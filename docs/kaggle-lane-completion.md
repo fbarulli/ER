@@ -34,7 +34,7 @@ evidence base for what this lane is:
   API — the same role `git publisher + tar.gz` plays for Colab today.
 - **cohort CSVs present in the box**: `dataset_50pct.csv` (49,225 rows,
   /tmp/opencode/er-50pct + repo root) alongside full `dataset.csv` — the
-  bundle lanes already re-pin on-VM `audit.source_export_expected_rows/
+  [historical — pins removed 2026-10-06] bundle lanes re-pinned on-VM `audit.source_export_expected_rows/
   _sha256` to ANY uploaded cohort (99c7ce8). Evidence the cohort/transport
   half of this lane is a real, in-progress production concern.
 

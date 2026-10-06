@@ -96,23 +96,22 @@ Gate reason strings live in `config/training.yaml` under `gate.reasons` and are 
 single source — the gate, the replay audit and the pool miners all read them, so
 wording changes land everywhere at once.
 
-## Gate census pin
+## Gate census
 
-A tripwire, not a business constant. If the gate or the candidate universe changes
-by accident, the run fails loudly instead of quietly skewing the labels.
+**Removed 2026-10-06 (owner ruling).** The census tripwire system — the
+source-export rows+sha gate, `gate_census_pin`, and `dedupe_census_pin`, each
+with per-site copies in `selftest.py` and on-VM rewriters — is deleted. Drift
+controls now rest entirely on per-stage manifest sha256, the preparation
+provenance identity, closure asserts (`input == output + Σ dropped`) and the
+Colab package freshness gate.
 
-Current measured values:
-
-| total_pairs | hard_no | proceed | fallback |
-|---|---|---|---|
-| 134,365 | 115,432 | 341 | 18,592 |
-
-`hard_no + proceed + fallback` must equal `total_pairs`, checked at config load.
-Four consumers read the one pin: `labeled_pairs` (asserts, raises),
-`selftest`, `gate_census_drift_report`, and `prepare_all` (rewrites it each run).
-
-The pin is deliberately *excluded* from the preparation provenance hash — it is
-this run's output, so it must not invalidate its own producer.
+What still happens at measurement time: the `gate_census` stage writes
+`run_dir/gate_census.json` and the stage manifest as **measured records** (no
+config rewrite, no pinned equality). The selftest prints the live census
+without gating on it. Consequence accepted: an out-of-band consumer run (direct
+`labeled_pairs`, standalone dedupe, or a Colab launch against the wrong cohort
+export) no longer fails loudly on a changed universe — verify the cohort
+*before* launching.
 
 ## Labeled pairs
 

@@ -512,12 +512,9 @@ def test_live_gate_positive_population_is_not_starved_of_auto_merge():
     # cases must name the specific identity reason above.
     # Source-reviewed JEV extraction rebuild: 12,733 -> 929 proceed pairs.
     # The complete measured routing census is retained in
-    # jev/rebuild_8/targeted_gate_census.json. The no-invented-conflict
-    # invariants above are the test; the proceed population is pinned in
-    # config/training.yaml (rand_matching.gate_census_pin).
-    from core.common import training_cfg
-
-    assert resolved == training_cfg().rand_matching.gate_census_pin.proceed
+    # jev/rebuild_8/targeted_gate_census.json. Pins are removed (2026-10-06
+    # owner ruling): the no-invented-conflict invariants above are the test.
+    assert resolved > 0
     # The audit census is untouched by the routing scope: these absence counts
     # are what the diagnostics consume, and they must keep being reported.
     assert missing_census["pulp_a"] > 0

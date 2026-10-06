@@ -1261,33 +1261,6 @@ class RandMatchingSpec(BaseModel):
         max_penalty: float = Field(ge=0.0, le=1.0)
         preserve_exact_gtin: bool
 
-    class GateCensusPinSpec(BaseModel):
-        """Measured gate-outcome census tripwire (drift detector, config SSOT).
-
-        Single declared source for the gate census counts that BOTH the
-        labeled-pairs exclusion assert and the selftest oracle compare
-        against. Previously each held its own hardcoded literal, so an
-        intentional gate change silently invalidated one while the other
-        kept passing. The census must sum exactly to total_pairs.
-        """
-
-        model_config = ConfigDict(extra="forbid")
-
-        total_pairs: int = Field(ge=0)
-        hard_no: int = Field(ge=0)
-        proceed: int = Field(ge=0)
-        fallback: int = Field(ge=0)
-
-        @model_validator(mode="after")
-        def _census_is_closed(self) -> RandMatchingSpec.GateCensusPinSpec:
-            if self.hard_no + self.proceed + self.fallback != self.total_pairs:
-                raise ValueError(
-                    "rand_matching.gate_census_pin must sum exactly to "
-                    f"total_pairs: {self.hard_no}+{self.proceed}+{self.fallback}"
-                    f" != {self.total_pairs}"
-                )
-            return self
-
     class TargetedVetoGatesSpec(BaseModel):
         """Hard attribute guards for non-exact automatic assignments."""
 
@@ -1354,7 +1327,6 @@ class RandMatchingSpec(BaseModel):
     targeted_veto_gates: TargetedVetoGatesSpec
     confidence_penalty_mask: ConfidencePenaltyMaskSpec
     flavor_overlap_penalty: FlavorOverlapPenaltySpec
-    gate_census_pin: GateCensusPinSpec
     target_recall: float = Field(gt=0.0, le=1.0)
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
@@ -1908,15 +1880,9 @@ class AuditSpec(BaseModel):
     lo < hi) + the silent-drop guardrail's manifest knobs (SILENT_DROPS
     task 2): manifest_dir — where per-stage manifests live (a manifest
     written LAST is the stage's completion marker; consumers resolve it
-    relative to the repo root via lib.common._path);
-    source_export_expected_rows — the approved raw-export census
-    (dataset.csv row count) the source-drift gate checks every loaded
-    export against; source_drift_threshold_pct — relative row-count
-    drift allowed on that census before the gate fails (0.0 = exact
-    match required); manifest_stages — the registry of stages that MUST
-    produce a manifest (an orchestrator lane may append its own). All four
-    are optional-with-default; the defaults are mirrored explicitly in
-    the yaml so the SSOT stays self-documenting."""
+    relative to the repo root via lib.common._path); manifest_stages —
+    the registry of stages that MUST produce a manifest (an orchestrator
+    lane may append its own)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1930,22 +1896,6 @@ class AuditSpec(BaseModel):
     #   IS the stage's completion marker. Consumers resolve it relative
     #   to the repo root via lib.common._path.
     manifest_dir: str = Field(default="results/manifests", min_length=1)
-    # source_export_expected_rows: the approved raw-export census — the
-    #   current dataset.csv row count. The source-drift gate (task 9)
-    #   compares every loaded export against this number so a changed
-    #   source export is loud, never silent.
-    source_export_expected_rows: int = Field(default=71_623, ge=1)
-    # source_drift_threshold_pct: relative row-count drift allowed on the
-    #   source export before that gate fails. 0.0 = exact match required
-    #   (any row-count change trips the gate).
-    source_drift_threshold_pct: float = Field(default=0.0, ge=0.0)
-    # source_export_expected_sha256: byte-level fingerprint of the approved
-    # raw export.  A row census alone cannot detect a substituted export
-    # whose row count happens to match.
-    source_export_expected_sha256: str = Field(
-        default="539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c",
-        pattern=r"^[0-9a-f]{64}$",
-    )
     # manifest_stages: stages that MUST produce a manifest, in pipeline
     #   order. An orchestrator lane may append its own later; this list is
     #   the required-minimum registry the verify pass walks.
@@ -2832,12 +2782,33 @@ class KaggleSpec(BaseModel):
     # Kernel slugs ("owner/slug"); null keeps every push fail-loud until the
     # owner names the target kernel (no silent default account).
     cpu_kernel_slug: str | None = None
+    # The GPU track-train kernel (train + ablation under ER_GPU_TRAINING_ONLY).
     gpu_kernel_slug: str | None = None
+    # The GPU embedding kernel (hybrid embedding forwards, second objective).
+    embedding_kernel_slug: str | None = None
+    # Dataset ("owner/slug") carrying the embedding request payload
+    # (request.json + prepared_text.npz) the embed kernel attaches.
+    embedding_dataset_slug: str | None = None
     checkout_paths: tuple[str, ...] = (
         "src", "scripts", "config", "requirements", "artifacts/models",
     )
     # Worker requirements the kernels install; torch ships with the image.
     bundle_requirements: str = "requirements/graph_tracks.txt"
+
+    # ── GPU lane knobs (same SSOT pattern as the colab block) ──────────────
+    # Suite config the train kernel passes to model_tracks.run; members of
+    # the prepared package install next to it (package layout SSOT is
+    # data/model_tracks, written by training.prepare_all packaging).
+    train_suite_config: str = "data/model_tracks/suite.yaml"
+    # Git-shipped checkpoint the embed kernel encodes against (member of
+    # checkout_paths, so it arrives with the sparse clone).
+    checkpoint: str = "artifacts/models"
+    # kernel-logs polling cadence and transcript directory (relative to
+    # staging_dir — colab log-poll mirror, cadence-adapted to kernels).
+    logs_poll_seconds: float = Field(default=15.0, ge=1.0)
+    logs_dir: str = "logs"
+    # Tag prefix for generated run tags (gpu_<UTC stamp>).
+    run_tag_prefix: str = "gpu_"
 
     @model_validator(mode="after")
     def _declared_paths_are_portable(self) -> "KaggleSpec":

@@ -1,4 +1,4 @@
-"""Preparation must reject stale CSVs, pin measured counts, and stop on failure."""
+"""Preparation must reject stale prerequisites, record measured counts, and stop on failure."""
 import hashlib
 import json
 from pathlib import Path
@@ -24,22 +24,22 @@ def test_resume_rejects_changed_prerequisite_bytes(tmp_path):
         verify_stage_manifest(manifest)
 
 
-def test_census_update_is_measured_and_preserves_other_configuration(tmp_path):
+def test_census_is_measured_and_recorded_without_config_rewrite(tmp_path):
+    # Pins removed 2026-10-06 (owner ruling): the census stage MEASURES and
+    # records; it must not touch the config.
     gates=tmp_path/'gates.csv'
     pd.DataFrame({'gtin1':['1','1','2'],'gtin2':['2','3','3'],
                   'gate_decision':['proceed','fallback','hard_no']}).to_csv(gates,index=False)
     config=tmp_path/'training.yaml'
-    prefix='rand_matching:\n  # keep this comment\n'
-    suffix='  target_recall: 0.9\n'
-    config.write_text(prefix+'  gate_census_pin:\n    total_pairs: 9\n    hard_no: 4\n    proceed: 3\n    fallback: 2\n'+suffix)
+    config.write_text('rand_matching:\n  # keep this comment\n  target_recall: 0.9\n')
     report=tmp_path/'census.json'
-    counts=refresh_gate_census(gates,config,report)
+    counts=refresh_gate_census(gates,report)
     assert counts=={'total_pairs':3,'hard_no':1,'proceed':1,'fallback':1}
     assert json.loads(report.read_text())==counts
-    assert config.read_text().startswith(prefix) and config.read_text().endswith(suffix)
+    assert config.read_text()=='rand_matching:\n  # keep this comment\n  target_recall: 0.9\n'
     frame=pd.read_csv(gates);pd.concat([frame,frame.iloc[:1]]).to_csv(gates,index=False)
     with pytest.raises(ValueError,match='Duplicate candidate'):
-        refresh_gate_census(gates,config,report)
+        refresh_gate_census(gates,report)
 
 
 def test_failed_stage_stops_preparation_and_retains_smoke(tmp_path,monkeypatch):
@@ -88,7 +88,7 @@ def test_census_rejects_reversed_duplicate(tmp_path):
     pd.DataFrame({'gtin1':['1','2'], 'gtin2':['2','1'],
                   'gate_decision':['proceed','proceed']}).to_csv(gates, index=False)
     with pytest.raises(ValueError, match='Duplicate candidate'):
-        refresh_gate_census(gates, tmp_path/'unused.yaml', tmp_path/'unused.json')
+        refresh_gate_census(gates, tmp_path/'unused.json')
 
 
 def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeypatch):
@@ -111,13 +111,13 @@ def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeyp
     assert len(calls) == 2
 
 
-def test_provenance_includes_nested_json_and_ignores_only_measured_census(tmp_path, monkeypatch):
+def test_provenance_includes_nested_json(tmp_path, monkeypatch):
     import core.common as common
     import training.prepare_all as preparation
     config = tmp_path / 'config'
     config.mkdir()
     training = config / 'training.yaml'
-    training.write_text('rand_matching:\n  gate_census_pin: {total_pairs: 1}\n  setting: 1\n')
+    training.write_text('rand_matching:\n  setting: 1\n')
     policy = config / 'nested' / 'policy.json'
     policy.parent.mkdir()
     policy.write_text('{"version": 1}')
@@ -128,8 +128,6 @@ def test_provenance_includes_nested_json_and_ignores_only_measured_census(tmp_pa
     monkeypatch.setattr(common, 'DATA_PATH', raw)
     monkeypatch.setattr('graph_tracks.text_cache.checkpoint_hash', lambda path, **kwargs: '0'*64)
     first = preparation.preparation_provenance(tmp_path, training, 'model')
-    training.write_text('rand_matching:\n  gate_census_pin: {total_pairs: 2}\n  setting: 1\n')
-    assert preparation.preparation_provenance(tmp_path, training, 'model') == first
     policy.write_text('{"version": 2}')
     assert preparation.preparation_provenance(tmp_path, training, 'model') != first
 

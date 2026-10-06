@@ -89,7 +89,17 @@ def live_slice() -> pd.DataFrame:
     per_brand = raw.groupby("brand")["gtin"].nunique().sort_values(ascending=False)
     brands = list(per_brand[per_brand >= 4].index[:2])
     assert len(brands) == 2, f"need two multi-gtin brands, got {brands}"
-    subset = raw[raw["brand"].isin(brands)].groupby("brand", group_keys=False).head(12)
+    # GTIN-UNIQUE rows only: a real same-GTIN duplicate inside the window
+    # would collapse alongside the crafted one and make the collapse-count
+    # assertion cohort-dependent (measured on the 35,561 cohort: the first
+    # two brands' head(12) carried an extra genuine duplicate). Deduping the
+    # selection keeps exactly ONE crafted collapse per run, on any cohort.
+    subset = (
+        raw[raw["brand"].isin(brands)]
+        .groupby("brand", group_keys=False).head(24)
+        .drop_duplicates(subset=["gtin"])
+        .groupby("brand", group_keys=False).head(12)
+    )
 
     collapsed = subset.head(1).copy()
     collapsed["sku_id"] = collapsed["sku_id"].astype(str) + "-dup"

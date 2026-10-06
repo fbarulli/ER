@@ -1,13 +1,10 @@
-"""CSV projection preserves source validation and existing NA semantics."""
-
-from types import SimpleNamespace
+"""CSV projection preserves NA semantics and the column SSOT contract."""
 
 import pandas as pd
 import pytest
 
 from core import common
 from core.columns import CANONICAL_COLUMNS, COLUMN_MAPPING, raw_of
-from core.manifest import sha256_file
 
 
 @pytest.fixture
@@ -21,11 +18,7 @@ def source_export(tmp_path, monkeypatch):
         raw_of("sku_name_eng"): ["Tea", "Coffee", "Water"],
     })
     pd.DataFrame(values).to_csv(path, index=False)
-    audit = SimpleNamespace(source_export_expected_rows=3,
-                            source_drift_threshold_pct=0,
-                            source_export_expected_sha256=sha256_file(path))
     monkeypatch.setattr(common, "DATA_PATH", path)
-    monkeypatch.setattr(common, "training_cfg", lambda: SimpleNamespace(audit=audit))
     return path
 
 
@@ -45,22 +38,6 @@ def test_projected_source_matches_full(source_export, raw):
     assert projected[gtin_column].iloc[0] == "00012345678905"
     assert projected[gtin_column].iloc[1:].isna().all()
     assert projected[brand_column].iloc[1:].isna().all()
-
-
-@pytest.mark.parametrize("raw", [False, True])
-@pytest.mark.parametrize("drift", ["rows", "hash"])
-def test_projection_keeps_source_guard(source_export, raw, drift):
-    frame = pd.read_csv(source_export, dtype=str, keep_default_na=False)
-    if drift == "rows":
-        frame = frame.iloc[:2]
-    else:
-        # Even an unselected field change must invalidate the source digest.
-        frame.loc[0, raw_of("sku_name_eng")] = "Changed title"
-    frame.to_csv(source_export, index=False)
-    loader = common.load_raw_export if raw else common.load_dataset
-    columns = [raw_of("brand")] if raw else ["brand"]
-    with pytest.raises(SystemExit, match="row-count drift" if drift == "rows" else "sha256 drift"):
-        loader(columns=columns)
 
 
 @pytest.mark.parametrize("raw", [False, True])

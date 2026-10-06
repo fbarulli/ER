@@ -14,7 +14,7 @@ from core.portable_archive import Digest
 
 import pandas as pd
 
-from core.common import F, TRAIN_ROOT, plot_dpi, trace_artifact, training_cfg
+from core.common import DATA_PATH, F, TRAIN_ROOT, plot_dpi, trace_artifact, training_cfg
 from core.manifest import sha256_file
 from training.validation_inference import resolve_best_checkpoint, threshold_assignment_metrics
 
@@ -22,8 +22,8 @@ from training.validation_inference import resolve_best_checkpoint, threshold_ass
 # Row accounting is re-measured from the artifacts at exec time — never
 # hardcoded — and every read is byte-stability asserted, so an artifact being
 # regenerated concurrently is never counted half-written:
-#   source census  dataset.csv rows == deduped + dropped == 71,623
-#                  (config/training.yaml audit.source_export_expected_rows pin)
+#   source census  dataset.csv rows == deduped + dropped (re-measured
+#                  byte-stable at exec time; no pinned expectation)
 #   fold map       results/training/validation_fold_map.csv maps every graph
 #                  entity to its fold; folds 2+3 are the validation side
 #   scored pairs   data/final_validation.csv (files.final_validation binding)
@@ -73,9 +73,9 @@ def scored_validation_accounting() -> dict[str, object]:
 
     Identity asserts (fail loud, before any launch):
       train_side_rows + validation_entity_rows == deduped_rows
-      deduped_rows + dropped_rows == the source-export census pin
+      deduped_rows + dropped_rows == the RE-MEASURED source census
     """
-    source_export_rows = int(training_cfg().audit.source_export_expected_rows)
+    source_export_rows = _byte_stable_csv_rows(DATA_PATH)
     deduped_rows = _byte_stable_csv_rows(F["dataset_deduped"])
     dropped_rows = _byte_stable_csv_rows(F["removals"])
     if deduped_rows + dropped_rows != source_export_rows:

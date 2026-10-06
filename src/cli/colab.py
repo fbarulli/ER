@@ -3834,16 +3834,15 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
     regenerated data artifacts comes back. CPU-only: no GPU allocation, no
     training.
 
-    WHICH export this is, is enforced by the committed config audit pins
-    audit.source_export_expected_rows / _sha256 (config/training.yaml, drift
-    threshold 0.0), asserted the first time the pinned stage loads the raw
-    export — for this lane that is the FIRST prepare_all stage, dedupe, so a
-    cohort CSV against full-cohort pins fails loudly at dedupe.
-    rand_matching.gate_census_pin is NOT the enforcement point in this flow:
-    the gate_census stage re-records it from the freshly regenerated
-    gate_results.csv (refresh_gate_census rewrites config/training.yaml)
-    before labeled_pairs compares against it — self-recording, not a
-    tripwire.
+    WHICH export this is, is carried by provenance, not a pin: prepare_all's
+    stage manifests + provenance identity record the bytes actually consumed
+    (owner ruling 2026-10-06 removed the config pin system), and the run
+    archive carries them back for audit. Passing the wrong cohort export
+    still produces a complete, internally consistent run — verify the
+    uploaded source against the intended cohort BEFORE launching.
+    The gate_census stage re-records the measured counts from the freshly
+    regenerated gate_results.csv into run_dir/gate_census.json and the stage
+    manifest — a measured record, not a tripwire.
 
     Delivery: the local copy lands under TRAINING_RESULTS/colab_bundle_<id>/
     (see _bundle_delivery_local); the VM-side archive keeps the FIXED name
@@ -3862,26 +3861,8 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
         flush=True,
     )
     _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
-    # Cohort-aware audit pins: the VM config re-pins to the uploaded export's
-    # measured census (rows + sha) BEFORE prepare_all reads it, so any cohort
-    # drives the lane while the drift gate stays meaningful for the rest of
-    # the run (a changed file mid-run still fails loudly at dedupe).
     script = _BOOTSTRAP + f"""
-import glob, hashlib, os, re, subprocess, sys, tarfile
-import pandas as pd
-csv_path = {REMOTE_ROOT!r} + "/dataset.csv"
-_rows = len(pd.read_csv(csv_path, dtype=str))
-_sha = hashlib.sha256(open(csv_path, "rb").read()).hexdigest()
-_cfg = {REMOTE_ROOT!r} + "/config/training.yaml"
-_text = open(_cfg, encoding="utf-8").read()
-_text = re.sub(r"(source_export_expected_rows: )[\\d_]+", r"\\g<1>" + str(_rows), _text, count=1)
-# Payload-only sha replacement: the merged audit lines carry trailing
-# comments AFTER the quoted hex, so consuming the closing quote here left an
-# unterminated scalar and broke the VM's YAML parse for prepare_all (both
-# cohorts' first launch).  Keep the quote and the comment; swap only the hex.
-_text = re.sub(r'(source_export_expected_sha256: ")([0-9a-f]{{64}})', r"\\g<1>" + _sha, _text, count=1)
-open(_cfg, "w", encoding="utf-8").write(_text)
-print(f"[bundle] VM audit pins -> rows={{_rows}} sha={{_sha[:12]}}...", flush=True)
+import glob, os, subprocess, sys
 rc = subprocess.run(
     [sys.executable, "-m", "training.prepare_all"],
     cwd={REMOTE_ROOT!r},

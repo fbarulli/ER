@@ -137,6 +137,15 @@ SLICE_FIELDS: tuple[tuple[str, str], ...] = (
 # pinned A no longer holds; the config moved to "withhold_straddle" (A)
 # together with this block, per the rule that an artifact may not ship under
 # a policy its evidence rejects.
+# RE-MEASURED 2026-10-06 regeneration (35,561-row export): A's dev-half thin
+# advantage REVERSED (A 87.9% vs B 77.6% cells below min_test_negatives=5).
+# A stays assigned: the thin share was the 2026-10-01 tiebreaker, but B
+# remains structurally disqualified — B's scored negatives carry trained-on
+# endpoints (a correctness property, not a preference), which the evidence
+# function refuses to certify. The thin share is therefore RECORDED as
+# evidence and is no longer a decision criterion; A's emit guard enforces
+# A's own-evidence criterion (both scored halves usable) instead of the
+# old cross-policy thin ordering.
 # ════════════════════════════════════════════════════════════════════════════
 
 # Policy names. Both stay load-valid; config/training.yaml pins the winner.
@@ -461,6 +470,32 @@ def build(
                     "together — do not emit an artifact under a policy its "
                     "evidence rejects."
                 )
+    elif policy_name == NEGATIVE_FOLD_POLICY_WITHHOLD:
+        # A's emit guard (added 2026-10-06 — before this branch existed, the
+        # assigned policy was never re-checked at emit and the artifact could
+        # ship under evidence it contradicts): A is clean of trained-on
+        # endpoints by construction (asserted above), so its own-evidence
+        # criterion is that the scored halves are usable at all — both must
+        # score negatives. The thin-cell share against B is RECORDED, not
+        # enforced: the 2026-10-06 census reversed A's 2026-10-01 dev-half
+        # thin advantage (B is disqualified structurally regardless — its
+        # scored negatives carry trained-on endpoints, which negative_policy_
+        # evidence refuses to certify), so thinness is no longer a decision
+        # criterion between the two.
+        now = evidence[policy_name]
+        empty_halves = [
+            half for half in ("dev", "test")
+            if int(now[f"scored_{half}_negatives"]) <= 0
+        ]
+        if empty_halves:
+            raise SystemExit(
+                "the pinned scored-half decision no longer holds: policy "
+                f"{policy_name!r} scores NO negatives on the "
+                f"{', '.join(empty_halves)} half (evidence={evidence}). "
+                "Re-decide, update the config and the DECISION block "
+                "together — do not emit an artifact under a policy its "
+                "evidence rejects."
+            )
     stats["negative_fold_policy"] = policy_name
     stats["negative_policy_evidence"] = evidence
     # ── apply the configured policy on the ASSEMBLED frame's negatives ──

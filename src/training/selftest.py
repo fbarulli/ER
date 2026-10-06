@@ -1177,137 +1177,28 @@ def oracle_per_key_coverage() -> None:
 
 
 def oracle_pinned_counts() -> None:
-    """Pinned real-data counts — drift here means a pipeline change
-    altered the committed-data contract (update alongside any
-    intentional drift, e.g. GTIN enforcement)."""
-    from core.common import RESULTS, F, training_cfg
+    """Measured real-data census — recorded, not compared (pins removed
+    2026-10-06 by owner ruling; provenance + stage manifests are the drift
+    controls). Prints the live gate/canonical/labeled census so a changed
+    universe is visible in the selftest output without gating on it."""
+    from core.common import RESULTS, F
 
     try:
         g = pd.read_csv(RESULTS / F["gate_results"], keep_default_na=False)
         c = pd.read_csv(RESULTS / F["canonical_records"], keep_default_na=False)
         lp = pd.read_csv(RESULTS / F["labeled_pairs"])
-        # RE-PINNED 2026-10-01: 13,250 -> 13,216 canonicals (-34). Source:
-        # results/manifests/data_prep.json (2026-09-30 run): 71,623 rows in
-        # == 13,216 kept + 12,995 collapsed + 45,412 dropped (missing/NaN
-        # 41,545 / checksum 3,715 / identity-review 152). The 13,250
-        # generation predates the latest dedupe rebuild
-        # (dataset_deduped.csv SHA 73a94016, 63,079 rows).
-        check("canonicals == 13,216", len(c) == 13216, f"got {len(c)}")
-        # RE-PINNED 2026-10-01: 135,769 -> 135,246 gate pairs (-523) and
-        # decisions 92,335/1,395/42,039 -> 92,259/1,239/41,748. Source: the
-        # 2026-09-30 wave-1/2 rebuild (dedupe chain byte-reproduced:
-        # dataset_deduped.csv SHA 73a94016, 63,079 rows; gate run
-        # run-c60abb62a6cb in results/logs/training_trace.csv — universe
-        # -523, hard_no -76 (Package-material-mismatch 3 -> 253 NEW via the
-        # attribute-side material capture, flavor 922 -> 821), proceed
-        # -156, fallback -291: Low raw pack 33,833 -> 33,564, Low raw
-        # volume 8,028 -> 8,016, packaging-level one-sided 113 -> 105,
-        # ambiguous-volume 37 -> 36, low-consistency 28 -> 27). The census
-        # now reads from config rand_matching.gate_census_pin — ONE declared
-        # source for labeled_pairs.py and this oracle; no second pin.
-        measured = {
-            "total_pairs": len(g),
-            "hard_no": int((g.gate_decision == "hard_no").sum()),
-            "proceed": int((g.gate_decision == "proceed").sum()),
-            "fallback": int((g.gate_decision == "fallback").sum()),
-        }
-        _pin = training_cfg().rand_matching.gate_census_pin.model_dump()
-        if measured != _pin:
-            from core.common import gate_census_drift_report
-
-            _drift = gate_census_drift_report(measured=measured)
-            print(
-                "[oracle] CENSUS DRIFT — per-sample report at "
-                "results/gate_census_drift.json; degraded: "
-                f"{_drift['degraded']}",
-                flush=True,
-            )
-        check(
-            "gate pairs == config gate_census_pin",
-            len(g) == training_cfg().rand_matching.gate_census_pin.total_pairs,
-            f"got {len(g)}",
-        )
         dec = g.gate_decision.value_counts().to_dict()
-        pin = training_cfg().rand_matching.gate_census_pin
-        check(
-            "gate decisions == config gate_census_pin",
-            # Threshold-independent: pair-similarity floors apply at the
-            # labeled stage, never here.
-            dec == {
-                "hard_no": pin.hard_no,
-                "proceed": pin.proceed,
-                "fallback": pin.fallback,
-            },
-            f"got {dec}",
+        print(
+            f"[census] canonicals {len(c):,} | gate pairs {len(g):,} "
+            f"({dec.get('hard_no', 0):,} hard_no / {dec.get('proceed', 0):,} "
+            f"proceed / {dec.get('fallback', 0):,} fallback) | "
+            f"labeled {len(lp):,} ({(lp.true_label == 1).sum():,} pos / "
+            f"{(lp.true_label == 0).sum():,} hard-neg)",
+            flush=True,
         )
-        check(
-            "labeled pairs == 8,711 (983 pos / 7,728 hard-neg)",
-            # RE-PINNED 2026-10-01, forced by the census move above. The
-            # labeled set is a FUNCTION of the census at the SSOT
-            # thresholds (pos sim>=0.50 / neg sim>=0.80): proceed 1,395 ->
-            # 1,239 (-156) leaves 1,023 at/above the floor (was 1,143:
-            # -120), hard_no 92,335 -> 92,259 (-76) leaves 7,713 (was
-            # 7,666: +47 — the material-mismatch hard_nos land mostly
-            # ABOVE the floor). Measured from the regenerated
-            # data/labeled_pairs.csv manifest; not scaled.
-            # (History: 2026-09-28 proceed_sim_threshold 0.80 -> 0.65 -> 0.50
-            # admitted 884 gate-verified pairs, canonical-agreement 1.0000 in
-            # every 0.05 band per scripts/check_proceed_precision.py.)
-            len(lp) == 8711
-            and (lp.true_label == 1).sum() == 983
-            and (lp.true_label == 0).sum() == 7728,
-            f"got {len(lp)} rows, {(lp.true_label == 1).sum()} pos, "
-            f"{(lp.true_label == 0).sum()} neg",
-        )
+        check("real-data census artifacts readable", True)
     except FileNotFoundError as e:
-        check("pinned counts (CSVs present)", False, str(e))
-
-
-def oracle_source_export_drift() -> None:
-    """The raw-export gate rejects both count and byte-level drift."""
-    import hashlib
-
-    from core.common import _validate_source_export, training_cfg
-
-    with tempfile.TemporaryDirectory() as d:
-        path = Path(d) / "source.csv"
-        path.write_text("sku_id\n1\n2\n", encoding="utf-8")
-        df = pd.read_csv(path, dtype=str)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        audit = training_cfg().audit.model_copy(
-            update={
-                "source_export_expected_rows": 2,
-                "source_export_expected_sha256": digest,
-                "source_drift_threshold_pct": 0.0,
-            }
-        )
-        _validate_source_export(df, path, audit=audit)
-        check("source-export gate accepts pinned rows and sha256", True)
-
-        try:
-            _validate_source_export(df, path, audit=audit.model_copy(
-                update={"source_export_expected_rows": 3}
-            ))
-            check("source-export gate rejects row-count drift", False)
-        except SystemExit as e:
-            message = str(e)
-            check(
-                "source-export gate reports observed and expected rows",
-                "observed_rows=2" in message and "expected_rows=3" in message,
-                message,
-            )
-
-        try:
-            _validate_source_export(df, path, audit=audit.model_copy(
-                update={"source_export_expected_sha256": "0" * 64}
-            ))
-            check("source-export gate rejects sha256 drift", False)
-        except SystemExit as e:
-            check(
-                "source-export gate reports observed and expected sha256",
-                "observed_sha256=" in str(e) and "expected_sha256=" in str(e),
-                str(e),
-            )
+        check("real-data census (CSVs present)", False, str(e))
 
 
 def oracle_config_split() -> None:
@@ -1672,7 +1563,10 @@ def oracle_no_fallback_ssot() -> None:
     #    rerank_max_length — all present + in range
     t = training_cfg().training
     check("training.layer_decay in (0,1]", 0.0 < t.layer_decay <= 1.0)
-    check("training.save_total_limit >= 1", t.save_total_limit >= 1)
+    check(
+        "training.save_total_limit null (keep all) or >= 1",
+        t.save_total_limit is None or t.save_total_limit >= 1,
+    )
     check("training.rerank_max_length >= 8", t.rerank_max_length >= 8)
     check(
         "runtime('layer_decay') == pydantic value",
@@ -2574,50 +2468,27 @@ def oracle_manifest() -> None:
         closes,
         f"got {ra}",
     )
-    # Re-pinned 2026-09-30 for the T3 identity partition. The previous pins
-    # (output 61,529 / T3 5,906) were ALREADY stale — the committed export held
-    # 61,414 rows, so this check had been failing before the fix. T3 no longer
-    # does the bulk of the collapsing (247 rows); price leaving the T2 key moved
-    # that work to T2 (6,338), and T2 now defers gtin-conflicting rows that
-    # T3 used to absorb silently.
-    # Re-pinned 2026-10-01: the T1 gtin-tier retune moved the per-tier
-    # drops (T1 1,943 -> 1,850, T1.5 132 -> 96, T2 6,338 -> 6,348, T3
-    # 247 -> 250); output 62,963 -> 63,079 (+116), dropped 8,660 -> 8,544
-    # (-116). Same manifest (results/manifests/dedupe.json), same input
-    # rows (71,623); closure re-measured PASS on the new numbers.
-    expected_dropped = {
-        "t1_retailer_gtin": 1850,
-        "t1_5_retailer_malformed_gtin_same_product": 96,
-        "t2_retailer_title_gtin": 6348,
-        "t3_retailer_title_identity_partition": 250,
+    # Tier registry sanity: every drop names a known tier, every tier with
+    # drops is counted. The NUMBERS are not compared against a pin (removed
+    # 2026-10-06 by owner ruling); the manifest sha256 + provenance identity
+    # are the drift controls.
+    known_tiers = {
+        't1_retailer_gtin',
+        't1_5_retailer_malformed_gtin_same_product',
+        't2_retailer_title_gtin',
+        't3_retailer_title_identity_partition',
+    }
+    deferred_keys = {
+        'skipped_checksum_invalid', 'deferred_to_t3',
+        'ambiguous_offer_groups', 'unresolved_identity_review_rows',
     }
     check(
-        "dedupe census pinned: input 71,623 / output 63,079 / "
-        "dropped 8,544 (T1 1,850 / T1.5 96 / T2 6,348 / T3 250)",
-        # what current code + committed export reproducibly yields; a
-        # silent upstream export change that shifts row counts fails
-        # here (same discipline as oracle_pinned_counts)
-        ra.get("input_rows") == 71623
-        and ra.get("output_rows") == 63079
-        and dropped == expected_dropped
-        and sum(dropped.values()) == 8544,
-        f"got {ra}",
-    )
-    # Re-pinned 2026-10-01 alongside the census above: skipped
-    # checksum-invalid 3,715 -> 3,867 (+152), deferred_to_t3 2,799 ->
-    # 2,806 (+7), unresolved 79 -> 207 (+128); ambiguous groups
-    # unchanged at 3,816.
-    check(
-        "dedupe deferred keys pinned: skipped_checksum_invalid 3,867 / "
-        "deferred_to_t3 2,806 / ambiguous groups 3,816 / unresolved 207",
-        # deferred populations are recorded OUTSIDE dropped (they
-        # re-enter later tiers; see dedupe.py's accounting note) —
-        # pin them so the audit trail can't silently thin out
-        ra.get("skipped_checksum_invalid") == 3867
-        and ra.get("deferred_to_t3") == 2806
-        and ra.get("ambiguous_offer_groups") == 3816
-        and ra.get("unresolved_identity_review_rows") == 207,
-        f"got {ra}",
+        "dedupe accounting shape: known tiers + deferred keys recorded",
+        isinstance(ra, dict)
+        and dropped
+        and set(dropped) <= known_tiers
+        and all(key in ra for key in deferred_keys),
+        f"got tiers {sorted(dropped)}, keys {sorted(ra)}",
     )
     try:
         verify_manifest("dedupe")
@@ -2741,8 +2612,6 @@ def main() -> None:
     print("== 9. pinned real-data counts ==")
     oracle_per_key_coverage()
     oracle_pinned_counts()
-    print("== 9a. source-export drift gate ==")
-    oracle_source_export_drift()
     print("== 9b. per-stage manifest guardrail (silent-drop layer) ==")
     oracle_manifest()
     print()

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.common import DATA_PATH, TRAIN_ROOT, _validate_source_export, data_cfg, training_cfg
+from core.common import DATA_PATH, TRAIN_ROOT, data_cfg, training_cfg
 from core.manifest import sha256_file
 if __package__ in (None, ""):
     # Permit the documented direct script command as well as test imports.
@@ -73,7 +73,6 @@ def snapshot(target: Path, *, label: str, chunk_rows: int) -> dict:
                 output.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
                 count += 1
             print(f"[{label}] extracted {count:,} raw rows; errors={sum(errors.values())}", flush=True)
-    _validate_source_export(pd.DataFrame(index=pd.RangeIndex(count)), DATA_PATH)
     if sha256_file(DATA_PATH) != meta["raw_dataset_sha256"]:
         raise RuntimeError("raw dataset changed during extraction snapshot")
     temporary.replace(target)

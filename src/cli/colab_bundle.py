@@ -17,14 +17,6 @@ untouched):
   mechanism, body brace-free so no escaping is needed), then
   run_colab_exec_stream(SESSION, script, timeout=..., log_name=...).
 
-  VM pin re-write ...... a PLAIN LINE FILTER (directive-specified; the deleted
-  attempt's two-layer regex was the regression): open(config).readlines(),
-  replace the two lines starting with '  source_export_expected_rows:' and
-  '  source_export_expected_sha256:' by % formatting, write back, one
-  confirmation line with the new rows+sha. Rows come from the same census the
-  guard enforces (len of the parsed frame, core.common._validate_source_export);
-  sha256 comes from the digest loop copied from colab.py:3224.
-
   prepare_all on the VM . subprocess.run([sys.executable, "-m",
   "training.prepare_all"], cwd=root) with NO stderr capture, NO log file
   and NO pump thread: stdout and stderr inherit to the streamed cell
@@ -99,43 +91,18 @@ _RESUME_FROM_CHOICES = ("dedupe", "validation", "full_bundle", "suite_inputs")
 # placeholders, exactly like the earlier directive required ("plain string,
 # placeholder-replaced, brace-free, no regex/backslashes").
 _BUNDLE_HEAD = _BOOTSTRAP + f"""
-import glob, hashlib, os, subprocess, sys, tarfile
-import pandas as pd
+import glob, os, subprocess, sys, tarfile
 
 root = "{REMOTE_ROOT}"
-csv_path = root + "/dataset.csv"
-config_path = root + "/config/training.yaml"
 """
 _RESUME_EXTRACT_SEGMENT = f"""
-# resume: extract the owner-built frozen state BEFORE the pin re-write
+# resume: extract the owner-built frozen state
 # (derived CSVs + second04 pairs + data_prep/labeled_pairs stage manifests,
 # REMOTE_ROOT-relative inside the tarball).
 from core.archive_reader import tar_archive
 with tar_archive(root + "/resume_state.tar.zst") as tar:
     tar.extractall(root, filter="data")
 print("[resume] frozen state extracted at " + root, flush=True)
-"""
-_PIN_SEGMENT = f"""
-# pins: point the audit pins at the uploaded export, plain line filter.
-digest = hashlib.sha256()
-with open(csv_path, "rb") as handle:
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(chunk)
-digest = digest.hexdigest()
-rows = len(pd.read_csv(csv_path))
-with open(config_path) as handle:
-    source_lines = handle.readlines()
-out_lines = []
-for line in source_lines:
-    if line.startswith("  source_export_expected_rows:"):
-        out_lines.append("  source_export_expected_rows: %d" % rows + os.linesep)
-    elif line.startswith("  source_export_expected_sha256:"):
-        out_lines.append('  source_export_expected_sha256: "%s"' % digest + os.linesep)
-    else:
-        out_lines.append(line)
-with open(config_path, "w") as handle:
-    handle.writelines(out_lines)
-print("[pins] source_export_expected_rows=%d source_export_expected_sha256=%s" % (rows, digest), flush=True)
 """
 _PREPARE_FRESH_SEGMENT = f"""
 # prepare: run the full CSV-to-inputs preparation; stdout and stderr inherit
@@ -190,9 +157,9 @@ with tar_archive(delivery, "w") as tar:
             tar.add(member, arcname="data/prepared/" + name)
 print("[bundle] delivery archive ready", flush=True)
 """
-_BUNDLE_REMOTE_SCRIPT = _BUNDLE_HEAD + _PIN_SEGMENT + _PREPARE_FRESH_SEGMENT + _DELIVERY_SEGMENT
+_BUNDLE_REMOTE_SCRIPT = _BUNDLE_HEAD + _PREPARE_FRESH_SEGMENT + _DELIVERY_SEGMENT
 _RESUME_REMOTE_SCRIPT = (
-    _BUNDLE_HEAD + _RESUME_EXTRACT_SEGMENT + _PIN_SEGMENT
+    _BUNDLE_HEAD + _RESUME_EXTRACT_SEGMENT
     + _PREPARE_RESUME_SEGMENT + _DELIVERY_SEGMENT
 )
 
@@ -208,10 +175,13 @@ def _provision() -> None:
     # the checkout carries only what the prep reads — src/, config/,
     # scripts/, requirements, the text checkpoint and the tracked smoke
     # inputs — never the stale derived CSVs or result archives on the branch.
-    prepare_remote_layout(minimal_runtime=True, sparse_paths=(
+    root = TRAIN_ROOT.resolve()
+    checkout_paths = (
         Path(resolve_model(training_cfg().training.base_model)),
-        Path("data/prepared/smoke_200"),
-    ))
+        TRAIN_ROOT / "data/prepared/smoke_200",
+    )
+    prepare_remote_layout(minimal_runtime=True, sparse_paths=tuple(
+        path.resolve().relative_to(root).as_posix() for path in checkout_paths))
     install_deps(minimal_runtime=True)
 
 

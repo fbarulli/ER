@@ -5,10 +5,9 @@ true_label=1: proceed & similarity >= 0.8 (
 true_label=0: hard_no & similarity >= 0.8 (text-similar but gate-proven
               different size/pack — the hard-negative class).
 fallback pairs stay OUT: that tier is 'uncertain' by design and would inject
-label noise into both classes. The exclusion is COUNTED + PINNED below
-(no silent drops): the fallback count must equal config
-rand_matching.gate_census_pin.fallback (same universe as the selftest
-oracle).
+label noise into both classes. The exclusion is COUNTED below (no silent
+drops) — pins removed 2026-10-06 by owner ruling; the four-bucket partition
+recorded in the stage manifest is the record.
 
 MANIFEST (SILENT_DROPS task 7): the stage now snapshots gate_results.csv
 (begin_manifest), writes labeled_pairs.csv atomically (atomic_write_csv —
@@ -47,7 +46,7 @@ def main() -> None:
     whole flow — begin at stage start, finish LAST.
     """
     cfg = load_config()
-    _pairs_cfg, _pin_cfg = cfg['pairs'], cfg['rand_matching']['gate_census_pin']
+    _pairs_cfg = cfg['pairs']
     POS_SIM = float(_pairs_cfg['proceed_sim_threshold'])
     NEG_SIM = float(_pairs_cfg['hardneg_sim_threshold'])
     gate_csv = F["gate_results"]
@@ -69,43 +68,14 @@ def main() -> None:
     print(f"[labeled] positives: {len(pos):,} | hard negatives: {len(neg):,}", flush=True)
 
     # ── NO SILENT DROPS (owner doctrine): the fallback exclusion above is a
-    # data drop by construction — count it LOUDLY and pin it. This script reads
-    # the SAME transductive-census universe (gate_results.csv) the selftest
-    # oracle pins, and the expected count comes from the ONE declared source,
-    # config rand_matching.gate_census_pin (schema sum-checked); anything else
-    # means the universe or the gate drifted and the config census is stale.
+    # data drop by construction — count it LOUDLY and record it in the stage
+    # manifest's row accounting (the four-bucket partition). Pins are removed
+    # (2026-10-06); drift across runs is visible via provenance, not asserts.
     n_fallback_excluded = int((g.gate_decision == "fallback").sum())
     print(f"[labeled] excluded {n_fallback_excluded:,} fallback-gate pairs (gate=fallback — not labelable as pos/hard-neg)")
     assert isinstance(n_fallback_excluded, int) and n_fallback_excluded >= 0, (
         f"n_fallback_excluded must be a non-negative int, got {n_fallback_excluded!r}"
     )
-    measured = {
-        "total_pairs": len(g),
-        "hard_no": int((g.gate_decision == "hard_no").sum()),
-        "proceed": int((g.gate_decision == "proceed").sum()),
-        "fallback": n_fallback_excluded,
-    }
-    if n_fallback_excluded != int(_pin_cfg["fallback"]) or (
-        {k: v for k, v in measured.items() if k != "fallback"}
-        != {
-            "total_pairs": int(_pin_cfg["total_pairs"]),
-            "hard_no": int(_pin_cfg["hard_no"]),
-            "proceed": int(_pin_cfg["proceed"]),
-        }
-    ):
-        from core.common import gate_census_drift_report
-
-        report = gate_census_drift_report(measured=measured)
-        print(
-            f"[labeled] CENSUS DRIFT — per-sample report: "
-            f"results/gate_census_drift.json; degraded: {report['degraded']}"
-        )
-        raise AssertionError(
-            f"census drift: {measured} but config "
-            f"rand_matching.gate_census_pin == {dict(_pin_cfg)} — see "
-            "results/gate_census_drift.json for the per-sample degraded map"
-        )
-
     out = pd.concat(
         [pos[["gtin1", "gtin2", "true_label"]], neg[["gtin1", "gtin2", "true_label"]]],
         ignore_index=True,

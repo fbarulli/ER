@@ -67,7 +67,6 @@ CANONICAL_CSV = WORK / "data" / "canonical_records.csv"
 SCRATCH = WORK / "scratch"
 SCRATCH.mkdir(exist_ok=True)
 
-EXPECTED_SHA = "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c"
 # budget caps for the pairwise-parse loop — deterministic, seed-bound.
 CAP_PAIRS_PER_GROUP = 8
 CAP_PAIRS_TOTAL = 4_000
@@ -84,20 +83,11 @@ def sha256_of(path: Path) -> str:
 
 
 def load_dataset() -> pd.DataFrame:
-    """dataset.csv: SSOT-loader-equal row set, without the stale drift gate.
+    """dataset.csv: SSOT-loader-equal row set, read directly.
 
-    `load_dataset()` runs a source drift gate whose config audit block
-    (config/training.yaml) pins the ORIGINAL census rows=35 / sha
-    c5b8643...; the owner-pinned CURRENT dataset is 71,623 rows / sha
-    539c2472.... Actually editing src/ or config/ is out of scope, so the
-    loader contract (columns + string dtype) is re-declared here and
-    verified against the LIVE recorded hash (owner task spec)."""
-
-    observed_sha = sha256_of(DATASET_CSV)
-    if observed_sha != EXPECTED_SHA:
-        raise SystemExit(
-            f"dataset.csv sha256 drift: observed={observed_sha} expected={EXPECTED_SHA}"
-        )
+    Pins are removed (2026-10-06 owner ruling): no drift gate and no
+    expected-sha comparison. The byte identity of the export this probe
+    ran on is recorded in the probe's own outputs."""
     columns = ["sku_id", "retailer", "country", "sku_name_eng",
                "description_short_eng", "breadcrumbs_eng", "sku_url",
                "image_url", "sku_last_price", "gtin", "brand", "category",
@@ -165,7 +155,7 @@ def _extended_conflict(a_id, b_id, a_extra: frozenset, b_extra: frozenset,
 def main() -> None:
     t_start = time.time()
     df = load_dataset()
-    print(f"[data] rows={len(df):,} sha256==EXPECTED ({EXPECTED_SHA[:12]}...)")
+    print(f"[data] rows={len(df):,} sha256={sha256_of(DATASET_CSV)[:12]}...")
 
     valid = gtin_validity(df["gtin"].astype(str)).to_numpy()
     # gtin_validity only quarantines the 34 held GTIN KEYS; the dedupe protocol

@@ -397,6 +397,188 @@ receipt = {
 print("[bundle-cpu] receipt: " + json.dumps(receipt, indent=2), flush=True)
 '''
 
+# ── remote GPU kernels (owner ruling 2026-10-06: GPU trains, never preps) ──
+#
+# Two GPU objectives, one skeleton each (pinned sparse clone -> attach the
+# CPU bundle kernel output as kernel_source -> verify -> run -> manifest-
+# backed tar.zst + sha256 sidecar into /kaggle/working):
+#
+#   train_gpu  — track train + ablation: model_tracks.run under
+#                ER_GPU_TRAINING_ONLY=1 (baseline export + data gate + three
+#                parallel CUDA workers under MPS; the Kaggle T4 image ships
+#                nvidia-cuda-mps-control at /opt/bin — kernel er-mps-probe
+#                verified daemon start + client context on this image).
+#   embed_gpu  — embedding forwards for hybrid: encode_prepared_embeddings
+#                against the git-shipped checkpoint (artifacts/models is in
+#                checkout_paths), request + prepared_text.npz attached as a
+#                Kaggle dataset; emits vectors.npz + .sha256.
+
+TRAIN_KERNEL_CODE_FILE = "train_gpu.py"
+EMBED_KERNEL_CODE_FILE = "embed_gpu.py"
+TRAIN_KERNEL_SHARED = '''\
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+CHECKOUT_PATHS = @CHECKOUT_PATHS@
+REQUIREMENTS = "@REQUIREMENTS@"
+RUN_TAG = "@RUN_TAG@"
+SUITE_CONFIG = "@SUITE_CONFIG@"
+BUNDLE_KERNEL_SLUG = "@BUNDLE_KERNEL_SLUG@"
+
+WORKING = Path("/kaggle/working")
+INPUTS = Path("/kaggle/input")
+SCRATCH = (Path("/kaggle/tmp") if Path("/kaggle/tmp").is_dir()
+           else Path(tempfile.gettempdir()) / "er_gpu")
+BUNDLE_RECEIPT = "bundle.receipt.json"
+BUNDLE_ARCHIVE = "all_tracks_inputs.tar.zst"
+
+
+def sh(command, **kwargs):
+    print("+ " + " ".join(str(part) for part in command), flush=True)
+    subprocess.run([str(part) for part in command], check=True, **kwargs)
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def locate_input_archive():
+    """Locate the attached bundle output (receipt + archive) under /kaggle/input."""
+    candidates = list(INPUTS.rglob(BUNDLE_RECEIPT))
+    if not candidates:
+        raise SystemExit("attached kernel output contained no " + BUNDLE_RECEIPT)
+    receipt_dir = candidates[0].parent
+    archive = receipt_dir / BUNDLE_ARCHIVE
+    if not archive.is_file():
+        raise SystemExit("attached kernel output missing " + BUNDLE_ARCHIVE)
+    return archive, receipt_dir
+
+
+def clone_pinned():
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    root = SCRATCH / "ER"
+    if root.exists():
+        shutil.rmtree(root)
+    sh(["git", "clone", "--filter=blob:none", "--sparse", "--depth", "1",
+        "--branch", BRANCH, REPOSITORY, root])
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    if head != REVISION:
+        raise SystemExit("branch tip moved: cloned %s but the kernel pins %s"
+                         % (head, REVISION))
+    sh(["git", "-C", str(root), "sparse-checkout", "set", *CHECKOUT_PATHS])
+    sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
+    return root
+
+
+def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
+    """Manifest-backed tar.zst + .sha256 sidecar (colab result-archive mirror)."""
+    result_archive = WORKING / f"{kind}.tar.zst"
+    files = sorted(p for p in output.rglob("*") if p.is_file())
+    root_name = output.name
+    with tarfile.open(result_archive, "w:zst") as tar:
+        for path in files:
+            arcname = Path(root_name) / path.relative_to(output)
+            tar.add(path, arcname=str(arcname))
+    result_manifest = {
+        "kind": kind,
+        "run_tag": RUN_TAG,
+        "revision": REVISION,
+        "files_count": len(files),
+        "files": {
+            str(Path(root_name) / p.relative_to(output)): {
+                "bytes": p.stat().st_size, "sha256": sha256_file(p)}
+            for p in files
+        },
+        **extra,
+    }
+    (WORKING / f"{kind}.manifest.json").write_text(
+        json.dumps(result_manifest, indent=2), encoding="utf-8")
+    digest = sha256_file(result_archive)
+    (WORKING / f"{kind}.tar.zst.sha256").write_text(digest + "\\n", encoding="utf-8")
+    print(f"[{kind}] staged: {result_archive} sha256={digest}", flush=True)
+    return digest
+'''
+
+TRAIN_KERNEL_BODY = '''
+archive_path, receipt_dir = locate_input_archive()
+receipt = json.loads((receipt_dir / BUNDLE_RECEIPT).read_text())
+if receipt.get("archive_sha256") and sha256_file(archive_path) != receipt["archive_sha256"]:
+    raise SystemExit("attached bundle sha256 mismatch against kernel receipt")
+
+root = clone_pinned()
+env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
+       "WANDB_MODE": "disabled"}
+
+# Install the prepared package exactly where the archive declares members,
+# then verify the suite preflight contract file landed at TRAIN_ROOT
+# (model_tracks.run ER_GPU_TRAINING_ONLY preflight reads it, run.py:68).
+with tarfile.open(archive_path, "r:zst") as tar:
+    tar.extractall(root)
+package_manifest = root / "model_tracks_package.json"
+if not package_manifest.is_file():
+    package_manifest = root / "data" / "model_tracks_package.json"
+if not package_manifest.is_file():
+    raise SystemExit("package install produced no model_tracks_package.json")
+(root / "model_tracks_package.json").write_text(package_manifest.read_text(),
+                                                encoding="utf-8")
+
+output = root / "results" / "model_tracks" / RUN_TAG
+env["ER_GPU_TRAINING_ONLY"] = "1"
+sh([sys.executable, "-m", "model_tracks.run",
+    "--config", SUITE_CONFIG,
+    "--output", str(output), "--run-tag", RUN_TAG], cwd=root, env=env)
+
+stage_result_archive(output, kind="result_bundle", extra={
+    "bundle_receipt": receipt,
+    "bundle_kernel": BUNDLE_KERNEL_SLUG,
+    "checkout_paths": CHECKOUT_PATHS,
+})
+'''
+
+EMBED_KERNEL_BODY = '''
+# Embedding objective: encode the prepared token archive against the
+# git-shipped checkpoint (artifacts/models rides the sparse checkout).
+# The request dataset (request.json + prepared_text.npz) is attached as a
+# Kaggle dataset: scripts/encode_prepared_embeddings.py refuses any
+# re-composition, so the bytes must match the locally prepared request.
+candidates = list(INPUTS.rglob("request.json"))
+if not candidates:
+    raise SystemExit("attached dataset contained no request.json")
+request_dir = candidates[0].parent
+root = clone_pinned()
+checkpoint = root / "@CHECKPOINT@"
+if not checkpoint.is_dir():
+    raise SystemExit("git-shipped checkpoint missing: " + str(checkpoint))
+env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
+       "WANDB_MODE": "disabled"}
+output = root / "results" / "embedding_job" / RUN_TAG
+output.mkdir(parents=True, exist_ok=True)
+sh([sys.executable, "scripts/encode_prepared_embeddings.py",
+    "--request", str(request_dir / "request.json"),
+    "--checkpoint", str(checkpoint),
+    "--output", str(output / "vectors.npz"),
+    "--device", "cuda"], cwd=root, env=env)
+stage_result_archive(output, kind="vectors", extra={
+    "request_dir": str(request_dir),
+    "checkpoint": "@CHECKPOINT@",
+})
+'''
+
 
 def _git_revision() -> str:
     result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=TRAIN_ROOT,
@@ -576,6 +758,232 @@ def kernel_status(slug: str | None = None, *, which: str = "cpu") -> dict[str, A
     return {"kernel": resolved, "status": status, "raw": output.strip()}
 
 
+GPU_KERNEL_KINDS = {"train": (TRAIN_KERNEL_CODE_FILE, TRAIN_KERNEL_BODY),
+                    "embed": (EMBED_KERNEL_CODE_FILE, EMBED_KERNEL_BODY)}
+
+
+def stage_gpu_kernel(*, kind: str, slug: str | None = None,
+                     revision: str | None = None,
+                     run_tag: str | None = None,
+                     checkpoint: str | None = None,
+                     checkout_paths: list[str] | None = None) -> dict[str, Any]:
+    """Stage a GPU kernel (train | embed) with the CPU bundle attached.
+
+    Dry-safe: metadata + generated script + receipt under the staging area;
+    `--execute` makes push_kernel() perform the network call. The train
+    kernel attaches the CPU bundle kernel via kernel_sources (Kaggle mounts
+    its output under /kaggle/input); the embed kernel additionally needs an
+    embedding request dataset slug (kaggle.embedding_dataset_slug).
+    """
+    spec = _spec()
+    if kind not in GPU_KERNEL_KINDS:
+        raise RuntimeError(f"unknown GPU kernel kind: {kind}")
+    code_file, body = GPU_KERNEL_KINDS[kind]
+    resolved_slug = slug or (spec.embedding_kernel_slug if kind == "embed"
+                             else spec.gpu_kernel_slug)
+    if not resolved_slug:
+        raise RuntimeError(
+            f"config kaggle.{kind}_kernel_slug is unset; name the {kind} "
+            "kernel (owner/slug) before staging")
+    bundle_slug = spec.cpu_kernel_slug
+    if not bundle_slug:
+        raise RuntimeError("config kaggle.cpu_kernel_slug is unset; the GPU "
+                           "kernel attaches the CPU bundle kernel output")
+    pinned = revision or _git_revision()
+    tag = run_tag or (spec.run_tag_prefix + time.strftime("%m%dT%H%M%S", time.gmtime()))
+    resolved_checkpoint = checkpoint or spec.checkpoint
+    stage = staging_dir() / f"{kind}_kernel"
+    stage.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, Any] = {
+        "id": resolved_slug,
+        "title": resolved_slug.rsplit("/", 1)[-1].replace("-", " ").title(),
+        "code_file": code_file,
+        "language": "python",
+        "kernel_type": "script",
+        "enable_gpu": True,
+        "enable_internet": True,
+        "dataset_sources": [],
+        "kernel_sources": [bundle_slug],
+        "competition_sources": [],
+        "is_private": True,
+    }
+    if kind == "embed":
+        request_dataset = spec.embedding_dataset_slug
+        if not request_dataset:
+            raise RuntimeError(
+                "config kaggle.embedding_dataset_slug is unset; package + "
+                "upload the embedding request dataset first (--what package "
+                "--dataset-csv ... ; then set the slug)")
+        metadata["dataset_sources"] = [request_dataset]
+    template = TRAIN_KERNEL_SHARED + body
+    script = (template
+              .replace("@REPOSITORY@", spec.repository)
+              .replace("@BRANCH@", spec.branch)
+              .replace("@REVISION@", pinned)
+              .replace("@CHECKOUT_PATHS@",
+                       json.dumps(list(checkout_paths or spec.checkout_paths)))
+              .replace("@REQUIREMENTS@", spec.bundle_requirements)
+              .replace("@RUN_TAG@", tag)
+              .replace("@SUITE_CONFIG@", spec.train_suite_config)
+              .replace("@BUNDLE_KERNEL_SLUG@", bundle_slug)
+              .replace("@CHECKPOINT@", resolved_checkpoint))
+    atomic_write_json(metadata, stage / "kernel-metadata.json")
+    (stage / code_file).write_text(script, encoding="utf-8")
+    receipt = {
+        "kernel": resolved_slug,
+        "kind": kind,
+        "gpu": True,
+        "branch": spec.branch,
+        "revision": pinned,
+        "run_tag": tag,
+        "bundle_kernel": bundle_slug,
+        "checkpoint": resolved_checkpoint if kind == "embed" else None,
+        "staged": str(stage),
+        "code_file": code_file,
+    }
+    atomic_write_json(receipt, stage / f"{kind}_kernel.receipt.json")
+    return receipt
+
+
+def push_kernel(stage_dir: Path) -> dict[str, Any]:
+    """Push any staged kernel (bundle | train | embed) via the CLI."""
+    spec = _spec()
+    executable = _require_kaggle_executable(spec.kaggle_executable)
+    metadata = json.loads((Path(stage_dir) / "kernel-metadata.json").read_text())
+    command = [executable, "kernels", "push", "-p", str(stage_dir)]
+    _, _ = _run_kaggle(command)
+    return {"mode": "executed", "kernel": metadata["id"], "pushed": True,
+            "staged": str(stage_dir)}
+
+
+def fetch_kernel_output(*, kind: str = "bundle", execute: bool) -> dict[str, Any]:
+    """Download a kernel's output and hash-verify its manifest archive.
+
+    bundle — bundle.receipt.json contract (all_tracks_inputs.tar.zst)
+    train  — result_manifest.json contract (result_bundle.tar.zst)
+    embed  — result_manifest.json contract (vectors.tar.zst)
+    Verified artifacts install under staging_dir/<cohort>/<kind>/.
+    """
+    spec = _spec()
+    if kind == "bundle":
+        slug = spec.cpu_kernel_slug
+    elif kind == "train":
+        slug = spec.gpu_kernel_slug
+    else:
+        slug = spec.embedding_kernel_slug
+    if not slug:
+        raise RuntimeError(f"config kaggle kernel slug for {kind!r} is unset")
+    manifest_name = ("bundle.receipt.json" if kind == "bundle"
+                     else f"{kind}.manifest.json")
+    archive_name = ("all_tracks_inputs.tar.zst" if kind == "bundle"
+                    else f"{kind}.tar.zst")
+    stage = staging_dir() / f"{kind}_fetch"
+    plan: dict[str, Any] = {
+        "mode": "executed" if execute else "dry-run",
+        "kernel": slug,
+        "kind": kind,
+        "stage": str(stage),
+    }
+    if not execute:
+        return plan
+    executable = _require_kaggle_executable(spec.kaggle_executable)
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+    command = [executable, "kernels", "output", slug, "-p", str(stage)]
+    _, _ = _run_kaggle(command)
+    manifests = sorted(stage.rglob(manifest_name))
+    if not manifests:
+        zips = sorted(stage.glob("*.zip"))
+        if zips:
+            with zipfile.ZipFile(zips[0]) as bundle:
+                bundle.extractall(stage / "unpacked")
+            manifests = sorted((stage / "unpacked").rglob(manifest_name))
+    if not manifests:
+        raise RuntimeError(
+            f"kernel output under {stage} contained no {manifest_name}")
+    manifest_dir = manifests[0].parent
+    manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+    archive = manifest_dir / archive_name
+    if not archive.is_file():
+        raise FileNotFoundError(
+            f"kernel output manifest names {archive_name} but it is missing "
+            f"under {manifest_dir}")
+    observed = sha256_file(archive)
+    sidecar = manifest_dir / f"{archive_name}.sha256"
+    expected = (sidecar.read_text().strip() if sidecar.is_file()
+                else manifest.get("archive_sha256"))
+    if not expected or observed != expected:
+        raise RuntimeError(
+            f"fetched {kind} sha256 mismatch: expected {expected} observed "
+            f"{observed}")
+    from core.common import F
+
+    cohort = cohort_label(Path(F["dataset"]))
+    destination = staging_dir() / cohort / kind
+    destination.mkdir(parents=True, exist_ok=True)
+    installed = {}
+    shutil.copy2(archive, destination / archive.name)
+    installed[archive_name] = str(destination / archive.name)
+    for name in (manifest_name, f"{archive_name}.sha256"):
+        sidecar_path = manifest_dir / name
+        if sidecar_path.is_file():
+            shutil.copy2(sidecar_path, destination / name)
+            installed[name] = str(destination / name)
+    plan.update({
+        "fetched_archive": str(archive),
+        "archive_sha256": observed,
+        "verified": True,
+        "cohort": cohort,
+        "installed": installed,
+    })
+    return plan
+
+
+def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
+                execute: bool) -> dict[str, Any]:
+    """Poll kernel status; on terminal states pull output logs locally.
+
+    Colab streams VM stdout into local transcripts; Kaggle exposes no live
+    stream, so this is the honest equivalent: status polling with the
+    configured executable (cadence from config kaggle.logs_poll_seconds)
+    and, on terminal states, `kernels output` fetch of the kernel's own log
+    file into the staging logs dir (kaggle.logs_dir).
+    """
+    spec = _spec()
+    resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
+    log_dir = staging_dir() / spec.logs_dir
+    plan: dict[str, Any] = {
+        "kernel": slug,
+        "poll_seconds": resolved_poll,
+        "follow": follow,
+        "log_dir": str(log_dir),
+        "mode": "executed" if execute else "dry-run",
+    }
+    if not execute:
+        return plan
+    history: list[dict[str, Any]] = []
+    while True:
+        status = kernel_status(slug)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _log_lane(f"[{slug}] status={status['status']}")
+        history.append({"at": stamp, "status": status["status"]})
+        if status["status"] in {"complete", "error", "cancelAcknowledged"} or not follow:
+            break
+        time.sleep(resolved_poll)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fetch = [executable, "kernels", "output", slug, "-p", str(log_dir / slug.replace("/", "__"))]
+    try:
+        _, _ = _run_kaggle(fetch)
+        plan["log_fetched"] = True
+    except RuntimeError as error:
+        plan["log_fetched"] = False
+        plan["log_error"] = str(error)[-800:]
+    plan["history"] = history
+    return plan
+
+
+
 def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
     """Download the CPU kernel output and hash-verify the bundle archive.
 
@@ -652,7 +1060,8 @@ def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--what", choices=["package", "upload", "download", "submission",
-                        "credentials", "bundle-kernel", "bundle-fetch", "kernel-status"],
+                        "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
+                        "train-kernel", "embed-kernel", "kernel-logs", "fetch-results"],
                         default="package")
     parser.add_argument("--dataset-csv", type=Path, default=None,
                         help="cohort export to package (default: the SSOT "
@@ -667,9 +1076,22 @@ def main() -> None:
     parser.add_argument("--execute", action="store_true",
                         help="actually invoke the kaggle CLI (requires "
                              "credentials + configured kaggle.slug)")
-    parser.add_argument("--kernel", choices=["cpu", "gpu"], default="cpu",
+    parser.add_argument("--kernel", choices=["cpu", "gpu", "embed"], default="cpu",
                         help="which configured kernel slug kernel-status "
                              "resolves (default: cpu)")
+    parser.add_argument("--kind", choices=["bundle", "train", "embed"], default=None,
+                        help="fetch-results: which kernel output to fetch and "
+                             "verify (default: bundle)")
+    parser.add_argument("--slug", default=None,
+                        help="kernel-logs: explicit owner/slug (default: "
+                             "resolved from --kernel)")
+    parser.add_argument("--follow", action="store_true",
+                        help="kernel-logs: poll until a terminal status")
+    parser.add_argument("--checkpoint", default=None,
+                        help="embed-kernel: git-shipped checkpoint path "
+                             "(default: config kaggle.checkpoint)")
+    parser.add_argument("--run-tag", default=None,
+                        help="run tag for GPU kernels (default: gpu_<stamp>)")
     parser.add_argument("--key-env", default=None,
                         help="environment variable holding the Kaggle API "
                              "token (default: the configured kaggle.api_key_env)")
@@ -696,10 +1118,45 @@ def main() -> None:
                   flush=True)
         return
     if args.what == "bundle-fetch":
-        print(json.dumps(fetch_bundle_output(execute=args.execute), indent=2), flush=True)
+        print(json.dumps(fetch_kernel_output(kind="bundle", execute=args.execute), indent=2), flush=True)
         if not args.execute:
             print("[kaggle-lane] dry-run only; pass --execute to download the "
                   "kernel output", flush=True)
+        return
+    if args.what == "train-kernel" or args.what == "embed-kernel":
+        kind = "train" if args.what == "train-kernel" else "embed"
+        receipt = stage_gpu_kernel(
+            kind=kind,
+            slug=args.slug,
+            revision=args.revision,
+            run_tag=args.run_tag,
+            checkpoint=args.checkpoint,
+        )
+        print(f"[kaggle-lane] staged {kind} kernel: {json.dumps(receipt, indent=2)}",
+              flush=True)
+        if args.execute:
+            print(json.dumps(push_kernel(Path(receipt["staged"])), indent=2),
+                  flush=True)
+        else:
+            print("[kaggle-lane] dry-run only; pass --execute to push the kernel",
+                  flush=True)
+        return
+    if args.what == "kernel-logs":
+        spec = _spec()
+        resolved = args.slug or (
+            spec.embedding_kernel_slug if args.kernel == "embed"
+            else spec.gpu_kernel_slug if args.kernel == "gpu"
+            else spec.cpu_kernel_slug)
+        print(json.dumps(kernel_logs(slug=resolved, follow=args.follow,
+                                     execute=args.execute), indent=2), flush=True)
+        return
+    if args.what == "fetch-results":
+        kind = args.kind or "train"
+        print(json.dumps(fetch_kernel_output(kind=kind, execute=args.execute),
+                         indent=2), flush=True)
+        if not args.execute:
+            print("[kaggle-lane] dry-run only; pass --execute to download and "
+                  "verify the result archive", flush=True)
         return
     if args.what == "kernel-status":
         print(json.dumps(kernel_status(which=args.kernel), indent=2), flush=True)

@@ -163,31 +163,30 @@ class FinalInferenceContractTests(unittest.TestCase):
     def test_the_scored_pair_census_closes_and_is_never_hardcoded(self):
         """Exec-time accounting: the census re-measures artifacts and closes.
 
-        The census pin lives ONLY in config (audit.source_export_expected_rows);
-        the worker reads it at exec time and must not carry its own hardcoded
-        constant (that is what this test's name guards)."""
-        from core.common import training_cfg
+        Pins are removed (2026-10-06 owner ruling): the census re-measures
+        every artifact byte-stably at exec time and must not carry its own
+        hardcoded constant (that is what this test's name guards)."""
         import training.complete_colab_worker as worker
         from training.complete_colab_worker import (
             _byte_stable_csv_rows,
             scored_validation_accounting,
         )
-        from core.common import F
+        from core.common import DATA_PATH, F
 
         self.assertFalse(
             [n for n in dir(worker) if "EXPECTED_SOURCE_EXPORT" in n.upper()],
             "the worker module carries a hardcoded census constant",
         )
         census = scored_validation_accounting()
-        # the exec-time census reads the pin from config, not from a module
+        # the exec-time census re-measures the raw export, never a stored pin
         self.assertEqual(
             census["source_export_rows"],
-            int(training_cfg().audit.source_export_expected_rows),
+            _byte_stable_csv_rows(DATA_PATH),
         )
         self.assertEqual(
             census["deduped_rows"] + census["dropped_rows"],
             census["source_export_rows"],
-            "deduped + dropped must close on the source-export census pin",
+            "deduped + dropped must close on the re-measured source census",
         )
         self.assertEqual(
             census["train_side_rows"] + census["validation_entity_rows"],

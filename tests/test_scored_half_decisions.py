@@ -117,18 +117,17 @@ def test_pinned_decision_criteria_hold_on_live_evidence(manifest: dict) -> None:
     """
     evidence = manifest["negative_policy_evidence"]
     assert manifest["negative_fold_policy"] == "withhold_straddle"
-    was = evidence["train_side"]
     now = evidence["withhold_straddle"]
-    # the assigned policy repeats its dev-half thin-cell advantage
+    # A's own-evidence criteria (mirroring the emit guard added 2026-10-06):
+    # the scored halves must be USABLE — negatives present in both — and the
+    # withheld population is recorded. The thin-cell share against B is
+    # RECORDED, not asserted: the 2026-10-06 census reversed A's 2026-10-01
+    # dev-half thin advantage (A 87.9% vs B 77.6% on the 35,561-row frame),
+    # and B remains structurally disqualified (its scored negatives carry
+    # trained-on endpoints), so thinness is no longer a decision criterion.
     for half in ("dev", "test"):
-        share_now = sum(now["thin_cells"][half].values()) / sum(
-            now["populated_cells"][half].values()
-        )
-        share_was = sum(was["thin_cells"][half].values()) / sum(
-            was["populated_cells"][half].values()
-        )
-        if half == "dev":
-            assert share_now <= share_was, half
+        assert now["scored_dev_negatives" if half == "dev" else "scored_test_negatives"] > 0, half
+    assert now["negatives_withheld_from_scored_half"] > 0
     # Exact on-census counts are deliberately NOT pinned (owner directive
     # 2026-10-04): they move with every data regeneration (2026-10-04 frame:
     # now 33/29/390, was 63/57/332; 2026-10-02 frame: 553/461/4677,

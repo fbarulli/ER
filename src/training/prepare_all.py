@@ -82,9 +82,8 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
     identity = {}
     for path in sorted(paths):
         if path.resolve() == Path(TRAINING_CONFIG_PATH).resolve():
-            # This run measures the census itself; it is output, not a setting.
+            # The run measures its own gate census; it is output, not a setting.
             config = yaml.safe_load(path.read_text())
-            config['rand_matching'].pop('gate_census_pin', None)
             identity[str(path.resolve())] = hashlib.sha256(
                 json.dumps(config, sort_keys=True).encode()).hexdigest()
         else:
@@ -168,10 +167,17 @@ def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | P
 
 
 @timed
-def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) -> dict[str, int]:
+def refresh_gate_census(gate_csv: Path, report_path: Path) -> dict[str, int]:
+    """Measure the gate-decision census and record it as a run artifact.
+
+    Keep the structural checks (no self-pairs, no duplicates, unknown
+    decisions) — they guard the frame, not a pinned number. The counts land
+    in run_dir/gate_census.json and the stage manifest as measured records;
+    there is deliberately NO config rewrite and no pinned equality check
+    (owner ruling 2026-10-06: the pin system is removed).
+    """
     import pandas as pd
-    from core.manifest import atomic_write_json, atomic_write_text
-    from core.schemas import RandMatchingSpec
+    from core.manifest import atomic_write_json
     frame = pd.read_csv(gate_csv, usecols=['gtin1', 'gtin2', 'gate_decision'],
                         dtype=str, keep_default_na=False)
     if frame[['gtin1', 'gtin2']].apply(lambda column: column.str.strip().eq('')).any().any():
@@ -189,14 +195,7 @@ def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) ->
     counts = {'total_pairs': len(frame), **{
         key: int(frame.gate_decision.eq(key).sum())
         for key in ('hard_no', 'proceed', 'fallback')}}
-    counts = RandMatchingSpec.GateCensusPinSpec.model_validate(counts).model_dump()
-    pattern = r'(  gate_census_pin:\n)(    total_pairs: \d+\n    hard_no: \d+\n    proceed: \d+\n    fallback: \d+\n)'
-    text, n = re.subn(pattern, lambda match: match.group(1) + ''.join(
-        f'    {key}: {value}\n' for key, value in counts.items()), Path(config_path).read_text())
-    if n != 1:
-        raise ValueError('Expected exactly one configured gate census')
     atomic_write_json(counts, report_path)
-    atomic_write_text(config_path, text)
     return counts
 
 
@@ -379,9 +378,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 elif name == 'gate_census':
                     with trace_step('prepare_all.stage_refresh_gate_census', stage=name):
                         manifest['gate_census'] = refresh_gate_census(
-                            F['gate_results'], TRAINING_CONFIG_PATH, run_dir / prep.gate_census_file)
-                        from core.common import refresh_training_config
-                        refresh_training_config()
+                            F['gate_results'], run_dir / prep.gate_census_file)
                 elif name == 'labeled_pairs':
                     with trace_step(f'prepare_all.{name}.run'):
                         run(name, ['-m', 'training.labeled_pairs'])

@@ -58,9 +58,9 @@ Everything tunable is in config, never at a call site.
 | `pairs` | `training.yaml` | similarity thresholds, negative draw |
 | `split` | `training.yaml` | fractions, folds, negative fold policy |
 | `masking` | `training.yaml` | masking, balanced augmentation, value swaps |
-| `audit` | `training.yaml` | census pins, manifest stages |
+| `audit` | `training.yaml` | manifest stages (census pins removed 2026-10-06) |
 | `negative_supply` | `training.yaml` | lane mode, GTIN handling |
-| `rand_matching` | `training.yaml` | veto gates, penalties, gate census pin |
+| `rand_matching` | `training.yaml` | veto gates, penalties |
 | `files` / `layouts` | `paths.yaml` | every artifact path |
 | `seed` | `paths.yaml` | the one seed |
 | — | `model_tracks.yaml` | setup dir, text bundle, epochs, device, parallelism |

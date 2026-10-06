@@ -1056,3 +1056,19 @@ id (deterministic, auditable).
 - 2026-10-01 - [x] Fixed a silently DEAD dimension: `package_material` used the regex `pack\s*material`, which compiles to `pack\s*material\s*:` and never matches the real corpus key `Pack Material Type:` — it read empty across all 35,571 n...
 - 2026-10-01 - [x] 17 new regression tests in `tests/test_dedupe_identity.py` pinning the identity partition, the T1.5 verdict table, completeness independence from price/urls, and absence-is-not-contradiction. Full suite: 586 passed, 2 ski...
 - 2026-10-01 - [x] Consolidated the per-row model composition loop (sku_info -> model_input_info -> build_sku_text) into ONE source: core.model_input.build_sku_texts(frame, structured_enabled=...) -> (texts, infos). Refactored call sites: p...
+- 2026-10-06 - [x] Pins system REMOVED (owner ruling): the three preparation
+  tripwires (source_export rows+sha gate, gate_census_pin, dedupe_census_pin)
+  and their multi-site copies are deleted. Rationale: drift controls now rest
+  entirely on per-stage manifest sha256 + provenance identity + closure
+  asserts + the Colab package freshness gate; measured census artifacts stay
+  as records (run_dir/gate_census.json, manifests). Consequences accepted:
+  out-of-band consumer runs (direct labeled_pairs, standalone dedupe) can no
+  longer fail loudly on a changed universe; cross-run sanctioned baselines
+  and the attribution cascades they enabled are gone. Removed code:
+  schemas GateCensusPinSpec/DedupeCensusPinSpec/SourceExportPinSpec/PinsSpec,
+  common PINNED_GATE_FALLBACK_PAIRS/_validate_source_export/
+  gate_census_drift_report, prepare_all config-rewrite in refresh_gate_census,
+  on-VM pin re-writers (colab.py, colab_bundle.py, finalize_full_evidence_
+  rebuild.py), labeled_pairs census assert, selftest pinned-census oracles,
+  test fixtures pinning the census. Consumers that needed a row count now
+  RE-MEASURE (complete_colab_worker source census reads dataset.csv directly).

@@ -269,14 +269,13 @@ def vocabulary() -> dict[str, Any]:
 
 def refresh_training_config() -> TrainingConfig:
     """Refresh the run-owned training view after publishing measured gate counts."""
-    global _TRAIN_CFG, PINNED_GATE_FALLBACK_PAIRS
+    global _TRAIN_CFG
     updated = TrainingConfig.model_validate(_read_yaml(TRAINING_CONFIG_PATH))
     _load_config_cached.cache_clear()
     merged = load_config()
     _CFG.clear()
     _CFG.update(merged)
     _TRAIN_CFG = updated
-    PINNED_GATE_FALLBACK_PAIRS = int(updated.rand_matching.gate_census_pin.fallback)
     return updated
 
 
@@ -752,16 +751,6 @@ def __getattr__(name: str):
         return mapping
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# ── gate census tripwire ────────────────────────────────────────────────────
-# Single declared source: config/rand_matching.gate_census_pin (schema-
-# validated, sum-checked). Consumed by src/training/labeled_pairs.py
-# (fallback exclusion) and selftest oracle_pinned_counts. Update the CONFIG
-# only, on a measured intentional gate change; no code-side literal exists.
-PINNED_GATE_FALLBACK_PAIRS = int(
-    training_cfg().rand_matching.gate_census_pin.fallback
-)
-
-
 def gate_census_drift_report(
     *,
     measured: dict[str, int],
@@ -770,11 +759,10 @@ def gate_census_drift_report(
 ) -> dict[str, Any]:
     """Per-sample map of what a gate-census drift DID to the labeled data.
 
-    Fired by the census consumers (training.labeled_pairs, selftest
-    oracle_pinned_counts) when the measured gate census breaks the config
-    rand_matching.gate_census_pin pin. Diffing the CURRENT gate_results.csv
-    against the PREVIOUS data/labeled_pairs.csv (on disk, else git HEAD),
-    it classifies every labeled pair the census change moved:
+    Fired by the gate-replay lane when replaying gate changes moves
+    labeled pairs. Diffing the CURRENT gate_results.csv against the
+    PREVIOUS data/labeled_pairs.csv (on disk, else git HEAD), it
+    classifies every moved pair:
 
       lost_true_block   label 1 whose pair is now gated hard_no
       lost_true_review  label 1 whose pair now lands in the fallback tier
@@ -786,7 +774,6 @@ def gate_census_drift_report(
     Writes the full per-sample report to results/gate_census_drift.json
     (results/ is gitignored scratch) and returns the summary + sample lists.
     """
-    pin = training_cfg().rand_matching.gate_census_pin.model_dump()
     g = current_gate if current_gate is not None else pd.read_csv(
         RESULTS / F["gate_results"],
         dtype=str,
@@ -870,12 +857,7 @@ def gate_census_drift_report(
             }
         )
     summary = {
-        "config_pin": pin,
         "measured_census": measured,
-        "deltas": {
-            key: int(measured.get(key, 0)) - int(pin.get(key, 0))
-            for key in pin
-        },
         "degraded": {
             key: len(items) for key, items in classes.items() if key != "survived"
         },
@@ -1056,70 +1038,9 @@ def write_visibility_log(
         trace_artifact("visibility", latest_path)
 
 
-def _validate_source_export(
-    df: pd.DataFrame,
-    path: Path,
-    *,
-    audit: Any | None = None,
-) -> None:
-    """Fail before downstream work if the configured raw export drifted.
-
-    Both public raw-export loaders call this after parsing.  The row census
-    catches additions/removals, while the SSOT-held SHA-256 catches a
-    same-sized substitution.  Keep the hash helper as a local import: the
-    manifest module imports this config module, so a module-level import
-    would create a cycle.
-    """
-    spec = audit if audit is not None else training_cfg().audit
-    observed_rows = len(df)
-    expected_rows = spec.source_export_expected_rows
-    drift_pct = abs(observed_rows - expected_rows) / expected_rows * 100
-    if drift_pct > spec.source_drift_threshold_pct:
-        raise SystemExit(
-            "source export row-count drift: "
-            f"path={path} observed_rows={observed_rows} "
-            f"expected_rows={expected_rows} "
-            f"observed_drift_pct={drift_pct:.6f} "
-            f"allowed_drift_pct={spec.source_drift_threshold_pct:.6f}"
-        )
-
-    from core.manifest import sha256_file
-
-    observed_sha256 = sha256_file(path)
-    if observed_sha256 != spec.source_export_expected_sha256:
-        raise SystemExit(
-            "source export sha256 drift: "
-            f"path={path} observed_sha256={observed_sha256} "
-            f"expected_sha256={spec.source_export_expected_sha256}"
-        )
-
-
-def _read_dataset_csv(path: Path, *, columns: Sequence[str] | None = None) -> pd.DataFrame:
-    """Read every dataset lane with the configured string/NA contract."""
-    if columns is not None and not columns:
-        raise ValueError("source export projection requires at least one column")
-    from training.preparation_run import active_preparation
-    run = active_preparation()
-    if run is None:
-        return pd.read_csv(path, usecols=columns, **data_cfg().dataset_csv_read.model_dump())
-    key = path.resolve()
-    if key not in run._datasets:
-        run._datasets[key] = pd.read_csv(path, **data_cfg().dataset_csv_read.model_dump())
-    frame = run._datasets[key]
-    return (frame if columns is None else frame.loc[:, list(columns)]).copy(deep=True)
-
-
 def _load_source_export(columns: Sequence[str] | None = None) -> pd.DataFrame:
-    """Parse selected raw columns while retaining the source census/hash guard."""
-    df = _read_dataset_csv(DATA_PATH, columns=columns)
-    from training.preparation_run import active_preparation
-    run = active_preparation()
-    key = 'validated_source:' + str(DATA_PATH.resolve())
-    if run is None or key not in run._objects:
-        _validate_source_export(df, DATA_PATH)
-        if run is not None:
-            run._objects[key] = True
-    return df
+    """Parse selected raw columns of the raw export."""
+    return _read_dataset_csv(DATA_PATH, columns=columns)
 
 
 def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
@@ -1151,6 +1072,21 @@ def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
         raw_columns = [canonical_to_raw[column] for column in columns]
     df = _load_source_export(raw_columns)
     return df.rename(columns=_column_mapping)
+
+
+def _read_dataset_csv(path: Path, *, columns: Sequence[str] | None = None) -> pd.DataFrame:
+    """Read every dataset lane with the configured string/NA contract."""
+    if columns is not None and not columns:
+        raise ValueError("source export projection requires at least one column")
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    if run is None:
+        return pd.read_csv(path, usecols=columns, **data_cfg().dataset_csv_read.model_dump())
+    key = path.resolve()
+    if key not in run._datasets:
+        run._datasets[key] = pd.read_csv(path, **data_cfg().dataset_csv_read.model_dump())
+    frame = run._datasets[key]
+    return (frame if columns is None else frame.loc[:, list(columns)]).copy(deep=True)
 
 
 def load_raw_export(*, columns: Sequence[str] | None = None) -> pd.DataFrame:

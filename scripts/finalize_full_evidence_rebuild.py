@@ -1,7 +1,6 @@
 """Finalize rebuilt labels and measure the complete all-item handoff."""
 import hashlib
 import json
-import re
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -29,13 +28,8 @@ def main():
     assert sum(counts[k] for k in ['hard_no','proceed','fallback']) == counts['total_pairs']
     # Keep the independent measured census alongside the config pin.
     (OUT/'measured_census.json').write_text(json.dumps(counts,indent=2)+'\n')
-    config_path = ROOT/'config/training.yaml'
-    config = config_path.read_text()
-    pattern = r'(  gate_census_pin:\n)(    total_pairs: \d+\n    hard_no: \d+\n    proceed: \d+\n    fallback: \d+\n)'
-    replacement = r'\1'+''.join(f'    {k}: {v}\n' for k,v in counts.items())
-    config, substitutions = re.subn(pattern,replacement,config)
-    assert substitutions == 1
-    config_path.write_text(config)
+    # measured_census.json IS the record (pins removed 2026-10-06 by owner
+    # ruling; no config rewrite happens here anymore).
     env = __import__('os').environ.copy()
     env['PYTHONPATH']='src:.'
     for args in [
