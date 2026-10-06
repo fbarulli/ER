@@ -206,7 +206,7 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     assignments.to_csv(output / 'listing_splits.csv', index=False)
     pairs.to_csv(output / 'listing_pairs.csv', index=False)
     write_json(output / 'pair_lineage.json',
-               _pair_lineage_document(accounting, output, _LAYOUT_F))
+               _pair_lineage_document(accounting, output, F))
     load_pairs(output / 'listing_pairs.csv', load_pairs_from)
     timing.mark('validate_and_write_pairs')
     listings = prepare(output / 'eligible_catalog.csv', output / 'listing_splits.csv',
@@ -329,7 +329,8 @@ def _default_setup_output() -> Path:
 
 def _default_text_checkpoint() -> Path:
     """The declared baseline text checkpoint (paths.yaml models registry)."""
-    from core.common import _CFG, TRAIN_ROOT, artifacts
+    from core.common import TRAIN_ROOT
+    from core.common import _CFG
     models_dir = _CFG['paths']['models_dir']
     key = _CFG['embedding_model_keys'][0]
     return Path(TRAIN_ROOT) / models_dir / _CFG['models'][key]
