@@ -375,16 +375,39 @@ def _gtin_facts(gtin: object) -> tuple[bool, str]:
     return True, "" if key is None else str(key)
 
 
+def _as_mapping(row: Mapping[str, Any] | Any) -> Mapping[str, Any] | None:
+    """Normalize one catalog row to the Mapping the identity readers consume.
+
+    Mapping/dict rows pass through untouched: every reader here only READS
+    (``resolve_listing_row`` rebinds a merged copy and never mutates the
+    input), so the old defensive ``dict(row)`` copy was pure per-row overhead
+    for the compose sites that feed dicts directly. A pandas Series keeps
+    today's ``row.to_dict()`` path for the frame.iterrows callers, and any
+    other shape returns None so the caller's getattr fallback is preserved.
+    Equivalence for the same row data: ``pd.Series(row).to_dict()`` returns
+    exactly the mapping's own keys and values, so a Mapping row and a Series
+    of it yield the same ProductIdentity; callers supply str cells (read_csv
+    ``dtype=str, keep_default_na=False`` or JSON records), so no dtype
+    coercion applies.
+    """
+    if isinstance(row, Mapping):
+        return row
+    if hasattr(row, "to_dict"):
+        return row.to_dict()
+    return None
+
+
 def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     """Build the descriptor bundle for one catalog row.
 
-    Accepts a Mapping or a pandas namedtuple. The extraction itself is the
+    Accepts a Mapping/dict row or a pandas Series. The extraction itself is the
     pipeline's own `sku_info` — this module never re-implements a parser, it
     only decides how parsed values are COMPARED.
     """
     from core.identity_policy import resolve_listing_row
-    if isinstance(row, Mapping) or hasattr(row, "to_dict"):
-        row = resolve_listing_row(dict(row) if isinstance(row, Mapping) else row.to_dict())
+    normalized = _as_mapping(row)
+    if normalized is not None:
+        row = resolve_listing_row(normalized)
     get = (lambda k, d="": row.get(k, d)) if isinstance(row, Mapping) else (
         lambda k, d="": getattr(row, k, d)
     )

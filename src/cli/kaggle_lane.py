@@ -345,7 +345,22 @@ WORKING = Path("/kaggle/working")
 
 def sh(command, **kwargs):
     print("+ " + " ".join(str(part) for part in command), flush=True)
-    subprocess.run([str(part) for part in command], check=True, **kwargs)
+    # Route child stderr (including tqdm) through the notebook output stream.
+    input_text = kwargs.pop("input", None)
+    kwargs.pop("text", None)
+    with subprocess.Popen([str(part) for part in command],
+                          stdin=subprocess.PIPE if input_text is not None else None,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, bufsize=1,
+                          **kwargs) as process:
+        if input_text is not None:
+            process.stdin.write(input_text)
+            process.stdin.close()
+        for line in process.stdout:
+            print(line, end="", flush=True)
+        rc = process.wait()
+    if rc:
+        raise subprocess.CalledProcessError(rc, command)
 
 
 def sha256_file(path):
@@ -1024,6 +1039,57 @@ def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
     return plan
 
 
+def stop_kernel(slug: str | None = None, *, which: str = "cpu",
+                execute: bool) -> dict[str, Any]:
+    """Stop a kernel's running session and release its compute quota.
+
+    Kaggle's official CLI exposes no cancel verb and the cancel-session API
+    needs a session id the public surfaces never report, so the reliable
+    mechanism is a version replace: push a trivial stub that prints and
+    exits — the platform tears down the current session to run version N+1.
+    Dry-run by default; --execute performs the replace.
+    """
+    spec = _spec()
+    resolved = slug or (spec.embedding_kernel_slug if which == "embed"
+                        else spec.gpu_kernel_slug if which == "gpu"
+                        else spec.cpu_kernel_slug)
+    if not resolved:
+        raise RuntimeError(
+            f"config kaggle.{which}_kernel_slug is unset; pass a slug or "
+            f"name the {which} kernel in config")
+    stage = staging_dir() / f"{which}_stop"
+    plan: dict[str, Any] = {
+        "mode": "executed" if execute else "dry-run",
+        "kernel": resolved,
+        "staged": str(stage),
+    }
+    if not execute:
+        return plan
+    stage.mkdir(parents=True, exist_ok=True)
+    title = resolved.rsplit("/", 1)[-1].replace("-", " ").title()
+    atomic_write_json({
+        "id": resolved,
+        "title": title,
+        "code_file": "cancel_stub.py",
+        "language": "python",
+        "kernel_type": "script",
+        "enable_gpu": False,
+        "enable_internet": True,
+        "dataset_sources": [],
+        "kernel_sources": [],
+        "competition_sources": [],
+        "is_private": True,
+    }, stage / "kernel-metadata.json")
+    (stage / "cancel_stub.py").write_text(
+        'print("[kaggle-lane] run cancelled by owner; session released")\n',
+        encoding="utf-8")
+    executable = _require_kaggle_executable(spec.kaggle_executable)
+    command = [executable, "kernels", "push", "-p", str(stage)]
+    _run_kaggle(command)
+    plan.update(stopped=True)
+    return plan
+
+
 def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
                 execute: bool) -> dict[str, Any]:
     """Poll kernel status; on terminal states pull output logs locally.
@@ -1080,7 +1146,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                         "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
-                        "train-kernel", "embed-kernel", "kernel-logs", "fetch-results"],
+                        "train-kernel", "embed-kernel", "kernel-logs", "fetch-results",
+                        "stop"],
                         default="package")
     parser.add_argument("--dataset-csv", type=Path, default=None,
                         help="cohort export to package (default: the SSOT "
@@ -1187,6 +1254,15 @@ def main() -> None:
         return
     if args.what == "kernel-status":
         print(json.dumps(kernel_status(which=args.kernel), indent=2), flush=True)
+        return
+    if args.what == "stop":
+        spec = _spec()
+        resolved = args.slug or (
+            spec.embedding_kernel_slug if args.kernel == "embed"
+            else spec.gpu_kernel_slug if args.kernel == "gpu"
+            else spec.cpu_kernel_slug)
+        print(json.dumps(stop_kernel(slug=resolved, which=args.kernel,
+                                     execute=args.execute), indent=2), flush=True)
         return
     spec = _spec()
     if args.what == "submission":

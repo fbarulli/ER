@@ -1,0 +1,6711 @@
+{
+  "listings": [
+    {
+      "attribute": {
+        "brand": [
+          "amlica"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "mandarin"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          200.0
+        ]
+      },
+      "sku_id": "1000100698",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bottle",
+          "pop"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coconut",
+          "coffee",
+          "mocha",
+          "oat",
+          "peppermint"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": [
+          "sweetened"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          237.0
+        ]
+      },
+      "sku_id": "1000226316",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "amand",
+          "saint"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "10002990",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "manzanita",
+          "sol"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "apple"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          2000.0
+        ]
+      },
+      "sku_id": "1000304279",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "sanzo"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "mango"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1000344085",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "gorilla",
+          "mind"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "berry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          473.0
+        ]
+      },
+      "sku_id": "1000432099",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bum",
+          "energy"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1000486377",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "tchibo"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee",
+          "light"
+        ],
+        "package_material": [],
+        "package_type": [
+          "pouch"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          8.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1000510072",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "sanzo"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "calamansi",
+          "lime"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1000516011",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "sound"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "hibiscus",
+          "lime",
+          "rose",
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar",
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1000566827",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1000656051",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "blueberry",
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1000710367",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "machu",
+          "picchu"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "blueberry",
+          "pineapple"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1000749660",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "proud",
+          "source"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          473.0
+        ]
+      },
+      "sku_id": "1000802081",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "juice",
+          "pickle"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          74.0
+        ]
+      },
+      "sku_id": "1000813567",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "raspberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1000827279",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "pineapple",
+          "strawberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1000894002",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "rivella"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "cyclamate",
+          "saccharin"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1000914264",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "navitas"
+        ],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners",
+          "unsweetened"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "10009275",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "ethiquable"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "pineapple"
+        ],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "10009367",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "uptime"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "mango",
+          "pineapple"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1000940992",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "peach",
+          "tropical"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1000943999",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fernandes"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1000988218",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "quench",
+          "sun"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "fruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1000991449",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruit",
+          "o"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "10010264",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "rivella"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1001068351",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kern",
+          "s"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apricot",
+          "coconut",
+          "mango",
+          "peach",
+          "pineapple"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          340.0
+        ]
+      },
+      "sku_id": "1001135174",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "sourcy"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "grape",
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1001173315",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "redcon"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1001306530",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "burst",
+          "juice"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1001405249",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "cliff",
+          "kill"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [
+          "box",
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "erythritol"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1001470657",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "aura",
+          "bora"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "basil",
+          "berry"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1001573296",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "ten"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          3785.0
+        ]
+      },
+      "sku_id": "1001787666",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "lifeaid"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "citrus",
+          "fruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "packet"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar",
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "monk_fruit",
+          "stevia"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1001815828",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kohana"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          946.0
+        ]
+      },
+      "sku_id": "1001961770",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bolt"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "mango",
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1002004030",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "regal"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "mango",
+          "orange"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          2000.0
+        ]
+      },
+      "sku_id": "100210306",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "force",
+          "strike"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          2.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1002116588",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hydrate",
+          "wow"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon",
+          "lime"
+        ],
+        "package_material": [],
+        "package_type": [
+          "blister"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1002262631",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "lifeaid"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "diet"
+        ],
+        "sweetener_type": [
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          35.0
+        ]
+      },
+      "sku_id": "1002383316",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "tea",
+          "texas"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "strawberry",
+          "tea"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          473.0
+        ]
+      },
+      "sku_id": "1002448096",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "emmi"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "cappuccino",
+          "coffee",
+          "italian",
+          "latte"
+        ],
+        "package_material": [],
+        "package_type": [
+          "cup",
+          "pot",
+          "tub"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          230.0
+        ]
+      },
+      "sku_id": "1002466685",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "shine",
+          "water"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1002477949",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "lemon",
+          "perfect"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1002529896",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1002764793",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "moomin"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "berries",
+          "berry",
+          "wild",
+          "wild berries"
+        ],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "100284616",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "teho"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1002955702",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "brew",
+          "dr",
+          "kombucha"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "cherry",
+          "lime"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1003114233",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "o",
+          "protein"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "coconut",
+          "tropical"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1003131245",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1003718169",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kombucha",
+          "vitae"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "apple",
+          "cinnamon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1003718780",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "recess"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger",
+          "lemon",
+          "lime"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1003734206",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "beer",
+          "mug",
+          "root"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1003791286",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruits",
+          "true"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "cherry",
+          "fruit",
+          "mango",
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1003836376",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "pureness"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "raspberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1003849840",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruits",
+          "true"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "lime",
+          "mint",
+          "orange",
+          "pineapple"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1003928100",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "klarbrunn"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "strawberry",
+          "watermelon"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          503.0
+        ]
+      },
+      "sku_id": "100396517",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruit",
+          "o"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1004003226",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "canadian",
+          "clearly"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1004027521",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "tenzing"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lime",
+          "mint"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1004037245",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fernandes"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon",
+          "pineapple"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1004095894",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "swoon"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "peach",
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "monk_fruit"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1004112793",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruits",
+          "true"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "ginger",
+          "pear"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "1004119226",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "moshi"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1004308646",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "pureness"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "cola"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1004325127",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "pureness"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger",
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1004348272",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruits",
+          "true"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "mango",
+          "orange",
+          "passion"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "1004349662",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1004356249",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "duskin"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          4.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1004391575",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "pureness"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1004407078",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "pro"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "pear"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1004487837",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "vilsa"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "blackcurrant"
+        ],
+        "package_material": [],
+        "package_type": [
+          "pouch"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1004541447",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "more",
+          "nutrition"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "peach",
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          65.0
+        ]
+      },
+      "sku_id": "1004565332",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "riemerschmid"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "pomegranate"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          700.0
+        ]
+      },
+      "sku_id": "1004631086",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "moloko"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1004631693",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bebivita"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fennel"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1004640309",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "jeden",
+          "tag"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1004645190",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "vilsa"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "blister"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          700.0
+        ]
+      },
+      "sku_id": "1004705514",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "mezzo",
+          "mix"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1004713348",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bio",
+          "zentrale"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lime"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1004714356",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1004734175",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "mezzo",
+          "mix"
+        ],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1004831113",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "evolution",
+          "fresh"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "fruit",
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1004831795",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "dr",
+          "price",
+          "s"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "tropical"
+        ],
+        "package_material": [],
+        "package_type": [
+          "packet"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          30.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1004889750",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "captain",
+          "gutsy"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "ginger",
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1004910390",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "trocadero"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1004948076",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "christinen"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lime"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "1004966952",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fritz",
+          "spritz"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1005016844",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "m",
+          "venpick"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee"
+        ],
+        "package_material": [],
+        "package_type": [
+          "cup",
+          "pot",
+          "tub"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1005016936",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "evolution",
+          "fresh"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "fruit",
+          "strawberry",
+          "vanilla"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1005041692",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "ka"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "grape"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "10050777",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "trocadero"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1005088488",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1005091224",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "larissa",
+          "veronica"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "mango",
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bag",
+          "packet"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          473.0
+        ]
+      },
+      "sku_id": "1005215657",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "french",
+          "la"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1005219309",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "moju"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "cherry",
+          "ginger",
+          "lemon",
+          "mango",
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          420.0
+        ]
+      },
+      "sku_id": "1005228770",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "applied",
+          "nutrition"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          24.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1005824008",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "coffee",
+          "mate"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "caramel",
+          "coffee",
+          "medium"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1479.0
+        ]
+      },
+      "sku_id": "1005869287",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "o",
+          "r",
+          "s"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "glucose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          24.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1005930651",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nutrament"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1006224395",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "oskar",
+          "sylte"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1006406967",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "coffee",
+          "mate"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee",
+          "vanilla"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1479.0
+        ]
+      },
+      "sku_id": "1006463432",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "jimmy",
+          "s"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1006566889",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hatsu"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1006567210",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "tassoni"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          4.0
+        ],
+        "volume_ml": [
+          180.0
+        ]
+      },
+      "sku_id": "1006567524",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "sunniva"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "lemon",
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1006702246",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "farris"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "apple",
+          "kiwi"
+        ],
+        "package_material": [],
+        "package_type": [
+          "box"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "sweetened"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1006719512",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "powerking"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "mango"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1006770215",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "farris"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "box"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1006795457",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "farris"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "apple",
+          "kiwi"
+        ],
+        "package_material": [],
+        "package_type": [
+          "box"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "sweetened"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1006802952",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "farris"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [],
+        "package_type": [
+          "box"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1006812831",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "farris"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "raspberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "box"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1006832588",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "frappuccino",
+          "starbucks",
+          "vanilla"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee",
+          "vanilla"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          4.0
+        ],
+        "volume_ml": [
+          281.0
+        ]
+      },
+      "sku_id": "1006920705",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bossen"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "pouch"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1006933433",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "ka"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1007072946",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1007110894",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "nyg",
+          "rda"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame",
+          "saccharin"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1007263397",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "cola"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007269766",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007305135",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "cola"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007351158",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "garant"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coconut",
+          "ginger",
+          "lemon",
+          "mango",
+          "pineapple"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "1007430073",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "trocadero"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "bag",
+          "packet"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1007601865",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007619248",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "cola"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007638966",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "javy"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee",
+          "espresso",
+          "medium"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          200.0
+        ]
+      },
+      "sku_id": "1007702991",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "cola"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007723013",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "lakanto"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "berry",
+          "pomegranate"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1007834837",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kraftling"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "ginger",
+          "mango",
+          "passion",
+          "passionfruit"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          60.0
+        ]
+      },
+      "sku_id": "1007854298",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bubbl",
+          "r"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lime",
+          "watermelon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "stevia",
+          "sugar"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1007887906",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "oxyshred"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "kiwi",
+          "strawberry",
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar",
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          473.0
+        ]
+      },
+      "sku_id": "1007927304",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hit",
+          "vit"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "mandarin"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1007951351",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hit",
+          "vit"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "fruit",
+          "mango",
+          "passion",
+          "passionfruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1007968621",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "raspberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1007968663",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kraftling"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "ginger",
+          "orange"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          60.0
+        ]
+      },
+      "sku_id": "1008030002",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "cortas"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "rose"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          503.0
+        ]
+      },
+      "sku_id": "1008060154",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kraftling"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "ginger",
+          "mango",
+          "passion",
+          "passionfruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          400.0
+        ]
+      },
+      "sku_id": "1008108874",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "lakanto"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "fruit"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1008117261",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kern",
+          "s"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "guava"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1745.0
+        ]
+      },
+      "sku_id": "1008123154",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "splenda"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          40.0
+        ]
+      },
+      "sku_id": "1008139572",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hit",
+          "vit"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "berry",
+          "elderberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1008146381",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "delight",
+          "international"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coffee",
+          "mocha",
+          "peppermint"
+        ],
+        "package_material": [],
+        "package_type": [
+          "box",
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1893.0
+        ]
+      },
+      "sku_id": "1008150748",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "blueberry",
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners",
+          "no_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1018367358",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [],
+        "flavor": [
+          "pineapple",
+          "strawberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": [
+          "no_artificial_sweeteners"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1018386053",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hip",
+          "pop"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar",
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "1018515978",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "premier"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "raspberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "1030982510",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kiviks",
+          "musteri"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "1033449824",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kevytolo",
+          "olvi"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1034377526",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "cutwater"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1038660793",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kevytolo",
+          "olvi"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1040469080",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "cutwater"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          24.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1041858355",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "battery"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "1041889119",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bull",
+          "cock",
+          "n"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "diet"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          20.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1042748759",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "bull",
+          "cock",
+          "n"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "apple",
+          "ginger"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          24.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "1043504899",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "la",
+          "mortuacienne"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          330.0
+        ]
+      },
+      "sku_id": "1054347099",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "eco"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "with_pulp"
+        ],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "109882955",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "paquito"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon",
+          "lime"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "with_pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "145887335",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "savs"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "203946453",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "savs"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "lemon",
+          "pear"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "20600327",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "coeur",
+          "de",
+          "pom"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "337516604",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "ogeu"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [
+          "flexible",
+          "pack"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "338115436",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "coeur",
+          "de",
+          "pom"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "349325893",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "marcel"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "apricot",
+          "grape",
+          "pear"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "373448609",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "marcel"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "grape",
+          "peach",
+          "pear"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "373471311",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "marcel"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "tomato"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "373583216",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "marcel"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "apricot",
+          "grape",
+          "pear"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "373719161",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "amand",
+          "saint"
+        ],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "383335008",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "rema"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "no_pulp"
+        ],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "397234750",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "multipower"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "cyclamate",
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "408247093",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "natural",
+          "so"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "avocado",
+          "pear"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "421406791",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "battery"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          275.0
+        ]
+      },
+      "sku_id": "448380388",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "marcel"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "grape",
+          "peach",
+          "pear"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          3.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "458872379",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "marcel"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "tomato"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          3.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "460220581",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "navitas"
+        ],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "4786315",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "multipower"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "pineapple"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "cyclamate",
+          "sucralose"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "485370881",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "ogeu"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [],
+        "package_material": [
+          "flexible",
+          "pack"
+        ],
+        "package_type": [
+          "pouch"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          1250.0
+        ]
+      },
+      "sku_id": "489403563",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fruits",
+          "true"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "ginger",
+          "pear"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "49423877",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "juice"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [
+          "no_pulp"
+        ],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "495736186",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "monoprix"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [
+          "with_pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "50518353",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "juice"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "flexible",
+          "pack"
+        ],
+        "package_type": [],
+        "pulp": [
+          "no_pulp"
+        ],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          6.0
+        ],
+        "volume_ml": [
+          200.0
+        ]
+      },
+      "sku_id": "515358217",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kevytolo",
+          "olvi"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          950.0
+        ]
+      },
+      "sku_id": "524461375",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kevytolo",
+          "olvi"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "lemon"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "524738170",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "natural",
+          "so"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "avocado",
+          "pear"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          750.0
+        ]
+      },
+      "sku_id": "53772127",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "garant"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [
+          "no_pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1750.0
+        ]
+      },
+      "sku_id": "55613066",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "kiviks",
+          "musteri"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "nectarine"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "56070791",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "la",
+          "mortuacienne"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "grapefruit"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "641603268",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "machu",
+          "picchu"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "blueberry",
+          "pineapple"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          355.0
+        ]
+      },
+      "sku_id": "688740747",
+      "split": "dev"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "pureness"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          370.0
+        ]
+      },
+      "sku_id": "703171863",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "harvest"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "coconut"
+        ],
+        "package_material": [
+          "carton",
+          "paper"
+        ],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [
+          "no_pulp"
+        ],
+        "sweetener": [
+          "no_added_sugar"
+        ],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "74341317",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "fernandes"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "ginger"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          250.0
+        ]
+      },
+      "sku_id": "756810987",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "omg"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "apple",
+          "fruit",
+          "passion",
+          "passionfruit",
+          "tea"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "fructose",
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          270.0
+        ]
+      },
+      "sku_id": "782605478",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "farris"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "peach"
+        ],
+        "package_material": [
+          "glass"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "no_sugar"
+        ],
+        "sweetener_type": [
+          "acesulfame_potassium",
+          "aspartame"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "896030834",
+      "split": "test"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "omg"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "passion",
+          "passionfruit",
+          "tea"
+        ],
+        "package_material": [],
+        "package_type": [
+          "can"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "fructose",
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "919472103",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:2020005054080",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:3292482220046",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:3292482520016",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:3600520752778",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:3700749300023",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:3700749300115",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:4779033974218",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [],
+        "carbonation": [],
+        "flavor": [],
+        "package_material": [],
+        "package_type": [],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": []
+      },
+      "sku_id": "canonical:7314720732046",
+      "split": "train"
+    }
+  ],
+  "schema": "er-graph-listings-v1"
+}

@@ -32,7 +32,7 @@ from collections.abc import Mapping, Sequence
 import pandas as pd  # frame access in build_sku_texts (consolidated loop)
 
 from core.columns import alias_names
-from core.common import load_config, row_metadata_text, config_section
+from core.common import load_config, metadata_text, row_metadata_text, config_section
 from core.schemas import TrainingSpec
 
 __all__ = [
@@ -233,6 +233,28 @@ def _reduce_redundancy(text: str, *, spec: TrainingSpec.ModelInputSpec) -> str:
     return " ".join(tokens)
 
 
+def _row_metadata_text(row, primary: str, *aliases: str) -> str:
+    """Read one source field from either accepted row shape.
+
+    Rows arrive as a pandas Series (the frame.iterrows lanes) or as a plain
+    dict/Mapping row (the package/ablation compose sites), and both are only
+    ever READ, so the Mapping passes through untouched and the Series keeps
+    the shared ``core.common.row_metadata_text`` reader. Equivalence for the
+    same row data: ``pd.Series(dict)`` keeps exactly the dict's keys, so a
+    missing name misses ``row.index`` there and misses ``row`` here — both
+    fall through to "" — while a present NaN/None reaches ``metadata_text``,
+    which returns "" for either shape. Every caller supplies str cells
+    (read_csv ``dtype=str, keep_default_na=False`` or JSON records), so no
+    dtype coercion can make the two shapes diverge.
+    """
+    if isinstance(row, Mapping):
+        for name in (primary, *aliases):
+            if name in row:
+                return metadata_text(row[name])
+        return ""
+    return row_metadata_text(row, primary, *aliases)
+
+
 def _cleaned_sku_text(
     row, info: Mapping[str, object], *, spec: TrainingSpec.ModelInputSpec
 ) -> str:
@@ -249,10 +271,10 @@ def _cleaned_sku_text(
     from core.structured_features import append_text
 
     tokens: list[str] = []
-    tokens += _normalized_tokens(row_metadata_text(row, "brand"), drop_schema_words=False)
-    tokens += _normalized_tokens(row_metadata_text(row, "sku_name_eng"), drop_schema_words=False)
+    tokens += _normalized_tokens(_row_metadata_text(row, "brand"), drop_schema_words=False)
+    tokens += _normalized_tokens(_row_metadata_text(row, "sku_name_eng"), drop_schema_words=False)
     tokens += _normalized_tokens(
-        row_metadata_text(row, *alias_names("attribute")), drop_schema_words=True
+        _row_metadata_text(row, *alias_names("attribute")), drop_schema_words=True
     )
     symmetric = model_input_info(info, spec=spec)
     return _reduce_redundancy(
@@ -298,12 +320,12 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     from pipeline import clean_sku_text, strip_schema_words
 
     base = strip_schema_words(clean_sku_text(
-        row_metadata_text(row, "sku_name_eng"),
-        row_metadata_text(row, *alias_names("attribute")),
-        row_metadata_text(row, "brand"),
-        row_metadata_text(row, *alias_names("description_short_eng")),
-        row_metadata_text(row, *alias_names("category")),
-        row_metadata_text(row, *alias_names("breadcrumbs_eng")),
+        _row_metadata_text(row, "sku_name_eng"),
+        _row_metadata_text(row, *alias_names("attribute")),
+        _row_metadata_text(row, "brand"),
+        _row_metadata_text(row, *alias_names("description_short_eng")),
+        _row_metadata_text(row, *alias_names("category")),
+        _row_metadata_text(row, *alias_names("breadcrumbs_eng")),
     ))
     # The legacy profile is a byte-for-byte rollback contract. The active
     # cleaned profile now accepts declared Pack Type when the title has none,
@@ -313,13 +335,13 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     legacy_info.pop("sweetening", None)
     # A title-only ablation supplies a precomputed full-row ``info`` while
     # blanking attributes in the row; keep that supplied structured channel.
-    if row_metadata_text(row, *alias_names("attribute")).strip():
+    if _row_metadata_text(row, *alias_names("attribute")).strip():
         legacy_info["package_type"] = set(extract_title_attributes(
-            row_metadata_text(row, "sku_name_eng")
+            _row_metadata_text(row, "sku_name_eng")
         )["package_types"])
         legacy_info["flavor"] = set(extract_flavor_tokens(
-            row_metadata_text(row, "sku_name_eng"),
-            row_metadata_text(row, *alias_names("attribute")),
+            _row_metadata_text(row, "sku_name_eng"),
+            _row_metadata_text(row, *alias_names("attribute")),
         ))
     return append_text(base, legacy_info, enabled=_structured_text_enabled())
 
@@ -385,9 +407,11 @@ def build_sku_text(
 ) -> str:
     """Model text for one SOURCE sku row.
 
-    ``row`` is a pandas row/Series so field fallbacks go through the shared
-    ``core.common.row_metadata_text`` reader; ``info`` is the structured
-    attribute mapping the caller already built for the numeric channel.
+    ``row`` is a pandas row/Series or a plain dict/Mapping row (the compose
+    sites feed dicts directly); field fallbacks go through the shared
+    ``core.common.row_metadata_text`` reader for a Series and the equivalent
+    Mapping read for a dict; ``info`` is the structured attribute mapping the
+    caller already built for the numeric channel.
     """
     resolved = _resolve(spec)
     if resolved.profile == "cleaned":

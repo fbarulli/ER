@@ -191,7 +191,6 @@ def _make_composer():
     from core.sku_identity import row_identity
     from graph_tracks.text_cache import composition_fingerprint
     from model_tracks.ablation import digest
-    import pandas as pd
     from core.common import training_cfg
     limits = training_cfg().packaging
     with trace_step('package.build_composition_contract'):
@@ -216,8 +215,7 @@ def _make_composer():
             if key in composed:
                 composed.move_to_end(key)
                 return composed[key]
-            series = pd.Series(row)
-            text = build_sku_text(series, model_input_info(row_identity(series).as_mapping()))
+            text = build_sku_text(row, model_input_info(row_identity(row).as_mapping()))
             cost = sys.getsizeof(key) + sys.getsizeof(text)
             if limits.composition_cache_entries and cost <= limits.composition_cache_bytes:
                 while composed and (len(composed) >= limits.composition_cache_entries or cache_bytes + cost > limits.composition_cache_bytes):
