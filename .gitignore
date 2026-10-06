@@ -42,6 +42,7 @@ artifacts/models/*/
 !artifacts/models/tracks/
 !artifacts/models/tracks/**
 training.log
+training_*.log
 # Training-run results: ignored wholesale except what DVC retention tracks
 # (the *.dvc sidecars DVC writes beside each run and its own lane .gitignore).
 training_results/*
@@ -50,6 +51,8 @@ training_results/*
 # Colab CLI session state and local runtime logs/cache.
 colab_cli_state/
 colab_system.log
+colab_system_*.log
+colab_setup_timing.log
 matplotlib/
 # Unrelated local artifact tree (contains node_modules, archives, and media).
 archify/
