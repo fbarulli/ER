@@ -20,7 +20,10 @@ def prepare_cohort(setup, bundle):
 
     folder = setup / 'ablation_cohort'
     folder.mkdir(parents=True, exist_ok=True)
-    clean = setup.parent / (setup.name + CLEAN_BACKUP_SUFFIX)
+    # The portable layout class owns this composition (package.py ships the
+    # members with the SAME resolver; drift between ship/consume is dead).
+    from model_tracks.portable_layout import PortableLayout
+    clean = PortableLayout.consumer_clean_backup(setup)
     clean_pairs = pd.read_csv(clean / 'pairs.csv', dtype=str, keep_default_na=False)
     catalog = pd.read_csv(setup / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
     rows = catalog.set_index('sku_id', drop=False).to_dict('index')
