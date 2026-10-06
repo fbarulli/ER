@@ -122,6 +122,16 @@ def mnrl_presentation_counts(data: dict) -> list[dict]:
     """Count actual objective rows, distinguishing negative augmentation lineage."""
     copy_pairs = set()
     twins = set()
+    twin_copies = set()
+    # Balanced-augmentation bundles record their lineage against the
+    # PRE-PROJECTION payload coordinates: augment_balanced stamps
+    # anchor_payload_idx / pair_payload_idx before the frozen objective is
+    # built, so the (anchor, pair, copy) tuple never matches a frozen triple
+    # even though copy_payload_idx is in the triple's own index space. Their
+    # payload carries augmentation_coverage; classic-lane bundles do not.
+    # Matching the copy index for those bundles restores the measurement
+    # without touching the classic lane's arithmetic.
+    balanced_lane = "augmentation_coverage" in data
     for row in data.get("hard_negative_mask_audit", []):
         if str(row.get("population", "hard_negative")) != "hard_negative":
             continue
@@ -129,6 +139,7 @@ def mnrl_presentation_counts(data: dict) -> list[dict]:
         pair = int(row["pair_payload_idx"])
         if _mode(row) == "counterfactual":
             twins.add((int(row["anchor_payload_idx"]), pair, copy))
+            twin_copies.add(copy)
         else:
             copy_pairs.add((copy, pair))
     plan = data.get("training_plan")
@@ -151,9 +162,14 @@ def mnrl_presentation_counts(data: dict) -> list[dict]:
             data["pos"], data["train_neg"], mask_audit=data.get("mask_audit", []),
             hard_negative_mask_audit=data.get("hard_negative_mask_audit", []))
         objectives = [("unsplit", [triple for triple, _ in rows], "production triple census (no frozen plan)")]
+    def _augmented_negative(a: int, p: int, n: int) -> bool:
+        if (a, n) in copy_pairs or (a, p, n) in twins:
+            return True
+        # Balanced lane only: the triple's negative IS the augmented copy.
+        return balanced_lane and n in twin_copies
+
     return [{"fold": fold, "source": source, "presentations": len(triples),
-             "negative_augmented": sum((int(a), int(n)) in copy_pairs or
-                                       (int(a), int(p), int(n)) in twins
+             "negative_augmented": sum(_augmented_negative(int(a), int(p), int(n))
                                        for a, p, n in triples)}
             for fold, triples, source in objectives]
 
