@@ -1078,6 +1078,13 @@ def supervise_kernels(*, kinds: Sequence[str], execute: bool,
     }
     if not execute:
         return plan
+    import threading
+    # Max visibility by default: one live log-stream follower per kernel.
+    threads = {kind: threading.Thread(
+        target=stream_kernel_logs, args=(slugs[kind],), daemon=True,
+        name=f'stream-{kind}') for kind in kinds}
+    for thread in threads.values():
+        thread.start()
     history: dict[str, list[dict[str, str]]] = {}
     outstanding = list(kinds)
     polls = 0
@@ -1104,6 +1111,8 @@ def supervise_kernels(*, kinds: Sequence[str], execute: bool,
         if outstanding:
             time.sleep(resolved_poll)
     plan["status_history"] = history
+    for thread in threads.values():
+        thread.join(timeout=10.0)  # stream followers close at session teardown
     receipt_path = staging_dir() / "supervise.receipt.json"
     try:
         atomic_write_json(plan, receipt_path)
@@ -1165,6 +1174,60 @@ def stop_kernel(slug: str | None = None, *, which: str = "cpu",
     return plan
 
 
+def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any]:
+    """Follow a session's live log stream (max visibility, owner default).
+
+    kaggle's CLI only shows status until teardown; the midtier's SSE log
+    proxy (kagglesdk GET->KERNELS GetKernelSessionLogsStream) exposes the
+    run's live stdout/stderr — the tqdm bars included. The proxy URL embeds
+    the kernel_session_id, which also feeds the manual kill switch.
+    Appends every event verbatim to log_path (default: staging logs dir)
+    and echoes decoded lines to the console."""
+    from kagglesdk.kaggle_client import KaggleClient
+    from kagglesdk.kaggle_env import KaggleEnv
+    from kagglesdk.common.types.file_download import FileDownload
+    from kagglesdk.kernels.types.kernels_api_service import (
+        ApiGetKernelSessionLogsStreamRequest)
+
+    spec = _spec()
+    owner, slash, kernel = slug.rpartition("/")
+    if not slash or not owner or not kernel:
+        raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
+    destination = log_path or (staging_dir() / spec.logs_dir /
+                               f"{kernel}.stream.log")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
+    session_id: int | None = None
+    with destination.open("a", encoding="utf-8") as log_handle:
+        client = KaggleClient(env=KaggleEnv.PROD)
+        request = ApiGetKernelSessionLogsStreamRequest()
+        request.user_name = owner
+        request.kernel_slug = kernel
+        response = client.kernels.kernels_api_client.get_kernel_session_logs_stream(
+            request)
+        # FileDownload.prepare_from returns the live streamed requests.Response
+        # (text/event-stream, "data: {stream_name,time,data}" SSE frames).
+        plan["stream_url"] = str(getattr(response, "url", "") or "")
+        for raw in response.iter_lines(decode_unicode=True):
+            if not raw:
+                continue
+            log_handle.write(raw + "\n")
+            log_handle.flush()
+            line = raw[5:].strip() if raw.startswith("data:") else raw
+            try:
+                payload = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                print(f"[stream {kernel}] {raw[:200]}", flush=True)
+                continue
+            if not isinstance(payload, dict):
+                print(f"[stream {kernel}] {line[:200]}", flush=True)
+                continue
+            for chunk in (str(payload.get("data", "")).splitlines() or [""]):
+                print(f"[stream {kernel}] {chunk[:200]}", flush=True)
+    plan["session_id"] = session_id
+    return plan
+
+
 def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
                 execute: bool) -> dict[str, Any]:
     """Poll kernel status; on terminal states pull output logs locally.
@@ -1222,7 +1285,7 @@ def main() -> None:
     parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                         "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
                         "train-kernel", "embed-kernel", "kernel-logs", "fetch-results",
-                        "stop", "supervise"],
+                        "stop", "supervise", "kernel-stream"],
                         default="package")
     parser.add_argument("--dataset-csv", type=Path, default=None,
                         help="cohort export to package (default: the SSOT "
@@ -1334,6 +1397,14 @@ def main() -> None:
         if not args.execute:
             print("[kaggle-lane] dry-run only; pass --execute to poll and fetch",
                   flush=True)
+        return
+    if args.what == "kernel-stream":
+        spec = _spec()
+        resolved = args.slug or (
+            spec.embedding_kernel_slug if args.kernel == "embed"
+            else spec.gpu_kernel_slug if args.kernel == "gpu"
+            else spec.cpu_kernel_slug)
+        print(json.dumps(stream_kernel_logs(resolved), indent=2), flush=True)
         return
     if args.what == "kernel-status":
         print(json.dumps(kernel_status(which=args.kernel), indent=2), flush=True)
