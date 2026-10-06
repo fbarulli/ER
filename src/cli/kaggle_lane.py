@@ -49,6 +49,22 @@ from core.manifest import atomic_write_json, sha256_file
 from core.runtime_inputs import checkout_members, checkout_inventory, checkout_preflight_script
 
 
+def _kernel_script_gate(script: str) -> None:
+    """Staging-time AST gate: never push an unparseable kernel or one that
+    references an undeclared template constant (the v4 NameError class)."""
+    import ast
+    parsed = ast.parse(script)
+    defined = {node.id for stmt in ast.walk(parsed)
+               if isinstance(stmt, ast.Assign)
+               for node in stmt.targets if isinstance(node, ast.Name)}
+    undeclared = {expr.id for expr in ast.walk(parsed)
+                  if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load)
+                  and expr.id.isupper() and expr.id not in defined}
+    if undeclared:
+        raise ValueError(f"staged kernel uses undeclared constants: "
+                         f"{sorted(undeclared)}; regenerate the template")
+
+
 class ExportCensus(BaseModel):
     """Measured cohort-export census recorded at package time."""
 
@@ -644,8 +660,7 @@ root = clone_pinned()
 checkpoint = root / "@CHECKPOINT@"
 if not checkpoint.is_dir():
     raise SystemExit("git-shipped checkpoint missing: " + str(checkpoint))
-env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
-       "WANDB_MODE": "disabled"}
+env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1"}
 output = root / "results" / "embedding_job" / RUN_TAG
 output.mkdir(parents=True, exist_ok=True)
 sh([sys.executable, "scripts/encode_prepared_embeddings.py",
@@ -817,6 +832,7 @@ def stage_bundle_kernel(*, revision: str | None = None,
               .replace("@COHORT@", cohort)
               .replace("@COHORT_DATASET@", cohort_dataset))
     atomic_write_json(metadata, stage / "kernel-metadata.json")
+    _kernel_script_gate(script)
     (stage / BUNDLE_KERNEL_CODE_FILE).write_text(script, encoding="utf-8")
     receipt = {
         "kernel": slug,
@@ -952,6 +968,7 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
               .replace("@CHECKPOINT@", resolved_checkpoint)
               .replace("@WANDB_API_KEY@", os.environ.get("WANDB_API_KEY") or _env_dot_value("WANDB_API_KEY") or ""))
     atomic_write_json(metadata, stage / "kernel-metadata.json")
+    _kernel_script_gate(script)
     (stage / code_file).write_text(script, encoding="utf-8")
     receipt = {
         "kernel": resolved_slug,
