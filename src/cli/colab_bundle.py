@@ -140,10 +140,13 @@ print("[pins] source_export_expected_rows=%d source_export_expected_sha256=%s" %
 _PREPARE_FRESH_SEGMENT = f"""
 # prepare: run the full CSV-to-inputs preparation; stdout and stderr inherit
 # to the streamed cell exactly like run_sims' subprocess (live [out] lines
-# with every tqdm bar; tracebacks stream live too).
+# with every tqdm bar; tracebacks stream live too). -u + PYTHONUNBUFFERED:
+# the kernel-exec pipe is not a tty, so without unbuffered stdio the child's
+# stage prints block-buffer at 8KB and the cell shows only heartbeats.
 rc = subprocess.run(
-    [sys.executable, "-m", "training.prepare_all"],
+    [sys.executable, "-u", "-m", "training.prepare_all"],
     cwd=root,
+    env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
 ).returncode
 if rc != 0:
     raise RuntimeError("prepare_all failed on the VM (rc=%d); see the streamed output above" % rc)
@@ -151,15 +154,16 @@ if rc != 0:
 _PREPARE_RESUME_SEGMENT = f"""
 # resume: continue the frozen preparation in place (prepare_all CLI); stdout
 # and stderr inherit to the streamed cell (live [out] lines, tqdm bars,
-# tracebacks).
+# tracebacks). Same unbuffered-stdio contract as the fresh segment.
 # lifecycle: resume_from='validation' re-runs negative_supply+discriminator+
 # validation+graph_inputs+full_bundle+suite_inputs+verify_handoff (~45 min
 # token phase); the delivery/download flow below then works unchanged.
 rc = subprocess.run(
-    [sys.executable, "-m", "training.prepare_all",
+    [sys.executable, "-u", "-m", "training.prepare_all",
      "--run-dir", root + "/results/training_prep/@RESUME_RUN_ID@",
      "--resume-from", "@RESUME_FROM@"],
     cwd=root,
+    env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
 ).returncode
 if rc != 0:
     raise RuntimeError("prepare_all failed on the VM (rc=%d); see the streamed output above" % rc)
@@ -195,10 +199,20 @@ _RESUME_REMOTE_SCRIPT = (
 
 def _provision() -> None:
     """cli.colab main()'s provisioning order for a full-runtime CPU lane."""
+    from core.common import resolve_model, training_cfg
+
     check_colab_cli()
     ensure_session()
-    prepare_remote_layout(minimal_runtime=False)
-    install_deps(minimal_runtime=False)
+    # The bundle lane regenerates every derived artifact from the uploaded
+    # export (same git-inputs pattern the tracks lane uses for suite inputs):
+    # the checkout carries only what the prep reads — src/, config/,
+    # scripts/, requirements, the text checkpoint and the tracked smoke
+    # inputs — never the stale derived CSVs or result archives on the branch.
+    prepare_remote_layout(minimal_runtime=True, sparse_paths=(
+        Path(resolve_model(training_cfg().training.base_model)),
+        Path("data/prepared/smoke_200"),
+    ))
+    install_deps(minimal_runtime=True)
 
 
 @_timed_colab("step")
