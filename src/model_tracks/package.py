@@ -240,7 +240,10 @@ def _prepare_exports(cfg, setup, bundle):
     with trace_step('package.text_export'):
         prepare_text_export(setup,Path(resolve_model(cfg.text_model)),batch_size=runtime('batch_size_embed'),composer=compose,token_cache=token_cache)
     with trace_step('package.ablation_suite'):
-        if cfg.post_training_ablation:
+        # ER_PACKAGE_SKIP_ABLATION=1 moves ablation staging off the CPU bundle
+        # (owner 2026-10-06: GPU sessions stage and forward ablation; the CPU
+        # bundle ships no ablation templates). Unset = unchanged everywhere.
+        if cfg.post_training_ablation and os.environ.get('ER_PACKAGE_SKIP_ABLATION') != '1':
             from model_tracks.staged_ablation import prepare_suite
             prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
     with trace_step('package.baseline_export'):
