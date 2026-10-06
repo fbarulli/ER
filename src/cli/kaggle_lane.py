@@ -334,6 +334,8 @@ BRANCH = "@BRANCH@"
 REVISION = "@REVISION@"
 CHECKOUT_PATHS = @CHECKOUT_PATHS@
 REQUIREMENTS = "@REQUIREMENTS@"
+COHORT = "@COHORT@"
+COHORT_DATASET = "@COHORT_DATASET@"
 
 SCRATCH = (Path("/kaggle/tmp") if Path("/kaggle/tmp").is_dir()
            else Path(tempfile.gettempdir()) / "er_bundle")
@@ -368,6 +370,15 @@ if head != REVISION:
 # Cone-mode sparse checkout keeps every root-level file (dataset.csv,
 # requirements.txt, pyproject.toml) and adds the configured directories.
 sh(["git", "-C", str(root), "sparse-checkout", "set", *CHECKOUT_PATHS])
+if COHORT != "full":
+    source = root / COHORT_DATASET
+    if not source.is_file():
+        raise SystemExit(
+            f"cohort export {COHORT_DATASET} not in the branch checkout for "
+            f"cohort {COHORT}; commit it at the repository root or attach it "
+            "as a dataset")
+    shutil.copy2(source, root / "dataset.csv")
+    print(f"[bundle-cpu] cohort remap: {COHORT_DATASET} -> dataset.csv", flush=True)
 sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
 env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1"}
 sh([sys.executable, "-m", "training.prepare_all",
@@ -388,6 +399,8 @@ receipt = {
     "revision": REVISION,
     "branch": BRANCH,
     "run_dir": run_dir.name,
+    "cohort": COHORT,
+    "cohort_dataset": COHORT_DATASET,
     "archive": "all_tracks_inputs.tar.zst",
     "archive_bytes": (destination / "all_tracks_inputs.tar.zst").stat().st_size,
     "archive_sha256": sha256_file(destination / "all_tracks_inputs.tar.zst"),
@@ -412,6 +425,23 @@ print("[bundle-cpu] receipt: " + json.dumps(receipt, indent=2), flush=True)
 #                against the git-shipped checkpoint (artifacts/models is in
 #                checkout_paths), request + prepared_text.npz attached as a
 #                Kaggle dataset; emits vectors.npz + .sha256.
+
+def cohort_export_csv(cohort: str) -> str:
+    """Root-relative export filename for a cohort tag (inverse cohort_label).
+
+    `full` = the SSOT default export; any other tag must name an export_csvs
+    entry whose filename carries the tag (50pct). Fail-loud on unknown.
+    """
+    export_csvs = _spec().export_csvs
+    if cohort == "full":
+        return export_csvs[0]
+    for name in export_csvs:
+        if cohort in name:
+            return name
+    raise RuntimeError(
+        f"no export_csvs entry matches cohort {cohort!r}; add it to config "
+        "kaggle.export_csvs (root-relative, self-describing filename)")
+
 
 TRAIN_KERNEL_CODE_FILE = "train_gpu.py"
 EMBED_KERNEL_CODE_FILE = "embed_gpu.py"
@@ -674,12 +704,15 @@ def _run_kaggle(command: list[str]) -> tuple[int, str]:
     return result.returncode, output
 
 
-def stage_bundle_kernel(*, revision: str | None = None) -> dict[str, Any]:
+def stage_bundle_kernel(*, revision: str | None = None,
+                        cohort: str = "full") -> dict[str, Any]:
     """Stage the CPU bundle-generation kernel: metadata + script + receipt.
 
     Dry-safe: writes into the staging area only; `push_bundle_kernel` makes
     the network call. The revision is pinned at staging time so the kernel
-    clones exactly the source the package provenance will record.
+    clones exactly the source the package provenance will record. The
+    cohort chooses which root-level export drives prepare_all in the
+    kernel (colab replace-on-checkout pattern, no upload round-trip).
     """
     spec = _spec()
     slug = spec.cpu_kernel_slug
@@ -688,6 +721,7 @@ def stage_bundle_kernel(*, revision: str | None = None) -> dict[str, Any]:
             "config kaggle.cpu_kernel_slug is unset; name the CPU kernel "
             "(owner/slug) before staging")
     pinned = revision or _git_revision()
+    cohort_dataset = cohort_export_csv(cohort)
     stage = staging_dir() / "bundle_kernel"
     stage.mkdir(parents=True, exist_ok=True)
     metadata = {
@@ -708,7 +742,9 @@ def stage_bundle_kernel(*, revision: str | None = None) -> dict[str, Any]:
               .replace("@BRANCH@", spec.branch)
               .replace("@REVISION@", pinned)
               .replace("@CHECKOUT_PATHS@", json.dumps(list(spec.checkout_paths)))
-              .replace("@REQUIREMENTS@", spec.bundle_requirements))
+              .replace("@REQUIREMENTS@", spec.bundle_requirements)
+              .replace("@COHORT@", cohort)
+              .replace("@COHORT_DATASET@", cohort_dataset))
     atomic_write_json(metadata, stage / "kernel-metadata.json")
     (stage / BUNDLE_KERNEL_CODE_FILE).write_text(script, encoding="utf-8")
     receipt = {
@@ -716,6 +752,8 @@ def stage_bundle_kernel(*, revision: str | None = None) -> dict[str, Any]:
         "gpu": False,
         "branch": spec.branch,
         "revision": pinned,
+        "cohort": cohort,
+        "cohort_dataset": cohort_dataset,
         "staged": str(stage),
         "code_file": BUNDLE_KERNEL_CODE_FILE,
     }
@@ -858,13 +896,17 @@ def push_kernel(stage_dir: Path) -> dict[str, Any]:
             "staged": str(stage_dir)}
 
 
-def fetch_kernel_output(*, kind: str = "bundle", execute: bool) -> dict[str, Any]:
+def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
+                        cohort: str | None = None) -> dict[str, Any]:
     """Download a kernel's output and hash-verify its manifest archive.
 
     bundle — bundle.receipt.json contract (all_tracks_inputs.tar.zst)
     train  — result_manifest.json contract (result_bundle.tar.zst)
     embed  — result_manifest.json contract (vectors.tar.zst)
-    Verified artifacts install under staging_dir/<cohort>/<kind>/.
+    Verified artifacts install under staging_dir/<cohort>/<kind>/; the
+    destination cohort tag comes from the explicit override (for the bundle
+    lane's per-cohort fetch) or from the config dataset binding, matching
+    the kernel receipt's own cohort tag when it declares one.
     """
     spec = _spec()
     if kind == "bundle":
@@ -921,13 +963,18 @@ def fetch_kernel_output(*, kind: str = "bundle", execute: bool) -> dict[str, Any
             f"{observed}")
     from core.common import F
 
-    cohort = cohort_label(Path(F["dataset"]))
-    destination = staging_dir() / cohort / kind
+    receipt_cohort = (manifest if kind == "bundle"
+                      else json.loads(manifests[0].read_text())).get("cohort")
+    resolved_cohort = cohort or receipt_cohort or cohort_label(Path(F["dataset"]))
+    destination = staging_dir() / resolved_cohort / kind
     destination.mkdir(parents=True, exist_ok=True)
     installed = {}
     shutil.copy2(archive, destination / archive.name)
     installed[archive_name] = str(destination / archive.name)
-    for name in (manifest_name, f"{archive_name}.sha256"):
+    sidecar_names = [manifest_name, f"{archive_name}.sha256"]
+    if kind == "bundle":
+        sidecar_names += ["manifest.json", "timings.json"]
+    for name in sidecar_names:
         sidecar_path = manifest_dir / name
         if sidecar_path.is_file():
             shutil.copy2(sidecar_path, destination / name)
@@ -936,7 +983,7 @@ def fetch_kernel_output(*, kind: str = "bundle", execute: bool) -> dict[str, Any
         "fetched_archive": str(archive),
         "archive_sha256": observed,
         "verified": True,
-        "cohort": cohort,
+        "cohort": resolved_cohort,
         "installed": installed,
     })
     return plan
@@ -987,76 +1034,11 @@ def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
 
 
 def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
-    """Download the CPU kernel output and hash-verify the bundle archive.
-
-    The kernel-written bundle.receipt.json is the transport-identity
-    contract: the fetched all_tracks_inputs.tar.zst must match its recorded
-    sha256, exactly like the dataset fetch-back. Verified artifacts install
-    under staging_dir/<cohort>/bundle/.
-    """
-    spec = _spec()
-    slug = spec.cpu_kernel_slug
-    if not slug:
-        raise RuntimeError(
-            "config kaggle.cpu_kernel_slug is unset; name the CPU kernel "
-            "(owner/slug) before fetching its output")
-    stage = staging_dir() / "bundle_fetch"
-    plan: dict[str, Any] = {
-        "mode": "executed" if execute else "dry-run",
-        "kernel": slug,
-        "stage": str(stage),
-    }
-    if not execute:
-        return plan
-    executable = _require_kaggle_executable(spec.kaggle_executable)
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir(parents=True)
-    command = [executable, "kernels", "output", slug, "-p", str(stage)]
-    _, _ = _run_kaggle(command)
-    receipts = sorted(stage.rglob("bundle.receipt.json"))
-    if not receipts:
-        # Older kaggle CLI versions wrap kernel output in a single zip.
-        zips = sorted(stage.glob("*.zip"))
-        if zips:
-            with zipfile.ZipFile(zips[0]) as bundle:
-                bundle.extractall(stage / "unpacked")
-            receipts = sorted((stage / "unpacked").rglob("bundle.receipt.json"))
-    if not receipts:
-        raise RuntimeError(
-            f"kernel output under {stage} contained no bundle.receipt.json")
-    receipt_dir = receipts[0].parent
-    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
-    archive = receipt_dir / receipt["archive"]
-    if not archive.is_file():
-        raise FileNotFoundError(
-            f"kernel output receipt names {receipt['archive']} but it is "
-            f"missing under {receipt_dir}")
-    observed = sha256_file(archive)
-    if observed != receipt["archive_sha256"]:
-        raise RuntimeError(
-            "fetched bundle sha256 mismatch: expected "
-            f"{receipt['archive_sha256']} observed {observed}")
-    from core.common import F
-
-    cohort = cohort_label(Path(F["dataset"]))
-    destination = staging_dir() / cohort / "bundle"
-    destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(archive, destination / archive.name)
-    installed = {"bundle": str(destination / archive.name)}
-    for name in ("manifest.json", "timings.json", "bundle.receipt.json"):
-        sidecar = receipt_dir / name
-        if sidecar.is_file():
-            shutil.copy2(sidecar, destination / name)
-            installed[name] = str(destination / name)
-    plan.update({
-        "fetched_archive": str(archive),
-        "archive_sha256": observed,
-        "verified": True,
-        "cohort": cohort,
-        "installed": installed,
-    })
-    return plan
+    """Back-compat entry point — delegates to the generalized fetcher."""
+    return fetch_kernel_output(kind="bundle", execute=execute)
+def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
+    """Back-compat entry point — delegates to the generalized fetcher."""
+    return fetch_kernel_output(kind="bundle", execute=execute)
 
 
 def main() -> None:
@@ -1093,7 +1075,12 @@ def main() -> None:
                         help="embed-kernel: git-shipped checkpoint path "
                              "(default: config kaggle.checkpoint)")
     parser.add_argument("--run-tag", default=None,
-                        help="run tag for GPU kernels (default: gpu_<stamp>)")
+                        help="run tag for GPU kernels (default: from "
+                             "config kaggle.run_tag_prefix + UTC stamp)")
+    parser.add_argument("--cohort", choices=["full", "50pct"], default=None,
+                        help="bundle-kernel/bundle-fetch: which root-level "
+                             "cohort export the CPU kernel remaps onto "
+                             "dataset.csv (default: full)")
     parser.add_argument("--key-env", default=None,
                         help="environment variable holding the Kaggle API "
                              "token (default: the configured kaggle.api_key_env)")
@@ -1108,10 +1095,11 @@ def main() -> None:
             print("[kaggle-lane] dry-run only; pass --execute to write the "
                   "credential file", flush=True)
         return
+    cohort_resolved = args.cohort or "full"
     if args.what == "bundle-kernel":
-        receipt = stage_bundle_kernel(revision=args.revision)
-        print(f"[kaggle-lane] staged bundle kernel: {json.dumps(receipt, indent=2)}",
-              flush=True)
+        receipt = stage_bundle_kernel(revision=args.revision, cohort=cohort_resolved)
+        print(f"[kaggle-lane] staged bundle kernel ({cohort_resolved}): "
+              f"{json.dumps(receipt, indent=2)}", flush=True)
         if args.execute:
             print(json.dumps(push_bundle_kernel(Path(receipt["staged"])), indent=2),
                   flush=True)
@@ -1120,7 +1108,9 @@ def main() -> None:
                   flush=True)
         return
     if args.what == "bundle-fetch":
-        print(json.dumps(fetch_kernel_output(kind="bundle", execute=args.execute), indent=2), flush=True)
+        plan = fetch_kernel_output(kind="bundle", execute=args.execute,
+                                   cohort=cohort_resolved if args.cohort else None)
+        print(json.dumps(plan, indent=2), flush=True)
         if not args.execute:
             print("[kaggle-lane] dry-run only; pass --execute to download the "
                   "kernel output", flush=True)
