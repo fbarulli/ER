@@ -264,6 +264,30 @@ def dataset_is_partial_cohort() -> bool:
     return sha256_file(DATA_PATH) == sha256_file(partial)
 
 
+def mounted_cohort() -> str:
+    """Cohort tag of the mounted raw export ('50pct', '10k', or 'full').
+
+    The balanced-augmentation vendor quota is cohort-scoped
+    (training.yaml masking.balanced_augmentation.cohort_counts): a
+    dataset.csv that is a byte-identical copy of a staged cohort export must
+    train under that cohort's counts even when no lane set ER_COHORT_TAG,
+    else the exact-equality coverage validator refuses a thin cross-vendor
+    pool (10k cohort: 287 mined < the full-dataset quota 300). One identity
+    here keeps every lane (local prep, colab bundle, kaggle) and the
+    training child run on the same tag. Cheap: size compare first, sha only
+    on a size match; without a staged cohort file the export is full.
+    """
+    if not DATA_PATH.is_file():
+        return 'full'
+    from core.manifest import sha256_file
+    for filename, tag in (('dataset_50pct.csv', '50pct'), ('dataset_10k.csv', '10k')):
+        staged = DATA_PATH.with_name(filename)
+        if (staged.is_file() and staged.stat().st_size == DATA_PATH.stat().st_size
+                and sha256_file(DATA_PATH) == sha256_file(staged)):
+            return tag
+    return 'full'
+
+
 def category_macros() -> dict[str, str]:
     """SSOT accessor for the category -> macro bucket taxonomy
     (config/paths.yaml category_macros:).

@@ -294,6 +294,12 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
         env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
             'shared_base_' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.pkl'))
+        # Cohort-scoped augmentation counts (training.yaml cohort_counts) key
+        # off ER_COHORT_TAG: a local prep that stages a cohort export copy at
+        # dataset.csv must tag itself so the full-dataset vendor quota can
+        # never out-mine the cohort's supply (10k exhausts at 287 < 300).
+        from core.common import mounted_cohort
+        env.setdefault('ER_COHORT_TAG', '' if (cohort := mounted_cohort()) == 'full' else cohort)
         env.pop('WANDB_API_KEY', None)
         # Preparation mutates inputs; inherited worker attestations are invalid.
         env['ER_DATA_GATE_ENFORCE'] = '1'

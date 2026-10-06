@@ -846,7 +846,8 @@ def _main_inner(_wandb) -> None:
         if args.sample and balanced_policy.sample_counts is not None:
             balanced_policy = balanced_policy.model_copy(update={'counts':balanced_policy.sample_counts})
         cohort_tag = os.environ.get('ER_COHORT_TAG', '')
-        if cohort_tag and cohort_tag in balanced_policy.cohort_counts:
+        sample_selected = args.sample and balanced_policy.sample_counts is not None
+        if not sample_selected and cohort_tag and cohort_tag in balanced_policy.cohort_counts:
             balanced_policy = balanced_policy.model_copy(
                 update={'counts': balanced_policy.cohort_counts[cohort_tag]})
         if args.mask_frac > 0 and balanced_policy.enabled:
