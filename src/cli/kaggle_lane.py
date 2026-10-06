@@ -1248,7 +1248,7 @@ def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any
     destination.parent.mkdir(parents=True, exist_ok=True)
     plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
     session_id: int | None = None
-    with destination.open("a", encoding="utf-8") as log_handle:
+    with destination.open("w", encoding="utf-8") as log_handle:
         client = KaggleClient(env=KaggleEnv.PROD)
         request = ApiGetKernelSessionLogsStreamRequest()
         request.user_name = owner
