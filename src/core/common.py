@@ -498,7 +498,7 @@ def ann_retrieval_ks() -> tuple[int, ...]:
 def operating_precision() -> float:
     """SSOT for the declared "recall at an agreed precision" target.
 
-    config/training.yaml evaluation.operating_precision.  MODEL_TRACKS_PLAN.md
+    config/training.yaml evaluation.operating_precision.  The model plan
     asks for recall at an *agreed* precision, which only means something if the
     agreement is a declared, tunable value rather than a literal buried in a
     metric function.  Reported next to every ``recall_at_precision`` figure so
@@ -588,11 +588,18 @@ def audit_finding(name: str) -> Path:
 
     `name` is a bare filename, never a path: a caller that passes a separator
     is re-anchored to the declared root rather than escaping it, so this can
-    never become a second way to spell the location.
+    never become a second way to spell the location. Dot names are refused
+    outright — `Path('..').name == '..'`, so a bare-name test alone lets the
+    parent directory through and resolves outside the root.
     """
-    if not name or name != Path(name).name:
+    if not name or name in {'.', '..'} or name != Path(name).name:
         raise ValueError(f"audit finding name must be a bare filename: {name!r}")
-    return AUDIT_FINDINGS_DIR / name
+    if '\\' in name or '/' in name:
+        raise ValueError(f"audit finding name must be a bare filename: {name!r}")
+    resolved = (AUDIT_FINDINGS_DIR / name).resolve()
+    if resolved.parent != AUDIT_FINDINGS_DIR.resolve():
+        raise ValueError(f"audit finding escapes the declared root: {name!r}")
+    return resolved
 
 
 # ── artifact binding roots (SSOT) ────────────────────────────────────────────

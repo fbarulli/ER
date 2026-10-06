@@ -49,7 +49,10 @@ def test_canonical_volumes_are_whole_ml_locks_that_in():
     case above only pins url_text's intermediate wording.
     """
     import pandas as pd
-    canon = pd.read_csv("data/canonical_records.csv", dtype=str, keep_default_na=False)
+    from core.common import F
+    # Resolve through the config SSOT, not a repo-relative literal: the test
+    # must hold wherever pytest is invoked from.
+    canon = pd.read_csv(F["canonical_records"], dtype=str, keep_default_na=False)
     for value in canon["volume_set"]:
         for token in str(value).strip("[]").split(","):
             token = token.strip()
