@@ -3883,9 +3883,9 @@ _text = re.sub(r'(source_export_expected_sha256: ")([0-9a-f]{{64}})', r"\\g<1>" 
 open(_cfg, "w", encoding="utf-8").write(_text)
 print(f"[bundle] VM audit pins -> rows={{_rows}} sha={{_sha[:12]}}...", flush=True)
 rc = subprocess.run(
-    [sys.executable, "-u", "-m", "training.prepare_all"],
+    [sys.executable, "-m", "training.prepare_all"],
     cwd={REMOTE_ROOT!r},
-    env={{**os.environ, "WANDB_MODE": "disabled", "PYTHONUNBUFFERED": "1"}},
+    env={{**os.environ, "WANDB_MODE": "disabled"}},
 ).returncode
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
