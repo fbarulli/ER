@@ -37,6 +37,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -198,14 +199,8 @@ def upload_dataset(package: KagglePackage, *, execute: bool) -> dict[str, Any]:
     executable = _require_kaggle_executable(spec.kaggle_executable)
     command = [executable, "datasets", "create", "--dir-mode", "skip",
                "-r", str(package.archive_path)]
-    print(f"[kaggle-lane] executing: {' '.join(command)}", flush=True)
-    result = subprocess.run(command, cwd=TRAIN_ROOT)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"kaggle datasets upload failed (rc={result.returncode}); "
-            "see the streamed kaggle output above"
-        )
-    plan["returncode"] = result.returncode
+    _, _ = _run_kaggle(command)
+    plan["returncode"] = 0
     return plan
 
 
@@ -240,12 +235,7 @@ def download_dataset(package: KagglePackage, *, execute: bool) -> dict[str, Any]
     executable = _require_kaggle_executable(spec.kaggle_executable)
     stage = staging_dir() / cohort_label(Path(package.export_path))
     command = [executable, "datasets", "download", slug, "--path", str(stage)]
-    result = subprocess.run(command, cwd=TRAIN_ROOT)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"kaggle datasets download failed (rc={result.returncode}); "
-            "see the streamed kaggle output above"
-        )
+    _, _ = _run_kaggle(command)
     fetched_candidates = sorted(
         stage.glob("*.zip"), key=lambda path: path.stat().st_mtime, reverse=True
     )
@@ -451,6 +441,49 @@ def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str,
     return plan
 
 
+def _log_lane(line: str) -> None:
+    """Timestamped lane logging: console plus append-only lane log.
+
+    Best-effort on the file side — a log-write failure is printed and never
+    allowed to mask the operation's own outcome.
+    """
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"[kaggle-lane {stamp}] {line}", flush=True)
+    try:
+        log_dir = staging_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "lane.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} {line}\n")
+    except OSError as error:
+        print(f"[kaggle-lane] lane.log write failed ({error}); continuing",
+              flush=True)
+
+
+def _run_kaggle(command: list[str]) -> tuple[int, str]:
+    """Run the kaggle CLI with full logging; never swallow its output.
+
+    stdout and stderr are captured together, echoed line by line, appended
+    to the lane log, and — on a failing returncode — embedded verbatim in
+    the raised RuntimeError so Kaggle's own diagnostics always surface.
+    """
+    printable = " ".join(command)
+    _log_lane(f"$ {printable}")
+    started = time.monotonic()
+    result = subprocess.run(command, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    elapsed = time.monotonic() - started
+    output = result.stdout or ""
+    for line in output.splitlines():
+        print(f"[kaggle] {line}", flush=True)
+    _log_lane(f"rc={result.returncode} seconds={elapsed:.1f}")
+    if result.returncode != 0:
+        tail = output.strip()[-4000:] or "(kaggle produced no output)"
+        raise RuntimeError(
+            f"kaggle command failed (rc={result.returncode}): {printable}\n"
+            f"--- kaggle output ---\n{tail}")
+    return result.returncode, output
+
+
 def stage_bundle_kernel(*, revision: str | None = None) -> dict[str, Any]:
     """Stage the CPU bundle-generation kernel: metadata + script + receipt.
 
@@ -510,12 +543,7 @@ def push_bundle_kernel(stage_dir: Path) -> dict[str, Any]:
             "(owner/slug) before pushing")
     executable = _require_kaggle_executable(spec.kaggle_executable)
     command = [executable, "kernels", "push", "-p", str(stage_dir)]
-    print(f"[kaggle-lane] executing: {' '.join(command)}", flush=True)
-    result = subprocess.run(command, cwd=TRAIN_ROOT)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"kaggle kernels push failed (rc={result.returncode}); see the "
-            "streamed kaggle output above")
+    _, _ = _run_kaggle(command)
     return {"mode": "executed", "kernel": slug, "pushed": True,
             "staged": str(stage_dir)}
 
@@ -529,17 +557,15 @@ def kernel_status(slug: str | None = None, *, which: str = "cpu") -> dict[str, A
             f"config kaggle.{which}_kernel_slug is unset; pass a slug or name "
             f"the {which} kernel in config")
     executable = _require_kaggle_executable(spec.kaggle_executable)
-    result = subprocess.run([executable, "kernels", "status", resolved],
-                            cwd=TRAIN_ROOT, capture_output=True, text=True)
-    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    command = [executable, "kernels", "status", resolved]
+    _, output = _run_kaggle(command)
     status = "unknown"
     for candidate in ("cancelAcknowledged", "cancelRequested", "complete",
                       "running", "queued", "error"):
         if candidate in output:
             status = candidate
             break
-    return {"kernel": resolved, "returncode": result.returncode,
-            "status": status, "raw": output}
+    return {"kernel": resolved, "status": status, "raw": output.strip()}
 
 
 def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
@@ -569,12 +595,7 @@ def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
     command = [executable, "kernels", "output", slug, "-p", str(stage)]
-    print(f"[kaggle-lane] executing: {' '.join(command)}", flush=True)
-    result = subprocess.run(command, cwd=TRAIN_ROOT)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"kaggle kernels output failed (rc={result.returncode}); see the "
-            "streamed kaggle output above")
+    _, _ = _run_kaggle(command)
     receipts = sorted(stage.rglob("bundle.receipt.json"))
     if not receipts:
         # Older kaggle CLI versions wrap kernel output in a single zip.
