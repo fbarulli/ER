@@ -61,10 +61,12 @@ def main() -> None:
         dtype={"gtin1": str, "gtin2": str},
         keep_default_na=False,
     )
+    print(f"[labeled] loaded {len(g):,} gate pairs", flush=True)
     pos = g[(g.gate_decision == "proceed") & (g.similarity >= POS_SIM)].copy()
     pos["true_label"] = 1
     neg = g[(g.gate_decision == "hard_no") & (g.similarity >= NEG_SIM)].copy()
     neg["true_label"] = 0
+    print(f"[labeled] positives: {len(pos):,} | hard negatives: {len(neg):,}", flush=True)
 
     # ── NO SILENT DROPS (owner doctrine): the fallback exclusion above is a
     # data drop by construction — count it LOUDLY and pin it. This script reads

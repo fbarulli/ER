@@ -26,14 +26,20 @@ from pipeline import run_within_brand_pipeline
 
 
 def main() -> None:
+    from core.timing import Timing
+    timing = Timing("data_prep")
     # Stage manifest (SILENT_DROPS task 6) — begin BEFORE the work: the
     # raw export is hashed now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed; the pipeline is
     # deterministic, no RNG is consumed.
     manifest = begin_manifest("data_prep", inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
+    timing.mark("manifest_begin")
     df = load_raw_export()
+    timing.mark("load_raw_export")
+    print(f"[data_prep] loaded {len(df):,} raw rows", flush=True)
     pairs, canon = run_within_brand_pipeline(df)
-    print(f"pairs: {len(pairs):,} | canonical records: {len(canon):,}")
+    timing.mark("run_within_brand_pipeline")
+    print(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}", flush=True)
     # AUDIT 2026-09-09: digit tokens resolved by the regex fallback (not in
     # the reference CSV) — the one degradation the numbers lane allows;
     # printed so it can never be silent.
@@ -76,9 +82,11 @@ def main() -> None:
         F["gate_results"].name,
         trace_path().name,
     ]
+    timing.mark("accounting_and_flags")
     mpath = finish_manifest(
         manifest, out_paths, row_accounting, expected_outputs=expected
     )
+    timing.mark("finish_manifest")
     n_in = row_accounting["input_rows"]
     n_out = row_accounting["output_rows"]
     n_drop = sum(row_accounting["dropped"].values())
@@ -150,12 +158,13 @@ def _flag_census(canon) -> dict[str, int]:
     manifest. Each gtin carrying a flag counts once; a gtin can carry several.
     """
     from collections import Counter
+    from core.progress import tracked
 
     counts: Counter[str] = Counter()
     column = getattr(canon, "get", None)
     if column is None or "attribute_consistency_flags" not in canon:
         return {}
-    for flags in canon["attribute_consistency_flags"]:
+    for flags in tracked(canon["attribute_consistency_flags"], "flag_census"):
         if not isinstance(flags, (list, tuple, set)):
             continue
         for flag in flags:

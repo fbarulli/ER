@@ -9,6 +9,7 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+import traceback
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -95,6 +96,9 @@ class TrainingPreparation(BaseModel):
                     code = error.code if isinstance(error.code, int) else (1 if error.code else 0)
                     if error.code and not isinstance(error.code, int):
                         print(error.code, file=sys.stderr)
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
+                    code = 1
         finally:
             sys.argv = saved_argv
             os.environ.clear()

@@ -113,9 +113,10 @@ def _usable_rows_with_census(
 def _build_manifest_with_census(
     frame: pd.DataFrame,
 ) -> tuple[pd.DataFrame, ExclusionCensus]:
+    from core.progress import tracked
     usable, census = _usable_rows_with_census(frame)
     rows: list[dict[str, object]] = []
-    for gtin, group in usable.groupby("gtin", sort=True):
+    for gtin, group in tracked(usable.groupby("gtin", sort=True), "cross_country_pairs"):
         records = group[["sku_id", "country"]].to_dict("records")
         for left, right in combinations(records, 2):
             country_a = str(left["country"])

@@ -348,6 +348,7 @@ def main() -> None:
     summary.append({"tier": "T2 retailer+title+gtin",
                     "dropped_rows": len(dropped2),
                     "deferred_to_t3": len(t2_conflict)})
+    print(f"[dedupe] T2 complete: {len(dropped2):,} dropped, {len(t2_conflict):,} deferred to T3", flush=True)
 
     # T3: retailer+title WITHIN AN IDENTITY PARTITION -> one deliberate
     # representative + flag. The `_ident` partition is the fix for the measured
@@ -363,6 +364,7 @@ def main() -> None:
     work = t3
     summary.append({"tier": "T3 retailer+title+identity-partition (price-aggregation)",
                     "dropped_rows": len(dropped3)})
+    print(f"[dedupe] T3 complete: {len(dropped3):,} dropped", flush=True)
 
 
     # ---- outputs --------------------------------------------------------------
