@@ -1,16 +1,19 @@
-"""Standalone CPU bundle lane: one raw export -> one delivery archive on the VM.
+"""Standalone CPU bundle lane: one committed cohort export -> one delivery archive.
 
 Copy-assembled from src/cli/colab.py's working machinery (colab.py itself is
 untouched):
 
-  provisioning order ... cli.colab main(), sims path (check_colab_cli ->
-  ensure_session -> prepare_remote_layout(minimal_runtime=False) ->
-  install_deps(minimal_runtime=False)); the VM is never stopped (no stop()
+  provisioning order ... the train lanes' sparse runtime (check_colab_cli ->
+  ensure_session -> prepare_remote_layout(minimal_runtime=True,
+  sparse_paths=checkpoint + smoke_200 + the chosen committed export) ->
+  install_deps(minimal_runtime=True)); the VM is never stopped (no stop()
   call in this module — the session stays open by owner directive).
 
-  upload ............... colab.py:3856 `_upload_with_retries(source,
-  f"{REMOTE_ROOT}/dataset.csv", timeout=3600)` (REMOTE_ROOT-prefixed remote
-  path, like every other working upload).
+  cohort export ........ NO upload (owner directive: the clone carries the
+  bytes): the chosen export rides the sparse checkout and the remote
+  launcher remaps it onto dataset.csv — the kaggle lane's proven contract
+  (cli.kaggle_lane cohort remap). Only config kaggle.export_csvs entries
+  are accepted (_provision fails loud otherwise).
 
   remote exec .......... run_sims()'s shape (colab.py:3923): _BOOTSTRAP +
   a plain script string (module-level f-string, _BOOTSTRAP's own
@@ -31,13 +34,13 @@ untouched):
   attempt in git history (git show 8ddc614:src/cli/colab.py, run_bundle
   remote section): remote tar at REMOTE_ROOT/bundle_delivery.tar.zst.
 
-  resume ................. upload, extract, prep pattern (same
-  _upload_with_retries call shape as the raw export, colab.py:3856): the
-  frozen state uploads to REMOTE_ROOT/resume_state.tar.zst and is extracted
-  with tarfile.extractall(REMOTE_ROOT) BEFORE the pin re-write; prepare_all
-  then runs --run-dir REMOTE_ROOT/results/training_prep/<frozen id>
-  --resume-from <choice> (runtime values injected via @placeholders@, never
-  baked into a module constant).
+  resume ................. the frozen state tarball (an owner-built local
+  artifact, never derived from the branch) uploads via _upload_with_retries
+  to REMOTE_ROOT/resume_state.tar.zst and is extracted with
+  tarfile.extractall(REMOTE_ROOT) BEFORE the pin re-write; prepare_all then
+  runs --run-dir REMOTE_ROOT/results/training_prep/<frozen id> --resume-from
+  <choice> (runtime values injected via @placeholders@, never baked into a
+  module constant).
 
   download ............. download_verified_training_results' download block
   (colab.py:2021-2033): local_base = TRAINING_RESULTS / run_id; local =
@@ -109,7 +112,17 @@ _PREPARE_BUDGET_SECONDS = 4 * 3600
 _PREPARE_LOG = "prepare_bundle.log"
 _PREPARE_STATUS = "prepare_bundle.status"
 _LAUNCH_PREPARE_SCRIPT = _BUNDLE_HEAD + f"""
-import json, pathlib, shlex
+import json, pathlib, shlex, shutil
+
+# Cohort remap copies the committed export the sparse checkout carries onto
+# dataset.csv — the kaggle lane's proven contract (cli.kaggle_lane). The
+# clone is the only source of bytes this lane consumes.
+chosen = pathlib.Path(root) / "@COHORT_EXPORT@"
+if not chosen.is_file():
+    raise SystemExit("committed cohort export absent from the checkout: @COHORT_EXPORT@")
+if chosen.name != "dataset.csv":
+    shutil.copy2(chosen, pathlib.Path(root) / "dataset.csv")
+    print("[bundle-cpu] cohort remap: @COHORT_EXPORT@ -> dataset.csv", flush=True)
 
 base = pathlib.Path(root)
 log_path, status_path = base / "{_PREPARE_LOG}", base / "{_PREPARE_STATUS}"
@@ -261,21 +274,30 @@ print("[bundle] delivery archive ready", flush=True)
 _FINALIZE_SCRIPT = _BUNDLE_HEAD + _DELIVERY_SEGMENT
 
 
-def _provision() -> None:
+def _provision(dataset_csv: Path | None = None) -> None:
     """cli.colab main()'s provisioning order for a full-runtime CPU lane."""
     from core.common import resolve_model, training_cfg
 
     check_colab_cli()
     ensure_session()
-    # The bundle lane regenerates every derived artifact from the uploaded
-    # export (same git-inputs pattern the tracks lane uses for suite inputs):
-    # the checkout carries only what the prep reads — src/, config/,
-    # scripts/, requirements, the text checkpoint and the tracked smoke
-    # inputs — never the stale derived CSVs or result archives on the branch.
+    # The bundle lane regenerates every derived artifact from the chosen
+    # committed export (same git-inputs pattern the tracks lane uses for
+    # suite inputs): the checkout carries only what the prep reads — src/,
+    # config/, scripts/, requirements, the text checkpoint and the tracked
+    # smoke inputs — plus the committed cohort export, which the remote
+    # launcher remaps onto dataset.csv; never the stale derived CSVs or
+    # result archives on the branch.
     root = TRAIN_ROOT.resolve()
+    chosen = dataset_csv if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
+    export = chosen.name
+    if export not in training_cfg().kaggle.export_csvs:
+        raise ValueError(
+            "bundle exports must be committed config kaggle.export_csvs "
+            f"entries (no upload exists on this lane); got {export!r}")
     checkout_paths = (
         Path(resolve_model(training_cfg().training.base_model)),
         TRAIN_ROOT / "data/prepared/smoke_200",
+        TRAIN_ROOT / export,
     )
     prepare_remote_layout(minimal_runtime=True, sparse_paths=tuple(
         path.resolve().relative_to(root).as_posix() for path in checkout_paths))
@@ -290,28 +312,26 @@ def run_bundle(
     resume_run_id: str | None = None,
     resume_state: Path | None = None,
 ) -> None:
-    """Upload the export, re-pin, prepare on the VM CPU, download the delivery.
+    """Prepare on the VM CPU from the cloned cohort export, download the delivery.
 
-    With --resume-from/--resume-run-id/--resume-state the frozen state tarball
-    is uploaded as REMOTE_ROOT/resume_state.tar.zst and extracted at REMOTE_ROOT
-    BEFORE the pin re-write, and prepare_all continues the frozen run via
-    --run-dir/--resume-from; the delivery/download flow is unchanged.
+    The chosen committed export rides the sparse checkout and the remote
+    launcher remaps it onto dataset.csv (the kaggle lane's contract) — this
+    lane uploads no raw export.  With --resume-from/--resume-run-id/
+    --resume-state the frozen state tarball is uploaded as
+    REMOTE_ROOT/resume_state.tar.zst and extracted at REMOTE_ROOT BEFORE the
+    pin re-write, and prepare_all continues the frozen run via --run-dir/
+    --resume-from; the delivery/download flow is unchanged.
     """
     source = Path(dataset_csv)
-    if not source.is_file():
-        raise FileNotFoundError(f"raw export not found: {source}")
     if resume_state is not None and not Path(resume_state).is_file():
         raise FileNotFoundError(f"resume state not found: {resume_state}")
     run_id = _lane_run_stamp()
     print(
-        f"[bundle] lane={run_id} uploading raw export {source} -> "
-        f"{REMOTE_ROOT}/dataset.csv ...",
+        f"[bundle] lane={run_id} cohort export {source.name} rides the sparse "
+        f"checkout (no upload; the clone carries the bytes)",
         flush=True,
     )
-    _result_event(run_id, "upload", "started", file=str(source))
-    _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
-    _result_event(run_id, "upload", "completed", remote=f"{REMOTE_ROOT}/dataset.csv")
-    script = _FRESH_LAUNCH_SCRIPT
+    script = _FRESH_LAUNCH_SCRIPT.replace("@COHORT_EXPORT@", source.name)
     if resume_state is not None:
         resume_state = Path(resume_state)
         print(
@@ -332,7 +352,7 @@ def run_bundle(
             )
         script = _RESUME_LAUNCH_SCRIPT.replace(
             "@RESUME_RUN_ID@", resume_run_id
-        ).replace("@RESUME_FROM@", resume_from)
+        ).replace("@RESUME_FROM@", resume_from).replace("@COHORT_EXPORT@", source.name)
         print(
             f"[bundle] resume: prepare_all --run-dir {REMOTE_ROOT}/results/training_prep/{resume_run_id} "
             f"--resume-from {resume_from}",
@@ -407,9 +427,10 @@ def _resume_args(args: argparse.Namespace) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset-csv", type=Path, default=TRAIN_ROOT / "dataset.csv",
-                    help="raw export to upload as the VM's dataset.csv (default: "
-                         "repo-root dataset.csv, the export the committed pins "
-                         "expect)")
+                    help="committed cohort export the sparse checkout carries and "
+                         "the remote launcher remaps onto dataset.csv (default: "
+                         "repo-root dataset.csv; config kaggle.export_csvs entries "
+                         "only — no upload exists on this lane)")
     ap.add_argument("--resume-from", default=None,
                     help="prepare_all --resume-from choice for a frozen run "
                          "(dedupe|validation|full_bundle|suite_inputs; e.g. "
@@ -430,7 +451,7 @@ def main() -> None:
     # stop() — the owner keeps the session open.
     _colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
-    _provision()
+    _provision(args.dataset_csv)
     run_bundle(args.dataset_csv, **_resume_args(args))
 
 
