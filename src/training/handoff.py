@@ -126,7 +126,10 @@ def _check_frozen_csvs(prepared) -> None:
     from core.common import F
     import hashlib
     from graph_tracks.data import file_hash
-    for key in ('canonical_records', 'gate_results', 'labeled_pairs'):
+    from tqdm import tqdm
+    for key in tqdm(('canonical_records', 'gate_results', 'labeled_pairs'),
+                    total=3, desc='frozen_csvs', unit='check', leave=False,
+                    disable=False, dynamic_ncols=True):
         if hashlib.sha256(prepared[key + '_csv']).hexdigest() != file_hash(F[key]):
             raise ValueError(f'Bundle contains stale {key}')
 
@@ -150,8 +153,11 @@ def _check_graph_manifest(setup_dir, layout, current: dict, meter: _LoadMeter) -
 def _check_worker_settings(setup_dir, layout, suite, meter: _LoadMeter) -> dict:
     """The exact worker settings the suite will execute (config-level)."""
     from model_tracks.worker import graph_worker_settings
+    from tqdm import tqdm
     summary: dict[str, Any] = {}
-    for track in ('gnn_only', 'hybrid'):
+    for track in tqdm(('gnn_only', 'hybrid'), total=2, desc='worker_settings',
+                      unit='track', leave=False, disable=False,
+                      dynamic_ncols=True):
         track_config = Path(setup_dir) / layout.track_config(track)
         if track_config.is_file():
             settings = graph_worker_settings(Path(setup_dir), suite, track)
@@ -235,8 +241,12 @@ def _verify_package(suite_archive, meter: _LoadMeter) -> tuple[dict, dict]:
 def _check_smoke(smoke_dir, smoke_original) -> None:
     """The run must not have touched the smoke inputs."""
     from training.prepare_all import sha256
-    current_smoke = {str(path): sha256(path)
-                     for path in Path(smoke_dir).rglob('*') if path.is_file()}
+    from tqdm import tqdm
+    paths = [path for path in Path(smoke_dir).rglob('*') if path.is_file()]
+    current_smoke = {}
+    for path in tqdm(paths, total=len(paths), desc='smoke_hash', unit='file',
+                     leave=False, disable=False, dynamic_ncols=True):
+        current_smoke[str(path)] = sha256(path)
     if current_smoke != smoke_original:
         raise ValueError('Smoke files changed during full preparation')
 

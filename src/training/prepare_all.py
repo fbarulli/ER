@@ -79,8 +79,10 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
     # tracked build inputs, so any regeneration must regenerate everything.
     paths.update([TRAIN_ROOT / 'artifacts/evidence/attribute_universe_census.json',
                   artifact('semantic_family_registry')])
+    from tqdm import tqdm
     identity = {}
-    for path in sorted(paths):
+    for path in tqdm(sorted(paths), desc='provenance_hash', unit='file', total=len(paths),
+                     leave=False, disable=False, dynamic_ncols=True):
         if path.resolve() == Path(TRAINING_CONFIG_PATH).resolve():
             # The run measures its own gate census; it is output, not a setting.
             config = yaml.safe_load(path.read_text())
@@ -96,25 +98,36 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
 def verify_reusable_outputs(entries: dict[str, PreparedFile]) -> None:
     if not entries:
         raise ValueError('Resume has no verified prepared outputs; regenerate inputs')
-    for path, entry in entries.items():
+    from tqdm import tqdm
+    for path, entry in tqdm(entries.items(), desc='verify_reusable', unit='file',
+                            leave=False, disable=False, dynamic_ncols=True):
         if Path(path).stat().st_size != entry.bytes or sha256(path) != entry.sha256:
             raise ValueError(f'Stale prepared resume input: {path}')
 
 
 @timed
 def sha256(path: str | Path) -> str:
+    from tqdm import tqdm
     digest = hashlib.sha256()
-    with Path(path).open('rb') as stream:
+    with Path(path).open('rb') as stream, \
+            tqdm(total=Path(path).stat().st_size, desc=f'sha256:{Path(path).name}',
+                 unit='B', unit_scale=True, leave=False, disable=False,
+                 dynamic_ncols=True) as bar:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
+            bar.update(len(chunk))
     return digest.hexdigest()
 
 
 @timed
 def file_inventory(paths: Sequence[Path]) -> dict[str, dict[str, str | int]]:
     """Hash each resolved artifact once per snapshot; never cache across stages."""
-    return {str(path): PreparedFile(sha256=sha256(path), bytes=path.stat().st_size).model_dump()
-            for path in dict.fromkeys(path.resolve() for path in paths)}
+    from tqdm import tqdm
+    inventory: dict[str, dict[str, str | int]] = {}
+    for path in tqdm(dict.fromkeys(path.resolve() for path in paths), desc='inventory',
+                     unit='file', leave=False, disable=False, dynamic_ncols=True):
+        inventory[str(path)] = PreparedFile(sha256=sha256(path), bytes=path.stat().st_size).model_dump()
+    return inventory
 
 
 @timed
@@ -133,7 +146,15 @@ def copy_bundle(source: Path, destination: Path) -> None:
                               errno.EINVAL, errno.ENOSYS}:
             raise
         with trace_step('copy_bundle.shutil_fallback'):
-            shutil.copy2(source, destination)
+            from tqdm import tqdm
+            with source.open('rb') as src, destination.open('wb') as dst, \
+                    tqdm(total=source.stat().st_size, desc='copy_bundle', unit='B',
+                         unit_scale=True, leave=False, disable=False,
+                         dynamic_ncols=True) as bar:
+                for chunk in iter(lambda: src.read(1024 * 1024), b''):
+                    dst.write(chunk)
+                    bar.update(len(chunk))
+            shutil.copystat(source, destination)
     else:
         shutil.copystat(source, destination)
 
@@ -158,7 +179,11 @@ def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | P
         raise ValueError(f'Prerequisite lacks current config/reference provenance: {path}; regenerate inputs')
     with trace_step('verify_stage_manifest.stale_hash_check',
                     outputs=len(manifest.inputs) + len(manifest.outputs)):
-        for entry in manifest.inputs + manifest.outputs:
+        from tqdm import tqdm
+        for entry in tqdm(manifest.inputs + manifest.outputs,
+                          total=len(manifest.inputs) + len(manifest.outputs),
+                          desc='verify_manifest', unit='entry', leave=False,
+                          disable=False, dynamic_ncols=True):
             # The consolidated trace is append-only across stages, not frozen input.
             if Path(entry.path).resolve() == trace_path().resolve():
                 continue
@@ -178,6 +203,7 @@ def refresh_gate_census(gate_csv: Path, report_path: Path) -> dict[str, int]:
     """
     import pandas as pd
     from core.manifest import atomic_write_json
+    from tqdm import tqdm
     frame = pd.read_csv(gate_csv, usecols=['gtin1', 'gtin2', 'gate_decision'],
                         dtype=str, keep_default_na=False)
     if frame[['gtin1', 'gtin2']].apply(lambda column: column.str.strip().eq('')).any().any():
@@ -192,9 +218,11 @@ def refresh_gate_census(gate_csv: Path, report_path: Path) -> dict[str, int]:
         raise ValueError('Duplicate candidate pairs')
     if set(frame.gate_decision) - {'hard_no', 'proceed', 'fallback'}:
         raise ValueError('Unknown gate decisions')
-    counts = {'total_pairs': len(frame), **{
-        key: int(frame.gate_decision.eq(key).sum())
-        for key in ('hard_no', 'proceed', 'fallback')}}
+    counts = {'total_pairs': len(frame)}
+    for key in tqdm(('hard_no', 'proceed', 'fallback'), desc='gate_census',
+                    unit='decision', total=3, leave=False, disable=False,
+                    dynamic_ncols=True):
+        counts[key] = int(frame.gate_decision.eq(key).sum())
     atomic_write_json(counts, report_path)
     return counts
 
@@ -256,7 +284,12 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         suite_archive = run_dir / f'{prep.suite_archive_name}.{suite.input_archive_format}'
         smoke = root / prep.smoke_dir
         with trace_step('prepare_all.smoke_before_hash'):
-            smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
+            smoke_paths = [path for path in smoke.rglob('*') if path.is_file()]
+            smoke_before = {}
+            from tqdm import tqdm
+            for path in tqdm(smoke_paths, desc='smoke_before_hash', unit='file',
+                             leave=False, disable=False, dynamic_ncols=True):
+                smoke_before[str(path)] = sha256(path)
         env = os.environ.copy()
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
         env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
@@ -351,8 +384,9 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             first = 'negative_supply' if resume_from == 'validation' else resume_from
             from tqdm import tqdm
             bar = tqdm(stages[stages.index(first):], desc='prepare_all',
-                       unit='stage', dynamic_ncols=True)
+                       unit='stage', dynamic_ncols=True, disable=False)
             for name in bar:
+                bar.set_postfix_str(name)
                 stage_started = time.monotonic()
                 manifest.setdefault('stage_metrics', {})[name] = {
                     'status': 'running', 'started_at': datetime.now(timezone.utc).isoformat(),
@@ -508,13 +542,15 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         except BaseException as error:
             if 'bar' in locals():
                 bar.close()
-            if name in manifest.get('stage_metrics', {}):
+            if 'name' in locals() and name in manifest.get('stage_metrics', {}):
                 elapsed = round(time.monotonic() - stage_started, 3)
                 manifest.setdefault('stage_seconds', {})[name] = elapsed
                 manifest['stage_metrics'][name].update(status='failed', seconds=elapsed,
                     finished_at=datetime.now(timezone.utc).isoformat())
                 emit_timing(f'[timing] prepare.{name} state=failed elapsed_seconds={elapsed:.3f}', path=run_dir / prep.timings_log)
-            manifest.update(status='failed', failed_stage=name, error=str(error))
+            manifest.update(status='failed', error=str(error))
+            if 'name' in locals():
+                manifest['failed_stage'] = name
             publish()
             raise
 
