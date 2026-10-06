@@ -44,6 +44,7 @@ from core.common import (
     training_cfg,
     vocabulary,
 )
+from core.run_log import RunLogger
 from core.schemas import (
     CanonicalRecord,
     ExtractedAttributes,
@@ -55,6 +56,9 @@ from core.schemas import (
     upgrade_canonical_records_frame,
 )
 from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
+from core.run_log import RunLogger
+
+_LOG = RunLogger(__name__)
 from core.critical_attributes import (
     CRITICAL_ATTRIBUTE_DIMENSIONS,
     categorical_conflict,
@@ -2717,6 +2721,57 @@ def _source_rows_for(frame: pd.DataFrame) -> str:
     return json.dumps(entries, sort_keys=True)
 
 
+def _assemble_gtin_groups(df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Vectorized re-implementation of the groupby.agg boxing block.
+
+    Same output columns and ordering (gtin-sorted keys via groupby's
+    sorted .indices), no per-group function dispatch from pandas internals.
+    Returns (grouped frame, rows-by-gtin zip source).
+    """
+    from tqdm import tqdm
+    columns = ("sku_name_eng", "attribute", "description_short_eng", "sku_url",
+               "image_url", "breadcrumbs_eng", "category", "country", "retailer",
+               "brand")
+    group_indices = df_full.groupby("gtin").indices
+    member_frames = {gtin: df_full.iloc[indices] for gtin, indices
+                     in _LOG.progress(sorted(group_indices.items()),
+                                      desc='gtin_groups', unit='gtin')}
+    grouped_rows, frame_rows = {}, []
+    for gtin, member in _LOG.progress(member_frames.items(), desc='assemble_groups',
+                                      unit='gtin'):
+        columns_of = {column: list(member[column]) for column in columns}
+        grouped_rows[gtin] = list(zip(columns_of["sku_name_eng"],
+                                      columns_of["attribute"], strict=True))
+        frame_rows.append({
+            "gtin": gtin,
+            "rows": grouped_rows[gtin],
+            "descriptions": columns_of["description_short_eng"],
+            "urls": columns_of["sku_url"],
+            "image_urls": columns_of["image_url"],
+            "breadcrumbs_engs": columns_of["breadcrumbs_eng"],
+            "categories": columns_of["category"],
+            "countries": columns_of["country"],
+            "retailers": columns_of["retailer"],
+            "brand": _dominant_brand(columns_of["brand"]),
+            "description_evidence": _source_evidence_values(columns_of["description_short_eng"]),
+            "breadcrumb_evidence": _source_evidence_values(columns_of["breadcrumbs_eng"]),
+            "source_rows": _source_rows_for(member),
+        })
+    grouped = pd.DataFrame(frame_rows)
+    return grouped, grouped_rows
+
+
+def _source_evidence_values(values: list) -> list[str]:
+    """The in-scope _source_evidence for a pre-assembled member list."""
+    return sorted({str(value).strip() for value in values
+                   if pd.notna(value) and str(value).strip()})
+
+
+def _dominant_brand(values: list) -> str:
+    """The group's most-common brand (first-occurrence tie-break, as before)."""
+    return Counter(values).most_common(1)[0][0]
+
+
 def run_within_brand_pipeline(
     df_full: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
@@ -2827,36 +2882,14 @@ def run_within_brand_pipeline(
         source="raw export",
     )
 
-    # Group by GTIN
-    grouped = (
-        df_full.groupby("gtin")
-        .agg(
-            rows=(
-                "sku_name_eng",
-                lambda x: list(zip(x, df_full.loc[x.index, "attribute"], strict=True)),
-            ),
-            descriptions=("description_short_eng", list),
-            urls=("sku_url", list),
-            image_urls=("image_url", list),
-            breadcrumbs_engs=("breadcrumbs_eng", list),
-            categories=("category", list),
-            countries=("country", list),
-            retailers=("retailer", list),
-            brand=("brand", lambda x: Counter(x).most_common(1)[0][0]),
-            description_evidence=("description_short_eng", _source_evidence),
-            breadcrumb_evidence=("breadcrumbs_eng", _source_evidence),
-            source_rows=("sku_name_eng", lambda x: _source_rows_for(
-                df_full.loc[x.index]
-            )),
-        )
-        .reset_index()
-    )
-
-    # Build global n‑gram IDF from all GTINs
+    # Group by GTIN (vectorized index assembly; per-group python lambdas
+    # through .agg are ~3x slower than one pass of dict-of-lists, and every
+    # column below is exactly a per-order-group collection).
+    grouped, rows_by_gtin_source = _assemble_gtin_groups(df_full)
     rows_by_gtin = dict(zip(grouped["gtin"], grouped["rows"], strict=True))
     global_idf = NgramIDF(rows_by_gtin)
 
-    # Precompute within‑brand IDF per brand
+    # Precompute within-brand IDF per brand
     brand_to_gtins = defaultdict(list)
     for gtin, brand in zip(grouped["gtin"], grouped["brand"], strict=True):
         brand_to_gtins[brand.lower().strip()].append(gtin)
