@@ -46,6 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.common import TRAIN_ROOT, training_cfg
 from core.manifest import atomic_write_json, sha256_file
+from core.runtime_inputs import checkout_members, checkout_inventory, checkout_preflight_script
 
 
 class ExportCensus(BaseModel):
@@ -359,7 +360,7 @@ SCRATCH.mkdir(parents=True, exist_ok=True)
 root = SCRATCH / "ER"
 if root.exists():
     shutil.rmtree(root)
-sh(["git", "clone", "--filter=blob:none", "--sparse", "--depth", "1",
+sh(["git", "clone", "--filter=blob:none", "--no-checkout", "--depth", "1",
     "--branch", BRANCH, REPOSITORY, root])
 head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                       capture_output=True, text=True, check=True).stdout.strip()
@@ -367,9 +368,11 @@ if head != REVISION:
     raise SystemExit(
         "branch tip moved: cloned %s but the kernel pins %s; regenerate the "
         "kernel (cli.kaggle_lane --what bundle-kernel)" % (head, REVISION))
-# Cone-mode sparse checkout keeps every root-level file (dataset.csv,
-# requirements.txt, pyproject.toml) and adds the configured directories.
-sh(["git", "-C", str(root), "sparse-checkout", "set", *CHECKOUT_PATHS])
+# Use the same explicit runtime inventory and sparse mode as Colab.
+sh(["git", "-C", str(root), "sparse-checkout", "set", "--no-cone", "--stdin"],
+   input="\\n".join("/" + member for member in CHECKOUT_PATHS) + "\\n", text=True)
+sh(["git", "-C", str(root), "checkout", BRANCH])
+@RUNTIME_PREFLIGHT@
 if COHORT != "full":
     source = root / COHORT_DATASET
     if not source.is_file():
@@ -381,7 +384,7 @@ if COHORT != "full":
     print(f"[bundle-cpu] cohort remap: {COHORT_DATASET} -> dataset.csv", flush=True)
 sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
 env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1"}
-sh([sys.executable, "-m", "training.prepare_all",
+sh([sys.executable, "-u", "-m", "training.prepare_all",
     "--tracks-config", "config/model_tracks.yaml"], cwd=root, env=env)
 runs = sorted((root / "results" / "training_prep").glob("*/all_tracks_inputs.tar.zst"),
               key=lambda path: path.stat().st_mtime)
@@ -475,7 +478,22 @@ BUNDLE_ARCHIVE = "all_tracks_inputs.tar.zst"
 
 def sh(command, **kwargs):
     print("+ " + " ".join(str(part) for part in command), flush=True)
-    subprocess.run([str(part) for part in command], check=True, **kwargs)
+    # Route child stderr (including tqdm) through the notebook output stream.
+    input_text = kwargs.pop("input", None)
+    kwargs.pop("text", None)
+    with subprocess.Popen([str(part) for part in command],
+                          stdin=subprocess.PIPE if input_text is not None else None,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, bufsize=1,
+                          **kwargs) as process:
+        if input_text is not None:
+            process.stdin.write(input_text)
+            process.stdin.close()
+        for line in process.stdout:
+            print(line, end="", flush=True)
+        rc = process.wait()
+    if rc:
+        raise subprocess.CalledProcessError(rc, command)
 
 
 def sha256_file(path):
@@ -503,15 +521,19 @@ def clone_pinned():
     root = SCRATCH / "ER"
     if root.exists():
         shutil.rmtree(root)
-    sh(["git", "clone", "--filter=blob:none", "--sparse", "--depth", "1",
+    sh(["git", "clone", "--filter=blob:none", "--no-checkout", "--depth", "1",
         "--branch", BRANCH, REPOSITORY, root])
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                           capture_output=True, text=True, check=True).stdout.strip()
     if head != REVISION:
         raise SystemExit("branch tip moved: cloned %s but the kernel pins %s"
                          % (head, REVISION))
-    sh(["git", "-C", str(root), "sparse-checkout", "set", *CHECKOUT_PATHS])
+    sh(["git", "-C", str(root), "sparse-checkout", "set", "--no-cone", "--stdin"],
+       input="\\n".join("/" + member for member in CHECKOUT_PATHS) + "\\n", text=True)
+    sh(["git", "-C", str(root), "checkout", BRANCH])
+@RUNTIME_PREFLIGHT@
     sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
+    sys.path.insert(0, str(root / "src"))
     return root
 
 
@@ -520,7 +542,8 @@ def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
     result_archive = WORKING / f"{kind}.tar.zst"
     files = sorted(p for p in output.rglob("*") if p.is_file())
     root_name = output.name
-    with tarfile.open(result_archive, "w:zst") as tar:
+    from core.archive_reader import tar_archive
+    with tar_archive(result_archive, "w") as tar:
         for path in files:
             arcname = Path(root_name) / path.relative_to(output)
             tar.add(path, arcname=str(arcname))
@@ -557,11 +580,11 @@ env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
 # Install the prepared package exactly where the archive declares members,
 # then verify the suite preflight contract file landed at TRAIN_ROOT
 # (model_tracks.run ER_GPU_TRAINING_ONLY preflight reads it, run.py:68).
-with tarfile.open(archive_path, "r:zst") as tar:
-    tar.extractall(root)
+sys.path.insert(0, str(root / "src"))
+from core.portable_archive import verified_archive
+with verified_archive(archive_path, "model_tracks_package.json") as (archive, _):
+    archive.extractall(root)
 package_manifest = root / "model_tracks_package.json"
-if not package_manifest.is_file():
-    package_manifest = root / "data" / "model_tracks_package.json"
 if not package_manifest.is_file():
     raise SystemExit("package install produced no model_tracks_package.json")
 (root / "model_tracks_package.json").write_text(package_manifest.read_text(),
@@ -741,7 +764,10 @@ def stage_bundle_kernel(*, revision: str | None = None,
               .replace("@REPOSITORY@", spec.repository)
               .replace("@BRANCH@", spec.branch)
               .replace("@REVISION@", pinned)
-              .replace("@CHECKOUT_PATHS@", json.dumps(list(spec.checkout_paths)))
+              .replace("@CHECKOUT_PATHS@",
+                       json.dumps(checkout_members((*spec.checkout_paths, cohort_dataset))))
+              .replace("@RUNTIME_PREFLIGHT@", checkout_preflight_script(
+                  checkout_inventory((*spec.checkout_paths, cohort_dataset))))
               .replace("@REQUIREMENTS@", spec.bundle_requirements)
               .replace("@COHORT@", cohort)
               .replace("@COHORT_DATASET@", cohort_dataset))
@@ -769,6 +795,8 @@ def push_bundle_kernel(stage_dir: Path) -> dict[str, Any]:
         raise RuntimeError(
             "config kaggle.cpu_kernel_slug is unset; name the CPU kernel "
             "(owner/slug) before pushing")
+    from core.runtime_inputs import staged_kernel_preflight
+    staged_kernel_preflight(Path(stage_dir))
     executable = _require_kaggle_executable(spec.kaggle_executable)
     command = [executable, "kernels", "push", "-p", str(stage_dir)]
     _, _ = _run_kaggle(command)
@@ -863,7 +891,10 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
               .replace("@BRANCH@", spec.branch)
               .replace("@REVISION@", pinned)
               .replace("@CHECKOUT_PATHS@",
-                       json.dumps(list(checkout_paths or spec.checkout_paths)))
+                       json.dumps(checkout_members(checkout_paths or spec.checkout_paths, lane="training")))
+              .replace("@RUNTIME_PREFLIGHT@", "\n".join(
+                  "    " + line for line in checkout_preflight_script(
+                      checkout_inventory(checkout_paths or spec.checkout_paths, lane="training")).splitlines()))
               .replace("@REQUIREMENTS@", spec.bundle_requirements)
               .replace("@RUN_TAG@", tag)
               .replace("@SUITE_CONFIG@", spec.train_suite_config)
@@ -890,6 +921,8 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
 def push_kernel(stage_dir: Path) -> dict[str, Any]:
     """Push any staged kernel (bundle | train | embed) via the CLI."""
     spec = _spec()
+    from core.runtime_inputs import staged_kernel_preflight
+    staged_kernel_preflight(Path(stage_dir))
     executable = _require_kaggle_executable(spec.kaggle_executable)
     metadata = json.loads((Path(stage_dir) / "kernel-metadata.json").read_text())
     command = [executable, "kernels", "push", "-p", str(stage_dir)]
