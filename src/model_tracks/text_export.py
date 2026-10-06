@@ -8,6 +8,7 @@ from model_tracks.embedding_forward import PreparedEmbeddingForward
 
 
 def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
+    from core.common import training_cfg
     from sentence_transformers import SentenceTransformer
     from core.encoding_inputs import prepare_token_batches,tokenization_policy
     from model_tracks.ablation import digest
@@ -17,11 +18,21 @@ def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
         cache[model_key] = SentenceTransformer(str(checkpoint),device='cpu',local_files_only=True)
     model = cache[model_key]
     key = ('tokens',digest({'texts':texts,'batch_size':batch_size,'policy':tokenization_policy(model)}))
-    if key not in cache:
+    cached = cache.get(key)
+    if cached is None:
+        # Evict previous populations before allocating the next token set. Keep
+        # the native model, but never retain tokens for every ablation at once.
+        for old_key in list(cache):
+            if old_key[0] == 'tokens':
+                del cache[old_key]
         frozen = {}
         plan = prepare_token_batches(model,texts,frozen,batch_size=batch_size)
-        cache[key] = (plan,frozen)
-    plan,frozen = cache[key]
+        # Large token sets are already persisted by callers. Retain only small
+        # sets for immediate cross-track reuse within the configured array-byte budget.
+        if sum(value.nbytes for value in frozen.values()) <= training_cfg().packaging.token_cache_bytes:
+            cache[key] = (plan, frozen)
+    else:
+        plan, frozen = cached
     arrays.update(frozen)
     return plan
 

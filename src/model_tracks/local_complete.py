@@ -1,6 +1,7 @@
 """Complete downloaded training checkpoints on local CPU, then publish."""
 import json
 from pathlib import Path
+from model_tracks.package import package_member
 from core.archive_reader import open_archive, archive_sidecar
 
 from core.portable_archive import verify_archive, write_archive, RESULT_ARCHIVE_EXCLUDED_DIRS
@@ -33,7 +34,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     training = verify_archive(training_archive, 'suite_bundle_manifest.json')
     inputs = verify_archive(input_archive, 'model_tracks_package.json')
     with open_archive(input_archive) as archive:
-        settings = SuiteConfig.model_validate(yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
+        settings = SuiteConfig.model_validate(yaml.safe_load(archive.read(package_member('suite_package_config'))))
     if training['run_tag'] != run_tag:
         raise ValueError('local completion run mismatch')
     from model_tracks.resume import validate_training_binding
@@ -106,7 +107,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                 if target.exists() and target.read_bytes() != data:
                     raise ValueError(f'local prepared input changed: {relative}')
                 target.write_bytes(data)
-        settings = SuiteConfig.model_validate(yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
+        settings = SuiteConfig.model_validate(yaml.safe_load(archive.read(package_member('suite_package_config'))))
     setup = prepared / settings.setup_dir
     baseline = destination/'baseline/shared_minilm__embeddings.npz'
     if baseline.is_file():

@@ -126,6 +126,21 @@ files:
 # or an unknown layout crashes.  Nothing in the tree builds these paths by
 # hand (no bare leaves, no "results/" literals, no glob conventions):
 layouts:
+  suite_package_shared:
+    root: repo
+    owner: model_tracks.package
+    template: "data/model_tracks/shared"
+    fields: {}
+  suite_package_config:
+    root: repo
+    owner: model_tracks.package
+    template: "data/model_tracks/suite.yaml"
+    fields: {}
+  semantic_family_registry:
+    root: repo
+    owner: core.attribute_decision
+    template: "artifacts/evidence/semantics/family_registry.json"
+    fields: {}
   report_plot:
     root: results_training
     owner: training.report_plots

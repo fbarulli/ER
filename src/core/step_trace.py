@@ -10,11 +10,21 @@ from __future__ import annotations
 
 import functools
 import os
+import sys
 import time
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
+
+
+def rss_mb() -> float:
+    """Peak resident memory of this process so far (for OOM forensics)."""
+    try:
+        import resource
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+    except (ImportError, OSError, AttributeError):
+        return 0.0
 
 
 def destination() -> Path | None:
@@ -26,13 +36,23 @@ def destination() -> Path | None:
 
 
 def send(message: str) -> None:
-    """Append one line to the bound existing time log (prints before bind)."""
+    """Append one line to the bound existing time log (prints before bind).
+
+    Console emission goes through tqdm.write so live bars are never mangled:
+    with instruments and bars both active, each stays readable on a terminal
+    and inside the captured stage log.
+    """
+    try:
+        from tqdm import tqdm
+        tqdm.write(message, file=sys.stdout)
+    except ImportError:
+        print(message, flush=True)
     path = destination()
     if path is None:
-        print(message, flush=True)
         return
-    from core.timing import emit_timing
-    emit_timing(message, path=path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8') as handle:
+        handle.write(message + '\n')
 
 
 def _label(function: Callable, prefix: str | None) -> str:
@@ -56,16 +76,16 @@ def timed(function: Callable | None = None, *, prefix: str | None = None) -> Cal
         @functools.wraps(function)
         def wrapper(*args, **kwargs):
             started = time.perf_counter()
-            send(f'[timing] {label} state=started')
+            send(f'[timing] {label} state=started rss_mb={rss_mb()}')
             try:
                 result = function(*args, **kwargs)
             except BaseException:
                 elapsed = time.perf_counter() - started
-                send(f'[timing] {label} state=failed elapsed_seconds={elapsed:.3f}')
+                send(f'[timing] {label} state=failed elapsed_seconds={elapsed:.3f} rss_mb={rss_mb()}')
                 send(_traceback_block(f'[traceback] {label}'))
                 raise
             elapsed = time.perf_counter() - started
-            send(f'[timing] {label} state=completed elapsed_seconds={elapsed:.3f}')
+            send(f'[timing] {label} state=completed elapsed_seconds={elapsed:.3f} rss_mb={rss_mb()}')
             return result
 
         return wrapper
@@ -78,16 +98,16 @@ def trace_step(section: str, **fields: Any):
     """Time one inline step with start/completed/failed and tracebacks."""
     detail = ''.join(f' {key}={value}' for key, value in fields.items())
     started = time.perf_counter()
-    send(f'[timing] {section} state=started{detail}')
+    send(f'[timing] {section} state=started{detail} rss_mb={rss_mb()}')
     try:
         yield
     except BaseException:
         elapsed = time.perf_counter() - started
-        send(f'[timing] {section} state=failed{detail} elapsed_seconds={elapsed:.3f}')
+        send(f'[timing] {section} state=failed{detail} elapsed_seconds={elapsed:.3f} rss_mb={rss_mb()}')
         send(_traceback_block(f'[traceback] {section}'))
         raise
     elapsed = time.perf_counter() - started
-    send(f'[timing] {section} state=completed{detail} elapsed_seconds={elapsed:.3f}')
+    send(f'[timing] {section} state=completed{detail} elapsed_seconds={elapsed:.3f} rss_mb={rss_mb()}')
 
 
 def _traceback_block(header: str) -> str:

@@ -2811,6 +2811,23 @@ class PreparationGraphSetupSpec(BaseModel):
         return f"{track}{self.track_config_suffix}"
 
 
+class ArchiveSpec(BaseModel):
+    """Pipeline compression and bounded archive I/O, owned by training.yaml."""
+    model_config = ConfigDict(extra="forbid")
+    format: Literal['tar.zst']
+    compression_level: int = Field(ge=1, le=22)
+    copy_buffer_bytes: int = Field(ge=65536)
+    legacy_zip_level: int = Field(ge=0, le=9)
+
+
+class PackagingSpec(BaseModel):
+    """Limits on reusable preparation intermediates; zero disables retention."""
+    model_config = ConfigDict(extra="forbid")
+    composition_cache_entries: int = Field(ge=0)
+    composition_cache_bytes: int = Field(ge=0)
+    token_cache_bytes: int = Field(ge=0)
+
+
 class PreparationSpec(BaseModel):
     """training.preparation — the owned preparation run contract.
 
@@ -2908,6 +2925,8 @@ class TrainingConfig(BaseModel):
     rand_matching: RandMatchingSpec
     difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
+    archives: ArchiveSpec
+    packaging: PackagingSpec
     # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
     # training.prepared_bundle hard-fails a bundle built under drifted
     # masking config instead of warning. Env PREPARED_BUNDLE_DRIFT_STRICT

@@ -68,6 +68,12 @@ class TrainingPreparation(BaseModel):
                 if key == path or key.is_relative_to(path):
                     del cache[key]
 
+    def release_bundle(self, path: Path) -> None:
+        """Release a completed consumer's bundle, preserving path alias identity."""
+        key = self.bundle_key(path)
+        self._bundles.pop(key, None)
+        self._objects.pop('built_bundle:' + str(key), None)
+
     def bundle_key(self, path: Path) -> Path:
         path = path.resolve()
         return self._aliases.get(path, path)

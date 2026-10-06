@@ -12,7 +12,9 @@ from pathlib import Path
 import zipfile
 from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
-from core.archive_reader import open_archive, zstd_module, archive_sidecar
+from core.archive_reader import open_archive, zstd_module, archive_sidecar, archive_settings, tar_archive
+from core.progress import tracked
+from core.step_trace import timed, trace_step
 
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -45,6 +47,41 @@ RESULT_ARCHIVE_EXCLUDED_DIRS = frozenset({
 })
 
 
+# Recompressing these containers wastes CPU and rarely saves meaningful space.
+_COMPRESSED_SUFFIXES = frozenset({'.gz', '.bz2', '.xz', '.zst', '.zip', '.npz',
+                                  '.png', '.jpg', '.jpeg', '.webp', '.parquet'})
+
+
+def _write_zip(candidate, files, inline, manifest_name, manifest):
+    """Stream standard ZIP64 with fast deflate; copy compressed payloads as-is."""
+    with zipfile.ZipFile(candidate, 'x', compression=zipfile.ZIP_DEFLATED,
+                         compresslevel=archive_settings().legacy_zip_level, allowZip64=True) as archive:
+        for target, source in tracked(files.items(), desc='archive.zip_files'):
+            compression = (zipfile.ZIP_STORED if source.suffix.lower() in _COMPRESSED_SUFFIXES
+                           else zipfile.ZIP_DEFLATED)
+            archive.write(source, target, compress_type=compression, compresslevel=archive_settings().legacy_zip_level)
+        for target, value in inline.items():
+            archive.writestr(target, value)
+        archive.writestr(manifest_name, manifest)
+
+
+def _write_tar(candidate, files, inline, manifest_name, manifest):
+    with tar_archive(candidate, 'x') as archive:
+        for target, source in tracked(files.items(), desc='archive.tar_files'):
+            archive.add(source, arcname=target, recursive=False)
+        for target, value in inline.items():
+            _add_tar_text(archive, target, value)
+        _add_tar_text(archive, manifest_name, manifest)
+
+
+def _add_tar_text(archive, name, value):
+    payload = value.encode()
+    member = tarfile.TarInfo(name)
+    member.size = len(payload)
+    archive.addfile(member, io.BytesIO(payload))
+
+
+@timed
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
                   inventory_key: str = 'files', profile: bool = False) -> Path:
@@ -55,16 +92,19 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         raise ValueError('archive member collision')
     timings = {}
     started = time.monotonic()
+    # Reject malformed inventories before expensive source hashing.
+    for target in files:
+        _check_member(target)
+    for target in inline:
+        _check_member(target)
+    _check_member(manifest_name)
     inventory = {}
-    for target, source in files.items():
-        if source.is_symlink():
-            raise ValueError('archive must not include symbolic links')
+    for target, source in tracked(files.items(), desc='archive.hash_sources'):
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('archive requires regular files, not symbolic links')
         with source.open('rb') as handle:
             inventory[target] = hashlib.file_digest(handle, 'sha256').hexdigest()
     inventory.update({target:hashlib.sha256(value.encode()).hexdigest() for target,value in inline.items()})
-    for target in [*inventory, manifest_name]:
-        if Path(target).is_absolute() or '..' in Path(target).parts:
-            raise ValueError('unsafe archive path')
     timings["inventory_hash_seconds"] = time.monotonic() - started
     output.parent.mkdir(parents=True, exist_ok=True)
     candidate = output.with_name(f'{output.name}.partial-{os.getpid()}-{uuid.uuid4().hex}')
@@ -72,27 +112,19 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         started = time.monotonic()
         manifest = json.dumps({**metadata, inventory_key:inventory}, indent=2)+'\n'
         if output.name.endswith('.tar.zst'):
-            with zstd_module().open(candidate, 'xb', level=1) as compressed:
-                with tarfile.open(fileobj=compressed, mode='w|', dereference=True) as archive:
-                    for target, source in files.items():
-                        archive.add(source, arcname=target, recursive=False)
-                    for target, value in {**inline, manifest_name: manifest}.items():
-                        payload = value.encode()
-                        member = tarfile.TarInfo(target)
-                        member.size = len(payload)
-                        archive.addfile(member, io.BytesIO(payload))
+            with trace_step('archive.zstandard', files=len(files),
+                            compression_level=archive_settings().compression_level):
+                _write_tar(candidate, files, inline, manifest_name, manifest)
         else:
-            with zipfile.ZipFile(candidate, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
-                for target, source in files.items():
-                    archive.write(source, target)
-                for target, value in inline.items():
-                    archive.writestr(target, value)
-                archive.writestr(manifest_name, manifest)
+            # Explicit ZIP outputs remain available for historical callers.
+            with trace_step('archive.zip', files=len(files)):
+                _write_zip(candidate, files, inline, manifest_name, manifest)
         # Sources can change while being archived (e.g. checkpoint rotation).
         # Never publish an archive whose bytes disagree with its frozen inventory.
         timings["compression_seconds"] = time.monotonic() - started
         started = time.monotonic()
-        verify_archive(candidate, manifest_name, inventory_key=inventory_key)
+        with trace_step('archive.verify'):
+            verify_archive(candidate, manifest_name, inventory_key=inventory_key)
         timings["verification_seconds"] = time.monotonic() - started
         with candidate.open('rb') as handle:
             os.fsync(handle.fileno())
@@ -135,9 +167,10 @@ def verify_open_archive(archive, manifest_name: str, *, inventory_key: str = 'fi
     for member in archive.infolist():
         _check_member(member.filename, regular=not member.is_dir() and
                       (member.external_attr >> 16) & 0o170000 != 0o120000)
-    metadata = json.loads(archive.read(manifest_name))
+    with archive.open(manifest_name) as handle:
+        metadata = json.load(handle)
     actual = {}
-    for name in names:
+    for name in tracked(names, desc='archive.verify_members'):
         if name != manifest_name:
             with archive.open(name) as handle:
                 actual[name] = hashlib.file_digest(handle, 'sha256').hexdigest()
@@ -161,8 +194,9 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
     zstd = zstd_module()
     try:
         with zstd.open(path, 'rb') as compressed:
-            with tarfile.open(fileobj=compressed, mode='r|') as archive:
-                for member in archive:
+            with tarfile.open(fileobj=compressed, mode='r|',
+                              bufsize=archive_settings().copy_buffer_bytes) as archive:
+                for member in tracked(archive, desc='archive.verify_stream'):
                     _check_member(member.name, regular=member.isfile())
                     if member.name in seen:
                         raise ValueError('duplicate archive members')
@@ -173,7 +207,7 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
                         else:
                             actual[member.name] = hashlib.file_digest(handle, 'sha256').hexdigest()
             # Consume the frame trailer as well; truncated zstd streams must fail.
-            while compressed.read(1024 * 1024):
+            while compressed.read(archive_settings().copy_buffer_bytes):
                 pass
     except zstd.ZstdError as error:
         raise ValueError(f'invalid Zstandard archive: {path}') from error

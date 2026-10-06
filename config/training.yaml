@@ -1277,3 +1277,14 @@ ner:
   huggingface:
     ner_repo_id: "fbarulli/e-r"
     token_file: ".env"
+
+# Shared archive and preparation memory policy. ZIP remains readable for old runs.
+archives:
+  format: tar.zst
+  compression_level: 1
+  copy_buffer_bytes: 1048576
+  legacy_zip_level: 1
+packaging:
+  composition_cache_entries: 4096
+  composition_cache_bytes: 16777216
+  token_cache_bytes: 67108864

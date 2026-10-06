@@ -8,6 +8,35 @@ from types import SimpleNamespace
 import zipfile
 
 
+def archive_settings():
+    from core.common import training_cfg
+    return training_cfg().archives
+
+
+@contextmanager
+def tar_archive(path, mode='r'):
+    """Zstandard for new tar writers; spool once for repeated legacy/new reads."""
+    settings = archive_settings()
+    if mode in {'w', 'x'}:
+        with zstd_module().open(path, mode + 'b', level=settings.compression_level) as compressed:
+            with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
+                              bufsize=settings.copy_buffer_bytes,
+                              copybufsize=settings.copy_buffer_bytes) as archive:
+                yield archive
+        return
+    if mode != 'r':
+        raise ValueError('tar archive mode must be r, w or x')
+    with Path(path).open('rb') as handle:
+        magic = handle.read(4)
+    if magic != b'\x28\xb5\x2f\xfd':
+        # Historical deliveries use gzip or an uncompressed tar.
+        with tarfile.open(path, 'r:*') as archive:
+            yield archive
+        return
+    with open_archive(path) as reader:
+        yield reader.archive
+
+
 def archive_sidecar(path, suffix):
     path = Path(path)
     for ending in ('.tar.zst', '.zip'):
@@ -64,7 +93,7 @@ class TarReader:
         if target.is_symlink():
             raise ValueError('archive extraction target is a symbolic link')
         with self.open(name) as source, target.open('wb') as output:
-            shutil.copyfileobj(source, output)
+            shutil.copyfileobj(source, output, length=archive_settings().copy_buffer_bytes)
         return str(target)
 
     def extractall(self, destination):
@@ -84,7 +113,7 @@ def open_archive(path):
         zstd = zstd_module()
         try:
             with zstd.open(path, 'rb') as compressed:
-                shutil.copyfileobj(compressed, spool)
+                shutil.copyfileobj(compressed, spool, length=archive_settings().copy_buffer_bytes)
         except zstd.ZstdError as error:
             raise ValueError(f'invalid Zstandard archive: {path}') from error
         spool.seek(0)

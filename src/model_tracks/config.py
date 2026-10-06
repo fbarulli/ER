@@ -13,7 +13,7 @@ class SuiteConfig(BaseModel):
     epochs: int = Field(default=10, ge=1)
     device: Literal['cpu', 'cuda'] = 'cuda'
     input_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
-    result_archive_format: Literal['zip', 'tar.zst'] = 'zip'
+    result_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
     schedule: Literal['parallel'] = 'parallel'
     max_parallel: Literal[3] = 3
     gpu_parallel_backend: Literal['mps'] = 'mps'

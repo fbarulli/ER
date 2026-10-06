@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import io
+from itertools import chain
 import json
 import shutil
 from pathlib import Path
@@ -129,7 +130,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
                prepared / FILENAME: backup_root / FILENAME}
     for source, backup in backups.items():
         if not backup.exists() or not old_manifest.get('shared_training_data_sha256'):
-            backup.write_bytes(source.read_bytes())
+            shutil.copyfile(source, backup)
     clean_catalog = pd.read_csv(backup_root / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
     catalog_rows = clean_catalog.to_dict('records')
     records = load_records(backup_root / 'listings.json')
@@ -146,7 +147,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     if len(gtins) != shared.canonical_rows or len(bundle['payload']) != shared.payload_rows:
         raise ValueError('shared graph bundle layout mismatch')
     copies = {}
-    for audit in (*bundle['mask_audit'], *bundle['hard_negative_mask_audit']):
+    for audit in chain(bundle['mask_audit'], bundle['hard_negative_mask_audit']):
         copies[int(audit['copy_payload_idx'])] = (int(audit.get('copy_source_payload_idx') if audit.get('copy_source_payload_idx') is not None else audit['anchor_payload_idx']), audit)
         if audit.get('copy_pair_payload_idx') is not None:
             copies[int(audit['copy_pair_payload_idx'])] = (int(audit['pair_payload_idx']), audit)
@@ -241,7 +242,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     evaluation_hash = _hash_rows(_pair_rows(evaluation))
     projected = [dict(example_id=row['example_id'], sku_id1=node_map[str(row['payload_index1'])],
                       sku_id2=node_map[str(row['payload_index2'])], label=str(row['label']), split='train')
-                 for row in shared.pair_rows()]
+                 for row in shared.iter_pair_rows()]
     evaluation['example_id'] = ''
     pairs = pd.concat([pd.DataFrame(projected), evaluation], ignore_index=True)
     catalog = pd.DataFrame(catalog_rows).fillna('')
@@ -342,7 +343,7 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
     pairs = pd.read_csv(setup / 'prepared/pairs.csv', dtype=str, keep_default_na=False)
     expected = [dict(example_id=row['example_id'], sku_id1=projection.node_map[str(row['payload_index1'])],
                      sku_id2=projection.node_map[str(row['payload_index2'])], label=str(row['label']), split='train')
-                for row in shared.pair_rows()]
+                for row in shared.iter_pair_rows()]
     actual = pairs[pairs.split == 'train'].to_dict('records')
     if actual != expected or _hash_rows(actual) != projection.train_pair_order_sha256:
         raise ValueError('graph supervision differs from exact shared example order/labels')
