@@ -56,6 +56,7 @@ import os
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
+from core.run_log import RunLogger
 
 import cli.colab as _colab
 from cli.colab import (
@@ -76,6 +77,8 @@ from cli.colab import (
     run_colab_exec_capture,
     run_colab_exec_stream,
 )
+
+_LOG = RunLogger(__name__)
 
 # The delivery archive keeps the VM-side fixed name from the 8ddc614 lane; a
 # rerun on a live VM overwrites it (the download consumes it per invocation).
@@ -225,7 +228,9 @@ print(json.dumps(payload), flush=True)
         if chunk:
             # Both-transcript forwarding, exactly like worker telemetry
             # (cli.colab:1501-1505).
-            for line in chunk.splitlines():
+            lines = chunk.splitlines()
+            for line in _LOG.progress(lines, desc='prepare_stream', unit='line',
+                                      total=len(lines)):
                 _write_training_log(f"[prepare] {line}\n")
                 print(f"[prepare] {line}", flush=True)
             offset = int(payload["offset"])
@@ -326,38 +331,49 @@ def run_bundle(
     if resume_state is not None and not Path(resume_state).is_file():
         raise FileNotFoundError(f"resume state not found: {resume_state}")
     run_id = _lane_run_stamp()
-    print(
-        f"[bundle] lane={run_id} cohort export {source.name} rides the sparse "
-        f"checkout (no upload; the clone carries the bytes)",
-        flush=True,
-    )
-    script = _FRESH_LAUNCH_SCRIPT.replace("@COHORT_EXPORT@", source.name)
+    _LOG.info(f'[bundle] lane={run_id} cohort export {source.name} rides the '
+              f'sparse checkout (no upload; the clone carries the bytes)')
+    script = _compose_launch_script(source, resume_from, resume_run_id,
+                                    resume_state)
     if resume_state is not None:
-        resume_state = Path(resume_state)
-        print(
-            f"[bundle] resume: uploading {resume_state} -> {REMOTE_ROOT}/{_RESUME_STATE_ARCHIVE} ...",
-            flush=True,
-        )
-        _result_event(run_id, "upload", "started", file=str(resume_state))
-        _upload_with_retries(
-            resume_state, f"{REMOTE_ROOT}/{_RESUME_STATE_ARCHIVE}", timeout=3600
-        )
-        _result_event(
-            run_id, "upload", "completed", remote=f"{REMOTE_ROOT}/{_RESUME_STATE_ARCHIVE}"
-        )
-        if resume_run_id is None or resume_from is None:
-            raise ValueError(
-                "--resume-state requires --resume-run-id and --resume-from "
-                "(the frozen run id and the prepare_all --resume-from choice)"
-            )
-        script = _RESUME_LAUNCH_SCRIPT.replace(
-            "@RESUME_RUN_ID@", resume_run_id
-        ).replace("@RESUME_FROM@", resume_from).replace("@COHORT_EXPORT@", source.name)
-        print(
-            f"[bundle] resume: prepare_all --run-dir {REMOTE_ROOT}/results/training_prep/{resume_run_id} "
-            f"--resume-from {resume_from}",
-            flush=True,
-        )
+        _upload_resume_state(run_id, Path(resume_state))
+    _launch_and_poll(script)
+    _finalize_and_download(run_id)
+
+
+def _compose_launch_script(source: Path, resume_from: str | None,
+                           resume_run_id: str | None,
+                           resume_state: Path | None) -> str:
+    """The detached prepare launcher script (fresh or frozen-run placeholders)."""
+    if resume_state is None:
+        return _FRESH_LAUNCH_SCRIPT.replace("@COHORT_EXPORT@", source.name)
+    if resume_run_id is None or resume_from is None:
+        raise ValueError(
+            "--resume-state requires --resume-run-id and --resume-from "
+            "(the frozen run id and the prepare_all --resume-from choice)")
+    script = (_RESUME_LAUNCH_SCRIPT
+              .replace("@RESUME_RUN_ID@", resume_run_id)
+              .replace("@RESUME_FROM@", resume_from)
+              .replace("@COHORT_EXPORT@", source.name))
+    _LOG.info(f'[bundle] resume: prepare_all --run-dir '
+              f'{REMOTE_ROOT}/results/training_prep/{resume_run_id} '
+              f'--resume-from {resume_from}')
+    return script
+
+
+def _upload_resume_state(run_id: str, resume_state: Path) -> None:
+    """Upload the owner-built frozen-state tarball to its fixed VM name."""
+    _LOG.info(f'[bundle] resume: uploading {resume_state} -> '
+              f'{REMOTE_ROOT}/{_RESUME_STATE_ARCHIVE} ...')
+    _result_event(run_id, "upload", "started", file=str(resume_state))
+    _upload_with_retries(resume_state, f"{REMOTE_ROOT}/{_RESUME_STATE_ARCHIVE}",
+                         timeout=3600)
+    _result_event(run_id, "upload", "completed",
+                  remote=f"{REMOTE_ROOT}/{_RESUME_STATE_ARCHIVE}")
+
+
+def _launch_and_poll(script: str) -> None:
+    """Launch the detached prepare (quick exec), then stream its log."""
     # Launch the detached prepare (a quick exec), then POLL the VM-side log —
     # the train lanes' proven capture: every new byte, each tqdm \r update
     # included, streams to both transcripts until the status file records
@@ -367,6 +383,10 @@ def run_bundle(
         SESSION, script, timeout=300, log_name="bundle_launch", training_output=True
     )
     _poll_prepare_log(deadline_seconds=_PREPARE_BUDGET_SECONDS)
+
+
+def _finalize_and_download(run_id: str) -> None:
+    """Build the delivery archive remotely, then land it under this run id."""
     run_colab_exec_stream(
         SESSION, _FINALIZE_SCRIPT, timeout=1800, log_name="bundle_delivery",
         training_output=True,
@@ -380,16 +400,17 @@ def run_bundle(
     _result_event(run_id, "download", "started", workers=1)
     local = local_base / _ARCHIVE_NAME
     _download_file_with_visibility(
-        remote=f"{REMOTE_ROOT}/bundle_delivery.tar.zst",
+        remote=f"{REMOTE_ROOT}/{_ARCHIVE_NAME}",
         local=local,
         worker=None,
         index=1,
         total=1,
         run_id=run_id,
     )
-    _result_event(run_id, "download", "completed", archive=str(local), destination=str(local_base))
-    print(f"[bundle] delivered -> {local}", flush=True)
-    print(f"[bundle] {run_id} complete; the VM session stays open", flush=True)
+    _result_event(run_id, "download", "completed", archive=str(local),
+                  destination=str(local_base))
+    _LOG.info(f'[bundle] delivered -> {local}')
+    _LOG.info(f'[bundle] {run_id} complete; the VM session stays open')
 
 
 def _resume_args(args: argparse.Namespace) -> dict:
