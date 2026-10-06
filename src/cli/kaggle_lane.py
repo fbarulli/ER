@@ -40,7 +40,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1041,6 +1041,78 @@ def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
     return plan
 
 
+def supervise_kernels(*, kinds: Sequence[str], execute: bool,
+                      poll_seconds: float | None = None,
+                      max_polls: int = 4 * 4320) -> dict[str, Any]:
+    """Dependable single-op harvest: poll terminal states, then fetch.
+
+    One process per launch: each requested kernel's status is polled at the
+    configured cadence until it reaches a terminal state, then
+    fetch_kernel_output downloads + hash-verifies + installs it (idempotent
+    and fail-closed; re-running after an interruption simply completes the
+    job). Polling holds neither a session nor a quota. On a non-complete
+    terminal state the fetch is skipped and the failure is recorded; the
+    aggregate returns only when every kind has been handled. Dry-run prints
+    the plan.
+    """
+    spec = _spec()
+    resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
+    slugs = {
+        "bundle": spec.cpu_kernel_slug,
+        "train": spec.gpu_kernel_slug,
+        "embed": spec.embedding_kernel_slug,
+    }
+    unknown = [kind for kind in kinds if kind not in slugs]
+    if unknown:
+        raise RuntimeError(f"unknown supervise kind(s): {unknown}")
+    missing = [kind for kind in kinds if not slugs[kind]]
+    if missing:
+        raise RuntimeError(
+            f"config kaggle kernel slug unset for {missing}; name them in config")
+    terminal = {"complete", "error", "cancelAcknowledged"}
+    plan: dict[str, Any] = {
+        "mode": "executed" if execute else "dry-run",
+        "poll_seconds": resolved_poll,
+        "kernels": {kind: slugs[kind] for kind in kinds},
+    }
+    if not execute:
+        return plan
+    history: dict[str, list[dict[str, str]]] = {}
+    outstanding = list(kinds)
+    polls = 0
+    while outstanding:
+        polls += 1
+        if polls > max_polls:
+            raise RuntimeError(
+                f"supervise gave up after {polls} polls; still outstanding: {outstanding}")
+        for kind in list(outstanding):
+            status = kernel_status(slug=slugs[kind])
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _log_lane(f"[{slugs[kind]}] status={status['status']}")
+            history.setdefault(kind, []).append({"at": stamp, "status": status["status"]})
+            if status["status"] in terminal:
+                outstanding.remove(kind)
+                if status["status"] == "complete":
+                    plan_setdefault: dict[str, Any] = plan.setdefault("fetch", {})
+                    plan_setdefault[kind] = fetch_kernel_output(
+                        kind=kind, execute=True)
+                else:
+                    plan.setdefault("failures", {})[kind] = {
+                        "status": status["status"], "raw": status.get("raw", ""),
+                        "note": "supervise: non-complete terminal state; fetch skipped"}
+        if outstanding:
+            time.sleep(resolved_poll)
+    plan["status_history"] = history
+    receipt_path = staging_dir() / "supervise.receipt.json"
+    try:
+        atomic_write_json(plan, receipt_path)
+    except OSError as error:
+        print(f"[kaggle-lane] supervise receipt write failed ({error}); continuing",
+              flush=True)
+    plan["receipt"] = str(receipt_path)
+    return plan
+
+
 def stop_kernel(slug: str | None = None, *, which: str = "cpu",
                 execute: bool) -> dict[str, Any]:
     """Stop a kernel's running session and release its compute quota.
@@ -1149,7 +1221,7 @@ def main() -> None:
     parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                         "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
                         "train-kernel", "embed-kernel", "kernel-logs", "fetch-results",
-                        "stop"],
+                        "stop", "supervise"],
                         default="package")
     parser.add_argument("--dataset-csv", type=Path, default=None,
                         help="cohort export to package (default: the SSOT "
@@ -1253,6 +1325,14 @@ def main() -> None:
         if not args.execute:
             print("[kaggle-lane] dry-run only; pass --execute to download and "
                   "verify the result archive", flush=True)
+        return
+    if args.what == "supervise":
+        kinds = [args.kind] if args.kind else ["bundle", "train", "embed"]
+        plan = supervise_kernels(kinds=kinds, execute=args.execute)
+        print(json.dumps(plan, indent=2), flush=True)
+        if not args.execute:
+            print("[kaggle-lane] dry-run only; pass --execute to poll and fetch",
+                  flush=True)
         return
     if args.what == "kernel-status":
         print(json.dumps(kernel_status(which=args.kernel), indent=2), flush=True)
