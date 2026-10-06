@@ -347,26 +347,29 @@ def finish_manifest(
     # Pydantic receives the declared ``list[str]`` contract and expected
     # output matching compares the same basename representation.
     expected = [Path(p).name for p in (expected_outputs or [])]
-    entries = []
-    for p in outputs:
-        entry = _file_entry(Path(p))
-        name = Path(p).name
-        entry["expected"] = name in expected if expected else None
-        entries.append(entry)
-    manifest.outputs = [ManifestFile.model_validate(e) for e in entries]
+    manifest.outputs = [ManifestFile.model_validate(e)
+                        for e in _output_entries(outputs, expected)]
     manifest.row_accounting = row_accounting
     manifest.expected_outputs = expected
     manifest.finished = _utc_now()
     manifest.status = status
-    directory = (
-        Path(manifest_dir)
-        if manifest_dir is not None
+    directory = Path(manifest_dir) if manifest_dir is not None \
         else _path(training_cfg().audit.manifest_dir)
-    )
     directory.mkdir(parents=True, exist_ok=True)
     return atomic_write_json(
         manifest.model_dump(mode="json"), directory / f"{manifest.stage}.json"
     )
+
+
+def _output_entries(outputs: list[str | Path], expected: list[str]) -> list[dict]:
+    """The publish-time output records, flagged against the expected set."""
+    entries = []
+    for path in outputs:
+        entry = _file_entry(Path(path))
+        name = Path(path).name
+        entry["expected"] = name in expected if expected else None
+        entries.append(entry)
+    return entries
 
 
 def read_manifest(stage: str, manifest_dir: str | Path | None = None) -> StageManifest:
@@ -397,53 +400,83 @@ def verify_manifest(
     because the raw export is 53MB).
     """
     problems: list[str] = []
-    directory = (
-        Path(manifest_dir)
-        if manifest_dir is not None
-        else _path(training_cfg().audit.manifest_dir)
-    )
-    path = directory / f"{stage}.json"
-    if not path.exists():
-        raise RuntimeError(f"manifest missing: {path} — stage never completed")
-    manifest = StageManifest.model_validate_json(
-        path.read_text(encoding="utf-8")
-    )
-    if manifest.status != "complete":
-        problems.append(f"status is {manifest.status!r}, not 'complete'")
+    manifest = _existing_manifest(stage, manifest_dir)
+    _collect_status_problems(manifest, problems)
     for group, entries, rehash in (
         ("input", manifest.inputs, check_inputs),
         ("output", manifest.outputs, True),
     ):
-        for entry in entries:
-            f = Path(entry.path)
-            if not f.exists():
-                problems.append(f"{group} missing on disk: {entry.path}")
-                continue
-            if rehash:
-                actual = sha256_file(f)
-                if actual != entry.sha256:
-                    problems.append(
-                        f"{group} sha256 mismatch: {entry.path} "
-                        f"manifest={entry.sha256[:12]} actual={actual[:12]}"
-                    )
-            residue = list(f.parent.glob(f"{f.name}.tmp-*"))
-            if residue:
-                problems.append(
-                    f"interrupted-write residue next to {entry.path}: "
-                    f"{[r.name for r in residue]}"
-                )
-    for name in manifest.expected_outputs:
-        if name not in [Path(e.path).name for e in manifest.outputs]:
-            problems.append(f"expected output never produced: {name}")
-    try:
-        _check_closure(manifest.row_accounting)
-    except ValueError as err:
-        problems.append(str(err))
+        _collect_entry_problems(group, entries, rehash, problems)
+    _collect_expected_output_problems(manifest, problems)
+    _collect_closure_problems(manifest, problems)
     if problems:
         raise RuntimeError(
             f"manifest verification failed for stage {stage!r}:\n  - "
             + "\n  - ".join(problems)
         )
+
+
+def _existing_manifest(stage: str, manifest_dir: str | Path | None) -> StageManifest:
+    """Parse the published stage manifest; missing = stage never completed."""
+    path = _manifest_path(stage, manifest_dir)
+    if not path.exists():
+        raise RuntimeError(f"manifest missing: {path} — stage never completed")
+    return StageManifest.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _manifest_path(stage: str, manifest_dir: str | Path | None) -> Path:
+    """The declared audit manifest directory (or the caller's override)."""
+    directory = (Path(manifest_dir) if manifest_dir is not None
+                 else _path(training_cfg().audit.manifest_dir))
+    return directory / f"{stage}.json"
+
+
+def _collect_status_problems(manifest: StageManifest, problems: list[str]) -> None:
+    """Only a 'complete' manifest can verify anything."""
+    if manifest.status != "complete":
+        problems.append(f"status is {manifest.status!r}, not 'complete'")
+
+
+def _collect_entry_problems(group: str, entries, rehash: bool,
+                            problems: list[str]) -> None:
+    """Per-entry: present on disk, hash matches, no interrupted-write residue."""
+    from tqdm import tqdm
+    for entry in tqdm(entries, desc=f'manifest_{group}', unit='entry',
+                      leave=False, disable=False, dynamic_ncols=True):
+        f = Path(entry.path)
+        if not f.exists():
+            problems.append(f"{group} missing on disk: {entry.path}")
+            continue
+        if rehash:
+            actual = sha256_file(f)
+            if actual != entry.sha256:
+                problems.append(
+                    f"{group} sha256 mismatch: {entry.path} "
+                    f"manifest={entry.sha256[:12]} actual={actual[:12]}"
+                )
+        residue = list(f.parent.glob(f"{f.name}.tmp-*"))
+        if residue:
+            problems.append(
+                f"interrupted-write residue next to {entry.path}: "
+                f"{[r.name for r in residue]}"
+            )
+
+
+def _collect_expected_output_problems(manifest: StageManifest,
+                                      problems: list[str]) -> None:
+    """Every declared output must exist among the recorded ones."""
+    produced = [Path(e.path).name for e in manifest.outputs]
+    for name in manifest.expected_outputs:
+        if name not in produced:
+            problems.append(f"expected output never produced: {name}")
+
+
+def _collect_closure_problems(manifest: StageManifest, problems: list[str]) -> None:
+    """Row accounting closure problems land in the same report (not a raise)."""
+    try:
+        _check_closure(manifest.row_accounting)
+    except ValueError as err:
+        problems.append(str(err))
 
 
 def verify_manifests(
