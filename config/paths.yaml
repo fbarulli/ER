@@ -145,6 +145,33 @@ layouts:
     owner: core.attribute_decision
     template: "artifacts/evidence/semantics/family_registry.json"
     fields: {}
+  # The bundling pipeline's own source/config neighborhoods (one owner each,
+  # declared once so no pipeline module spells a top-level directory name).
+  source_code_dir:
+    root: repo
+    owner: training.prepare_all
+    template: "src"
+    fields: {}
+  scripts_dir:
+    root: repo
+    owner: training.prepare_all
+    template: "scripts"
+    fields: {}
+  config_dir:
+    root: repo
+    owner: training.prepare_all
+    template: "config"
+    fields: {}
+  model_tracks_config:
+    root: repo
+    owner: training.prepare_all
+    template: "config/model_tracks.yaml"
+    fields: {}
+  negative_supply_discriminator:
+    root: repo
+    owner: training.prepare_all
+    template: "scripts/negative_supply_discriminator.py"
+    fields: {}
   report_plot:
     root: results_training
     owner: training.report_plots

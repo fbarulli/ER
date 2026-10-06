@@ -27,9 +27,18 @@ from core.portable_archive import (
     INVENTORY, RuntimeSnapshot, verify_archive, verify_open_archive, write_archive,
 )
 from core.progress import tracked
+from core.run_log import RunLogger
 from core.step_trace import rss_mb, send, timed, trace_step
 from model_tracks.config import load_config
 from model_tracks.preflight import preflight
+
+_LOG = RunLogger(__name__)
+
+
+def _source_layout_key() -> str:
+    """The declared source-code neighborhood (paths.yaml layouts block)."""
+    from core.common import LAYOUTS
+    return str(LAYOUTS['source_code_dir'].template)
 
 PACKAGE_MANIFEST = 'model_tracks_package.json'
 RECOVERY_MANIFEST = 'suite_recovery_manifest.json'
@@ -98,23 +107,29 @@ def _release_bundle(path: Path) -> None:
     send(f'[package] released_bundle={path.name} peak_rss_mb={rss_mb()}')
 
 
+def _snapshot_pinned_items() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The declared pinned files/configs (training.yaml packaging block)."""
+    from core.common import training_cfg
+    pinned = training_cfg().packaging.snapshot_pinned_files
+    configs = training_cfg().packaging.snapshot_pinned_configs
+    return pinned, configs
+
+
 @timed
 def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, Path]:
     """Shared local source/config overlay for prepared Colab jobs."""
     from core.common import TRAIN_ROOT
-    from core.progress import tracked
     files = {}
     with trace_step('snapshot.collect_source_files'):
-        for path in tracked((p for p in _walk_files(TRAIN_ROOT / 'src',
+        for path in tracked((p for p in _walk_files(TRAIN_ROOT / _source_layout_key(),
                             excluded_dirs=frozenset({'__pycache__'})) if p.suffix == '.py'), total=None,
                             desc='snapshot.source_files'):
             files[path.relative_to(TRAIN_ROOT).as_posix()] = path
     with trace_step('snapshot.pin_scripts_and_configs'):
-        for name in ('src/pipeline.py','scripts/diet_manifest.py',
-                     'scripts/run_colab_ablation.py','scripts/run_colab_embeddings.py',
-                     'src/cli/colab.py','src/cli/__init__.py'):
+        pinned_files, pinned_configs = _snapshot_pinned_items()
+        for name in pinned_files:
             files[name] = TRAIN_ROOT/name
-        for name in ('paths.yaml','training.yaml','identity_dimensions.yaml','identity_reviews.json','vocabulary.json','text_track.yaml','attribute_ablation.yaml'):
+        for name in pinned_configs:
             files['config/'+name] = TRAIN_ROOT/'config'/name
         # The semantic family registry is a REQUIRED frozen input: calibration
         # refuses to start without it (core.attribute_decision raises rather than
@@ -308,59 +323,101 @@ def _collect_package_sources(cfg, setup: Path, bundle_path: Path) -> dict[str, P
     files.update(_runtime_sources(cfg))
     files[str(_target() / 'text_prepared.pkl.gz')] = bundle_path
     files[str(_target() / 'text_prepared.pkl.gz.json')] = _sidecar(bundle_path)
-    # Ablation cohort staging (GPU suite) rebuilds from the UNPROJECTED clean
-    # gates; the projected setup overrides them, so the immutable clean backup
-    # ships whenever it exists (ER_PACKAGE_SKIP_ABLATION leaves the bundle
-    # without ablation templates, but the clean backup is still prepared by
-    # the suite_inputs projection in shared_graph_data).
-    clean_backup = setup.parent / (setup.name + '__clean_shared_inputs')
-    if clean_backup.is_dir():
-        for path in sorted(clean_backup.rglob('*')):
-            if path.is_file():
-                files[str(_target() / path.relative_to(setup.parent))] = path
+    _collect_clean_backup_files(setup, files)
     return files
+
+
+def _collect_clean_backup_files(setup: Path, files: dict) -> None:
+    """Ship the unprojected clean gates backup whenever it exists.
+
+    Ablation cohort staging (GPU suite) rebuilds from the UNPROJECTED clean
+    gates; the projected setup overrides them, so the immutable clean backup
+    ships whenever it exists (ER_PACKAGE_SKIP_ABLATION leaves the bundle
+    without ablation templates, but the clean backup is still prepared by
+    the suite_inputs projection in shared_graph_data).
+    """
+    clean_backup = setup.parent / (setup.name + '__clean_shared_inputs')
+    if not clean_backup.is_dir():
+        return
+    for path in _LOG.progress((p for p in sorted(clean_backup.rglob('*')) if p.is_file()),
+                              desc='package.clean_backup', unit='file'):
+        files[str(_target() / path.relative_to(setup.parent))] = path
 
 
 @timed
 def package(config: Path, output: Path) -> Path:
-    from core.common import TRAIN_ROOT, git_revision
+    """Publish the immutable suite package: stage, preflight, collect, write."""
+    from training.prepared_bundle import load_prepared_bundle
+    bundle_path, setup, cfg = _resolve_package_paths(config)
+    _require_absent_output(output)
+    with trace_step('package.load_bundle', bundle=bundle_path.name):
+        _, bundle = load_prepared_bundle(bundle_path)
+    try:
+        native_model, checks = _stage_and_preflight(config, cfg, setup, bundle,
+                                                    bundle_path)
+    finally:
+        del bundle
+        _release_bundle(bundle_path)
+    files = _collect_package_sources(cfg, setup, bundle_path)
+    archive = _write_package_archive(output, cfg, setup, files, checks)
+    send(f'[package] archive={archive} rss_mb={rss_mb()}')
+    return archive
 
+
+def _require_absent_output(output: Path) -> None:
+    """The package name is exclusive: refuse to overwrite any existing path."""
     output = Path(output)
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
 
-    with trace_step('package.resolve_paths'):
-        cfg = load_config(config)
-        setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
-        bundle_path = (TRAIN_ROOT / cfg.text_bundle).resolve()
-    from training.prepared_bundle import load_prepared_bundle
-    with trace_step('package.load_bundle', bundle=bundle_path.name):
-        _, bundle = load_prepared_bundle(bundle_path)
+
+def _resolve_package_paths(config: Path) -> tuple[Path, Path, Any]:
+    """Config-owned paths: the suite yaml, its setup dir and text bundle."""
+    from core.common import TRAIN_ROOT
+    cfg = load_config(config)
+    return ((Path(TRAIN_ROOT) / cfg.text_bundle).resolve(),
+            (Path(TRAIN_ROOT) / cfg.setup_dir).resolve(), cfg)
+
+
+def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
+                         bundle_path: Path) -> tuple[Any, dict]:
+    """Shared population + graph inputs + exports, then the package preflight.
+
+    Release order is deliberate: the bundle ref leaves after exports (the
+    ablation cohort is the last consumer), and the token cache materializes
+    the native model the preflight validates.
+    """
+    _prepare_shared_population(setup, bundle)
+    gc.collect()
+    _prepare_graph_inputs(setup)
     try:
-        _prepare_shared_population(setup, bundle)
-        gc.collect()
-        _prepare_graph_inputs(setup)
         native_model = _prepare_exports(cfg, setup, bundle)
     finally:
-        del bundle
         _release_bundle(bundle_path)
     try:
         with trace_step('package.preflight'):
-            checks = preflight(config, allow_gpu_pending=True, native_token_model=native_model)
+            checks = preflight(config, allow_gpu_pending=True,
+                               native_token_model=native_model)
+            return native_model, checks
     finally:
         del native_model
         _release_bundle(bundle_path)
-    files = _collect_package_sources(cfg, setup, bundle_path)
+
+
+def _write_package_archive(output: Path, cfg, setup: Path,
+                           files: dict, checks: dict) -> Path:
+    """Inline the portable configs, then write the archive for one Colab run."""
+    from core.common import git_revision
+    _require_absent_output(output)
     with trace_step('package.inline_configs'):
         inline = {name: yaml.safe_dump(value, sort_keys=False)
                   for name, value in _portable_config_models(cfg, setup).items()}
     with trace_step('package.write_archive'):
         revision = git_revision()
-        archive = write_archive(output,files,inline=inline,manifest_name=PACKAGE_MANIFEST,
-                                metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks},
-                                profile=True)
-    send(f'[package] archive={archive} rss_mb={rss_mb()}')
-    return archive
+        return write_archive(output, files, inline=inline, manifest_name=PACKAGE_MANIFEST,
+                             metadata={'schema': 'er-model-tracks-package-v1',
+                                       'revision': revision, 'preflight': checks},
+                             profile=True)
 
 
 @timed
@@ -481,17 +538,23 @@ def _extract_verified_members(source, staging: Path, inventory: dict) -> None:
     from core.common import training_cfg
     buffer_bytes = training_cfg().archives.copy_buffer_bytes
     for name, expected in tracked(inventory.items(), desc='restore.members'):
-        target = staging / name
-        if not target.resolve().is_relative_to(staging):
-            raise ValueError('unsafe recovery archive member')
-        target.parent.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256()
-        with source.open(name) as member, target.open('xb') as handle:
-            while chunk := member.read(buffer_bytes):
-                digest.update(chunk)
-                handle.write(chunk)
-        if digest.hexdigest() != expected:
-            raise ValueError('archive integrity mismatch: ' + name)
+        _copy_member_verified(source, name, expected, staging, buffer_bytes)
+
+
+def _copy_member_verified(source, name: str, expected: str,
+                          staging: Path, buffer_bytes: int) -> None:
+    """Stream one archive member to staging, verifying its digest on the way."""
+    target = staging / name
+    if not target.resolve().is_relative_to(staging):
+        raise ValueError('unsafe recovery archive member')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    with source.open(name) as member, target.open('xb') as handle:
+        while chunk := member.read(buffer_bytes):
+            digest.update(chunk)
+            handle.write(chunk)
+    if digest.hexdigest() != expected:
+        raise ValueError('archive integrity mismatch: ' + name)
 
 
 def _publish_recovery(staging: Path, output: Path) -> None:

@@ -140,8 +140,10 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
 def _provenance_paths(root: Path, suite_config: Path) -> set[Path]:
     """Every byte-relevant input of a full preparation, as one resolved set."""
     from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT, artifact
-    paths = set((root / 'src').rglob('*.py')) | set((root / 'scripts').rglob('*.py'))
-    paths.update(path for path in (root / 'config').rglob('*')
+    layouts = _pipeline_layouts()
+    paths = set((root / layouts['source_code_dir']).rglob('*.py')) | \
+        set((root / layouts['scripts_dir']).rglob('*.py'))
+    paths.update(path for path in (root / layouts['config_dir']).rglob('*')
                  if path.suffix in {'.yaml', '.yml', '.json'} and path.is_file())
     paths.update([Path(CONFIG_PATH), Path(TRAINING_CONFIG_PATH),
                   Path(VOCABULARY_CONFIG_PATH), Path(suite_config), Path(DATA_PATH)])
@@ -150,6 +152,14 @@ def _provenance_paths(root: Path, suite_config: Path) -> set[Path]:
     paths.update([TRAIN_ROOT / 'artifacts/evidence/attribute_universe_census.json',
                   artifact('semantic_family_registry')])
     return paths
+
+
+def _pipeline_layouts() -> dict[str, str]:
+    """The pipeline's repo-layout bindings (paths.yaml layouts block)."""
+    from core.common import LAYOUTS
+    return {key: str(LAYOUTS[key].template)
+            for key in ('source_code_dir', 'scripts_dir', 'config_dir',
+                        'model_tracks_config', 'negative_supply_discriminator')}
 
 
 @timed
@@ -315,7 +325,7 @@ def _load_preparation_configs(tracks_config):
     from core.common import TRAIN_ROOT, TRAINING_CONFIG_PATH, training_cfg
     from model_tracks.config import load_config as load_suite
     root = Path(TRAIN_ROOT)
-    config_path = Path(tracks_config or root / 'config/model_tracks.yaml').resolve()
+    config_path = Path(tracks_config or _default_tracks_config(root)).resolve()
     suite = load_suite(config_path)
     training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
     return config_path, suite, training
@@ -336,7 +346,7 @@ def _derive_run_context(suite, training, tracks_config) -> _RunContext:
     prep = training.prep if hasattr(training, 'prep') else training.preparation
     return _RunContext(
         root=root, results=results,
-        config_path=Path(tracks_config or root / 'config/model_tracks.yaml').resolve(),
+        config_path=Path(tracks_config or _default_tracks_config(root)).resolve(),
         suite=suite, training=training, prep=prep, lane=training.negative_supply,
         reusable_keys=tuple(prep.reusable_keys), files=F,
         checkpoint=resolve_model(suite.text_model),
@@ -345,6 +355,11 @@ def _derive_run_context(suite, training, tracks_config) -> _RunContext:
         bundle=_full_baseline_bundle(root, training),
         smoke=root / prep.smoke_dir,
     )
+
+
+def _default_tracks_config(root: Path) -> Path:
+    """The declared default three-track configuration (paths.yaml layouts)."""
+    return root / str(_pipeline_layouts()['model_tracks_config'])
 
 
 def _full_baseline_bundle(root, training) -> Path:
@@ -394,7 +409,8 @@ def _hash_smoke_baseline(smoke: Path) -> dict[str, str]:
 def _prepare_environment(root: Path, run_dir: Path, prep) -> tuple[dict[str, str], str]:
     """Child-stage environment contract; returns (env, shared_base_payload)."""
     env = os.environ.copy()
-    env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
+    env['PYTHONPATH'] = (str(root / _pipeline_layouts()['source_code_dir'])
+                         + os.pathsep + str(root))
     env['EUROMONITOR_SHARED_BASE_DATA'] = _shared_base_payload_path(run_dir)
     _bind_cohort_tag(env)
     env.pop('WANDB_API_KEY', None)
@@ -637,7 +653,8 @@ class PrepareRun:
     def _stage_discriminator(self, name: str) -> None:
         """Run + record the diagnostic verdict; gate mode decides enforcement."""
         from core.common import RESULTS
-        arguments = [str(self.context.root / 'scripts/negative_supply_discriminator.py'),
+        arguments = [str(self.context.root /
+                         _pipeline_layouts()['negative_supply_discriminator']),
                      str(Path(RESULTS) / self.context.prep.negative_supply_dir /
                          self.run_tag / 'pairs.csv'),
                      '--out', str(self.run_dir / self.context.prep.discriminator_file)]

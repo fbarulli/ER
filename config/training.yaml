@@ -1345,3 +1345,18 @@ packaging:
   composition_cache_entries: 4096
   composition_cache_bytes: 16777216
   token_cache_bytes: 67108864
+  snapshot_pinned_files:
+    - src/pipeline.py
+    - scripts/diet_manifest.py
+    - scripts/run_colab_ablation.py
+    - scripts/run_colab_embeddings.py
+    - src/cli/colab.py
+    - src/cli/__init__.py
+  snapshot_pinned_configs:
+    - paths.yaml
+    - training.yaml
+    - identity_dimensions.yaml
+    - identity_reviews.json
+    - vocabulary.json
+    - text_track.yaml
+    - attribute_ablation.yaml
