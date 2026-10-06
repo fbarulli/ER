@@ -2753,7 +2753,9 @@ class KaggleSpec(BaseModel):
     slug: str | None = None
     # Cohort exports publishable by the lane, matched by self-describing
     # cohort tags (same shape the cpu_bundle_prep cohort_label values take).
-    export_csvs: tuple[str, ...] = ("dataset.csv", "dataset_50pct.csv")
+    export_csvs: tuple[str, ...] = (
+        "dataset.csv", "dataset_50pct.csv", "dataset_10k.csv",
+    )
     # Staging root (relative to TRAIN_ROOT) for packaged upload payloads and
     # verified download receipts.
     staging_dir: str = "results/kaggle_lane"

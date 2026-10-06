@@ -48,7 +48,8 @@ def test_export_csvs_block_additive_and_yaml_consistent():
     # The committed YAML carries the same values the schema defaults to;
     # neither a missing block nor a flipped default may change colab/prep.
     assert cfg.kaggle.slug is None
-    assert cfg.kaggle.export_csvs == ("dataset.csv", "dataset_50pct.csv")
+    assert cfg.kaggle.export_csvs == ("dataset.csv", "dataset_50pct.csv",
+                                      "dataset_10k.csv")
     assert cfg.kaggle.submission_id_columns == ("sku_id", "item_id")
     raw = yaml.safe_load((common.TRAIN_ROOT / "config/training.yaml").read_text())
     assert raw["kaggle"]["staging_dir"] == cfg.kaggle.staging_dir

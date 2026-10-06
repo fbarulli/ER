@@ -177,7 +177,7 @@ kaggle:
   slug: null
   # Cohort exports the lane may package (repo-root names, matching the
   # cpu_bundle_prep cohort_label tags).
-  export_csvs: ["dataset.csv", "dataset_50pct.csv"]
+  export_csvs: ["dataset.csv", "dataset_50pct.csv", "dataset_10k.csv"]
   # Staging root for packaged payloads, config manifests, and download
   # receipts (relative to the repo root, portable fragments only).
   staging_dir: "results/kaggle_lane"

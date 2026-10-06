@@ -1077,7 +1077,7 @@ def main() -> None:
     parser.add_argument("--run-tag", default=None,
                         help="run tag for GPU kernels (default: from "
                              "config kaggle.run_tag_prefix + UTC stamp)")
-    parser.add_argument("--cohort", choices=["full", "50pct"], default=None,
+    parser.add_argument("--cohort", choices=["full", "50pct", "10k"], default=None,
                         help="bundle-kernel/bundle-fetch: which root-level "
                              "cohort export the CPU kernel remaps onto "
                              "dataset.csv (default: full)")
