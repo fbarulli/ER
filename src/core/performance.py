@@ -1,6 +1,6 @@
 """Operational-cost instrumentation: latency, memory, refresh time.
 
-MODEL_TRACKS_PLAN.md requires "Encoding/indexing/query latency, memory,
+The model plan requires "Encoding/indexing/query latency, memory,
 refresh time" as a first-class reported measurement. The pre-existing
 :class:`core.training_profiler.TrainingProfiler` records an opt-in PyTorch
 trace (``ER_TRAINING_PROFILE=1``) that only covers whichever three trainer

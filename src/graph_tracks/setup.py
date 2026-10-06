@@ -20,6 +20,7 @@ from graph_tracks.train import write_json
 
 
 def listing_contract(catalog, labels, populations):
+    from core.progress import tracked
     from training.folds import normalize_gtin
     roles = {}
     for split, values in populations.items():
@@ -38,7 +39,7 @@ def listing_contract(catalog, labels, populations):
     keys = frame.gtin.map(normalize_gtin)
     assignments = pd.DataFrame({'sku_id': frame.sku_id, 'split': keys.map(roles)})
     groups = {}
-    for key, listing in zip(keys, frame.sku_id):
+    for key, listing in tracked(zip(keys, frame.sku_id), "listing_groups"):
         groups.setdefault(key, []).append(listing)
     pair_map, skipped, lineage = {}, Counter(), {}
     source_axes = [c for c in labels.columns if c not in {'gtin1', 'gtin2', 'true_label'}]
@@ -133,14 +134,15 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     assignments.to_csv(output / 'listing_splits.csv', index=False)
     pairs.to_csv(output / 'listing_pairs.csv', index=False)
     write_json(output / 'pair_lineage.json', {'schema':'er-graph-pair-lineage-v1',
-               'pairs':accounting.pop('pair_lineage'), 'source_trace_columns':accounting['source_trace_columns'],
-               'missing_axes':accounting['missing_axes'], 'augmentation':accounting['augmentation'],
-               'listing_pairs_sha256':file_hash(output / 'listing_pairs.csv'),
-               'source_labels_sha256':file_hash(F['labeled_pairs'])})
+                'pairs':accounting.pop('pair_lineage'), 'source_trace_columns':accounting['source_trace_columns'],
+                'missing_axes':accounting['missing_axes'], 'augmentation':accounting['augmentation'],
+                'listing_pairs_sha256':file_hash(output / 'listing_pairs.csv'),
+                'source_labels_sha256':file_hash(F['labeled_pairs'])})
     load_pairs(output / 'listing_pairs.csv', load_pairs_from)
     timing.mark('validate_and_write_pairs')
     listings = prepare(output / 'eligible_catalog.csv', output / 'listing_splits.csv',
                        output / 'listing_pairs.csv', output / 'prepared', training_tensors=training_tensors)
+    timing.mark('graph_prepare')
     records = load_records(listings)
     write_json(output / 'graph_census.json', census(records, fit_vocabulary(records)))
     timing.mark('graph_features_and_census')

@@ -113,7 +113,18 @@ def resolve(path):
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    # STREAMED, never materialized. `json.dumps` builds the whole document as
+    # one contiguous string before hashing; an exhaustive-cohort request is
+    # ~1 GB of JSON (732 MB measured on the 2026-10-06 text track) and the
+    # gnn_only digest ran while the text track's token batches were still
+    # resident, so the kernel OOM-killed the run. iterencode is the SAME
+    # encoder with the SAME kwargs, so the emitted bytes — and therefore every
+    # cohort_sha256 / content-addressed directory name derived from them — are
+    # byte-identical to the previous implementation; only peak memory drops.
+    hasher = hashlib.sha256()
+    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
+        hasher.update(chunk.encode())
+    return hasher.hexdigest()
 
 
 def source_name(path):
@@ -126,7 +137,13 @@ def checkpoint_identity(path):
 
 
 def write(path, value):
-    path.write_text(json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)+'\n')
+    # STREAMED for the same reason as digest(): a request of this size must
+    # never exist as one in-memory string. json.dump writes incrementally
+    # through the encoder's iterencode, so the bytes on disk are unchanged.
+    with Path(path).open('w', encoding='utf-8') as handle:
+        json.dump(value, handle, sort_keys=True, ensure_ascii=False, indent=2,
+                  allow_nan=False)
+        handle.write('\n')
 
 
 def _field_surfaces(text: str) -> dict[str, set[str]]:

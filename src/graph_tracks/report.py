@@ -65,7 +65,7 @@ def pair_metrics(labels, scores, threshold, ks):
         'agreed_recall': target_recall,
         'precision_at_recall': precision_at_target,
         precision_at_recall_key(): precision_at_target,
-        # MODEL_TRACKS_PLAN.md asks for "recall at an agreed precision". The
+        # The model plan asks for "recall at an agreed precision". The
         # agreement is config SSOT (evaluation.operating_precision) and is
         # echoed into every row so the number is self-documenting.
         'agreed_precision': agreed,
@@ -226,7 +226,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     from graph_tracks.report_attributes import write_reports as write_attribute_reports
     write_attribute_reports(listings, records, pairs, scores, report_dir, track)
     progress('attribute_reports_complete', output=str(report_dir))
-    # MODEL_TRACKS_PLAN.md requires unseen / sparse-neighborhood / isolated /
+    # The model plan requires unseen / sparse-neighborhood / isolated /
     # missing-field slices; only the attribute slices existed before this.
     from graph_tracks.report_slices import report as slice_report
     slices = slice_report(records, scored, track=track, output=report_dir,

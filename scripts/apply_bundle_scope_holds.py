@@ -8,7 +8,7 @@ census_bundle_scope.py) and, for every unheld family it contains:
 - appends the family to identity/findings/bundle_scope_holds.json in the
   established schema (evidence_cases empty: these families were observed
   corpus-wide, not inside the frozen residual cohort);
-- appends the family section to identity/findings/BUNDLE_SCOPE_FINDINGS.md.
+- appends the family section to the BUNDLE_SCOPE_FINDINGS report.
 
 The census file lists families explicitly; this script never re-derives them,
 so re-running with the same census is idempotent.
@@ -19,16 +19,17 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FINDINGS = ROOT / 'identity/findings'
+import sys; sys.path.insert(0, str(ROOT/'src'))
+from core.common import audit_finding
 CONFIG = ROOT / 'config/identity_reviews.json'
 REASON = ('Source titles advertise different explicit retail bundle counts '
           'under one GTIN; identifier scope (inner item versus complete '
-          'offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.')
+          'offer) is unresolved. See the BUNDLE_SCOPE_FINDINGS report.')
 
 SECTION_PREAMBLE = ('Source titles advertise different explicit bundle counts '
                     'under one GTIN; identifier scope (inner item versus '
                     'complete offer) is unresolved. See '
-                    'identity/findings/BUNDLE_SCOPE_FINDINGS.md.')
+                    'the BUNDLE_SCOPE_FINDINGS report.')
 
 
 def main():
@@ -36,7 +37,7 @@ def main():
     config = json.loads(CONFIG.read_text())
     held = {key.zfill(14) for key in config['quarantined_gtins']}
     holds_doc = json.loads((FINDINGS / 'bundle_scope_holds.json').read_text())
-    doc_text = (FINDINGS / 'BUNDLE_SCOPE_FINDINGS.md').read_text()
+    doc_text = (audit_finding('BUNDLE_SCOPE_FINDINGS.md')).read_text()
 
     applied = []
     for family in census['families_detail']:
@@ -73,7 +74,7 @@ def main():
     CONFIG.write_text(json.dumps(config, indent=2) + '\n')
     (FINDINGS / 'bundle_scope_holds.json').write_text(
         json.dumps(holds_doc, indent=2) + '\n')
-    (FINDINGS / 'BUNDLE_SCOPE_FINDINGS.md').write_text(doc_text)
+    (audit_finding('BUNDLE_SCOPE_FINDINGS.md')).write_text(doc_text)
     print(f'applied {len(applied)} new holds; config total '
           f"{len(config['quarantined_gtins'])}")
 

@@ -9,6 +9,7 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+import traceback
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -18,6 +19,51 @@ _ACTIVE: ContextVar[TrainingPreparation | None] = ContextVar('training_preparati
 
 def active_preparation() -> TrainingPreparation | None:
     return _ACTIVE.get()
+
+
+class _TeeWriter:
+    """Mirror one redirected stage stream into the log and the live terminal.
+
+    The log keeps the full capture; the terminal sees the same bytes so tqdm
+    bars stream live instead of being buried in the stage log. isatty/fileno
+    follow the terminal so tqdm enables disable=None bars and dynamic_ncols
+    there (and stays disabled under pytest capture or nohup pipes). A dead
+    terminal only costs the mirror: the log write must never fail because of
+    it.
+    """
+
+    def __init__(self, log, terminal):
+        self._log, self._terminal = log, terminal
+
+    def write(self, text):
+        self._log.write(text)
+        try:
+            self._terminal.write(text)
+        except (OSError, ValueError):
+            pass
+        return len(text)
+
+    def flush(self):
+        self._log.flush()
+        try:
+            self._terminal.flush()
+        except (OSError, ValueError):
+            pass
+
+    def isatty(self):
+        try:
+            return bool(self._terminal.isatty())
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    def fileno(self):
+        return self._terminal.fileno()
+
+    def writable(self):
+        return True
+
+    def close(self):
+        self._log.close()
 
 
 class TrainingPreparation(BaseModel):
@@ -67,6 +113,12 @@ class TrainingPreparation(BaseModel):
                 if key == path or key.is_relative_to(path):
                     del cache[key]
 
+    def release_bundle(self, path: Path) -> None:
+        """Release a completed consumer's bundle, preserving path alias identity."""
+        key = self.bundle_key(path)
+        self._bundles.pop(key, None)
+        self._objects.pop('built_bundle:' + str(key), None)
+
     def bundle_key(self, path: Path) -> Path:
         path = path.resolve()
         return self._aliases.get(path, path)
@@ -77,13 +129,15 @@ class TrainingPreparation(BaseModel):
     def run_stage(self, arguments: list[str], *, root: Path, env: dict[str, str], log):
         """Run an existing entry point in this interpreter, restoring CLI state."""
         saved_argv, saved_env, saved_cwd = sys.argv, os.environ.copy(), Path.cwd()
+        saved_out, saved_err = sys.stdout, sys.stderr
         command = [sys.executable, *arguments]
         code = 0
         try:
             os.environ.clear()
             os.environ.update(env)
             os.chdir(root)
-            with redirect_stdout(log), redirect_stderr(log):
+            with redirect_stdout(_TeeWriter(log, saved_out)), \
+                    redirect_stderr(_TeeWriter(log, saved_err)):
                 try:
                     if arguments[0] == '-m':
                         sys.argv = [arguments[1], *arguments[2:]]
@@ -95,6 +149,9 @@ class TrainingPreparation(BaseModel):
                     code = error.code if isinstance(error.code, int) else (1 if error.code else 0)
                     if error.code and not isinstance(error.code, int):
                         print(error.code, file=sys.stderr)
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
+                    code = 1
         finally:
             sys.argv = saved_argv
             os.environ.clear()

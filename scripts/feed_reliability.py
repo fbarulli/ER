@@ -13,6 +13,8 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from core.common import audit_finding
+
 ROOT = Path(__file__).resolve().parents[1]
 
 DIMS = ('brand', 'volume_ml', 'pack', 'flavor', 'carbonation', 'sweetener',
@@ -22,7 +24,7 @@ fam_spoken = Counter()
 dissent = {d: Counter() for d in DIMS}
 majority = {d: Counter() for d in DIMS}
 
-for v in json.load(open(ROOT / 'identity/findings/biggest_merge_verdicts.json'))['verdicts']:
+for v in json.load(open(audit_finding('biggest_merge_verdicts.json')))['verdicts']:
     feeds_spoken = set()
     for d, info in v['dimension_verdicts'].items():
         for f in info.get('consensus_feeds', []):
@@ -49,8 +51,8 @@ for f, spoken in fam_spoken.items():
         'per_dim_dissent': {d: dissent[d][f] for d in DIMS if dissent[d][f]},
     })
 rows.sort(key=lambda r: -(r['dissent_authored'] / max(r['majority_holdings'], 1)))
-json.dump({'feeds': rows, 'families': len(json.load(open(ROOT / 'identity/findings/biggest_merge_verdicts.json'))['verdicts'])},
-          open(ROOT / 'identity/findings/feed_reliability.json', 'w'), indent=1)
+json.dump({'feeds': rows, 'families': len(json.load(open(audit_finding('biggest_merge_verdicts.json')))['verdicts'])},
+          open(audit_finding('feed_reliability.json'), 'w'), indent=1)
 
 lines = ['# Per-feed reliability (all multi-feed same-GTIN families)', '',
          "Ratio = dissents authored / majority holdings over descriptor verdicts.",
@@ -63,7 +65,7 @@ for r in rows[:40]:
     ratio = f"{r['dissent_ratio']:.2f}" if r['dissent_ratio'] is not None else 'silent-majority'
     lines.append(f"| {r['feed']} | {r['families_spoken']} | {r['dissent_authored']} "
                  f"| {r['majority_holdings']} | {ratio} | {dims} |")
-(ROOT / 'identity/findings/FEED_RELIABILITY.md').write_text('\n'.join(lines) + '\n')
+(audit_finding('FEED_RELIABILITY.md')).write_text('\n'.join(lines) + '\n')
 
 print('feeds ranked:', len(rows))
 for r in rows[:25]:

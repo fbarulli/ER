@@ -1,6 +1,6 @@
 """Unseen / sparse-neighborhood / isolated / missing-field generalization slices.
 
-MODEL_TRACKS_PLAN.md requires these four slices next to the attribute slices
+The model plan requires these four slices next to the attribute slices
 ("Generalization and coverage"). The attribute slices were implemented in
 ``graph_tracks.report_attributes``; these were not implemented at all, in any
 lane.

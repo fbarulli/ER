@@ -198,6 +198,12 @@ class DataPathsSpec(BaseModel):
     models_dir: str
     embeddings_dir: str
     logs_dir: str
+    # Machine-written audit findings (JSON evidence + its generated .md
+    # report). Declared HERE so no script hardcodes the path: six audit
+    # scripts used to spell `identity/findings/<name>` independently, and
+    # three of them read each other's JSON, so the literals were a
+    # cross-script contract nobody could see or change in one place.
+    audit_findings_dir: str
 
 
 class LayoutSpec(BaseModel):
@@ -850,7 +856,7 @@ class UniformitySpec(BaseModel):
 
 
 class GeneralizationSliceSpec(BaseModel):
-    """Generalization/coverage slices required by MODEL_TRACKS_PLAN.md.
+    """Generalization/coverage slices required by the model plan.
 
     The plan requires unseen, sparse-neighborhood, isolated and
     missing-field slices alongside the attribute slices. The attribute class
@@ -2593,6 +2599,24 @@ class RuntimePackagesSpec(BaseModel):
         return values
 
 
+class CpuBundlePrepSpec(BaseModel):
+    """CPU data-bundle prep lane settings (owner structural ruling 8).
+
+    Strictly ISOLATED additions consumed ONLY by src/cli/
+    colab_data_bundle_prep.py and its thin passthroughs in cli.colab —
+    nothing on the GPU-training runtime path reads this block.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Request `--high-mem` when the lane must provision a FRESH CPU session;
+    # False (default) keeps the allocation argv byte-identical to pre-parity.
+    high_mem: bool = False
+    # True = cli.colab's --what bundle dispatch forwards to the lane;
+    # False (default) keeps the original direct call, byte-identical.
+    lane: bool = False
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
@@ -2843,6 +2867,23 @@ class PreparationGraphSetupSpec(BaseModel):
         return f"{track}{self.track_config_suffix}"
 
 
+class ArchiveSpec(BaseModel):
+    """Pipeline compression and bounded archive I/O, owned by training.yaml."""
+    model_config = ConfigDict(extra="forbid")
+    format: Literal['tar.zst']
+    compression_level: int = Field(ge=1, le=22)
+    copy_buffer_bytes: int = Field(ge=65536)
+    legacy_zip_level: int = Field(ge=0, le=9)
+
+
+class PackagingSpec(BaseModel):
+    """Limits on reusable preparation intermediates; zero disables retention."""
+    model_config = ConfigDict(extra="forbid")
+    composition_cache_entries: int = Field(ge=0)
+    composition_cache_bytes: int = Field(ge=0)
+    token_cache_bytes: int = Field(ge=0)
+
+
 class PreparationSpec(BaseModel):
     """training.preparation — the owned preparation run contract.
 
@@ -2934,12 +2975,17 @@ class TrainingConfig(BaseModel):
     calibration_sweep: CalibrationSweepSpec
     tracking: TrackingSpec
     colab: ColabSpec
+    # Isolated CPU data-bundle prep lane block (owner ruling 8) — never
+    # read on the GPU-training runtime path.
+    cpu_bundle_prep: CpuBundlePrepSpec = Field(default_factory=CpuBundlePrepSpec)
     rand_matching: RandMatchingSpec
     difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
     # Kaggle dataset/export transport lane (additive; default factory so the
     # existing YAML without the block stays byte-identical at load).
     kaggle: KaggleSpec = Field(default_factory=KaggleSpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
+    archives: ArchiveSpec
+    packaging: PackagingSpec
     # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
     # training.prepared_bundle hard-fails a bundle built under drifted
     # masking config instead of warning. Env PREPARED_BUNDLE_DRIFT_STRICT

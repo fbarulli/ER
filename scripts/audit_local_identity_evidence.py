@@ -12,7 +12,7 @@ from core.text import attribute_fields
 
 
 def main():
- out=ROOT/'identity/findings'
+ out=AUDIT_FINDINGS_DIR
  cases=json.loads((out/'residual_cases.json').read_text())
  df=pd.read_csv(ROOT/'dataset.csv',dtype=str,keep_default_na=False)
  rows={r['sku_id']:r for r in df.to_dict('records')}

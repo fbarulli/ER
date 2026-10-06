@@ -38,8 +38,12 @@ def test_worker_failure_records_traceback_then_reraises(tmp_path, monkeypatch, t
 def test_supervisor_preflight_failure_retains_final_event_log(tmp_path, monkeypatch):
     from model_tracks import run
     from types import SimpleNamespace
-    monkeypatch.setattr(run, 'load_config', lambda _: SimpleNamespace(dvc_enabled=False, profiling=False, result_archive_format='zip'))
-    def fail(_):
+    monkeypatch.setattr(run, 'load_config', lambda _: SimpleNamespace(dvc_enabled=False, profiling=False, result_archive_format='zip', post_training_ablation=False))
+    # Accepts the call's keyword arguments: run.py passes
+    # `allow_gpu_pending=cfg.post_training_ablation` so the CPU-only
+    # preparation preflight may tolerate the declared GPU-pending hybrid cache.
+    # The stub only needs to fail.
+    def fail(*_args, **_kwargs):
         raise ValueError('stale frozen input')
     monkeypatch.setattr(run, 'preflight', fail)
     output = tmp_path / 'suite'

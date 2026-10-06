@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+from core.common import audit_finding
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
@@ -20,7 +22,7 @@ from core.identity_policy import reviewed_row_mask
 
 
 def main():
-    census = json.load(open(ROOT / 'identity/findings/untrusted_title_conflicts.json'))
+    census = json.load(open(audit_finding('untrusted_title_conflicts.json')))
     df = pd.read_csv(ROOT / 'dataset.csv', dtype=str, keep_default_na=False)
     facts = gtin_validity(df.gtin)
     held = ~facts & (df.gtin.str.strip() != '')
@@ -60,15 +62,15 @@ def main():
            'rows_retired': before_rows - after_rows,
            'groups': len(census), 'states': group_states,
            'reduced_examples': reduced[:40]}
-    (ROOT / 'identity/findings/untrusted_resid_remeasure.json').write_text(
+    (audit_finding('untrusted_resid_remeasure.json')).write_text(
         json.dumps(out, indent=1) + '\n')
     md = ['## Untrusted-title census re-measured after the scope holds', '',
           json.dumps({'groups': group_states, 'rows': out}, indent=2), '']
     md += ['Reduced groups:']
     md += [f"- {r['retailer']} \u2014 {r['title']} ({r['before']} rows \u2192 {r['after']})"
            for r in reduced[:15]]
-    (ROOT / 'identity/findings/UNTRUSTED_TITLE_CONFLICTS.md').write_text('')
-    p = ROOT / 'identity/findings/UNTRUSTED_TITLE_CONFLICTS.md'
+    (audit_finding('UNTRUSTED_TITLE_CONFLICTS.md')).write_text('')
+    p = audit_finding('UNTRUSTED_TITLE_CONFLICTS.md')
     p.write_text(p.read_text() + '\n' + '\n'.join(md) + '\n')
     print(json.dumps({'states': group_states, 'before_rows': before_rows,
                       'after_rows': after_rows}, indent=2))

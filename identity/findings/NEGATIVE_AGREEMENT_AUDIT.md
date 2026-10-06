@@ -2,10 +2,12 @@
 
 Cohort (NEXT_STEPS item 4, now validated): of the 261 different-GTIN residual
 negatives, **37 pairs share the same title AND (33 pairs) the same image URL or
-(14 pairs) the same listing URL** — pairs the production keeps distinct on GTIN
-alone (`keep_distinct_gtins`). Machines: `scripts/negative_missing_probe.py` +
-`negative_missing_probe.json`. Every flagged field was then verified by hand in all
-13 original columns (`sku_id, retailer, country, sku_name_eng, description_short_eng,
+(19 pairs) the same base listing URL** (12 pairs share the same item-id path tail
+region; the earlier hand-note "14 same URL" corresponds to a looser count).
+Pairs the production keeps distinct on GTIN alone (`keep_distinct_gtins`).
+Machines: `scripts/negative_missing_probe.py` + `negative_missing_probe.json`.
+Every flagged field was then verified by hand in all 13 original columns
+(`sku_id, retailer, country, sku_name_eng, description_short_eng,
 breadcrumbs_eng, sku_url, image_url, sku_last_price, gtin, brand, category, attribute`).
 
 ## 1. Feature inventory — what the pairs have and do not have
@@ -70,6 +72,14 @@ country forensics, and URL-slug archaeology.
 
 **Pair prefix verdict (canonical-13 first-3):**
 
+**Guideline and reconciliation:** machine prefix-marker split is 15 outlier
+/ 21 registry-consistent / 1 GTIN-8 pair (R0127). The hand-verdict count used
+below is 14 pseudo-suspicion + 23 registry-consistent because R0218 (Harmless
+Harvest) carries an outlier-prefixed peapod GTIN but is hand-proven a genuine
+2-size family (§3, desc evidence 259 ml vs 473 ml), and R0127's short GTIN-8
+pair is likewise hand-kept as a real two-flavour sibling — both moved into the
+"keep-distinct correct" bucket with hand evidence overriding the prefix marker.
+
 - **Outlier GTINs on both sides — 14 pseudo-suspicion pairs, confirmed locally,
   independent of any registry:**
   R0001+R0011 Fruit2O (pair 604/613/646 vs sparse family),
@@ -81,7 +91,8 @@ country forensics, and URL-slug archaeology.
   Carethy path p-471012 twice), R0192 Holoslife (063/064, UK/Netherlands, same
   slug p-407149 twice), R0201 Weider (085/599 vs family 404…, same slug twice),
   R0211 NAYA (076×2 vs family 063…).
-- **Registry-consistent prefixes (keep-distinct stands, 23 pairs):** the entire
+- **Registry-consistent prefixes (keep-distinct stands, 23 pairs incl. the
+  GTIN-8 R0127 and hand-verified R0218 per the reconciliation note):** the entire
   German/Austrian/Spanish sibling blocks — Weider/Multipower/IronMaxx/GOT7/ESN/
   peeroton/Alnavit/Amecke (400/404/425/426/900 families), ékolo/Kombutxa/226ers
   (843), Brecon Carreg (503), plus Starbucks Frappuccino R0005 (010×2 both sides).

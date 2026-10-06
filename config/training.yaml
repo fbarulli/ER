@@ -192,6 +192,21 @@ kaggle:
   # The lane drives the kaggle CLI via this executable name; credentials stay:
   # credentials live in ~/.kaggle/kaggle.json, never in this file.
   kaggle_executable: "kaggle"
+# ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
+# Production code lives in src/cli/colab_data_bundle_prep.py: this block is
+# consumed ONLY by that lane and its thin passthroughs in cli.colab; no
+# GPU-training runtime path reads it. Exactly two owner-launched high-RAM
+# CPU VMs (50% cohort and full cohort) are the production surface.
+cpu_bundle_prep:
+  # `colab new --high-mem` when the lane must provision a FRESH CPU session;
+  # owner-launched sessions are reused by name either way.
+  high_mem: true
+  # true = cli.colab --what bundle dispatch forwards to the lane (the shared
+  # launcher otherwise keeps its original direct behavior, byte-identical).
+  # Owner directive 2026-10-05: production posture = true; the first launch
+  # goes through cli.colab main() (session/checkout/install prologue), and
+  # the module entry stays the relaunch-only path.
+  lane: true
 
 # ── Colab checkout/runtime ─────────────────────────────────────────────────
 # The launcher clones this public training branch instead of uploading a
@@ -234,6 +249,7 @@ colab:
       - "PyYAML"
       - "matplotlib"
     prepared:
+      - "backports.zstd"
       - "sentence-transformers"
       - "datasets"
       - "accelerate"
@@ -243,6 +259,7 @@ colab:
       - "hnswlib"
       - "wandb"
     full:
+      - "backports.zstd"
       - "sentence-transformers"
       - "datasets"
       - "accelerate"
@@ -310,7 +327,7 @@ colab:
   remote_upload_max_backoff_seconds: 30
   checkpoint_manifest_name: "checkpoint_manifest.json"
   latest_best_marker: "latest_best.json"
-  result_archive_name: "result_bundle.tar.gz"
+  result_archive_name: "result_bundle.tar.zst"
   result_manifest_name: "result_bundle_manifest.json"
   result_download_excluded_dirs:
     - ".dvc-cache"
@@ -517,7 +534,7 @@ evaluation:
   # previously a bare pydantic default_factory literal in graph_tracks/config.py
   # that both graph_tracks_*.yaml had to restate by hand.
   ann_recall_ks: [1, 5, 10, 50]
-  # "Recall at an agreed precision" (MODEL_TRACKS_PLAN.md evaluation table).
+  # "Recall at an agreed precision" (the model plan evaluation table).
   # The plan requires the agreement to be a declared value rather than a
   # floating target; this is it. Reported as recall_at_precision in every
   # track pair-metric row, alongside the agreed value it was computed at.
@@ -729,7 +746,7 @@ rand_matching:
   # (oracle_pinned_counts) read it, replacing two divergent hardcoded literals.
   # Update ONLY on an intentional, measured gate change, and update it here
   # once — the schema enforces hard_no + proceed + fallback == total_pairs.
-  # Measured against the regenerated gate_results.csv (13,216 products).
+  # Measured against the regenerated gate_results.csv (11,562 products).
   # 2026-10-02 regen (attribution): extraction changes landed (16,942-row
   # field motion), x-multiplier unit-boundary repaired (split 3),
   # URL decimal pack evidence (26 rows), stage-7 claim lift with
@@ -739,10 +756,10 @@ rand_matching:
   # degraded map (vs prior pin): lost_true_block 300, lost_true_review
   # 2506, new_merge_risk 14, lost_neg_review 1365.
   gate_census_pin:
-    total_pairs: 97
-    hard_no: 51
-    proceed: 27
-    fallback: 19
+    total_pairs: 134365
+    hard_no: 115432
+    proceed: 341
+    fallback: 18592
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"
@@ -1219,6 +1236,12 @@ mining_profiles:
 # than carrying a module-specific config file. Paths are resolved by
 # core.common.ner_config(); no NER module infers a config location.
 ner:
+  archive_names:
+    checkpoint: latest_checkpoint.tar.zst
+    best_model: best_ner_model.tar.zst
+    final_model: ner_model_final.tar.zst
+    remote_model: model_bundle.tar.zst
+    published_final_model: ner_model.tar.zst
   base_dir: "."
   results_dir: "results"
   columns: &ner_columns
@@ -1289,3 +1312,14 @@ ner:
   huggingface:
     ner_repo_id: "fbarulli/e-r"
     token_file: ".env"
+
+# Shared archive and preparation memory policy. ZIP remains readable for old runs.
+archives:
+  format: tar.zst
+  compression_level: 1
+  copy_buffer_bytes: 1048576
+  legacy_zip_level: 1
+packaging:
+  composition_cache_entries: 4096
+  composition_cache_bytes: 16777216
+  token_cache_bytes: 67108864

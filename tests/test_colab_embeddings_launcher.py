@@ -23,7 +23,7 @@ def test_cpu_requires_explicit_smoke_scope():
 
 
 def test_remote_program_executes_without_indentation_error(tmp_path):
-    _, path = launcher()
+    module, path = launcher()
     assignment = next(node for node in ast.walk(ast.parse(path.read_text()))
                       if isinstance(node, ast.Assign) and any(
                           isinstance(target, ast.Name) and target.id == 'script'
@@ -35,7 +35,7 @@ def test_remote_program_executes_without_indentation_error(tmp_path):
     with tarfile.open(package, 'w:gz') as archive:
         archive.add(source, arcname='encode.py')
     script = eval(compile(ast.Expression(assignment.value), '<launcher>', 'eval'),
-                  {'remote_package': str(package), 'remote_checkpoint': '/content/EuromonitoR/artifacts/models/all-MiniLM-L6-v2', 'job': str(tmp_path), 'package': package, 'device':'cuda', 'file_hash': lambda _: __import__('hashlib').sha256(package.read_bytes()).hexdigest()})
+                  {'backend': module.backend, 'remote_package': str(package), 'remote_checkpoint': '/content/EuromonitoR/artifacts/models/all-MiniLM-L6-v2', 'job': str(tmp_path), 'package': package, 'device':'cuda', 'file_hash': lambda _: __import__('hashlib').sha256(package.read_bytes()).hexdigest()})
     with patch('subprocess.run') as run:
         exec(compile(script, '<remote>', 'exec'), {})
     args, kwargs = run.call_args
@@ -98,9 +98,10 @@ def test_embedding_save_reuses_existing_git_artifact_flow(tmp_path):
         run_tag = archive.parent.name
         assert message.startswith('embeddings: save verified cache ')
         assert archive.name == module.backend._RESULT_ARCHIVE_NAME
-        assert archive.name.endswith('.tar.gz')
+        assert archive.name.endswith('.tar.zst')
         import tarfile
-        with tarfile.open(archive, 'r:gz') as result:
+        from core.archive_reader import tar_archive
+        with tar_archive(archive) as result:
             manifest = json.load(result.extractfile(module.backend._RESULT_MANIFEST_NAME))
             assert manifest['run_id'] == run_tag
             paths = {item['path'] for item in manifest['included']}

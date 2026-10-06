@@ -348,6 +348,7 @@ def build(
         normed = normalize_gtin(raw)
         return normed if normed in raw_keys or normed in norm_keys else None
 
+    from core.progress import tracked
     labeled = pd.read_csv(
         F["labeled_pairs"], dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
     )
@@ -355,8 +356,10 @@ def build(
 
     rows: list[dict[str, object]] = []
     unresolvable = 0
-    for g1, g2, label in zip(
-        labeled["gtin1"], labeled["gtin2"], labeled["true_label"]
+    for g1, g2, label in tracked(
+        zip(labeled["gtin1"], labeled["gtin2"], labeled["true_label"]),
+        "final_validation_rows",
+        total=len(labeled),
     ):
         k1, k2 = resolve(g1), resolve(g2)
         if k1 is None or k2 is None:

@@ -60,7 +60,8 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
         request['sources'] = {anchor(k):v for k,v in request['sources'].items()}
         request['checkpoint'] = anchor(request['checkpoint'])
         request['text_checkpoint'] = anchor(request['text_checkpoint']) if request['text_checkpoint'] else None
-        request['portable_setup'] = 'data/model_tracks/shared'
+        from model_tracks.package import package_member
+        request['portable_setup'] = package_member('suite_package_shared')
         target = setup/'ablation_templates'/track
         target.mkdir(parents=True,exist_ok=True)
         shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')

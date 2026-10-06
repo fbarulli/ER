@@ -8,8 +8,20 @@ import pandas as pd
 from model_tracks.config import load_config
 
 
+def _payload_digest(payload):
+    """Preserve json.dumps(list(payload)) bytes without its full JSON allocation."""
+    digest = hashlib.sha256(b'[')
+    for index, text in enumerate(payload):
+        if index:
+            digest.update(b', ')
+        digest.update(json.dumps(text, ensure_ascii=False).encode())
+    digest.update(b']')
+    return digest.hexdigest()
+
+
 def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) -> dict:
     from core.common import F, SEED, TRAIN_ROOT, resolve_model, training_cfg
+    from graph_tracks.data import file_hash
     from graph_tracks.preflight import preflight as graph_preflight
     from graph_tracks.text_cache import checkpoint_hash
     from training.prepared_bundle import canonical_payload_rows, load_prepared_bundle, prepared_holdout
@@ -18,10 +30,10 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     root = (TRAIN_ROOT / cfg.setup_dir).resolve()
     setup = json.loads((root / 'setup_manifest.json').read_text())
     is_smoke = setup.get('smoke', False)
-    source_hash = hashlib.sha256(Path(F['dataset_deduped']).read_bytes()).hexdigest()
+    source_hash = file_hash(Path(F['dataset_deduped']))
     if setup.get('source_catalog_sha256') != source_hash:
         raise ValueError('graph setup is stale: source catalog; rebuild locally before launch')
-    labels_hash = hashlib.sha256(Path(F['labeled_pairs']).read_bytes()).hexdigest()
+    labels_hash = file_hash(Path(F['labeled_pairs']))
     if not is_smoke and setup.get('labeled_pairs_sha256') != labels_hash:
         raise ValueError('graph setup is stale: labeled pairs; rebuild locally before launch')
     from graph_tracks.config import load_text_config, load_config as load_graph_config
@@ -64,7 +76,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     export_request = json.loads((root/'text_export_request.json').read_text())
     if bundle['training_tokens']['policy'] != export_request['plan']['tokenization']:
         raise ValueError('training native tokenizer differs from prepared suite export')
-    payload_digest = hashlib.sha256(json.dumps(list(bundle['payload']),ensure_ascii=False).encode()).hexdigest()
+    payload_digest = _payload_digest(bundle['payload'])
     if bundle['training_tokens']['payload_sha256'] != payload_digest or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
         raise ValueError('training native tokens differ from frozen payload')
     validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
@@ -77,8 +89,11 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     validate_epoch_batches(bundle['training_plan'], epochs=cfg.epochs, batch_sizes=batch_sizes)
     from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
     from model_tracks.shared_graph_data import validate_projection
-    shared = SharedTrainingData.model_validate_json((root / 'shared_training_data.json').read_text())
-    if from_bundle(bundle).fingerprint != shared.fingerprint:
+    # Finish and release the reconstructed population before parsing its disk copy.
+    expected_shared = from_bundle(bundle).fingerprint
+    layout = training_cfg().preparation.graph_setup
+    shared = SharedTrainingData.model_validate_json((root / layout.shared_training_data).read_bytes())
+    if expected_shared != shared.fingerprint:
         raise ValueError('suite shared training data differs from frozen text objective')
     text_binding = TrackTrainingBinding.model_validate_json((root / 'text_training_binding.json').read_text())
     if text_binding.track != 'text':
@@ -87,8 +102,9 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     for track in ('gnn_only', 'hybrid'):
         validate_projection(root, shared, track=track)
     shared_summary = {'sha256': shared.fingerprint, 'examples': len(shared.examples),
-                      'endpoints': len(shared.endpoints), 'graph_pair_rows': len(shared.pair_rows()),
+                      'endpoints': len(shared.endpoints), 'graph_pair_rows': 2 * len(shared.examples),
                       'tracks': ['text', 'gnn_only', 'hybrid']}
+    del shared, text_binding
     from core.schemas import DataTuple
     DataTuple(n_df=len(bundle['df']), **{key: bundle[key] for key in
               ('payload', 'structured_features', 'row_bc', 'country', 'pos', 'hp_pairs', 'emb0')})
@@ -104,7 +120,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
             raise ValueError(f'{sources_key} does not align with {pairs_key}')
     if not is_smoke:
         for key in ('labeled_pairs', 'canonical_records', 'gate_results'):
-            if hashlib.sha256(bundle[f'{key}_csv']).hexdigest() != hashlib.sha256(F[key].read_bytes()).hexdigest():
+            if hashlib.sha256(bundle[f'{key}_csv']).hexdigest() != file_hash(F[key]):
                 raise ValueError(f'text bundle is stale: {key}; rebuild locally before launch')
     canonical_payload_rows(len(bundle['df']), bundle['payload'], bundle['row_bc'])
     train, dev, test = prepared_holdout(bundle, dict(training_cfg().split), seed=SEED)

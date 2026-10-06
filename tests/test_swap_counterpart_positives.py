@@ -44,9 +44,33 @@ BUNDLE = (
     / "data" / "prepared" / "full" / "worker_1_baseline.pkl.gz"
 )
 
-pytestmark = pytest.mark.skipif(
-    not BUNDLE.is_file(), reason=f"real prepared bundle absent: {BUNDLE}"
-)
+# These guard the TIER 1(a) counterpart positives minted for ANCHOR-SIDE value
+# swaps. That lane is `augment_value_swaps(population="hard_negative")`, which
+# lives inside the `not balanced_policy.enabled` branch of
+# training/train.py. With config masking.balanced_augmentation.enabled = true
+# (shipped since 66bead6, 2026-10-04) it never runs, so the bundle carries
+# zero swap_values rows and this fixture asserts against data the pipeline
+# does not produce. Skip LOUDLY and reversibly: re-enable the classic lane
+# and these come back. Do not relax the assertions.
+def _classic_swap_lane_active() -> bool:
+    from core.common import load_config
+
+    return not load_config()["masking"]["balanced_augmentation"]["enabled"]
+
+
+pytestmark = [
+    pytest.mark.skipif(
+        not BUNDLE.is_file(), reason=f"real prepared bundle absent: {BUNDLE}"
+    ),
+    pytest.mark.skipif(
+        not _classic_swap_lane_active(),
+        reason=(
+            "anchor-side value swaps are unreachable: masking."
+            "balanced_augmentation.enabled is true, so training/train.py "
+            "skips augment_value_swaps and mints no swap_values rows"
+        ),
+    ),
+]
 
 
 @pytest.fixture(scope="module")

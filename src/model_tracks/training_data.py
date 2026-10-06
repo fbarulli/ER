@@ -3,11 +3,25 @@ from __future__ import annotations
 
 import hashlib
 import io
+from itertools import chain
 import json
 from typing import Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+class TrainingJSONEncoder(json.JSONEncoder):
+    """Walk these plain-field training schemas without copying their large lists.
+
+    This is intentionally scoped to the training contracts below: they have no
+    aliases, custom serializers, computed fields or non-JSON scalar types.
+    """
+
+    def default(self, value):
+        if isinstance(value, BaseModel):
+            return {name: getattr(value, name) for name in type(value).model_fields}
+        return super().default(value)
+
 
 # Stable node-ID contract for virtual (non-source) endpoints. These prefixes
 # are read by the ANN catalog filter, the packaged text exporter and the graph
@@ -107,7 +121,7 @@ class SharedTrainingData(BaseModel):
         endpoints = {row.payload_index: row for row in self.endpoints}
         if len(endpoints) != len(self.endpoints):
             raise ValueError('duplicate training endpoint')
-        if [row.example_id for row in self.examples] != list(range(len(self.examples))):
+        if any(row.example_id != i for i, row in enumerate(self.examples)):
             raise ValueError('training examples must retain frozen row order')
         used = {i for row in self.examples for i in (row.anchor, row.positive, row.negative)}
         if used != set(endpoints):
@@ -116,7 +130,7 @@ class SharedTrainingData(BaseModel):
         if canonical_end > self.payload_rows:
             raise ValueError('canonical block exceeds frozen payload')
         relationships = {}
-        for row in self.pair_rows():
+        for row in self.iter_pair_rows():
             pair = tuple(sorted((row['payload_index1'], row['payload_index2'])))
             if pair in relationships and relationships[pair] != row['label']:
                 raise ValueError('shared examples contain conflicting relationship labels')
@@ -132,14 +146,22 @@ class SharedTrainingData(BaseModel):
 
     @property
     def fingerprint(self) -> str:
-        return hashlib.sha256(json.dumps(self.model_dump(mode='json'),
-                                         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        digest = hashlib.sha256()
+        encoder = TrainingJSONEncoder(sort_keys=True, ensure_ascii=False)
+        for chunk in encoder.iterencode(self):
+            digest.update(chunk.encode())
+        return digest.hexdigest()
+
+    def iter_pair_rows(self):
+        """Yield graph relationships in frozen order without a second population."""
+        for row in self.examples:
+            for label, other in ((1, row.positive), (0, row.negative)):
+                yield dict(example_id=f'{row.example_id}:{label}',
+                           payload_index1=row.anchor, payload_index2=other, label=label)
 
     def pair_rows(self) -> list[dict]:
-        """Exact pair projection for graph losses, preserving repeated rows."""
-        return [dict(example_id=f'{row.example_id}:{label}',
-                     payload_index1=row.anchor, payload_index2=other, label=label)
-                for row in self.examples for label, other in ((1, row.positive), (0, row.negative))]
+        """Exact pair projection for callers that require a materialized list."""
+        return list(self.iter_pair_rows())
 
 
 def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
@@ -153,7 +175,7 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
     if list(map(str, bundle['row_bc'][source_rows:canonical_end])) != gtins:
         raise ValueError('canonical endpoint ordering differs from bundled records')
     copies = {}
-    for audit in (*bundle['mask_audit'], *bundle['hard_negative_mask_audit']):
+    for audit in chain(bundle['mask_audit'], bundle['hard_negative_mask_audit']):
         mappings = [(audit['copy_payload_idx'], audit.get('copy_source_payload_idx') if audit.get('copy_source_payload_idx') is not None else audit['anchor_payload_idx'])]
         if audit.get('copy_pair_payload_idx') is not None:
             mappings.append((audit['copy_pair_payload_idx'], audit['pair_payload_idx']))

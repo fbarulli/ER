@@ -19,11 +19,21 @@ def prepare(setup,checkpoint,*,composer=None):
         'metadata':{**metadata,'text_sha256':texts_hash(texts)},
         'prepared_text':{**export['plan'],'sha256':export['tokens_sha256']}}
     path = setup/'embedding_inputs.json'
-    raw = json.dumps(request,ensure_ascii=False,sort_keys=True)
-    cache = setup/'shared_minilm__embeddings.npz'
-    if cache.exists():
-        validate_result(cache,request,request_sha256=hashlib.sha256(raw.encode()).hexdigest())
-    path.write_text(raw)
+    # Avoid a second full-size JSON string plus UTF-8 copy alongside the texts.
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=setup,
+                                     prefix=path.name + '.', suffix='.partial',
+                                     delete=False) as handle:
+        candidate = Path(handle.name)
+        try:
+            json.dump(request, handle, ensure_ascii=False, sort_keys=True)
+            handle.close()
+            cache = setup / 'shared_minilm__embeddings.npz'
+            if cache.exists():
+                validate_result(cache, request, request_sha256=file_hash(candidate))
+            candidate.replace(path)
+        finally:
+            candidate.unlink(missing_ok=True)
     return path
 
 

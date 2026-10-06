@@ -1,6 +1,6 @@
 """Contracts for the post-training report surface the plan requires.
 
-MODEL_TRACKS_PLAN.md asks for recall at an agreed precision, unseen /
+The model plan asks for recall at an agreed precision, unseen /
 sparse-neighborhood / isolated / missing-field slices, operational cost, and
 confidence intervals. None of those existed in any lane before this file's
 subjects were implemented, so each is pinned here: a metric or artifact that

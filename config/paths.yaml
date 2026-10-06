@@ -44,6 +44,10 @@ paths:
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   logs_dir: "logs"                      # per-step orchestrator logs
+  # Machine-written audit findings. Tracked on purpose: this is the durable
+  # evidence record for identity/gate adjudication, and the audit scripts read
+  # each other's JSON here. Declared once so no script spells the path itself.
+  audit_findings_dir: "identity/findings"
   # Training inputs share the versioned root-level data directory with the
   # reference data. Results remain separate and are never inputs by default.
   training_data_dir: "data"
@@ -126,6 +130,21 @@ files:
 # or an unknown layout crashes.  Nothing in the tree builds these paths by
 # hand (no bare leaves, no "results/" literals, no glob conventions):
 layouts:
+  suite_package_shared:
+    root: repo
+    owner: model_tracks.package
+    template: "data/model_tracks/shared"
+    fields: {}
+  suite_package_config:
+    root: repo
+    owner: model_tracks.package
+    template: "data/model_tracks/suite.yaml"
+    fields: {}
+  semantic_family_registry:
+    root: repo
+    owner: core.attribute_decision
+    template: "artifacts/evidence/semantics/family_registry.json"
+    fields: {}
   report_plot:
     root: results_training
     owner: training.report_plots

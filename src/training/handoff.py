@@ -124,8 +124,10 @@ def _load_bundle_verified(full_bundle, meter: _LoadMeter):
 def _check_frozen_csvs(prepared) -> None:
     """The bundle's frozen CSV copies agree with the run's published files."""
     from core.common import F
+    import hashlib
+    from graph_tracks.data import file_hash
     for key in ('canonical_records', 'gate_results', 'labeled_pairs'):
-        if prepared[key + '_csv'] != Path(F[key]).read_bytes():
+        if hashlib.sha256(prepared[key + '_csv']).hexdigest() != file_hash(F[key]):
             raise ValueError(f'Bundle contains stale {key}')
 
 

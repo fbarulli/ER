@@ -55,6 +55,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+from core.archive_reader import tar_archive
 import tempfile
 import threading
 import time
@@ -1543,8 +1544,9 @@ print(json.dumps(payload), flush=True)
 def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
     """Build one manifest-backed archive on the VM before transfer."""
     archive_path = f"{remote_base}/{_RESULT_ARCHIVE_NAME}"
-    script = f"""
-import hashlib, json, pathlib, tarfile
+    script = _BOOTSTRAP + f"""
+import hashlib, json, pathlib
+from core.archive_reader import tar_archive
 
 base = pathlib.Path({remote_base!r})
 archive_path = base / {_RESULT_ARCHIVE_NAME!r}
@@ -1642,7 +1644,7 @@ manifest = {{
 }}
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 archive_path.unlink(missing_ok=True)
-with tarfile.open(archive_path, "w:gz") as archive:
+with tar_archive(archive_path, "w") as archive:
     for entry in included:
         worker_root = base / f"worker_{{entry['worker']}}"
         source = worker_root / entry["path"]
@@ -1723,7 +1725,7 @@ def _extract_result_archive(
     """Safely extract and atomically replace the worker result directories."""
     temporary = Path(tempfile.mkdtemp(prefix=f".{run_id}-result-", dir=local_base.parent))
     try:
-        with tarfile.open(archive_path, "r:gz") as archive:
+        with tar_archive(archive_path) as archive:
             members = archive.getmembers()
             for member in members:
                 relative = Path(member.name)
@@ -2247,7 +2249,11 @@ def ensure_session() -> None:
         _forget_cached_session()
     accelerator = [] if GPU.upper() == "CPU" else ["--gpu", GPU]
     print(f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
-    colab("new", "-s", SESSION, *accelerator, timeout=300)
+    # Owner ruling 8: the CPU high-RAM production shape belongs to its own
+    # lane (cli.colab_data_bundle_prep); this line is the thin passthrough.
+    # With the lane's config flag off it returns (), byte-identical argv.
+    from cli.colab_data_bundle_prep import cpu_shape_args
+    colab("new", "-s", SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
     print("[session] provisioned; running control-channel handshake ...")
     _verify_session_handshake()
 
@@ -3779,19 +3785,21 @@ else:
     json.dumps({{"run_id": "{run_id}", "models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
     encoding="utf-8",
 )
-archive = pathlib.Path(shutil.make_archive(
-    str(hpo_root), "gztar", root_dir=hpo_root.parent, base_dir=hpo_root.name
-))
+from core.archive_reader import tar_archive
+archive = hpo_root.with_suffix('.tar.zst')
+with tar_archive(archive, 'w') as bundle:
+    bundle.add(hpo_root, arcname=hpo_root.name)
 print(f"[hpo-archive] {{archive}}", flush=True)
 print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank_model": "{_RERANK_MODEL}"}}, sort_keys=True), flush=True)
 """
     run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
-    remote_archive = f"{REMOTE_ROOT}/results/hpo_runs/{run_id}.tar.gz"
-    local_archive = TRAINING_RESULTS / "hpo_runs" / f"{run_id}.tar.gz"
+    remote_archive = f"{REMOTE_ROOT}/results/hpo_runs/{run_id}.tar.zst"
+    local_archive = TRAINING_RESULTS / "hpo_runs" / f"{run_id}.tar.zst"
     local_archive.parent.mkdir(parents=True, exist_ok=True)
     colab("download", "-s", SESSION, remote_archive, str(local_archive), timeout=3600)
     local_root = TRAINING_RESULTS / "hpo_runs"
-    shutil.unpack_archive(local_archive, local_root, format="gztar")
+    with tar_archive(local_archive) as bundle:
+        bundle.extractall(local_root, filter='data')
     print(f"[hpo-archive] preserved -> {local_root / run_id}", flush=True)
     return run_id
 
@@ -3839,7 +3847,7 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
 
     Delivery: the local copy lands under TRAINING_RESULTS/colab_bundle_<id>/
     (see _bundle_delivery_local); the VM-side archive keeps the FIXED name
-    REMOTE_ROOT/bundle_delivery.tar.gz, so a rerun on a live VM overwrites
+    REMOTE_ROOT/bundle_delivery.tar.zst, so a rerun on a live VM overwrites
     the previous delivery — acceptable because the download consumes it per
     invocation and the local copy is timestamped per run_id.
     """
@@ -3867,7 +3875,11 @@ _sha = hashlib.sha256(open(csv_path, "rb").read()).hexdigest()
 _cfg = {REMOTE_ROOT!r} + "/config/training.yaml"
 _text = open(_cfg, encoding="utf-8").read()
 _text = re.sub(r"(source_export_expected_rows: )[\\d_]+", r"\\g<1>" + str(_rows), _text, count=1)
-_text = re.sub(r'(source_export_expected_sha256: ")[0-9a-f]{{64}}"', r"\\g<1>" + _sha, _text, count=1)
+# Payload-only sha replacement: the merged audit lines carry trailing
+# comments AFTER the quoted hex, so consuming the closing quote here left an
+# unterminated scalar and broke the VM's YAML parse for prepare_all (both
+# cohorts' first launch).  Keep the quote and the comment; swap only the hex.
+_text = re.sub(r'(source_export_expected_sha256: ")([0-9a-f]{{64}})', r"\\g<1>" + _sha, _text, count=1)
 open(_cfg, "w", encoding="utf-8").write(_text)
 print(f"[bundle] VM audit pins -> rows={{_rows}} sha={{_sha[:12]}}...", flush=True)
 rc = subprocess.run(
@@ -3881,8 +3893,9 @@ run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/training_prep/*"))[-1]
 # FIXED delivery name: a rerun on a live VM overwrites the previous archive;
 # acceptable because the launcher consumes it per invocation and keeps a
 # per-run timestamped copy under TRAINING_RESULTS/colab_bundle_<run_id>/.
-delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.gz"
-with tarfile.open(delivery, "w:gz") as tar:
+delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.zst"
+from core.archive_reader import tar_archive
+with tar_archive(delivery, "w") as tar:
     tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
     for rel in ("data/canonical_records.csv", "data/gate_results.csv",
                 "data/dataset_deduped.csv", "data/labeled_pairs.csv",
@@ -3907,15 +3920,15 @@ print("[bundle] delivery archive ready", flush=True)
     # TRAINING_RESULTS / run_id), so only the exact sibling-free id inside
     # that root satisfies the contract (see _bundle_delivery_local).
     _download_file_with_visibility(
-        remote=f"{REMOTE_ROOT}/bundle_delivery.tar.gz",
-        local=delivery_dir / "bundle_delivery.tar.gz",
+        remote=f"{REMOTE_ROOT}/bundle_delivery.tar.zst",
+        local=delivery_dir / "bundle_delivery.tar.zst",
         worker=None,
         index=1,
         total=1,
         run_id=delivery_dir.name,
     )
     print(
-        f"[bundle] delivered -> {delivery_dir / 'bundle_delivery.tar.gz'}",
+        f"[bundle] delivered -> {delivery_dir / 'bundle_delivery.tar.zst'}",
         flush=True,
     )
 
@@ -4602,7 +4615,7 @@ def main() -> None:
         # Finish immutable input publication before allocating an accelerator.
         # prepare_remote_layout clones the same Git branch below.
         from model_tracks.colab import prepare_git_inputs
-        suite_recovery = RESULTS/'model_tracks'/f'{suite_run_tag}.recovery.zip'
+        suite_recovery = RESULTS/'model_tracks'/f'{suite_run_tag}.recovery.tar.zst'
         suite_git_inputs = prepare_git_inputs(suite_archive,suite_run_tag,
             resume_archive=suite_recovery if args.resume_run and suite_recovery.is_file() else None)
         args.what = 'tracks'
@@ -4777,7 +4790,15 @@ def main() -> None:
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
-            run_bundle(dataset_csv=args.dataset_csv)
+            if bool(training_cfg().cpu_bundle_prep.lane):
+                # Owner ruling 8: data-bundle production lives in its own
+                # lane file; this forward is the thin passthrough.  With the
+                # lane's config flag off, the original direct call runs and
+                # behavior is byte-identical.
+                from cli.colab_data_bundle_prep import run_cpu_bundle_prep
+                run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
+            else:
+                run_bundle(dataset_csv=args.dataset_csv)
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,

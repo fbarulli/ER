@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from model_tracks.package import package_member
 import subprocess
 import sys
 import tempfile
@@ -40,7 +41,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         raise ValueError('snapshot completion run mismatch')
     with open_archive(input_archive) as archive:
         settings = SuiteConfig.model_validate(
-            yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
+            yaml.safe_load(archive.read(package_member('suite_package_config'))))
     inventory = {relative: digest for relative, digest in inputs['files'].items()
                  if relative.startswith(('src/', 'config/', 'scripts/'))}
     if settings.ablation_config in inputs['files']:
@@ -56,7 +57,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             for relative in inventory:
                 target = snapshot / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(archive.read(relative))
+                archive.extract(relative, snapshot)
             # Root discovery needs project markers; packaging owns all executable
             # source and config above, so this marker carries no runtime settings.
             (snapshot / 'pyproject.toml').write_text(

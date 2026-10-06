@@ -185,7 +185,7 @@ if fv.exists():
            else "MISMATCH")
     record("S1", f"identity  {pos} + {neg} == {sh[0]}", f"{pos} + {neg} = {pos + neg}",
            "PASS" if pos + neg == sh[0] else "MISMATCH")
-    record("S1", "DATA_PATH.md claims (2026-09-28)", "6,351 total / 565 pos / 5,786 neg",
+    record("S1", "validation-census claims (2026-09-28)", "6,351 total / 565 pos / 5,786 neg",
            "PASS" if (sh[0], pos, neg) == (6351, 565, 5786) else "STALE-DOC")
     gr = m.get("graph", {})
     added = gr.get("validation_edges_added")

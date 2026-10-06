@@ -604,7 +604,7 @@ def _performance_html(performance):
         out.append('<p>Not measured in this run: '
                    f'{escape(", ".join(map(str, missing)))}. '
                    'Latency, memory and refresh time are required by '
-                   'MODEL_TRACKS_PLAN.md.</p>')
+                   'the model plan.</p>')
     return ''.join(out)
 
 

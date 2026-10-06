@@ -1,6 +1,6 @@
 """Seeded paired bootstrap confidence intervals over the scored pair population.
 
-MODEL_TRACKS_PLAN.md asks for "paired confidence intervals and repeated seeds".
+The model plan asks for "paired confidence intervals and repeated seeds".
 The model-track lanes train exactly one checkpoint per split, so there are no
 repeated training seeds to report: claiming seed replication would be a
 fabricated result.  What *is* available honestly is a paired bootstrap over the

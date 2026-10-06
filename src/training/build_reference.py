@@ -42,9 +42,10 @@ def _brand_vocab() -> set[str]:
     normalize_text, NOT the spelled numeric brands. spell_numeric_brand
     is applied by clean_sku_text at USE time, not census time.
     """
+    from core.progress import tracked
     df = load_dataset(columns=["brand"])
     vocab: set[str] = set()
-    for b in df["brand"].dropna().astype(str):
+    for b in tracked(df["brand"].dropna().astype(str), "brand_vocab"):
         vocab.update(b.lower().split())
     return vocab
 

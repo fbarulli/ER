@@ -11,7 +11,7 @@ that dashboard/training_reports.py renders under /training.
 Usage:
   PYTHONPATH=src .venv/bin/python scripts/verify_suite_archive.py 1004T155148611490Z
   PYTHONPATH=src .venv/bin/python scripts/verify_suite_archive.py \\
-      results/model_tracks/1004T155148611490Z.zip --config results/model_tracks/suite.yaml
+      results/model_tracks/1004T155148611490Z.tar.zst --config results/model_tracks/suite.yaml
 
 Exit 0 when the archive verifies, 1 when a check fails or the archive is
 unreadable.  The positional argument is a run tag (resolved under

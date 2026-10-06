@@ -2649,7 +2649,7 @@
    "per_dim_dissent": {}
   },
   {
-   "feed": "docti pharma",
+   "feed": "promofarma",
    "families_spoken": 1,
    "dissent_authored": 0,
    "majority_holdings": 1,
@@ -2658,7 +2658,7 @@
    "per_dim_dissent": {}
   },
   {
-   "feed": "promofarma",
+   "feed": "docti pharma",
    "families_spoken": 1,
    "dissent_authored": 0,
    "majority_holdings": 1,
@@ -2712,19 +2712,19 @@
    "per_dim_dissent": {}
   },
   {
-   "feed": "da",
-   "families_spoken": 6,
+   "feed": "atida",
+   "families_spoken": 3,
    "dissent_authored": 0,
-   "majority_holdings": 6,
+   "majority_holdings": 3,
    "dissent_ratio": 0.0,
    "top_dissent_dims": [],
    "per_dim_dissent": {}
   },
   {
-   "feed": "atida",
-   "families_spoken": 3,
+   "feed": "da",
+   "families_spoken": 6,
    "dissent_authored": 0,
-   "majority_holdings": 3,
+   "majority_holdings": 6,
    "dissent_ratio": 0.0,
    "top_dissent_dims": [],
    "per_dim_dissent": {}
