@@ -32,6 +32,11 @@ import os
 from pathlib import Path
 from typing import Any, Sequence
 
+from core.run_log import RunLogger
+from core.step_trace import timed
+
+log = RunLogger(__name__)
+
 def _find_project_root() -> Path:
     """Locate the project from stable markers, never a magic parent offset."""
     from core.project_root import find_project_root
@@ -107,26 +112,31 @@ def _read_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _read_vocabulary(path: Path) -> dict:
-    if not path.exists():
-        raise SystemExit(f"config missing: {path}")
-    try:
-        vocabulary = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"malformed vocabulary config {path}: {exc}") from exc
-    required_lists = ("STOPWORDS", "MINIMAL_STOPWORDS", "ENGLISH_STOP_WORDS")
-    for key in required_lists:
+_REQUIRED_VOCABULARY_LISTS = ("STOPWORDS", "MINIMAL_STOPWORDS", "ENGLISH_STOP_WORDS")
+
+
+def _validate_vocabulary_lists(vocabulary: dict) -> None:
+    """The three stopword lists must be non-empty lists of non-empty strings."""
+    for key in _REQUIRED_VOCABULARY_LISTS:
         values = vocabulary.get(key)
         if not isinstance(values, list) or not all(
             isinstance(value, str) and value.strip() for value in values
         ):
             raise SystemExit(f"vocabulary.{key} must be a non-empty list of strings")
+
+
+def _validate_concept_folds(vocabulary: dict) -> None:
+    """CONCEPT_FOLDS must be a non-empty map of non-empty strings."""
     folds = vocabulary.get("CONCEPT_FOLDS")
     if not isinstance(folds, dict) or not folds or not all(
         isinstance(key, str) and key.strip() and isinstance(value, str) and value.strip()
         for key, value in folds.items()
     ):
         raise SystemExit("vocabulary.CONCEPT_FOLDS must be a non-empty string mapping")
+
+
+def _validate_category_macros(vocabulary: dict) -> None:
+    """category_macros must map distinct non-empty strings onto categories."""
     macros = vocabulary.get("category_macros")
     if not isinstance(macros, dict) or not macros:
         raise SystemExit("vocabulary.category_macros must be a non-empty mapping")
@@ -135,43 +145,58 @@ def _read_vocabulary(path: Path) -> dict:
             raise SystemExit("vocabulary.category_macros keys and values must be non-empty strings")
         if category.strip() == macro.strip():
             raise SystemExit(f"vocabulary.category_macros maps {category!r} to itself")
+
+
+def _read_vocabulary(path: Path) -> dict:
+    if not path.exists():
+        raise SystemExit(f"config missing: {path}")
+    try:
+        vocabulary = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"malformed vocabulary config {path}: {exc}") from exc
+    _validate_vocabulary_lists(vocabulary)
+    _validate_concept_folds(vocabulary)
+    _validate_category_macros(vocabulary)
     from core.attribute_vocabulary import validated_attribute_vocabulary
 
     validated_attribute_vocabulary(vocabulary)
     return vocabulary
 
 
-@lru_cache(maxsize=1)
-def _load_config_cached() -> dict:
-    """Load + validate the split-SSOT and deep-merge into ONE view.
+_CONFIG_OVERLAYS: tuple[tuple[Path, type], ...] = (
+    (TRAINING_CONFIG_PATH, TrainingConfig),
+)
 
-    Order: paths.yaml is the base; training.yaml
-    overlays it (the domain file wins on conflicts — a conflict
-    is a config bug and the domain file is the authority for its keys).
-    Every file is validated against its pydantic model BEFORE merging, so an
-    invalid knob crashes here with the file + field named.
+
+def _merge_config_overlays(base: dict) -> dict:
+    """Deep-merge each domain config over the paths.yaml base.
+
+    The domain file wins on conflicts — a conflict is a config bug and the
+    domain file is the authority for its keys.
     """
-    base = dict(_read_yaml(CONFIG_PATH))
-    DataConfig.model_validate(base)  # root contract — fail before merge
-    vocabulary = _read_vocabulary(VOCABULARY_CONFIG_PATH)
     merged = dict(base)
-    for path, model in (
-        (TRAINING_CONFIG_PATH, TrainingConfig),
-    ):
-        if path.exists():
-            overlay = dict(_read_yaml(path))
-            model.model_validate(overlay)
-            for key, block in overlay.items():
-                if (
-                    key in merged
-                    and isinstance(merged[key], dict)
-                    and isinstance(block, dict)
-                ):
-                    merged[key] = {**merged[key], **block}
-                else:
-                    merged[key] = block
-        else:
-            raise SystemExit(f"config missing: {path}")
+    for path, model in _CONFIG_OVERLAYS:
+        overlay = dict(_read_yaml(path))
+        model.model_validate(overlay)
+        for key, block in overlay.items():
+            if (
+                key in merged
+                and isinstance(merged[key], dict)
+                and isinstance(block, dict)
+            ):
+                merged[key] = {**merged[key], **block}
+            else:
+                merged[key] = block
+    return merged
+
+
+def _validate_model_registry_references(merged: dict, base: dict) -> None:
+    """Every model reference in the merged view must name a registry key.
+
+    Crash at load (fail-loud, never mid-run) when training.base_model,
+    hpo.models, sweep.rerank_model or colab.sims_model/mixed_mining_profile
+    drift from config/paths.yaml.
+    """
     hpo_models = set(merged.get("hpo", {}).get("models", []))
     registry_models = set(base.get("models", {}))
     base_model = merged["training"]["base_model"]
@@ -210,6 +235,21 @@ def _load_config_cached() -> dict:
             "colab.mixed_mining_profile must name a configured mining profile: "
             f"{mixed_profile!r} not in {sorted(merged['mining_profiles'])}"
         )
+
+
+@lru_cache(maxsize=1)
+def _load_config_cached() -> dict:
+    """Load + validate the split-SSOT and deep-merge into ONE view.
+
+    Order: paths.yaml is the base; training.yaml overlays it. Every file is
+    validated against its pydantic model BEFORE merging, so an
+    invalid knob crashes here with the file + field named.
+    """
+    base = dict(_read_yaml(CONFIG_PATH))
+    DataConfig.model_validate(base)  # root contract — fail before merge
+    vocabulary = _read_vocabulary(VOCABULARY_CONFIG_PATH)
+    merged = _merge_config_overlays(base)
+    _validate_model_registry_references(merged, base)
     merged["category_macros"] = vocabulary["category_macros"]
     return merged
 
@@ -244,6 +284,24 @@ def data_cfg() -> DataConfig:
     return _DATA_CFG
 
 
+def _byte_identical_to_staged(staged_name: str) -> bool:
+    """True when the mounted export is byte-identical to a staged cohort CSV.
+
+    Cheap: size compare first, sha256 only on a size match. A tree without
+    the staged file (e.g. a fresh clone) or the export is never a match.
+    """
+    if not DATA_PATH.is_file():
+        return False
+    from core.manifest import sha256_file
+
+    staged = DATA_PATH.with_name(staged_name)
+    return bool(
+        staged.is_file()
+        and staged.stat().st_size == DATA_PATH.stat().st_size
+        and sha256_file(DATA_PATH) == sha256_file(staged)
+    )
+
+
 def dataset_is_partial_cohort() -> bool:
     """True when the mounted raw export is the 50%-cohort accommodation.
 
@@ -251,17 +309,16 @@ def dataset_is_partial_cohort() -> bool:
     dataset only ("only the full dataset should be tested"). dataset_50pct.csv
     is the partial cohort's staged export; when dataset.csv is byte-identical
     to it, cohort-specific live-data expectations (measured on a different
-    universe) SKIP instead of failing. A tree without the partial file (e.g.
-    a fresh clone) is treated as full. Cheap: size compare first, sha only
-    on a size match.
+    universe) SKIP instead of failing. Derived from the ONE cohort detector
+    (mounted_cohort) so the two answers can never diverge.
     """
-    if not DATA_PATH.is_file():
-        return False
-    partial = DATA_PATH.with_name("dataset_50pct.csv")
-    if not partial.is_file() or partial.stat().st_size != DATA_PATH.stat().st_size:
-        return False
-    from core.manifest import sha256_file
-    return sha256_file(DATA_PATH) == sha256_file(partial)
+    return mounted_cohort() == "50pct"
+
+
+_COHORT_EXPORTS: tuple[tuple[str, str], ...] = (
+    ("dataset_50pct.csv", "50pct"),
+    ("dataset_10k.csv", "10k"),
+)
 
 
 def mounted_cohort() -> str:
@@ -275,17 +332,12 @@ def mounted_cohort() -> str:
     pool (10k cohort: 287 mined < the full-dataset quota 300). One identity
     here keeps every lane (local prep, colab bundle, kaggle) and the
     training child run on the same tag. Cheap: size compare first, sha only
-    on a size match; without a staged cohort file the export is full.
+    on a size match;     without a staged cohort file the export is full.
     """
-    if not DATA_PATH.is_file():
-        return 'full'
-    from core.manifest import sha256_file
-    for filename, tag in (('dataset_50pct.csv', '50pct'), ('dataset_10k.csv', '10k')):
-        staged = DATA_PATH.with_name(filename)
-        if (staged.is_file() and staged.stat().st_size == DATA_PATH.stat().st_size
-                and sha256_file(DATA_PATH) == sha256_file(staged)):
+    for filename, tag in _COHORT_EXPORTS:
+        if _byte_identical_to_staged(filename):
             return tag
-    return 'full'
+    return "full"
 
 
 def category_macros() -> dict[str, str]:
@@ -328,39 +380,80 @@ def training_cfg() -> TrainingConfig:
     return _TRAIN_CFG
 
 
-def masking_cfg(profile: str | None = None) -> dict[str, Any]:
-    """Return the validated base masking config with one named profile applied."""
-    base = dict(_CFG["masking"])
-    selected = str(profile or base["profile"])
-    profiles = _CFG["masking_profiles"]
+def _profile_applied(
+    *,
+    base: dict[str, Any],
+    profiles: Any,
+    selected: str,
+    label: str,
+    drop_null_overrides: bool,
+) -> dict[str, Any]:
+    """One named profile applied to a validated base block.
+
+    `label` is the profile family's name in error messages; the two families
+    differ ONLY in whether a profile's explicit nulls count as overrides
+    (masking drops them — null means "inherit the base"), which is why the
+    filter is a parameter and not an assumption.
+    """
     if selected not in profiles:
         raise KeyError(
-            f"unknown masking profile {selected!r}; "
+            f"unknown {label} profile {selected!r}; "
             f"expected one of {sorted(profiles)}"
         )
-    overrides = {
-        key: value
-        for key, value in dict(profiles[selected]).items()
-        if value is not None
-    }
-    base.update(overrides)
-    base["profile"] = selected
-    return base
+    if drop_null_overrides:
+        overrides = {
+            key: value
+            for key, value in dict(profiles[selected]).items()
+            if value is not None
+        }
+    else:
+        overrides = dict(profiles[selected])
+    applied = dict(base)
+    applied.update(overrides)
+    applied["profile"] = selected
+    return applied
+
+
+def masking_cfg(profile: str | None = None) -> dict[str, Any]:
+    """Return the validated base masking config with one named profile applied."""
+    return _profile_applied(
+        base=dict(_CFG["masking"]),
+        profiles=_CFG["masking_profiles"],
+        selected=str(profile or _CFG["masking"]["profile"]),
+        label="masking",
+        drop_null_overrides=True,
+    )
 
 
 def collapse_guardrail_cfg(profile: str | None = None) -> dict[str, Any]:
     """Return the validated collapse guardrail with one named profile applied."""
-    base = dict(_CFG["collapse_guardrail"])
-    selected = str(profile or base["profile"])
-    profiles = _CFG["collapse_guardrail_profiles"]
-    if selected not in profiles:
-        raise KeyError(
-            f"unknown collapse guardrail profile {selected!r}; "
-            f"expected one of {sorted(profiles)}"
-        )
-    base.update(dict(profiles[selected]))
-    base["profile"] = selected
-    return base
+    return _profile_applied(
+        base=dict(_CFG["collapse_guardrail"]),
+        profiles=_CFG["collapse_guardrail_profiles"],
+        selected=str(profile or _CFG["collapse_guardrail"]["profile"]),
+        label="collapse guardrail",
+        drop_null_overrides=False,
+    )
+
+
+_NER_REQUIRED_SECTIONS = {
+    "base_dir",
+    "results_dir",
+    "columns",
+    "data_prep",
+    "semantic_training",
+    "semantic_evaluation",
+    "ner_training",
+    "colab",
+    "huggingface",
+}
+
+
+def _require_ner_sections(ner: Any) -> None:
+    """Fail loud when the training.ner block lost a required section."""
+    missing = sorted(_NER_REQUIRED_SECTIONS - set(ner))
+    if missing:
+        raise KeyError(f"training.ner missing required section(s): {missing}")
 
 
 def ner_config() -> dict[str, Any]:
@@ -370,20 +463,7 @@ def ner_config() -> dict[str, Any]:
     private YAML file. A deep copy prevents a consumer from mutating the
     process-wide validated configuration.
     """
-    required = {
-        "base_dir",
-        "results_dir",
-        "columns",
-        "data_prep",
-        "semantic_training",
-        "semantic_evaluation",
-        "ner_training",
-        "colab",
-        "huggingface",
-    }
-    missing = sorted(required - set(_TRAIN_CFG.ner))
-    if missing:
-        raise KeyError(f"training.ner missing required section(s): {missing}")
+    _require_ner_sections(_TRAIN_CFG.ner)
     return copy.deepcopy(_TRAIN_CFG.ner)
 
 
@@ -626,19 +706,28 @@ TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
 AUDIT_FINDINGS_DIR = _path(_CFG["paths"]["audit_findings_dir"])
 
 
-def audit_finding(name: str) -> Path:
-    """Resolve one audit finding/report file under the declared findings root.
+def _require_bare_finding_name(name: str) -> None:
+    """A finding name must be a bare filename anchored to the declared root.
 
-    `name` is a bare filename, never a path: a caller that passes a separator
-    is re-anchored to the declared root rather than escaping it, so this can
-    never become a second way to spell the location. Dot names are refused
-    outright — `Path('..').name == '..'`, so a bare-name test alone lets the
-    parent directory through and resolves outside the root.
+    A caller that passes a separator is re-anchored rather than escaping, so
+    this can never become a second way to spell the location. Dot names are
+    refused outright — `Path('..').name == '..'`, so a bare-name test alone
+    lets the parent directory through and resolves outside the root.
     """
     if not name or name in {'.', '..'} or name != Path(name).name:
         raise ValueError(f"audit finding name must be a bare filename: {name!r}")
     if '\\' in name or '/' in name:
         raise ValueError(f"audit finding name must be a bare filename: {name!r}")
+
+
+def audit_finding(name: str) -> Path:
+    """Resolve one audit finding/report file under the declared findings root.
+
+    `name` is a bare filename, never a path: a caller that passes a separator
+    is re-anchored to the declared root rather than escaping it, so this can
+    never become a second way to spell the location.
+    """
+    _require_bare_finding_name(name)
     resolved = (AUDIT_FINDINGS_DIR / name).resolve()
     if resolved.parent != AUDIT_FINDINGS_DIR.resolve():
         raise ValueError(f"audit finding escapes the declared root: {name!r}")
@@ -717,16 +806,20 @@ LAYOUTS: dict[str, LayoutSpec] = {
 _UNSET = object()
 
 
-def artifact(key: str, fields: dict[str, object] | None = None) -> Path:
-    """Render a generated-artifact destination from an owned layout template.
-
-    Template placeholders are filled ONLY from the declared fields set; a
-    missing or unexpected field crashes.  Callers must wrap the returned
-    path in the layout's OWNER module (declared in paths.yaml layouts:.owner).
-    """
+def _require_layout(key: str):
+    """The declared layout template for a generated artifact, or fail loud."""
     spec = LAYOUTS.get(key)
     if spec is None:
         raise KeyError(f"unknown layout {key!r}; declared layouts: {sorted(LAYOUTS)}")
+    return spec
+
+
+def _coerced_fields(spec, key: str, fields: dict[str, object] | None) -> dict[str, object]:
+    """Fill a template's declared fields with exactly their declared types.
+
+    Placeholders are filled ONLY from the declared fields set; a missing or
+    unexpected field crashes.
+    """
     declared = set(spec.fields)
     provided = dict(fields or {})
     if set(provided) != declared:
@@ -742,6 +835,18 @@ def artifact(key: str, fields: dict[str, object] | None = None) -> Path:
             coerced[name] = float(raw)
         else:
             coerced[name] = str(raw)
+    return coerced
+
+
+def artifact(key: str, fields: dict[str, object] | None = None) -> Path:
+    """Render a generated-artifact destination from an owned layout template.
+
+    Template placeholders are filled ONLY from the declared fields set; a
+    missing or unexpected field crashes.  Callers must wrap the returned
+    path in the layout's OWNER module (declared in paths.yaml layouts:.owner).
+    """
+    spec = _require_layout(key)
+    coerced = _coerced_fields(spec, key, fields)
     return (_BINDING_ROOTS[spec.root] / spec.template.format(**coerced)).resolve()
 
 
@@ -750,10 +855,34 @@ def ensure_parent(path: Path) -> Path:
     return path
 
 
+def _read_trace_rows(trace_path: Path) -> list:
+    """The trace manifest's current rows ([] when absent/corrupt/unexpected).
+
+    A previous dict-shaped trace ({"artifacts": [...]}) is unwrapped; any
+    parse or shape failure starts a fresh list rather than losing the new
+    record — the file is reconstructed on the next write.
+    """
+    if not trace_path.exists():
+        return []
+    try:
+        rows = json.loads(trace_path.read_text(encoding="utf-8"))
+        if isinstance(rows, dict):
+            rows = rows.get("artifacts", [])
+    except Exception:
+        rows = []
+    return rows
+
+
+def _write_trace_rows(trace_path: Path, rows: list) -> None:
+    """Atomically replace the trace manifest (tmp file + rename)."""
+    tmp = trace_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"artifacts": rows}, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(trace_path)
+
+
 def trace_artifact(key: str, path: Path, producer: str = "") -> None:
     """Stamp a generated-artifact write into the artifacts trace manifest."""
-    import json as _json
-    from datetime import datetime as _datetime, timezone as _timezone
+    from datetime import datetime, timezone
 
     trace_dir = RESULTS / "manifests"
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -762,20 +891,11 @@ def trace_artifact(key: str, path: Path, producer: str = "") -> None:
         "layout": key,
         "path": str(path),
         "producer": producer or "unknown",
-        "at": _datetime.now(_timezone.utc).isoformat(),
+        "at": datetime.now(timezone.utc).isoformat(),
     }
-    rows = []
-    if trace_path.exists():
-        try:
-            rows = _json.loads(trace_path.read_text(encoding="utf-8"))
-            if isinstance(rows, dict):
-                rows = rows.get("artifacts", [])
-        except Exception:
-            rows = []
+    rows = _read_trace_rows(trace_path)
     rows.append(record)
-    tmp = trace_path.with_suffix(".json.tmp")
-    tmp.write_text(_json.dumps({"artifacts": rows}, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(trace_path)
+    _write_trace_rows(trace_path, rows)
 
 
 # ── column mapping + seed (SSOT, read once) ──────────────────────────────────
@@ -795,6 +915,155 @@ def __getattr__(name: str):
         return mapping
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+_DRIFT_CLASSES = (
+    "lost_true_block",
+    "lost_true_review",
+    "new_merge_risk",
+    "lost_neg_review",
+    "survived",
+)
+
+# label 1 -> outcome bucket; label 0 -> its own mapping (a pair that stays
+# hard_no is a surviving true negative, one that now proceeds is merge risk).
+_TRUE_LABEL_BUCKET = {
+    "proceed": "survived",
+    "hard_no": "lost_true_block",
+    "fallback": "lost_true_review",
+}
+_FALSE_LABEL_BUCKET = {
+    "hard_no": "survived",
+    "proceed": "new_merge_risk",
+    "fallback": "lost_neg_review",
+}
+
+
+def _gate_outcome_map(current_gate) -> dict[tuple[str, str], tuple[str, str]]:
+    """(gtin1, gtin2) -> (decision, reason) from the CURRENT gate results.
+
+    Reads the replayed frame when given, else gate_results.csv from disk.
+    """
+    g = current_gate if current_gate is not None else pd.read_csv(
+        RESULTS / F["gate_results"],
+        dtype=str,
+        keep_default_na=False,
+    )
+    outcomes: dict[tuple[str, str], tuple[str, str]] = {}
+    for row in log.progress(
+        g.itertuples(index=False), desc="gate_outcomes", unit="pair",
+        total=len(g),
+    ):
+        outcomes[(str(row.gtin1), str(row.gtin2))] = (
+            str(row.gate_decision), str(row.gate_reason),
+        )
+    return outcomes
+
+
+def _labeled_from_git_head(labeled_path: Path) -> pd.DataFrame:
+    """The previous labeled set from git HEAD when the file left the tree.
+
+    A previous-labeled artifact that is neither on disk nor in git HEAD is a
+    hard error: the per-sample drift map needs SOME previous labeled set.
+    """
+    import subprocess
+    from io import BytesIO
+
+    try:
+        git_path = labeled_path.resolve().relative_to(TRAIN_ROOT.resolve())
+    except ValueError as exc:
+        raise FileNotFoundError(
+            f"Previous labeled artifact is missing outside the repository: {labeled_path}"
+        ) from exc
+    head = subprocess.run(
+        ["git", "show", f"HEAD:{git_path.as_posix()}"],
+        cwd=TRAIN_ROOT,
+        capture_output=True,
+    )
+    if head.returncode != 0:
+        raise FileNotFoundError(
+            f"No previous labeled artifact to diff against: neither "
+            f"{labeled_path.as_posix()} on disk nor in git HEAD — the "
+            "per-sample drift map needs SOME previous labeled set"
+        )
+    return pd.read_csv(
+        BytesIO(head.stdout),
+        dtype=str,
+        keep_default_na=False,
+    )
+
+
+def _previous_labeled_frame(previous_labeled_csv) -> pd.DataFrame:
+    """The previous labeled_pairs frame: on disk, else git HEAD."""
+    labeled_path = previous_labeled_csv or (DATA_DIR / F["labeled_pairs"])
+    if labeled_path.is_file():
+        return pd.read_csv(
+            labeled_path,
+            dtype=str,
+            keep_default_na=False,
+        )
+    return _labeled_from_git_head(labeled_path)
+
+
+def _classify_drift_rows(
+    labeled: pd.DataFrame, outcomes: dict
+) -> tuple[dict[str, list[dict[str, Any]]], int]:
+    """Bucket every previous labeled pair under its NEW gate outcome.
+
+    Returns the per-class sample lists and the count of labeled pairs the
+    current gate no longer covers.
+    """
+    classes: dict[str, list[dict[str, str]]] = {key: [] for key in _DRIFT_CLASSES}
+    missing_from_gate = 0
+    for row in log.progress(
+        labeled.itertuples(index=False), desc="drift_classification",
+        unit="pair", total=len(labeled),
+    ):
+        state = outcomes.get((str(row.gtin1), str(row.gtin2)))
+        if state is None:
+            missing_from_gate += 1
+            continue
+        decision, reason = state
+        label = int(float(row.true_label))
+        bucket = (
+            _TRUE_LABEL_BUCKET[decision]
+            if label == 1
+            else _FALSE_LABEL_BUCKET[decision]
+        )
+        classes[bucket].append(
+            {
+                "gtin1": str(row.gtin1),
+                "gtin2": str(row.gtin2),
+                "label": label,
+                "new_decision": decision,
+                "new_reason": reason,
+            }
+        )
+    return classes, missing_from_gate
+
+
+def _drift_summary(
+    measured: dict[str, int],
+    classes: dict[str, list],
+    missing_from_gate: int,
+) -> dict[str, Any]:
+    """The report's summary block (degraded counts + survived + samples)."""
+    return {
+        "measured_census": measured,
+        "degraded": {
+            key: len(items) for key, items in classes.items() if key != "survived"
+        },
+        "survived": len(classes["survived"]),
+        "pairs_absent_from_current_gate": missing_from_gate,
+        "samples": classes,
+    }
+
+
+def _write_drift_report(summary: dict[str, Any]) -> None:
+    """Persist the per-sample report (results/ is gitignored scratch)."""
+    report_path = RESULTS / "gate_census_drift.json"
+    report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+@timed
 def gate_census_drift_report(
     *,
     measured: dict[str, int],
@@ -816,101 +1085,13 @@ def gate_census_drift_report(
       survived          labeled pairs whose source outcome is unchanged
 
     Writes the full per-sample report to results/gate_census_drift.json
-    (results/ is gitignored scratch) and returns the summary + sample lists.
+    and returns the summary + sample lists.
     """
-    g = current_gate if current_gate is not None else pd.read_csv(
-        RESULTS / F["gate_results"],
-        dtype=str,
-        keep_default_na=False,
-    )
-    outcome = {
-        (str(r.gtin1), str(r.gtin2)): (str(r.gate_decision), str(r.gate_reason))
-        for r in g.itertuples(index=False)
-    }
-    labeled_path = previous_labeled_csv or (DATA_DIR / F["labeled_pairs"])
-    if labeled_path.is_file():
-        labeled = pd.read_csv(
-            labeled_path,
-            dtype=str,
-            keep_default_na=False,
-        )
-    else:
-        import subprocess
-        from io import BytesIO
-
-        try:
-            git_path = labeled_path.resolve().relative_to(TRAIN_ROOT.resolve())
-        except ValueError as exc:
-            raise FileNotFoundError(
-                f"Previous labeled artifact is missing outside the repository: {labeled_path}"
-            ) from exc
-        head = subprocess.run(
-            ["git", "show", f"HEAD:{git_path.as_posix()}"],
-            cwd=TRAIN_ROOT,
-            capture_output=True,
-        )
-        if head.returncode != 0:
-            raise FileNotFoundError(
-                f"No previous labeled artifact to diff against: neither "
-                f"{labeled_path.as_posix()} on disk nor in git HEAD — the "
-                "per-sample drift map needs SOME previous labeled set"
-            )
-        labeled = pd.read_csv(
-            BytesIO(head.stdout),
-            dtype=str,
-            keep_default_na=False,
-        )
-    classes: dict[str, list[dict[str, str]]] = {
-        key: []
-        for key in (
-            "lost_true_block",
-            "lost_true_review",
-            "new_merge_risk",
-            "lost_neg_review",
-            "survived",
-        )
-    }
-    missing_from_gate = 0
-    for row in labeled.itertuples(index=False):
-        state = outcome.get((str(row.gtin1), str(row.gtin2)))
-        if state is None:
-            missing_from_gate += 1
-            continue
-        decision, reason = state
-        label = int(float(row.true_label))
-        bucket = (
-            {
-                "proceed": "survived",
-                "hard_no": "lost_true_block",
-                "fallback": "lost_true_review",
-            }[decision]
-            if label == 1
-            else {
-                "hard_no": "survived",
-                "proceed": "new_merge_risk",
-                "fallback": "lost_neg_review",
-            }[decision]
-        )
-        classes[bucket].append(
-            {
-                "gtin1": str(row.gtin1),
-                "gtin2": str(row.gtin2),
-                "label": label,
-                "new_decision": decision,
-                "new_reason": reason,
-            }
-        )
-    summary = {
-        "measured_census": measured,
-        "degraded": {
-            key: len(items) for key, items in classes.items() if key != "survived"
-        },
-        "survived": len(classes["survived"]),
-        "pairs_absent_from_current_gate": missing_from_gate,
-        "samples": classes,
-    }
-    report_path = RESULTS / "gate_census_drift.json"
-    report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    outcomes = _gate_outcome_map(current_gate)
+    labeled = _previous_labeled_frame(previous_labeled_csv)
+    classes, missing_from_gate = _classify_drift_rows(labeled, outcomes)
+    summary = _drift_summary(measured, classes, missing_from_gate)
+    _write_drift_report(summary)
     return summary
 
 
@@ -952,11 +1133,10 @@ def set_determinism(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    print(
+    log.info(
         f"[determinism] seed={seed} cudnn.deterministic=True "
         f"(PYTHONHASHSEED note: effective only if set before interpreter "
-        f"start)",
-        flush=True,
+        f"start)"
     )
 
 # ── model registry + resolution (shared by every model-loading lane) ────────
@@ -981,52 +1161,54 @@ def _validate_materialized_model(path: Path, reference: str) -> str:
     return str(resolved)
 
 
-def resolve_model(key_or_sub: str) -> str:
-    """Resolve a registry key, configured subdirectory, or local path.
+def _candidate_model_paths(reference: str) -> list[Path]:
+    """Every local path a model reference may resolve to, in priority order.
 
-    Registry values are accepted deliberately because older callers and
-    persisted run metadata store the configured subdirectory rather than its
-    key. Both forms remain strictly project-local and never trigger a Hub
-    download.
+    Registry keys, configured subdirectories and direct local paths are
+    accepted deliberately because older callers and persisted run metadata
+    store the subdirectory rather than its key. Both registry forms remain
+    strictly project-local and never trigger a Hub download.
     """
-    reference = str(key_or_sub).strip()
-    if not reference:
-        raise ValueError("model reference must be non-empty")
-
     registry_keys = [key for key, value in MODELS.items() if value == reference]
     if reference in MODELS:
-        relative = Path(MODELS[reference])
-        candidates = [_MODEL_ROOT / relative]
-    elif len(registry_keys) == 1:
-        relative = Path(reference)
-        candidates = [_MODEL_ROOT / relative]
-    elif len(registry_keys) > 1:
+        return [_MODEL_ROOT / Path(MODELS[reference])]
+    if len(registry_keys) == 1:
+        return [_MODEL_ROOT / Path(reference)]
+    if len(registry_keys) > 1:
         raise ValueError(
             f"model registry value {reference!r} is ambiguous; matching keys: "
             f"{sorted(registry_keys)}"
         )
-    else:
-        direct = Path(reference).expanduser()
-        if direct.is_absolute():
-            candidates = [direct]
-        elif (TRAIN_ROOT / direct).exists():
-            candidates = [TRAIN_ROOT / direct]
-        else:
-            raise KeyError(
-                f"unknown model registry key {reference!r}; "
-                f"expected one of {sorted(MODELS)} or an existing local path"
-            )
+    direct = Path(reference).expanduser()
+    if direct.is_absolute():
+        return [direct]
+    if (TRAIN_ROOT / direct).exists():
+        return [TRAIN_ROOT / direct]
+    raise KeyError(
+        f"unknown model registry key {reference!r}; "
+        f"expected one of {sorted(MODELS)} or an existing local path"
+    )
 
+
+def _materialized_model(candidates: list[Path], reference: str) -> str:
+    """The first already-materialized candidate directory, fail loud otherwise."""
     for candidate in candidates:
         if candidate.is_dir():
             return _validate_materialized_model(candidate, reference)
-
     checked = ", ".join(str(path.resolve()) for path in candidates)
     raise FileNotFoundError(
         f"model {reference!r} is not materialized locally; checked: {checked}. "
         "The Git-shipped project-owned model bundle is missing; "
         "external model downloads are disabled."
     )
+
+
+def resolve_model(key_or_sub: str) -> str:
+    """Resolve a registry key, configured subdirectory, or local path."""
+    reference = str(key_or_sub).strip()
+    if not reference:
+        raise ValueError("model reference must be non-empty")
+    return _materialized_model(_candidate_model_paths(reference), reference)
 
 
 def load_local_sentence_transformer(
@@ -1067,24 +1249,39 @@ def load_local_cross_encoder(
 #                                      the fold-metrics pointer discipline)
 #   results/logs/<run_tag>/<name>.csv — the run's own copy (every run,
 #                                      sample or not)
+def _write_visibility_copy(df: pd.DataFrame, key: str, fields: dict) -> None:
+    """One visibility dump to its artifact path + trace stamp."""
+    path = artifact(key, fields)
+    ensure_parent(path)
+    df.to_csv(path, index=False)
+    trace_artifact(key, path)
+
+
 def write_visibility_log(
     df: pd.DataFrame, name: str, run_tag: str, sample: bool
 ) -> None:
     """Write a visibility dump under the run-tag dir + latest pointer."""
-    run_path = artifact("visibility_run", {"run_tag": run_tag, "name": name})
-    ensure_parent(run_path)
-    df.to_csv(run_path, index=False)
-    trace_artifact("visibility_run", run_path)
+    _write_visibility_copy(df, "visibility_run", {"run_tag": run_tag, "name": name})
     if not sample and not os.environ.get("EUROMONITOR_HPO_RETENTION_MODE"):
-        latest_path = artifact("visibility", {"name": name})
-        ensure_parent(latest_path)
-        df.to_csv(latest_path, index=False)
-        trace_artifact("visibility", latest_path)
+        _write_visibility_copy(df, "visibility", {"name": name})
 
 
 def _load_source_export(columns: Sequence[str] | None = None) -> pd.DataFrame:
     """Parse selected raw columns of the raw export."""
     return _read_dataset_csv(DATA_PATH, columns=columns)
+
+
+def _projected_raw_columns(
+    column_mapping: dict[str, str], columns: Sequence[str] | None
+) -> list[str] | None:
+    """Canonical column names -> the raw CSV columns to project at parse time."""
+    if columns is None:
+        return None
+    canonical_to_raw = {canonical: raw for raw, canonical in column_mapping.items()}
+    unknown = sorted(set(columns) - set(canonical_to_raw))
+    if unknown:
+        raise ValueError(f"unknown canonical source columns: {unknown}")
+    return [canonical_to_raw[column] for column in columns]
 
 
 def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
@@ -1105,17 +1302,11 @@ def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
     # load_dataset() was dead for every caller — src/training/build_reference,
     # dedupe, zero_shot_sims and the selftest oracle. The lazy re-export is
     # kept for `from core.common import COLUMN_MAPPING` consumers.
-    from core.columns import COLUMN_MAPPING as _column_mapping
+    from core.columns import COLUMN_MAPPING as mapping
 
-    raw_columns = None
-    if columns is not None:
-        canonical_to_raw = {canonical: raw for raw, canonical in _column_mapping.items()}
-        unknown = sorted(set(columns) - set(canonical_to_raw))
-        if unknown:
-            raise ValueError(f"unknown canonical source columns: {unknown}")
-        raw_columns = [canonical_to_raw[column] for column in columns]
+    raw_columns = _projected_raw_columns(mapping, columns)
     df = _load_source_export(raw_columns)
-    return df.rename(columns=_column_mapping)
+    return df.rename(columns=mapping)
 
 
 def _read_dataset_csv(path: Path, *, columns: Sequence[str] | None = None) -> pd.DataFrame:
@@ -1192,6 +1383,7 @@ def has_gtin(df: pd.DataFrame) -> pd.Series:
 # where actually needed (kfold_gtins, report_plots' country slice).
 
 
+@timed
 def column_profile(df: pd.DataFrame) -> pd.DataFrame:
     """Per-column profile: non-null count, cardinality, numeric_like, stored dtype.
 
@@ -1200,7 +1392,7 @@ def column_profile(df: pd.DataFrame) -> pd.DataFrame:
     Single source for 01's dtype table and 01b's column scatter.
     """
     rows = []
-    for col in df.columns:
+    for col in log.progress(df.columns, desc="column_profile", unit="column"):
         non_null = int(df[col].notna().sum())
         cardinality = int(df[col].dropna().nunique())
         numeric_like = 0.0
@@ -1226,14 +1418,16 @@ def canonical_volume(series: pd.Series) -> pd.DataFrame:
 
     Canonical volume comes from title ONLY (extract_volume_ml); the ambiguous
     flag marks bare oz/ounce (weight vs fluid). Single source for the
-    extract-volume projection used by 01e/01f/01h/02/02b/02c.
+    extract-volume projection used by 01e/01f/01h/02/02b/02c. Extracted in
+    ONE pass (the former two per-column .map passes re-walked the series).
     """
-    vol = series.map(extract_volume_ml)
+    extracted = series.map(extract_volume_ml).tolist()
     return pd.DataFrame(
         {
-            "canonical_volume_ml": vol.map(lambda t: t[0]),
-            "canonical_volume_ambiguous": vol.map(lambda t: t[1]),
-        }
+            "canonical_volume_ml": [pair[0] for pair in extracted],
+            "canonical_volume_ambiguous": [pair[1] for pair in extracted],
+        },
+        index=series.index,
     )
 
 
@@ -1286,6 +1480,23 @@ def pair_similarity(emb: "_np.ndarray", pairs_idx: "_np.ndarray") -> "_np.ndarra
 
 
 
+def _multi_retailer_gtins(df: pd.DataFrame) -> tuple["_np.ndarray", int]:
+    """The multi-retailer gtins to deal, plus the singleton count kept out.
+
+    Retailer identity goes through the normalize_retailer SSOT: raw spellings
+    alias across exports and would count one alias group as multi-retailer.
+    """
+    gtins = df["gtin"].fillna("").astype(str)
+    known = df[gtins.str.len() > 0]
+    known = known.assign(_retailer_key=known["retailer"].map(normalize_retailer))
+    multi = known[known.groupby("gtin")["_retailer_key"].transform("nunique") > 1]
+    bcs = _np.array(sorted(multi["gtin"].unique()))
+    n_single = int(
+        known.groupby("gtin")["retailer"].nunique().eq(1).sum()
+    )
+    return bcs, n_single
+
+
 def kfold_gtins(df: pd.DataFrame, k: int, seed: int | None = None) -> list[set[str]]:
     """K gtin sets over multi-retailer gtins, shuffled and split ~evenly.
 
@@ -1304,24 +1515,14 @@ def kfold_gtins(df: pd.DataFrame, k: int, seed: int | None = None) -> list[set[s
     gtin including singletons. Callers must treat the returned folds
     as test-pool keysets, not as dataset coverage.
     """
-    gtins = df["gtin"].fillna("").astype(str)
-    known = df[gtins.str.len() > 0]
-    # Retailer identity through the normalize_retailer SSOT: raw spellings
-    # alias across exports and would count one alias group as multi-retailer.
-    known = known.assign(_retailer_key=known["retailer"].map(normalize_retailer))
-    multi = known[known.groupby("gtin")["_retailer_key"].transform("nunique") > 1]
-    bcs = _np.array(sorted(multi["gtin"].unique()))
+    bcs, n_single = _multi_retailer_gtins(df)
     perm = _np.random.default_rng(seed if seed is not None else SEED).permutation(
         len(bcs)
     )
     folds = [set(bcs[perm[i::k]]) for i in range(k)]
-    n_single = int(
-        known.groupby("gtin")["retailer"].nunique().eq(1).sum()
-    )
-    print(
+    log.info(
         f"[kfold_gtins] {len(bcs):,} multi-retailer gtins in {k} folds; "
         f"{n_single:,} single-retailer gtins are in NO fold "
         f"(legacy CV semantics — use component_folds for full coverage)",
-        flush=True,
     )
     return folds
