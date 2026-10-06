@@ -53,6 +53,7 @@ _CLONE_UNSUPPORTED = frozenset({errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY,
                                 errno.EINVAL, errno.ENOSYS})
 _RUN_TAG_PATTERN = r'[A-Za-z0-9_-]+'
 _EXTRA_LANE_STAGES = frozenset({'negative_supply', 'discriminator'})
+_LANE_STAGE_ORDER = ('negative_supply', 'discriminator')
 
 _STAGE_MODULES = {
     'dedupe': ['training.dedupe'],
@@ -598,7 +599,7 @@ class PrepareRun:
         stages = list(STAGES)
         if self.run_tag:
             stages[stages.index('validation'):stages.index('validation')] = \
-                list(_EXTRA_LANE_STAGES)
+                list(_LANE_STAGE_ORDER)
         return stages
 
     def _stage_command(self, name: str) -> list[str]:
