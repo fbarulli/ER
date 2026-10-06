@@ -37,6 +37,7 @@ from core.common import (
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
+from core.step_trace import send, timed, trace_step
 from training.folds import component_folds, derive_holdout
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 
@@ -47,6 +48,7 @@ from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 _REMOTE_TRAINING = os.environ.get("EUROMONITOR_REMOTE_TRAINING") == "1"
 
 
+@timed
 def _uniformity_cfg() -> dict:
     """Read at call time so refresh_training_config() is never shadowed."""
     return load_config()["training"]["uniformity_regularization"]
@@ -57,6 +59,7 @@ def _uniformity_cfg() -> dict:
 # never read anywhere).
 
 
+@timed
 def load_training_data(df: pd.DataFrame, payload_variant: str = "full") -> dict:
     """OFFICIAL pair construction (DATA_PIPE.pairs): payload = clean sku
     text per row + canonical per GTIN; pos = (sku, own canonical), neg =
@@ -66,6 +69,7 @@ def load_training_data(df: pd.DataFrame, payload_variant: str = "full") -> dict:
     return load_base_data(df, payload_variant=payload_variant)
 
 
+@timed
 def _write_hard_negative_mask_trace(
     audit: list[dict],
     *,
@@ -86,6 +90,7 @@ def _write_hard_negative_mask_trace(
     )
 
 
+@timed
 def results_pointer(rows, *, run_tag, args, metrics_csv_name):
     """Run-level results pointer (owner Q21): names the latest full-run
     artifacts and states whether fold metrics are present or deferred.
@@ -141,6 +146,7 @@ def results_pointer(rows, *, run_tag, args, metrics_csv_name):
     }
 
 
+@timed
 def _emit_07_series(ok_rows: list[dict], args) -> None:
     """Write report aggregates using the entry point's configured dependencies."""
     from training.report_rows import emit_07_series
@@ -159,6 +165,7 @@ from training.report_rows import (
 )
 
 
+@timed
 def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics_path: Path, rows: list[dict]) -> None:
     """Publish every run-scoped result and checkpoint as one downloadable artifact."""
     artifact_paths: list[Path] = [metrics_path]
@@ -222,6 +229,7 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
         _wandb.log_artifacts(unique_paths, f"run-{run_tag}-downloadable")
 
 
+@timed
 def main() -> None:
     """Train with W&B telemetry and local run artifacts."""
     from core.wandb_ctx import WandbCtx
@@ -231,6 +239,7 @@ def main() -> None:
         _main_inner(_wandb)
 
 
+@timed
 def _main_inner(_wandb) -> None:
     # determinism FIRST (2026-10-06): one call before any model/data
     # randomness — masking augmentation, zero-shot encode, fold carving
@@ -238,40 +247,41 @@ def _main_inner(_wandb) -> None:
     # ride this seed. The component split keeps passing SEED explicitly
     # (its own contract); the GLOBAL RNGs (random/numpy/torch/cudnn)
     # are pinned here, once, at entry.
-    set_determinism(SEED)
-    cfg = load_config()
-    # NO FALLBACKS (owner Q27): every section/key below is read with hard
-    # indexing — a missing key crashes at startup, never a silent default.
-    tr = cfg["training"]
-    mining_cfg = cfg["mining"]
-    mining_profile = os.environ.get("EUROMONITOR_MINING_PROFILE")
-    if mining_profile:
-        profile_cfg = cfg["mining_profiles"][mining_profile]
-        mining_cfg = {
-            **mining_cfg,
-            "ann": {
-                **mining_cfg["ann"],
-                "enabled": bool(profile_cfg["ann_enabled"]),
-            },
-            "attribute_conflict": {
-                **mining_cfg["attribute_conflict"],
-                "enabled": bool(profile_cfg["attribute_conflict_enabled"]),
-            },
-            "cross_brand": {
-                **mining_cfg["cross_brand"],
-                "enabled": bool(profile_cfg["cross_brand_enabled"]),
-            },
-        }
-    ann_cfg = mining_cfg["ann"]
-    attr_cfg = mining_cfg["attribute_conflict"]
-    cross_cfg = mining_cfg["cross_brand"]
-    ann_mining_enabled = bool(ann_cfg["enabled"])
-    attribute_conflict_enabled = bool(attr_cfg["enabled"])
-    cross_brand_enabled = bool(cross_cfg["enabled"])
-    mining_enabled = ann_mining_enabled or attribute_conflict_enabled
-    mask_cfg = cfg["masking"]
-    collapse_cfg = cfg["collapse_guardrail"]
-    split_cfg = cfg["split"]
+    with trace_step('training._main_inner.config'):
+        set_determinism(SEED)
+        cfg = load_config()
+        # NO FALLBACKS (owner Q27): every section/key below is read with hard
+        # indexing — a missing key crashes at startup, never a silent default.
+        tr = cfg["training"]
+        mining_cfg = cfg["mining"]
+        mining_profile = os.environ.get("EUROMONITOR_MINING_PROFILE")
+        if mining_profile:
+            profile_cfg = cfg["mining_profiles"][mining_profile]
+            mining_cfg = {
+                **mining_cfg,
+                "ann": {
+                    **mining_cfg["ann"],
+                    "enabled": bool(profile_cfg["ann_enabled"]),
+                },
+                "attribute_conflict": {
+                    **mining_cfg["attribute_conflict"],
+                    "enabled": bool(profile_cfg["attribute_conflict_enabled"]),
+                },
+                "cross_brand": {
+                    **mining_cfg["cross_brand"],
+                    "enabled": bool(profile_cfg["cross_brand_enabled"]),
+                },
+            }
+        ann_cfg = mining_cfg["ann"]
+        attr_cfg = mining_cfg["attribute_conflict"]
+        cross_cfg = mining_cfg["cross_brand"]
+        ann_mining_enabled = bool(ann_cfg["enabled"])
+        attribute_conflict_enabled = bool(attr_cfg["enabled"])
+        cross_brand_enabled = bool(cross_cfg["enabled"])
+        mining_enabled = ann_mining_enabled or attribute_conflict_enabled
+        mask_cfg = cfg["masking"]
+        collapse_cfg = cfg["collapse_guardrail"]
+        split_cfg = cfg["split"]
 
     # Trainer models resolve through the project-owned registry. Resolution is
     # local-only: a missing DVC bundle fails before data preparation begins.
@@ -280,182 +290,183 @@ def _main_inner(_wandb) -> None:
     default_model = str(tr["base_model"])
     default_band = str(ann_cfg["band"])
 
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--epochs", type=int, default=int(tr["epochs"]))
-    ap.add_argument("--lr", type=float, default=float(tr["lr"]))
-    ap.add_argument(
-        "--warmup-ratio", type=float, default=None,
-        help="final selected-run override; omitted values use training.yaml",
-    )
-    ap.add_argument(
-        "--weight-decay", type=float, default=None,
-        help="final selected-run override; omitted values use training.yaml",
-    )
-    # 05-01: the holdout shares are CONFIG-owned, so the help text reports the
-    # configured shares instead of restating literals. argparse %-formats help
-    # strings — a bare percent must be doubled or --help raises.
-    dev_share = float(split_cfg["dev_fraction"])
-    test_share = float(split_cfg["test_fraction"])
-    _share_pct = (
-        f"{1.0 - dev_share - test_share:.0%}/{dev_share:.0%}/{test_share:.0%}"
-    ).replace("%", "%%")
-    ap.add_argument(
-        "--split",
-        choices=["holdout", "cv"],
-        default=str(split_cfg["mode"]),
-        help=f"holdout: ONE component-aware {_share_pct} "
-        "train/dev/test split (the owner's spec) | "
-        "cv: k component folds (research mode)",
-    )
-    ap.add_argument(
-        "--folds",
-        type=int,
-        default=int(split_cfg["cv_folds"]),
-        help="cv mode only: number of component folds",
-    )
-    ap.add_argument(
-        "--model",
-        type=str,
-        default=default_model,
-        help="registry key or local path to the bundled model directory",
-    )
-    ap.add_argument(
-        "--band",
-        type=str,
-        default=default_band,
-        help="mining band for in-batch hard negatives",
-    )
-    ap.add_argument(
-        "--n-target-mining",
-        type=int,
-        default=int(ann_cfg["target"]),
-        help="ANN mining target (SSOT: mining.ann.target)",
-    )
-    ap.add_argument(
-        "--dev-fraction",
-        type=float,
-        default=runtime("dev_fraction"),  # SSOT training.dev_fraction — no inline literal
-        help="dev share of the train side (cv mode); holdout uses the component split",
-    )
-    ap.add_argument(
-        "--sample",
-        type=int,
-        default=None,
-        help="debug: cap dataset rows (full chain, tiny data)",
-    )
-    ap.add_argument(
-        "--dataset",
-        type=Path,
-        default=None,
-        help="validated deduped source CSV override (used by prepared Colab bundles)",
-    )
-    ap.add_argument(
-        "--mask-effect",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="run the optional post-training masking robustness audit",
-    )
-    ap.add_argument(
-        "--resume",
-        action="store_true",
-        help="resume each fold from its newest compatible checkpoint in this run directory",
-    )
-    # ── 07-series mirrors (all GPU-only experiments) ──────────────────────
-    ap.add_argument(
-        "--payload",
-        choices=["full", "title_only"],
-        default="full",
-        help="07c field ablation: payload composition variant",
-    )
-    ap.add_argument(
-        "--loss",
-        choices=["contrastive", "mnrl", "triplet"],
-        default=_SSOT_LOSS,  # training.loss SSOT — no fallback (owner Q27)
-        help="training loss (contrastive = OnlineContrastiveLoss over labeled "
-        "hard pos/neg pairs — the lane default, owner ruling 2026-09-07; "
-        "mnrl = in-batch ranking; triplet = mined triplets). "
-        "SSOT: training.loss",
-    )
-    # NOTE: --no-hard-positives REMOVED — hard positives are wired per the
-    # owner ruling (volume-verified lane ON + loud when empty; see the
-    # HARD POSITIVES block below). A flag for an always-off lane was a
-    # silent no-op; the lane is now always-on by config, not by flag.
-    # ── HPO lanes (second07 grid / second08 TPE — both with masking) ─────
-    ap.add_argument(
-        "--grid",
-        action="store_true",
-        help="second07-style fixed grid sweep (epochs x lr x warmup, "
-        "11 configs, config_mean summary) — masking applied in every config",
-    )
-    ap.add_argument(
-        "--hpo",
-        action="store_true",
-        help="second08-style optuna TPE sweep over HPO_SPACE — masking "
-        "applied in every trial (resume-safe sqlite study)",
-    )
-    ap.add_argument("--quick", action="store_true", help="grid lane: 3-config smoke")
-    ap.add_argument(
-        "--n-trials",
-        type=int,
-        default=int(cfg["hpo"]["n_trials"]),  # SSOT hpo.n_trials
-        help="tpe lane: trial budget",
-    )
-    ap.add_argument(
-        "--n-jobs",
-        type=int,
-        default=int(cfg["hpo"]["n_jobs"]),  # SSOT hpo.n_jobs
-        help="tpe lane: parallel optuna workers (1 = sequential; >1 "
-        "multiplies GPU/CPU memory — beware)",
-    )
-    ap.add_argument(
-        "--train-frac",
-        type=float,
-        default=1.0,
-        help="07d data scaling: fraction of TRAIN pairs used "
-        "(dev/test pools stay full — the curve measures "
-        "train-data effect, not eval noise)",
-    )
-    ap.add_argument(
-        "--rerank",
-        type=str,
-        default=None,
-        help="07e two-stage: cross-encoder model id (e.g. "
-        "cross-encoder/ms-marco-MiniLM-L-6-v2) re-scoring "
-        "the confusion band after bi-encoder training",
-    )
-    ap.add_argument(
-        "--plot",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="07f report + training-loss plots (default on; --no-plot to skip)",
-    )
-    ap.add_argument(
-        "--mask-frac",
-        type=float,
-        default=None,
-        help="masking augmentation (config/paths.yaml masking.*): "
-        "fraction of positive anchors to mask. Default "
-        "comes from the config — enabled:false -> 0 "
-        "(off), enabled:true -> masking.frac. Explicit "
-        "CLI value always wins.",
-    )
-    ap.add_argument(
-        "--masking-profile",
-        default=str(mask_cfg["profile"]),
-        help="config/training.yaml masking_profiles entry",
-    )
-    ap.add_argument(
-        "--collapse-guardrail-profile",
-        default=str(collapse_cfg["profile"]),
-        help="config/training.yaml collapse_guardrail_profiles entry",
-    )
-    ap.add_argument(
-        "--prepare-bundle",
-        type=Path,
-        default=None,
-        help="write the fully prepared local training bundle and exit",
-    )
-    args = ap.parse_args()
+    with trace_step('training._main_inner.args'):
+        ap = argparse.ArgumentParser(description=__doc__)
+        ap.add_argument("--epochs", type=int, default=int(tr["epochs"]))
+        ap.add_argument("--lr", type=float, default=float(tr["lr"]))
+        ap.add_argument(
+            "--warmup-ratio", type=float, default=None,
+            help="final selected-run override; omitted values use training.yaml",
+        )
+        ap.add_argument(
+            "--weight-decay", type=float, default=None,
+            help="final selected-run override; omitted values use training.yaml",
+        )
+        # 05-01: the holdout shares are CONFIG-owned, so the help text reports the
+        # configured shares instead of restating literals. argparse %-formats help
+        # strings — a bare percent must be doubled or --help raises.
+        dev_share = float(split_cfg["dev_fraction"])
+        test_share = float(split_cfg["test_fraction"])
+        _share_pct = (
+            f"{1.0 - dev_share - test_share:.0%}/{dev_share:.0%}/{test_share:.0%}"
+        ).replace("%", "%%")
+        ap.add_argument(
+            "--split",
+            choices=["holdout", "cv"],
+            default=str(split_cfg["mode"]),
+            help=f"holdout: ONE component-aware {_share_pct} "
+            "train/dev/test split (the owner's spec) | "
+            "cv: k component folds (research mode)",
+        )
+        ap.add_argument(
+            "--folds",
+            type=int,
+            default=int(split_cfg["cv_folds"]),
+            help="cv mode only: number of component folds",
+        )
+        ap.add_argument(
+            "--model",
+            type=str,
+            default=default_model,
+            help="registry key or local path to the bundled model directory",
+        )
+        ap.add_argument(
+            "--band",
+            type=str,
+            default=default_band,
+            help="mining band for in-batch hard negatives",
+        )
+        ap.add_argument(
+            "--n-target-mining",
+            type=int,
+            default=int(ann_cfg["target"]),
+            help="ANN mining target (SSOT: mining.ann.target)",
+        )
+        ap.add_argument(
+            "--dev-fraction",
+            type=float,
+            default=runtime("dev_fraction"),  # SSOT training.dev_fraction — no inline literal
+            help="dev share of the train side (cv mode); holdout uses the component split",
+        )
+        ap.add_argument(
+            "--sample",
+            type=int,
+            default=None,
+            help="debug: cap dataset rows (full chain, tiny data)",
+        )
+        ap.add_argument(
+            "--dataset",
+            type=Path,
+            default=None,
+            help="validated deduped source CSV override (used by prepared Colab bundles)",
+        )
+        ap.add_argument(
+            "--mask-effect",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="run the optional post-training masking robustness audit",
+        )
+        ap.add_argument(
+            "--resume",
+            action="store_true",
+            help="resume each fold from its newest compatible checkpoint in this run directory",
+        )
+        # ── 07-series mirrors (all GPU-only experiments) ──────────────────────
+        ap.add_argument(
+            "--payload",
+            choices=["full", "title_only"],
+            default="full",
+            help="07c field ablation: payload composition variant",
+        )
+        ap.add_argument(
+            "--loss",
+            choices=["contrastive", "mnrl", "triplet"],
+            default=_SSOT_LOSS,  # training.loss SSOT — no fallback (owner Q27)
+            help="training loss (contrastive = OnlineContrastiveLoss over labeled "
+            "hard pos/neg pairs — the lane default, owner ruling 2026-09-07; "
+            "mnrl = in-batch ranking; triplet = mined triplets). "
+            "SSOT: training.loss",
+        )
+        # NOTE: --no-hard-positives REMOVED — hard positives are wired per the
+        # owner ruling (volume-verified lane ON + loud when empty; see the
+        # HARD POSITIVES block below). A flag for an always-off lane was a
+        # silent no-op; the lane is now always-on by config, not by flag.
+        # ── HPO lanes (second07 grid / second08 TPE — both with masking) ─────
+        ap.add_argument(
+            "--grid",
+            action="store_true",
+            help="second07-style fixed grid sweep (epochs x lr x warmup, "
+            "11 configs, config_mean summary) — masking applied in every config",
+        )
+        ap.add_argument(
+            "--hpo",
+            action="store_true",
+            help="second08-style optuna TPE sweep over HPO_SPACE — masking "
+            "applied in every trial (resume-safe sqlite study)",
+        )
+        ap.add_argument("--quick", action="store_true", help="grid lane: 3-config smoke")
+        ap.add_argument(
+            "--n-trials",
+            type=int,
+            default=int(cfg["hpo"]["n_trials"]),  # SSOT hpo.n_trials
+            help="tpe lane: trial budget",
+        )
+        ap.add_argument(
+            "--n-jobs",
+            type=int,
+            default=int(cfg["hpo"]["n_jobs"]),  # SSOT hpo.n_jobs
+            help="tpe lane: parallel optuna workers (1 = sequential; >1 "
+            "multiplies GPU/CPU memory — beware)",
+        )
+        ap.add_argument(
+            "--train-frac",
+            type=float,
+            default=1.0,
+            help="07d data scaling: fraction of TRAIN pairs used "
+            "(dev/test pools stay full — the curve measures "
+            "train-data effect, not eval noise)",
+        )
+        ap.add_argument(
+            "--rerank",
+            type=str,
+            default=None,
+            help="07e two-stage: cross-encoder model id (e.g. "
+            "cross-encoder/ms-marco-MiniLM-L-6-v2) re-scoring "
+            "the confusion band after bi-encoder training",
+        )
+        ap.add_argument(
+            "--plot",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="07f report + training-loss plots (default on; --no-plot to skip)",
+        )
+        ap.add_argument(
+            "--mask-frac",
+            type=float,
+            default=None,
+            help="masking augmentation (config/paths.yaml masking.*): "
+            "fraction of positive anchors to mask. Default "
+            "comes from the config — enabled:false -> 0 "
+            "(off), enabled:true -> masking.frac. Explicit "
+            "CLI value always wins.",
+        )
+        ap.add_argument(
+            "--masking-profile",
+            default=str(mask_cfg["profile"]),
+            help="config/training.yaml masking_profiles entry",
+        )
+        ap.add_argument(
+            "--collapse-guardrail-profile",
+            default=str(collapse_cfg["profile"]),
+            help="config/training.yaml collapse_guardrail_profiles entry",
+        )
+        ap.add_argument(
+            "--prepare-bundle",
+            type=Path,
+            default=None,
+            help="write the fully prepared local training bundle and exit",
+        )
+        args = ap.parse_args()
 
     mask_cfg = masking_cfg(args.masking_profile)
     cfg["collapse_guardrail"] = collapse_guardrail_cfg(
@@ -533,52 +544,53 @@ def _main_inner(_wandb) -> None:
     lo, hi = (float(x) for x in args.band.split("-"))
     band = (lo, hi)
 
-    from core.timing import Timing
+    with trace_step('training._main_inner.data_load'):
+        from core.timing import Timing
 
-    timing = Timing("train.data_path")
+        timing = Timing("train.data_path")
 
-    if args.dataset is None:
-        df = load_dataset_deduped()
-    else:
-        dataset_path = args.dataset.expanduser().resolve()
-        if not dataset_path.is_file():
-            raise FileNotFoundError(f"training dataset override is missing: {dataset_path}")
-        df = load_dataset_deduped(dataset_path)
-        print(f"[dataset] override={dataset_path} rows={len(df):,}", flush=True)
-    if args.sample:
-        df = df.head(args.sample).reset_index(drop=True)
-        print(f"SAMPLE MODE: first {args.sample} rows", flush=True)
-    timing.mark("dataset_load")
-    # run_tag (owner ruling): every varying axis — model, payload variant,
-    # train fraction, split, AND sample mode — is part of every artifact
-    # name this run touches (fold metrics, pair dumps, checkpoints,
-    # visibility logs). Constructed EARLY: the visibility dumps below write
-    # into run-tagged dirs before any training happens.
-    model_tag = args.model.rstrip("/").split("/")[-1]
-    frac_tag = "full" if args.train_frac >= 1.0 else f"frac{args.train_frac:g}"
-    sample_tag = f"sample{args.sample}" if args.sample else ""
-    base_run_tag = (
-        f"train-{args.split}-{model_tag}-{args.payload}-{frac_tag}-{sample_tag}"
-    ).replace("/", "-").rstrip("-")
-    # The launcher supplies one immutable ID for the entire remote run. Keep
-    # it in every artifact/W&B namespace so two otherwise identical retries
-    # cannot overwrite or become indistinguishable from one another.
-    global_run_id = os.environ.get("EUROMONITOR_RUN_ID", "").strip()
-    run_tag = global_run_id or base_run_tag
-    # 07c field ablation — payload variants (only the TEXT the encoder sees
-    # changes, so fold metrics are comparable):
-    #   full       = clean sku (title + attributes, the owner's cleaning)
-    #                — pairs (sku, own canonical)
-    #   title_only = clean sku from title alone
-    data = load_training_data(df, payload_variant=args.payload)
-    payload, structured_features, row_bc, pos, neg = (
-        data["payload"],
-        np.asarray(data["structured_features"], dtype=np.float32),
-        data["row_bc"],
-        data["pos"],
-        data["neg"],
-    )
-    timing.mark("base_data")
+        if args.dataset is None:
+            df = load_dataset_deduped()
+        else:
+            dataset_path = args.dataset.expanduser().resolve()
+            if not dataset_path.is_file():
+                raise FileNotFoundError(f"training dataset override is missing: {dataset_path}")
+            df = load_dataset_deduped(dataset_path)
+            print(f"[dataset] override={dataset_path} rows={len(df):,}", flush=True)
+        if args.sample:
+            df = df.head(args.sample).reset_index(drop=True)
+            print(f"SAMPLE MODE: first {args.sample} rows", flush=True)
+        timing.mark("dataset_load")
+        # run_tag (owner ruling): every varying axis — model, payload variant,
+        # train fraction, split, AND sample mode — is part of every artifact
+        # name this run touches (fold metrics, pair dumps, checkpoints,
+        # visibility logs). Constructed EARLY: the visibility dumps below write
+        # into run-tagged dirs before any training happens.
+        model_tag = args.model.rstrip("/").split("/")[-1]
+        frac_tag = "full" if args.train_frac >= 1.0 else f"frac{args.train_frac:g}"
+        sample_tag = f"sample{args.sample}" if args.sample else ""
+        base_run_tag = (
+            f"train-{args.split}-{model_tag}-{args.payload}-{frac_tag}-{sample_tag}"
+        ).replace("/", "-").rstrip("-")
+        # The launcher supplies one immutable ID for the entire remote run. Keep
+        # it in every artifact/W&B namespace so two otherwise identical retries
+        # cannot overwrite or become indistinguishable from one another.
+        global_run_id = os.environ.get("EUROMONITOR_RUN_ID", "").strip()
+        run_tag = global_run_id or base_run_tag
+        # 07c field ablation — payload variants (only the TEXT the encoder sees
+        # changes, so fold metrics are comparable):
+        #   full       = clean sku (title + attributes, the owner's cleaning)
+        #                — pairs (sku, own canonical)
+        #   title_only = clean sku from title alone
+        data = load_training_data(df, payload_variant=args.payload)
+        payload, structured_features, row_bc, pos, neg = (
+            data["payload"],
+            np.asarray(data["structured_features"], dtype=np.float32),
+            data["row_bc"],
+            data["pos"],
+            data["neg"],
+        )
+        timing.mark("base_data")
     # Retailer per payload row, for the cross-retailer donor precedence the
     # duplicate census asked for (91.4% of real same-GTIN duplicates are
     # cross-retailer). Sku rows carry their import retailer; the canonical
@@ -780,380 +792,381 @@ def _main_inner(_wandb) -> None:
     # and stay label 0: the masked/swapped anchor remains paired with its
     # different-product target. Masked/swapped texts are NEW payload entries
     # (row_bc = same gtin), so folds/components are unaffected.
-    mask_audit: list[dict] = []
-    hard_negative_mask_audit: list[dict] = []
-    # Augmented hard-negative copies join BOTH the eval (neg) and training
-    # (train_neg) pools with an "<source>+aug" provenance label so the diet
-    # gate (scripts/diet_manifest.py) sees the same augmented views the
-    # trainer presents. Labels are untouched: every copy stays label 0.
-    # The dynamic per-presentation path (training.py) is separate and unchanged.
-    # Keep provenance aligned with every negative row before any fold split.
-    # The baseline resolved gate population is immutable; supplemental
-    # miners append their own source label rather than collapsing into a
-    # generic ``hard_negative`` bucket.
-    # Provenance per negative row. Lane mode ships its own populations
-    # (base_negative / real_partner); the gate path keeps "gate".
-    neg_sources = (
-        np.array(data["neg_source"], dtype=object)
-        if data.get("neg_source")
-        else np.full(len(neg), "gate", dtype=object)
-    )
-    # Join all static real-negative populations BEFORE augmentation. Leaving
-    # the targeted/cross-brand lanes until after masking made their rows
-    # bypass every negative augmentation lane and diluted the actual MNRL
-    # presentation diet. Miners already resolve original payload endpoints;
-    # augmentation inherits their identity/fold lineage and source label.
-    for enabled, candidates, source in (
-        (attribute_conflict_enabled, targeted_attribute_neg, "targeted_attribute_conflict"),
-        (cross_brand_enabled, cross_brand_neg, "cross_brand_conflict"),
-    ):
-        if enabled and len(candidates):
-            neg = np.vstack([neg, candidates]) if len(neg) else candidates.copy()
-            neg_sources = np.concatenate([
-                neg_sources, np.full(len(candidates), source, dtype=object)
-            ])
-    train_neg = neg
-    train_neg_sources = neg_sources.copy()
-    # Freeze identity components before selecting any attribute donor. Copies
-    # inherit existing entities and cannot redefine the parent split.
-    frozen_holdout = None
-    donor_scope = None
-    canonical_scope = set(range(len(df), len(payload)))
-    from collections import Counter as _MintCounter
-    mint_rejections = _MintCounter()
-    if args.split == "holdout":
-        train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
-        frozen_holdout = {role: sorted(values) for role, values in
-                          zip(("train", "dev", "test"), (train_bc, dev_bc, test_bc))}
-        donor_scope = {i for i,value in enumerate(row_bc) if str(value) in train_bc}
-    elif args.mask_frac > 0 and (swap_value_frac or hard_negative_swap_value_frac or counterfactual_frac):
-        raise ValueError("static attribute transplants require a frozen holdout; prepare each CV fold separately")
-    from core.schemas import BalancedAugmentationSpec
-    balanced_policy = BalancedAugmentationSpec.model_validate(mask_cfg['balanced_augmentation'])
-    if args.sample and balanced_policy.sample_counts is not None:
-        balanced_policy = balanced_policy.model_copy(update={'counts':balanced_policy.sample_counts})
-    if args.mask_frac > 0 and balanced_policy.enabled:
-        from training.balanced_augmentation import augment_balanced
-        from core.manifest import atomic_write_json
-        before_neg = len(neg)
-        pos, neg, payload, row_bc, structured_features, mask_audit, hard_negative_mask_audit, balanced_coverage = augment_balanced(
-            pos=pos, neg=neg, payload=payload, row_bc=row_bc, features=structured_features,
-            df=df, train_indices=donor_scope, canonical_indices=canonical_scope,
-            spec=balanced_policy, seed=SEED)
-        added_sources = np.full(len(neg)-before_neg, 'counterfactual', dtype=object)
-        neg_sources = np.concatenate([neg_sources, added_sources])
-        train_neg, train_neg_sources = neg, neg_sources.copy()
-        coverage_path = RESULTS / 'training' / run_tag / 'balanced_augmentation.json'
-        coverage_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(balanced_coverage.model_dump(mode='json'), coverage_path)
-        print(f'[balanced-augmentation] {balanced_coverage.model_dump(mode="json")} -> {coverage_path}', flush=True)
-    if args.mask_frac > 0 and not balanced_policy.enabled:
-        from training.masking import (
-            augment_hard_negatives,
-            augment_positives,
-            augment_value_swaps,
+    with trace_step('training._main_inner.augmentation'):
+        mask_audit: list[dict] = []
+        hard_negative_mask_audit: list[dict] = []
+        # Augmented hard-negative copies join BOTH the eval (neg) and training
+        # (train_neg) pools with an "<source>+aug" provenance label so the diet
+        # gate (scripts/diet_manifest.py) sees the same augmented views the
+        # trainer presents. Labels are untouched: every copy stays label 0.
+        # The dynamic per-presentation path (training.py) is separate and unchanged.
+        # Keep provenance aligned with every negative row before any fold split.
+        # The baseline resolved gate population is immutable; supplemental
+        # miners append their own source label rather than collapsing into a
+        # generic ``hard_negative`` bucket.
+        # Provenance per negative row. Lane mode ships its own populations
+        # (base_negative / real_partner); the gate path keeps "gate".
+        neg_sources = (
+            np.array(data["neg_source"], dtype=object)
+            if data.get("neg_source")
+            else np.full(len(neg), "gate", dtype=object)
         )
+        # Join all static real-negative populations BEFORE augmentation. Leaving
+        # the targeted/cross-brand lanes until after masking made their rows
+        # bypass every negative augmentation lane and diluted the actual MNRL
+        # presentation diet. Miners already resolve original payload endpoints;
+        # augmentation inherits their identity/fold lineage and source label.
+        for enabled, candidates, source in (
+            (attribute_conflict_enabled, targeted_attribute_neg, "targeted_attribute_conflict"),
+            (cross_brand_enabled, cross_brand_neg, "cross_brand_conflict"),
+        ):
+            if enabled and len(candidates):
+                neg = np.vstack([neg, candidates]) if len(neg) else candidates.copy()
+                neg_sources = np.concatenate([
+                    neg_sources, np.full(len(candidates), source, dtype=object)
+                ])
+        train_neg = neg
+        train_neg_sources = neg_sources.copy()
+        # Freeze identity components before selecting any attribute donor. Copies
+        # inherit existing entities and cannot redefine the parent split.
+        frozen_holdout = None
+        donor_scope = None
+        canonical_scope = set(range(len(df), len(payload)))
+        from collections import Counter as _MintCounter
+        mint_rejections = _MintCounter()
+        if args.split == "holdout":
+            train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+            frozen_holdout = {role: sorted(values) for role, values in
+                              zip(("train", "dev", "test"), (train_bc, dev_bc, test_bc))}
+            donor_scope = {i for i,value in enumerate(row_bc) if str(value) in train_bc}
+        elif args.mask_frac > 0 and (swap_value_frac or hard_negative_swap_value_frac or counterfactual_frac):
+            raise ValueError("static attribute transplants require a frozen holdout; prepare each CV fold separately")
+        from core.schemas import BalancedAugmentationSpec
+        balanced_policy = BalancedAugmentationSpec.model_validate(mask_cfg['balanced_augmentation'])
+        if args.sample and balanced_policy.sample_counts is not None:
+            balanced_policy = balanced_policy.model_copy(update={'counts':balanced_policy.sample_counts})
+        if args.mask_frac > 0 and balanced_policy.enabled:
+            from training.balanced_augmentation import augment_balanced
+            from core.manifest import atomic_write_json
+            before_neg = len(neg)
+            pos, neg, payload, row_bc, structured_features, mask_audit, hard_negative_mask_audit, balanced_coverage = augment_balanced(
+                pos=pos, neg=neg, payload=payload, row_bc=row_bc, features=structured_features,
+                df=df, train_indices=donor_scope, canonical_indices=canonical_scope,
+                spec=balanced_policy, seed=SEED)
+            added_sources = np.full(len(neg)-before_neg, 'counterfactual', dtype=object)
+            neg_sources = np.concatenate([neg_sources, added_sources])
+            train_neg, train_neg_sources = neg, neg_sources.copy()
+            coverage_path = RESULTS / 'training' / run_tag / 'balanced_augmentation.json'
+            coverage_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(balanced_coverage.model_dump(mode='json'), coverage_path)
+            print(f'[balanced-augmentation] {balanced_coverage.model_dump(mode="json")} -> {coverage_path}', flush=True)
+        if args.mask_frac > 0 and not balanced_policy.enabled:
+            from training.masking import (
+                augment_hard_negatives,
+                augment_positives,
+                augment_value_swaps,
+            )
 
-        n_pre_mask_pos = len(pos)
-        pos, payload, row_bc, n_added, mask_audit = augment_positives(
-            pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
-        )
-        # One shared donor-value counter across all three swap lanes, passed
-        # in fixed call order (pos values, neg values, twins): the footprint
-        # cap binds the whole bundle, not one lane. The cap budget is the
-        # three lanes' combined picks, so shares mean the same everywhere.
-        # (len(neg) here equals the later n_pre_mask_neg: pos augmentation
-        # never touches the neg array.) Deterministic.
-        from collections import Counter as _Counter
+            n_pre_mask_pos = len(pos)
+            pos, payload, row_bc, n_added, mask_audit = augment_positives(
+                pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
+            )
+            # One shared donor-value counter across all three swap lanes, passed
+            # in fixed call order (pos values, neg values, twins): the footprint
+            # cap binds the whole bundle, not one lane. The cap budget is the
+            # three lanes' combined picks, so shares mean the same everywhere.
+            # (len(neg) here equals the later n_pre_mask_neg: pos augmentation
+            # never touches the neg array.) Deterministic.
+            from collections import Counter as _Counter
 
-        _shared_value_counts: _Counter = _Counter()
-        _swap_pick_total = (
-            int(n_pre_mask_pos * min(swap_value_frac, 1.0))
-            + int(len(neg) * min(hard_negative_swap_value_frac, 1.0))
-            + int(n_pre_mask_pos * min(counterfactual_frac, 1.0))
-        )
-        # Static value swaps (coconut -> lime) sample the same ORIGINAL
-        # prefix. Positives are rewritten on BOTH sides from an agreeing
-        # donor pair, so a match stays a match; each such audit appends TWO
-        # payload rows (anchor copy + counterpart copy).
-        pos, payload, row_bc, n_value_added, value_audit = augment_value_swaps(
-            pos,
-            payload,
-            row_bc,
-            frac=swap_value_frac,
-            seed=SEED + 3,
-            population="positive",
-            pool_size=n_pre_mask_pos,
-            symmetric=True,
-            entity_keys=entity_keys,
-            allowed_payload_indices=donor_scope,
-            coherent_prose=True,
-            rejection_counts=mint_rejections,
-            max_field_share=swap_max_field_share,
-            max_value_share=swap_max_value_share,
-            shared_value_counts=_shared_value_counts,
-            cap_base=_swap_pick_total,
-            max_donor_overlap=swap_max_donor_overlap,
-            field_quota_shares=field_quota_shares or None,
-            row_retailer=payload_retailers,
-            attribute_augment=attribute_augment or None,
-        )
-        mask_audit.extend(value_audit)
-        from training.masking import extend_augmented_features
-
-        structured_features = extend_augmented_features(
-            structured_features, payload, mask_audit
-        )
-        # ── declaration-dropout lane (duplicate census 2026-10-01) ──
-        # Attribute cells differ in 100% of same-GTIN groups: every retailer
-        # declares a different partial key subset. Mint that shape: copy the
-        # anchor, remove 1..3 random declared structured groups, pair with
-        # the unchanged positive. Label-safe (removing evidence cannot
-        # contradict identity); this is also the lane that reaches the
-        # registry-only weak spots no token group serves.
-        n_dropout_added = 0
-        if dropout_frac > 0:
-            from training.masking import augment_declaration_dropout as _aug_drop
-
-            _pos_pre_drop = len(pos)
-            pos, payload, row_bc, n_dropout_added, _drop_audit = _aug_drop(
+            _shared_value_counts: _Counter = _Counter()
+            _swap_pick_total = (
+                int(n_pre_mask_pos * min(swap_value_frac, 1.0))
+                + int(len(neg) * min(hard_negative_swap_value_frac, 1.0))
+                + int(n_pre_mask_pos * min(counterfactual_frac, 1.0))
+            )
+            # Static value swaps (coconut -> lime) sample the same ORIGINAL
+            # prefix. Positives are rewritten on BOTH sides from an agreeing
+            # donor pair, so a match stays a match; each such audit appends TWO
+            # payload rows (anchor copy + counterpart copy).
+            pos, payload, row_bc, n_value_added, value_audit = augment_value_swaps(
                 pos,
                 payload,
                 row_bc,
-                frac=dropout_frac,
-                seed=SEED + 6,
+                frac=swap_value_frac,
+                seed=SEED + 3,
+                population="positive",
                 pool_size=n_pre_mask_pos,
-                min_drop=int(_dropout_cfg.min_drop),
-                max_drop=int(_dropout_cfg.max_drop),
+                symmetric=True,
+                entity_keys=entity_keys,
+                allowed_payload_indices=donor_scope,
+                coherent_prose=True,
+                rejection_counts=mint_rejections,
+                max_field_share=swap_max_field_share,
                 max_value_share=swap_max_value_share,
+                shared_value_counts=_shared_value_counts,
+                cap_base=_swap_pick_total,
+                max_donor_overlap=swap_max_donor_overlap,
+                field_quota_shares=field_quota_shares or None,
+                row_retailer=payload_retailers,
+                attribute_augment=attribute_augment or None,
             )
-            if n_dropout_added:
-                mask_audit.extend(_drop_audit)
-                structured_features = extend_augmented_features(
-                    structured_features, payload, _drop_audit
+            mask_audit.extend(value_audit)
+            from training.masking import extend_augmented_features
+
+            structured_features = extend_augmented_features(
+                structured_features, payload, mask_audit
+            )
+            # ── declaration-dropout lane (duplicate census 2026-10-01) ──
+            # Attribute cells differ in 100% of same-GTIN groups: every retailer
+            # declares a different partial key subset. Mint that shape: copy the
+            # anchor, remove 1..3 random declared structured groups, pair with
+            # the unchanged positive. Label-safe (removing evidence cannot
+            # contradict identity); this is also the lane that reaches the
+            # registry-only weak spots no token group serves.
+            n_dropout_added = 0
+            if dropout_frac > 0:
+                from training.masking import augment_declaration_dropout as _aug_drop
+
+                _pos_pre_drop = len(pos)
+                pos, payload, row_bc, n_dropout_added, _drop_audit = _aug_drop(
+                    pos,
+                    payload,
+                    row_bc,
+                    frac=dropout_frac,
+                    seed=SEED + 6,
+                    pool_size=n_pre_mask_pos,
+                    min_drop=int(_dropout_cfg.min_drop),
+                    max_drop=int(_dropout_cfg.max_drop),
+                    max_value_share=swap_max_value_share,
                 )
-        if len(structured_features) != len(payload):
-            raise RuntimeError(
-                "structured feature/payload length mismatch after masking: "
-                f"{len(structured_features)} != {len(payload)}"
-            )
-        # MASK VISIBILITY (owner directive 2026-09-07): per-copy realized
-        # extents — the high-vs-low-extent effect on overfitting is
-        # measurable only when each copy's TRUE masked fraction is logged
-        # next to its texts. Rewritten every run — run-tagged dir + latest
-        # pointer (sample runs never move the shared pointer).
-        import pandas as _pd
+                if n_dropout_added:
+                    mask_audit.extend(_drop_audit)
+                    structured_features = extend_augmented_features(
+                        structured_features, payload, _drop_audit
+                    )
+            if len(structured_features) != len(payload):
+                raise RuntimeError(
+                    "structured feature/payload length mismatch after masking: "
+                    f"{len(structured_features)} != {len(payload)}"
+                )
+            # MASK VISIBILITY (owner directive 2026-09-07): per-copy realized
+            # extents — the high-vs-low-extent effect on overfitting is
+            # measurable only when each copy's TRUE masked fraction is logged
+            # next to its texts. Rewritten every run — run-tagged dir + latest
+            # pointer (sample runs never move the shared pointer).
+            import pandas as _pd
 
-        from core.common import write_visibility_log as _wvl
+            from core.common import write_visibility_log as _wvl
 
-        _ma = _pd.DataFrame(mask_audit)
-        if bool(mask_cfg["track_visibility"]):
-            _wvl(_ma, "mask_visibility.csv", run_tag, bool(args.sample))
-        # high/low halves of the extent distribution — the split point is
-        # the MIDPOINT of the config extent band (masking.mask_lo..
-        # mask_hi), derived here so a band change can never leave the
-        # buckets misaligned with the distribution (was inline 0.10).
-        # swap_values copies carry realized_extent measuring the replaced
-        # fraction — a different quantity — so that mode alone is excluded
-        # from the extent halves; the full audit (masked + swapped) is
-        # what the visibility CSV keeps.
-        _mid = (float(mask_cfg["mask_lo"]) + float(mask_cfg["mask_hi"])) / 2.0
-        _ma_masked = _ma[~_ma.target_mode.isin(["swap_values"])] if len(_ma) else _ma
-        if len(_ma_masked):
-            _hi = _ma_masked[_ma_masked.realized_extent >= _mid]
-            _lo = _ma_masked[_ma_masked.realized_extent < _mid]
-            _extent_desc = (
-                f"variable {float(mask_cfg['mask_lo']):.0%}-"
-                f"{float(mask_cfg['mask_hi']):.0%}"
-                if mask_prob is None
-                else mask_prob
-            )
-            print(
-                f"[masking] +{n_added:,} masked-anchor positives "
-                f"(frac={args.mask_frac:.0%}, extent={_extent_desc}) | "
-                f"high-extent(>={_mid:.2f}): {len(_hi):,} copies, mean {_hi.realized_extent.mean():.3f} | "
-                f"low-extent(<{_mid:.2f}): {len(_lo):,} copies, mean {_lo.realized_extent.mean() if len(_lo) else 0:.3f}",
-                flush=True,
-            )
-            if mask_hard_negatives:
+            _ma = _pd.DataFrame(mask_audit)
+            if bool(mask_cfg["track_visibility"]):
+                _wvl(_ma, "mask_visibility.csv", run_tag, bool(args.sample))
+            # high/low halves of the extent distribution — the split point is
+            # the MIDPOINT of the config extent band (masking.mask_lo..
+            # mask_hi), derived here so a band change can never leave the
+            # buckets misaligned with the distribution (was inline 0.10).
+            # swap_values copies carry realized_extent measuring the replaced
+            # fraction — a different quantity — so that mode alone is excluded
+            # from the extent halves; the full audit (masked + swapped) is
+            # what the visibility CSV keeps.
+            _mid = (float(mask_cfg["mask_lo"]) + float(mask_cfg["mask_hi"])) / 2.0
+            _ma_masked = _ma[~_ma.target_mode.isin(["swap_values"])] if len(_ma) else _ma
+            if len(_ma_masked):
+                _hi = _ma_masked[_ma_masked.realized_extent >= _mid]
+                _lo = _ma_masked[_ma_masked.realized_extent < _mid]
+                _extent_desc = (
+                    f"variable {float(mask_cfg['mask_lo']):.0%}-"
+                    f"{float(mask_cfg['mask_hi']):.0%}"
+                    if mask_prob is None
+                    else mask_prob
+                )
                 print(
-                    f"[masking] hard negatives use dynamic per-presentation "
-                    f"masking (label=0, frac={mask_hard_negative_frac:.0%})",
+                    f"[masking] +{n_added:,} masked-anchor positives "
+                    f"(frac={args.mask_frac:.0%}, extent={_extent_desc}) | "
+                    f"high-extent(>={_mid:.2f}): {len(_hi):,} copies, mean {_hi.realized_extent.mean():.3f} | "
+                    f"low-extent(<{_mid:.2f}): {len(_lo):,} copies, mean {_lo.realized_extent.mean() if len(_lo) else 0:.3f}",
                     flush=True,
                 )
-        if n_value_added:
-            print(
-                f"[masking] +{n_value_added:,} swap-values positives "
-                f"(frac={swap_value_frac:.0%}, symmetric donor transplant)",
-                flush=True,
-            )
-
-        # ── negative augmentation (bundle path; labels stay 0) ──
-        # Random-band masks (config hard-negative extent band) plus
-        # agreed-surface swaps plus anchor-side value swaps, all sampled
-        # from the ORIGINAL negative prefix only (pool_size = pre-
-        # augmentation neg count), so nothing compounds on masked copies.
-        # New rows join BOTH neg and train_neg with an "<source>+aug"
-        # provenance label; the payload / structured tail grows with the
-        # anchor rows. Labels and the loss mapping are untouched: every
-        # copy stays label 0.
-        n_pre_mask_neg = len(neg)
-        _neg_pair_source = {
-            (int(a), int(b)): str(s)
-            for (a, b), s in zip(neg.tolist(), neg_sources.tolist())
-        }
-        neg, payload, row_bc, n_neg_added, _neg_mask_audit = augment_hard_negatives(
-            neg,
-            payload,
-            row_bc,
-            frac=mask_hard_negative_frac,
-            seed=SEED + 1,
-        )
-        neg, payload, row_bc, n_neg_value_added, _neg_value_audit = augment_value_swaps(
-            neg,
-            payload,
-            row_bc,
-            frac=hard_negative_swap_value_frac,
-            seed=SEED + 4,
-            population="hard_negative",
-            pool_size=n_pre_mask_neg,
-            symmetric=False,
-            entity_keys=entity_keys,
-            allowed_payload_indices=donor_scope,
-            coherent_prose=True,
-            rejection_counts=mint_rejections,
-            max_field_share=swap_max_field_share,
-            max_value_share=swap_max_value_share,
-            shared_value_counts=_shared_value_counts,
-            cap_base=_swap_pick_total,
-            max_donor_overlap=swap_max_donor_overlap,
-            field_quota_shares=field_quota_shares or None,
-            row_retailer=payload_retailers,
-            attribute_augment=attribute_augment or None,
-        )
-        _neg_new_audit = _neg_mask_audit + _neg_value_audit
-        if _neg_new_audit:
-            train_neg = neg
-            _aug_sources = np.array(
-                [
-                    _neg_pair_source[
-                        (int(row["anchor_payload_idx"]), int(row["pair_payload_idx"]))
-                    ]
-                    + "+aug"
-                    for row in _neg_new_audit
-                ],
-                dtype=object,
-            )
-            neg_sources = np.concatenate([neg_sources, _aug_sources])
-            train_neg_sources = np.concatenate([train_neg_sources, _aug_sources])
-            structured_features = extend_augmented_features(
-                structured_features, payload, _neg_new_audit
-            )
-        hard_negative_mask_audit.extend(_neg_new_audit)
-        # ── TIER 1(a): counterpart positives for anchor-side value swaps ──
-        # An anchor-only transplant invalidates the source positive, so the
-        # triple builder omitted every swap copy and it never trained. Replay
-        # the same donor transplant onto the source's own positive so the pair
-        # (copy, counterpart) is genuinely positive. Feature lineage for the new
-        # counterpart rows is derived from the source positive row, so the
-        # already-extended swap copy is not re-claimed.
-        from training.masking import mint_swap_counterpart_positives as _mint_cfp
-
-        _cfp_pairs, _cfp_payload, _cfp_bc, _cfp_audit = _mint_cfp(
-            _neg_value_audit, payload, row_bc, pos
-        )
-        if _cfp_pairs:
-            payload.extend(_cfp_payload)
-            row_bc = np.concatenate(
-                [row_bc, np.array(_cfp_bc, dtype=row_bc.dtype)]
-            )
-            pos = (
-                np.vstack([pos, np.array(_cfp_pairs, dtype=pos.dtype)])
-                if len(pos)
-                else np.array(_cfp_pairs, dtype=pos.dtype)
-            )
-            structured_features = extend_augmented_features(
-                structured_features, payload, _cfp_audit
-            )
-            hard_negative_mask_audit.extend(_cfp_audit)
-            print(
-                f"[masking] +{len(_cfp_pairs):,} swap counterpart positives "
-                f"(anchor-side transplant replayed onto the source positive)",
-                flush=True,
-            )
-        # ── counterfactual twins (minimal-flip negatives from positives) ──
-        # Sampled from the SAME original positive prefix (pool_size =
-        # n_pre_mask_pos), so twins never compound on masked/swapped copies.
-        # Each twin breaks exactly one previously-agreed field and is labeled
-        # 0 by construction; twins join BOTH neg and train_neg with a
-        # "counterfactual" provenance label (registered in the datapoint
-        # population spec, so coverage stays exact).
-        from training.masking import augment_counterfactual_twins as _aug_cf
-
-        _cf_pos_len = len(pos)
-        _cf_full, payload, row_bc, n_cf_added, _cf_audit = _aug_cf(
-            pos,
-            payload,
-            row_bc,
-            frac=counterfactual_frac,
-            seed=SEED + 5,
-            pool_size=n_pre_mask_pos,
-            entity_keys=entity_keys,
-            allowed_payload_indices=donor_scope,
-            coherent_prose=True,
-            canonical_indices=canonical_scope,
-            rejection_counts=mint_rejections,
-            max_field_share=swap_max_field_share,
-            max_value_share=swap_max_value_share,
-            shared_value_counts=_shared_value_counts,
-            cap_base=_swap_pick_total,
-            max_donor_overlap=swap_max_donor_overlap,
-            field_quota_shares=field_quota_shares or None,
-            row_retailer=payload_retailers,
-            attribute_augment=attribute_augment or None,
-        )
-        _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
-        if n_cf_added:
-            if len(_cf_new) != n_cf_added:
-                raise RuntimeError(
-                    "counterfactual twin row accounting did not close: "
-                    f"{len(_cf_new)} != {n_cf_added}"
+                if mask_hard_negatives:
+                    print(
+                        f"[masking] hard negatives use dynamic per-presentation "
+                        f"masking (label=0, frac={mask_hard_negative_frac:.0%})",
+                        flush=True,
+                    )
+            if n_value_added:
+                print(
+                    f"[masking] +{n_value_added:,} swap-values positives "
+                    f"(frac={swap_value_frac:.0%}, symmetric donor transplant)",
+                    flush=True,
                 )
-            neg = np.vstack([neg, _cf_new])
-            train_neg = np.vstack([train_neg, _cf_new])
-            _cf_sources = np.full(n_cf_added, "counterfactual", dtype=object)
-            neg_sources = np.concatenate([neg_sources, _cf_sources])
-            train_neg_sources = np.concatenate([train_neg_sources, _cf_sources])
-            structured_features = extend_augmented_features(
-                structured_features, payload, _cf_audit
-            )
-            hard_negative_mask_audit.extend(_cf_audit)
-            print(
-                f"[masking] +{n_cf_added:,} counterfactual twins "
-                f"(frac={counterfactual_frac:.0%}, agreed-field flip, label=0)",
-                flush=True,
-            )
-        if len(structured_features) != len(payload):
-            raise RuntimeError(
-                "structured feature/payload length mismatch after negative "
-                f"augmentation: {len(structured_features)} != {len(payload)}"
-            )
-        if len(neg_sources) != len(neg) or len(train_neg_sources) != len(train_neg):
-            raise RuntimeError(
-                "negative source provenance length mismatch after augmentation: "
-                f"eval={len(neg_sources)}/{len(neg)} "
-                f"train={len(train_neg_sources)}/{len(train_neg)}"
-            )
-        if n_neg_added + n_neg_value_added:
-            print(
-                f"[masking] +{n_neg_added:,} masked hard negatives "
-                f"(frac={mask_hard_negative_frac:.0%}) "
-                f"+{n_neg_value_added:,} swap-values hard negatives "
-                f"(frac={hard_negative_swap_value_frac:.0%}, label=0)",
-                flush=True,
-            )
 
-    timing.mark("augmentation")
+            # ── negative augmentation (bundle path; labels stay 0) ──
+            # Random-band masks (config hard-negative extent band) plus
+            # agreed-surface swaps plus anchor-side value swaps, all sampled
+            # from the ORIGINAL negative prefix only (pool_size = pre-
+            # augmentation neg count), so nothing compounds on masked copies.
+            # New rows join BOTH neg and train_neg with an "<source>+aug"
+            # provenance label; the payload / structured tail grows with the
+            # anchor rows. Labels and the loss mapping are untouched: every
+            # copy stays label 0.
+            n_pre_mask_neg = len(neg)
+            _neg_pair_source = {
+                (int(a), int(b)): str(s)
+                for (a, b), s in zip(neg.tolist(), neg_sources.tolist())
+            }
+            neg, payload, row_bc, n_neg_added, _neg_mask_audit = augment_hard_negatives(
+                neg,
+                payload,
+                row_bc,
+                frac=mask_hard_negative_frac,
+                seed=SEED + 1,
+            )
+            neg, payload, row_bc, n_neg_value_added, _neg_value_audit = augment_value_swaps(
+                neg,
+                payload,
+                row_bc,
+                frac=hard_negative_swap_value_frac,
+                seed=SEED + 4,
+                population="hard_negative",
+                pool_size=n_pre_mask_neg,
+                symmetric=False,
+                entity_keys=entity_keys,
+                allowed_payload_indices=donor_scope,
+                coherent_prose=True,
+                rejection_counts=mint_rejections,
+                max_field_share=swap_max_field_share,
+                max_value_share=swap_max_value_share,
+                shared_value_counts=_shared_value_counts,
+                cap_base=_swap_pick_total,
+                max_donor_overlap=swap_max_donor_overlap,
+                field_quota_shares=field_quota_shares or None,
+                row_retailer=payload_retailers,
+                attribute_augment=attribute_augment or None,
+            )
+            _neg_new_audit = _neg_mask_audit + _neg_value_audit
+            if _neg_new_audit:
+                train_neg = neg
+                _aug_sources = np.array(
+                    [
+                        _neg_pair_source[
+                            (int(row["anchor_payload_idx"]), int(row["pair_payload_idx"]))
+                        ]
+                        + "+aug"
+                        for row in _neg_new_audit
+                    ],
+                    dtype=object,
+                )
+                neg_sources = np.concatenate([neg_sources, _aug_sources])
+                train_neg_sources = np.concatenate([train_neg_sources, _aug_sources])
+                structured_features = extend_augmented_features(
+                    structured_features, payload, _neg_new_audit
+                )
+            hard_negative_mask_audit.extend(_neg_new_audit)
+            # ── TIER 1(a): counterpart positives for anchor-side value swaps ──
+            # An anchor-only transplant invalidates the source positive, so the
+            # triple builder omitted every swap copy and it never trained. Replay
+            # the same donor transplant onto the source's own positive so the pair
+            # (copy, counterpart) is genuinely positive. Feature lineage for the new
+            # counterpart rows is derived from the source positive row, so the
+            # already-extended swap copy is not re-claimed.
+            from training.masking import mint_swap_counterpart_positives as _mint_cfp
+
+            _cfp_pairs, _cfp_payload, _cfp_bc, _cfp_audit = _mint_cfp(
+                _neg_value_audit, payload, row_bc, pos
+            )
+            if _cfp_pairs:
+                payload.extend(_cfp_payload)
+                row_bc = np.concatenate(
+                    [row_bc, np.array(_cfp_bc, dtype=row_bc.dtype)]
+                )
+                pos = (
+                    np.vstack([pos, np.array(_cfp_pairs, dtype=pos.dtype)])
+                    if len(pos)
+                    else np.array(_cfp_pairs, dtype=pos.dtype)
+                )
+                structured_features = extend_augmented_features(
+                    structured_features, payload, _cfp_audit
+                )
+                hard_negative_mask_audit.extend(_cfp_audit)
+                print(
+                    f"[masking] +{len(_cfp_pairs):,} swap counterpart positives "
+                    f"(anchor-side transplant replayed onto the source positive)",
+                    flush=True,
+                )
+            # ── counterfactual twins (minimal-flip negatives from positives) ──
+            # Sampled from the SAME original positive prefix (pool_size =
+            # n_pre_mask_pos), so twins never compound on masked/swapped copies.
+            # Each twin breaks exactly one previously-agreed field and is labeled
+            # 0 by construction; twins join BOTH neg and train_neg with a
+            # "counterfactual" provenance label (registered in the datapoint
+            # population spec, so coverage stays exact).
+            from training.masking import augment_counterfactual_twins as _aug_cf
+
+            _cf_pos_len = len(pos)
+            _cf_full, payload, row_bc, n_cf_added, _cf_audit = _aug_cf(
+                pos,
+                payload,
+                row_bc,
+                frac=counterfactual_frac,
+                seed=SEED + 5,
+                pool_size=n_pre_mask_pos,
+                entity_keys=entity_keys,
+                allowed_payload_indices=donor_scope,
+                coherent_prose=True,
+                canonical_indices=canonical_scope,
+                rejection_counts=mint_rejections,
+                max_field_share=swap_max_field_share,
+                max_value_share=swap_max_value_share,
+                shared_value_counts=_shared_value_counts,
+                cap_base=_swap_pick_total,
+                max_donor_overlap=swap_max_donor_overlap,
+                field_quota_shares=field_quota_shares or None,
+                row_retailer=payload_retailers,
+                attribute_augment=attribute_augment or None,
+            )
+            _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
+            if n_cf_added:
+                if len(_cf_new) != n_cf_added:
+                    raise RuntimeError(
+                        "counterfactual twin row accounting did not close: "
+                        f"{len(_cf_new)} != {n_cf_added}"
+                    )
+                neg = np.vstack([neg, _cf_new])
+                train_neg = np.vstack([train_neg, _cf_new])
+                _cf_sources = np.full(n_cf_added, "counterfactual", dtype=object)
+                neg_sources = np.concatenate([neg_sources, _cf_sources])
+                train_neg_sources = np.concatenate([train_neg_sources, _cf_sources])
+                structured_features = extend_augmented_features(
+                    structured_features, payload, _cf_audit
+                )
+                hard_negative_mask_audit.extend(_cf_audit)
+                print(
+                    f"[masking] +{n_cf_added:,} counterfactual twins "
+                    f"(frac={counterfactual_frac:.0%}, agreed-field flip, label=0)",
+                    flush=True,
+                )
+            if len(structured_features) != len(payload):
+                raise RuntimeError(
+                    "structured feature/payload length mismatch after negative "
+                    f"augmentation: {len(structured_features)} != {len(payload)}"
+                )
+            if len(neg_sources) != len(neg) or len(train_neg_sources) != len(train_neg):
+                raise RuntimeError(
+                    "negative source provenance length mismatch after augmentation: "
+                    f"eval={len(neg_sources)}/{len(neg)} "
+                    f"train={len(train_neg_sources)}/{len(train_neg)}"
+                )
+            if n_neg_added + n_neg_value_added:
+                print(
+                    f"[masking] +{n_neg_added:,} masked hard negatives "
+                    f"(frac={mask_hard_negative_frac:.0%}) "
+                    f"+{n_neg_value_added:,} swap-values hard negatives "
+                    f"(frac={hard_negative_swap_value_frac:.0%}, label=0)",
+                    flush=True,
+                )
+
+        timing.mark("augmentation")
 
     # ── COMPONENT-AWARE SPLITS ──────────────────────────────────────────────
     # UNEXPECTED-BEHAVIOR FIX: pipeline positives connect TWO DIFFERENT
@@ -1525,93 +1538,94 @@ def _main_inner(_wandb) -> None:
     # training: block via runtime() — the inline 0.05/0.01/linear/1.0
     # literals duplicated config/training.yaml and could silently diverge.
     uniformity = _uniformity_cfg()
-    cfg = {
-        "architecture": runtime("architecture"),
-        "epochs": args.epochs,
-        "lr": args.lr,
-        "warmup_ratio": args.warmup_ratio,
-        "weight_decay": args.weight_decay,
-        "projection_dropout": runtime("projection_dropout"),
-        "label_smoothing": runtime("label_smoothing"),
-        "random_easy_enabled": bool(runtime("random_easy_negatives")["enabled"]),
-        "random_easy_ratio_to_hard": float(
-            runtime("random_easy_negatives")["ratio_to_hard"]
-        ),
-        "random_easy_candidate_pool_size": int(
-            runtime("random_easy_negatives")["candidate_pool_size"]
-        ),
-        "lr_scheduler": runtime("lr_scheduler"),
-        "max_grad_norm": runtime("max_grad_norm"),
-        "patience": ES_PATIENCE,
-        "es_threshold": ES_THRESHOLD,
-        "uniformity_weight": (
-            float(uniformity["weight"])
-            if bool(uniformity["enabled"])
-            else 0.0
-        ),
-        "late_epoch_decay_enabled": bool(
-            runtime("late_epoch_lr_decay")["enabled"]
-        ),
-        "late_epoch_decay_start_fraction": float(
-            runtime("late_epoch_lr_decay")["start_epoch_fraction"]
-        ),
-        "late_epoch_decay_multiplier": float(
-            runtime("late_epoch_lr_decay")["multiplier"]
-        ),
-    }
-    t0 = time.perf_counter()
-    # run_tag carries EVERY varying axis (owner ruling): the 07-series
-    # ablation sweep ran 12 variants into the SAME train_fold_metrics.csv
-    # and r{tag}_f{fold} checkpoint dirs — each run silently overwrote the
-    # last. Model, payload variant, and train fraction are now part of the
-    # tag so artifacts collide-proof across the whole series.
-    # SAMPLE COLLISION FIX (owner audit 2026-09-07): --sample runs share
-    # every tag axis with the real run (same split/model/payload/frac) and
-    # SILENTLY OVERWROTE the full run's fold-metrics + pair-dump CSVs —
-    # measured: 3h full-frac-0.25 result destroyed by a 1k chain check.
-    # Sample runs write to their own suffixed artifacts; never to the
-    # shared names. (run_tag itself is built right after df loads.)
-    rows = train_one_config(
-        cfg,
-        loss=args.loss,
-        model_id=args.model,
-        # hard positives ride in the data tuple (position 5, set above);
-        # hard negatives ride in neg_pairs — ONE channel each, no shadow copies
-        use_hp=hard_positives_enabled and len(hp_pairs) > 0,
-        band=band,
-        data=data,
-        seed=SEED,
-        on_cuda=on_cuda,
-        cv_folds=None,
-        folds_override=folds_override,
-        dev_fraction=args.dev_fraction,
-        dev_override=dev_override,
-        neg_pairs=neg,
-        train_neg_pairs=train_neg,
-        neg_pair_sources=neg_sources,
-        train_neg_pair_sources=train_neg_sources,
-        dynamic_mask_hard_negatives=mask_hard_negatives,
-        dynamic_mask_frac=mask_hard_negative_frac,
-        dynamic_mask_prob=hard_negative_mask_prob,
-        dynamic_mask_lo=hard_negative_mask_lo,
-        dynamic_mask_hi=hard_negative_mask_hi,
-        mask_audit=mask_audit,
-        hard_negative_mask_audit=hard_negative_mask_audit,
-        ann_refresh_enabled=ann_mining_enabled,
-        attribute_conflict_refresh_enabled=attribute_conflict_enabled,
-        train_frac=args.train_frac if args.train_frac < 1.0 else None,
-        run_tag=run_tag,
-        sample=bool(args.sample),
-        resume=args.resume,
-        wandb_ctx=_wandb,
-    )
-    _write_hard_negative_mask_trace(
-        hard_negative_mask_audit,
-        run_tag=run_tag,
-        sample=bool(args.sample),
-        enabled=bool(mask_cfg["track_visibility"]),
-    )
-    elapsed = time.perf_counter() - t0
+    with trace_step('training._main_inner.training'):
+        cfg = {
+            "architecture": runtime("architecture"),
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "warmup_ratio": args.warmup_ratio,
+            "weight_decay": args.weight_decay,
+            "projection_dropout": runtime("projection_dropout"),
+            "label_smoothing": runtime("label_smoothing"),
+            "random_easy_enabled": bool(runtime("random_easy_negatives")["enabled"]),
+            "random_easy_ratio_to_hard": float(
+                runtime("random_easy_negatives")["ratio_to_hard"]
+            ),
+            "random_easy_candidate_pool_size": int(
+                runtime("random_easy_negatives")["candidate_pool_size"]
+            ),
+            "lr_scheduler": runtime("lr_scheduler"),
+            "max_grad_norm": runtime("max_grad_norm"),
+            "patience": ES_PATIENCE,
+            "es_threshold": ES_THRESHOLD,
+            "uniformity_weight": (
+                float(uniformity["weight"])
+                if bool(uniformity["enabled"])
+                else 0.0
+            ),
+            "late_epoch_decay_enabled": bool(
+                runtime("late_epoch_lr_decay")["enabled"]
+            ),
+            "late_epoch_decay_start_fraction": float(
+                runtime("late_epoch_lr_decay")["start_epoch_fraction"]
+            ),
+            "late_epoch_decay_multiplier": float(
+                runtime("late_epoch_lr_decay")["multiplier"]
+            ),
+        }
+        t0 = time.perf_counter()
+        # run_tag carries EVERY varying axis (owner ruling): the 07-series
+        # ablation sweep ran 12 variants into the SAME train_fold_metrics.csv
+        # and r{tag}_f{fold} checkpoint dirs — each run silently overwrote the
+        # last. Model, payload variant, and train fraction are now part of the
+        # tag so artifacts collide-proof across the whole series.
+        # SAMPLE COLLISION FIX (owner audit 2026-09-07): --sample runs share
+        # every tag axis with the real run (same split/model/payload/frac) and
+        # SILENTLY OVERWROTE the full run's fold-metrics + pair-dump CSVs —
+        # measured: 3h full-frac-0.25 result destroyed by a 1k chain check.
+        # Sample runs write to their own suffixed artifacts; never to the
+        # shared names. (run_tag itself is built right after df loads.)
+        rows = train_one_config(
+            cfg,
+            loss=args.loss,
+            model_id=args.model,
+            # hard positives ride in the data tuple (position 5, set above);
+            # hard negatives ride in neg_pairs — ONE channel each, no shadow copies
+            use_hp=hard_positives_enabled and len(hp_pairs) > 0,
+            band=band,
+            data=data,
+            seed=SEED,
+            on_cuda=on_cuda,
+            cv_folds=None,
+            folds_override=folds_override,
+            dev_fraction=args.dev_fraction,
+            dev_override=dev_override,
+            neg_pairs=neg,
+            train_neg_pairs=train_neg,
+            neg_pair_sources=neg_sources,
+            train_neg_pair_sources=train_neg_sources,
+            dynamic_mask_hard_negatives=mask_hard_negatives,
+            dynamic_mask_frac=mask_hard_negative_frac,
+            dynamic_mask_prob=hard_negative_mask_prob,
+            dynamic_mask_lo=hard_negative_mask_lo,
+            dynamic_mask_hi=hard_negative_mask_hi,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
+            ann_refresh_enabled=ann_mining_enabled,
+            attribute_conflict_refresh_enabled=attribute_conflict_enabled,
+            train_frac=args.train_frac if args.train_frac < 1.0 else None,
+            run_tag=run_tag,
+            sample=bool(args.sample),
+            resume=args.resume,
+            wandb_ctx=_wandb,
+        )
+        _write_hard_negative_mask_trace(
+            hard_negative_mask_audit,
+            run_tag=run_tag,
+            sample=bool(args.sample),
+            enabled=bool(mask_cfg["track_visibility"]),
+        )
+        elapsed = time.perf_counter() - t0
 
     # ── MASK-EXTENT EFFECT (owner directive 2026-09-07) ─────────────────────
     # Does masking actually fight overfitting, and does the HIGH-extent

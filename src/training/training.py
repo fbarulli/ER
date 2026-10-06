@@ -75,6 +75,7 @@ from core.schemas import check_labeled_pairs_frame
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
 from core.timing import emit_timing
+from core.step_trace import send, timed, trace_step
 
 # D7 telemetry: wall seconds spent inside load_config's deepcopy, keyed by
 # call-site label (fold{n}.* for per-fold sites); aggregated per fold and
@@ -82,6 +83,7 @@ from core.timing import emit_timing
 _CFG_DEEPCOPY_TOTALS: dict[str, float] = {}
 
 
+@timed
 def _timed_load_config(key: str) -> dict:
     """Behavior-identical load_config with a measured deepcopy component."""
     started = time.perf_counter()
@@ -321,6 +323,7 @@ class FoldExecutionError(RuntimeError):
         )
 
 
+@timed
 def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
     """Make incomplete calibration evidence fatal before selection aggregation."""
     incomplete_rows = [
@@ -349,6 +352,7 @@ from core.ranking_metrics import (
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@timed
 def _align_model_token_ids(model: SentenceTransformer) -> None:
     """Make tokenizer special-token IDs the single source of truth.
 
@@ -397,6 +401,7 @@ def _align_model_token_ids(model: SentenceTransformer) -> None:
         raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
 
 
+@timed
 def _configure_projection_dropout(model, probability: float) -> bool:
     """Append serializable dropout after pooling, idempotently.
 
@@ -423,6 +428,7 @@ def _configure_projection_dropout(model, probability: float) -> bool:
     return True
 
 
+@timed
 def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
     """Keep Transformers 5 tokenizer saves loadable by older HF runtimes.
 
@@ -460,6 +466,7 @@ def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
         )
 
 
+@timed
 def _write_checkpoint_manifest(
     checkpoint: Path,
     *,
@@ -533,10 +540,11 @@ def _write_checkpoint_manifest(
             "rng": "rng_state.pth",
         },
     }
-    (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
-        json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
+    with trace_step('training.write_checkpoint_manifest'):
+        (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
 
 
 # _auc/_cos -> _common SSOT (see GATES_MAP.md)
@@ -546,6 +554,7 @@ _auc = pair_auc
 _cos = pair_similarity
 
 
+@timed
 def _split_safe_random_negative_pairs(
     df: pd.DataFrame,
     row_bc: np.ndarray,
@@ -601,6 +610,7 @@ def _split_safe_random_negative_pairs(
     return np.empty((0, 2), dtype=int)
 
 
+@timed
 def _mix_random_easy_training_negatives(
     hard_pairs: np.ndarray,
     hard_sources: np.ndarray,
@@ -674,6 +684,7 @@ def _mix_random_easy_training_negatives(
     return mixed_pairs, mixed_sources, len(unique_candidates)
 
 
+@timed
 def _mnrl_training_triples_with_populations(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
@@ -832,6 +843,7 @@ def _mnrl_training_triples_with_populations(
     return triples
 
 
+@timed
 def _build_mnrl_training_triples(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
@@ -851,6 +863,7 @@ def _build_mnrl_training_triples(
     ]
 
 
+@timed
 def _build_mnrl_triple_populations(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
@@ -874,6 +887,7 @@ def _build_mnrl_triple_populations(
     ]
 
 
+@timed
 def _mnrl_shared_positive_gtin_rows(
     triples: list[tuple[int, int, int]], row_bc: np.ndarray
 ) -> int:
@@ -890,6 +904,7 @@ def _mnrl_shared_positive_gtin_rows(
     return sum(counts[gtin] > 1 for gtin in gtins)
 
 
+@timed
 def select_balanced_negatives(
     train_neg: np.ndarray,
     train_neg_sources: np.ndarray,
@@ -967,6 +982,7 @@ def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float
     return float(prec), float(rec), thr
 
 
+@timed
 def _make_loss(
     model,
     loss: str,
@@ -1035,6 +1051,7 @@ from training.losses import (
 )
 
 
+@timed
 def _runtime_telemetry() -> dict[str, float | int]:
     """Cheap process and CUDA facts emitted with each training heartbeat."""
     telemetry: dict[str, float | int] = {"pid": os.getpid()}
@@ -1961,6 +1978,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         return control
 
 
+@timed
 def retain_hpo_champion(
     *, model_id: str, run_tag: str, value: float, folds: list[int]
 ) -> bool:
@@ -2025,6 +2043,7 @@ def retain_hpo_champion(
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+@timed
 def _discriminative_groups(
     model, base_lr: float, layer_decay: float | None = None
 ) -> list[dict]:
@@ -2160,6 +2179,7 @@ def _canonical_payload_metadata(
     }
 
 
+@timed
 def _load_gate_lookup() -> dict[tuple[str, str], dict[str, object]]:
     gate_path = F["gate_results"]
     if not gate_path.is_file():
@@ -2296,6 +2316,7 @@ def _pair_metadata(
     return fields
 
 
+@timed
 def _dump_train_visibility(
     fold_i,
     s1,
@@ -2361,6 +2382,7 @@ def _dump_train_visibility(
     )
 
 
+@timed
 def _build_pair_lineage(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
@@ -2437,6 +2459,7 @@ def _build_pair_lineage(
     return rows
 
 
+@timed
 def _training_pair_populations(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
@@ -2510,6 +2533,7 @@ def _usage_row(
     return detail
 
 
+@timed
 def _write_datapoint_usage(
     *,
     fold_i: int,
@@ -2683,6 +2707,7 @@ def _write_datapoint_usage(
     }
 
 
+@timed
 def _ambiguous_pair_attributions(by_population: dict[str, dict[str, object]]) -> int:
     """Count pairs attributed to more than one population in the same fold.
 
@@ -2704,6 +2729,7 @@ def _ambiguous_pair_attributions(by_population: dict[str, dict[str, object]]) ->
     return len(ambiguous)
 
 
+@timed
 def _assert_datapoint_coverage_identity(
     *,
     fold_i: int,
@@ -2783,6 +2809,7 @@ def _assert_datapoint_coverage_identity(
 ATTRIBUTABLE_NEGATIVE_USAGE_ROLES = frozenset({"negative_source", "presented_label"})
 
 
+@timed
 def _negative_source_accounting(
     *,
     fold_i: int,
@@ -3054,6 +3081,7 @@ def _dynamic_mask_negative_transform(
     return transformed
 
 
+@timed
 def _load_labeled_different_positive_pairs(
     *,
     eval_pos: np.ndarray,
@@ -3149,6 +3177,7 @@ def _load_labeled_different_positive_pairs(
     return pairs
 
 
+@timed
 def _merge_different_calibration_positives(
     dev_pos: np.ndarray,
     labeled_pairs: np.ndarray,
@@ -3178,12 +3207,14 @@ def _merge_different_calibration_positives(
     return merged
 
 
+@timed
 def _evaluation_negative_mask(pairs: np.ndarray, n_source: int, copy_ids: set[int]) -> np.ndarray:
     """Calibration queries must be real SKU rows, with unaugmented endpoints."""
     source_rows = (pairs[:, 0] >= 0) & (pairs[:, 0] < n_source)
     return source_rows & ~np.isin(pairs, list(copy_ids)).any(axis=1)
 
 
+@timed
 def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr_negs,
                             tr_neg_sources, hp_pairs, row_bc, tr_bc, use_hp,
                             mask_audit, hard_negative_mask_audit, hard_train, seed, fold_i):
@@ -3292,6 +3323,7 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
     return {"objective": objective}
 
 
+@timed
 def prepare_fixed_training_inputs(
     cfg, *, loss, model_id, use_hp, band, data, seed, cv_folds=None,
     folds_override=None, dev_fraction=None, dev_override=None,
@@ -3337,48 +3369,49 @@ def prepare_fixed_training_inputs(
     # The training payload intentionally appends canonical and masked-copy
     # entries after the source SKU rows. The shared uniformity boundary owns
     # the source-row alignment before selecting unrelated pairs.
-    payload_metadata, gate_lookup = _build_payload_metadata(
-        df,
-        payload,
-        row_bc,
-        mask_audit=mask_audit,
-        hard_negative_mask_audit=hard_negative_mask_audit,
-    )
-    # Masked positive copies are augmentation for training only.  Splits are
-    # gtin-based, so passing the augmented array directly into dev/test
-    # would silently put those copies into evaluation even though they carry
-    # the same gtin as the original SKU.  Keep the augmented ``pos`` for
-    # train-side selection, but remove copy endpoints from evaluation pools.
-    _masked_copy_ids = {
-        int(row["copy_payload_idx"])
-        for row in (mask_audit or []) + (hard_negative_mask_audit or [])
-        if row.get("copy_payload_idx") is not None
-    }
-    eval_pos = (
-        pos[~np.isin(pos[:, 0], np.fromiter(_masked_copy_ids, dtype=int))]
-        if _masked_copy_ids and len(pos)
-        else pos
-    )
-    if _masked_copy_ids:
-        print(
-            f"    [masking] excluded {len(pos) - len(eval_pos):,} masked "
-            "positive copies from dev/holdout evaluation; training retains them",
-            flush=True,
+    with trace_step('training.prepare_inputs.payload_metadata'):
+        payload_metadata, gate_lookup = _build_payload_metadata(
+            df,
+            payload,
+            row_bc,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
         )
-    if neg_pairs is not None and len(neg_pairs):
-        # Preserve _train_neg_source and its source labels above: synthetic
-        # copies train normally, but calibration needs a real source SKU.
-        eval_mask = _evaluation_negative_mask(neg_pairs, len(df), _masked_copy_ids)
-        excluded = int((~eval_mask).sum())
-        neg_pairs = neg_pairs[eval_mask]
-        _eval_neg_sources = _eval_neg_sources[eval_mask]
-        if excluded:
-            print(f"    [masking] excluded {excluded:,} synthetic negative views from evaluation; training retains them", flush=True)
-    labeled_different_pos = _load_labeled_different_positive_pairs(
-        eval_pos=eval_pos,
-        row_bc=row_bc,
-        n_source_rows=len(df),
-    )
+        # Masked positive copies are augmentation for training only.  Splits are
+        # gtin-based, so passing the augmented array directly into dev/test
+        # would silently put those copies into evaluation even though they carry
+        # the same gtin as the original SKU.  Keep the augmented ``pos`` for
+        # train-side selection, but remove copy endpoints from evaluation pools.
+        _masked_copy_ids = {
+            int(row["copy_payload_idx"])
+            for row in (mask_audit or []) + (hard_negative_mask_audit or [])
+            if row.get("copy_payload_idx") is not None
+        }
+        eval_pos = (
+            pos[~np.isin(pos[:, 0], np.fromiter(_masked_copy_ids, dtype=int))]
+            if _masked_copy_ids and len(pos)
+            else pos
+        )
+        if _masked_copy_ids:
+            print(
+                f"    [masking] excluded {len(pos) - len(eval_pos):,} masked "
+                "positive copies from dev/holdout evaluation; training retains them",
+                flush=True,
+            )
+        if neg_pairs is not None and len(neg_pairs):
+            # Preserve _train_neg_source and its source labels above: synthetic
+            # copies train normally, but calibration needs a real source SKU.
+            eval_mask = _evaluation_negative_mask(neg_pairs, len(df), _masked_copy_ids)
+            excluded = int((~eval_mask).sum())
+            neg_pairs = neg_pairs[eval_mask]
+            _eval_neg_sources = _eval_neg_sources[eval_mask]
+            if excluded:
+                print(f"    [masking] excluded {excluded:,} synthetic negative views from evaluation; training retains them", flush=True)
+        labeled_different_pos = _load_labeled_different_positive_pairs(
+            eval_pos=eval_pos,
+            row_bc=row_bc,
+            n_source_rows=len(df),
+        )
     all_gtin_set = set(row_bc.tolist())
 
     # country must cover every payload entry (canonicals + masked copies
@@ -3396,37 +3429,38 @@ def prepare_fixed_training_inputs(
     # instead of an IndexError three stack frames into a fold.
     from core.schemas import DataTuple as _DataTuple
 
-    _DataTuple(
-        n_df=len(df),
-        payload=payload,
-        structured_features=structured_features,
-        row_bc=row_bc,
-        country=country,
-        pos=pos,
-        hp_pairs=hp_pairs,
-        emb0=emb0,
-    )
+    with trace_step('training.prepare_inputs.contracts'):
+        _DataTuple(
+            n_df=len(df),
+            payload=payload,
+            structured_features=structured_features,
+            row_bc=row_bc,
+            country=country,
+            pos=pos,
+            hp_pairs=hp_pairs,
+            emb0=emb0,
+        )
 
-    if folds_override is not None:
-        # folds_override contract: EITHER one gtin-set (holdout mode: that
-        # set is the single test fold; train = every other gtin) OR a list
-        # of sets (explicit CV folds — second11's connected-component split;
-        # each set is one fold, train = union of the others).
-        if isinstance(folds_override, (set, frozenset)):
-            folds = [set(folds_override)]
+        if folds_override is not None:
+            # folds_override contract: EITHER one gtin-set (holdout mode: that
+            # set is the single test fold; train = every other gtin) OR a list
+            # of sets (explicit CV folds — second11's connected-component split;
+            # each set is one fold, train = union of the others).
+            if isinstance(folds_override, (set, frozenset)):
+                folds = [set(folds_override)]
+            else:
+                folds = list(folds_override)
         else:
-            folds = list(folds_override)
-    else:
-        # AUDIT FIX (round 2 F10, round 3): --folds N now builds N folds.
-        # The old code ALWAYS dealt CV_FOLDS (5) and sliced [:n_folds], so
-        # --folds 8 silently trained 5 — a cap no one asked for. Behavior
-        # for n_folds <= CV_FOLDS is IDENTICAL: kfold_gtins deals the
-        # same strided permutation split, and the --quick prefix slice is
-        # unchanged.
-        n_folds = cv_folds if cv_folds is not None else CV_FOLDS
-        all_folds = kfold_gtins(df, n_folds, SEED)
-        # --quick trains on the first n_folds of the SAME split (folds stay comparable)
-        folds = all_folds[:n_folds]
+            # AUDIT FIX (round 2 F10, round 3): --folds N now builds N folds.
+            # The old code ALWAYS dealt CV_FOLDS (5) and sliced [:n_folds], so
+            # --folds 8 silently trained 5 — a cap no one asked for. Behavior
+            # for n_folds <= CV_FOLDS is IDENTICAL: kfold_gtins deals the
+            # same strided permutation split, and the --quick prefix slice is
+            # unchanged.
+            n_folds = cv_folds if cv_folds is not None else CV_FOLDS
+            all_folds = kfold_gtins(df, n_folds, SEED)
+            # --quick trains on the first n_folds of the SAME split (folds stay comparable)
+            folds = all_folds[:n_folds]
 
     # The training band is selected by config/CLI/HPO; the evaluation band
     # has its own fixed config contract. Share the implementation and reuse
@@ -3461,104 +3495,105 @@ def prepare_fixed_training_inputs(
     # The pool below gives every query a genuine ranking task.  Its inputs are
     # derived here from the SAME graph, the SAME payload space, and the SAME
     # fixed artifacts the fold itself uses.
-    from core.ranking_metrics import component_index
+    with trace_step('training.prepare_inputs.retrieval_pool_inputs'):
+        from core.ranking_metrics import component_index
 
-    # Component ids over the positive-pair graph: the unit
-    # training.folds.component_folds splits on.  Recomputed here (the split
-    # helper returns fold membership, not component identity) and asserted
-    # fold-pure below, so a competitor drawn from ANOTHER component of the
-    # SAME fold provably shares no positive-pair chain with the query.
-    _retrieval_row_component = component_index(pos, row_bc)
+        # Component ids over the positive-pair graph: the unit
+        # training.folds.component_folds splits on.  Recomputed here (the split
+        # helper returns fold membership, not component identity) and asserted
+        # fold-pure below, so a competitor drawn from ANOTHER component of the
+        # SAME fold provably shares no positive-pair chain with the query.
+        _retrieval_row_component = component_index(pos, row_bc)
 
-    def _holdout_true_match_gtin_pairs() -> frozenset[tuple[str, str]]:
-        """Known same-product relations — never a competing candidate.
+        def _holdout_true_match_gtin_pairs() -> frozenset[tuple[str, str]]:
+            """Known same-product relations — never a competing candidate.
 
-        A competitor that the lane's own evidence says IS the query's product
-        would be scored as a non-relevant candidate and turn a correct
-        ranking into a recorded miss.  Three sources of that evidence exist
-        and all three are excluded: the labeled-pairs ground truth, the
-        gate's own ``proceed`` decision (the relation the canonicals are built
-        from), and an identical canonical identity string.
-        """
-        from pipeline import load_canonical_map
+            A competitor that the lane's own evidence says IS the query's product
+            would be scored as a non-relevant candidate and turn a correct
+            ranking into a recorded miss.  Three sources of that evidence exist
+            and all three are excluded: the labeled-pairs ground truth, the
+            gate's own ``proceed`` decision (the relation the canonicals are built
+            from), and an identical canonical identity string.
+            """
+            from pipeline import load_canonical_map
 
-        pairs: set[tuple[str, str]] = set()
+            pairs: set[tuple[str, str]] = set()
 
-        def add(left: object, right: object) -> None:
-            a, b = str(left).strip(), str(right).strip()
-            if a and b and a != b:
-                pairs.add((a, b))
-                pairs.add((b, a))
+            def add(left: object, right: object) -> None:
+                a, b = str(left).strip(), str(right).strip()
+                if a and b and a != b:
+                    pairs.add((a, b))
+                    pairs.add((b, a))
 
-        labeled = check_labeled_pairs_frame(
-            pd.read_csv(
-                RESULTS / F["labeled_pairs"],
+            labeled = check_labeled_pairs_frame(
+                pd.read_csv(
+                    RESULTS / F["labeled_pairs"],
+                    dtype={"gtin1": str, "gtin2": str},
+                    keep_default_na=False,
+                )
+            )
+            labels = pd.to_numeric(labeled["true_label"], errors="raise").astype(int)
+            positives = labeled.loc[labels == 1]
+            for left, right in zip(positives["gtin1"], positives["gtin2"], strict=True):
+                add(left, right)
+            gates = pd.read_csv(
+                RESULTS / F["gate_results"],
                 dtype={"gtin1": str, "gtin2": str},
                 keep_default_na=False,
             )
-        )
-        labels = pd.to_numeric(labeled["true_label"], errors="raise").astype(int)
-        positives = labeled.loc[labels == 1]
-        for left, right in zip(positives["gtin1"], positives["gtin2"], strict=True):
-            add(left, right)
-        gates = pd.read_csv(
-            RESULTS / F["gate_results"],
-            dtype={"gtin1": str, "gtin2": str},
-            keep_default_na=False,
-        )
-        proceeds = gates.loc[gates["gate_decision"] == "proceed"]
-        for left, right in zip(proceeds["gtin1"], proceeds["gtin2"], strict=True):
-            add(left, right)
-        by_canonical: dict[str, list[str]] = {}
-        for gtin, canonical in load_canonical_map().items():
-            by_canonical.setdefault(str(canonical), []).append(str(gtin))
-        for group in by_canonical.values():
-            if len(group) > 1:
-                for left in group:
-                    for right in group:
-                        add(left, right)
-        return frozenset(pairs)
+            proceeds = gates.loc[gates["gate_decision"] == "proceed"]
+            for left, right in zip(proceeds["gtin1"], proceeds["gtin2"], strict=True):
+                add(left, right)
+            by_canonical: dict[str, list[str]] = {}
+            for gtin, canonical in load_canonical_map().items():
+                by_canonical.setdefault(str(canonical), []).append(str(gtin))
+            for group in by_canonical.values():
+                if len(group) > 1:
+                    for left in group:
+                        for right in group:
+                            add(left, right)
+            return frozenset(pairs)
 
-    from training.prepared_bundle import canonical_payload_rows
-    _retrieval_canonical_rows = canonical_payload_rows(len(df), payload, row_bc)
-    _retrieval_true_match_pairs = _holdout_true_match_gtin_pairs()
-    print(
-        f"[retrieval-pool] canonical competitor universe={len(_retrieval_canonical_rows):,} "
-        f"payload rows | known true-match gtin pairs excluded="
-        f"{len(_retrieval_true_match_pairs) // 2:,} (labeled positives + gate "
-        f"proceed + identical canonical identity)",
-        flush=True,
-    )
+        from training.prepared_bundle import canonical_payload_rows
+        _retrieval_canonical_rows = canonical_payload_rows(len(df), payload, row_bc)
+        _retrieval_true_match_pairs = _holdout_true_match_gtin_pairs()
+        print(
+            f"[retrieval-pool] canonical competitor universe={len(_retrieval_canonical_rows):,} "
+            f"payload rows | known true-match gtin pairs excluded="
+            f"{len(_retrieval_true_match_pairs) // 2:,} (labeled positives + gate "
+            f"proceed + identical canonical identity)",
+            flush=True,
+        )
 
     rows: list[dict] = []
     fold_plans = []
     for fold_i, test_bc in enumerate(folds):
         try:
             t_fold = time.perf_counter()
-            if len(folds) > 1:
-                train_bc = set().union(*[f for j, f in enumerate(folds) if j != fold_i])
-            else:
-                # single holdout fold: train side = every gtin NOT in the
-                # test fold (dev_override carves dev out of this below)
-                train_bc = all_gtin_set - folds[0]
+            with trace_step('training.prepare_inputs.fold_split'):
+                if len(folds) > 1:
+                    train_bc = set().union(*[f for j, f in enumerate(folds) if j != fold_i])
+                else:
+                    # single holdout fold: train side = every gtin NOT in the
+                    # test fold (dev_override carves dev out of this below)
+                    train_bc = all_gtin_set - folds[0]
 
-            # split train gtins into train/dev (early stopping target).
-            # dev_override: caller-supplied component-aware dev boundary
-            # (skips the rng carve — a gtin-level carve SPLITS positive
-            # pairs between train and dev, silently dropping them from both:
-            # measured 7,808 of 37,445 pair-uses in 5-fold CV).
-            if dev_override is not None:
-                dev_bc = set(dev_override) & train_bc
-                tr_bc = train_bc - dev_bc
-            else:
-                rng = np.random.default_rng(seed + fold_i)
-                train_bcs = np.array(sorted(train_bc))
-                perm = rng.permutation(len(train_bcs))
-                dev_frac = dev_fraction if dev_fraction is not None else DEV_FRACTION
-                n_dev = max(1, int(len(train_bcs) * dev_frac))
-                dev_bc = set(train_bcs[perm[:n_dev]])
-                tr_bc = set(train_bcs[perm[n_dev:]])
-
+                # split train gtins into train/dev (early stopping target).
+                # dev_override: caller-supplied component-aware dev boundary
+                # (skips the rng carve — a gtin-level carve SPLITS positive
+                # pairs between train and dev, silently dropping them from both:
+                # measured 7,808 of 37,445 pair-uses in 5-fold CV).
+                if dev_override is not None:
+                    dev_bc = set(dev_override) & train_bc
+                    tr_bc = train_bc - dev_bc
+                else:
+                    rng = np.random.default_rng(seed + fold_i)
+                    train_bcs = np.array(sorted(train_bc))
+                    perm = rng.permutation(len(train_bcs))
+                    dev_frac = dev_fraction if dev_fraction is not None else DEV_FRACTION
+                    n_dev = max(1, int(len(train_bcs) * dev_frac))
+                    dev_bc = set(train_bcs[perm[:n_dev]])
+                    tr_bc = set(train_bcs[perm[n_dev:]])
             # ── HOLDOUT-SELECTION DISCIPLINE (test-leak fix, 2026-09-12) ──
             # In selection mode the fold's job is to RANK hyperparameters,
             # and the ranking signal must come from DEV only. Hard asserts
@@ -3599,65 +3634,66 @@ def prepare_fixed_training_inputs(
                     flush=True,
                 )
 
-            test_pos = eval_pos[pairs_in_set(eval_pos, row_bc, test_bc)]
-            # ── RETRIEVAL-POOL FOLD PURITY (ER-346) ──────────────────────
-            # The competitor rule excludes the query's own COMPONENT, which is
-            # only fold-safe if the split really deals whole components: a
-            # component straddling the boundary would let a competitor carry a
-            # positive relationship across it.  Checked, not assumed — the
-            # component ids and the split are derived from the same graph.
-            _bc_in_test = np.asarray(
-                [row_bc[i] in test_bc for i in range(len(row_bc))], dtype=bool
-            )
-            _test_components = np.unique(
-                _retrieval_row_component[_bc_in_test]
-            )
-            _impure = int(
-                np.sum(
-                    np.isin(_retrieval_row_component, _test_components)
-                    & ~_bc_in_test
-                    & (_retrieval_row_component >= 0)
+            with trace_step('training.prepare_inputs.fold_pools'):
+                test_pos = eval_pos[pairs_in_set(eval_pos, row_bc, test_bc)]
+                # ── RETRIEVAL-POOL FOLD PURITY (ER-346) ──────────────────────
+                # The competitor rule excludes the query's own COMPONENT, which is
+                # only fold-safe if the split really deals whole components: a
+                # component straddling the boundary would let a competitor carry a
+                # positive relationship across it.  Checked, not assumed — the
+                # component ids and the split are derived from the same graph.
+                _bc_in_test = np.asarray(
+                    [row_bc[i] in test_bc for i in range(len(row_bc))], dtype=bool
                 )
-            )
-            assert not _impure, (
-                f"LEAK: {_impure} payload rows belong to a component that "
-                "intersects the test fold but is not contained in it — the "
-                "retrieval competitor rule assumes the split deals WHOLE "
-                "components, so excluding own-component competitors would not "
-                "be fold-safe"
-            )
-            # Competitor universe for THIS fold: canonical payload rows whose
-            # gtin belongs to the test fold, so every query's ranking task
-            # stays inside the fold it is scored on.
-            _fold_canonical_rows = _retrieval_canonical_rows[
-                _bc_in_test[_retrieval_canonical_rows]
-            ]
-            train_pos = pos[pairs_in_set(pos, row_bc, tr_bc)]
-            dev_pos = eval_pos[pairs_in_set(eval_pos, row_bc, dev_bc)]
-            dev_pos = _merge_different_calibration_positives(
-                dev_pos,
-                labeled_different_pos,
-                row_bc,
-                dev_bc,
-            )
-            hard_train = hard_train_all[pairs_in_set(hard_train_all, row_bc, tr_bc)]
-            hard_dev = hard_eval[pairs_in_set(hard_eval, row_bc, dev_bc)]
-            hard_test = hard_eval[pairs_in_set(hard_eval, row_bc, test_bc)]
-            _train_neg_mask = (
-                pairs_in_set(_train_neg_source, row_bc, tr_bc)
-                if _train_neg_source is not None and len(_train_neg_source)
-                else np.zeros(0, dtype=bool)
-            )
-            tr_negs = (
-                _train_neg_source[_train_neg_mask]
-                if _train_neg_source is not None and len(_train_neg_source)
-                else np.empty((0, 2), dtype=int)
-            )
-            tr_neg_sources = (
-                _train_neg_sources[_train_neg_mask]
-                if len(_train_neg_mask)
-                else np.empty(0, dtype=object)
-            )
+                _test_components = np.unique(
+                    _retrieval_row_component[_bc_in_test]
+                )
+                _impure = int(
+                    np.sum(
+                        np.isin(_retrieval_row_component, _test_components)
+                        & ~_bc_in_test
+                        & (_retrieval_row_component >= 0)
+                    )
+                )
+                assert not _impure, (
+                    f"LEAK: {_impure} payload rows belong to a component that "
+                    "intersects the test fold but is not contained in it — the "
+                    "retrieval competitor rule assumes the split deals WHOLE "
+                    "components, so excluding own-component competitors would not "
+                    "be fold-safe"
+                )
+                # Competitor universe for THIS fold: canonical payload rows whose
+                # gtin belongs to the test fold, so every query's ranking task
+                # stays inside the fold it is scored on.
+                _fold_canonical_rows = _retrieval_canonical_rows[
+                    _bc_in_test[_retrieval_canonical_rows]
+                ]
+                train_pos = pos[pairs_in_set(pos, row_bc, tr_bc)]
+                dev_pos = eval_pos[pairs_in_set(eval_pos, row_bc, dev_bc)]
+                dev_pos = _merge_different_calibration_positives(
+                    dev_pos,
+                    labeled_different_pos,
+                    row_bc,
+                    dev_bc,
+                )
+                hard_train = hard_train_all[pairs_in_set(hard_train_all, row_bc, tr_bc)]
+                hard_dev = hard_eval[pairs_in_set(hard_eval, row_bc, dev_bc)]
+                hard_test = hard_eval[pairs_in_set(hard_eval, row_bc, test_bc)]
+                _train_neg_mask = (
+                    pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                    if _train_neg_source is not None and len(_train_neg_source)
+                    else np.zeros(0, dtype=bool)
+                )
+                tr_negs = (
+                    _train_neg_source[_train_neg_mask]
+                    if _train_neg_source is not None and len(_train_neg_source)
+                    else np.empty((0, 2), dtype=int)
+                )
+                tr_neg_sources = (
+                    _train_neg_sources[_train_neg_mask]
+                    if len(_train_neg_mask)
+                    else np.empty(0, dtype=object)
+                )
             n_train_hard_neg = len(tr_negs)
             random_easy_unique_candidates = 0
             if loss == "contrastive":
@@ -3804,52 +3840,53 @@ def prepare_fixed_training_inputs(
                 )
                 continue
 
-            fixed = {
-                'fold_i': fold_i,
-                'test_bc': test_bc,
-                'tr_bc': tr_bc,
-                'test_pos': test_pos,
-                'train_pos': train_pos,
-                'dev_pos': dev_pos,
-                'hard_train': hard_train,
-                'hard_dev': hard_dev,
-                'hard_test': hard_test,
-                'tr_negs': tr_negs,
-                'tr_neg_sources': tr_neg_sources,
-                'n_train_hard_neg': n_train_hard_neg,
-                'random_easy_unique_candidates': random_easy_unique_candidates,
-                'n_train_random_easy_neg': n_train_random_easy_neg,
-                'train_neg_source_counts': train_neg_source_counts,
-                'calibration_pos': calibration_pos,
-                'calibration_neg': calibration_neg,
-                'train_all': train_all,
-                'n_gate_kept': n_gate_kept,
-                'static_masked_pos': static_masked_pos,
-                'static_positive_pct': static_positive_pct,
-                'dev_pairs': dev_pairs,
-                'dev_neg_pairs': dev_neg_pairs,
-                'dev_structured': dev_structured,
-                '_fold_canonical_rows': _fold_canonical_rows,
-            }
-            fixed.update(_prepare_objective_plan(
-                loss=loss, payload=payload, structured_features=structured_features,
-                train_all=train_all, tr_negs=tr_negs, tr_neg_sources=tr_neg_sources,
-                hp_pairs=hp_pairs, row_bc=row_bc, tr_bc=tr_bc, use_hp=use_hp,
-                mask_audit=mask_audit, hard_negative_mask_audit=hard_negative_mask_audit,
-                hard_train=hard_train, seed=seed, fold_i=fold_i,
-            ))
-            fixed["random_neg_pairs"] = _split_safe_random_negative_pairs(
-                df, row_bc, set(test_bc), seed=SEED + fold_i + 1000,
-                n_neg=int(_timed_load_config(f"fold{fold_i}.random_neg_pairs")["pairs"]["n_neg"]),
-            )
-            retrieval_ks = tuple(_timed_load_config(f"fold{fold_i}.retrieval_ks")["evaluation"]["retrieval_ks"])
-            fixed["retrieval_pool"] = build_evaluation_pool(
-                test_pos, np.asarray([str(df["sku_id"].iloc[int(i)]) for i in test_pos[:, 0]], dtype=str),
-                competitor_rows=_fold_canonical_rows, row_component=_retrieval_row_component,
-                row_bc=row_bc, n_competitors=competitors_per_query(retrieval_ks),
-                seed=seed + fold_i * 1009 + 340346, ks=retrieval_ks,
-                priority_pairs=hard_test, excluded_gtin_pairs=_retrieval_true_match_pairs,
-            )
+            with trace_step('training.prepare_inputs.fold_plan'):
+                fixed = {
+                    'fold_i': fold_i,
+                    'test_bc': test_bc,
+                    'tr_bc': tr_bc,
+                    'test_pos': test_pos,
+                    'train_pos': train_pos,
+                    'dev_pos': dev_pos,
+                    'hard_train': hard_train,
+                    'hard_dev': hard_dev,
+                    'hard_test': hard_test,
+                    'tr_negs': tr_negs,
+                    'tr_neg_sources': tr_neg_sources,
+                    'n_train_hard_neg': n_train_hard_neg,
+                    'random_easy_unique_candidates': random_easy_unique_candidates,
+                    'n_train_random_easy_neg': n_train_random_easy_neg,
+                    'train_neg_source_counts': train_neg_source_counts,
+                    'calibration_pos': calibration_pos,
+                    'calibration_neg': calibration_neg,
+                    'train_all': train_all,
+                    'n_gate_kept': n_gate_kept,
+                    'static_masked_pos': static_masked_pos,
+                    'static_positive_pct': static_positive_pct,
+                    'dev_pairs': dev_pairs,
+                    'dev_neg_pairs': dev_neg_pairs,
+                    'dev_structured': dev_structured,
+                    '_fold_canonical_rows': _fold_canonical_rows,
+                }
+                fixed.update(_prepare_objective_plan(
+                    loss=loss, payload=payload, structured_features=structured_features,
+                    train_all=train_all, tr_negs=tr_negs, tr_neg_sources=tr_neg_sources,
+                    hp_pairs=hp_pairs, row_bc=row_bc, tr_bc=tr_bc, use_hp=use_hp,
+                    mask_audit=mask_audit, hard_negative_mask_audit=hard_negative_mask_audit,
+                    hard_train=hard_train, seed=seed, fold_i=fold_i,
+                ))
+                fixed["random_neg_pairs"] = _split_safe_random_negative_pairs(
+                    df, row_bc, set(test_bc), seed=SEED + fold_i + 1000,
+                    n_neg=int(_timed_load_config(f"fold{fold_i}.random_neg_pairs")["pairs"]["n_neg"]),
+                )
+                retrieval_ks = tuple(_timed_load_config(f"fold{fold_i}.retrieval_ks")["evaluation"]["retrieval_ks"])
+                fixed["retrieval_pool"] = build_evaluation_pool(
+                    test_pos, np.asarray([str(df["sku_id"].iloc[int(i)]) for i in test_pos[:, 0]], dtype=str),
+                    competitor_rows=_fold_canonical_rows, row_component=_retrieval_row_component,
+                    row_bc=row_bc, n_competitors=competitors_per_query(retrieval_ks),
+                    seed=seed + fold_i * 1009 + 340346, ks=retrieval_ks,
+                    priority_pairs=hard_test, excluded_gtin_pairs=_retrieval_true_match_pairs,
+                )
             fold_plans.append(fixed)
         except Exception:
             rows.append({"fold": fold_i, "status": "failed", "traceback": traceback.format_exc()})
@@ -3863,6 +3900,7 @@ def prepare_fixed_training_inputs(
     }, "folds": fold_plans, "skipped": rows}
 
 
+@timed
 def train_one_config(
     cfg: dict,
     *,
@@ -3927,391 +3965,396 @@ def train_one_config(
     """Train cfg across the group-aware folds. Returns fold metric rows
     (failures included, with traceback)."""
     import torch
-    if dynamic_mask_lo is None or dynamic_mask_hi is None:
-        raise ValueError(
-            "dynamic hard-negative masking requires its configured extent band"
-        )
-    dynamic_mask_lo = float(dynamic_mask_lo)
-    dynamic_mask_hi = float(dynamic_mask_hi)
-    # BOUNDARY CONTRACT (lib.schemas.TrainConfig): the optimizer/early-stop
-    # dict — every key validated (epochs >= 1, lr > 0, warmup in [0,1]...)
-    # before a single fold runs. A missing/illegal knob dies HERE with the
-    # field named, not inside the HF Trainer mid-epoch.
-    from core.schemas import TrainConfig as _TrainConfig
+    with trace_step('training.train_one_config.config_validation'):
+        if dynamic_mask_lo is None or dynamic_mask_hi is None:
+            raise ValueError(
+                "dynamic hard-negative masking requires its configured extent band"
+            )
+        dynamic_mask_lo = float(dynamic_mask_lo)
+        dynamic_mask_hi = float(dynamic_mask_hi)
+        # BOUNDARY CONTRACT (lib.schemas.TrainConfig): the optimizer/early-stop
+        # dict — every key validated (epochs >= 1, lr > 0, warmup in [0,1]...)
+        # before a single fold runs. A missing/illegal knob dies HERE with the
+        # field named, not inside the HF Trainer mid-epoch.
+        from core.schemas import TrainConfig as _TrainConfig
 
-    _TrainConfig.model_validate(cfg)
-    if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
-        raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
-    _CFG_DEEPCOPY_TOTALS.clear()
-    calibration_config = _timed_load_config("run.calibration")
+        _TrainConfig.model_validate(cfg)
+        if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
+            raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
+        _CFG_DEEPCOPY_TOTALS.clear()
+        calibration_config = _timed_load_config("run.calibration")
 
-    df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
-    if prepared_plan is None:
-        fixed_inputs = prepare_fixed_training_inputs(
-            cfg, loss=loss, model_id=model_id, use_hp=use_hp, band=band, data=data,
-            seed=seed, cv_folds=cv_folds, folds_override=folds_override,
-            dev_fraction=dev_fraction, dev_override=dev_override,
-            neg_pairs=neg_pairs, train_neg_pairs=train_neg_pairs,
-            neg_pair_sources=neg_pair_sources, train_neg_pair_sources=train_neg_pair_sources,
-            mask_audit=mask_audit, hard_negative_mask_audit=hard_negative_mask_audit,
-            train_frac=train_frac, sample=sample, selection_mode=selection_mode,
-        )
-    else:
-        fixed_inputs = prepared_plan["inputs"]
-    payload_metadata = fixed_inputs["shared"]['payload_metadata']
-    gate_lookup = fixed_inputs["shared"]['gate_lookup']
-    _retrieval_row_component = fixed_inputs["shared"]['_retrieval_row_component']
-    _retrieval_true_match_pairs = fixed_inputs["shared"]['_retrieval_true_match_pairs']
-    _train_neg_source = fixed_inputs["shared"]['_train_neg_source']
-    country = fixed_inputs["shared"]['country']
-    rows = list(fixed_inputs["skipped"])
-    _canon_attrs: dict[str, dict] | None = None
-    if prepared_tokens is not None:
-        from training.token_inputs import payload_sha256
+    with trace_step('training.train_one_config.fixed_inputs'):
+        df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
+        if prepared_plan is None:
+            fixed_inputs = prepare_fixed_training_inputs(
+                cfg, loss=loss, model_id=model_id, use_hp=use_hp, band=band, data=data,
+                seed=seed, cv_folds=cv_folds, folds_override=folds_override,
+                dev_fraction=dev_fraction, dev_override=dev_override,
+                neg_pairs=neg_pairs, train_neg_pairs=train_neg_pairs,
+                neg_pair_sources=neg_pair_sources, train_neg_pair_sources=train_neg_pair_sources,
+                mask_audit=mask_audit, hard_negative_mask_audit=hard_negative_mask_audit,
+                train_frac=train_frac, sample=sample, selection_mode=selection_mode,
+            )
+        else:
+            fixed_inputs = prepared_plan["inputs"]
+        payload_metadata = fixed_inputs["shared"]['payload_metadata']
+        gate_lookup = fixed_inputs["shared"]['gate_lookup']
+        _retrieval_row_component = fixed_inputs["shared"]['_retrieval_row_component']
+        _retrieval_true_match_pairs = fixed_inputs["shared"]['_retrieval_true_match_pairs']
+        _train_neg_source = fixed_inputs["shared"]['_train_neg_source']
+        country = fixed_inputs["shared"]['country']
+        rows = list(fixed_inputs["skipped"])
+        _canon_attrs: dict[str, dict] | None = None
+        if prepared_tokens is not None:
+            from training.token_inputs import payload_sha256
 
-        prepared_payload_digest = payload_sha256(payload)
-    else:
-        prepared_payload_digest = None
+            prepared_payload_digest = payload_sha256(payload)
+        else:
+            prepared_payload_digest = None
     for fold_inputs in fixed_inputs["folds"]:
         fold_i = fold_inputs["fold_i"]
         try:
-            t_fold = time.perf_counter()
-            test_bc = fold_inputs['test_bc']
-            tr_bc = fold_inputs['tr_bc']
-            test_pos = fold_inputs['test_pos']
-            train_pos = fold_inputs['train_pos']
-            dev_pos = fold_inputs['dev_pos']
-            hard_train = fold_inputs['hard_train']
-            hard_dev = fold_inputs['hard_dev']
-            hard_test = fold_inputs['hard_test']
-            tr_negs = fold_inputs['tr_negs']
-            tr_neg_sources = fold_inputs['tr_neg_sources']
-            n_train_hard_neg = fold_inputs['n_train_hard_neg']
-            random_easy_unique_candidates = fold_inputs['random_easy_unique_candidates']
-            n_train_random_easy_neg = fold_inputs['n_train_random_easy_neg']
-            train_neg_source_counts = fold_inputs['train_neg_source_counts']
-            calibration_pos = fold_inputs['calibration_pos']
-            calibration_neg = fold_inputs['calibration_neg']
-            train_all = fold_inputs['train_all']
-            n_gate_kept = fold_inputs['n_gate_kept']
-            static_masked_pos = fold_inputs['static_masked_pos']
-            static_positive_pct = fold_inputs['static_positive_pct']
-            dev_pairs = fold_inputs['dev_pairs']
-            dev_neg_pairs = fold_inputs['dev_neg_pairs']
-            dev_structured = fold_inputs['dev_structured']
-            _fold_canonical_rows = fold_inputs['_fold_canonical_rows']
-            objective_plan = fold_inputs["objective"]
-            checkpoint_dir = artifact(
-                "checkpoint_repo",
-                {
-                    "model_tag": model_id.rstrip("/").rsplit("/", 1)[-1],
-                    "run_tag": run_tag,
-                    "fold": fold_i,
-                    "step": 0,
-                },
-            ).parent
-            if resume and not any(checkpoint_dir.glob("checkpoint-*/trainer_state.json")):
-                if checkpoint_publication_deferred():
-                    raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
-                from training.dvc_store import restore_checkpoint
+            with trace_step('training.train_one_config.fold_setup'):
+                t_fold = time.perf_counter()
+                test_bc = fold_inputs['test_bc']
+                tr_bc = fold_inputs['tr_bc']
+                test_pos = fold_inputs['test_pos']
+                train_pos = fold_inputs['train_pos']
+                dev_pos = fold_inputs['dev_pos']
+                hard_train = fold_inputs['hard_train']
+                hard_dev = fold_inputs['hard_dev']
+                hard_test = fold_inputs['hard_test']
+                tr_negs = fold_inputs['tr_negs']
+                tr_neg_sources = fold_inputs['tr_neg_sources']
+                n_train_hard_neg = fold_inputs['n_train_hard_neg']
+                random_easy_unique_candidates = fold_inputs['random_easy_unique_candidates']
+                n_train_random_easy_neg = fold_inputs['n_train_random_easy_neg']
+                train_neg_source_counts = fold_inputs['train_neg_source_counts']
+                calibration_pos = fold_inputs['calibration_pos']
+                calibration_neg = fold_inputs['calibration_neg']
+                train_all = fold_inputs['train_all']
+                n_gate_kept = fold_inputs['n_gate_kept']
+                static_masked_pos = fold_inputs['static_masked_pos']
+                static_positive_pct = fold_inputs['static_positive_pct']
+                dev_pairs = fold_inputs['dev_pairs']
+                dev_neg_pairs = fold_inputs['dev_neg_pairs']
+                dev_structured = fold_inputs['dev_structured']
+                _fold_canonical_rows = fold_inputs['_fold_canonical_rows']
+                objective_plan = fold_inputs["objective"]
+                checkpoint_dir = artifact(
+                    "checkpoint_repo",
+                    {
+                        "model_tag": model_id.rstrip("/").rsplit("/", 1)[-1],
+                        "run_tag": run_tag,
+                        "fold": fold_i,
+                        "step": 0,
+                    },
+                ).parent
+                if resume and not any(checkpoint_dir.glob("checkpoint-*/trainer_state.json")):
+                    if checkpoint_publication_deferred():
+                        raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
+                    from training.dvc_store import restore_checkpoint
 
-                restore_checkpoint(RESULTS, checkpoint_dir)
-                print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
+                    restore_checkpoint(RESULTS, checkpoint_dir)
+                    print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
 
-            ensure_parent(checkpoint_dir)
+                ensure_parent(checkpoint_dir)
 
             # Tied-weight two-tower retrieval model: the trainer receives
             # (SKU text, canonical text) pairs; each side is encoded on its
             # own before cosine/loss comparison.  CrossEncoder is optional
             # only in rerank.py after retrieval, never this default path.
-            model = load_local_sentence_transformer(
-                model_id, device="cuda" if on_cuda else "cpu"
-            )
-            _align_model_token_ids(model)
-            dropout_added = _configure_projection_dropout(
-                model, float(cfg["projection_dropout"])
-            )
-            print(
-                f"    [regularization] weight_decay={cfg['weight_decay']:.4g} | "
-                f"projection_dropout={cfg['projection_dropout']:.4g} "
-                f"({'added' if dropout_added else 'configured'}) | "
-                f"label_smoothing={cfg['label_smoothing']:.4g}",
-                flush=True,
-            )
-            if loss == "contrastive":
+            with trace_step('training.train_one_config.fold_model_and_dataset'):
+                model = load_local_sentence_transformer(
+                    model_id, device="cuda" if on_cuda else "cpu"
+                )
+                _align_model_token_ids(model)
+                dropout_added = _configure_projection_dropout(
+                    model, float(cfg["projection_dropout"])
+                )
                 print(
-                    f"    [random-easy-train] hard={n_train_hard_neg:,} | "
-                    f"random_easy={n_train_random_easy_neg:,} "
-                    f"({random_easy_unique_candidates:,} unique candidates) | "
-                    f"ratio={n_train_random_easy_neg / n_train_hard_neg if n_train_hard_neg else 0.0:.3f}",
+                    f"    [regularization] weight_decay={cfg['weight_decay']:.4g} | "
+                    f"projection_dropout={cfg['projection_dropout']:.4g} "
+                    f"({'added' if dropout_added else 'configured'}) | "
+                    f"label_smoothing={cfg['label_smoothing']:.4g}",
                     flush=True,
                 )
-            model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
-            from core.encoding_inputs import enable_zero_truncation
-            enable_zero_truncation(model)
-            token_lookup = None
-            if prepared_tokens is not None:
-                from training.token_inputs import PreparedTokenLookup
-                token_lookup = PreparedTokenLookup(
-                    model, prepared_tokens, payload, payload_digest=prepared_payload_digest
-                )
-
-            # ── build the training dataset FIRST (steps derive from it) ──
-            from datasets import Dataset
-
-            examples = None
-            ann_refresh_state: dict[str, object] = {
-                "pairs": {},
-                "structured_features": {},
-                "sources": {},
-                "version": 0,
-                "count": 0,
-            }
-            # MNRL/triplet do not install the dynamic contrastive dataset
-            # transform, but post-training telemetry is shared by every loss.
-            # Keep its empty state defined for those lanes.
-            dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
-            if loss == "contrastive":
-                # OnlineContrastiveLoss (owner ruling 2026-09-07): paired
-                # (sentence1, sentence2, label) rows. POSITIVES = train_all
-                # (sku, own canonical); NEGATIVES = the gate hard-no pairs —
-                # text-similar, gate-proven different size/pack/flavor —
-                # restricted to TRAIN gtins (component boundary holds:
-                # pairs_in_set filters by tr_bc). The loss itself then picks
-                # the hard subset per batch (farthest positives, closest
-                # negatives) — hard-pair training at both layers.
-                if len(tr_negs) == 0:
-                    rows.append(
-                        {
-                            "fold": fold_i,
-                            "status": "skipped",
-                            "reason": "contrastive loss needs labeled negatives "
-                            "(gate hard-no pairs) — none resolved in train",
-                        }
+                if loss == "contrastive":
+                    print(
+                        f"    [random-easy-train] hard={n_train_hard_neg:,} | "
+                        f"random_easy={n_train_random_easy_neg:,} "
+                        f"({random_easy_unique_candidates:,} unique candidates) | "
+                        f"ratio={n_train_random_easy_neg / n_train_hard_neg if n_train_hard_neg else 0.0:.3f}",
+                        flush=True,
                     )
-                    continue
-                fixed_dataset = objective_plan["dataset"]
-                s1, s2, lab = (fixed_dataset[key] for key in ("sentence1", "sentence2", "label"))
-                pair_populations = fixed_dataset["pair_population"]
-                presentation_counts: dict[tuple, int] = {}
-                train_ds = Dataset.from_dict(fixed_dataset)
-                dynamic_mask_counts: dict[int, int] = {}
-                dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
-                dynamic_epoch_ref = {"epoch": 0}
-                dynamic_mask_audit: list[dict] = []
-                if (
-                    (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)
-                    or ann_refresh_enabled
-                    or attribute_conflict_refresh_enabled
-                    or TRACK_DATAPOINT_USAGE
-                ):
-                    import random as _random
-                    from functools import partial
+                model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
+                from core.encoding_inputs import enable_zero_truncation
+                enable_zero_truncation(model)
+                token_lookup = None
+                if prepared_tokens is not None:
+                    from training.token_inputs import PreparedTokenLookup
+                    token_lookup = PreparedTokenLookup(
+                        model, prepared_tokens, payload, payload_digest=prepared_payload_digest
+                    )
 
-                    _mask_rng = _random.Random(seed + fold_i + 100_003)
-                    train_ds.set_transform(
-                        partial(
-                            _dynamic_mask_negative_transform,
-                            rng=_mask_rng,
-                            frac=dynamic_mask_frac if dynamic_mask_hard_negatives else 0.0,
-                            mask_prob=dynamic_mask_prob,
-                            mask_lo=dynamic_mask_lo,
-                            mask_hi=dynamic_mask_hi,
-                            counts=dynamic_mask_counts,
-                            counts_by_epoch=dynamic_mask_counts_by_epoch,
-                            stats_by_epoch=dynamic_mask_stats_by_epoch,
-                            epoch_ref=dynamic_epoch_ref,
-                            ann_pairs=ann_refresh_state["pairs"],
-                            ann_structured_features=ann_refresh_state[
-                                "structured_features"
-                            ],
-                            ann_sources=ann_refresh_state["sources"],
-                            ann_state=ann_refresh_state,
-                            pair_populations=pair_populations,
-                            presentation_counts=(
-                                presentation_counts
-                                if TRACK_DATAPOINT_USAGE
-                                else None
-                            ),
-                            mask_audit=dynamic_mask_audit,
-                            fold=fold_i,
-                            token_lookup=token_lookup,
-                        )
-                    )
-                # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
-                # EXACT rows the model ingests for this fold — sentence1,
-                # sentence2, label, both gtins, pos/hp/neg provenance.
-                # Rewritten per fold (last fold wins; fold metrics CSV
-                # keeps per-fold counts).
-                _dump_train_visibility(
-                    fold_i,
-                    s1,
-                    s2,
-                    lab,
-                    train_all,
-                    tr_negs,
-                    tr_neg_sources=tr_neg_sources,
-                    hp_in_train=(
-                        hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)]
-                        if use_hp and hp_pairs is not None and len(hp_pairs)
-                        else None
-                    ),
-                    payload=payload,
-                    row_bc=row_bc,
-                    payload_metadata=payload_metadata,
-                    gate_lookup=gate_lookup,
-                    run_tag=run_tag,
-                    sample=sample,
-                )
-            elif loss == "mnrl":
-                # MNRL's third column is an explicit negative for *that same
-                # anchor*, not an arbitrary text sampled from a global pool.
-                # Preserve the gate/attribute-conflict evidence by joining
-                # every source-side hard negative to its source's positive
-                # canonical pair. The loss also continues to use the other
-                # positives in a batch as in-batch negatives.
-                triples = objective_plan["triples"]
-                if not triples:
-                    rows.append(
-                        {
-                            "fold": fold_i,
-                            "status": "skipped",
-                            "reason": "MNRL needs anchor-positive-negative triples; "
-                            "none survived the train component boundary",
-                        }
-                    )
-                    continue
-                shared_gtin_rows = objective_plan["shared_gtin_rows"]
-                # Twin exposure (point A watch-item): counterfactual copies
-                # share 90%+ tokens with their source positive, so their
-                # denominator pressure is the sharpest in the batch. Report
-                # the share every fold; gradient spikes in epochs 1-2 point
-                # here first. Existing guards: max_grad_norm=1.0,
-                # warmup_ratio=0.05, dev-AP early stopping, and ~63
-                # in-batch natural negatives per anchor at batch 64.
-                twin_copies = {
-                    int(audit["copy_payload_idx"])
-                    for audit in hard_negative_mask_audit or []
-                    if audit.get("target_mode") == "counterfactual"
-                    and audit.get("copy_payload_idx") is not None
+                # ── build the training dataset FIRST (steps derive from it) ──
+                from datasets import Dataset
+
+                examples = None
+                ann_refresh_state: dict[str, object] = {
+                    "pairs": {},
+                    "structured_features": {},
+                    "sources": {},
+                    "version": 0,
+                    "count": 0,
                 }
-                twin_triples = sum(1 for _, _, n in triples if n in twin_copies)
-                print(
-                    f"    [mnrl-pairs] triples={len(triples):,} | "
-                    f"twin_negatives={twin_triples:,} "
-                    f"({twin_triples / max(len(triples), 1):.1%}) | "
-                    f"positive-GTIN repeat exposure={shared_gtin_rows:,} "
-                    "(different texts may still share product identity)",
-                    flush=True,
-                )
-                # Per-triple population tags (base/masked/twin) parallel the
-                # triples so train-time MNRL subset monitoring can attribute
-                # loss per population. pair_id is the triple index threaded
-                # through PairIdDataCollator to the loss; both columns are
-                # stripped before tokenization and never affect the loss value.
-                triple_populations = objective_plan["dataset"]["population"]
-                train_ds = Dataset.from_dict(objective_plan["dataset"])
-            else:
-                train_ds = Dataset.from_dict(objective_plan["dataset"])
-                examples = list(range(len(train_ds)))
-
-            from training.sampler import FrozenBatchSampler
-            device_key = "cuda" if on_cuda else "cpu"
-            fixed_sampler = objective_plan["sampler"][device_key]
-            if cfg["epochs"] > len(fixed_sampler["epochs"]):
-                raise ValueError("requested training epochs exceed locally prepared presentation plan; rebuild locally")
-            batch_size = runtime("batch_size_cuda" if on_cuda else "batch_size_cpu")
-            if sample:
-                # Smoke tests exercise the saved CPU/CUDA presentation plan.
-                batch_size = fixed_sampler["batch_size"]
-            elif fixed_sampler["batch_size"] != batch_size:
-                raise ValueError("local presentation batch size differs from configured runtime; rebuild locally")
-            if loss in {"contrastive", "mnrl"}:
-                if "pair_id" not in train_ds.column_names or list(train_ds["pair_id"]) != list(range(len(train_ds))):
-                    raise ValueError("local objective pair IDs must map every training row in order; rebuild locally")
-            controlled_sampler = FrozenBatchSampler(
-                fixed_sampler["epochs"], expected_rows=len(train_ds), batch_size=batch_size
-            )
-            n_steps_per_epoch = max(1, len(controlled_sampler))
-            warmup_steps = int(sum(len(batches) for batches in fixed_sampler["epochs"][:cfg["epochs"]]) * cfg["warmup_ratio"])
-            eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
-
-            # dev evaluator: pos pairs vs hard negatives, binary AUC-style
-            from sentence_transformers.evaluation import BinaryClassificationEvaluator
-
-            class StructuredBinaryClassificationEvaluator(BinaryClassificationEvaluator):
-                """Binary evaluator using the same fused score as final reports."""
-
-                def __init__(self, *args, structured_features, feature_weight, **kwargs):
-                    super().__init__(*args, **kwargs)
-                    self.structured_features = np.asarray(
-                        structured_features, dtype=np.float32
-                    )
-                    self.feature_weight = float(feature_weight)
-
-                def compute_metrics(self, model):
-                    from sklearn.metrics import average_precision_score, matthews_corrcoef
-                    from sentence_transformers.util import pairwise_cos_sim
-
-                    emb1 = self.embed_inputs(model, self.sentences1)
-                    emb2 = self.embed_inputs(model, self.sentences2)
-                    from core.structured_features import fuse_torch
-
-                    n = len(self.sentences1)
-                    if self.structured_features.shape[0] != n or self.structured_features.shape[1] != 2:
-                        raise RuntimeError(
-                            "structured evaluator feature count mismatch: "
-                            f"{self.structured_features.shape} != ({n}, 2, feature_dim)"
+                # MNRL/triplet do not install the dynamic contrastive dataset
+                # transform, but post-training telemetry is shared by every loss.
+                # Keep its empty state defined for those lanes.
+                dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
+                if loss == "contrastive":
+                    # OnlineContrastiveLoss (owner ruling 2026-09-07): paired
+                    # (sentence1, sentence2, label) rows. POSITIVES = train_all
+                    # (sku, own canonical); NEGATIVES = the gate hard-no pairs —
+                    # text-similar, gate-proven different size/pack/flavor —
+                    # restricted to TRAIN gtins (component boundary holds:
+                    # pairs_in_set filters by tr_bc). The loss itself then picks
+                    # the hard subset per batch (farthest positives, closest
+                    # negatives) — hard-pair training at both layers.
+                    if len(tr_negs) == 0:
+                        rows.append(
+                            {
+                                "fold": fold_i,
+                                "status": "skipped",
+                                "reason": "contrastive loss needs labeled negatives "
+                                "(gate hard-no pairs) — none resolved in train",
+                            }
                         )
-                    feat = torch.tensor(self.structured_features, dtype=torch.float32)
-                    emb1 = fuse_torch(
-                        torch.as_tensor(emb1), feat[:, 0, :], self.feature_weight
-                    )
-                    emb2 = fuse_torch(
-                        torch.as_tensor(emb2), feat[:, 1, :], self.feature_weight
-                    )
-                    scores = pairwise_cos_sim(emb1, emb2).detach().cpu().numpy()
-                    labels_np = np.asarray(self.labels)
-                    acc, acc_threshold = self.find_best_acc_and_threshold(
-                        scores, labels_np, True
-                    )
-                    f1, precision, recall, f1_threshold = self.find_best_f1_and_threshold(
-                        scores, labels_np, True
-                    )
-                    predicted = scores >= f1_threshold
-                    return {
-                        "cosine": {
-                            "accuracy": acc,
-                            "accuracy_threshold": acc_threshold,
-                            "f1": f1,
-                            "f1_threshold": f1_threshold,
-                            "precision": precision,
-                            "recall": recall,
-                            "ap": average_precision_score(labels_np, scores),
-                            "mcc": matthews_corrcoef(labels_np, predicted),
-                        }
-                    }
+                        continue
+                    fixed_dataset = objective_plan["dataset"]
+                    s1, s2, lab = (fixed_dataset[key] for key in ("sentence1", "sentence2", "label"))
+                    pair_populations = fixed_dataset["pair_population"]
+                    presentation_counts: dict[tuple, int] = {}
+                    train_ds = Dataset.from_dict(fixed_dataset)
+                    dynamic_mask_counts: dict[int, int] = {}
+                    dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
+                    dynamic_epoch_ref = {"epoch": 0}
+                    dynamic_mask_audit: list[dict] = []
+                    if (
+                        (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)
+                        or ann_refresh_enabled
+                        or attribute_conflict_refresh_enabled
+                        or TRACK_DATAPOINT_USAGE
+                    ):
+                        import random as _random
+                        from functools import partial
 
-            sentences1 = [a for a, _ in dev_pairs] + [a for a, _ in dev_neg_pairs]
-            sentences2 = [b for _, b in dev_pairs] + [b for _, b in dev_neg_pairs]
-            labels = [1] * len(dev_pairs) + [0] * len(dev_neg_pairs)
-            _sf_cfg = _timed_load_config(
-                f"fold{fold_i}.structured_features"
-            )["training"]["structured_features"]
-            structured_feature_weight = (
-                float(_sf_cfg["embedding_weight"])
-                if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
-                else 0.0
-            )
-            evaluator = StructuredBinaryClassificationEvaluator(
-                sentences1,
-                sentences2,
-                labels,
-                name="dev",
-                show_progress_bar=False,
-                structured_features=np.asarray(dev_structured, dtype=np.float32),
-                feature_weight=structured_feature_weight,
-            )
+                        _mask_rng = _random.Random(seed + fold_i + 100_003)
+                        train_ds.set_transform(
+                            partial(
+                                _dynamic_mask_negative_transform,
+                                rng=_mask_rng,
+                                frac=dynamic_mask_frac if dynamic_mask_hard_negatives else 0.0,
+                                mask_prob=dynamic_mask_prob,
+                                mask_lo=dynamic_mask_lo,
+                                mask_hi=dynamic_mask_hi,
+                                counts=dynamic_mask_counts,
+                                counts_by_epoch=dynamic_mask_counts_by_epoch,
+                                stats_by_epoch=dynamic_mask_stats_by_epoch,
+                                epoch_ref=dynamic_epoch_ref,
+                                ann_pairs=ann_refresh_state["pairs"],
+                                ann_structured_features=ann_refresh_state[
+                                    "structured_features"
+                                ],
+                                ann_sources=ann_refresh_state["sources"],
+                                ann_state=ann_refresh_state,
+                                pair_populations=pair_populations,
+                                presentation_counts=(
+                                    presentation_counts
+                                    if TRACK_DATAPOINT_USAGE
+                                    else None
+                                ),
+                                mask_audit=dynamic_mask_audit,
+                                fold=fold_i,
+                                token_lookup=token_lookup,
+                            )
+                        )
+                    # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
+                    # EXACT rows the model ingests for this fold — sentence1,
+                    # sentence2, label, both gtins, pos/hp/neg provenance.
+                    # Rewritten per fold (last fold wins; fold metrics CSV
+                    # keeps per-fold counts).
+                    _dump_train_visibility(
+                        fold_i,
+                        s1,
+                        s2,
+                        lab,
+                        train_all,
+                        tr_negs,
+                        tr_neg_sources=tr_neg_sources,
+                        hp_in_train=(
+                            hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)]
+                            if use_hp and hp_pairs is not None and len(hp_pairs)
+                            else None
+                        ),
+                        payload=payload,
+                        row_bc=row_bc,
+                        payload_metadata=payload_metadata,
+                        gate_lookup=gate_lookup,
+                        run_tag=run_tag,
+                        sample=sample,
+                    )
+                elif loss == "mnrl":
+                    # MNRL's third column is an explicit negative for *that same
+                    # anchor*, not an arbitrary text sampled from a global pool.
+                    # Preserve the gate/attribute-conflict evidence by joining
+                    # every source-side hard negative to its source's positive
+                    # canonical pair. The loss also continues to use the other
+                    # positives in a batch as in-batch negatives.
+                    triples = objective_plan["triples"]
+                    if not triples:
+                        rows.append(
+                            {
+                                "fold": fold_i,
+                                "status": "skipped",
+                                "reason": "MNRL needs anchor-positive-negative triples; "
+                                "none survived the train component boundary",
+                            }
+                        )
+                        continue
+                    shared_gtin_rows = objective_plan["shared_gtin_rows"]
+                    # Twin exposure (point A watch-item): counterfactual copies
+                    # share 90%+ tokens with their source positive, so their
+                    # denominator pressure is the sharpest in the batch. Report
+                    # the share every fold; gradient spikes in epochs 1-2 point
+                    # here first. Existing guards: max_grad_norm=1.0,
+                    # warmup_ratio=0.05, dev-AP early stopping, and ~63
+                    # in-batch natural negatives per anchor at batch 64.
+                    twin_copies = {
+                        int(audit["copy_payload_idx"])
+                        for audit in hard_negative_mask_audit or []
+                        if audit.get("target_mode") == "counterfactual"
+                        and audit.get("copy_payload_idx") is not None
+                    }
+                    twin_triples = sum(1 for _, _, n in triples if n in twin_copies)
+                    print(
+                        f"    [mnrl-pairs] triples={len(triples):,} | "
+                        f"twin_negatives={twin_triples:,} "
+                        f"({twin_triples / max(len(triples), 1):.1%}) | "
+                        f"positive-GTIN repeat exposure={shared_gtin_rows:,} "
+                        "(different texts may still share product identity)",
+                        flush=True,
+                    )
+                    # Per-triple population tags (base/masked/twin) parallel the
+                    # triples so train-time MNRL subset monitoring can attribute
+                    # loss per population. pair_id is the triple index threaded
+                    # through PairIdDataCollator to the loss; both columns are
+                    # stripped before tokenization and never affect the loss value.
+                    triple_populations = objective_plan["dataset"]["population"]
+                    train_ds = Dataset.from_dict(objective_plan["dataset"])
+                else:
+                    train_ds = Dataset.from_dict(objective_plan["dataset"])
+                    examples = list(range(len(train_ds)))
+
+            with trace_step('training.train_one_config.fold_evaluator'):
+                from training.sampler import FrozenBatchSampler
+                device_key = "cuda" if on_cuda else "cpu"
+                fixed_sampler = objective_plan["sampler"][device_key]
+                if cfg["epochs"] > len(fixed_sampler["epochs"]):
+                    raise ValueError("requested training epochs exceed locally prepared presentation plan; rebuild locally")
+                batch_size = runtime("batch_size_cuda" if on_cuda else "batch_size_cpu")
+                if sample:
+                    # Smoke tests exercise the saved CPU/CUDA presentation plan.
+                    batch_size = fixed_sampler["batch_size"]
+                elif fixed_sampler["batch_size"] != batch_size:
+                    raise ValueError("local presentation batch size differs from configured runtime; rebuild locally")
+                if loss in {"contrastive", "mnrl"}:
+                    if "pair_id" not in train_ds.column_names or list(train_ds["pair_id"]) != list(range(len(train_ds))):
+                        raise ValueError("local objective pair IDs must map every training row in order; rebuild locally")
+                controlled_sampler = FrozenBatchSampler(
+                    fixed_sampler["epochs"], expected_rows=len(train_ds), batch_size=batch_size
+                )
+                n_steps_per_epoch = max(1, len(controlled_sampler))
+                warmup_steps = int(sum(len(batches) for batches in fixed_sampler["epochs"][:cfg["epochs"]]) * cfg["warmup_ratio"])
+                eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
+
+                # dev evaluator: pos pairs vs hard negatives, binary AUC-style
+                from sentence_transformers.evaluation import BinaryClassificationEvaluator
+
+                class StructuredBinaryClassificationEvaluator(BinaryClassificationEvaluator):
+                    """Binary evaluator using the same fused score as final reports."""
+
+                    def __init__(self, *args, structured_features, feature_weight, **kwargs):
+                        super().__init__(*args, **kwargs)
+                        self.structured_features = np.asarray(
+                            structured_features, dtype=np.float32
+                        )
+                        self.feature_weight = float(feature_weight)
+
+                    def compute_metrics(self, model):
+                        from sklearn.metrics import average_precision_score, matthews_corrcoef
+                        from sentence_transformers.util import pairwise_cos_sim
+
+                        emb1 = self.embed_inputs(model, self.sentences1)
+                        emb2 = self.embed_inputs(model, self.sentences2)
+                        from core.structured_features import fuse_torch
+
+                        n = len(self.sentences1)
+                        if self.structured_features.shape[0] != n or self.structured_features.shape[1] != 2:
+                            raise RuntimeError(
+                                "structured evaluator feature count mismatch: "
+                                f"{self.structured_features.shape} != ({n}, 2, feature_dim)"
+                            )
+                        feat = torch.tensor(self.structured_features, dtype=torch.float32)
+                        emb1 = fuse_torch(
+                            torch.as_tensor(emb1), feat[:, 0, :], self.feature_weight
+                        )
+                        emb2 = fuse_torch(
+                            torch.as_tensor(emb2), feat[:, 1, :], self.feature_weight
+                        )
+                        scores = pairwise_cos_sim(emb1, emb2).detach().cpu().numpy()
+                        labels_np = np.asarray(self.labels)
+                        acc, acc_threshold = self.find_best_acc_and_threshold(
+                            scores, labels_np, True
+                        )
+                        f1, precision, recall, f1_threshold = self.find_best_f1_and_threshold(
+                            scores, labels_np, True
+                        )
+                        predicted = scores >= f1_threshold
+                        return {
+                            "cosine": {
+                                "accuracy": acc,
+                                "accuracy_threshold": acc_threshold,
+                                "f1": f1,
+                                "f1_threshold": f1_threshold,
+                                "precision": precision,
+                                "recall": recall,
+                                "ap": average_precision_score(labels_np, scores),
+                                "mcc": matthews_corrcoef(labels_np, predicted),
+                            }
+                        }
+
+                sentences1 = [a for a, _ in dev_pairs] + [a for a, _ in dev_neg_pairs]
+                sentences2 = [b for _, b in dev_pairs] + [b for _, b in dev_neg_pairs]
+                labels = [1] * len(dev_pairs) + [0] * len(dev_neg_pairs)
+                _sf_cfg = _timed_load_config(
+                    f"fold{fold_i}.structured_features"
+                )["training"]["structured_features"]
+                structured_feature_weight = (
+                    float(_sf_cfg["embedding_weight"])
+                    if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
+                    else 0.0
+                )
+                evaluator = StructuredBinaryClassificationEvaluator(
+                    sentences1,
+                    sentences2,
+                    labels,
+                    name="dev",
+                    show_progress_bar=False,
+                    structured_features=np.asarray(dev_structured, dtype=np.float32),
+                    feature_weight=structured_feature_weight,
+                )
 
             # ── VALIDATION-LOSS DATASET (owner directive 2026-09-10) ──────
             # eval_dataset in the trainer's OWN column shape -> HF computes
@@ -4351,479 +4394,481 @@ def train_one_config(
             # caps disk at ~2x model size (~1 GB L12 / ~180 MB L6) — no explosion,
             # and load_best_model_at_end restores the best epoch. Unique subdir
             # per run_tag so parallel trials never collide.
-            from sentence_transformers import SentenceTransformerTrainer
-            from sentence_transformers import (
-                SentenceTransformerTrainingArguments as STArgs,
-            )
-            from sentence_transformers.sentence_transformer.training_args import (
-                BatchSamplers,
-            )
-            from training.sampler import ControlledBatchSampler
+            with trace_step('training.train_one_config.fold_training'):
+                from sentence_transformers import SentenceTransformerTrainer
+                from sentence_transformers import (
+                    SentenceTransformerTrainingArguments as STArgs,
+                )
+                from sentence_transformers.sentence_transformer.training_args import (
+                    BatchSamplers,
+                )
+                from training.sampler import ControlledBatchSampler
 
-            from training.token_inputs import ObjectiveDataCollator as PairIdDataCollator
+                from training.token_inputs import ObjectiveDataCollator as PairIdDataCollator
 
-            class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
-                """HF Trainer plus an explicit manifest of all resume state."""
+                class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
+                    """HF Trainer plus an explicit manifest of all resume state."""
 
-                def add_model_card_callback(self, default_args_dict):
-                    if prepared_tokens is None:
-                        return super().add_model_card_callback(default_args_dict)
-                    from training.token_inputs import model_card_text_dataset
-                    original_train, original_eval = self.train_dataset, self.eval_dataset
-                    try:
-                        self.train_dataset = model_card_text_dataset(original_train)
-                        self.eval_dataset = model_card_text_dataset(original_eval)
-                        return super().add_model_card_callback(default_args_dict)
-                    finally:
-                        self.train_dataset, self.eval_dataset = original_train, original_eval
+                    def add_model_card_callback(self, default_args_dict):
+                        if prepared_tokens is None:
+                            return super().add_model_card_callback(default_args_dict)
+                        from training.token_inputs import model_card_text_dataset
+                        original_train, original_eval = self.train_dataset, self.eval_dataset
+                        try:
+                            self.train_dataset = model_card_text_dataset(original_train)
+                            self.eval_dataset = model_card_text_dataset(original_eval)
+                            return super().add_model_card_callback(default_args_dict)
+                        finally:
+                            self.train_dataset, self.eval_dataset = original_train, original_eval
 
-                def get_batch_sampler(self, dataset, batch_size, drop_last, **kwargs):
-                    if "pair_id" in dataset.column_names or loss == "triplet":
-                        return FrozenBatchSampler(
-                            fixed_sampler["epochs"], expected_rows=len(dataset),
-                            batch_size=fixed_sampler["batch_size"],
-                        )
-                    return super().get_batch_sampler(dataset, batch_size, drop_last, **kwargs)
+                    def get_batch_sampler(self, dataset, batch_size, drop_last, **kwargs):
+                        if "pair_id" in dataset.column_names or loss == "triplet":
+                            return FrozenBatchSampler(
+                                fixed_sampler["epochs"], expected_rows=len(dataset),
+                                batch_size=fixed_sampler["batch_size"],
+                            )
+                        return super().get_batch_sampler(dataset, batch_size, drop_last, **kwargs)
 
-                def compute_loss(
-                    self,
-                    model,
-                    inputs,
-                    return_outputs=False,
-                    num_items_in_batch=None,
-                ):
-                    pair_ids = inputs.pop("pair_id", None)
-                    structured = inputs.pop("structured_features", None)
-                    loss_fn = self.loss
-                    if pair_ids is not None and hasattr(loss_fn, "set_batch_pair_ids"):
-                        loss_fn.set_batch_pair_ids(pair_ids)
-                    if structured is not None and hasattr(
-                        loss_fn, "set_batch_structured_features"
-                    ):
-                        loss_fn.set_batch_structured_features(structured)
-                    return super().compute_loss(
+                    def compute_loss(
+                        self,
                         model,
                         inputs,
-                        return_outputs=return_outputs,
-                        num_items_in_batch=num_items_in_batch,
-                    )
-
-                def _load_optimizer_and_scheduler(self, checkpoint):
-                    super()._load_optimizer_and_scheduler(checkpoint)
-                    optimizer_policy.validate_restored(self.optimizer)
-
-                def _save_checkpoint(self, model, trial):
-                    if hasattr(self.loss, 'flush_tracking'):
-                        self.loss.flush_tracking()
-                    super()._save_checkpoint(model, trial)
-                    checkpoint = (
-                        Path(self._get_output_dir(trial=trial))
-                        / f"checkpoint-{self.state.global_step}"
-                    )
-                    _make_checkpoint_tokenizer_portable(checkpoint)
-                    _write_checkpoint_manifest(
-                        checkpoint,
-                        epoch=self.state.epoch,
-                        global_step=self.state.global_step,
-                        model=model,
-                        optimizer=self.optimizer,
-                        scheduler=self.lr_scheduler,
-                        scaler=getattr(self.accelerator, "scaler", None),
-                        trainer_state=self.state,
-                        trainer_control=self.control,
-                        training_args=self.args,
-                    )
-                    trace_artifact("checkpoint_repo", checkpoint, producer="training.training")
-
-            # T4 can emulate BF16, but has native FP16 tensor cores. Avoid
-            # selecting emulated BF16 from PyTorch's permissive default probe.
-            native_bf16 = on_cuda and torch.cuda.is_bf16_supported(including_emulation=False)
-            model_tag = str(model_id).rstrip("/").rsplit("/", 1)[-1]
-            args_hf = STArgs(
-                output_dir=str(checkpoint_dir),
-                per_device_train_batch_size=batch_size,
-                num_train_epochs=cfg["epochs"],
-                learning_rate=cfg["lr"],
-                warmup_steps=warmup_steps,
-                weight_decay=cfg["weight_decay"],
-                lr_scheduler_type=cfg["lr_scheduler"],
-                max_grad_norm=cfg["max_grad_norm"],
-                bf16=native_bf16,
-                fp16=on_cuda and not native_bf16,
-                # early stopping: eval every eval_steps, stop on plateau,
-                # restore the best checkpoint at the end
-                eval_strategy="steps",
-                eval_steps=eval_steps,
-                # eval batch = the SSOT encode batch (loss on dev pairs is
-                # gradient-free; same batch the dev evaluator uses)
-                per_device_eval_batch_size=runtime("batch_size_eval"),
-                metric_for_best_model="eval_dev_cosine_ap",
-                greater_is_better=True,
-                load_best_model_at_end=True,
-                save_strategy="steps",
-                save_steps=eval_steps,
-                save_total_limit=training_cfg().training.save_total_limit,  # Validated nullable SSOT; retain all when None
-                # A resumable checkpoint must retain optimizer, scheduler,
-                # RNG, and trainer state.  Model-only snapshots cannot pick
-                # up a stopped run faithfully.
-                save_only_model=False,
-                logging_strategy="steps",
-                logging_steps=eval_steps,
-                remove_unused_columns=False,
-                report_to=[],
-                seed=seed + fold_i,
-                use_cpu=not on_cuda,
-                # Controlled batch sampler (owner): offline prep
-                # determines composition; default HF sampling is
-                # used when batch_sampler.enabled is false.
-                batch_sampler=(
-                    BatchSamplers.NO_DUPLICATES
-                    if loss == "mnrl"
-                    else BatchSamplers.BATCH_SAMPLER
-                ),
-            )
-            # discriminative LRs: bottom layers hold pretrained knowledge ->
-            # smaller LR; top layers + pooling head adapt to the task -> full
-            # LR. Per-layer multiplicative decay (0.9^k), bottom to top.
-            # Dedup by tensor id: some architectures tie/share weights
-            # (embeddings<->pooler etc.) — AdamW REJECTS a param in two groups.
-            base_lr = cfg["lr"]
-            # AUDIT FIX (round 2 F09, round 3): the single-LR fallback stays
-            # (sanctioned: it is visible in stdout and the run continues),
-            # but it is now QUERYABLE downstream — `lr_groups` lands in the
-            # fold-metrics row ("discriminative" normal / "single"
-            # fallback) so a degraded fold is distinguishable without
-            # scraping stdout.
-            lr_groups = "discriminative"
-            try:
-                groups = _discriminative_groups(model, base_lr)
-                n_g = len(groups)
-                print(
-                    f"    [optim] discriminative LR: {n_g} groups, "
-                    f"bottom {groups[0]['lr']:.2e} .. top {base_lr:.2e}",
-                    flush=True,
-                )
-            except Exception as exc:
-                lr_groups = "single"
-                print(
-                    f"    [optim] single LR fallback ({exc}) "
-                    f"[lr_groups=single — recorded in the fold-metrics row]",
-                    flush=True,
-                )
-                groups = [{"params": model.parameters(), "lr": base_lr}]
-
-            from torch import optim
-
-            from core.gpu_execution import OptimizerExecution
-            optimizer_policy = OptimizerExecution(backend=training_cfg().training.optimizer_backend)
-            optimizer = optim.AdamW(
-                groups, weight_decay=cfg["weight_decay"], lr=base_lr,
-                **optimizer_policy.kwargs('cuda' if on_cuda else 'cpu'),
-            )
-            optimizer_backend = optimizer_policy.resolved_backend('cuda' if on_cuda else 'cpu')
-            print(f'    [optim] policy={optimizer_policy.backend} backend={optimizer_backend}', flush=True)
-
-            mnrl_cfg = training_cfg().training
-            loss_fn = _make_loss(
-                model,
-                loss,
-                structured_feature_weight=structured_feature_weight,
-                uniformity_weight=float(cfg["uniformity_weight"]),
-                uniformity_temperature=float(_UNIFORMITY_CFG["temperature"]),
-                uniformity_min_batch_size=int(_UNIFORMITY_CFG["min_batch_size"]),
-                label_smoothing=float(cfg["label_smoothing"]),
-                mnrl_monitoring_enabled=bool(
-                    mnrl_cfg.mnrl_monitoring.enabled
-                ),
-                twin_warmup_enabled=bool(mnrl_cfg.twin_loss_warmup.enabled),
-                twin_warmup_epochs=int(mnrl_cfg.twin_loss_warmup.warmup_epochs),
-                twin_weight=float(mnrl_cfg.twin_loss_warmup.twin_weight),
-            )
-            if loss == "mnrl" and hasattr(loss_fn, "set_triple_populations"):
-                loss_fn.set_triple_populations(triple_populations)
-            pair_lineage = _build_pair_lineage(
-                train_all,
-                tr_negs,
-                train_neg_sources=tr_neg_sources,
-                mask_audit=mask_audit,
-                hard_negative_mask_audit=hard_negative_mask_audit,
-                payload_metadata=payload_metadata,
-                gate_lookup=gate_lookup,
-            )
-            if hasattr(loss_fn, "set_pair_lineage"):
-                loss_fn.set_pair_lineage(pair_lineage)
-                loss_fn._dynamic_mask_counts = dynamic_mask_counts
-                loss_fn._dynamic_mask_counts_by_epoch = dynamic_mask_counts_by_epoch
-                loss_fn._dynamic_mask_stats_by_epoch = dynamic_mask_stats_by_epoch
-                loss_fn._dynamic_epoch_ref = dynamic_epoch_ref
-            if hasattr(loss_fn, "set_total_negative_pairs"):
-                loss_fn.set_total_negative_pairs(len(tr_negs))
-
-            callbacks = [
-                ProgressCallback(
-                    wandb_ctx,
-                    tracked_loss=loss_fn,
-                    trace_path=RESULTS
-                    / "logs"
-                    / run_tag
-                    / f"loss_backprop_fold{fold_i}.csv",
-                    collapse_model=model,
-                    collapse_df=df,
-                    collapse_payload=payload,
-                    collapse_config=calibration_config,
-                    collapse_batch_size=runtime("batch_size_eval"),
-                ),
-                LateEpochLrDecayCallback(
-                    enabled=bool(cfg["late_epoch_decay_enabled"]),
-                    start_epoch_fraction=float(
-                        cfg["late_epoch_decay_start_fraction"]
-                    ),
-                    multiplier=float(cfg["late_epoch_decay_multiplier"]),
-                ),
-                EarlyStoppingCallback(
-                    early_stopping_patience=cfg["patience"],
-                    early_stopping_threshold=cfg["es_threshold"],
-                ),
-            ]
-            if not checkpoint_publication_deferred():
-                callbacks.append(DvcCheckpointCallback())
-            if (
-                (ann_refresh_enabled or attribute_conflict_refresh_enabled)
-                and loss == "contrastive"
-            ):
-                ann_cfg = config_section("mining", "ann")
-                callbacks.append(
-                    FineTunedAnnRefreshCallback(
-                        df=df,
-                        payload=payload,
-                        row_gtins=row_bc,
-                        structured_features=structured_features,
-                        train_gtins=set(tr_bc),
-                        existing=tr_negs,
-                        ann_state=ann_refresh_state,
-                        slot_ids=range(len(train_all), len(train_all) + len(tr_negs)),
-                        fold_i=fold_i,
-                        run_tag=run_tag,
-                        batch_size=runtime("batch_size_embed"),
-                        max_seq_length=runtime("max_seq_length"),
-                        model=model,
-                        wandb_ctx=wandb_ctx,
-                    )
-                )
-            from core.training_profiler import TrainingProfiler
-            training_profile = TrainingProfiler(RESULTS / 'profiles' / run_tag / f'fold{fold_i}',str(next(model.parameters()).device.type))
-            if training_profile.enabled:
-                callbacks.append(training_profile.callback())
-            trainer = ResumableSentenceTransformerTrainer(
-                model=model,
-                args=args_hf,
-                train_dataset=train_ds,
-                eval_dataset=eval_ds,
-                evaluator=evaluator,
-                data_collator=PairIdDataCollator(
-                    preprocess_fn=model.preprocess,
-                    router_mapping=args_hf.router_mapping,
-                    prompts=args_hf.prompts,
-                ),
-                loss=loss_fn,
-                optimizers=(optimizer, None),  # prebuilt AdamW with
-                # discriminative LRs; scheduler=None -> HF builds warmup+linear
-                # from args, scaling our per-group LRs
-                callbacks=callbacks,
-            )
-            resume_checkpoint = None
-            if resume:
-                candidates = sorted(
-                    checkpoint_dir.glob("checkpoint-*"),
-                    key=lambda path: int(path.name.removeprefix("checkpoint-")),
-                )
-                if candidates:
-                    latest = candidates[-1]
-                    required = (
-                        "optimizer.pt",
-                        "scheduler.pt",
-                        "rng_state.pth",
-                        training_cfg().colab.checkpoint_manifest_name,
-                        "trainer_state.json",
-                    )
-                    missing = [name for name in required if not (latest / name).is_file()]
-                    if missing:
-                        raise RuntimeError(
-                            f"cannot resume {latest}: checkpoint lacks trainer state; "
-                            f"missing {', '.join(missing)}. Start a new run once "
-                            "to create resumable checkpoints."
+                        return_outputs=False,
+                        num_items_in_batch=None,
+                    ):
+                        pair_ids = inputs.pop("pair_id", None)
+                        structured = inputs.pop("structured_features", None)
+                        loss_fn = self.loss
+                        if pair_ids is not None and hasattr(loss_fn, "set_batch_pair_ids"):
+                            loss_fn.set_batch_pair_ids(pair_ids)
+                        if structured is not None and hasattr(
+                            loss_fn, "set_batch_structured_features"
+                        ):
+                            loss_fn.set_batch_structured_features(structured)
+                        return super().compute_loss(
+                            model,
+                            inputs,
+                            return_outputs=return_outputs,
+                            num_items_in_batch=num_items_in_batch,
                         )
-                    from core.model_input import model_input_composition
-                    checkpoint_manifest = json.loads((latest / training_cfg().colab.checkpoint_manifest_name).read_text())
-                    if checkpoint_manifest.get("model_input") != model_input_composition().model_dump():
-                        raise ValueError("resume checkpoint model input composition mismatch")
-                    # Trainer state contains absolute paths from the original
-                    # VM. Rebase only to the selected sibling in this restored
-                    # checkpoint tree, never to another run's checkpoint.
-                    state_path = latest / "trainer_state.json"
-                    restored_state = json.loads(state_path.read_text())
-                    selected = restored_state.get("best_model_checkpoint")
-                    if selected:
-                        local_selected = checkpoint_dir / Path(selected).name
-                        if not local_selected.is_dir():
-                            raise FileNotFoundError(f"resume selected checkpoint missing: {local_selected}")
-                        restored_state["best_model_checkpoint"] = str(local_selected.resolve())
-                        state_path.write_text(json.dumps(restored_state, indent=2) + "\n")
-                    resume_checkpoint = str(latest)
-                    print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
-                else:
-                    print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
-            try:
-                trainer.train(resume_from_checkpoint=resume_checkpoint)
-            finally:
-                training_profile.close()
-            progress_callback = next(
-                callback
-                for callback in callbacks
-                if isinstance(callback, ProgressCallback)
-            )
-            late_lr_callback = next(
-                callback
-                for callback in callbacks
-                if isinstance(callback, LateEpochLrDecayCallback)
-            )
-            datapoint_coverage: dict[str, int] = {}
-            if loss == "contrastive" and TRACK_DATAPOINT_USAGE:
-                enabled_dynamic_populations = {
-                    population
-                    for population, enabled in (
-                        ("ann_finetuned", ann_refresh_enabled),
-                        ("attribute_conflict", attribute_conflict_refresh_enabled),
-                    )
-                    if enabled
-                }
-                print(
-                    "    [datapoint-sources] "
-                    + ", ".join(
-                        f"{name}={'enabled' if name in enabled_dynamic_populations else 'disabled_by_config'}"
-                        for name in ("ann_finetuned", "attribute_conflict")
-                    ),
-                    flush=True,
-                )
-                datapoint_coverage = _write_datapoint_usage(
-                    fold_i=fold_i,
-                    pair_populations=pair_populations,
-                    presentation_counts=presentation_counts,
-                    pair_lineage=pair_lineage,
-                    dynamic_populations=enabled_dynamic_populations,
-                    run_tag=run_tag,
-                    sample=sample,
-                )
-                if wandb_ctx is not None and datapoint_coverage:
-                    wandb_ctx.log_metrics(
-                        {
-                            f"datapoint_coverage/{key}": float(value)
-                            for key, value in datapoint_coverage.items()
-                        }
-                    )
-                    wandb_ctx.set_summary(
-                        {
-                            f"datapoint_coverage/{key}": float(value)
-                            for key, value in datapoint_coverage.items()
-                        }
-                    )
-            if MASK_TRACK_PER_EPOCH and dynamic_mask_stats_by_epoch:
-                mask_epoch_rows = []
-                for epoch, stats in sorted(dynamic_mask_stats_by_epoch.items()):
-                    presented = float(stats["negative_presented"])
-                    masked_count = float(stats["masked_count"])
-                    mask_epoch_rows.append(
-                        {
-                            "fold": fold_i,
-                            "epoch": int(epoch),
-                            "negative_presented": int(presented),
-                            "masked_count": int(masked_count),
-                            "masked_pct": masked_count / presented if presented else 0.0,
-                            "mean_realized_extent": (
-                                float(stats["extent_sum"]) / masked_count
-                                if masked_count else 0.0
-                            ),
-                            "configured_mask_lo": float(dynamic_mask_lo),
-                            "configured_mask_hi": float(dynamic_mask_hi),
-                            "static_positive_masked": int(static_masked_pos),
-                            "static_positive_total": int(len(train_all)),
-                            "static_positive_masked_pct": float(static_positive_pct),
-                        }
-                    )
-                from core.common import write_visibility_log
 
-                write_visibility_log(
-                    pd.DataFrame(mask_epoch_rows),
-                    f"masking_per_epoch_fold{fold_i}.csv",
-                    run_tag,
-                    sample,
+                    def _load_optimizer_and_scheduler(self, checkpoint):
+                        super()._load_optimizer_and_scheduler(checkpoint)
+                        optimizer_policy.validate_restored(self.optimizer)
+
+                    def _save_checkpoint(self, model, trial):
+                        if hasattr(self.loss, 'flush_tracking'):
+                            self.loss.flush_tracking()
+                        super()._save_checkpoint(model, trial)
+                        checkpoint = (
+                            Path(self._get_output_dir(trial=trial))
+                            / f"checkpoint-{self.state.global_step}"
+                        )
+                        _make_checkpoint_tokenizer_portable(checkpoint)
+                        _write_checkpoint_manifest(
+                            checkpoint,
+                            epoch=self.state.epoch,
+                            global_step=self.state.global_step,
+                            model=model,
+                            optimizer=self.optimizer,
+                            scheduler=self.lr_scheduler,
+                            scaler=getattr(self.accelerator, "scaler", None),
+                            trainer_state=self.state,
+                            trainer_control=self.control,
+                            training_args=self.args,
+                        )
+                        trace_artifact("checkpoint_repo", checkpoint, producer="training.training")
+
+                # T4 can emulate BF16, but has native FP16 tensor cores. Avoid
+                # selecting emulated BF16 from PyTorch's permissive default probe.
+                native_bf16 = on_cuda and torch.cuda.is_bf16_supported(including_emulation=False)
+                model_tag = str(model_id).rstrip("/").rsplit("/", 1)[-1]
+                args_hf = STArgs(
+                    output_dir=str(checkpoint_dir),
+                    per_device_train_batch_size=batch_size,
+                    num_train_epochs=cfg["epochs"],
+                    learning_rate=cfg["lr"],
+                    warmup_steps=warmup_steps,
+                    weight_decay=cfg["weight_decay"],
+                    lr_scheduler_type=cfg["lr_scheduler"],
+                    max_grad_norm=cfg["max_grad_norm"],
+                    bf16=native_bf16,
+                    fp16=on_cuda and not native_bf16,
+                    # early stopping: eval every eval_steps, stop on plateau,
+                    # restore the best checkpoint at the end
+                    eval_strategy="steps",
+                    eval_steps=eval_steps,
+                    # eval batch = the SSOT encode batch (loss on dev pairs is
+                    # gradient-free; same batch the dev evaluator uses)
+                    per_device_eval_batch_size=runtime("batch_size_eval"),
+                    metric_for_best_model="eval_dev_cosine_ap",
+                    greater_is_better=True,
+                    load_best_model_at_end=True,
+                    save_strategy="steps",
+                    save_steps=eval_steps,
+                    save_total_limit=training_cfg().training.save_total_limit,  # Validated nullable SSOT; retain all when None
+                    # A resumable checkpoint must retain optimizer, scheduler,
+                    # RNG, and trainer state.  Model-only snapshots cannot pick
+                    # up a stopped run faithfully.
+                    save_only_model=False,
+                    logging_strategy="steps",
+                    logging_steps=eval_steps,
+                    remove_unused_columns=False,
+                    report_to=[],
+                    seed=seed + fold_i,
+                    use_cpu=not on_cuda,
+                    # Controlled batch sampler (owner): offline prep
+                    # determines composition; default HF sampling is
+                    # used when batch_sampler.enabled is false.
+                    batch_sampler=(
+                        BatchSamplers.NO_DUPLICATES
+                        if loss == "mnrl"
+                        else BatchSamplers.BATCH_SAMPLER
+                    ),
                 )
-                write_visibility_log(
-                    pd.DataFrame(mask_epoch_rows),
-                    "mask_hard_negative_visibility.csv",
-                    run_tag,
-                    sample,
+                # discriminative LRs: bottom layers hold pretrained knowledge ->
+                # smaller LR; top layers + pooling head adapt to the task -> full
+                # LR. Per-layer multiplicative decay (0.9^k), bottom to top.
+                # Dedup by tensor id: some architectures tie/share weights
+                # (embeddings<->pooler etc.) — AdamW REJECTS a param in two groups.
+                base_lr = cfg["lr"]
+                # AUDIT FIX (round 2 F09, round 3): the single-LR fallback stays
+                # (sanctioned: it is visible in stdout and the run continues),
+                # but it is now QUERYABLE downstream — `lr_groups` lands in the
+                # fold-metrics row ("discriminative" normal / "single"
+                # fallback) so a degraded fold is distinguishable without
+                # scraping stdout.
+                lr_groups = "discriminative"
+                try:
+                    groups = _discriminative_groups(model, base_lr)
+                    n_g = len(groups)
+                    print(
+                        f"    [optim] discriminative LR: {n_g} groups, "
+                        f"bottom {groups[0]['lr']:.2e} .. top {base_lr:.2e}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    lr_groups = "single"
+                    print(
+                        f"    [optim] single LR fallback ({exc}) "
+                        f"[lr_groups=single — recorded in the fold-metrics row]",
+                        flush=True,
+                    )
+                    groups = [{"params": model.parameters(), "lr": base_lr}]
+
+                from torch import optim
+
+                from core.gpu_execution import OptimizerExecution
+                optimizer_policy = OptimizerExecution(backend=training_cfg().training.optimizer_backend)
+                optimizer = optim.AdamW(
+                    groups, weight_decay=cfg["weight_decay"], lr=base_lr,
+                    **optimizer_policy.kwargs('cuda' if on_cuda else 'cpu'),
                 )
-                if wandb_ctx is not None:
-                    for row in mask_epoch_rows:
+                optimizer_backend = optimizer_policy.resolved_backend('cuda' if on_cuda else 'cpu')
+                print(f'    [optim] policy={optimizer_policy.backend} backend={optimizer_backend}', flush=True)
+
+                mnrl_cfg = training_cfg().training
+                loss_fn = _make_loss(
+                    model,
+                    loss,
+                    structured_feature_weight=structured_feature_weight,
+                    uniformity_weight=float(cfg["uniformity_weight"]),
+                    uniformity_temperature=float(_UNIFORMITY_CFG["temperature"]),
+                    uniformity_min_batch_size=int(_UNIFORMITY_CFG["min_batch_size"]),
+                    label_smoothing=float(cfg["label_smoothing"]),
+                    mnrl_monitoring_enabled=bool(
+                        mnrl_cfg.mnrl_monitoring.enabled
+                    ),
+                    twin_warmup_enabled=bool(mnrl_cfg.twin_loss_warmup.enabled),
+                    twin_warmup_epochs=int(mnrl_cfg.twin_loss_warmup.warmup_epochs),
+                    twin_weight=float(mnrl_cfg.twin_loss_warmup.twin_weight),
+                )
+                if loss == "mnrl" and hasattr(loss_fn, "set_triple_populations"):
+                    loss_fn.set_triple_populations(triple_populations)
+                pair_lineage = _build_pair_lineage(
+                    train_all,
+                    tr_negs,
+                    train_neg_sources=tr_neg_sources,
+                    mask_audit=mask_audit,
+                    hard_negative_mask_audit=hard_negative_mask_audit,
+                    payload_metadata=payload_metadata,
+                    gate_lookup=gate_lookup,
+                )
+                if hasattr(loss_fn, "set_pair_lineage"):
+                    loss_fn.set_pair_lineage(pair_lineage)
+                    loss_fn._dynamic_mask_counts = dynamic_mask_counts
+                    loss_fn._dynamic_mask_counts_by_epoch = dynamic_mask_counts_by_epoch
+                    loss_fn._dynamic_mask_stats_by_epoch = dynamic_mask_stats_by_epoch
+                    loss_fn._dynamic_epoch_ref = dynamic_epoch_ref
+                if hasattr(loss_fn, "set_total_negative_pairs"):
+                    loss_fn.set_total_negative_pairs(len(tr_negs))
+
+                callbacks = [
+                    ProgressCallback(
+                        wandb_ctx,
+                        tracked_loss=loss_fn,
+                        trace_path=RESULTS
+                        / "logs"
+                        / run_tag
+                        / f"loss_backprop_fold{fold_i}.csv",
+                        collapse_model=model,
+                        collapse_df=df,
+                        collapse_payload=payload,
+                        collapse_config=calibration_config,
+                        collapse_batch_size=runtime("batch_size_eval"),
+                    ),
+                    LateEpochLrDecayCallback(
+                        enabled=bool(cfg["late_epoch_decay_enabled"]),
+                        start_epoch_fraction=float(
+                            cfg["late_epoch_decay_start_fraction"]
+                        ),
+                        multiplier=float(cfg["late_epoch_decay_multiplier"]),
+                    ),
+                    EarlyStoppingCallback(
+                        early_stopping_patience=cfg["patience"],
+                        early_stopping_threshold=cfg["es_threshold"],
+                    ),
+                ]
+                if not checkpoint_publication_deferred():
+                    callbacks.append(DvcCheckpointCallback())
+                if (
+                    (ann_refresh_enabled or attribute_conflict_refresh_enabled)
+                    and loss == "contrastive"
+                ):
+                    ann_cfg = config_section("mining", "ann")
+                    callbacks.append(
+                        FineTunedAnnRefreshCallback(
+                            df=df,
+                            payload=payload,
+                            row_gtins=row_bc,
+                            structured_features=structured_features,
+                            train_gtins=set(tr_bc),
+                            existing=tr_negs,
+                            ann_state=ann_refresh_state,
+                            slot_ids=range(len(train_all), len(train_all) + len(tr_negs)),
+                            fold_i=fold_i,
+                            run_tag=run_tag,
+                            batch_size=runtime("batch_size_embed"),
+                            max_seq_length=runtime("max_seq_length"),
+                            model=model,
+                            wandb_ctx=wandb_ctx,
+                        )
+                    )
+                from core.training_profiler import TrainingProfiler
+                training_profile = TrainingProfiler(RESULTS / 'profiles' / run_tag / f'fold{fold_i}',str(next(model.parameters()).device.type))
+                if training_profile.enabled:
+                    callbacks.append(training_profile.callback())
+                trainer = ResumableSentenceTransformerTrainer(
+                    model=model,
+                    args=args_hf,
+                    train_dataset=train_ds,
+                    eval_dataset=eval_ds,
+                    evaluator=evaluator,
+                    data_collator=PairIdDataCollator(
+                        preprocess_fn=model.preprocess,
+                        router_mapping=args_hf.router_mapping,
+                        prompts=args_hf.prompts,
+                    ),
+                    loss=loss_fn,
+                    optimizers=(optimizer, None),  # prebuilt AdamW with
+                    # discriminative LRs; scheduler=None -> HF builds warmup+linear
+                    # from args, scaling our per-group LRs
+                    callbacks=callbacks,
+                )
+                resume_checkpoint = None
+                if resume:
+                    candidates = sorted(
+                        checkpoint_dir.glob("checkpoint-*"),
+                        key=lambda path: int(path.name.removeprefix("checkpoint-")),
+                    )
+                    if candidates:
+                        latest = candidates[-1]
+                        required = (
+                            "optimizer.pt",
+                            "scheduler.pt",
+                            "rng_state.pth",
+                            training_cfg().colab.checkpoint_manifest_name,
+                            "trainer_state.json",
+                        )
+                        missing = [name for name in required if not (latest / name).is_file()]
+                        if missing:
+                            raise RuntimeError(
+                                f"cannot resume {latest}: checkpoint lacks trainer state; "
+                                f"missing {', '.join(missing)}. Start a new run once "
+                                "to create resumable checkpoints."
+                            )
+                        from core.model_input import model_input_composition
+                        checkpoint_manifest = json.loads((latest / training_cfg().colab.checkpoint_manifest_name).read_text())
+                        if checkpoint_manifest.get("model_input") != model_input_composition().model_dump():
+                            raise ValueError("resume checkpoint model input composition mismatch")
+                        # Trainer state contains absolute paths from the original
+                        # VM. Rebase only to the selected sibling in this restored
+                        # checkpoint tree, never to another run's checkpoint.
+                        state_path = latest / "trainer_state.json"
+                        restored_state = json.loads(state_path.read_text())
+                        selected = restored_state.get("best_model_checkpoint")
+                        if selected:
+                            local_selected = checkpoint_dir / Path(selected).name
+                            if not local_selected.is_dir():
+                                raise FileNotFoundError(f"resume selected checkpoint missing: {local_selected}")
+                            restored_state["best_model_checkpoint"] = str(local_selected.resolve())
+                            state_path.write_text(json.dumps(restored_state, indent=2) + "\n")
+                        resume_checkpoint = str(latest)
+                        print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
+                    else:
+                        print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
+                try:
+                    trainer.train(resume_from_checkpoint=resume_checkpoint)
+                finally:
+                    training_profile.close()
+            with trace_step('training.train_one_config.fold_telemetry'):
+                progress_callback = next(
+                    callback
+                    for callback in callbacks
+                    if isinstance(callback, ProgressCallback)
+                )
+                late_lr_callback = next(
+                    callback
+                    for callback in callbacks
+                    if isinstance(callback, LateEpochLrDecayCallback)
+                )
+                datapoint_coverage: dict[str, int] = {}
+                if loss == "contrastive" and TRACK_DATAPOINT_USAGE:
+                    enabled_dynamic_populations = {
+                        population
+                        for population, enabled in (
+                            ("ann_finetuned", ann_refresh_enabled),
+                            ("attribute_conflict", attribute_conflict_refresh_enabled),
+                        )
+                        if enabled
+                    }
+                    print(
+                        "    [datapoint-sources] "
+                        + ", ".join(
+                            f"{name}={'enabled' if name in enabled_dynamic_populations else 'disabled_by_config'}"
+                            for name in ("ann_finetuned", "attribute_conflict")
+                        ),
+                        flush=True,
+                    )
+                    datapoint_coverage = _write_datapoint_usage(
+                        fold_i=fold_i,
+                        pair_populations=pair_populations,
+                        presentation_counts=presentation_counts,
+                        pair_lineage=pair_lineage,
+                        dynamic_populations=enabled_dynamic_populations,
+                        run_tag=run_tag,
+                        sample=sample,
+                    )
+                    if wandb_ctx is not None and datapoint_coverage:
                         wandb_ctx.log_metrics(
                             {
-                                "masking/epoch": float(row["epoch"]),
-                                "masking/dynamic_negative_presented": float(row["negative_presented"]),
-                                "masking/dynamic_negative_masked": float(row["masked_count"]),
-                                "masking/dynamic_negative_masked_pct": float(row["masked_pct"]),
-                                "masking/dynamic_negative_mean_realized_extent": float(row["mean_realized_extent"]),
-                            },
+                                f"datapoint_coverage/{key}": float(value)
+                                for key, value in datapoint_coverage.items()
+                            }
                         )
-            if (
-                loss == "mnrl"
-                and mnrl_cfg.mnrl_monitoring.enabled
-                and hasattr(loss_fn, "mnrl_subset_rows_by_epoch")
-            ):
-                mnrl_subset_rows = loss_fn.mnrl_subset_rows_by_epoch()
-                if mnrl_subset_rows:
+                        wandb_ctx.set_summary(
+                            {
+                                f"datapoint_coverage/{key}": float(value)
+                                for key, value in datapoint_coverage.items()
+                            }
+                        )
+                if MASK_TRACK_PER_EPOCH and dynamic_mask_stats_by_epoch:
+                    mask_epoch_rows = []
+                    for epoch, stats in sorted(dynamic_mask_stats_by_epoch.items()):
+                        presented = float(stats["negative_presented"])
+                        masked_count = float(stats["masked_count"])
+                        mask_epoch_rows.append(
+                            {
+                                "fold": fold_i,
+                                "epoch": int(epoch),
+                                "negative_presented": int(presented),
+                                "masked_count": int(masked_count),
+                                "masked_pct": masked_count / presented if presented else 0.0,
+                                "mean_realized_extent": (
+                                    float(stats["extent_sum"]) / masked_count
+                                    if masked_count else 0.0
+                                ),
+                                "configured_mask_lo": float(dynamic_mask_lo),
+                                "configured_mask_hi": float(dynamic_mask_hi),
+                                "static_positive_masked": int(static_masked_pos),
+                                "static_positive_total": int(len(train_all)),
+                                "static_positive_masked_pct": float(static_positive_pct),
+                            }
+                        )
                     from core.common import write_visibility_log
 
                     write_visibility_log(
-                        pd.DataFrame(mnrl_subset_rows),
-                        f"mnrl_subset_loss_by_epoch_fold{fold_i}.csv",
+                        pd.DataFrame(mask_epoch_rows),
+                        f"masking_per_epoch_fold{fold_i}.csv",
+                        run_tag,
+                        sample,
+                    )
+                    write_visibility_log(
+                        pd.DataFrame(mask_epoch_rows),
+                        "mask_hard_negative_visibility.csv",
                         run_tag,
                         sample,
                     )
                     if wandb_ctx is not None:
-                        for row in mnrl_subset_rows:
+                        for row in mask_epoch_rows:
                             wandb_ctx.log_metrics(
                                 {
-                                    "mnrl_subset/epoch": float(row["epoch"]),
-                                    f"mnrl_subset/loss_{row['population']}": float(
-                                        row["mean_loss"]
-                                    ),
-                                    f"mnrl_subset/count_{row['population']}": float(
-                                        row["triple_count"]
-                                    ),
-                                }
+                                    "masking/epoch": float(row["epoch"]),
+                                    "masking/dynamic_negative_presented": float(row["negative_presented"]),
+                                    "masking/dynamic_negative_masked": float(row["masked_count"]),
+                                    "masking/dynamic_negative_masked_pct": float(row["masked_pct"]),
+                                    "masking/dynamic_negative_mean_realized_extent": float(row["mean_realized_extent"]),
+                                },
                             )
-            usage_rows: list[dict] = []
-            if hasattr(loss_fn, "pair_usage_rows"):
-                usage_rows = loss_fn.pair_usage_rows()
-            if hasattr(loss_fn, "pair_usage_rows_by_epoch"):
-                usage_epoch_rows = loss_fn.pair_usage_rows_by_epoch()
-                if usage_epoch_rows:
-                    for usage in usage_epoch_rows:
-                        pair_id = int(usage["pair_id"])
-                        usage["dynamic_mask_count"] = int(
-                            dynamic_mask_counts_by_epoch.get(
-                                int(usage["epoch"]), {}
-                            ).get(pair_id, 0)
-                        )
-                    from core.common import write_visibility_log
+                if (
+                    loss == "mnrl"
+                    and mnrl_cfg.mnrl_monitoring.enabled
+                    and hasattr(loss_fn, "mnrl_subset_rows_by_epoch")
+                ):
+                    mnrl_subset_rows = loss_fn.mnrl_subset_rows_by_epoch()
+                    if mnrl_subset_rows:
+                        from core.common import write_visibility_log
 
-                    write_visibility_log(
-                        pd.DataFrame(usage_epoch_rows),
-                        f"pair_backprop_fold{fold_i}.csv",
-                        run_tag,
-                        sample,
-                    )
+                        write_visibility_log(
+                            pd.DataFrame(mnrl_subset_rows),
+                            f"mnrl_subset_loss_by_epoch_fold{fold_i}.csv",
+                            run_tag,
+                            sample,
+                        )
+                        if wandb_ctx is not None:
+                            for row in mnrl_subset_rows:
+                                wandb_ctx.log_metrics(
+                                    {
+                                        "mnrl_subset/epoch": float(row["epoch"]),
+                                        f"mnrl_subset/loss_{row['population']}": float(
+                                            row["mean_loss"]
+                                        ),
+                                        f"mnrl_subset/count_{row['population']}": float(
+                                            row["triple_count"]
+                                        ),
+                                    }
+                                )
+                usage_rows: list[dict] = []
+                if hasattr(loss_fn, "pair_usage_rows"):
+                    usage_rows = loss_fn.pair_usage_rows()
+                if hasattr(loss_fn, "pair_usage_rows_by_epoch"):
+                    usage_epoch_rows = loss_fn.pair_usage_rows_by_epoch()
+                    if usage_epoch_rows:
+                        for usage in usage_epoch_rows:
+                            pair_id = int(usage["pair_id"])
+                            usage["dynamic_mask_count"] = int(
+                                dynamic_mask_counts_by_epoch.get(
+                                    int(usage["epoch"]), {}
+                                ).get(pair_id, 0)
+                            )
+                        from core.common import write_visibility_log
+
+                        write_visibility_log(
+                            pd.DataFrame(usage_epoch_rows),
+                            f"pair_backprop_fold{fold_i}.csv",
+                            run_tag,
+                            sample,
+                        )
             # Source accounting is computed after the fold boundary and from
             # the same pair IDs used by the loss. This directly answers how
             # many gate / targeted-attribute / attribute-conflict / random-easy
@@ -5187,466 +5232,467 @@ def train_one_config(
                 continue
 
             # eval on test (timed: encode latency is a first-class metric)
-            from core.structured_features import fuse_numpy
+            with trace_step('training.train_one_config.holdout_eval'):
+                from core.structured_features import fuse_numpy
 
-            post_train_embedding_cache: dict[int, np.ndarray] = {}
+                post_train_embedding_cache: dict[int, np.ndarray] = {}
 
-            def _encode_fused_rows(rows: np.ndarray) -> np.ndarray:
-                """Encode each post-train payload row once per fold."""
-                unique_rows = np.unique(np.asarray(rows, dtype=int))
-                missing_rows = np.asarray(
+                def _encode_fused_rows(rows: np.ndarray) -> np.ndarray:
+                    """Encode each post-train payload row once per fold."""
+                    unique_rows = np.unique(np.asarray(rows, dtype=int))
+                    missing_rows = np.asarray(
+                        [
+                            row
+                            for row in unique_rows
+                            if int(row) not in post_train_embedding_cache
+                        ],
+                        dtype=int,
+                    )
+                    if len(missing_rows):
+                        encoded = model.encode(
+                            [payload[int(row)] for row in missing_rows],
+                            batch_size=runtime("batch_size_eval"),
+                            normalize_embeddings=True,
+                            show_progress_bar=False,
+                        )
+                        fused = fuse_numpy(
+                            encoded,
+                            structured_features[missing_rows],
+                            structured_feature_weight,
+                        )
+                        post_train_embedding_cache.update(
+                            {
+                                int(row): fused[position]
+                                for position, row in enumerate(missing_rows)
+                            }
+                        )
+                    return np.asarray(
+                        [post_train_embedding_cache[int(row)] for row in rows]
+                    )
+
+                t_encode = time.perf_counter()
+                eval_rows = np.unique(np.r_[test_pos.ravel(), hard_test.ravel()])
+                row_to_idx = {int(r): i for i, r in enumerate(eval_rows)}
+                tp_idx = np.array([row_to_idx[int(r)] for r in test_pos.ravel()]).reshape(
+                    -1, 2
+                )
+                hn_idx = np.array([row_to_idx[int(r)] for r in hard_test.ravel()]).reshape(
+                    -1, 2
+                )
+                emb = _encode_fused_rows(eval_rows)
+                encode_s = time.perf_counter() - t_encode
+                pos_s = _cos(emb, tp_idx)
+                neg_s = _cos(emb, hn_idx)
+                cross_mask = country[test_pos[:, 0]] != country[test_pos[:, 1]]
+
+                # Split-safe random/easy negatives: construct from TEST rows only,
+                # score with this fine-tuned model, and keep the population label
+                # separate from the gate-mined hard-negative dump.
+                random_neg_pairs = fold_inputs["random_neg_pairs"]
+                random_easy_s = np.empty(0, dtype=float)
+                random_easy_score_path = RESULTS / (
+                    f"train_{model_tag}_{run_tag}_fold{fold_i}_random_easy_scores.csv"
+                )
+                if len(random_neg_pairs):
+                    random_rows = np.unique(random_neg_pairs.ravel())
+                    random_row_to_idx = {int(r): i for i, r in enumerate(random_rows)}
+                    random_idx = np.array(
+                        [random_row_to_idx[int(r)] for r in random_neg_pairs.ravel()]
+                    ).reshape(-1, 2)
+                    random_emb = _encode_fused_rows(random_rows)
+                    random_easy_s = _cos(random_emb, random_idx)
+                random_easy_status = "ok" if len(random_neg_pairs) else "empty"
+                pd.DataFrame(
                     [
-                        row
-                        for row in unique_rows
-                        if int(row) not in post_train_embedding_cache
-                    ],
-                    dtype=int,
-                )
-                if len(missing_rows):
-                    encoded = model.encode(
-                        [payload[int(row)] for row in missing_rows],
-                        batch_size=runtime("batch_size_eval"),
-                        normalize_embeddings=True,
-                        show_progress_bar=False,
-                    )
-                    fused = fuse_numpy(
-                        encoded,
-                        structured_features[missing_rows],
-                        structured_feature_weight,
-                    )
-                    post_train_embedding_cache.update(
-                        {
-                            int(row): fused[position]
-                            for position, row in enumerate(missing_rows)
-                        }
-                    )
-                return np.asarray(
-                    [post_train_embedding_cache[int(row)] for row in rows]
-                )
+                        *(
+                            {
+                                "fold": fold_i,
+                                "population": "holdout_pos",
+                                "label": 1,
+                                "score": float(score),
+                            }
+                            for score in pos_s
+                        ),
+                        *(
+                            {
+                                "fold": fold_i,
+                                "population": "random_neg",
+                                "label": 0,
+                                "score": float(score),
+                            }
+                            for score in random_easy_s
+                        ),
+                    ]
+                ).to_csv(random_easy_score_path, index=False)
 
-            t_encode = time.perf_counter()
-            eval_rows = np.unique(np.r_[test_pos.ravel(), hard_test.ravel()])
-            row_to_idx = {int(r): i for i, r in enumerate(eval_rows)}
-            tp_idx = np.array([row_to_idx[int(r)] for r in test_pos.ravel()]).reshape(
-                -1, 2
-            )
-            hn_idx = np.array([row_to_idx[int(r)] for r in hard_test.ravel()]).reshape(
-                -1, 2
-            )
-            emb = _encode_fused_rows(eval_rows)
-            encode_s = time.perf_counter() - t_encode
-            pos_s = _cos(emb, tp_idx)
-            neg_s = _cos(emb, hn_idx)
-            cross_mask = country[test_pos[:, 0]] != country[test_pos[:, 1]]
-
-            # Split-safe random/easy negatives: construct from TEST rows only,
-            # score with this fine-tuned model, and keep the population label
-            # separate from the gate-mined hard-negative dump.
-            random_neg_pairs = fold_inputs["random_neg_pairs"]
-            random_easy_s = np.empty(0, dtype=float)
-            random_easy_score_path = RESULTS / (
-                f"train_{model_tag}_{run_tag}_fold{fold_i}_random_easy_scores.csv"
-            )
-            if len(random_neg_pairs):
-                random_rows = np.unique(random_neg_pairs.ravel())
-                random_row_to_idx = {int(r): i for i, r in enumerate(random_rows)}
-                random_idx = np.array(
-                    [random_row_to_idx[int(r)] for r in random_neg_pairs.ravel()]
+                # ── HOLDOUT DISCIPLINE (owner audit 2026-09-07) ────────────────
+                # Youden threshold is picked on DEV and applied to TEST. The old
+                # code computed the operating point on the test scores itself —
+                # an optimistic leak (the reported acc_at_thr was fitted on the
+                # very pairs it scored). Dev-side rows are already encoded here:
+                # reuse the SAME eval payload block for the dev pairs.
+                dev_rows = np.unique(np.r_[dev_pos.ravel(), hard_dev.ravel()])
+                dev_row_to_idx = {int(r): i for i, r in enumerate(dev_rows)}
+                dev_tp_idx = np.array(
+                    [dev_row_to_idx[int(r)] for r in dev_pos.ravel()]
                 ).reshape(-1, 2)
-                random_emb = _encode_fused_rows(random_rows)
-                random_easy_s = _cos(random_emb, random_idx)
-            random_easy_status = "ok" if len(random_neg_pairs) else "empty"
-            pd.DataFrame(
-                [
-                    *(
-                        {
-                            "fold": fold_i,
-                            "population": "holdout_pos",
-                            "label": 1,
-                            "score": float(score),
-                        }
-                        for score in pos_s
-                    ),
-                    *(
-                        {
-                            "fold": fold_i,
-                            "population": "random_neg",
-                            "label": 0,
-                            "score": float(score),
-                        }
-                        for score in random_easy_s
-                    ),
-                ]
-            ).to_csv(random_easy_score_path, index=False)
+                dev_hn_idx = np.array(
+                    [dev_row_to_idx[int(r)] for r in hard_dev.ravel()]
+                ).reshape(-1, 2)
+                dev_emb = _encode_fused_rows(dev_rows)
+                dev_pos_s = _cos(dev_emb, dev_tp_idx)
+                dev_neg_s = _cos(dev_emb, dev_hn_idx)
 
-            # ── HOLDOUT DISCIPLINE (owner audit 2026-09-07) ────────────────
-            # Youden threshold is picked on DEV and applied to TEST. The old
-            # code computed the operating point on the test scores itself —
-            # an optimistic leak (the reported acc_at_thr was fitted on the
-            # very pairs it scored). Dev-side rows are already encoded here:
-            # reuse the SAME eval payload block for the dev pairs.
-            dev_rows = np.unique(np.r_[dev_pos.ravel(), hard_dev.ravel()])
-            dev_row_to_idx = {int(r): i for i, r in enumerate(dev_rows)}
-            dev_tp_idx = np.array(
-                [dev_row_to_idx[int(r)] for r in dev_pos.ravel()]
-            ).reshape(-1, 2)
-            dev_hn_idx = np.array(
-                [dev_row_to_idx[int(r)] for r in hard_dev.ravel()]
-            ).reshape(-1, 2)
-            dev_emb = _encode_fused_rows(dev_rows)
-            dev_pos_s = _cos(dev_emb, dev_tp_idx)
-            dev_neg_s = _cos(dev_emb, dev_hn_idx)
-
-            # Diagnostic train-side score population for class-overlap plots.
-            # It is never used for threshold fitting or HPO selection. For
-            # contrastive training, negatives are the exact gate negatives
-            # seen by the loss; for other losses, the mined hard-train set is
-            # the comparable negative population.
-            train_neg_eval_pairs = (
-                _train_neg_source[
-                    pairs_in_set(_train_neg_source, row_bc, tr_bc)
-                ]
-                if _train_neg_source is not None and len(_train_neg_source)
-                else hard_train
-            )
-            train_rows = np.unique(
-                np.r_[train_all.ravel(), train_neg_eval_pairs.ravel()]
-            )
-            train_row_to_idx = {int(r): i for i, r in enumerate(train_rows)}
-            train_pos_idx = np.array(
-                [train_row_to_idx[int(r)] for r in train_all.ravel()]
-            ).reshape(-1, 2)
-            train_neg_idx = np.array(
-                [train_row_to_idx[int(r)] for r in train_neg_eval_pairs.ravel()]
-            ).reshape(-1, 2)
-            train_emb = _encode_fused_rows(train_rows)
-            train_pos_s = _cos(train_emb, train_pos_idx)
-            train_neg_s = _cos(train_emb, train_neg_idx)
-
-            # ── latency metrics ──────────────────────────────────────────
-            train_s = time.perf_counter() - t_fold - encode_s
-            steps_run = trainer.state.global_step
-            s_per_step = train_s / steps_run if steps_run else float("nan")
-            texts_per_s = len(eval_rows) / encode_s if encode_s else float("nan")
-            # steps saved by early stopping (epochs requested vs run)
-            steps_full = n_steps_per_epoch * cfg["epochs"]
-            es_saved_pct = (
-                100 * (1 - steps_run / steps_full) if steps_full else float("nan")
-            )
-
-            # ── GPU usage (0 on CPU) ──────────────────────────────────────
-            gpu_vram_gb = gpu_peak_gb = float("nan")
-            if on_cuda:
-                gpu_vram_gb = torch.cuda.memory_allocated() / 1e9
-                gpu_peak_gb = torch.cuda.max_memory_allocated() / 1e9
-                torch.cuda.reset_peak_memory_stats()
-
-            # ── Youden threshold: picked on DEV, applied to TEST ───────────
-            # (J = TPR - FPR). The threshold the fold would SHIP with is
-            # chosen on validation, never fitted on the holdout it scores.
-            _all = np.r_[pos_s, neg_s]
-            _y = np.r_[np.ones(len(pos_s)), np.zeros(len(neg_s))]
-            _dev_all = np.r_[dev_pos_s, dev_neg_s]
-            _dev_y = np.r_[
-                np.ones(len(dev_pos_s)), np.zeros(len(dev_neg_s))
-            ]
-
-            _thr = youden_threshold(_dev_all, _dev_y)
-            _pred_at_thr = (_all >= _thr).astype(int)
-            _acc = float(
-                ((_y == 1) & (_pred_at_thr == 1)).sum()
-                + ((_y == 0) & (_pred_at_thr == 0)).sum()
-            ) / len(_y) if len(_y) else float("nan")
-
-            # PR-AUC + F1 at the FIXED operating threshold (SSOT):
-            # ROC AUC alone hides class imbalance and threshold choice;
-            # the lane reports PR-AUC + the F1 the pipeline would ship with
-            from sklearn.metrics import average_precision_score, f1_score
-
-            from core.common import load_config as _lc
-
-            _pr_auc = float(average_precision_score(_y, _all))
-            # ══════════════════════════════════════════════════════════════
-            # HOLDOUT RETRIEVAL (ER-346) — two protocols, both reported
-            # ══════════════════════════════════════════════════════════════
-            # OLD PROTOCOL (retained, renamed, and PROVEN degenerate by its own
-            # coverage record below): the pool was np.vstack([test_pos,
-            # hard_test]) grouped by source sku_id.  Negatives are anchored
-            # only at the single representative row per gtin, so 5,292 of
-            # 5,847 holdout queries saw EXACTLY their own positive and no query
-            # ever saw more than 6 candidates (< max(ks)=10).  With the positive
-            # first in a stable sort, a perfect oracle and a constant scorer
-            # both read Hits@1 = Precision@1 = Recall@1 = Recall@5 = Recall@10
-            # = 1.0.  Its coverage fields (share_queries_pool_le_max_k = 1.0,
-            # trustworthy = 0) are what make that visible in the CSV.
-            _ks = tuple(_lc()["evaluation"]["retrieval_ks"])
-            _eval_pairs = np.vstack([test_pos, hard_test])
-            _query_ids = np.asarray(
-                [str(df["sku_id"].iloc[int(i)]) for i in _eval_pairs[:, 0]],
-                dtype=str,
-            )
-            _old_protocol = {
-                f"old_protocol_{name}": value
-                for name, value in ranking_at_k_by_query(
-                    _y, _all, _query_ids, _ks
-                ).items()
-            }
-            _old_protocol.update(
-                ranking_coverage(
-                    _y,
-                    _query_ids,
-                    _ks,
-                    prefix="old_protocol_",
-                    tie_break="stable_input_order_positive_first",
+                # Diagnostic train-side score population for class-overlap plots.
+                # It is never used for threshold fitting or HPO selection. For
+                # contrastive training, negatives are the exact gate negatives
+                # seen by the loss; for other losses, the mined hard-train set is
+                # the comparable negative population.
+                train_neg_eval_pairs = (
+                    _train_neg_source[
+                        pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                    ]
+                    if _train_neg_source is not None and len(_train_neg_source)
+                    else hard_train
                 )
-            )
+                train_rows = np.unique(
+                    np.r_[train_all.ravel(), train_neg_eval_pairs.ravel()]
+                )
+                train_row_to_idx = {int(r): i for i, r in enumerate(train_rows)}
+                train_pos_idx = np.array(
+                    [train_row_to_idx[int(r)] for r in train_all.ravel()]
+                ).reshape(-1, 2)
+                train_neg_idx = np.array(
+                    [train_row_to_idx[int(r)] for r in train_neg_eval_pairs.ravel()]
+                ).reshape(-1, 2)
+                train_emb = _encode_fused_rows(train_rows)
+                train_pos_s = _cos(train_emb, train_pos_idx)
+                train_neg_s = _cos(train_emb, train_neg_idx)
 
-            # NEW PROTOCOL: every query gets its OWN positive plus
-            # ``competitors_per_query(ks)`` competing canonicals from OTHER
-            # components of the SAME test fold.  N = 10 * max(ks) - 1 = 99 for
-            # ks=[1,5,10] — the floor is N >= max(ks) (pool strictly larger than
-            # the largest K) and the chosen N puts an informationless scorer's
-            # Recall@10 at 10/100 = 0.10, one decade of usable range below 1.0.
-            # The correctness floor for the FIVE bare schema-pinned columns
-            # (hits_at_1 / precision_at_k / recall_at_k) now carries these
-            # corrected values.
-            _n_competitors = competitors_per_query(_ks)
-            _retrieval_pool = fold_inputs["retrieval_pool"]
-            _t_pool = time.perf_counter()
-            _pool_rows = np.unique(_retrieval_pool.pairs.ravel())
-            # Pool rows are payload indices encoded through the SAME fused
-            # cache the rest of the fold uses, so the added cost is the number
-            # of UNIQUE rows (bounded by the fold's canonical count), never
-            # queries x N.
-            _pool_added_rows = added_encode_rows(_pool_rows, eval_rows)
-            _pool_emb = _encode_fused_rows(_pool_rows)
-            _pool_idx = np.searchsorted(_pool_rows, _retrieval_pool.pairs).reshape(-1, 2)
-            _pool_scores = _cos(_pool_emb, _pool_idx)
-            _pool_encode_s = time.perf_counter() - _t_pool
-            _retrieval = ranking_at_k_by_query(
-                _retrieval_pool.labels,
-                _pool_scores,
-                _retrieval_pool.query_keys,
-                _ks,
-            )
-            _retrieval.update(
-                ranking_coverage(
+                # ── latency metrics ──────────────────────────────────────────
+                train_s = time.perf_counter() - t_fold - encode_s
+                steps_run = trainer.state.global_step
+                s_per_step = train_s / steps_run if steps_run else float("nan")
+                texts_per_s = len(eval_rows) / encode_s if encode_s else float("nan")
+                # steps saved by early stopping (epochs requested vs run)
+                steps_full = n_steps_per_epoch * cfg["epochs"]
+                es_saved_pct = (
+                    100 * (1 - steps_run / steps_full) if steps_full else float("nan")
+                )
+
+                # ── GPU usage (0 on CPU) ──────────────────────────────────────
+                gpu_vram_gb = gpu_peak_gb = float("nan")
+                if on_cuda:
+                    gpu_vram_gb = torch.cuda.memory_allocated() / 1e9
+                    gpu_peak_gb = torch.cuda.max_memory_allocated() / 1e9
+                    torch.cuda.reset_peak_memory_stats()
+
+                # ── Youden threshold: picked on DEV, applied to TEST ───────────
+                # (J = TPR - FPR). The threshold the fold would SHIP with is
+                # chosen on validation, never fitted on the holdout it scores.
+                _all = np.r_[pos_s, neg_s]
+                _y = np.r_[np.ones(len(pos_s)), np.zeros(len(neg_s))]
+                _dev_all = np.r_[dev_pos_s, dev_neg_s]
+                _dev_y = np.r_[
+                    np.ones(len(dev_pos_s)), np.zeros(len(dev_neg_s))
+                ]
+
+                _thr = youden_threshold(_dev_all, _dev_y)
+                _pred_at_thr = (_all >= _thr).astype(int)
+                _acc = float(
+                    ((_y == 1) & (_pred_at_thr == 1)).sum()
+                    + ((_y == 0) & (_pred_at_thr == 0)).sum()
+                ) / len(_y) if len(_y) else float("nan")
+
+                # PR-AUC + F1 at the FIXED operating threshold (SSOT):
+                # ROC AUC alone hides class imbalance and threshold choice;
+                # the lane reports PR-AUC + the F1 the pipeline would ship with
+                from sklearn.metrics import average_precision_score, f1_score
+
+                from core.common import load_config as _lc
+
+                _pr_auc = float(average_precision_score(_y, _all))
+                # ══════════════════════════════════════════════════════════════
+                # HOLDOUT RETRIEVAL (ER-346) — two protocols, both reported
+                # ══════════════════════════════════════════════════════════════
+                # OLD PROTOCOL (retained, renamed, and PROVEN degenerate by its own
+                # coverage record below): the pool was np.vstack([test_pos,
+                # hard_test]) grouped by source sku_id.  Negatives are anchored
+                # only at the single representative row per gtin, so 5,292 of
+                # 5,847 holdout queries saw EXACTLY their own positive and no query
+                # ever saw more than 6 candidates (< max(ks)=10).  With the positive
+                # first in a stable sort, a perfect oracle and a constant scorer
+                # both read Hits@1 = Precision@1 = Recall@1 = Recall@5 = Recall@10
+                # = 1.0.  Its coverage fields (share_queries_pool_le_max_k = 1.0,
+                # trustworthy = 0) are what make that visible in the CSV.
+                _ks = tuple(_lc()["evaluation"]["retrieval_ks"])
+                _eval_pairs = np.vstack([test_pos, hard_test])
+                _query_ids = np.asarray(
+                    [str(df["sku_id"].iloc[int(i)]) for i in _eval_pairs[:, 0]],
+                    dtype=str,
+                )
+                _old_protocol = {
+                    f"old_protocol_{name}": value
+                    for name, value in ranking_at_k_by_query(
+                        _y, _all, _query_ids, _ks
+                    ).items()
+                }
+                _old_protocol.update(
+                    ranking_coverage(
+                        _y,
+                        _query_ids,
+                        _ks,
+                        prefix="old_protocol_",
+                        tie_break="stable_input_order_positive_first",
+                    )
+                )
+
+                # NEW PROTOCOL: every query gets its OWN positive plus
+                # ``competitors_per_query(ks)`` competing canonicals from OTHER
+                # components of the SAME test fold.  N = 10 * max(ks) - 1 = 99 for
+                # ks=[1,5,10] — the floor is N >= max(ks) (pool strictly larger than
+                # the largest K) and the chosen N puts an informationless scorer's
+                # Recall@10 at 10/100 = 0.10, one decade of usable range below 1.0.
+                # The correctness floor for the FIVE bare schema-pinned columns
+                # (hits_at_1 / precision_at_k / recall_at_k) now carries these
+                # corrected values.
+                _n_competitors = competitors_per_query(_ks)
+                _retrieval_pool = fold_inputs["retrieval_pool"]
+                _t_pool = time.perf_counter()
+                _pool_rows = np.unique(_retrieval_pool.pairs.ravel())
+                # Pool rows are payload indices encoded through the SAME fused
+                # cache the rest of the fold uses, so the added cost is the number
+                # of UNIQUE rows (bounded by the fold's canonical count), never
+                # queries x N.
+                _pool_added_rows = added_encode_rows(_pool_rows, eval_rows)
+                _pool_emb = _encode_fused_rows(_pool_rows)
+                _pool_idx = np.searchsorted(_pool_rows, _retrieval_pool.pairs).reshape(-1, 2)
+                _pool_scores = _cos(_pool_emb, _pool_idx)
+                _pool_encode_s = time.perf_counter() - _t_pool
+                _retrieval = ranking_at_k_by_query(
                     _retrieval_pool.labels,
+                    _pool_scores,
                     _retrieval_pool.query_keys,
                     _ks,
-                    prefix="retrieval_",
-                    tie_break="seeded_within_query_permutation",
                 )
-            )
-            _retrieval.update(
-                {
-                    f"retrieval_{name}": value
-                    for name, value in _retrieval_pool.coverage.items()
+                _retrieval.update(
+                    ranking_coverage(
+                        _retrieval_pool.labels,
+                        _retrieval_pool.query_keys,
+                        _ks,
+                        prefix="retrieval_",
+                        tie_break="seeded_within_query_permutation",
+                    )
+                )
+                _retrieval.update(
+                    {
+                        f"retrieval_{name}": value
+                        for name, value in _retrieval_pool.coverage.items()
+                    }
+                )
+                _retrieval["retrieval_pool_unique_rows"] = len(_pool_rows)
+                _retrieval["retrieval_pool_added_encode_rows"] = int(_pool_added_rows)
+                _retrieval["retrieval_pool_encode_s"] = round(_pool_encode_s, 1)
+                _top_k = max(_ks)
+                print(
+                    f"  [retrieval] fold {fold_i}: {_retrieval_pool.coverage['pool_queries_evaluated']:,}"
+                    f"/{_retrieval_pool.coverage['pool_queries_requested']:,} queries pooled | "
+                    f"pool sizes {_retrieval_pool.coverage['pool_size_min']}-"
+                    f"{_retrieval_pool.coverage['pool_size_max']} "
+                    f"(target 1+{_n_competitors}) | unique rows +{_pool_added_rows:,}"
+                    f" | Recall@{_top_k} {_retrieval[f'recall_at_{_top_k}']:.4f} vs chance "
+                    f"{_retrieval[f'retrieval_chance_recall_at_{_top_k}']:.4f} | "
+                    f"old protocol Recall@{_top_k} "
+                    f"{_old_protocol[f'old_protocol_recall_at_{_top_k}']:.4f} "
+                    f"(share_pool_le_max_k="
+                    f"{_old_protocol['old_protocol_share_queries_pool_le_max_k']:.4f})",
+                    flush=True,
+                )
+
+                _fixed_thr = float(_lc()["split"]["fixed_threshold"])
+                _pred = (_all >= _fixed_thr).astype(int)
+                _f1_fixed = float(f1_score(_y, _pred, zero_division=0))
+                _prec_fixed = float(
+                    (_y[_pred == 1] == 1).mean() if (_pred == 1).any() else 0.0
+                )
+                _rec_fixed = float((_pred[_y == 1] == 1).mean() if (_y == 1).any() else 0.0)
+                # metric column names follow the SSOT threshold (the historical
+                # "f1_at_0.55" names hardcoded 0.55 while the value was already
+                # config-driven — a threshold change would have made every CSV
+                # header lie). Consumers key on f"*_at_{thr:g}".
+                _thr_key = f"{_fixed_thr:g}"
+
+                # ── 07-series schema fields (owner ruling): the report plots read
+                # precision at 90% recall with its audit triple (TP/FP/threshold)
+                # from 07b/07c/07d CSVs; compute them from the SAME score
+                # population as pr_auc so those CSVs regenerate from src/training/train runs.
+                _target_recall = float(
+                    calibration_config["rand_matching"]["target_recall"]
+                )
+                _prec90, _rec90, _thr90 = _precision_at_recall(_y, _all, _target_recall)
+                _tp90 = int(((_all >= _thr90) & (_y == 1)).sum())
+                _fp90 = int(((_all >= _thr90) & (_y == 0)).sum())
+                # Same SSOT doctrine as _thr_key above: the recall-tied KEYS must
+                # follow the configured target_recall, not a literal "90pct" —
+                # otherwise a retune writes a 95%-recall number under a 90% header.
+                _recall_key = recall_column_suffix(_target_recall)
+
+                row = {
+                    "fold": fold_i,
+                    "status": "ok",
+                    "auc": _auc(pos_s, neg_s),
+                    # dev-picked Youden applied to test (holdout discipline);
+                    # youden_thr_test_descriptive = the threshold argmax ON test
+                    # scores — reported ONLY as the leak diagnostic (how much
+                    # the old protocol flattered itself), never as the ship point
+                    "youden_thr": _thr,
+                    "youden_thr_test_descriptive": youden_threshold(_all, _y),
+                    "acc_at_thr": _acc,
+                    "pr_auc": _pr_auc,
+                    # 07-schema: AP under the same name the plots expect
+                    "average_precision": _pr_auc,
+                    # The five bare, schema-pinned retrieval columns
+                    # (hits_at_1/precision_at_k/recall_at_k) now carry the
+                    # CORRECTED per-query pool; the degenerate historical pool is
+                    # retained under old_protocol_* so the improvement is auditable
+                    # in the same row, and BOTH carry their own coverage record.
+                    **_retrieval,
+                    **_old_protocol,
+                    f"precision_at_{_recall_key}_recall": _prec90,
+                    f"tp_at_{_recall_key}_recall": _tp90,
+                    f"fp_at_{_recall_key}_recall": _fp90,
+                    f"threshold_at_{_recall_key}_recall": _thr90,
+                    f"f1_at_{_thr_key}": _f1_fixed,
+                    f"precision_at_{_thr_key}": _prec_fixed,
+                    f"recall_at_{_thr_key}": _rec_fixed,
+                    "auc_cross": _auc(pos_s[cross_mask], neg_s)
+                    if cross_mask.any()
+                    else float("nan"),
+                    "final_train_loss": final_train_loss,
+                    "best_dev_ap": best_dev_ap,
+                    # full curves for the train-vs-val loss plot (json: csv-column-safe)
+                    "train_loss_hist": json.dumps([round(x, 4) for x in train_losses]),
+                    "train_epoch_hist": json.dumps(
+                        [round(float(e["epoch"]), 4) for e in hist if "loss" in e and e.get("epoch") is not None]
+                    ),
+                    "dev_ap_hist": json.dumps([round(x, 4) for x in dev_aps]),
+                    "dev_auc_hist": json.dumps([round(x, 4) for x in dev_aucs]),
+                    "dev_precision_hist": json.dumps([round(x, 4) for x in dev_precisions]),
+                    "dev_recall_hist": json.dumps([round(x, 4) for x in dev_recalls]),
+                    "dev_f1_hist": json.dumps([round(x, 4) for x in dev_f1s]),
+                    "dev_metric_epoch_hist": json.dumps(
+                        [round(float(e["epoch"]), 4) for e in dev_metric_events]
+                    ),
+                    "dev_loss_hist": json.dumps([round(x, 4) for x in dev_losses]),
+                    "dev_epoch_hist": json.dumps(
+                        [round(float(e["epoch"]), 4) for e in hist if "eval_loss" in e and e.get("epoch") is not None]
+                    ),
+                    # ── pair accounting (failure-analysis ground) ────────────
+                    "n_pos": len(test_pos),
+                    "n_neg": len(hard_test),
+                    "n_random_easy_neg": len(random_neg_pairs),
+                    "random_easy_status": random_easy_status,
+                    "random_easy_available": int(bool(len(random_neg_pairs))),
+                    "random_easy_score_csv": str(random_easy_score_path),
+                    **coverage,
+                    **source_coverage,
+                    **datapoint_coverage,
+                    "n_train_pos": len(train_pos),
+                    # hp rows in train = total minus the GATE rows actually kept.
+                    # Subtracting the UNSAMPLED train_pos went NEGATIVE under
+                    # train_frac<1 (measured -426 on the frac0.25 run).
+                    "n_train_hp": int(len(train_all) - n_gate_kept),
+                    # contrastive: labeled negatives = gate hard-no pairs in
+                    # train gtins (the label=0 half of the dataset); mnrl:
+                    # in-batch only (counted separately below); triplet: mined
+                    "n_train_neg": (
+                        len(tr_negs)
+                        if loss == "contrastive"
+                        else (0 if loss == "mnrl" else len(hard_train))
+                    ),
+                    "n_train_hard_neg": n_train_hard_neg,
+                    "n_train_random_easy_neg": n_train_random_easy_neg,
+                    "n_train_random_easy_unique_candidates": (
+                        random_easy_unique_candidates
+                    ),
+                    "train_random_easy_to_hard_ratio": (
+                        n_train_random_easy_neg / n_train_hard_neg
+                        if n_train_hard_neg
+                        else 0.0
+                    ),
+                    "n_hp_in_train": (
+                        len(hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)])
+                        if use_hp and hp_pairs is not None and len(hp_pairs)
+                        else 0
+                    ),
+                    # MNRL negatives are in-batch: each anchor sees every other
+                    # example's positive as a negative -> (batch_size - 1) per
+                    # anchor, ~batch*n_train per epoch
+                    "n_mnrl_neg_per_anchor": (
+                        BATCH_SIZE_CUDA if on_cuda else BATCH_SIZE_CPU
+                    )
+                    - 1
+                    if loss == "mnrl"
+                    else 0,
+                    "n_dev_pos": len(dev_pos),
+                    "n_dev_neg": len(hard_dev),
+                    "n_negative_presented": dynamic_negative_presented_total,
+                    "n_masked_hard_negatives": dynamic_negative_masked_total,
+                    "masked_hard_negative_pct": (
+                        dynamic_negative_masked_total / dynamic_negative_presented_total
+                        if dynamic_negative_presented_total
+                        else 0.0
+                    ),
+                    "n_train": (
+                        len(train_ds)
+                        if loss in ("mnrl", "contrastive")
+                        else len(examples or [])
+                    ),
+                    # optimizer geometry actually used (F09): "discriminative"
+                    # = per-layer groups; "single" = the visible single-LR
+                    # fallback after a _discriminative_groups failure
+                    "lr_groups": lr_groups,
+                    "warmup_steps": warmup_steps,
+                    "weight_decay": float(cfg["weight_decay"]),
+                    "projection_dropout": float(cfg["projection_dropout"]),
+                    "label_smoothing": (
+                        float(cfg["label_smoothing"])
+                        if loss == "contrastive"
+                        else 0.0
+                    ),
+                    "uniformity_weight": float(cfg["uniformity_weight"]),
+                    "late_epoch_decay_enabled": bool(
+                        cfg["late_epoch_decay_enabled"]
+                    ),
+                    "late_epoch_decay_start_fraction": float(
+                        cfg["late_epoch_decay_start_fraction"]
+                    ),
+                    "late_epoch_decay_multiplier": float(
+                        cfg["late_epoch_decay_multiplier"]
+                    ),
+                    "late_epoch_decay_applied": int(late_lr_callback.applied),
+                    "late_epoch_decay_applied_epoch": (
+                        float(late_lr_callback.applied_epoch)
+                        if late_lr_callback.applied_epoch is not None
+                        else float("nan")
+                    ),
+                    **{
+                        f"train_{key}": value
+                        for key, value in progress_callback.latest_collapse_metrics.items()
+                    },
+                    # latency
+                    "s_per_step": round(s_per_step, 3),
+                    "texts_per_s_encode": round(texts_per_s, 1),
+                    "encode_s": round(encode_s, 1),
+                    "train_s": round(train_s, 1),
+                    "es_saved_pct": round(es_saved_pct, 1),
+                    # device
+                    "gpu_vram_gb": round(gpu_vram_gb, 2),
+                    "gpu_peak_gb": round(gpu_peak_gb, 2),
+                    "fold_s": round(time.perf_counter() - t_fold, 1),
+                    **calibration_metrics,
                 }
-            )
-            _retrieval["retrieval_pool_unique_rows"] = len(_pool_rows)
-            _retrieval["retrieval_pool_added_encode_rows"] = int(_pool_added_rows)
-            _retrieval["retrieval_pool_encode_s"] = round(_pool_encode_s, 1)
-            _top_k = max(_ks)
-            print(
-                f"  [retrieval] fold {fold_i}: {_retrieval_pool.coverage['pool_queries_evaluated']:,}"
-                f"/{_retrieval_pool.coverage['pool_queries_requested']:,} queries pooled | "
-                f"pool sizes {_retrieval_pool.coverage['pool_size_min']}-"
-                f"{_retrieval_pool.coverage['pool_size_max']} "
-                f"(target 1+{_n_competitors}) | unique rows +{_pool_added_rows:,}"
-                f" | Recall@{_top_k} {_retrieval[f'recall_at_{_top_k}']:.4f} vs chance "
-                f"{_retrieval[f'retrieval_chance_recall_at_{_top_k}']:.4f} | "
-                f"old protocol Recall@{_top_k} "
-                f"{_old_protocol[f'old_protocol_recall_at_{_top_k}']:.4f} "
-                f"(share_pool_le_max_k="
-                f"{_old_protocol['old_protocol_share_queries_pool_le_max_k']:.4f})",
-                flush=True,
-            )
-
-            _fixed_thr = float(_lc()["split"]["fixed_threshold"])
-            _pred = (_all >= _fixed_thr).astype(int)
-            _f1_fixed = float(f1_score(_y, _pred, zero_division=0))
-            _prec_fixed = float(
-                (_y[_pred == 1] == 1).mean() if (_pred == 1).any() else 0.0
-            )
-            _rec_fixed = float((_pred[_y == 1] == 1).mean() if (_y == 1).any() else 0.0)
-            # metric column names follow the SSOT threshold (the historical
-            # "f1_at_0.55" names hardcoded 0.55 while the value was already
-            # config-driven — a threshold change would have made every CSV
-            # header lie). Consumers key on f"*_at_{thr:g}".
-            _thr_key = f"{_fixed_thr:g}"
-
-            # ── 07-series schema fields (owner ruling): the report plots read
-            # precision at 90% recall with its audit triple (TP/FP/threshold)
-            # from 07b/07c/07d CSVs; compute them from the SAME score
-            # population as pr_auc so those CSVs regenerate from src/training/train runs.
-            _target_recall = float(
-                calibration_config["rand_matching"]["target_recall"]
-            )
-            _prec90, _rec90, _thr90 = _precision_at_recall(_y, _all, _target_recall)
-            _tp90 = int(((_all >= _thr90) & (_y == 1)).sum())
-            _fp90 = int(((_all >= _thr90) & (_y == 0)).sum())
-            # Same SSOT doctrine as _thr_key above: the recall-tied KEYS must
-            # follow the configured target_recall, not a literal "90pct" —
-            # otherwise a retune writes a 95%-recall number under a 90% header.
-            _recall_key = recall_column_suffix(_target_recall)
-
-            row = {
-                "fold": fold_i,
-                "status": "ok",
-                "auc": _auc(pos_s, neg_s),
-                # dev-picked Youden applied to test (holdout discipline);
-                # youden_thr_test_descriptive = the threshold argmax ON test
-                # scores — reported ONLY as the leak diagnostic (how much
-                # the old protocol flattered itself), never as the ship point
-                "youden_thr": _thr,
-                "youden_thr_test_descriptive": youden_threshold(_all, _y),
-                "acc_at_thr": _acc,
-                "pr_auc": _pr_auc,
-                # 07-schema: AP under the same name the plots expect
-                "average_precision": _pr_auc,
-                # The five bare, schema-pinned retrieval columns
-                # (hits_at_1/precision_at_k/recall_at_k) now carry the
-                # CORRECTED per-query pool; the degenerate historical pool is
-                # retained under old_protocol_* so the improvement is auditable
-                # in the same row, and BOTH carry their own coverage record.
-                **_retrieval,
-                **_old_protocol,
-                f"precision_at_{_recall_key}_recall": _prec90,
-                f"tp_at_{_recall_key}_recall": _tp90,
-                f"fp_at_{_recall_key}_recall": _fp90,
-                f"threshold_at_{_recall_key}_recall": _thr90,
-                f"f1_at_{_thr_key}": _f1_fixed,
-                f"precision_at_{_thr_key}": _prec_fixed,
-                f"recall_at_{_thr_key}": _rec_fixed,
-                "auc_cross": _auc(pos_s[cross_mask], neg_s)
-                if cross_mask.any()
-                else float("nan"),
-                "final_train_loss": final_train_loss,
-                "best_dev_ap": best_dev_ap,
-                # full curves for the train-vs-val loss plot (json: csv-column-safe)
-                "train_loss_hist": json.dumps([round(x, 4) for x in train_losses]),
-                "train_epoch_hist": json.dumps(
-                    [round(float(e["epoch"]), 4) for e in hist if "loss" in e and e.get("epoch") is not None]
-                ),
-                "dev_ap_hist": json.dumps([round(x, 4) for x in dev_aps]),
-                "dev_auc_hist": json.dumps([round(x, 4) for x in dev_aucs]),
-                "dev_precision_hist": json.dumps([round(x, 4) for x in dev_precisions]),
-                "dev_recall_hist": json.dumps([round(x, 4) for x in dev_recalls]),
-                "dev_f1_hist": json.dumps([round(x, 4) for x in dev_f1s]),
-                "dev_metric_epoch_hist": json.dumps(
-                    [round(float(e["epoch"]), 4) for e in dev_metric_events]
-                ),
-                "dev_loss_hist": json.dumps([round(x, 4) for x in dev_losses]),
-                "dev_epoch_hist": json.dumps(
-                    [round(float(e["epoch"]), 4) for e in hist if "eval_loss" in e and e.get("epoch") is not None]
-                ),
-                # ── pair accounting (failure-analysis ground) ────────────
-                "n_pos": len(test_pos),
-                "n_neg": len(hard_test),
-                "n_random_easy_neg": len(random_neg_pairs),
-                "random_easy_status": random_easy_status,
-                "random_easy_available": int(bool(len(random_neg_pairs))),
-                "random_easy_score_csv": str(random_easy_score_path),
-                **coverage,
-                **source_coverage,
-                **datapoint_coverage,
-                "n_train_pos": len(train_pos),
-                # hp rows in train = total minus the GATE rows actually kept.
-                # Subtracting the UNSAMPLED train_pos went NEGATIVE under
-                # train_frac<1 (measured -426 on the frac0.25 run).
-                "n_train_hp": int(len(train_all) - n_gate_kept),
-                # contrastive: labeled negatives = gate hard-no pairs in
-                # train gtins (the label=0 half of the dataset); mnrl:
-                # in-batch only (counted separately below); triplet: mined
-                "n_train_neg": (
-                    len(tr_negs)
-                    if loss == "contrastive"
-                    else (0 if loss == "mnrl" else len(hard_train))
-                ),
-                "n_train_hard_neg": n_train_hard_neg,
-                "n_train_random_easy_neg": n_train_random_easy_neg,
-                "n_train_random_easy_unique_candidates": (
-                    random_easy_unique_candidates
-                ),
-                "train_random_easy_to_hard_ratio": (
-                    n_train_random_easy_neg / n_train_hard_neg
-                    if n_train_hard_neg
-                    else 0.0
-                ),
-                "n_hp_in_train": (
-                    len(hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)])
-                    if use_hp and hp_pairs is not None and len(hp_pairs)
-                    else 0
-                ),
-                # MNRL negatives are in-batch: each anchor sees every other
-                # example's positive as a negative -> (batch_size - 1) per
-                # anchor, ~batch*n_train per epoch
-                "n_mnrl_neg_per_anchor": (
-                    BATCH_SIZE_CUDA if on_cuda else BATCH_SIZE_CPU
-                )
-                - 1
-                if loss == "mnrl"
-                else 0,
-                "n_dev_pos": len(dev_pos),
-                "n_dev_neg": len(hard_dev),
-                "n_negative_presented": dynamic_negative_presented_total,
-                "n_masked_hard_negatives": dynamic_negative_masked_total,
-                "masked_hard_negative_pct": (
-                    dynamic_negative_masked_total / dynamic_negative_presented_total
-                    if dynamic_negative_presented_total
-                    else 0.0
-                ),
-                "n_train": (
-                    len(train_ds)
-                    if loss in ("mnrl", "contrastive")
-                    else len(examples or [])
-                ),
-                # optimizer geometry actually used (F09): "discriminative"
-                # = per-layer groups; "single" = the visible single-LR
-                # fallback after a _discriminative_groups failure
-                "lr_groups": lr_groups,
-                "warmup_steps": warmup_steps,
-                "weight_decay": float(cfg["weight_decay"]),
-                "projection_dropout": float(cfg["projection_dropout"]),
-                "label_smoothing": (
-                    float(cfg["label_smoothing"])
-                    if loss == "contrastive"
-                    else 0.0
-                ),
-                "uniformity_weight": float(cfg["uniformity_weight"]),
-                "late_epoch_decay_enabled": bool(
-                    cfg["late_epoch_decay_enabled"]
-                ),
-                "late_epoch_decay_start_fraction": float(
-                    cfg["late_epoch_decay_start_fraction"]
-                ),
-                "late_epoch_decay_multiplier": float(
-                    cfg["late_epoch_decay_multiplier"]
-                ),
-                "late_epoch_decay_applied": int(late_lr_callback.applied),
-                "late_epoch_decay_applied_epoch": (
-                    float(late_lr_callback.applied_epoch)
-                    if late_lr_callback.applied_epoch is not None
-                    else float("nan")
-                ),
-                **{
-                    f"train_{key}": value
-                    for key, value in progress_callback.latest_collapse_metrics.items()
-                },
-                # latency
-                "s_per_step": round(s_per_step, 3),
-                "texts_per_s_encode": round(texts_per_s, 1),
-                "encode_s": round(encode_s, 1),
-                "train_s": round(train_s, 1),
-                "es_saved_pct": round(es_saved_pct, 1),
-                # device
-                "gpu_vram_gb": round(gpu_vram_gb, 2),
-                "gpu_peak_gb": round(gpu_peak_gb, 2),
-                "fold_s": round(time.perf_counter() - t_fold, 1),
-                **calibration_metrics,
-            }
-            rows.append(row)
+                rows.append(row)
 
             # ── per-fold pair dump: the failure-analysis ground truth ─────
             # every scored pair with its sku_ids, score, label and stratum —
@@ -5658,111 +5704,112 @@ def train_one_config(
             # masked copy appears as a FIRST endpoint of a pos pair (its
             # anchor is a df row) — so the smallest pos-first-endpoint
             # >= len(df) marks the canonical/masked boundary.
-            _masked_firsts = [
-                int(i) for i in pos[:, 0] if i >= len(df)
-            ]
-            _canon_end = (
-                min(_masked_firsts) if _masked_firsts else len(payload)
-            )
-            n_canon_entries = max(0, _canon_end - len(df))
-            pair_records = []
-            _attribute_cache: dict[int, dict[str, object]] = {}
-
-            from core.attribute_conflicts import (
-                canonical_attribute_info,
-                conflict_columns,
-                sku_attribute_info,
-            )
-            from core.common import F as _F
-
-            if _canon_attrs is None:
-                _canon_frame = pd.read_csv(
-                    _F["canonical_records"], dtype=str, keep_default_na=False
-                )
-                _canon_attrs = {
-                    str(record["gtin"]): canonical_attribute_info(record)
-                    for record in _canon_frame.to_dict("records")
-                }
-
-            def _attribute_info(index: int) -> dict[str, object]:
-                """Use structured canonical attributes for canonical endpoints."""
-                if index in _attribute_cache:
-                    return _attribute_cache[index]
-                if index < len(df):
-                    info = sku_attribute_info(
-                        df["sku_name_eng"].iloc[index], df["attribute"].iloc[index],
-                        df["description_short_eng"].iloc[index]
-                        if "description_short_eng" in df else "",
-                    )
-                else:
-                    gtin = str(row_bc[index])
-                    if gtin not in _canon_attrs:
-                        raise KeyError(
-                            f"payload endpoint {index} has gtin {gtin!r} "
-                            "but no canonical attribute record"
-                        )
-                    info = _canon_attrs[gtin]
-                _attribute_cache[index] = info
-                return info
-
-            def _attribute_conflicts(a: int, b: int) -> dict[str, object]:
-                return conflict_columns(_attribute_info(a), _attribute_info(b))
-
-            df_sku_ids = df["sku_id"].tolist()
-            df_retailers = df["retailer"].tolist()
-
-            def _sku_id(i, _n_canon=n_canon_entries):
-                if i < len(df):
-                    return str(df_sku_ids[i])
-                bc_i = str(row_bc[i]) if i < len(row_bc) else ""
-                if i < len(df) + _n_canon:
-                    return f"canon#{bc_i or i}"
-                return f"masked#{i}"
-
-            def _retailer(i):
-                return str(df_retailers[i]) if i < len(df) else "-"
-
-            for pairs, scores, label, a_col, b_col in (
-                (test_pos, pos_s, 1, None, None),
-                (hard_test, neg_s, 0, None, None),
-            ):
-                for k in range(len(pairs)):
-                    a, b = int(pairs[k, 0]), int(pairs[k, 1])
-                    # payload space: [0, len(df)) = sku rows, then canonicals
-                    # (one per GTIN), then masked-anchor copies. The old dump
-                    # labeled EVERYTHING past df as "masked#N" — canonical
-                    # targets (the majority, ~85% of pos endpoints) were
-                    # mislabeled. Label by what the entry actually is.
-                    pair_records.append(
-                        {
-                            "fold": fold_i,
-                            "label": label,
-                            "sku_id_a": _sku_id(a),
-                            "sku_id_b": _sku_id(b),
-                            "score": float(scores[k]),
-                            "cross_country": bool(country[a] != country[b]),
-                            "retailer_a": _retailer(a),
-                            "retailer_b": _retailer(b),
-                            **_attribute_conflicts(a, b),
-                        }
-                    )
-            model_tag = model_id.split("/")[-1]
-            # pair dump carries run_tag (owner audit 2026-09-07): the bare
-            # model_tag name collided across runs — a 1k --sample run
-            # overwrote a 3h full run's pair dump (14,414 rows -> 1,079).
-            pd.DataFrame(pair_records).to_csv(
-                RESULTS / f"train_{model_tag}_{run_tag}_fold{fold_i}_pairs.csv",
-                index=False,
-            )
-            pd.DataFrame(
-                [
-                    *({"fold": fold_i, "label": 1, "score": float(s)} for s in train_pos_s),
-                    *({"fold": fold_i, "label": 0, "score": float(s)} for s in train_neg_s),
+            with trace_step('training.train_one_config.pair_dump'):
+                _masked_firsts = [
+                    int(i) for i in pos[:, 0] if i >= len(df)
                 ]
-            ).to_csv(
-                RESULTS / f"train_{model_tag}_{run_tag}_fold{fold_i}_train_scores.csv",
-                index=False,
-            )
+                _canon_end = (
+                    min(_masked_firsts) if _masked_firsts else len(payload)
+                )
+                n_canon_entries = max(0, _canon_end - len(df))
+                pair_records = []
+                _attribute_cache: dict[int, dict[str, object]] = {}
+
+                from core.attribute_conflicts import (
+                    canonical_attribute_info,
+                    conflict_columns,
+                    sku_attribute_info,
+                )
+                from core.common import F as _F
+
+                if _canon_attrs is None:
+                    _canon_frame = pd.read_csv(
+                        _F["canonical_records"], dtype=str, keep_default_na=False
+                    )
+                    _canon_attrs = {
+                        str(record["gtin"]): canonical_attribute_info(record)
+                        for record in _canon_frame.to_dict("records")
+                    }
+
+                def _attribute_info(index: int) -> dict[str, object]:
+                    """Use structured canonical attributes for canonical endpoints."""
+                    if index in _attribute_cache:
+                        return _attribute_cache[index]
+                    if index < len(df):
+                        info = sku_attribute_info(
+                            df["sku_name_eng"].iloc[index], df["attribute"].iloc[index],
+                            df["description_short_eng"].iloc[index]
+                            if "description_short_eng" in df else "",
+                        )
+                    else:
+                        gtin = str(row_bc[index])
+                        if gtin not in _canon_attrs:
+                            raise KeyError(
+                                f"payload endpoint {index} has gtin {gtin!r} "
+                                "but no canonical attribute record"
+                            )
+                        info = _canon_attrs[gtin]
+                    _attribute_cache[index] = info
+                    return info
+
+                def _attribute_conflicts(a: int, b: int) -> dict[str, object]:
+                    return conflict_columns(_attribute_info(a), _attribute_info(b))
+
+                df_sku_ids = df["sku_id"].tolist()
+                df_retailers = df["retailer"].tolist()
+
+                def _sku_id(i, _n_canon=n_canon_entries):
+                    if i < len(df):
+                        return str(df_sku_ids[i])
+                    bc_i = str(row_bc[i]) if i < len(row_bc) else ""
+                    if i < len(df) + _n_canon:
+                        return f"canon#{bc_i or i}"
+                    return f"masked#{i}"
+
+                def _retailer(i):
+                    return str(df_retailers[i]) if i < len(df) else "-"
+
+                for pairs, scores, label, a_col, b_col in (
+                    (test_pos, pos_s, 1, None, None),
+                    (hard_test, neg_s, 0, None, None),
+                ):
+                    for k in range(len(pairs)):
+                        a, b = int(pairs[k, 0]), int(pairs[k, 1])
+                        # payload space: [0, len(df)) = sku rows, then canonicals
+                        # (one per GTIN), then masked-anchor copies. The old dump
+                        # labeled EVERYTHING past df as "masked#N" — canonical
+                        # targets (the majority, ~85% of pos endpoints) were
+                        # mislabeled. Label by what the entry actually is.
+                        pair_records.append(
+                            {
+                                "fold": fold_i,
+                                "label": label,
+                                "sku_id_a": _sku_id(a),
+                                "sku_id_b": _sku_id(b),
+                                "score": float(scores[k]),
+                                "cross_country": bool(country[a] != country[b]),
+                                "retailer_a": _retailer(a),
+                                "retailer_b": _retailer(b),
+                                **_attribute_conflicts(a, b),
+                            }
+                        )
+                model_tag = model_id.split("/")[-1]
+                # pair dump carries run_tag (owner audit 2026-09-07): the bare
+                # model_tag name collided across runs — a 1k --sample run
+                # overwrote a 3h full run's pair dump (14,414 rows -> 1,079).
+                pd.DataFrame(pair_records).to_csv(
+                    RESULTS / f"train_{model_tag}_{run_tag}_fold{fold_i}_pairs.csv",
+                    index=False,
+                )
+                pd.DataFrame(
+                    [
+                        *({"fold": fold_i, "label": 1, "score": float(s)} for s in train_pos_s),
+                        *({"fold": fold_i, "label": 0, "score": float(s)} for s in train_neg_s),
+                    ]
+                ).to_csv(
+                    RESULTS / f"train_{model_tag}_{run_tag}_fold{fold_i}_train_scores.csv",
+                    index=False,
+                )
 
             # Track the train-versus-holdout geometry directly in W&B. The
             # CSVs remain the source of truth, but these summaries and the
@@ -5901,6 +5948,7 @@ def train_one_config(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@timed
 def run_hpo(
     args,
     data,
@@ -6117,134 +6165,137 @@ def run_hpo(
             )
         return value
 
-    sampler = optuna.samplers.TPESampler(seed=SEED)
-    # sqlite storage: the sweep SURVIVES session loss — re-running with the same
-    # --study resumes; every trial's params/value persist (the essential record)
-    # dlr suffix: discriminative-LR trials form a NEW objective surface —
-    # never mixed into the pre-dlr TPE history (its surrogate would be poisoned
-    # by trials whose values came from single-LR training)
-    study_name = f"second08-{args.model.split('/')[-1]}-dlr"
-    study_db = RESULTS / f"{study_name}.optuna.db"
-    control_plane = None
-    if os.environ.get("OPTUNA_STORAGE_URL"):
-        from training.hpo_control_plane import (
-            create_storage,
-            fail_stale_trials,
-            generation_study_name,
-            storage_from_environment,
-        )
-
-        generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
-        model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
-        if not generation_id or not model_key:
-            raise RuntimeError(
-                "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
-                "EUROMONITOR_HPO_MODEL_KEY"
+    with trace_step('training.run_hpo.study_creation'):
+        sampler = optuna.samplers.TPESampler(seed=SEED)
+        # sqlite storage: the sweep SURVIVES session loss — re-running with the same
+        # --study resumes; every trial's params/value persist (the essential record)
+        # dlr suffix: discriminative-LR trials form a NEW objective surface —
+        # never mixed into the pre-dlr TPE history (its surrogate would be poisoned
+        # by trials whose values came from single-LR training)
+        study_name = f"second08-{args.model.split('/')[-1]}-dlr"
+        study_db = RESULTS / f"{study_name}.optuna.db"
+        control_plane = None
+        if os.environ.get("OPTUNA_STORAGE_URL"):
+            from training.hpo_control_plane import (
+                create_storage,
+                fail_stale_trials,
+                generation_study_name,
+                storage_from_environment,
             )
-        study_name = generation_study_name(
-            generation_id=generation_id, model_key=model_key
-        )
-        control_plane = create_storage(storage_from_environment())
-        print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
-    if args.resume and control_plane is None:
-        if checkpoint_publication_deferred():
-            if not study_db.is_file():
-                raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
-            print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
-        else:
-            from training.dvc_store import restore_checkpoint
 
-            restore_checkpoint(RESULTS, study_db)
-            print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
-    storage = control_plane or f"sqlite:///{study_db}"
-    study = optuna.create_study(
-        direction="maximize",
-        sampler=sampler,
-        study_name=study_name,
-        storage=storage,
-        load_if_exists=True,
-    )
-    if control_plane is not None:
-        fail_stale_trials(study)
-    # resume-safe: count prior trials, run only what remains
-    prior = len(
-        [t for t in study.trials if t.state.name in ("COMPLETE", "PRUNED", "FAIL")]
-    )
-    remaining = max(0, args.n_trials - prior)
-    print(
-        f"HPO: {prior} prior trials on record, running {remaining} more (n_jobs={args.n_jobs})",
-        flush=True,
-    )
-    if remaining:
-        def _persist_study(*_args) -> None:
+            generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
+            model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
+            if not generation_id or not model_key:
+                raise RuntimeError(
+                    "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
+                    "EUROMONITOR_HPO_MODEL_KEY"
+                )
+            study_name = generation_study_name(
+                generation_id=generation_id, model_key=model_key
+            )
+            control_plane = create_storage(storage_from_environment())
+            print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
+        if args.resume and control_plane is None:
             if checkpoint_publication_deferred():
-                return
-            if not os.environ.get("DVC_API_KEY"):
-                return
-            from training.dvc_store import publish_checkpoint
+                if not study_db.is_file():
+                    raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
+                print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
+            else:
+                from training.dvc_store import restore_checkpoint
 
-            publish_checkpoint(RESULTS, study_db)
-
-        study.optimize(
-            objective,
-            n_trials=remaining,
-            n_jobs=args.n_jobs,
-            callbacks=[_optuna_tracking_cb(wandb_ctx), _persist_study],
+                restore_checkpoint(RESULTS, study_db)
+                print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+        storage = control_plane or f"sqlite:///{study_db}"
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=sampler,
+            study_name=study_name,
+            storage=storage,
+            load_if_exists=True,
         )
-
-    completed_trials = [
-        trial
-        for trial in study.trials
-        if trial.state.name == "COMPLETE" and trial.value is not None
-    ]
-    if not completed_trials:
-        raise FoldExecutionError(
-            "Optuna selection",
-            [{"status": "no_completed_trials"}],
+        if control_plane is not None:
+            fail_stale_trials(study)
+    # resume-safe: count prior trials, run only what remains
+    with trace_step('training.run_hpo.optimize'):
+        prior = len(
+            [t for t in study.trials if t.state.name in ("COMPLETE", "PRUNED", "FAIL")]
         )
-
-    # every trial's params + value, on disk (optuna keeps them in the study;
-    # the CSV makes the sweep's decision trail auditable without re-loading)
-    trials_df = study.trials_dataframe(
-        attrs=("number", "state", "value", "params", "user_attrs")
-    )
-    model_tag = args.model.split("/")[-1]
-    era = "-dlr"  # discriminative-LR sweep era (see study_name above)
-    trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
-    ensure_parent(trials_path)
-    trials_df.to_csv(trials_path, index=False)
-    trace_artifact("hpo_trials", trials_path, producer="training.training")
-    best = {
-        "config": study.best_params,
-        "value": study.best_value,
-        "n_trials": len(study.trials),
-        "model": args.model,
-        "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
-        # which signal ranked the trials (test-leak fix, 2026-09-12):
-        # calibration Rand in both holdout and CV selection modes
-        "selection": (
-            HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
-        ),
-    }
-    out_path = artifact("hpo_best", {"model": model_tag, "era": era})
-    ensure_parent(out_path)
-    with open(out_path, "w") as f:
-        json.dump(best, f, indent=2)
-    trace_artifact("hpo_best", out_path, producer="training.training")
-    if (
-        wandb_ctx is not None
-        and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
-    ):
-        wandb_ctx.log_artifact(trials_path, "hpo-trials")
-        wandb_ctx.log_artifact(out_path, "hpo-best")
-        wandb_ctx.set_summary(
-            {"hpo_best_objective": study.best_value, "hpo_completed_trials": len(study.trials)}
+        remaining = max(0, args.n_trials - prior)
+        print(
+            f"HPO: {prior} prior trials on record, running {remaining} more (n_jobs={args.n_jobs})",
+            flush=True,
         )
-    _sel = best["selection"]
-    print(f"\nBEST: {study.best_params} -> {_sel} {study.best_value:.4f}", flush=True)
-    # AUDIT FIX (round 2, F02): print the path ACTUALLY written — the old
-    # line named train_hpo_best.json, a file never written by this lane.
-    print(f"wrote {out_path}", flush=True)
+        if remaining:
+            def _persist_study(*_args) -> None:
+                if checkpoint_publication_deferred():
+                    return
+                if not os.environ.get("DVC_API_KEY"):
+                    return
+                from training.dvc_store import publish_checkpoint
+
+                publish_checkpoint(RESULTS, study_db)
+
+            study.optimize(
+                objective,
+                n_trials=remaining,
+                n_jobs=args.n_jobs,
+                callbacks=[_optuna_tracking_cb(wandb_ctx), _persist_study],
+            )
+
+    with trace_step('training.run_hpo.best_config'):
+        completed_trials = [
+            trial
+            for trial in study.trials
+            if trial.state.name == "COMPLETE" and trial.value is not None
+        ]
+        if not completed_trials:
+            raise FoldExecutionError(
+                "Optuna selection",
+                [{"status": "no_completed_trials"}],
+            )
+
+        # every trial's params + value, on disk (optuna keeps them in the study;
+        # the CSV makes the sweep's decision trail auditable without re-loading)
+        trials_df = study.trials_dataframe(
+            attrs=("number", "state", "value", "params", "user_attrs")
+        )
+        model_tag = args.model.split("/")[-1]
+        era = "-dlr"  # discriminative-LR sweep era (see study_name above)
+        trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
+        ensure_parent(trials_path)
+        trials_df.to_csv(trials_path, index=False)
+        trace_artifact("hpo_trials", trials_path, producer="training.training")
+        best = {
+            "config": study.best_params,
+            "value": study.best_value,
+            "n_trials": len(study.trials),
+            "model": args.model,
+            "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
+            # which signal ranked the trials (test-leak fix, 2026-09-12):
+            # calibration Rand in both holdout and CV selection modes
+            "selection": (
+                HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
+            ),
+        }
+        out_path = artifact("hpo_best", {"model": model_tag, "era": era})
+        ensure_parent(out_path)
+        with open(out_path, "w") as f:
+            json.dump(best, f, indent=2)
+        trace_artifact("hpo_best", out_path, producer="training.training")
+        if (
+            wandb_ctx is not None
+            and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
+        ):
+            wandb_ctx.log_artifact(trials_path, "hpo-trials")
+            wandb_ctx.log_artifact(out_path, "hpo-best")
+            wandb_ctx.set_summary(
+                {"hpo_best_objective": study.best_value, "hpo_completed_trials": len(study.trials)}
+            )
+        _sel = best["selection"]
+        print(f"\nBEST: {study.best_params} -> {_sel} {study.best_value:.4f}", flush=True)
+        # AUDIT FIX (round 2, F02): print the path ACTUALLY written — the old
+        # line named train_hpo_best.json, a file never written by this lane.
+        print(f"wrote {out_path}", flush=True)
 
 
 def _optuna_tracking_cb(wandb_ctx):

@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 import yaml
 from core.portable_archive import Digest
 from core.schemas import PREPARATION_REUSABLE_KEYS
+from training.prepare_all_trace import send, timed, trace_step
 
 STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference',
         'canonical_and_gates', 'gate_census', 'labeled_pairs', 'validation',
@@ -64,6 +65,7 @@ class PreparationState(BaseModel):
         return self
 
 
+@timed
 def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, str]:
     """Pin source, owning configs, raw input and baseline checkpoint content."""
     from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT
@@ -91,6 +93,7 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
     return identity
 
 
+@timed
 def verify_reusable_outputs(entries: dict[str, PreparedFile]) -> None:
     if not entries:
         raise ValueError('Resume has no verified prepared outputs; regenerate inputs')
@@ -99,6 +102,7 @@ def verify_reusable_outputs(entries: dict[str, PreparedFile]) -> None:
             raise ValueError(f'Stale prepared resume input: {path}')
 
 
+@timed
 def sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -107,12 +111,14 @@ def sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+@timed
 def file_inventory(paths: Sequence[Path]) -> dict[str, dict[str, str | int]]:
     """Hash each resolved artifact once per snapshot; never cache across stages."""
     return {str(path): PreparedFile(sha256=sha256(path), bytes=path.stat().st_size).model_dump()
             for path in dict.fromkeys(path.resolve() for path in paths)}
 
 
+@timed
 def copy_bundle(source: Path, destination: Path) -> None:
     """Use filesystem copy-on-write when available, keeping independent files.
 
@@ -120,23 +126,27 @@ def copy_bundle(source: Path, destination: Path) -> None:
     Unsupported filesystems use shutil's platform-accelerated copy instead.
     """
     try:
-        with source.open('rb') as src, destination.open('wb') as dst:
-            fcntl.ioctl(dst.fileno(), 0x40049409, src.fileno())  # Linux FICLONE
+        with trace_step('copy_bundle.ioctl_clone'):
+            with source.open('rb') as src, destination.open('wb') as dst:
+                fcntl.ioctl(dst.fileno(), 0x40049409, src.fileno())  # Linux FICLONE
     except OSError as error:
         if error.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY,
                               errno.EINVAL, errno.ENOSYS}:
             raise
-        shutil.copy2(source, destination)
+        with trace_step('copy_bundle.shutil_fallback'):
+            shutil.copy2(source, destination)
     else:
         shutil.copystat(source, destination)
 
 
+@timed
 def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | Path] = ()) -> None:
     from core.manifest import source_tree_sha256
     from core.schemas import StageManifest
     from core.tracing import trace_path
     try:
-        manifest = StageManifest.model_validate_json(Path(path).read_text())
+        with trace_step('verify_stage_manifest.load'):
+            manifest = StageManifest.model_validate_json(Path(path).read_text())
     except ValueError as exc:
         exc.add_note(f'Preparation prerequisite manifest: {path}')
         raise
@@ -147,14 +157,17 @@ def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | P
     recorded_inputs = {Path(entry.path).resolve() for entry in manifest.inputs}
     if set(Path(item).resolve() for item in required_inputs) - recorded_inputs:
         raise ValueError(f'Prerequisite lacks current config/reference provenance: {path}; regenerate inputs')
-    for entry in manifest.inputs + manifest.outputs:
-        # The consolidated trace is append-only across stages, not frozen input.
-        if Path(entry.path).resolve() == trace_path().resolve():
-            continue
-        if sha256(entry.path) != entry.sha256:
-            raise ValueError(f'Stale prerequisite: {entry.path}')
+    with trace_step('verify_stage_manifest.stale_hash_check',
+                    outputs=len(manifest.inputs) + len(manifest.outputs)):
+        for entry in manifest.inputs + manifest.outputs:
+            # The consolidated trace is append-only across stages, not frozen input.
+            if Path(entry.path).resolve() == trace_path().resolve():
+                continue
+            if sha256(entry.path) != entry.sha256:
+                raise ValueError(f'Stale prerequisite: {entry.path}')
 
 
+@timed
 def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) -> dict[str, int]:
     import pandas as pd
     from core.manifest import atomic_write_json, atomic_write_text
@@ -193,43 +206,48 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
     requested_negative_supply_run_tag = negative_supply_run_tag
     from core.common import F, RESULTS, TRAIN_ROOT, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, resolve_model, training_cfg
     from model_tracks.config import load_config as load_suite
-    root = Path(TRAIN_ROOT)
-    config_path = Path(tracks_config or root / 'config/model_tracks.yaml').resolve()
-    suite = load_suite(config_path)
-    # Read bundle settings afresh for long-lived callers.
-    training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
-    prep = training.preparation
-    # The declared run contract owns the resumable key set; the module-level
-    # constant is the defaulted public API (tests pin it), the run reads cfg.
-    reusable_keys = tuple(prep.reusable_keys)
-    if suite.text_model != training.training.base_model:
-        raise ValueError('suite text_model and training.base_model must agree before preparation')
-    if suite.epochs > training.training.epochs:
-        raise ValueError('suite epochs exceed locally prepared training epochs; update training.yaml first')
-    lane = training.negative_supply
-    if lane.mode == 'lane':
-        if negative_supply_run_tag and negative_supply_run_tag != lane.pairs_run_tag:
-            raise ValueError('negative-supply run tag differs from the configured training lane')
-        negative_supply_run_tag = lane.pairs_run_tag
-    if negative_supply_run_tag and not re.fullmatch(r'[A-Za-z0-9_-]+', negative_supply_run_tag):
-        raise ValueError('negative-supply run tag must contain only letters, digits, underscores, hyphens')
-    run_dir = Path(run_dir or RESULTS / prep.run_dir_base / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')).resolve()
-    negative_supply_run_tag = negative_supply_run_tag or ('prep_' + run_dir.name)
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', negative_supply_run_tag):
-        raise ValueError('preparation directory name requires an explicit valid --negative-supply-run-tag')
-    run_dir.mkdir(parents=True, exist_ok=True)
+    with trace_step('prepare_all.load_configs'):
+        root = Path(TRAIN_ROOT)
+        config_path = Path(tracks_config or root / 'config/model_tracks.yaml').resolve()
+        suite = load_suite(config_path)
+        # Read bundle settings afresh for long-lived callers.
+        training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
+        prep = training.preparation
+        # The declared run contract owns the resumable key set; the module-level
+        # constant is the defaulted public API (tests pin it), the run reads cfg.
+        reusable_keys = tuple(prep.reusable_keys)
+        if suite.text_model != training.training.base_model:
+            raise ValueError('suite text_model and training.base_model must agree before preparation')
+        if suite.epochs > training.training.epochs:
+            raise ValueError('suite epochs exceed locally prepared training epochs; update training.yaml first')
+    with trace_step('prepare_all.resolve_paths'):
+        lane = training.negative_supply
+        if lane.mode == 'lane':
+            if negative_supply_run_tag and negative_supply_run_tag != lane.pairs_run_tag:
+                raise ValueError('negative-supply run tag differs from the configured training lane')
+            negative_supply_run_tag = lane.pairs_run_tag
+        if negative_supply_run_tag and not re.fullmatch(r'[A-Za-z0-9_-]+', negative_supply_run_tag):
+            raise ValueError('negative-supply run tag must contain only letters, digits, underscores, hyphens')
+        run_dir = Path(run_dir or RESULTS / prep.run_dir_base / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')).resolve()
+        negative_supply_run_tag = negative_supply_run_tag or ('prep_' + run_dir.name)
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', negative_supply_run_tag):
+            raise ValueError('preparation directory name requires an explicit valid --negative-supply-run-tag')
+        run_dir.mkdir(parents=True, exist_ok=True)
+        os.environ['ER_TIMING_LOG'] = str(run_dir / prep.timings_log)
     lock_path = RESULTS / prep.lock_file
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open('w') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError('Another training preparation is already running') from None
-        if resume_from == 'validation':
-            for name in ('data_prep', 'labeled_pairs'):
-                verify_stage_manifest(RESULTS / 'manifests' / (name + '.json'),
-                    required_inputs=([CONFIG_PATH, VOCABULARY_CONFIG_PATH, F['number_reference']]
-                                     if name == 'data_prep' else [TRAINING_CONFIG_PATH]))
+        with trace_step('prepare_all.lock_acquire'):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError('Another training preparation is already running') from None
+        with trace_step('prepare_all.resume_validation'):
+            if resume_from == 'validation':
+                for name in ('data_prep', 'labeled_pairs'):
+                    verify_stage_manifest(RESULTS / 'manifests' / (name + '.json'),
+                        required_inputs=([CONFIG_PATH, VOCABULARY_CONFIG_PATH, F['number_reference']]
+                                         if name == 'data_prep' else [TRAINING_CONFIG_PATH]))
         checkpoint = resolve_model(suite.text_model)
         setup = (root / suite.setup_dir).resolve()
         text_bundle = (root / suite.text_bundle).resolve()
@@ -238,7 +256,8 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         bundle = (root / training.colab.full_prepared_bundles[0]).resolve()
         suite_archive = run_dir / f'{prep.suite_archive_name}.{suite.input_archive_format}'
         smoke = root / prep.smoke_dir
-        smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
+        with trace_step('prepare_all.smoke_before_hash'):
+            smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
         env = os.environ.copy()
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
         env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
@@ -247,41 +266,44 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         # Preparation mutates inputs; inherited worker attestations are invalid.
         env['ER_DATA_GATE_ENFORCE'] = '1'
         completed = []
-        manifest = {'status': 'running', 'resume_from': resume_from,
-                    'training_started': False, 'smoke_updated': False,
-                    'stages': completed, 'run_dir': str(run_dir),
-                    'shared_base_payload': env['EUROMONITOR_SHARED_BASE_DATA'],
-                    'tracks_config': str(config_path),
-                    'negative_supply_mode': lane.mode,
-                    'negative_supply_run_tag': negative_supply_run_tag,
-                    'provenance': preparation_provenance(root, config_path, checkpoint),
-                    'smoke_original': smoke_before, 'reusable_outputs': {},
-                    'hybrid_embeddings': 'GPU pending: frozen baseline forward before hybrid training'}
+        with trace_step('prepare_all.manifest_init'):
+            manifest = {'status': 'running', 'resume_from': resume_from,
+                        'training_started': False, 'smoke_updated': False,
+                        'stages': completed, 'run_dir': str(run_dir),
+                        'shared_base_payload': env['EUROMONITOR_SHARED_BASE_DATA'],
+                        'tracks_config': str(config_path),
+                        'negative_supply_mode': lane.mode,
+                        'negative_supply_run_tag': negative_supply_run_tag,
+                        'provenance': preparation_provenance(root, config_path, checkpoint),
+                        'smoke_original': smoke_before, 'reusable_outputs': {},
+                        'hybrid_embeddings': 'GPU pending: frozen baseline forward before hybrid training'}
         manifest_path = run_dir / prep.manifest_file
-        if resume_from in {'full_bundle', 'suite_inputs'}:
-            previous_state = PreparationState.model_validate_json(manifest_path.read_text())
-            previous = previous_state.model_dump(mode='json')
-            if previous_state.run_dir != str(run_dir):
-                raise ValueError('Preparation manifest belongs to another run directory')
-            if requested_negative_supply_run_tag and requested_negative_supply_run_tag != previous_state.negative_supply_run_tag:
-                raise ValueError('Resume negative-supply run tag differs from the saved run')
-            negative_supply_run_tag = previous_state.negative_supply_run_tag
-            if previous_state.provenance != manifest['provenance']:
-                raise ValueError('Preparation source/config/raw input/checkpoint changed; regenerate inputs')
-            if previous_state.smoke_original != smoke_before:
-                raise ValueError('Smoke files changed since this preparation began')
-            verify_reusable_outputs(previous_state.reusable_outputs)
-            prerequisite = 'graph_inputs' if resume_from == 'full_bundle' else 'full_bundle'
-            if (prerequisite not in previous.get('stages', []) or
-                    previous.get('tracks_config') != str(config_path)):
-                raise ValueError(f'{resume_from} resume requires this run\'s completed {prerequisite}')
-            remaining = set(STAGES[STAGES.index(resume_from):])
-            completed.extend(stage for stage in previous['stages']
-                             if stage not in remaining)
-            manifest.update(previous, status='running', resume_from=resume_from,
-                            stages=completed, shared_base_payload=env['EUROMONITOR_SHARED_BASE_DATA'])
-            manifest.pop('failed_stage', None)
-            manifest.pop('error', None)
+        with trace_step('prepare_all.resume_replay'):
+            if resume_from in {'full_bundle', 'suite_inputs'}:
+                previous_state = PreparationState.model_validate_json(manifest_path.read_text())
+                previous = previous_state.model_dump(mode='json')
+                if previous_state.run_dir != str(run_dir):
+                    raise ValueError('Preparation manifest belongs to another run directory')
+                if requested_negative_supply_run_tag and requested_negative_supply_run_tag != previous_state.negative_supply_run_tag:
+                    raise ValueError('Resume negative-supply run tag differs from the saved run')
+                negative_supply_run_tag = previous_state.negative_supply_run_tag
+                if previous_state.provenance != manifest['provenance']:
+                    raise ValueError('Preparation source/config/raw input/checkpoint changed; regenerate inputs')
+                if previous_state.smoke_original != smoke_before:
+                    raise ValueError('Smoke files changed since this preparation began')
+                verify_reusable_outputs(previous_state.reusable_outputs)
+                prerequisite = 'graph_inputs' if resume_from == 'full_bundle' else 'full_bundle'
+                if (prerequisite not in previous.get('stages', []) or
+                        previous.get('tracks_config') != str(config_path)):
+                    raise ValueError(f'{resume_from} resume requires this run\'s completed {prerequisite}')
+                remaining = set(STAGES[STAGES.index(resume_from):])
+                completed.extend(stage for stage in previous['stages']
+                                 if stage not in remaining)
+                manifest.update(previous, status='running', resume_from=resume_from,
+                                stages=completed, shared_base_payload=env['EUROMONITOR_SHARED_BASE_DATA'])
+                manifest.pop('failed_stage', None)
+                manifest.pop('error', None)
+        @timed
         def publish():
             temporary = manifest_path.with_suffix('.tmp')
             state = PreparationState.model_validate(manifest)
@@ -299,6 +321,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             from core.timing import collect_timing_entries, write_offender_report
             write_offender_report(run_dir / prep.offender_report,
                                   collect_timing_entries(run_dir, manifest.get('stage_seconds', {})))
+        @timed
         def run(name, arguments, *, check=True):
             print(f'[prepare] {name} -> {run_dir / (name + prep.stage_log_suffix)}', flush=True)
             env['ER_TIMING_OUT'] = str(run_dir / (name + prep.stage_timing_suffix))
@@ -310,6 +333,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             if check:
                 result.check_returncode()
             return result
+        @timed
         def archive(path, name):
             from training.preparation_run import active_preparation
             active_preparation().invalidate(path)
@@ -335,61 +359,79 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 emit_timing(f'[timing] prepare.{name} state=started', path=run_dir / prep.timings_log)
                 publish()
                 if name == 'dedupe':
-                    run(name, ['-m', 'training.dedupe'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.dedupe'])
                 elif name == 'cross_country_pairs':
-                    run(name, ['-m', 'training.build_second04_pairs'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.build_second04_pairs'])
                 elif name == 'number_reference':
-                    run(name, ['-m', 'training.build_reference'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.build_reference'])
                 elif name == 'verify_reference':
-                    run(name, ['-m', 'training.build_reference', '--verify'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.build_reference', '--verify'])
                 elif name == 'canonical_and_gates':
-                    run(name, ['-m', 'training.data_prep'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.data_prep'])
                 elif name == 'gate_census':
-                    manifest['gate_census'] = refresh_gate_census(
-                        F['gate_results'], TRAINING_CONFIG_PATH, run_dir / prep.gate_census_file)
-                    from core.common import refresh_training_config
-                    refresh_training_config()
+                    with trace_step('prepare_all.stage_refresh_gate_census', stage=name):
+                        manifest['gate_census'] = refresh_gate_census(
+                            F['gate_results'], TRAINING_CONFIG_PATH, run_dir / prep.gate_census_file)
+                        from core.common import refresh_training_config
+                        refresh_training_config()
                 elif name == 'labeled_pairs':
-                    run(name, ['-m', 'training.labeled_pairs'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.labeled_pairs'])
                 elif name == 'negative_supply':
-                    archive(RESULTS / prep.negative_supply_dir / negative_supply_run_tag, 'negative_supply')
-                    run(name, ['-m', 'training.negative_supply', '--run-tag', negative_supply_run_tag])
+                    with trace_step(f'prepare_all.{name}.archive'):
+                        archive(RESULTS / prep.negative_supply_dir / negative_supply_run_tag, 'negative_supply')
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.negative_supply', '--run-tag', negative_supply_run_tag])
                 elif name == 'discriminator':
-                    arguments = [str(root / 'scripts/negative_supply_discriminator.py'),
-                                 str(RESULTS / prep.negative_supply_dir / negative_supply_run_tag / 'pairs.csv'),
-                                 '--out', str(run_dir / prep.discriminator_file)]
-                    result = run(name, arguments, check=False)
-                    verdict = json.loads((run_dir / prep.discriminator_file).read_text())
-                    manifest['discriminator'] = verdict
-                    if result.returncode and (lane.mode == 'lane' or verdict.get('verdict') != 'SEPARABLE'):
-                        raise subprocess.CalledProcessError(result.returncode, arguments)
-                    if result.returncode:
-                        print('[prepare] diagnostic lane is SEPARABLE; active gate mode is unchanged', flush=True)
+                    with trace_step(f'prepare_all.{name}.run_and_verdict'):
+                        arguments = [str(root / 'scripts/negative_supply_discriminator.py'),
+                                     str(RESULTS / prep.negative_supply_dir / negative_supply_run_tag / 'pairs.csv'),
+                                     '--out', str(run_dir / prep.discriminator_file)]
+                        result = run(name, arguments, check=False)
+                        verdict = json.loads((run_dir / prep.discriminator_file).read_text())
+                        manifest['discriminator'] = verdict
+                        if result.returncode and (lane.mode == 'lane' or verdict.get('verdict') != 'SEPARABLE'):
+                            raise subprocess.CalledProcessError(result.returncode, arguments)
+                        if result.returncode:
+                            print('[prepare] diagnostic lane is SEPARABLE; active gate mode is unchanged', flush=True)
                 elif name == 'validation':
-                    run(name, ['-m', 'training.build_final_validation'])
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.build_final_validation'])
                 elif name == 'graph_inputs':
-                    archive(setup, 'track_setup')
-                    run(name, ['-m', 'graph_tracks.setup', '--output', str(setup),
-                               '--text-checkpoint', str(checkpoint), '--defer-training-tensors'])
+                    with trace_step(f'prepare_all.{name}.archive'):
+                        archive(setup, 'track_setup')
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'graph_tracks.setup', '--output', str(setup),
+                                   '--text-checkpoint', str(checkpoint), '--defer-training-tensors'])
                 elif name == 'full_bundle':
-                    archive(bundle, bundle.name)
-                    archive(bundle.with_suffix(bundle.suffix + '.json'), bundle.name + '.json')
-                    run(name, ['-m', 'training.train', '--dataset', str(F['dataset_deduped']),
-                               '--payload', 'full', '--prepare-bundle', str(bundle),
-                               '--model', suite.text_model, '--no-mask-effect', '--no-plot'])
+                    with trace_step(f'prepare_all.{name}.archive'):
+                        archive(bundle, bundle.name)
+                        archive(bundle.with_suffix(bundle.suffix + '.json'), bundle.name + '.json')
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'training.train', '--dataset', str(F['dataset_deduped']),
+                                   '--payload', 'full', '--prepare-bundle', str(bundle),
+                                   '--model', suite.text_model, '--no-mask-effect', '--no-plot'])
                     if text_bundle != bundle:
-                        archive(text_bundle, 'text_bundle.pkl.gz')
-                        archive(text_bundle.with_suffix(text_bundle.suffix + '.json'), 'text_bundle.pkl.gz.json')
-                        text_bundle.parent.mkdir(parents=True, exist_ok=True)
-                        copy_bundle(bundle, text_bundle)
-                        from training.preparation_run import active_preparation
-                        active_preparation().alias_bundle(bundle, text_bundle)
-                        shutil.copy2(bundle.with_suffix(bundle.suffix + '.json'),
-                                     text_bundle.with_suffix(text_bundle.suffix + '.json'))
+                        with trace_step(f'prepare_all.{name}.copy_text_bundle'):
+                            archive(text_bundle, 'text_bundle.pkl.gz')
+                            archive(text_bundle.with_suffix(text_bundle.suffix + '.json'), 'text_bundle.pkl.gz.json')
+                            text_bundle.parent.mkdir(parents=True, exist_ok=True)
+                            copy_bundle(bundle, text_bundle)
+                            from training.preparation_run import active_preparation
+                            active_preparation().alias_bundle(bundle, text_bundle)
+                            shutil.copy2(bundle.with_suffix(bundle.suffix + '.json'),
+                                         text_bundle.with_suffix(text_bundle.suffix + '.json'))
                 elif name == 'suite_inputs':
-                    archive(suite_archive, suite_archive.name)
-                    run(name, ['-m', 'model_tracks.package', '--config', str(config_path),
-                               '--output', str(suite_archive)])
+                    with trace_step(f'prepare_all.{name}.archive'):
+                        archive(suite_archive, suite_archive.name)
+                    with trace_step(f'prepare_all.{name}.run'):
+                        run(name, ['-m', 'model_tracks.package', '--config', str(config_path),
+                                   '--output', str(suite_archive)])
                 else:
                     from training.handoff import verify_training_loads, write_handoff_report
                     inventory_paths = [Path(F[key]) for key in reusable_keys]
@@ -408,16 +450,18 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     os.environ.update(ER_TIMING_OUT=str(run_dir / (name + prep.stage_timing_suffix)),
                                       ER_TIMING_LOG=str(run_dir / prep.timings_log))
                     try:
-                        report = verify_training_loads(
-                            root=root, suite=suite, suite_config_path=config_path,
-                            checkpoint=checkpoint, setup_dir=setup, full_bundle=bundle,
-                            text_bundle=text_bundle, suite_archive=suite_archive,
-                            provenance=manifest['provenance'], smoke_dir=smoke,
-                            smoke_original=smoke_before, reusable_paths=inventory_paths)
+                        with trace_step(f'prepare_all.{name}.verify_training_loads'):
+                            report = verify_training_loads(
+                                root=root, suite=suite, suite_config_path=config_path,
+                                checkpoint=checkpoint, setup_dir=setup, full_bundle=bundle,
+                                text_bundle=text_bundle, suite_archive=suite_archive,
+                                provenance=manifest['provenance'], smoke_dir=smoke,
+                                smoke_original=smoke_before, reusable_paths=inventory_paths)
                     finally:
                         os.environ.pop('ER_TIMING_OUT', None)
                         os.environ.pop('ER_TIMING_LOG', None)
-                    write_handoff_report(report, handoff_path)
+                    with trace_step(f'prepare_all.{name}.write_handoff_report'):
+                        write_handoff_report(report, handoff_path)
                     manifest['handoff'] = {'path': str(handoff_path), 'status': report.status,
                                            'total_seconds': report.total_seconds}
                     manifest['outputs'] = report.final_inventory
@@ -425,26 +469,30 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     manifest['suite_package'] = report.suite_package
                     manifest['smoke_unchanged_verified'] = True
                 if name in {'graph_inputs', 'full_bundle'}:
-                    reusable = [Path(F[key]) for key in reusable_keys]
-                    reusable += [path for path in setup.rglob('*') if path.is_file()]
-                    if name == 'full_bundle':
-                        reusable += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
-                                     text_bundle.with_suffix(text_bundle.suffix + '.json')]
-                    reusable += [RESULTS / prep.negative_supply_dir / negative_supply_run_tag / filename
-                                 for filename in ('pairs.csv', 'manifest.json')]
-                    reusable.append(run_dir / prep.discriminator_file)
-                    manifest['reusable_outputs'] = file_inventory(reusable)
+                    with trace_step(f'prepare_all.{name}.collect_reusable_outputs'):
+                        reusable = [Path(F[key]) for key in reusable_keys]
+                        reusable += [path for path in setup.rglob('*') if path.is_file()]
+                        if name == 'full_bundle':
+                            reusable += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
+                                         text_bundle.with_suffix(text_bundle.suffix + '.json')]
+                        reusable += [RESULTS / prep.negative_supply_dir / negative_supply_run_tag / filename
+                                     for filename in ('pairs.csv', 'manifest.json')]
+                        reusable.append(run_dir / prep.discriminator_file)
+                        manifest['reusable_outputs'] = file_inventory(reusable)
                 if name == 'full_bundle':
-                    from training.preparation_run import active_preparation
-                    active_preparation()._base.clear()
-                    active_preparation()._datasets.clear()
+                    with trace_step(f'prepare_all.{name}.invalidate'):
+                        from training.preparation_run import active_preparation
+                        active_preparation()._base.clear()
+                        active_preparation()._datasets.clear()
                 if name == 'dedupe':
-                    from training.preparation_run import active_preparation
-                    active_preparation().invalidate(Path(F['dataset_deduped']))
+                    with trace_step(f'prepare_all.{name}.invalidate'):
+                        from training.preparation_run import active_preparation
+                        active_preparation().invalidate(Path(F['dataset_deduped']))
                 if name == 'number_reference':
-                    import pipeline
-                    pipeline._VERDICTS_CACHE = None
-                    pipeline._VERDICTS_LOADED = False
+                    with trace_step(f'prepare_all.{name}.invalidate'):
+                        import pipeline
+                        pipeline._VERDICTS_CACHE = None
+                        pipeline._VERDICTS_LOADED = False
                 completed.append(name)
                 elapsed = round(time.monotonic() - stage_started, 3)
                 manifest.setdefault('stage_seconds', {})[name] = elapsed
@@ -468,12 +516,14 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             raise
 
 
+@timed
 def prepare_all(**kwargs):
     """Execute the CSV-to-training-input lifecycle as one owned Python run."""
     from training.preparation_run import TrainingPreparation
     return TrainingPreparation(**kwargs).execute()
 
 
+@timed
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', type=Path)
