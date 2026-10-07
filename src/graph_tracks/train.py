@@ -26,45 +26,109 @@ from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.tracking import GraphWandb
 from graph_tracks.data import census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
+from core.run_log import RunLogger
+from training.prepare_all_trace import timed
+
+_LOG = RunLogger(__name__)
 
 
-def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    columns = {"sku_id1", "sku_id2", "label", "split"}
-    if set(frame.columns) not in (columns, columns | {'example_id'}):
-        raise ValueError("pairs columns must be sku_id1, sku_id2, label, split, with optional example_id")
-    ids = {r["sku_id"]: i for i, r in enumerate(records)}
-    seen, example_ids = {}, set()
-    rows = {s: ([], []) for s in ("train", "dev", "test")}
-    for row in frame.itertuples(index=False):
-        if row.label not in {"0", "1"} or row.split not in rows:
+class SupervisedPairs:
+    """Load the supervised pair CSV into index edges/labels per split.
+
+    One contract per check, single responsibilities throughout:
+
+    - the CSV column contract (sku_id1, sku_id2, label, split + optional
+      example_id) is checked against the whole frame up front;
+    - every census row is ONE supervised pair: label/split validity, endpoint
+      presence in the listings, no self-pairs, no split-boundary crossing
+      (a pair may not contain a trained-on endpoint), example_id uniqueness
+      for training relationships, and duplicate/conflict detection;
+    - train/dev must carry BOTH labels or the benchmark cannot rank.
+
+    Fail-loud: each raise message is a contract, not a suggestion.
+    """
+
+    COLUMNS = {"sku_id1", "sku_id2", "label", "split"}
+    SPLITS = ("train", "dev", "test")
+
+    def __init__(self, path: Path, records: list[dict]):
+        self._frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+        self._check_columns()
+        self._records = records
+        self._ids = {r["sku_id"]: i for i, r in enumerate(records)}
+        self._seen: dict[tuple[int, int], tuple[str, bool]] = {}
+        self._example_ids: set[str] = set()
+        self._rows = {s: ([], []) for s in self.SPLITS}
+
+    @classmethod
+    def from_csv(cls, path: Path, records: list[dict]) -> "SupervisedPairs":
+        return cls(path, records)
+
+    def _check_columns(self) -> None:
+        columns = self.COLUMNS
+        if set(self._frame.columns) not in (columns, columns | {'example_id'}):
+            raise ValueError("pairs columns must be sku_id1, sku_id2, label, split, with optional example_id")
+
+    def _check_label_split(self, row) -> None:
+        if row.label not in {"0", "1"} or row.split not in self._rows:
             raise ValueError("invalid pair label/split")
-        if row.sku_id1 not in ids or row.sku_id2 not in ids:
+
+    def _check_endpoints(self, row) -> tuple[int, int]:
+        if row.sku_id1 not in self._ids or row.sku_id2 not in self._ids:
             raise ValueError("pair endpoint absent from listings")
-        i, j = ids[row.sku_id1], ids[row.sku_id2]
+        i, j = self._ids[row.sku_id1], self._ids[row.sku_id2]
         if i == j:
             raise ValueError("self-pairs are not a matching benchmark")
-        if records[i]["split"] != row.split or records[j]["split"] != row.split:
+        if self._records[i]["split"] != row.split or self._records[j]["split"] != row.split:
             raise ValueError("pair crosses split boundary or contains a trained-on endpoint")
-        key = tuple(sorted((i, j)))
-        example_id = getattr(row, 'example_id', '')
-        if example_id:
-            if row.split != 'train' or example_id in example_ids:
-                raise ValueError('example_id must uniquely identify a training relationship')
-            example_ids.add(example_id)
-        if key in seen:
-            previous_label, repeated_training = seen[key]
+        return i, j
+
+    def _check_example(self, row, example_id: str) -> None:
+        if not example_id:
+            return
+        if row.split != 'train' or example_id in self._example_ids:
+            raise ValueError('example_id must uniquely identify a training relationship')
+        self._example_ids.add(example_id)
+
+    def _accept(self, row, key: tuple[int, int], example_id: str, i: int, j: int) -> None:
+        if key in self._seen:
+            previous_label, repeated_training = self._seen[key]
             if previous_label != row.label or not (example_id and repeated_training):
                 raise ValueError("duplicate or conflicting pair")
-        seen[key] = (row.label, bool(example_id))
-        rows[row.split][0].append((i, j))
-        rows[row.split][1].append(float(row.label))
-    result = {s: (np.asarray(p, dtype=np.int64).reshape(-1, 2),
-                  np.asarray(y, dtype=np.float32)) for s, (p, y) in rows.items()}
-    for split in ("train", "dev"):
-        if set(result[split][1]) != {0., 1.}:
-            raise ValueError(f"{split} needs positive and negative labeled pairs")
-    return result
+        self._seen[key] = (row.label, bool(example_id))
+        self._rows[row.split][0].append((i, j))
+        self._rows[row.split][1].append(float(row.label))
+
+    def load(self) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        result = {
+            s: (np.asarray(p, dtype=np.int64).reshape(-1, 2),
+                np.asarray(y, dtype=np.float32))
+            for s, (p, y) in self._rows.items()
+        }
+        for split in ("train", "dev"):
+            if set(result[split][1]) != {0., 1.}:
+                raise ValueError(f"{split} needs positive and negative labeled pairs")
+        return result
+
+
+    def scan(self) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """Run the census through the contract checks (the pipeline's bar)."""
+        for row in _LOG.progress(
+            self._frame.itertuples(index=False), desc="supervised_pair_scan",
+            unit="pair", total=len(self._frame),
+        ):
+            self._check_label_split(row)
+            i, j = self._check_endpoints(row)
+            example_id = getattr(row, 'example_id', '')
+            self._check_example(row, example_id)
+            self._accept(row, tuple(sorted((i, j))), example_id, i, j)
+        return self.load()
+
+
+@timed
+def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """THE supervised-pair census read (contract on :class:`SupervisedPairs`)."""
+    return SupervisedPairs.from_csv(path, records).scan()
 
 
 def quality(labels: np.ndarray, scores: np.ndarray) -> dict[str, float]:

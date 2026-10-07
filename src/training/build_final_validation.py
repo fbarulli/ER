@@ -85,6 +85,7 @@ from training.folds import (
     merged_component_graph,
     normalize_gtin,
 )
+from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
 
@@ -289,7 +290,10 @@ class SliceFieldGrid:
         """Validate + index the canonical frame into per-gtin slice values."""
         canonical["_key"] = canonical["gtin"].map(normalize_gtin)
         out: dict[str, dict[str, str]] = {}
-        for _, row in canonical.iterrows():
+        for _, row in _LOG.progress(
+            canonical.iterrows(), desc="canonical_slice_freeze", unit="record",
+            total=len(canonical),
+        ):
             key = row["_key"]
             if not key or key in out:
                 continue
@@ -756,78 +760,75 @@ class LeakGuards:
         assignment.
         """
         if policy_name == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
-            was, now = (evidence[NEGATIVE_FOLD_POLICY_WITHHOLD],
-                        evidence[policy_name])
-            if not (
-                now["scored_test_negatives"] > was["scored_test_negatives"]
-                and now["scored_dev_negatives"] > was["scored_dev_negatives"]
-            ):
-                raise SystemExit(
-                    "the pinned scored-half decision no longer holds: policy "
-                    f"{policy_name!r} does not score MORE negatives per fold "
-                    f"than {NEGATIVE_FOLD_POLICY_WITHHOLD!r} "
-                    f"(evidence={evidence}). Re-decide, update the config and "
-                    "the DECISION block together — do not emit an artifact "
-                    "under a policy its evidence rejects."
-                )
-            for half in ("dev", "test"):
-                thin = now["thin_cells"][half]
-                if thin is None:
-                    continue
-                thin_b = sum(now["thin_cells"][half].values())
-                cells_b = sum(now["populated_cells"][half].values())
-                thin_a = sum(was["thin_cells"][half].values())
-                cells_a = sum(was["populated_cells"][half].values())
-                share_b = thin_b / cells_b if cells_b else float("nan")
-                share_a = thin_a / cells_a if cells_a else float("nan")
-                if not share_b <= share_a:
-                    raise SystemExit(
-                        "the pinned scored-half decision no longer holds: "
-                        "policy "
-                        f"{policy_name!r} scores MORE thin-heavy negatives "
-                        f"(% cells below min_test_negatives="
-                        f"{min_test_negatives}: {share_b:.4f}) than "
-                        f"{NEGATIVE_FOLD_POLICY_WITHHOLD!r} ({share_a:.4f}) "
-                        f"on the {half} half (evidence={evidence}). "
-                        "Re-decide, update the config and the DECISION block "
-                        "together — do not emit an artifact under a policy "
-                        "its evidence rejects."
-                    )
+            assert_pinned_evidence_train_side(policy_name, evidence, min_test_negatives)
         elif policy_name == NEGATIVE_FOLD_POLICY_WITHHOLD:
-            # A's emit guard (added 2026-10-06 — before this branch existed,
-            # the assigned policy was never re-checked at emit and the
-            # artifact could ship under evidence it contradicts): A is clean
-            # of trained-on endpoints by construction (asserted above), so
-            # its own-evidence criterion is that the scored halves are
-            # usable at all — both must score negatives. The thin-cell share
-            # against B is RECORDED, not enforced: the 2026-10-06 census
-            # reversed A's 2026-10-01 dev-half thin advantage (B is
-            # disqualified structurally regardless — its scored negatives
-            # carry trained-on endpoints, which negative_policy_evidence
-            # refuses to certify), so thinness is no longer a decision
-            # criterion between the two.
-            now = evidence[policy_name]
-            empty_halves = [
-                half for half in ("dev", "test")
-                if int(now[f"scored_{half}_negatives"]) <= 0
-            ]
-            if empty_halves:
-                raise SystemExit(
-                    "the pinned scored-half decision no longer holds: policy "
-                    f"{policy_name!r} scores NO negatives on the "
-                    f"{', '.join(empty_halves)} half (evidence={evidence}). "
-                    "Re-decide, update the config and the DECISION block "
-                    "together — do not emit an artifact under a policy its "
-                    "evidence rejects."
-                )
+            assert_pinned_evidence_withhold(policy_name, evidence)
 
 
-class _ValidationFrame:
-    """Assembled validation population + its failure-mode counters."""
+def assert_pinned_evidence_train_side(policy_name, evidence, min_test_negatives):
+    """Policy B's emit guard: B must score MORE negatives per scored half
+    than A, and must not score MORE thin-heavy negatives."""
+    was, now = (evidence[NEGATIVE_FOLD_POLICY_WITHHOLD], evidence[policy_name])
+    if not (
+        now["scored_test_negatives"] > was["scored_test_negatives"]
+        and now["scored_dev_negatives"] > was["scored_dev_negatives"]
+    ):
+        raise SystemExit(
+            "the pinned scored-half decision no longer holds: policy "
+            f"{policy_name!r} does not score MORE negatives per fold than "
+            f"{NEGATIVE_FOLD_POLICY_WITHHOLD!r} (evidence={evidence}). "
+            "Re-decide, update the config and the DECISION block together "
+            "— do not emit an artifact under a policy its evidence rejects."
+        )
+    for half in ("dev", "test"):
+        thin = now["thin_cells"][half]
+        if thin is None:
+            continue
+        thin_b = sum(now["thin_cells"][half].values())
+        cells_b = sum(now["populated_cells"][half].values())
+        thin_a = sum(was["thin_cells"][half].values())
+        cells_a = sum(was["populated_cells"][half].values())
+        share_b = thin_b / cells_b if cells_b else float("nan")
+        share_a = thin_a / cells_a if cells_a else float("nan")
+        if not share_b <= share_a:
+            raise SystemExit(
+                "the pinned scored-half decision no longer holds: policy "
+                f"{policy_name!r} scores MORE thin-heavy negatives (% "
+                f"cells below min_test_negatives={min_test_negatives}: "
+                f"{share_b:.4f}) than {NEGATIVE_FOLD_POLICY_WITHHOLD!r} "
+                f"({share_a:.4f}) on the {half} half (evidence={evidence}). "
+                "Re-decide, update the config and the DECISION block "
+                "together — do not emit an artifact under a policy its "
+                "evidence rejects."
+            )
 
-    def __init__(self, frame: pd.DataFrame, stats: dict[str, int]):
-        self.frame = frame
-        self.stats = stats
+
+def assert_pinned_evidence_withhold(policy_name, evidence):
+    """Policy A's emit guard (added 2026-10-06 — before this branch existed,
+    the assigned policy was never re-checked at emit and the artifact could
+    ship under evidence it contradicts): A is clean of trained-on endpoints
+    by construction (asserted above), so its own-evidence criterion is that
+    the scored halves are usable at all — both must score negatives. The
+    thin-cell share against B is RECORDED, not enforced: the 2026-10-06
+    census reversed A's 2026-10-01 dev-half thin advantage (B is
+    disqualified structurally regardless — its scored negatives carry
+    trained-on endpoints, which negative_policy_evidence refuses to
+    certify), so thinness is no longer a decision criterion between the
+    two."""
+    now = evidence[policy_name]
+    empty_halves = [
+        half for half in ("dev", "test")
+        if int(now[f"scored_{half}_negatives"]) <= 0
+    ]
+    if empty_halves:
+        raise SystemExit(
+            "the pinned scored-half decision no longer holds: policy "
+            f"{policy_name!r} scores NO negatives on the "
+            f"{', '.join(empty_halves)} half (evidence={evidence}). "
+            "Re-decide, update the config and the DECISION block "
+            "together — do not emit an artifact under a policy its "
+            "evidence rejects."
+        )
 
 
 def _apply_negative_fold_policy(
@@ -954,6 +955,7 @@ def write_manifest(
     return manifest
 
 
+@timed
 def build(
     output: Path | None = None,
     *,
