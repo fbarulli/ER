@@ -80,7 +80,11 @@ from core.common import (
     training_cfg,
 )
 from core.manifest import sha256_file
+from core.run_log import RunLogger
 from core.schemas import ResultBundleManifest, StageManifest
+from training.prepare_all_trace import timed
+
+_LOG = RunLogger(__name__)
 
 
 # Smoke and normal training defaults come from the Colab runtime config.
@@ -1236,6 +1240,7 @@ print(json.dumps(payload), flush=True)
         time.sleep(_LOG_POLL_SECONDS)
 
 
+@timed
 def run_parallel_train_and_tail(
     args: list[str], workers: int, *, resume_run: str | None = None,
     smoke: bool = False,
@@ -2514,6 +2519,7 @@ def _remote_auth_env_script(
 
 
 @_timed_colab("step")
+@timed
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
 
@@ -2625,6 +2631,7 @@ print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
 
+@timed
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
@@ -3488,6 +3495,7 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
     return remotes
 
 
+@timed
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
     smoke: bool = False,
@@ -3656,6 +3664,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     return remote_base, 1
 
 
+@timed
 def run_hpo(
     mode: str | None = None,
     *,
@@ -3828,6 +3837,7 @@ def _bundle_delivery_local(run_id: str) -> Path:
     return TRAINING_RESULTS / ("colab_bundle_" + run_id)
 
 
+@timed
 def run_bundle(dataset_csv: Path | None = None) -> None:
     """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
 
@@ -3923,6 +3933,7 @@ print("[bundle] delivery archive ready", flush=True)
     )
 
 
+@timed
 def run_sims() -> None:
     """Run the configured zero-shot embedding model lane on the VM."""
     print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
@@ -3943,6 +3954,7 @@ if rc != 0:
     download_results(skip_checkpoints=True, require_manifests=True)
 
 
+@timed
 def run_mixed(
     frac: float,
     epochs: int,
@@ -4253,6 +4265,7 @@ def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
         )
 
 
+@timed
 def download_results(
     skip_checkpoints: bool = True, *, require_manifests: bool = False
 ) -> list[StageManifest]:
@@ -4295,6 +4308,7 @@ def download_results(
     return manifests
 
 
+@timed
 def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
     """Pull the trained checkpoints (model weights) back.
 
@@ -4447,6 +4461,7 @@ def stop(*, stop_local_owner: bool = False) -> bool:
 
 
 def main() -> None:
+    RunLogger.configure_console()
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", default="tracks",
