@@ -1,24 +1,24 @@
 """Ablation-lane timing harness (reusable across optimization rounds).
 
-Workload (identical every round, CPU-first; real 10k cohort inputs):
-  1. ablation.prepare      — catalog=dataset_10k.csv (10,000 real rows),
+Workload (identical every round, CPU-first; real 3k cohort inputs):
+  1. ablation.prepare      — catalog=dataset_3k.csv (3,000 real rows),
                              pairs=artifacts/abl_opt/inputs/pairs_dev_500.csv
                              (deterministic consecutive-pair derivation from
                              the same catalog, 500 dev pairs, label = same
                              brand, population='real'), checkpoint=the real
                              MiniLM checkpoint, track='text',
-                             retrieval_catalog='full' -> 10k candidate texts.
+                             retrieval_catalog='full' -> 3k candidate texts.
   2. ablation.encode       — device='cpu', saved_text=the seeded MiniLM cache
                              (artifacts/abl_opt/inputs/shared_minilm.csv.npz)
                              so native forwarding covers only variant texts,
                              exactly like the staged baseline path.
   3. ablation.report       — frozen threshold binding under inputs/, HNSW on
-                             the 10k candidate catalog, exact ranks + ann
+                             the 3k candidate catalog, exact ranks + ann
                              hits + paired rows.
 
 Deterministic cohort rule (recorded, fixed forever):
   pairs are consecutive sorted sku_id neighbors (i, i+1) over the first
-  order-preserved rows of dataset_10k.csv after sorting by sku_id; label is
+  order-preserved rows of dataset_3k.csv after sorting by sku_id; label is
   '1' iff both rows share a nonempty brand; split stays 'dev'; population
   column 'real'.
 
@@ -60,16 +60,16 @@ import yaml  # noqa: E402
 ABL = ROOT / 'artifacts' / 'abl_opt'
 INPUTS = ABL / 'inputs'
 ROUNDS = ABL / 'rounds'
-CATALOG = ROOT / 'dataset_10k.csv'
+CATALOG = ROOT / 'dataset_3k.csv'
 PAIRS = INPUTS / 'pairs_dev_500.csv'
 CONFIG = INPUTS / 'ablation_settings.yaml'
 CHECKPOINT = ROOT / 'artifacts' / 'models' / 'all-MiniLM-L6-v2'
-SAVED_TEXT = INPUTS / 'shared_minilm__ablation.npz'
+SAVED_TEXT = INPUTS / 'shared_minilm__ablation_3k.npz'
 BINDING = INPUTS / 'baseline_threshold.json'
 PAIRS_N = 500
 THRESHOLD_STATE = INPUTS / 'threshold.json'
-REPORT_NOTE = ('inputs recorded 2026-10-07: catalog=dataset_10k.csv '
-               '(10k real rows); pairs = consecutive sorted-sku_id '
+REPORT_NOTE = ('inputs recorded 2026-10-08: catalog=dataset_3k.csv '
+               '(3k real rows); pairs = consecutive sorted-sku_id '
                'neighbors over first 500 rows, label=1 iff both share '
                'a nonempty brand; split=dev; population=real; '
                'coverage=sampled sample_pairs=100; retrieval_catalog=full')
@@ -109,7 +109,7 @@ def list_dirs(base: Path, prefix='round') -> list[int]:
 
 
 def prepare_pairs():
-    """Deterministic dev pairs from the real 10k catalog (rule in module doc)."""
+    """Deterministic dev pairs from the real 3k catalog (rule in module doc)."""
     frame = pd.read_csv(CATALOG, dtype=str, keep_default_na=False)
     frame['sku_id'] = frame['sku_id'].astype(str)
     frame = frame[frame.sku_id != ''].sort_values('sku_id', kind='stable').head(PAIRS_N)
@@ -150,7 +150,7 @@ def ensure_inputs(profile=False, rebuild_cache=False):
 
 
 def build_saved_text_cache():
-    """One-time CPU encode of the 10k-catalog native baseline texts, then
+    """One-time CPU encode of the 3k-catalog native baseline texts, then
     freeze the shared saved-text cache npz used by encode(saved_text=...)."""
     from model_tracks.ablation import prepare
     from graph_tracks.text_cache import texts_hash
@@ -172,7 +172,11 @@ def build_saved_text_cache():
     # baseline encode produces variant vectors too; seeded text cache uses
     # the candidate vectors (baseline text of every catalog id).
     metadata = {'checkpoint_sha256': request['sources'].get(request['checkpoint'], ''),
-                'composition': request['composition'],
+                # The reader in ablation._prepared_text_vectors compares this against
+                # model_input_composition().model_dump(mode='json') -- a DICT. Storing
+                # request['composition'] here (a fingerprint string) made that check
+                # unsatisfiable, so every seeded-cache round raised unconditionally.
+                'composition': model_input_composition().model_dump(mode='json'),
                 'text_sha256': texts_hash([request['texts'][i]
                                            for i in request['candidate_text_indices']]),
                 'tokenization': request['prepared_inputs']['tokenization'],
@@ -202,6 +206,22 @@ def rank_profile(prof, out_csv: Path, top=40):
             continue
         rows.append((tottime, nc, cumtime, f'{module}:{name}'))
     rows.sort(reverse=True)
+    # Second view over ALL frames, builtins and C extensions included. The
+    # filtered ranking above drops every name starting with '<', which silently
+    # hides re.Pattern.search/sub/finditer and other C-level hot spots.
+    allrows = []
+    for (file, line, name), (cc, nc, tottime, cumtime, callers) in stats.stats.items():
+        if 'run_colab' in file:
+            continue
+        label = file if file.startswith('<') or not file.startswith('/') else file.replace(ROOT.as_posix(), '')
+        label = label + ':' + str(line)
+        allrows.append((tottime, nc, cumtime, f'{label}:{name}'))
+    allrows.sort(reverse=True)
+    with out_csv.with_name('ranking_all.csv').open('w', newline='') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(['self_seconds', 'ncalls', 'total_seconds', 'function'])
+        for row in allrows[:120]:
+            writer.writerow([f'{row[0]:.3f}', row[1], f'{row[2]:.3f}', row[3]])
     with out_csv.open('w', newline='') as handle:
         writer = csv.writer(handle)
         writer.writerow(['self_seconds', 'ncalls', 'total_seconds', 'function'])
@@ -252,7 +272,7 @@ def run_round(round_no: int, rebuild_cache=False):
 
     idle_ok = wait_for_idle(limit=MAX_LOAD, timeout_s=WAIT_TIMEOUT_S)
 
-    summary = {'idle_ok': idle_ok, 'load_avg_at_start': load_avg(), 'notes': REPORT_NOTE, 'cohort': '10k', 'pairs_source': str(PAIRS),
+    summary = {'idle_ok': idle_ok, 'load_avg_at_start': load_avg(), 'notes': REPORT_NOTE, 'cohort': '3k', 'pairs_source': str(PAIRS),
                'checkpoint_sha256': identity, 'torch_threads': 4}
     load_start = load_avg()
     started = time.perf_counter()
