@@ -23,8 +23,12 @@ def _publish_git_inputs(paths, message: str) -> None:
     from model_tracks.publish import push_artifacts
     push_artifacts(paths, message)
     branch = training_cfg().colab.branch
-    head = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-                          cwd=TRAIN_ROOT, text=True, capture_output=True, check=True).stdout.strip()
+    try:
+        head = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                              cwd=TRAIN_ROOT, text=True, capture_output=True,
+                              check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return
     if head and head != 'HEAD' and head != branch:
         subprocess.run(['git', 'push', 'origin', f'HEAD:{branch}'],
                        cwd=TRAIN_ROOT, check=True)

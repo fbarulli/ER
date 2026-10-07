@@ -42,10 +42,9 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     with open_archive(input_archive) as archive:
         settings = SuiteConfig.model_validate(
             yaml.safe_load(archive.read(package_member('suite_package_config'))))
-    inventory = {relative: digest for relative, digest in inputs['files'].items()
-                 if relative.startswith(('src/', 'config/', 'scripts/'))}
-    if settings.ablation_config in inputs['files']:
-        inventory[settings.ablation_config] = inputs['files'][settings.ablation_config]
+    from model_tracks.resume import runtime_source_inventory
+    inventory = runtime_source_inventory(
+        inputs['files'], ablation_config=settings.ablation_config)
     if not inventory or 'src/model_tracks/local_complete.py' not in inventory:
         raise ValueError('prepared inputs lack the frozen completion runtime')
     mismatches = [relative for relative, expected in inventory.items()

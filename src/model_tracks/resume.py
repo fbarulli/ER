@@ -54,13 +54,49 @@ def _training_identity(identity: dict[str, Any] | None) -> dict[str, Any]:
     return {key: value for key, value in (identity or {}).items() if key != 'implementation'}
 
 
+def _events_skip_ablation(text: str) -> bool:
+    """True when an event stream records a deliberate ablation-export skip."""
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get('phase') == 'ablation' and event.get('status') == 'skipped':
+            return True
+    return False
+
+
+def recorded_ablation_skip(output: Path) -> bool:
+    """True when a suite's event log records that GPU ablation export was skipped."""
+    events = output / 'suite_events.jsonl'
+    return events.is_file() and _events_skip_ablation(events.read_text())
+
+
+def runtime_source_inventory(files: dict[str, Digest], *,
+                             ablation_config: str | None = None) -> dict[str, Digest]:
+    """The package members that form a suite's recorded runtime snapshot.
+
+    Mirrors :func:`model_tracks.package.runtime_snapshot_files`: the checkout
+    source/config/script neighborhoods, the pinned semantic family registry
+    (which lives under ``artifacts/`` and would otherwise be dropped by a
+    prefix-only filter), and the ablation config.
+    """
+    from model_tracks.package import package_member
+    inventory = {relative: expected for relative, expected in files.items()
+                 if relative.startswith(('src/', 'config/', 'scripts/'))}
+    registry = package_member('semantic_family_registry')
+    if registry in files:
+        inventory[registry] = files[registry]
+    if ablation_config in files:
+        inventory[ablation_config] = files[ablation_config]
+    return inventory
+
+
 def validate_training_binding(document: dict[str, Any], inputs: dict[str, Any],
                               settings: SuiteConfig, run_tag: str) -> TrainingInputBinding:
     binding = TrainingInputBinding.model_validate(document)
-    source_inventory = {relative: expected for relative, expected in inputs['files'].items()
-                        if relative.startswith(('src/', 'config/', 'scripts/'))}
-    if settings.ablation_config in inputs['files']:
-        source_inventory[settings.ablation_config] = inputs['files'][settings.ablation_config]
+    source_inventory = runtime_source_inventory(
+        inputs['files'], ablation_config=settings.ablation_config)
     if (binding.run_tag != run_tag or binding.settings != settings
             or binding.inputs != inputs['preflight']
             or binding.resume_identity.implementation != source_inventory):
@@ -96,6 +132,10 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
         binding = TrainingInputBinding.model_validate_json(bundle.read('suite_manifest.json'))
         if binding.run_tag != run_tag or settings is not None and binding.settings != settings:
             raise ValueError('completed archive suite configuration differs')
+        # A GPU run that shipped no ablation templates records the deliberate
+        # skip; the completed suite then legitimately has no saved ablation.
+        ablation_skipped = ('suite_events.jsonl' in bundle.namelist()
+                            and _events_skip_ablation(bundle.read('suite_events.jsonl').decode()))
         for track in TRACKS:
             inventory = validate_archived_track(bundle, metadata, track, postprocess_complete=True)
             suffix = ('text__completion_manifest.json' if track == 'text'
@@ -109,7 +149,7 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
             report = TrackReportManifest.model_validate_json(bundle.read(track + '/' + reports[0]))
             if report.track != track or report.test_reported and not binding.settings.report_test:
                 raise ValueError('completed archive report configuration differs: ' + track)
-            if binding.settings.post_training_ablation:
+            if binding.settings.post_training_ablation and not ablation_skipped:
                 from model_tracks.post_training_ablation import SavedAblationReport
                 path = 'ablation/report.json'
                 if path not in inventory.files:

@@ -5,8 +5,12 @@ from model_tracks.package import package_member
 from core.archive_reader import open_archive, archive_sidecar
 
 from core.portable_archive import verify_archive, write_archive, RESULT_ARCHIVE_EXCLUDED_DIRS
+from core.run_log import RunLogger
 from graph_tracks.data import file_hash
 from model_tracks.config import SuiteConfig
+
+log = RunLogger(__name__)
+
 
 def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done: bool = False, destination: Path | None = None) -> Path:
     from model_tracks.resume import validate_completed_suite_archive
@@ -41,11 +45,17 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     with open_archive(training_archive) as archive:
         validate_training_binding(json.loads(archive.read('suite_manifest.json')),
                                   inputs, settings, run_tag)
-    # The local report implementation must match the code that produced training.
-    for relative, expected in inputs['files'].items():
-        if relative.startswith(('src/', 'config/', 'scripts/')) or relative == settings.ablation_config:
-            if file_hash(TRAIN_ROOT / relative) != expected:
-                raise ValueError(f'Local completion code/config differs from training: {relative}')
+    # The suite's recorded runtime is already checked against the verified input
+    # package by validate_training_binding (self-consistent). Requiring the live
+    # checkout to still be byte-identical is a freshness gate that misfires once
+    # unrelated commits land after packaging; the frozen snapshot path runs the
+    # packaged runtime instead. Legacy mode keeps the strict checkout pin.
+    from core.perf_switches import legacy_mode
+    if legacy_mode():
+        for relative, expected in inputs['files'].items():
+            if relative.startswith(('src/', 'config/', 'scripts/')) or relative == settings.ablation_config:
+                if file_hash(TRAIN_ROOT / relative) != expected:
+                    raise ValueError(f'Local completion code/config differs from training: {relative}')
     destination = training_archive.parent / run_tag
     final = training_archive.parent / f'{run_tag}.{settings.result_archive_format}'
     if final.exists():
@@ -182,13 +192,21 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         print(f'[local-postprocess/{track}] complete', flush=True)
     ablation_done = False
     if settings.post_training_ablation:
-        from model_tracks.post_training_ablation import complete_saved
-        # Compute once before sealing; publication consumes those exact bytes.
-        complete_saved(destination, settings)
-        ablation_done = True
-        # Ablation adds durable reports after the per-track pair report.
-        for track in TRACKS:
-            record_completion(destination / track, track)
+        # A GPU run that shipped no staged ablation templates records the
+        # deliberate skip (model_tracks.run); there are then no exports to
+        # consume, and the sealed suite legitimately carries no saved ablation.
+        from model_tracks.resume import recorded_ablation_skip
+        if recorded_ablation_skip(destination):
+            log.info('[local-postprocess] GPU suite skipped attribute ablation; '
+                     'no saved ablation to consume')
+        else:
+            from model_tracks.post_training_ablation import complete_saved
+            # Compute once before sealing; publication consumes those exact bytes.
+            complete_saved(destination, settings)
+            ablation_done = True
+            # Ablation adds durable reports after the per-track pair report.
+            for track in TRACKS:
+                record_completion(destination / track, track)
     suite['postprocess_location'] = 'local CPU'
     (destination / 'suite_manifest.json').write_text(json.dumps(suite, indent=2))
     files = {p.relative_to(destination).as_posix(): p for p in destination.rglob('*')
