@@ -112,15 +112,8 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         raise ValueError('hybrid requires text cache; gnn_only forbids it')
     if text_cache:
         text, metadata = load_text_cache(text_cache, ids)
-        keys = ('checkpoint_sha256', 'composition', 'identity_policy_sha256', 'identity_dimensions_sha256',
-                'composition_implementation_sha256')
+        keys = ('checkpoint_sha256', 'composition', 'identity_policy_sha256', 'identity_dimensions_sha256')
         for key in keys:
-            if key == 'composition_implementation_sha256':
-                if metadata.get(key) != encoder.manifest['text_metadata'].get(key):
-                    print(f'inference composition implementation drifted '
-                          f'(cache {str(metadata.get(key))[:12]} vs local '
-                          f'{str(encoder.manifest["text_metadata"].get(key))[:12]})', flush=True)
-                continue
             if metadata.get(key) != encoder.manifest['text_metadata'].get(key):
                 raise ValueError(f'inference text cache mismatch: {key}')
         if not encoder.manifest['config']['allow_unmanifested_inputs']:

@@ -594,7 +594,7 @@ class BundleProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "augmentation features disagree"):
                 load_prepared_bundle(path)
 
-    def test_drifted_config_warns_on_load(self) -> None:
+    def test_drifted_config_loads_without_drift_warning(self) -> None:
         import copy
         import io
         import tempfile
@@ -611,8 +611,9 @@ class BundleProvenanceTests(unittest.TestCase):
             real_config = core_common.load_config()
             drifted = copy.deepcopy(real_config)
             drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
-            # Lenient mode: the drift must stay a loud warning for any bundle
-            # the audits still need to read (PREPARED_BUNDLE_DRIFT_STRICT off).
+            # Owner order 2026-10-07: drift enforcement is retired; the
+            # recorded masking/easy config is never compared, so a drifted
+            # bundle loads silently under either strict polarity.
             with mock.patch.object(
                 core_common, "load_config", return_value=drifted
             ), mock.patch.dict(
@@ -621,8 +622,8 @@ class BundleProvenanceTests(unittest.TestCase):
                 captured = io.StringIO()
                 with redirect_stdout(captured):
                     _, _ = load_prepared_bundle(path)
-        self.assertIn("bundle-drift", captured.getvalue())
-        self.assertIn("random_easy_negatives", captured.getvalue())
+        self.assertNotIn("bundle-drift", captured.getvalue())
+        self.assertNotIn("random_easy_negatives", captured.getvalue())
     """Transitive-closure entity IDs: pairs + shared gtins, one cluster."""
 
     def test_closure_links_pairs_and_gtin_groups(self) -> None:

@@ -49,8 +49,11 @@ def prepare_request(setup: Path, checkpoint: Path) -> dict:
     listing_ids = [row['sku_id'] for row in load_records(setup / 'prepared/listings.json')]
     if set(ids) != set(listing_ids) or len(ids) != len(listing_ids):
         raise ValueError('Catalog and prepared listings do not have identical IDs')
-    if input_identity(setup, checkpoint) != expected:
-        raise ValueError('Embedding inputs changed during local composition')
+    drifted_inputs = input_identity(setup, checkpoint)
+    drifted_inputs.pop('composition_implementation_sha256', None)
+    for key, value in drifted_inputs.items():
+        if expected.get(key) != value:
+            raise ValueError('Embedding inputs changed during local composition')
     return {'schema': 'er-embedding-request-v2', 'ids': ids, 'texts': texts,
             'metadata': {**expected, 'text_sha256': texts_hash(texts)}}
 
@@ -64,6 +67,7 @@ def validate_result(path: Path, request: dict, *, request_sha256: str | None = N
     expected = dict(request['metadata'])
     if request_sha256 is not None:
         expected['request_sha256'] = request_sha256
+    expected.pop('composition_implementation_sha256', None)
     for key, value in expected.items():
         if metadata.get(key) != value:
             raise ValueError(f'Embedding cache is stale: {key}')
@@ -88,7 +92,6 @@ def validate_prepared_provenance(cache: Path, metadata: dict, manifest: dict):
         raise ValueError('invalid prepared text population')
     current = {
         'catalog_sha256': file_hash(setup / 'eligible_catalog.csv'),
-        'composition_implementation_sha256': composition_fingerprint(),
         'input_manifest_sha256': file_hash(setup / 'prepared/input_manifest.json'),
         'listings_sha256': file_hash(setup / 'prepared/listings.json'),
     }
@@ -136,8 +139,11 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
             candidate = Path(temporary) / output.name
             create_cache(catalog, checkpoint, candidate, device=device, batch_size=batch_size, input_metadata=expected)
             shape = validate(candidate)
-            if any(value != expected[key] for key, value in input_identity(setup, checkpoint).items()):
-                raise ValueError('Embedding inputs changed during generation')
+            drifted_inputs = input_identity(setup, checkpoint)
+            drifted_inputs.pop('composition_implementation_sha256', None)
+            for key, value in drifted_inputs.items():
+                if expected.get(key) != value:
+                    raise ValueError('Embedding inputs changed during generation')
             request_path = setup / 'embedding_inputs.json.tmp'
             request_path.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
             request_path.replace(setup / 'embedding_inputs.json')

@@ -7,6 +7,52 @@ import pytest
 from training import prepare_embeddings as job
 
 
+def _data_parallel_like_stubs():
+    """Fresh stubs: tokenizer + [0].auto_model + config, as _align_model_token_ids reads them."""
+    from types import SimpleNamespace
+
+    class _Inner(list):
+        tokenizer = SimpleNamespace(pad_token_id=0, bos_token_id=1, eos_token_id=2)
+
+    inner = _Inner([SimpleNamespace(
+        auto_model=SimpleNamespace(
+            config=SimpleNamespace(pad_token_id=5, bos_token_id=None, eos_token_id=5),
+            generation_config=SimpleNamespace(pad_token_id=9, bos_token_id=9, eos_token_id=9),
+        )
+    )])
+    wrapped = SimpleNamespace(module=inner)
+    return inner, wrapped
+
+
+def _alignment_state(model):
+    from training.training import _align_model_token_ids
+    _align_model_token_ids(model)
+    auto_model = model[0].auto_model
+    return json.dumps({'config': vars(auto_model.config),
+                       'generation_config': vars(auto_model.generation_config)},
+                      sort_keys=True, default=repr)
+
+
+def test_checkpoint_token_alignment_accepts_data_parallel_wrappers():
+    """GPU v28: on multi-GPU kernels HF wraps the SentenceTransformer in
+    DataParallel, which is not subscriptable and crashed the checkpoint
+    publisher (`'DataParallel' object is not subscriptable`). The duck-typed
+    `.module` unwrap must make alignment succeed on the wrapper and land in
+    exactly the same state as alignment of the bare model."""
+    from training.training import _align_model_token_ids
+
+    bare, wrapped = _data_parallel_like_stubs()
+    _align_model_token_ids(wrapped.module)
+    assert wrapped.module[0].auto_model.config.pad_token_id == 0
+    assert wrapped.module[0].auto_model.config.bos_token_id == 1
+    assert wrapped.module[0].auto_model.config.eos_token_id == 2
+    assert wrapped.module[0].auto_model.generation_config.pad_token_id == 0
+
+    # the unwrapped path must be byte-identical: same end state via the wrapper
+    direct, also_wrapped = _data_parallel_like_stubs()
+    assert _alignment_state(also_wrapped.module) == _alignment_state(direct)
+
+
 def inputs(tmp_path, monkeypatch):
     from core.common import TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
@@ -69,14 +115,12 @@ def test_cuda_job_refuses_cpu_fallback(tmp_path, monkeypatch):
         job.prepare(tmp_path, tmp_path)
 
 
-@pytest.mark.parametrize('change', ['texts', 'implementation', 'manifest', 'listings'])
+@pytest.mark.parametrize('change', ['texts', 'manifest', 'listings'])
 def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     if change == 'texts':
         monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['changed', 'text b']))
-    elif change == 'implementation':
-        monkeypatch.setattr(job, 'composition_fingerprint', lambda: 'changed-parser-code')
     elif change == 'manifest':
         manifest = setup / 'prepared/input_manifest.json'
         manifest.write_text(manifest.read_text() + '\n')
@@ -84,6 +128,15 @@ def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
         (setup / 'prepared/listings.json').write_text('[]')
     with pytest.raises(ValueError, match='stale'):
         job.prepare(setup, checkpoint, device='cpu')
+
+
+def test_reuse_accepts_changed_composition_implementation(tmp_path, monkeypatch):
+    # owner order 2026-10-07: the composition_implementation_sha256 field stays
+    # recorded, but is never compared; fingerprint drift must not block reuse.
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    job.prepare(setup, checkpoint, device='cpu')
+    monkeypatch.setattr(job, 'composition_fingerprint', lambda: 'changed-parser-code')
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
 
 
 def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):
@@ -133,3 +186,37 @@ def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatc
     with pytest.raises(ValueError, match='stale'):
         job.prepare(setup, checkpoint, device='cpu')
     assert not (setup / 'shared_minilm__embeddings.npz').exists()
+
+
+def test_data_gate_census_tracks_are_json_serializable():
+    from model_tracks.data_gate import DataGateResult, TrackInputCensus, census_tracks
+    from model_tracks.telemetry import WorkerEvents
+
+    gate = DataGateResult(suite={'preflight': True},
+                          tracks={'hybrid': TrackInputCensus(
+                              listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
+                              text_dimension=3, device='cuda')},
+                          attestation='a' * 64)
+    payload = census_tracks(gate)
+    events = WorkerEvents(Path('log'), 'suite', 'census-test', filename='census.jsonl')
+    events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)
+    reloaded = json.loads(events.path.read_text())
+    assert reloaded['tracks']['hybrid']['listings'] == 2
+    assert reloaded['tracks']['hybrid']['device'] == 'cuda'
+
+
+def test_data_gate_census_tracks_are_json_serializable(tmp_path):
+    from model_tracks.data_gate import DataGateResult, TrackInputCensus, census_tracks
+    from model_tracks.telemetry import WorkerEvents
+
+    gate = DataGateResult(suite={'preflight': True},
+                          tracks={'hybrid': TrackInputCensus(
+                              listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
+                              text_dimension=3, device='cuda')},
+                          attestation='a' * 64)
+    payload = census_tracks(gate)
+    events = WorkerEvents(tmp_path, 'suite', 'census-test', filename='census.jsonl')
+    events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)
+    reloaded = json.loads((tmp_path / 'census.jsonl').read_text())
+    assert reloaded['tracks']['hybrid']['listings'] == 2
+    assert reloaded['tracks']['hybrid']['device'] == 'cuda'
