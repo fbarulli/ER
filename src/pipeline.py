@@ -178,208 +178,302 @@ def extract_volume_from_title(title: str) -> dict:
             "parse_status": entry.family}
 
 
-def extract_pack_evidence(title: str) -> list[dict]:
-    """Retain physical-unit and outer-package quantities with original spans."""
-    text = str(title or "")
-    from core.text import extract_volume_evidence
-    measurements = extract_volume_evidence(text)
-    confidence = data_cfg().extraction.pack_confidence
-    # Count tokens must include their entire number: decimal and price tails
-    # cannot masquerade as integer quantities. Grouped thousands are counts.
-    count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
-    number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
-    containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
-    # The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
-    # container word), never any letter. `12x1 mineralwasser`/`12x1 pet`
-    # (SKUs 935970386, 935979247, 955514786) emitted false raw spans
-    # `12x1 m`/`12x1 p` — the unit word's first letter. One descriptive
-    # word may sit between the count and a MEASUREMENT unit ('6x20 organic
-    # cl'); a bare container word may not be reached THROUGH material words
-    # ('12x1 pet bottles' is not a recognized span).
-    measurement_tail = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
-    multiplier_tail = (rf"(?:\s*(?:{measurement_tail}|{containers})\b"
-                       rf"|\s+[a-z]+\s*{measurement_tail})")
-    patterns = (
-        ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
-        ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
-        # Retail titles also use a terminal count without a unit size:
-        # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
-        # a suffix; model codes and unfinished size multipliers stay unknown.
-        ("multiplier", rf"{number}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
-        ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
-        ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
-        ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
-        ("compact", rf"\bpack\s*[- ]?\s*{count_token}\b", "unit_count"),
-        ("container", rf"{number}\s*(?:glass\s*)?{containers}\b", "unit_count"),
-        ("count", rf"{number}\s*cases?\b", "outer_count"),
-    )
-    evidence = []
-    occupied = []
-    for kind, pattern, role in patterns:
-        for match in re.finditer(pattern, text, re.I):
-            if any(start <= match.start() < end for start, end in occupied):
+class _PackEvidenceReader:
+    """One title's pack-evidence scan, phase by phase.
+
+    The phases below run in ONE fixed order inside read(); the statements are
+    the pre-refactor body verbatim, so the returned evidence list (order,
+    keys, values, rule names) is byte-identical.
+
+    Phase map:
+      prepare            — text, volume measurements, package subset,
+                           configured confidence, count regex vocabulary,
+                           the family patterns
+      scan_family_patterns — the ordered span-claimed pattern scan
+      scan_prefix_multipliers — a multiplier preceding the product name
+      scan_set_and_count_words — set/bundle + retail unit counts + word
+                           counts + the sticks-per-box hierarchy
+      reconcile_totals   — whitespace-multiplier proof via stated totals
+      reinterpret_outer  — "(Pack of n)" outer/inner hierarchy rewrite
+    """
+
+    def __init__(self, title: str) -> None:
+        self._title = title
+        self.evidence: list[dict] = []
+        self.occupied: list[tuple[int, int]] = []
+
+    # ── phase: prepare ──────────────────────────────────────────────────────
+
+    def prepare(self) -> dict:
+        """Reader + regex vocabulary (shared by every scan phase)."""
+        text = str(self._title or "")
+        from core.text import extract_volume_evidence
+        measurements = extract_volume_evidence(text)
+        confidence = data_cfg().extraction.pack_confidence
+        # Count tokens must include their entire number: decimal and price tails
+        # cannot masquerade as integer quantities. Grouped thousands are counts.
+        count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
+        number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
+        containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
+        # The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
+        # container word), never any letter. `12x1 mineralwasser`/`12x1 pet`
+        # (SKUs 935970386, 935979247, 955514786) emitted false raw spans
+        # `12x1 m`/`12x1 p` — the unit word's first letter. One descriptive
+        # word may sit between the count and a MEASUREMENT unit ('6x20 organic
+        # cl'); a bare container word may not be reached THROUGH material words
+        # ('12x1 pet bottles' is not a recognized span).
+        measurement_tail = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
+        multiplier_tail = (rf"(?:\s*(?:{measurement_tail}|{containers})\b"
+                           rf"|\s+[a-z]+\s*{measurement_tail})")
+        patterns = (
+            ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
+            ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
+            # Retail titles also use a terminal count without a unit size:
+            # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
+            # a suffix; model codes and unfinished size multipliers stay unknown.
+            ("multiplier", rf"{number}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
+            ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
+            ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
+            ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
+            ("compact", rf"\bpack\s*[- ]?\s*{count_token}\b", "unit_count"),
+            ("container", rf"{number}\s*(?:glass\s*)?{containers}\b", "unit_count"),
+            ("count", rf"{number}\s*cases?\b", "outer_count"),
+        )
+        return {
+            "text": text,
+            "measurements": measurements,
+            "package_measurements": [m for m in measurements if m['role'] == 'package_volume'],
+            "confidence": confidence,
+            "count_token": count_token,
+            "number": number,
+            "patterns": patterns,
+        }
+
+    # ── phase: the family scan ──────────────────────────────────────────────
+
+    def scan_family_patterns(self, ctx: dict) -> None:
+        """Ordered span-claimed scan over every recognized family."""
+        text = ctx["text"]
+        measurements = ctx["measurements"]
+        confidence = ctx["confidence"]
+        for kind, pattern, role in ctx["patterns"]:
+            for match in re.finditer(pattern, text, re.I):
+                if any(start <= match.start() < end for start, end in self.occupied):
+                    continue
+                if kind == "compact" and any(
+                    entry["start"] == match.start(1) for entry in measurements
+                ):
+                    continue
+                if kind == "pack_of" and any(
+                    entry["start"] == match.start(1) for entry in measurements
+                ):
+                    # "8 pack of 16 Fl Oz" states eight units, not sixteen.
+                    # A quantity carrying a volume unit cannot be a pack count.
+                    continue
+                if kind == "compact" and text[match.end():].startswith(")") and re.search(
+                    rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
+                    text[match.end() + 1:],
+                ):
+                    # "Combo Pack - 1) product A & 2) product B" is a list.
+                    continue
+                # Currency followed by whitespace still denotes a price.
+                if re.search(r"[$€£]\s*$", text[:match.start()]):
+                    continue
+                # GDSN weight declarations ("gross weight: 527 unit (specific) …
+                # centiliters") are prose measurements, not a retail bundle: a
+                # count immediately preceded by a weight label is skipped.
+                if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
+                    continue
+                count = int(re.sub(r"[.,]", "", match.group(1)))
+                if kind == "nested":
+                    count *= int(match.group(2))
+                if count <= 0:
+                    continue
+                self.occupied.append(match.span())
+                self.evidence.append({"count": count, "confidence": confidence[kind],
+                                      "role": role, "raw_match": match.group(0),
+                                      "start": match.start(), "end": match.end(), "rule": kind})
+
+    # ── phase: multiplier before the product name ───────────────────────────
+
+    def scan_prefix_multipliers(self, ctx: dict) -> None:
+        """A multiplier can precede the product name, not just its unit size.
+
+        Require a physical-package measurement after it and reject dosage-only
+        text; bare model codes and unproved whitespace counts stay unknown."""
+        text = ctx["text"]
+        number = ctx["number"]
+        confidence = ctx["confidence"]
+        package_measurements = ctx["package_measurements"]
+        for match in re.finditer(rf"{number}\s*[x×]\s+(?=[a-z])", text, re.I):
+            if any(start <= match.start() < end for start, end in self.occupied):
                 continue
-            if kind == "compact" and any(
-                entry["start"] == match.start(1) for entry in measurements
-            ):
+            following = next((m for m in package_measurements
+                              if match.end() <= m['start'] and m['start'] - match.end() <= 100), None)
+            if following is None:
                 continue
-            if kind == "pack_of" and any(
-                entry["start"] == match.start(1) for entry in measurements
-            ):
-                # "8 pack of 16 Fl Oz" states eight units, not sixteen.
-                # A quantity carrying a volume unit cannot be a pack count.
+            between = text[match.end():following['start']]
+            if re.search(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", between, re.I):
                 continue
-            if kind == "compact" and text[match.end():].startswith(")") and re.search(
-                rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
-                text[match.end() + 1:],
-            ):
-                # "Combo Pack - 1) product A & 2) product B" is a list.
+            end = following['end']
+            self.evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
+                                  'confidence': confidence['multiplier'], 'role': 'unit_count',
+                                  'raw_match': text[match.start():end], 'start': match.start(),
+                                  'end': end, 'rule': 'multiplier'})
+            self.occupied.append((match.start(), end))
+
+    # ── phase: set/bundle + retail counts + word counts + sticks hierarchy ──
+
+    def scan_set_and_count_words(self, ctx: dict) -> None:
+        """set/bundle lane (requires package measurements), retail unit-count
+        lane, word-count lane, and the sticks-per-box hierarchy (deterministic
+        append order)."""
+        text = ctx["text"]
+        number = ctx["number"]
+        count_token = ctx["count_token"]
+        confidence = ctx["confidence"]
+        if ctx["package_measurements"]:
+            for match in re.finditer(rf"\b(?:set|bundle)\s+of\s*{count_token}\b", text, re.I):
+                if re.match(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", text[match.end():], re.I):
+                    continue
+                self.evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
+                                      'confidence': confidence['pack_of'], 'role': 'unit_count',
+                                      'raw_match': match.group(0), 'start': match.start(),
+                                      'end': match.end(), 'rule': 'pack_of'})
+        # Retail metadata is count evidence only when its unit is Count, not
+        # fluid ounces or a mass; decimal .00 is an integer count here.
+        for match in re.finditer(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", text, re.I):
+            if int(match.group(1)):
+                self.evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
+                                      'role': 'unit_count', 'raw_match': match.group(0),
+                                      'start': match.start(), 'end': match.end(), 'rule': 'count'})
+        word_counts = dict(zip(
+            ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
+            range(1, 13), strict=True,
+        ))
+        for match in re.finditer(r"\b(" + "|".join(word_counts) + r")\s*[- ]\s*packs?\b", text, re.I):
+            self.evidence.append({"count": word_counts[match.group(1).lower()],
+                                  "confidence": confidence["count"], "role": "unit_count",
+                                  "raw_match": match.group(0), "start": match.start(),
+                                  "end": match.end(), "rule": "count"})
+        inner = re.search(rf"(?<![\d.,]){count_token}\s*sticks?\s+per\s+box\b", text, re.I)
+        if inner:
+            inner_count = int(re.sub(r"[.,]", "", inner.group(1)))
+            self.evidence.append({"count": inner_count, "confidence": confidence["count"],
+                                  "role": "inner_count", "raw_match": inner.group(0),
+                                  "start": inner.start(), "end": inner.end(), "rule": "count"})
+            for entry in list(self.evidence):
+                if entry["rule"] == "compact" and entry["role"] == "unit_count":
+                    entry["role"] = "outer_count"
+                    entry["hierarchy_ambiguous"] = True
+                    start, end = min(entry["start"], inner.start()), max(entry["end"], inner.end())
+                    self.evidence.append({"count": inner_count * entry["count"],
+                                          "confidence": min(entry["confidence"], confidence["count"]),
+                                          "role": "derived_inner_total", "hierarchy_ambiguous": True,
+                                          "raw_match": text[start:end], "start": start, "end": end,
+                                          "rule": "nested"})
+            outer = re.search(rf"{number}\s*boxes\b", text, re.I)
+            if outer:
+                start, end = min(outer.start(), inner.start()), max(outer.end(), inner.end())
+                self.evidence.insert(0, {"count": inner_count * int(re.sub(r"[.,]", "", outer.group(1))),
+                                         "confidence": confidence["nested"], "role": "unit_count",
+                                         "raw_match": text[start:end], "start": start, "end": end,
+                                         "rule": "nested"})
+
+    # ── phase: whitespace-multiplier proof via stated totals ────────────────
+
+    def reconcile_totals(self, ctx: dict) -> None:
+        """Two passes over the measurements: the stated-total proof and the
+        package/total ratio (the ratio needs a REAL total_volume)."""
+        # Whitespace alone is not a multiplier. A nearby explicitly stated total
+        # can prove the relation, e.g. "6 330 ml (Total 1980 ml)".
+        from core.unit_canonicalization import canonical_volume_ml
+        text = ctx["text"]
+        confidence = ctx["confidence"]
+        measurements = ctx["measurements"]
+        for unit_entry, total_entry in zip(measurements, measurements[1:]):
+            prefix = re.search(rf"{ctx['number']}\s+$", text[:unit_entry["start"]])
+            between = text[unit_entry["end"]:total_entry["start"]]
+            if prefix is None or not re.fullmatch(r"[ .()]*total\s*", between, re.I):
                 continue
-            # Currency followed by whitespace still denotes a price.
-            if re.search(r"[$€£]\s*$", text[:match.start()]):
+            if any(start <= prefix.start() < end for start, end in self.occupied):
                 continue
-            # GDSN weight declarations ("gross weight: 527 unit (specific) …
-            # centiliters") are prose measurements, not a retail bundle: a
-            # count immediately preceded by a weight label is skipped.
-            if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
+            count = int(re.sub(r"[.,]", "", prefix.group(1)))
+            unit_volume = canonical_volume_ml(unit_entry["value"], unit_entry["unit"])
+            total_volume = canonical_volume_ml(total_entry["value"], total_entry["unit"])
+            if count > 0 and unit_volume > 0 and math.isclose(count * unit_volume, total_volume):
+                start, end = prefix.start(), total_entry["end"]
+                self.evidence.append({"count": count, "confidence": confidence["multiplier"],
+                                      "role": "unit_count", "raw_match": text[start:end],
+                                      "start": start, "end": end, "rule": "multiplier"})
+        for total_entry in measurements:
+            if total_entry["role"] != "total_volume":
                 continue
-            count = int(re.sub(r"[.,]", "", match.group(1)))
-            if kind == "nested":
-                count *= int(match.group(2))
-            if count <= 0:
-                continue
-            occupied.append(match.span())
-            evidence.append({"count": count, "confidence": confidence[kind],
-                             "role": role, "raw_match": match.group(0),
-                             "start": match.start(), "end": match.end(), "rule": kind})
-    # A multiplier can precede the product name, not just its unit size.
-    # Require a physical-package measurement after it and reject dosage-only
-    # text; bare model codes and unproved whitespace counts stay unknown.
-    package_measurements = [m for m in measurements if m['role'] == 'package_volume']
-    for match in re.finditer(rf"{number}\s*[x×]\s+(?=[a-z])", text, re.I):
-        if any(start <= match.start() < end for start, end in occupied):
-            continue
-        following = next((m for m in package_measurements
-                          if match.end() <= m['start'] and m['start'] - match.end() <= 100), None)
-        if following is None:
-            continue
-        between = text[match.end():following['start']]
-        if re.search(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", between, re.I):
-            continue
-        end = following['end']
-        evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
-                         'confidence': confidence['multiplier'], 'role': 'unit_count',
-                         'raw_match': text[match.start():end], 'start': match.start(),
-                         'end': end, 'rule': 'multiplier'})
-        occupied.append((match.start(), end))
-    if package_measurements:
-        for match in re.finditer(rf"\b(?:set|bundle)\s+of\s*{count_token}\b", text, re.I):
-            if re.match(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", text[match.end():], re.I):
-                continue
-            evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
-                             'confidence': confidence['pack_of'], 'role': 'unit_count',
-                             'raw_match': match.group(0), 'start': match.start(),
-                             'end': match.end(), 'rule': 'pack_of'})
-    # Retail metadata is count evidence only when its unit is Count, not
-    # fluid ounces or a mass; decimal .00 is an integer count here.
-    for match in re.finditer(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", text, re.I):
-        if int(match.group(1)):
-            evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
-                             'role': 'unit_count', 'raw_match': match.group(0),
-                             'start': match.start(), 'end': match.end(), 'rule': 'count'})
-    word_counts = dict(zip(
-        ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
-        range(1, 13), strict=True,
-    ))
-    for match in re.finditer(r"\b(" + "|".join(word_counts) + r")\s*[- ]\s*packs?\b", text, re.I):
-        evidence.append({"count": word_counts[match.group(1).lower()],
-                         "confidence": confidence["count"], "role": "unit_count",
-                         "raw_match": match.group(0), "start": match.start(),
-                         "end": match.end(), "rule": "count"})
-    inner = re.search(rf"(?<![\d.,]){count_token}\s*sticks?\s+per\s+box\b", text, re.I)
-    if inner:
-        inner_count = int(re.sub(r"[.,]", "", inner.group(1)))
-        evidence.append({"count": inner_count, "confidence": confidence["count"],
-                         "role": "inner_count", "raw_match": inner.group(0),
-                         "start": inner.start(), "end": inner.end(), "rule": "count"})
-        for entry in list(evidence):
-            if entry["rule"] == "compact" and entry["role"] == "unit_count":
-                entry["role"] = "outer_count"
-                entry["hierarchy_ambiguous"] = True
-                start, end = min(entry["start"], inner.start()), max(entry["end"], inner.end())
-                evidence.append({"count": inner_count * entry["count"],
-                                 "confidence": min(entry["confidence"], confidence["count"]),
-                                 "role": "derived_inner_total", "hierarchy_ambiguous": True,
-                                 "raw_match": text[start:end], "start": start, "end": end,
-                                 "rule": "nested"})
-        outer = re.search(rf"{number}\s*boxes\b", text, re.I)
-        if outer:
-            start, end = min(outer.start(), inner.start()), max(outer.end(), inner.end())
-            evidence.insert(0, {"count": inner_count * int(re.sub(r"[.,]", "", outer.group(1))),
-                                "confidence": confidence["nested"], "role": "unit_count",
-                                "raw_match": text[start:end], "start": start, "end": end,
-                                "rule": "nested"})
-    # Whitespace alone is not a multiplier. A nearby explicitly stated total
-    # can prove the relation, e.g. "6 330 ml (Total 1980 ml)".
-    from core.unit_canonicalization import canonical_volume_ml
-    for unit_entry, total_entry in zip(measurements, measurements[1:]):
-        prefix = re.search(rf"{number}\s+$", text[:unit_entry["start"]])
-        between = text[unit_entry["end"]:total_entry["start"]]
-        if prefix is None or not re.fullmatch(r"[ .()]*total\s*", between, re.I):
-            continue
-        if any(start <= prefix.start() < end for start, end in occupied):
-            continue
-        count = int(re.sub(r"[.,]", "", prefix.group(1)))
-        unit_volume = canonical_volume_ml(unit_entry["value"], unit_entry["unit"])
-        total_volume = canonical_volume_ml(total_entry["value"], total_entry["unit"])
-        if count > 0 and unit_volume > 0 and math.isclose(count * unit_volume, total_volume):
-            start, end = prefix.start(), total_entry["end"]
-            evidence.append({"count": count, "confidence": confidence["multiplier"],
-                             "role": "unit_count", "raw_match": text[start:end],
-                             "start": start, "end": end, "rule": "multiplier"})
-    for total_entry in measurements:
-        if total_entry["role"] != "total_volume":
-            continue
-        for unit_entry in measurements:
-            if (unit_entry["role"] != "package_volume"
-                or unit_entry["end"] >= total_entry["start"]
-                or unit_entry["unit"] != total_entry["unit"]
-                or unit_entry["value"] <= 0):
-                continue
-            ratio = total_entry["value"] / unit_entry["value"]
-            count = round(ratio)
-            if count <= 1 or not math.isclose(ratio, count):
-                continue
-            if any(entry["role"] == "unit_count" for entry in evidence):
+            for unit_entry in measurements:
+                if (unit_entry["role"] != "package_volume"
+                    or unit_entry["end"] >= total_entry["start"]
+                    or unit_entry["unit"] != total_entry["unit"]
+                    or unit_entry["value"] <= 0):
+                    continue
+                ratio = total_entry["value"] / unit_entry["value"]
+                count = round(ratio)
+                if count <= 1 or not math.isclose(ratio, count):
+                    continue
+                if any(entry["role"] == "unit_count" for entry in self.evidence):
+                    break
+                start, end = unit_entry["start"], total_entry["end"]
+                self.evidence.append({"count": count, "confidence": confidence["multiplier"],
+                                      "role": "unit_count", "raw_match": text[start:end],
+                                      "start": start, "end": end, "rule": "multiplier"})
                 break
-            start, end = unit_entry["start"], total_entry["end"]
-            evidence.append({"count": count, "confidence": confidence["multiplier"],
-                             "role": "unit_count", "raw_match": text[start:end],
-                             "start": start, "end": end, "rule": "multiplier"})
-            break
-    # "4 x 250ml (Pack of 2)" describes two inner four-packs. Preserve
-    # levels and a proven physical-unit total instead of picking inner four.
-    outer = re.search(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){count_token}\s*\)", text, re.I)
-    inner_units = [e for e in evidence if e['role'] == 'unit_count' and e['rule'] == 'multiplier'
-                   and (outer is None or e['end'] <= outer.start())]
-    if outer and inner_units:
-        inner = inner_units[0]
-        outer_count = int(re.sub(r'[.,]', '', outer.group(1)))
-        start, end = inner['start'], outer.end()
-        for entry in evidence:
-            if entry['role'] == 'unit_count':
-                entry['role'] = 'outer_count' if entry['start'] >= outer.start() else 'inner_count'
-        evidence.insert(0, {'count': inner['count'] * outer_count,
-                            'confidence': confidence['nested'], 'role': 'unit_count',
-                            'raw_match': text[start:end], 'start': start, 'end': end,
-                            'rule': 'nested'})
-    elif len({e['count'] for e in evidence if e['role'] == 'unit_count'}) > 1:
-        # Unresolved competing counts are not a license to select whichever
-        # happens to match another record.
-        for entry in evidence:
-            if entry['role'] == 'unit_count':
-                entry['hierarchy_ambiguous'] = True
-    return evidence
+
+    # ── phase: "(Pack of n)" outer reinterpretation ─────────────────────────
+
+    def reinterpret_outer(self, ctx: dict) -> None:
+        """Rewrite the hierarchy when an outer pack surrounds inner counts."""
+        # "4 x 250ml (Pack of 2)" describes two inner four-packs. Preserve
+        # levels and a proven physical-unit total instead of picking inner four.
+        text = ctx["text"]
+        count_token = ctx["count_token"]
+        confidence = ctx["confidence"]
+        outer = re.search(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){count_token}\s*\)", text, re.I)
+        inner_units = [e for e in self.evidence if e['role'] == 'unit_count' and e['rule'] == 'multiplier'
+                       and (outer is None or e['end'] <= outer.start())]
+        if outer and inner_units:
+            inner = inner_units[0]
+            outer_count = int(re.sub(r'[.,]', '', outer.group(1)))
+            start, end = inner['start'], outer.end()
+            for entry in self.evidence:
+                if entry['role'] == 'unit_count':
+                    entry['role'] = 'outer_count' if entry['start'] >= outer.start() else 'inner_count'
+            self.evidence.insert(0, {'count': inner['count'] * outer_count,
+                                     'confidence': confidence['nested'], 'role': 'unit_count',
+                                     'raw_match': text[start:end], 'start': start, 'end': end,
+                                     'rule': 'nested'})
+        elif len({e['count'] for e in self.evidence if e['role'] == 'unit_count'}) > 1:
+            # Unresolved competing counts are not a license to select whichever
+            # happens to match another record.
+            for entry in self.evidence:
+                if entry['role'] == 'unit_count':
+                    entry['hierarchy_ambiguous'] = True
+
+    # ── orchestration ───────────────────────────────────────────────────────
+
+    def read(self) -> list[dict]:
+        """Run the load-bearing scan order."""
+        ctx = self.prepare()
+        self.scan_family_patterns(ctx)
+        self.scan_prefix_multipliers(ctx)
+        self.scan_set_and_count_words(ctx)
+        self.reconcile_totals(ctx)
+        self.reinterpret_outer(ctx)
+        return self.evidence
+
+
+def extract_pack_evidence(title: str) -> list[dict]:
+    """Retain physical-unit and outer-package quantities with original spans —
+    see _PackEvidenceReader.read (phases, order, output bytes identical)."""
+    return _PackEvidenceReader(title).read()
 
 
 def extract_pack_from_title(title: str) -> tuple:
