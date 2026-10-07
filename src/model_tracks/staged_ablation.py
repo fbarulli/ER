@@ -29,7 +29,6 @@ import torch
 from core.run_log import RunLogger
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
-from graph_tracks.text_cache import checkpoint_hash
 from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context
 
 _LOG = RunLogger(__name__)
@@ -76,12 +75,11 @@ def _frozen_support(setup):
 
 def _template_checkpoint(setup,baseline,track,vocabulary,support):
     """The text baseline checkpoint, or the other tracks' template tensor file."""
-    from core.model_input import model_input_composition
     checkpoint = baseline
     if track != 'text':
         checkpoint = setup/(track+'__ablation_template.pt')
         payload = {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
-            'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
+            'text_metadata':{}},
             'vocabulary':vocabulary,'support_records':support}
         torch.save(payload,checkpoint)
     return checkpoint
