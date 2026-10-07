@@ -34,8 +34,8 @@ def extract_sweetening_status(*values: object) -> set[str]:
     return {state for state, pattern in SWEETENING_PATTERNS.items() if pattern.search(text)}
 
 
-def title_sweetener_types(title: str) -> set[str]:
-    """Capture explicit ingredient phrases in titles, not bare ingredient words."""
+@lru_cache(maxsize=65536)
+def _title_sweetener_types_cached(title: str) -> frozenset[str]:
     text = normalized_attribute_text(title)
     text = _negated_ingredient_pattern().sub(' ', text)
     found: set[str] = set()
@@ -50,7 +50,19 @@ def title_sweetener_types(title: str) -> set[str]:
         found.add(match.group(1).replace(" ", "_"))
     if re.search(r"\bwith stevia\b(?!\s+free\b)", text):
         found.add("stevia")
-    return found
+    return frozenset(found)
+
+
+def title_sweetener_types(title: str) -> set[str]:
+    """Capture explicit ingredient phrases in titles, not bare ingredient words."""
+    try:
+        return set(_title_sweetener_types_cached(title))
+    except TypeError:
+        return _title_sweetener_types_uncached(title)
+
+
+def _title_sweetener_types_uncached(title: str) -> set[str]:
+    return set(_title_sweetener_types_cached.__wrapped__(title))
 
 
 @lru_cache(maxsize=1)
@@ -59,8 +71,21 @@ def _negated_ingredient_pattern():
     return re.compile(r'\b(?:no|without|not made with|not sweetened with)\s+(' + ingredients + r')\b(?!\s+added\b)', re.I)
 
 
+@lru_cache(maxsize=65536)
+def _negated_sweetener_types_cached(values: tuple) -> frozenset[str]:
+    return frozenset(_negated_sweetener_types_impl(*values))
+
+
 def negated_sweetener_types(*values: object) -> set[str]:
     """Explicit absent ingredient claims; silence never asserts absence."""
+    try:
+        hash(values)
+    except TypeError:
+        return _negated_sweetener_types_impl(*values)
+    return set(_negated_sweetener_types_cached(values))
+
+
+def _negated_sweetener_types_impl(*values: object) -> set[str]:
     text = normalized_attribute_text(*values)
     found = {match.group(1).replace(' ', '_') for match in _negated_ingredient_pattern().finditer(text)}
     # General sugar-free wording belongs to sugar-status claims. Named

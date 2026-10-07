@@ -225,7 +225,7 @@ _SODA_DRY_PRODUCT_RE = re.compile(
 )
 
 
-def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
+def _extract_critical_claims_impl(*values: object) -> dict[str, frozenset[str]]:
     """Extract explicit non-numeric critical claims from source text.
 
     ``no added sugar`` is retained separately: it does not prove that a
@@ -331,6 +331,26 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
         "pulp": frozenset(pulp),
         "organic": organic,
     }
+
+
+@lru_cache(maxsize=131072)
+def _extract_critical_claims_cached(values: tuple) -> dict[str, frozenset[str]]:
+    return _extract_critical_claims_impl(*values)
+
+
+def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
+    """Public memoized entry point for :func:`_extract_critical_claims_impl`.
+
+    The claim scan is pure in ``values`` and the same field tuples are
+    re-read by the identity, gate and ledger lanes. A shallow dict copy is
+    returned so a caller may never mutate the cached mapping; the values are
+    frozensets and therefore immutable.
+    """
+    try:
+        hash(values)
+    except TypeError:
+        return _extract_critical_claims_impl(*values)
+    return dict(_extract_critical_claims_cached(values))
 
 
 def extract_description_claims(description: object) -> dict[str, frozenset[str]]:
