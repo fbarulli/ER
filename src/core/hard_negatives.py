@@ -1241,6 +1241,191 @@ def mine_cross_brand_negatives_with_funnel(
     return pairs, scores, funnel
 
 
+class _AttributeConflictMiner:
+    """One supplemental attribute-conflict mining pass (same brand/type,
+    conflicting critical attribute, mid-cosine).
+
+    SR phases, ONE fixed order in run(); the statements are the original
+    miner body verbatim, so the returned pairs are byte-identical.
+
+    Phase map:
+      resolve_band   — BandSpec validation, config targets, gate-locked
+                       volume tolerances (SSOT note: this lane must use the
+                       gate's own cut)
+      index_canonical — the canon table + first-wins payload index block
+      group_targets   — (brand, type) blocking + shortest-representative
+                       names + the existing-keys guard set
+      scan_pairs     — the guard chain (self/canonical-conflict/name/
+                       attribute conflict/cosine band/duplicate) + emission
+    """
+
+    def __init__(self, df, payload, row_gtins, emb, *, existing, n_target,
+                 cosine_lo, cosine_hi, volume_relative_tolerance,
+                 volume_absolute_tolerance_ml) -> None:
+        self._df = df
+        self._payload = payload
+        self._row_gtins = row_gtins
+        self._emb = emb
+        self._existing = existing
+        self._n_target_arg = n_target
+        self._cosine_lo_arg = cosine_lo
+        self._cosine_hi_arg = cosine_hi
+        self._vol_rel_arg = volume_relative_tolerance
+        self._vol_abs_arg = volume_absolute_tolerance_ml
+
+    # ── phase: band + guards resolve ────────────────────────────────────────
+
+    def resolve_band(self) -> None:
+        from core.common import F, config_section, training_cfg
+        from core.schemas import BandSpec
+
+        cfg = training_cfg().mining.attribute_conflict
+        configured_lo, configured_hi = (float(x) for x in cfg.band.split('-'))
+        selected = BandSpec.model_validate({
+            'lo': configured_lo if self._cosine_lo_arg is None else self._cosine_lo_arg,
+            'hi': configured_hi if self._cosine_hi_arg is None else self._cosine_hi_arg,
+        })
+        self._cosine_lo = selected.lo
+        self._cosine_hi = selected.hi
+        self._n_target = (
+            cfg.target if self._n_target_arg is None else self._n_target_arg
+        )
+        if self._n_target < 0:
+            raise ValueError('attribute-conflict target must be non-negative')
+        # The refresh path omits these arguments; it must use the same verdict
+        # as initial preparation rather than quietly requiring exact volumes.
+        gate = config_section('gate')
+        if self._vol_rel_arg is None:
+            self._vol_rel = float(gate['vol_tolerance'])
+        else:
+            self._vol_rel = self._vol_rel_arg
+        if self._vol_abs_arg is None:
+            self._vol_abs = float(gate['vol_abs_tolerance'])
+        else:
+            self._vol_abs = self._vol_abs_arg
+        canon_path = F["canonical_records"]
+        self._canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
+        from core.attribute_conflicts import attribute_conflict_types, canonical_attribute_info
+
+        self._attribute_conflict_types = attribute_conflict_types
+        self._canonical_attribute_info = canonical_attribute_info
+
+    # ── phase: canonical table + payload index ──────────────────────────────
+
+    def index_canonical(self) -> None:
+        self._canon_by_gtin = {}
+        for record in self._canon.to_dict("records"):
+            gtin = str(record["gtin"])
+            self._canon_by_gtin[gtin] = {
+                "brand": str(record.get("mode_brand", "")).strip().lower(),
+                "type": str(record.get("mode_type", "")).strip().lower(),
+                "canonical": str(record.get("canonical", "")).strip(),
+                **self._canonical_attribute_info(record),
+            }
+        # Canonicals occupy the first post-data block. Masked copies are appended
+        # later with the same gtin, so first-wins is the canonical-only rule.
+        self._canon_idx: dict[str, int] = {}
+        for i in range(len(self._df), len(self._row_gtins)):
+            gtin = str(self._row_gtins[i])
+            if gtin in self._canon_by_gtin:
+                self._canon_idx.setdefault(gtin, i)
+
+    # ── phase: blocking + representative rows ────────────────────────────────
+
+    def group_targets(self) -> None:
+        groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for gtin, info in self._canon_by_gtin.items():
+            key = (info["brand"], info["type"])
+            if key[0] and key[1]:
+                groups[key].append(gtin)
+        self._groups = groups
+
+        # Longest representative row per gtin, stable on original row order.
+        reps: dict[str, int] = {}
+        for i, gtin in enumerate(self._row_gtins[: len(self._df)]):
+            gtin = str(gtin)
+            if gtin not in self._canon_by_gtin:
+                continue
+            title_len = len(str(self._df.iloc[i].get("sku_name_eng", "")))
+            old = reps.get(gtin)
+            if old is None or title_len > len(str(self._df.iloc[old].get("sku_name_eng", ""))):
+                reps[gtin] = i
+        self._reps = reps
+
+        self._product_names = {
+            gtin: normalized_product_name(
+                self._df.iloc[row].get("sku_name_eng", ""), self._canon_by_gtin[gtin]["brand"]
+            )
+            for gtin, row in reps.items()
+        }
+
+        self._existing_keys = {
+            (int(a), int(b)) for a, b in (self._existing if self._existing is not None else [])
+        }
+
+    # ── phase: the guarded scan + emission ───────────────────────────────────
+
+    def scan_pairs(self) -> list[tuple[int, int, float]]:
+        found: list[tuple[int, int, float]] = []
+        for source_gtin, source_row in self._reps.items():
+            source = self._canon_by_gtin[source_gtin]
+            candidates = self._groups.get((source["brand"], source["type"]), [])
+            for target_gtin in candidates:
+                if (
+                    target_gtin == source_gtin
+                    or target_gtin not in self._canon_idx
+                    or (
+                        source["canonical"]
+                        and source["canonical"] == self._canon_by_gtin[target_gtin]["canonical"]
+                    )
+                ):
+                    continue
+                target = self._canon_by_gtin[target_gtin]
+                if (
+                    not self._product_names.get(source_gtin)
+                    or self._product_names.get(source_gtin) != self._product_names.get(target_gtin)
+                ):
+                    continue
+                if not self._attribute_conflict_types(
+                    source,
+                    target,
+                    volume_relative_tolerance=float(self._vol_rel),
+                    volume_absolute_tolerance_ml=float(self._vol_abs),
+                ):
+                    continue
+                target_row = self._canon_idx[target_gtin]
+                score = float(np.dot(self._emb[source_row], self._emb[target_row]))
+                if not float(self._cosine_lo) < score <= float(self._cosine_hi):
+                    continue
+                pair = (int(source_row), int(target_row))
+                if pair in self._existing_keys:
+                    continue
+                self._existing_keys.add(pair)
+                found.append((pair[0], pair[1], score))
+        return found
+
+    def run(self) -> tuple[np.ndarray, np.ndarray]:
+        if self._n_target_arg <= 0 or len(self._df) == 0:
+            # (Verbatim original comparison: an unset n_target would TypeError
+            # here exactly as before; callers pass the config-resolved int.)
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        self.resolve_band()
+        self.index_canonical()
+        if not self._canon_idx:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        self.group_targets()
+        found = sorted(
+            self.scan_pairs(), key=lambda item: (-item[2], item[0], item[1])
+        )
+        found = found[: int(self._n_target)]
+        if not found:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        return (
+            np.asarray([(a, b) for a, b, _ in found], dtype=int),
+            np.asarray([s for _, _, s in found], dtype=float),
+        )
+
+
 def mine_attribute_conflict_negatives(
     df: pd.DataFrame,
     payload: list[str],
@@ -1254,7 +1439,8 @@ def mine_attribute_conflict_negatives(
     volume_relative_tolerance: float | None = None,
     volume_absolute_tolerance_ml: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine additional same-brand/category pairs that disagree on attributes.
+    """Mine additional same-brand/category pairs that disagree on attributes —
+    one phase-ordered pass on :class:`_AttributeConflictMiner`.
 
     The gate hard-no population remains the baseline. This supplemental lane
     searches representative SKU rows against other canonical targets sharing
@@ -1265,124 +1451,13 @@ def mine_attribute_conflict_negatives(
     ``volume_*_tolerance`` must be the training gate's own tolerance; see the
     SSOT note on :func:`mine_targeted_attribute_negatives`.
     """
-    if n_target <= 0 or len(df) == 0:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-
-    from core.common import F, config_section, training_cfg
-    from core.schemas import BandSpec
-    cfg = training_cfg().mining.attribute_conflict
-    configured_lo, configured_hi = (float(x) for x in cfg.band.split('-'))
-    selected = BandSpec.model_validate({
-        'lo': configured_lo if cosine_lo is None else cosine_lo,
-        'hi': configured_hi if cosine_hi is None else cosine_hi,
-    })
-    cosine_lo, cosine_hi = selected.lo, selected.hi
-    n_target = cfg.target if n_target is None else n_target
-    if n_target < 0:
-        raise ValueError('attribute-conflict target must be non-negative')
-    # The refresh path omits these arguments; it must use the same verdict
-    # as initial preparation rather than quietly requiring exact volumes.
-    gate = config_section('gate')
-    if volume_relative_tolerance is None:
-        volume_relative_tolerance = float(gate['vol_tolerance'])
-    if volume_absolute_tolerance_ml is None:
-        volume_absolute_tolerance_ml = float(gate['vol_abs_tolerance'])
-
-    canon_path = F["canonical_records"]
-    canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
-    from core.attribute_conflicts import attribute_conflict_types, canonical_attribute_info
-
-    canon_by_gtin = {}
-    for record in canon.to_dict("records"):
-        gtin = str(record["gtin"])
-        canon_by_gtin[gtin] = {
-            "brand": str(record.get("mode_brand", "")).strip().lower(),
-            "type": str(record.get("mode_type", "")).strip().lower(),
-            "canonical": str(record.get("canonical", "")).strip(),
-            **canonical_attribute_info(record),
-        }
-    # Canonicals occupy the first post-data block. Masked copies are appended
-    # later with the same gtin, so first-wins is the canonical-only rule.
-    canon_idx: dict[str, int] = {}
-    for i in range(len(df), len(row_gtins)):
-        gtin = str(row_gtins[i])
-        if gtin in canon_by_gtin:
-            canon_idx.setdefault(gtin, i)
-    if not canon_idx:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-
-    groups: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for gtin, info in canon_by_gtin.items():
-        key = (info["brand"], info["type"])
-        if key[0] and key[1]:
-            groups[key].append(gtin)
-
-    # Longest representative row per gtin, stable on original row order.
-    reps: dict[str, int] = {}
-    for i, gtin in enumerate(row_gtins[: len(df)]):
-        gtin = str(gtin)
-        if gtin not in canon_by_gtin:
-            continue
-        title_len = len(str(df.iloc[i].get("sku_name_eng", "")))
-        old = reps.get(gtin)
-        if old is None or title_len > len(str(df.iloc[old].get("sku_name_eng", ""))):
-            reps[gtin] = i
-
-    product_names = {
-        gtin: normalized_product_name(
-            df.iloc[row].get("sku_name_eng", ""), canon_by_gtin[gtin]["brand"]
-        )
-        for gtin, row in reps.items()
-    }
-
-    existing_keys = {
-        (int(a), int(b)) for a, b in (existing if existing is not None else [])
-    }
-    found: list[tuple[int, int, float]] = []
-    for source_gtin, source_row in reps.items():
-        source = canon_by_gtin[source_gtin]
-        candidates = groups.get((source["brand"], source["type"]), [])
-        for target_gtin in candidates:
-            if (
-                target_gtin == source_gtin
-                or target_gtin not in canon_idx
-                or (
-                    source["canonical"]
-                    and source["canonical"] == canon_by_gtin[target_gtin]["canonical"]
-                )
-            ):
-                continue
-            target = canon_by_gtin[target_gtin]
-            if (
-                not product_names.get(source_gtin)
-                or product_names.get(source_gtin) != product_names.get(target_gtin)
-            ):
-                continue
-            if not attribute_conflict_types(
-                source,
-                target,
-                volume_relative_tolerance=float(volume_relative_tolerance),
-                volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
-            ):
-                continue
-            target_row = canon_idx[target_gtin]
-            score = float(np.dot(emb[source_row], emb[target_row]))
-            if not float(cosine_lo) < score <= float(cosine_hi):
-                continue
-            pair = (int(source_row), int(target_row))
-            if pair in existing_keys:
-                continue
-            existing_keys.add(pair)
-            found.append((pair[0], pair[1], score))
-
-    found.sort(key=lambda item: (-item[2], item[0], item[1]))
-    found = found[: int(n_target)]
-    if not found:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    return (
-        np.asarray([(a, b) for a, b, _ in found], dtype=int),
-        np.asarray([s for _, _, s in found], dtype=float),
-    )
+    return _AttributeConflictMiner(
+        df, payload, row_gtins, emb,
+        existing=existing, n_target=n_target, cosine_lo=cosine_lo,
+        cosine_hi=cosine_hi,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+    ).run()
 
 
 def conflicting_gtin_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
