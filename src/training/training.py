@@ -760,51 +760,10 @@ def _split_safe_random_negative_pairs(
     seed: int,
     n_neg: int,
 ) -> np.ndarray:
-    """Build known-different random negatives using only one split.
-
-    ``build_pairs`` owns the gtin validity/title-difference rules. This
-    wrapper restricts its input to the requested split first, then maps the
-    returned local row indices back to the training payload indices.
-    """
-    from core.blocking import build_pairs
-
-    split_rows = np.flatnonzero(
-        np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._split_safe_random_negative_pairs(
+        df, row_bc, split_gtins, seed=seed, n_neg=n_neg
     )
-    if len(split_rows) < 2 or n_neg <= 0:
-        if n_neg > 0:
-            print(
-                "[random-easy] WARNING: split-safe negative sampling skipped "
-                f"(requested={n_neg}, split_rows={len(split_rows)})",
-                flush=True,
-            )
-        return np.empty((0, 2), dtype=int)
-
-    subset = df.iloc[split_rows].reset_index(drop=True)
-    pairs_cfg = training_cfg().pairs
-    target = min(int(n_neg), len(subset) * 4)
-    while target:
-        try:
-            _, local_neg = build_pairs(
-                subset,
-                seed=seed,
-                max_pos_per_group=int(pairs_cfg.max_pos_per_group),
-                n_neg=target,
-            )
-            return split_rows[local_neg]
-        except RuntimeError:
-            # Keep a one-pair request alive for the final feasibility check;
-            # target //= 2 used to turn 1 into 0 and silently discard the
-            # random/easy population after one sampling miss.
-            if target == 1:
-                break
-            target = max(1, target // 2)
-    print(
-        "[random-easy] WARNING: no split-safe negatives could be sampled "
-        f"(requested={n_neg}, split_rows={len(split_rows)})",
-        flush=True,
-    )
-    return np.empty((0, 2), dtype=int)
 
 
 @timed
@@ -820,65 +779,18 @@ def _mix_random_easy_training_negatives(
     ratio_to_hard: float,
     candidate_pool_size: int,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Retain hard negatives and deterministically add split-local easy ones.
-
-    When the unique easy pool is smaller than the ratio target, deterministic
-    sampling with replacement replenishes it. The returned integer is the
-    unique candidate count before replenishment, useful for telemetry.
-    """
-    hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
-    hard_sources = np.asarray(hard_sources, dtype=object)
-    if len(hard_sources) != len(hard_pairs):
-        raise ValueError("hard negative/source lengths differ")
-    ratio_to_hard = float(ratio_to_hard)
-    if ratio_to_hard < 0:
-        raise ValueError("random/easy to hard ratio must be non-negative")
-    if int(candidate_pool_size) < 1:
-        raise ValueError("random/easy candidate pool size must be positive")
-    target = int(np.ceil(len(hard_pairs) * ratio_to_hard))
-    if not enabled or target == 0:
-        return hard_pairs, hard_sources, 0
-
-    candidates = _split_safe_random_negative_pairs(
-        df,
-        row_bc,
-        train_gtins,
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._mix_random_easy_training_negatives(
+        hard_pairs,
+        hard_sources,
+        df=df,
+        row_bc=row_bc,
+        train_gtins=train_gtins,
         seed=seed,
-        n_neg=min(target, int(candidate_pool_size)),
+        enabled=enabled,
+        ratio_to_hard=ratio_to_hard,
+        candidate_pool_size=candidate_pool_size,
     )
-    if not len(candidates):
-        return hard_pairs, hard_sources, 0
-    if not pairs_in_set(candidates, row_bc, train_gtins).all():
-        raise RuntimeError("random/easy training negatives crossed the train split")
-
-    normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
-    unique_candidates = np.asarray(
-        [
-            pair
-            for pair in np.unique(np.sort(candidates, axis=1), axis=0)
-            if tuple(pair) not in normalized_hard
-        ],
-        dtype=int,
-    ).reshape(-1, 2)
-    if not len(unique_candidates):
-        print(
-            "[random-easy] WARNING: candidate pool only duplicated hard negatives",
-            flush=True,
-        )
-        return hard_pairs, hard_sources, 0
-    rng = np.random.default_rng(seed + 1)
-    chosen = unique_candidates[
-        rng.choice(
-            len(unique_candidates),
-            size=target,
-            replace=len(unique_candidates) < target,
-        )
-    ]
-    mixed_pairs = np.vstack([hard_pairs, chosen])
-    mixed_sources = np.concatenate(
-        [hard_sources, np.full(target, "random_easy", dtype=object)]
-    )
-    return mixed_pairs, mixed_sources, len(unique_candidates)
 
 
 @timed
@@ -889,155 +801,13 @@ def _mnrl_training_triples_with_populations(
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[tuple[tuple[int, int, int], str]]:
-    """Join explicit negatives to positives without losing augmented anchors.
-
-    Masked/swapped copies have new payload indices; audit rows identify the
-    original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
-    one of their source's explicit negatives, if available. Never infer a
-    positive or negative from a gtin alone: that can silently mislabel.
-
-    Each triple is paired with its training population so train-time
-    per-subset loss monitoring can attribute loss to the population that
-    generated the negative pressure:
-      * ``base``   — ordinary source-anchored triples (no augmentation copy)
-      * ``masked`` — triples anchored on a masked/swap hard-negative copy
-      * ``twin``   — counterfactual twin negatives trained against their source
-    """
-    positives_by_anchor: dict[int, set[int]] = {}
-    for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
-        positives_by_anchor.setdefault(int(anchor), set()).add(int(positive))
-
-    original_by_copy_pair: dict[tuple[int, int], int] = {}
-    mode_by_copy_pair: dict[tuple[int, int], str] = {}
-    for audit in hard_negative_mask_audit or []:
-        key = (int(audit["copy_payload_idx"]), int(audit["pair_payload_idx"]))
-        original = int(audit["anchor_payload_idx"])
-        if key in original_by_copy_pair and original_by_copy_pair[key] != original:
-            raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
-        original_by_copy_pair[key] = original
-        mode_by_copy_pair[key] = str(audit.get("target_mode", ""))
-
-    negatives_by_anchor: dict[int, list[int]] = {}
-    for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
-        negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
-    selected_edges = set(map(tuple,np.asarray(train_neg,dtype=int).reshape(-1,2).tolist()))
-    for audit in hard_negative_mask_audit or []:
-        if audit.get('target_mode') == 'counterfactual':
-            source, pair, copy = (int(audit[key]) for key in ('anchor_payload_idx','pair_payload_idx','copy_payload_idx'))
-            if (copy,pair) in selected_edges and pair in positives_by_anchor.get(source,set()):
-                negatives_by_anchor.setdefault(source,[]).append(copy)
-
-    triples: list[tuple[tuple[int, int, int], str]] = []
-    seen: set[tuple[int, int, int]] = set()
-    for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
-        anchor_i, negative_i = int(anchor), int(negative)
-        mode = mode_by_copy_pair.get((anchor_i, negative_i))
-        if mode == "counterfactual":
-            # Counterfactual twins get source-anchored triples below; treating
-            # the twin copy as an anchor would inherit an incompatible positive.
-            continue
-        if mode == "swap_values":
-            # An anchor-only transplant CONTRADICTS the source's unchanged
-            # positive, so that positive is not a valid target for this row.
-            # TIER 1(a) replays the same transplant onto the source positive
-            # and registers the result against the COPY anchor, so the copy
-            # has a compatible positive of its own. With no counterpart the row
-            # is still omitted rather than trained against a false match.
-            positives = sorted(positives_by_anchor.get(anchor_i, ()))
-        else:
-            source_anchor = original_by_copy_pair.get(
-                (anchor_i, negative_i), anchor_i
-            )
-            positives = sorted(positives_by_anchor.get(source_anchor, ()))
-        positive_i = positives[0] if positives else None
-        if positive_i is None or positive_i == negative_i:
-            continue
-        triple = (anchor_i, positive_i, negative_i)
-        if triple not in seen:
-            seen.add(triple)
-            # A hard-negative copy anchor means the triple's negative is a
-            # masked/swap augmentation; otherwise it is an organic base triple.
-            population = (
-                "masked"
-                if (anchor_i, negative_i) in original_by_copy_pair
-                else "base"
-            )
-            triples.append((triple, population))
-
-    train_positive_pairs = {
-        (int(anchor), int(positive))
-        for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2)
-    }
-    for audit in mask_audit or []:
-        source_i = int(audit["anchor_payload_idx"])
-        copy_i = int(audit["copy_payload_idx"])
-        # Symmetric value swaps append a counterpart copy alongside the
-        # anchor copy: the copy's positive side is that counterpart copy,
-        # not the original pair side. Older audits lack the key and fall
-        # back to the original pair side.
-        source_positive_i = int(audit["pair_payload_idx"])
-        positive_i = int(
-            audit.get("copy_pair_payload_idx")
-            if audit.get("copy_pair_payload_idx") is not None
-            else source_positive_i
-        )
-        # Fold membership is checked on both edges independently: the
-        # original source pair licenses the augmentation, while a symmetric
-        # swap's generated counterpart must itself survive in this fold.
-        if (source_i, source_positive_i) not in train_positive_pairs:
-            continue
-        if (copy_i, positive_i) not in train_positive_pairs:
-            continue
-        negative_i = next(
-            (
-                negative
-                for negative in negatives_by_anchor.get(source_i, [])
-                if negative not in {source_positive_i, positive_i}
-            ),
-            None,
-        )
-        if negative_i is None:
-            continue
-        triple = (copy_i, positive_i, negative_i)
-        if triple not in seen:
-            seen.add(triple)
-            triples.append((triple, "masked"))
-    # Counterfactual twins never survive the main loop above: a twin row is
-    # (copy, pair-side) with label 0, and its source's positive IS the pair
-    # side, so positive_i == negative_i skips it — silently dropping every
-    # twin from training (they would linger in eval/diet only). Twins train
-    # as explicit negatives of their own source: (source, pair-side, copy),
-    # i.e. "the original matches its canonical better than its one-flip
-    # twin". That is the counterfactual pressure; without this branch the
-    # twin lane mints evaluation rows that never see a gradient.
-    selected_negative_pairs = selected_edges
-    for audit in hard_negative_mask_audit or []:
-        if audit.get("target_mode") != "counterfactual":
-            continue
-        source_i = int(audit["anchor_payload_idx"])
-        copy_i = int(audit["copy_payload_idx"])
-        pair_i = int(audit["pair_payload_idx"])
-        # Twins are eligible only if the twin edge survived negative
-        # balancing/filtering and the exact counterpart survived positives.
-        if (copy_i, pair_i) not in selected_negative_pairs:
-            continue
-        if pair_i not in positives_by_anchor.get(source_i, set()):
-            continue
-        if audit.get('copy_source_payload_idx') == pair_i:
-            # Compare a canonical-derived twin to its clean canonical parent.
-            # The listing remains the licensed positive, while vendor wording
-            # cannot dilute the minimal attribute distinction on the negative.
-            triple = (pair_i, source_i, copy_i)
-            if triple not in seen:
-                seen.add(triple)
-                triples.append((triple, 'twin'))
-            continue
-        for positive_i in sorted(positives_by_anchor.get(source_i, set())):
-            triple = (source_i, positive_i, copy_i)
-            if triple not in seen:
-                seen.add(triple)
-                triples.append((triple, "twin"))
-    return triples
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._mnrl_training_triples_with_populations(
+        train_pos,
+        train_neg,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
 
 
 @timed
@@ -1048,16 +818,13 @@ def _build_mnrl_training_triples(
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[tuple[int, int, int]]:
-    """Join explicit negatives to positives without losing augmented anchors."""
-    return [
-        triple
-        for triple, _population in _mnrl_training_triples_with_populations(
-            train_pos,
-            train_neg,
-            mask_audit=mask_audit,
-            hard_negative_mask_audit=hard_negative_mask_audit,
-        )
-    ]
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._build_mnrl_training_triples(
+        train_pos,
+        train_neg,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
 
 
 @timed
@@ -1068,37 +835,21 @@ def _build_mnrl_triple_populations(
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[str]:
-    """Per-triple training population (base/masked/twin) for MNRL monitoring.
-
-    Returned in the same order as ``_build_mnrl_training_triples`` so the
-    i-th population tag attributes the i-th triple.
-    """
-    return [
-        population
-        for _triple, population in _mnrl_training_triples_with_populations(
-            train_pos,
-            train_neg,
-            mask_audit=mask_audit,
-            hard_negative_mask_audit=hard_negative_mask_audit,
-        )
-    ]
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._build_mnrl_triple_populations(
+        train_pos,
+        train_neg,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
 
 
 @timed
 def _mnrl_shared_positive_gtin_rows(
     triples: list[tuple[int, int, int]], row_bc: np.ndarray
 ) -> int:
-    """Count triple rows whose positive GTIN occurs in another triple.
-
-    The no-duplicate-text sampler cannot protect nonidentical payloads for
-    the same product from becoming in-batch negatives. This is an exposure
-    count, not the number actually colliding in a shuffled batch.
-    """
-    from collections import Counter
-
-    gtins = [str(row_bc[positive]) for _, positive, _ in triples]
-    counts = Counter(gtins)
-    return sum(counts[gtin] > 1 for gtin in gtins)
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._mnrl_shared_positive_gtin_rows(triples, row_bc)
 
 
 @timed
@@ -1109,59 +860,431 @@ def select_balanced_negatives(
     target: int,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, int, int]:
-    """Subsample negatives to ``target`` rows, keeping every base row first.
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders.select_balanced_negatives(
+        train_neg,
+        train_neg_sources,
+        neg_copy_anchors,
+        target,
+        seed,
+    )
 
-    Augmented copies are trimmed before real base pairs — never the reverse:
-    a neat 1.000 ratio must not cost organic data. Only when the base pool
-    alone exceeds the target is the base itself trimmed (reported, not
-    silent). Deterministic in ``seed``. Returns (selected, sources,
-    n_discarded_base, n_discarded_aug).
+
+class _PopulationBuilders:
+    """Small SR owner of the training population/negative builders.
+
+    Contrastive random/easy lane:
+      * `_split_safe_random_negative_pairs` split-local random negatives
+      * `_mix_random_easy_training_negatives` hard + deterministic easy mix
+
+    MNRL triple lane (+ negative-population owners):
+      * `_mnrl_training_triples_with_populations` triples with base/masked/
+        twin population tags (the single source of both projections below)
+      * `_build_mnrl_training_triples` / `_build_mnrl_triple_populations`
+        the two projections consumers pin
+      * `_mnrl_shared_positive_gtin_rows` positive-GTIN repeat exposure
+      * `select_balanced_negatives` base-first negative subsampling
+
+    Module-level names stay the pinned (@timed) call surface; the bodies
+    here are behavior-identical (verified row-for-row).
     """
-    pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
-    sources = np.asarray(train_neg_sources, dtype=object)
-    if len(pairs) != len(sources):
-        raise ValueError("negative/source lengths differ")
-    if target < 0:
-        raise ValueError("balance target must be non-negative")
-    if target >= len(pairs):
-        return pairs, sources, 0, 0
-    rng = np.random.default_rng(seed)
-    base_idx = np.array(
-        [i for i, (a, _b) in enumerate(pairs) if int(a) not in neg_copy_anchors],
-        dtype=int,
-    )
-    aug_idx = np.array(
-        [i for i, (a, _b) in enumerate(pairs) if int(a) in neg_copy_anchors],
-        dtype=int,
-    )
-    if len(base_idx) > target:
-        keep_base = rng.choice(base_idx, size=target, replace=False)
-        keep_aug: np.ndarray = np.empty(0, dtype=int)
-    else:
-        keep_base = base_idx
-        need = target - len(keep_base)
-        keep_aug = (
-            rng.choice(aug_idx, size=min(need, len(aug_idx)), replace=False)
-            if need > 0 and len(aug_idx)
-            else np.empty(0, dtype=int)
+
+    @staticmethod
+    def _split_safe_random_negative_pairs(
+        df: pd.DataFrame,
+        row_bc: np.ndarray,
+        split_gtins: set[str],
+        *,
+        seed: int,
+        n_neg: int,
+    ) -> np.ndarray:
+        """Build known-different random negatives using only one split.
+
+        ``build_pairs`` owns the gtin validity/title-difference rules. This
+        wrapper restricts its input to the requested split first, then maps the
+        returned local row indices back to the training payload indices.
+        """
+        from core.blocking import build_pairs
+
+        split_rows = np.flatnonzero(
+            np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
         )
-    keep = np.concatenate([keep_base, keep_aug])
-    return (
-        pairs[keep],
-        sources[keep],
-        int(len(base_idx) - len(keep_base)),
-        int(len(aug_idx) - len(keep_aug)),
-    )
+        if len(split_rows) < 2 or n_neg <= 0:
+            if n_neg > 0:
+                print(
+                    "[random-easy] WARNING: split-safe negative sampling skipped "
+                    f"(requested={n_neg}, split_rows={len(split_rows)})",
+                    flush=True,
+                )
+            return np.empty((0, 2), dtype=int)
 
+        subset = df.iloc[split_rows].reset_index(drop=True)
+        pairs_cfg = training_cfg().pairs
+        target = min(int(n_neg), len(subset) * 4)
+        while target:
+            try:
+                _, local_neg = build_pairs(
+                    subset,
+                    seed=seed,
+                    max_pos_per_group=int(pairs_cfg.max_pos_per_group),
+                    n_neg=target,
+                )
+                return split_rows[local_neg]
+            except RuntimeError:
+                # Keep a one-pair request alive for the final feasibility check;
+                # target //= 2 used to turn 1 into 0 and silently discard the
+                # random/easy population after one sampling miss.
+                if target == 1:
+                    break
+                target = max(1, target // 2)
+        print(
+            "[random-easy] WARNING: no split-safe negatives could be sampled "
+            f"(requested={n_neg}, split_rows={len(split_rows)})",
+            flush=True,
+        )
+        return np.empty((0, 2), dtype=int)
 
-def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
-    """Precision/recall/threshold at a target recall (07-series schema).
+    @staticmethod
+    def _mix_random_easy_training_negatives(
+        hard_pairs: np.ndarray,
+        hard_sources: np.ndarray,
+        *,
+        df: pd.DataFrame,
+        row_bc: np.ndarray,
+        train_gtins: set[str],
+        seed: int,
+        enabled: bool,
+        ratio_to_hard: float,
+        candidate_pool_size: int,
+    ) -> tuple[np.ndarray, np.ndarray, int]:
+        """Retain hard negatives and deterministically add split-local easy ones.
 
-    Threshold = the LOWEST score still achieving recall_target (any higher
-    cut drops below it); precision at that cut with the FP count implied.
-    Deterministic: sorted order, ties resolved by score value.
-    """
-    return _CalibrationEvaluator._precision_at_recall(y, scores, recall_target)
+        When the unique easy pool is smaller than the ratio target, deterministic
+        sampling with replacement replenishes it. The returned integer is the
+        unique candidate count before replenishment, useful for telemetry.
+        """
+        hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
+        hard_sources = np.asarray(hard_sources, dtype=object)
+        if len(hard_sources) != len(hard_pairs):
+            raise ValueError("hard negative/source lengths differ")
+        ratio_to_hard = float(ratio_to_hard)
+        if ratio_to_hard < 0:
+            raise ValueError("random/easy to hard ratio must be non-negative")
+        if int(candidate_pool_size) < 1:
+            raise ValueError("random/easy candidate pool size must be positive")
+        target = int(np.ceil(len(hard_pairs) * ratio_to_hard))
+        if not enabled or target == 0:
+            return hard_pairs, hard_sources, 0
+
+        candidates = _split_safe_random_negative_pairs(
+            df,
+            row_bc,
+            train_gtins,
+            seed=seed,
+            n_neg=min(target, int(candidate_pool_size)),
+        )
+        if not len(candidates):
+            return hard_pairs, hard_sources, 0
+        if not pairs_in_set(candidates, row_bc, train_gtins).all():
+            raise RuntimeError("random/easy training negatives crossed the train split")
+
+        normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
+        unique_candidates = np.asarray(
+            [
+                pair
+                for pair in np.unique(np.sort(candidates, axis=1), axis=0)
+                if tuple(pair) not in normalized_hard
+            ],
+            dtype=int,
+        ).reshape(-1, 2)
+        if not len(unique_candidates):
+            print(
+                "[random-easy] WARNING: candidate pool only duplicated hard negatives",
+                flush=True,
+            )
+            return hard_pairs, hard_sources, 0
+        rng = np.random.default_rng(seed + 1)
+        chosen = unique_candidates[
+            rng.choice(
+                len(unique_candidates),
+                size=target,
+                replace=len(unique_candidates) < target,
+            )
+        ]
+        mixed_pairs = np.vstack([hard_pairs, chosen])
+        mixed_sources = np.concatenate(
+            [hard_sources, np.full(target, "random_easy", dtype=object)]
+        )
+        return mixed_pairs, mixed_sources, len(unique_candidates)
+
+    @staticmethod
+    def _mnrl_training_triples_with_populations(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Join explicit negatives to positives without losing augmented anchors.
+
+        Masked/swapped copies have new payload indices; audit rows identify the
+        original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
+        one of their source's explicit negatives, if available. Never infer a
+        positive or negative from a gtin alone: that can silently mislabel.
+
+        Each triple is paired with its training population so train-time
+        per-subset loss monitoring can attribute loss to the population that
+        generated the negative pressure:
+          * ``base``   — ordinary source-anchored triples (no augmentation copy)
+          * ``masked`` — triples anchored on a masked/swap hard-negative copy
+          * ``twin``   — counterfactual twin negatives trained against their source
+        """
+        positives_by_anchor: dict[int, set[int]] = {}
+        for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
+            positives_by_anchor.setdefault(int(anchor), set()).add(int(positive))
+
+        original_by_copy_pair: dict[tuple[int, int], int] = {}
+        mode_by_copy_pair: dict[tuple[int, int], str] = {}
+        for audit in hard_negative_mask_audit or []:
+            key = (int(audit["copy_payload_idx"]), int(audit["pair_payload_idx"]))
+            original = int(audit["anchor_payload_idx"])
+            if key in original_by_copy_pair and original_by_copy_pair[key] != original:
+                raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
+            original_by_copy_pair[key] = original
+            mode_by_copy_pair[key] = str(audit.get("target_mode", ""))
+
+        negatives_by_anchor: dict[int, list[int]] = {}
+        for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+            negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
+        selected_edges = set(map(tuple,np.asarray(train_neg,dtype=int).reshape(-1,2).tolist()))
+        for audit in hard_negative_mask_audit or []:
+            if audit.get('target_mode') == 'counterfactual':
+                source, pair, copy = (int(audit[key]) for key in ('anchor_payload_idx','pair_payload_idx','copy_payload_idx'))
+                if (copy,pair) in selected_edges and pair in positives_by_anchor.get(source,set()):
+                    negatives_by_anchor.setdefault(source,[]).append(copy)
+
+        triples: list[tuple[tuple[int, int, int], str]] = []
+        seen: set[tuple[int, int, int]] = set()
+        for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+            anchor_i, negative_i = int(anchor), int(negative)
+            mode = mode_by_copy_pair.get((anchor_i, negative_i))
+            if mode == "counterfactual":
+                # Counterfactual twins get source-anchored triples below; treating
+                # the twin copy as an anchor would inherit an incompatible positive.
+                continue
+            if mode == "swap_values":
+                # An anchor-only transplant CONTRADICTS the source's unchanged
+                # positive, so that positive is not a valid target for this row.
+                # TIER 1(a) replays the same transplant onto the source positive
+                # and registers the result against the COPY anchor, so the copy
+                # has a compatible positive of its own. With no counterpart the row
+                # is still omitted rather than trained against a false match.
+                positives = sorted(positives_by_anchor.get(anchor_i, ()))
+            else:
+                source_anchor = original_by_copy_pair.get(
+                    (anchor_i, negative_i), anchor_i
+                )
+                positives = sorted(positives_by_anchor.get(source_anchor, ()))
+            positive_i = positives[0] if positives else None
+            if positive_i is None or positive_i == negative_i:
+                continue
+            triple = (anchor_i, positive_i, negative_i)
+            if triple not in seen:
+                seen.add(triple)
+                # A hard-negative copy anchor means the triple's negative is a
+                # masked/swap augmentation; otherwise it is an organic base triple.
+                population = (
+                    "masked"
+                    if (anchor_i, negative_i) in original_by_copy_pair
+                    else "base"
+                )
+                triples.append((triple, population))
+
+        train_positive_pairs = {
+            (int(anchor), int(positive))
+            for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2)
+        }
+        for audit in mask_audit or []:
+            source_i = int(audit["anchor_payload_idx"])
+            copy_i = int(audit["copy_payload_idx"])
+            # Symmetric value swaps append a counterpart copy alongside the
+            # anchor copy: the copy's positive side is that counterpart copy,
+            # not the original pair side. Older audits lack the key and fall
+            # back to the original pair side.
+            source_positive_i = int(audit["pair_payload_idx"])
+            positive_i = int(
+                audit.get("copy_pair_payload_idx")
+                if audit.get("copy_pair_payload_idx") is not None
+                else source_positive_i
+            )
+            # Fold membership is checked on both edges independently: the
+            # original source pair licenses the augmentation, while a symmetric
+            # swap's generated counterpart must itself survive in this fold.
+            if (source_i, source_positive_i) not in train_positive_pairs:
+                continue
+            if (copy_i, positive_i) not in train_positive_pairs:
+                continue
+            negative_i = next(
+                (
+                    negative
+                    for negative in negatives_by_anchor.get(source_i, [])
+                    if negative not in {source_positive_i, positive_i}
+                ),
+                None,
+            )
+            if negative_i is None:
+                continue
+            triple = (copy_i, positive_i, negative_i)
+            if triple not in seen:
+                seen.add(triple)
+                triples.append((triple, "masked"))
+        # Counterfactual twins never survive the main loop above: a twin row is
+        # (copy, pair-side) with label 0, and its source's positive IS the pair
+        # side, so positive_i == negative_i skips it — silently dropping every
+        # twin from training (they would linger in eval/diet only). Twins train
+        # as explicit negatives of their own source: (source, pair-side, copy),
+        # i.e. "the original matches its canonical better than its one-flip
+        # twin". That is the counterfactual pressure; without this branch the
+        # twin lane mints evaluation rows that never see a gradient.
+        selected_negative_pairs = selected_edges
+        for audit in hard_negative_mask_audit or []:
+            if audit.get("target_mode") != "counterfactual":
+                continue
+            source_i = int(audit["anchor_payload_idx"])
+            copy_i = int(audit["copy_payload_idx"])
+            pair_i = int(audit["pair_payload_idx"])
+            # Twins are eligible only if the twin edge survived negative
+            # balancing/filtering and the exact counterpart survived positives.
+            if (copy_i, pair_i) not in selected_negative_pairs:
+                continue
+            if pair_i not in positives_by_anchor.get(source_i, set()):
+                continue
+            if audit.get('copy_source_payload_idx') == pair_i:
+                # Compare a canonical-derived twin to its clean canonical parent.
+                # The listing remains the licensed positive, while vendor wording
+                # cannot dilute the minimal attribute distinction on the negative.
+                triple = (pair_i, source_i, copy_i)
+                if triple not in seen:
+                    seen.add(triple)
+                    triples.append((triple, 'twin'))
+                continue
+            for positive_i in sorted(positives_by_anchor.get(source_i, set())):
+                triple = (source_i, positive_i, copy_i)
+                if triple not in seen:
+                    seen.add(triple)
+                    triples.append((triple, "twin"))
+        return triples
+
+    @staticmethod
+    def _build_mnrl_training_triples(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[int, int, int]]:
+        """Join explicit negatives to positives without losing augmented anchors."""
+        return [
+            triple
+            for triple, _population in _mnrl_training_triples_with_populations(
+                train_pos,
+                train_neg,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
+            )
+        ]
+
+    @staticmethod
+    def _build_mnrl_triple_populations(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[str]:
+        """Per-triple training population (base/masked/twin) for MNRL monitoring.
+
+        Returned in the same order as ``_build_mnrl_training_triples`` so the
+        i-th population tag attributes the i-th triple.
+        """
+        return [
+            population
+            for _triple, population in _mnrl_training_triples_with_populations(
+                train_pos,
+                train_neg,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
+            )
+        ]
+
+    @staticmethod
+    def _mnrl_shared_positive_gtin_rows(
+        triples: list[tuple[int, int, int]], row_bc: np.ndarray
+    ) -> int:
+        """Count triple rows whose positive GTIN occurs in another triple.
+
+        The no-duplicate-text sampler cannot protect nonidentical payloads for
+        the same product from becoming in-batch negatives. This is an exposure
+        count, not the number actually colliding in a shuffled batch.
+        """
+        from collections import Counter
+
+        gtins = [str(row_bc[positive]) for _, positive, _ in triples]
+        counts = Counter(gtins)
+        return sum(counts[gtin] > 1 for gtin in gtins)
+
+    @staticmethod
+    def select_balanced_negatives(
+        train_neg: np.ndarray,
+        train_neg_sources: np.ndarray,
+        neg_copy_anchors: set[int],
+        target: int,
+        seed: int,
+    ) -> tuple[np.ndarray, np.ndarray, int, int]:
+        """Subsample negatives to ``target`` rows, keeping every base row first.
+
+        Augmented copies are trimmed before real base pairs — never the reverse:
+        a neat 1.000 ratio must not cost organic data. Only when the base pool
+        alone exceeds the target is the base itself trimmed (reported, not
+        silent). Deterministic in ``seed``. Returns (selected, sources,
+        n_discarded_base, n_discarded_aug).
+        """
+        pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
+        sources = np.asarray(train_neg_sources, dtype=object)
+        if len(pairs) != len(sources):
+            raise ValueError("negative/source lengths differ")
+        if target < 0:
+            raise ValueError("balance target must be non-negative")
+        if target >= len(pairs):
+            return pairs, sources, 0, 0
+        rng = np.random.default_rng(seed)
+        base_idx = np.array(
+            [i for i, (a, _b) in enumerate(pairs) if int(a) not in neg_copy_anchors],
+            dtype=int,
+        )
+        aug_idx = np.array(
+            [i for i, (a, _b) in enumerate(pairs) if int(a) in neg_copy_anchors],
+            dtype=int,
+        )
+        if len(base_idx) > target:
+            keep_base = rng.choice(base_idx, size=target, replace=False)
+            keep_aug: np.ndarray = np.empty(0, dtype=int)
+        else:
+            keep_base = base_idx
+            need = target - len(keep_base)
+            keep_aug = (
+                rng.choice(aug_idx, size=min(need, len(aug_idx)), replace=False)
+                if need > 0 and len(aug_idx)
+                else np.empty(0, dtype=int)
+            )
+        keep = np.concatenate([keep_base, keep_aug])
+        return (
+            pairs[keep],
+            sources[keep],
+            int(len(base_idx) - len(keep_base)),
+            int(len(aug_idx) - len(keep_aug)),
+        )
+
 
 
 @timed
