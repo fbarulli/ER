@@ -1039,10 +1039,14 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
         raise RuntimeError(
             "--activate gate: no staged dataset payload at "
             f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
-    slug = _spec().dataset_slug
+    slug = (_spec().finetune_dataset_slug
+            if decision_kind == FINETUNE_DECISION else _spec().dataset_slug)
     plan["slug"] = slug
     if not slug:
         raise RuntimeError(
+            "config laya.finetune_dataset_slug is unset; name the corpus "
+            "dataset (owner/slug) before an executed attach"
+            if decision_kind == FINETUNE_DECISION else
             "config laya.dataset_slug is unset; name the input dataset "
             "(owner/slug) before an executed attach")
     from cli import kaggle_lane as lane
