@@ -178,13 +178,23 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     return setup/'ablation_templates'
 
 
-def _bind_template(setup,track):
-    """The track's frozen template request, bound to the staged setup root."""
-    from core.common import TRAIN_ROOT
+def _read_template(setup,track):
+    """The track's frozen template request file."""
     template = setup/'ablation_templates'/track
-    request = json.loads((template/'request.json').read_text())
+    return template,json.loads((template/'request.json').read_text())
+
+
+def _bind_staged_setup(setup,request):
+    """Point the template request's shared inputs at the staged setup root."""
+    from core.common import TRAIN_ROOT
     # Bind the actual staged setup for both direct suites and portable workers.
     request['portable_setup'] = setup.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
+
+
+def _bind_template(setup,track):
+    """The track's frozen template request, bound to the staged setup root."""
+    template,request = _read_template(setup,track)
+    _bind_staged_setup(setup,request)
     return template,request
 
 
@@ -229,8 +239,17 @@ def _saved_text_default(request,*,output,setup,track,saved_text):
     return saved_text
 
 
+def _encode_vectors(path,vectors,*,device,saved_text,text_model,graph_encoder):
+    """The lane's ONLY device-executing call: the GPU-vector encode surface.
+
+    A later CPU migration replaces the device plumbing here alone; callers
+    and the device parameter threading upstream stay untouched.
+    """
+    encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
+
+
 def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
-    """Validated existing vectors win; otherwise the ONE device call encodes."""
+    """Validated existing vectors win; otherwise the device owner encodes."""
     vectors = folder/'vectors.npz'
     if vectors.exists():
         from model_tracks.ablation import validate_vectors
@@ -238,7 +257,8 @@ def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_mo
     else:
         saved_text = _saved_text_default(request,output=output,setup=setup,
             track=track,saved_text=saved_text)
-        encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
+        _encode_vectors(path,vectors,device=device,saved_text=saved_text,
+            text_model=text_model,graph_encoder=graph_encoder)
 
 
 @timed
