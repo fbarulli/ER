@@ -33,7 +33,7 @@ from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
 from graph_tracks.text_cache import checkpoint_hash
-from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors
+from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, _raw_checkpoint_identity, encode, request_context, validate_vectors
 from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
@@ -232,7 +232,7 @@ def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
         raise ValueError('unknown ablation checkpoint role')
     old_checkpoint = request['checkpoint']
     if checkpoint_role == 'baseline':
-        if track != 'text' or request['sources'][old_checkpoint] != checkpoint_identity(checkpoint):
+        if track != 'text' or request['sources'][old_checkpoint] != _raw_checkpoint_identity(checkpoint):
             raise ValueError('baseline ablation differs from frozen text checkpoint')
     else:
         selected = '@suite/'+checkpoint.relative_to(output.parent).as_posix()
