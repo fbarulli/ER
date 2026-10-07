@@ -292,7 +292,7 @@ def _is_noise(token: str) -> bool:
     return False
 
 
-def _has_unit_suffix(token: str, spec) -> bool:
+def _has_unit_suffix(token: str, spec=None) -> bool:
     """True when ``token`` is a SIZE token: a declared unit, with a quantity.
 
     Recognises the three shapes that actually appear in listing slugs:
@@ -309,7 +309,16 @@ def _has_unit_suffix(token: str, spec) -> bool:
     deleted as retailer codes — 34 and 9 occurrences in 8,000 sampled sku_url
     slugs — and those are precisely the size tokens the pack gate reads, so
     losing them silently removed pack evidence rather than noise.
+
+    Memoized: the answer depends only on ``token`` (the unit table is fixed at
+    import; ``spec`` is accepted for API compatibility and is not consulted by
+    the body), and the same slug vocabulary recurs across rows.
     """
+    return _has_unit_suffix_cached(token)
+
+
+@lru_cache(maxsize=262144)
+def _has_unit_suffix_cached(token: str) -> bool:
     for unit in _UNITS_BY_LEN:
         if not token.endswith(unit):
             continue
@@ -328,7 +337,7 @@ def _has_unit_suffix(token: str, spec) -> bool:
         if len(parts) > 1 and all(
             part.isdigit()
             or _HEAD_NUMBER_RE.fullmatch(part) is not None
-            or _has_unit_suffix(part, spec)
+            or _has_unit_suffix_cached(part)
             for part in parts
         ):
             return True
