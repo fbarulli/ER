@@ -6,23 +6,33 @@ from training.hnsw_index import PersistentHnswIndex
 
 
 class RetrievalComparison:
-    # One BLAS call scores a whole BLOCK of query sources at once. A per-source
-    # GEMV re-reads the entire catalog for every source (358 sources x 10,000 x
-    # 384 float32 = 5.5 GB of traffic to produce 358 x 10,000 scores on the 10k
-    # cohort), while the block GEMM streams the catalog once and writes every
-    # source's scores. Measured (artifacts/abl_opt/micro/bench_ranks.py, 4 CPU
-    # cores, one source per row):
-    #   candidates  sources   per-source   block GEMM
-    #          500       33      0.98 ms      2.94 ms   <- small catalogs: GEMV
-    #         1000       33      2.47 ms      4.99 ms
-    #         2000       64     42.39 ms     11.71 ms   <- block GEMM wins
-    #        10000      358   1339.40 ms     44.00 ms
-    # Small matrices pay a fixed multi-threaded bring-up in the GEMM path that
-    # outweighs streaming a catalog that already fits in cache, so dispatch on
-    # size instead of always batching.
-    SCORE_BLOCK = 256
-    BATCH_MIN_CANDIDATES = 1500
-    BATCH_MIN_SOURCES = 8
+    """Exact ranks and the HNSW comparison over one candidate catalog.
+
+    SCORING KERNEL (measured, artifacts/abl_opt/micro/bench_ranks_sweep.json).
+    One matrix product per BLOCK of query sources is 6-59x faster than one GEMV
+    per source, because a per-source GEMV re-reads the whole catalog for every
+    source (358 sources x 10,000 x 384 float32 = 5.5 GB of traffic to produce
+    358 x 10,000 scores) while the block product streams the catalog once. It is
+    NOT used here: a multi-row product does not accumulate in the same order as
+    the GEMV it replaces, so its scores differ in the last bits (max |delta|
+    1.4e-07 on unit vectors, 18,352 of 20,000 scores off by one ulp at 20,000
+    candidates). A rank counts strict comparisons against one value, so that
+    delta flips a rank whenever another candidate sits within it of that value —
+    measured: 1 rank of 358 sources on the synthetic 20k grid, while the 500
+    (smoke) and 10,000 (real cohort) fixtures came out identical. Ranks are
+    report content, and this lane's contract is byte-identical output, so the
+    exact per-source loop is kept and the block path was reverted (r19). A
+    margin-guarded hybrid was tried first: it cannot certify exactness in
+    practice, because with ~10,000 candidates the nearest other score is
+    typically ~4e-05 away, far below the ~2.3e-05 bound on the summation
+    difference, so nearly every source fell back to the GEMV and the hybrid ran
+    ​0.70x (slower than not batching at all).
+
+    The remaining rewrites are bit-exact: `catalog @ queries[source]` produces
+    identical scores to the original `queries[source] @ catalog.T` (asserted),
+    and the tie contest counts `scores[:target_index] == value` instead of
+    building `(scores == value) & (candidate_order < target_index)`.
+    """
 
     def __init__(self, ids, vectors, request, request_path, cfg):
         self.ids, self.vectors, self.request, self.cfg = ids, vectors, request, cfg
@@ -41,25 +51,6 @@ class RetrievalComparison:
             ef_construction=cfg.hnsw_ef_construction,ef_search=cfg.hnsw_ef_search)
         self.index.build(vectors,ids,checkpoint=marker,model_name=request['track'])
 
-    def _rank(self, pair_ranks, sources, targets, queries, endpoints, block_scores=None):
-        """Rank the requested side(s) of every source in one block.
-
-        Called once per block: with `block_scores` absent the block's scores are
-        one GEMV per source (small catalogs), otherwise they arrive from a
-        single matrix product for the whole block (large catalogs).
-        """
-        catalog = self.vectors
-        for row, source in enumerate(sources):
-            scores = (catalog @ queries[source]) if block_scores is None else block_scores[row]
-            scores[endpoints[source]] = -np.inf
-            for n, side, target in targets[source]:
-                target_index = endpoints[target]
-                value = scores[target_index]
-                # Ties are won by the lower catalog index: slicing to the
-                # target is that same contest with one temporary instead of two.
-                pair_ranks[n][side] = int(1+np.count_nonzero(scores > value)+np.count_nonzero(
-                    scores[:target_index] == value))
-
     def ranks(self, queries):
         # Only compare queries against candidates; never construct catalog².
         pair_ranks = [[None, None] for _ in self.pairs]
@@ -69,14 +60,19 @@ class RetrievalComparison:
                 targets.setdefault(source, []).append((n, side, target))
         endpoints = self.endpoints
         catalog = self.vectors
-        sources = list(targets)
-        if len(catalog) >= self.BATCH_MIN_CANDIDATES and len(sources) >= self.BATCH_MIN_SOURCES:
-            for start in range(0, len(sources), self.SCORE_BLOCK):
-                block = sources[start:start+self.SCORE_BLOCK]
-                self._rank(pair_ranks, block, targets, queries, endpoints,
-                           queries[block] @ catalog.T)
-        else:
-            self._rank(pair_ranks, sources, targets, queries, endpoints)
+        for source, requested in targets.items():
+            # Exact per-source scores: see the class docstring for why the
+            # faster block product cannot be used behind a rank.
+            scores = catalog @ queries[source]
+            scores[endpoints[source]] = -np.inf
+            for n, side, target in requested:
+                target_index = endpoints[target]
+                value = scores[target_index]
+                # Ties are won by the lower catalog index: slicing to the
+                # target is that same contest with one temporary instead of two
+                # (count((scores == value) & (candidate_order < target_index))).
+                pair_ranks[n][side] = int(1+np.count_nonzero(scores > value)+np.count_nonzero(
+                    scores[:target_index] == value))
         return pair_ranks
 
     def ann_hits(self, queries):

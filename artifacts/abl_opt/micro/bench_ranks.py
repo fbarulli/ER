@@ -77,7 +77,68 @@ def timeit(fn, reps: int) -> float:
     return (time.perf_counter() - started) / reps
 
 
+# Synthetic crossover grid: (candidates, query sources). Sizes bracket the
+# smoke fixture (500) and full-catalog cohorts. Each cell builds a normalized
+# random catalog/query matrix (seeded), drives the REAL ranks() size dispatch
+# and _rank kernel through an __new__ instance (the HNSW index that __init__
+# builds is not on this code path), and asserts the legacy and current
+# implementations return the same rank table.
+SWEEP_GRID = ((500, 33), (1000, 33), (2000, 64), (5000, 64), (5000, 200),
+              (10000, 100), (10000, 358), (20000, 358))
+SWEEP_SEED = 20261007
+SWEEP_DIM = 384
+
+
+def sweep() -> dict:
+    import os as _os
+    rng = np.random.default_rng(SWEEP_SEED)
+    cells = []
+    for candidates, sources in SWEEP_GRID:
+        catalog = rng.standard_normal((candidates, SWEEP_DIM), dtype=np.float32)
+        catalog /= np.linalg.norm(catalog, axis=1, keepdims=True)
+        queries = rng.standard_normal((sources, SWEEP_DIM), dtype=np.float32)
+        queries /= np.linalg.norm(queries, axis=1, keepdims=True)
+        retrieval = RetrievalComparison.__new__(RetrievalComparison)
+        retrieval.vectors = catalog
+        retrieval.endpoints = list(range(sources))
+        retrieval.pairs = [(2 * n, 2 * n + 1) for n in range(sources // 2)]
+        reps = 3 if candidates * sources > 2_000_000 else 10
+        legacy = legacy_ranks(retrieval, queries)
+        current = retrieval.ranks(queries)
+        legacy_samples, current_samples = [], []
+        for _ in range(reps):
+            started = time.perf_counter()
+            legacy_ranks(retrieval, queries)
+            legacy_samples.append(time.perf_counter() - started)
+            started = time.perf_counter()
+            retrieval.ranks(queries)
+            current_samples.append(time.perf_counter() - started)
+        before, after = median(legacy_samples), median(current_samples)
+        cells.append({'candidates': candidates, 'sources': sources, 'pairs': len(retrieval.pairs),
+                      'reps': reps,
+                      'before_ms': round(before * 1e3, 3), 'after_ms': round(after * 1e3, 3),
+                      'speedup': round(before / after, 2),
+                      'path': 'production ranks() (exact per-source GEMV)',
+                      'ranks_identical': legacy == current})
+        print(f"  candidates={candidates:>6} sources={sources:>4} "
+              f"{before * 1e3:9.3f} ms -> {after * 1e3:8.3f} ms  {cells[-1]['speedup']:6.2f}x "
+              f"{cells[-1]['path']:>14}  identical={cells[-1]['ranks_identical']}", flush=True)
+    result = {'kind': 'synthetic ranks equivalence/throughput sweep', 'seed': SWEEP_SEED, 'dim': SWEEP_DIM,
+              'dtype': 'float32 (L2-normalized rows)', 'host_cpus': _os.cpu_count(),
+              'loadavg': [round(v, 2) for v in _os.getloadavg()],
+              'note': ('wall-clock timing on a shared 4-CPU host; both implementations are '
+                       'measured in the same process, alternating reps, and must return the '
+                       'same rank table'),
+              'cells': cells}
+    (ROOT / 'artifacts/abl_opt/micro/bench_ranks_sweep.json').write_text(json.dumps(result, indent=2))
+    return result
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == '--sweep':
+        result = sweep()
+        print(json.dumps({k: result[k] for k in ('seed', 'loadavg', 'host_cpus')}, indent=2))
+        return
     mode = sys.argv[1] if len(sys.argv) > 1 else 'smoke'
     if mode == 'smoke':
         ablation = ROOT / 'artifacts/abl_opt/rounds/round15/iter0/output/ablation'
@@ -135,8 +196,10 @@ def main() -> None:
         'before_samples': [round(v, 4) for v in legacy_samples],
         'after_samples': [round(v, 4) for v in new_samples],
         'cprofile_self_seconds': profiled,
+        'loadavg': [round(v, 2) for v in os.getloadavg()],
         'ranks_identical': bool(identical),
         'rank_entries': sum(1 for row in new for value in row if value is not None),
+        'note': 'wall-clock timing on a shared 4-CPU host, interleaved reps, median',
     }
     print(json.dumps(result, indent=2))
     out = ROOT / f'artifacts/abl_opt/micro/bench_ranks_{mode}.json'

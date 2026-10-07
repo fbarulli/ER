@@ -4,26 +4,32 @@
   "candidates": 10000,
   "ids": 179,
   "pairs": 100,
-  "before_seconds": 0.0493,
-  "after_seconds": 0.0146,
-  "speedup": 3.37,
+  "before_seconds": 1.8133,
+  "after_seconds": 1.8356,
+  "speedup": 0.99,
   "before_samples": [
-    0.0415,
-    0.0508,
-    0.039,
-    0.0551,
-    0.0479,
-    0.0525
+    1.8368,
+    1.8484,
+    0.767,
+    1.0831,
+    1.7898,
+    1.856
   ],
   "after_samples": [
-    0.0153,
-    0.0139,
-    0.0118,
-    0.0128,
-    0.0202,
-    0.02
+    1.9391,
+    1.3115,
+    1.4291,
+    1.8231,
+    1.848,
+    1.8683
   ],
   "cprofile_self_seconds": {},
+  "loadavg": [
+    11.15,
+    9.37,
+    7.14
+  ],
   "ranks_identical": true,
-  "rank_entries": 200
+  "rank_entries": 200,
+  "note": "wall-clock timing on a shared 4-CPU host, interleaved reps, median"
 }
