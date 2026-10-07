@@ -5,12 +5,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from core.portable_archive import Digest
+from core.run_log import RunLogger
+from core.step_trace import timed
 from model_tracks.config import SuiteConfig
 from pathlib import Path
 from core.common import TRAIN_ROOT
 from core.portable_archive import verify_archive
 from graph_tracks.artifacts import name
 from model_tracks.ablation import report, checkpoint_identity, source_name, write, resolve, frozen_threshold, verify_threshold_binding
+
+_LOG = RunLogger(__name__)
 
 
 class AblationThresholdIdentity(BaseModel):
@@ -39,41 +43,54 @@ class SavedAblationReport(BaseModel):
     rows: list[dict[str, Any]]
 
 
+@timed
 def publish_saved(destination: Path, suite: SuiteConfig, *, archive: Path) -> None:
     """Publish frozen report bytes without refitting or rewriting the archive."""
+    with _LOG.section('ablation.publish.verify'):
+        archived, publisher = _sealed_archive(archive, suite)
+    with _LOG.section('ablation.publish.tracks'):
+        for track in _LOG.progress(('text', 'gnn_only', 'hybrid'), desc='publish_saved', unit='track'):
+            _publish_track(destination, track, archived, publisher)
+
+
+def _sealed_archive(archive, suite):
+    """Verify the sealed bundle and resolve its git-side publisher."""
+    archived = verify_archive(archive, "suite_bundle_manifest.json")
+    return archived, git_publisher(suite)
+
+
+def _publish_track(destination, track, archived, publisher):
+    """Publish one track's frozen report bytes after archive identity checks."""
     from graph_tracks.data import file_hash
     from model_tracks.ablation import Settings
-    archived = verify_archive(archive, "suite_bundle_manifest.json")
-    publisher = git_publisher(suite)
-    for track in ('text', 'gnn_only', 'hybrid'):
-        folder = destination / track / 'ablation'
-        request, vectors = folder / 'request.json', folder / 'vectors.npz'
-        saved, binding = folder / 'report.json', folder / 'baseline_threshold.json'
-        for path in (request, vectors, saved, binding, folder / 'prepared_inputs.npz', saved.with_suffix('.sha256')):
-            relative = path.relative_to(destination).as_posix()
-            if archived['files'].get(relative) != file_hash(path):
-                raise ValueError('saved ablation differs from sealed archive: ' + relative)
-        validated = SavedAblationReport.model_validate_json(saved.read_text())
-        document = json.loads(request.read_text())
-        calibration = SavedCalibration.model_validate_json(binding.read_text())
-        if (validated.track != track or document['track'] != track
-                or validated.request_sha256 != file_hash(request)
-                or validated.result_sha256 != file_hash(vectors)
-                or saved.with_suffix('.sha256').read_text().strip() != file_hash(saved)
-                or validated.threshold_provenance.get('sha256') != file_hash(binding)
-                or calibration.track != track or validated.threshold != calibration.threshold
-                or validated.threshold_binding.track != track
-                or validated.threshold_binding.checkpoint_sha256 != calibration.checkpoint_sha256):
-            raise ValueError('saved ablation publication identity differs: ' + track)
-        # Settings in the request are the frozen producer's settings. Live config
-        # may have changed while the immutable training run was in flight.
-        report_path = Path(Settings.model_validate(document['settings']).report_path)
-        report_path = report_path if report_path.is_absolute() else TRAIN_ROOT / report_path
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        from core.manifest import atomic_write_text
-        atomic_write_text(report_path, saved.read_text())
-        if publisher is not None:
-            publisher(request, vectors, json.loads(saved.read_text()), str(binding))
+    folder = destination / track / 'ablation'
+    request, vectors = folder / 'request.json', folder / 'vectors.npz'
+    saved, binding = folder / 'report.json', folder / 'baseline_threshold.json'
+    for path in (request, vectors, saved, binding, folder / 'prepared_inputs.npz', saved.with_suffix('.sha256')):
+        relative = path.relative_to(destination).as_posix()
+        if archived['files'].get(relative) != file_hash(path):
+            raise ValueError('saved ablation differs from sealed archive: ' + relative)
+    validated = SavedAblationReport.model_validate_json(saved.read_text())
+    document = json.loads(request.read_text())
+    calibration = SavedCalibration.model_validate_json(binding.read_text())
+    if (validated.track != track or document['track'] != track
+            or validated.request_sha256 != file_hash(request)
+            or validated.result_sha256 != file_hash(vectors)
+            or saved.with_suffix('.sha256').read_text().strip() != file_hash(saved)
+            or validated.threshold_provenance.get('sha256') != file_hash(binding)
+            or calibration.track != track or validated.threshold != calibration.threshold
+            or validated.threshold_binding.track != track
+            or validated.threshold_binding.checkpoint_sha256 != calibration.checkpoint_sha256):
+        raise ValueError('saved ablation publication identity differs: ' + track)
+    # Settings in the request are the frozen producer's settings. Live config
+    # may have changed while the immutable training run was in flight.
+    report_path = Path(Settings.model_validate(document['settings']).report_path)
+    report_path = report_path if report_path.is_absolute() else TRAIN_ROOT / report_path
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    from core.manifest import atomic_write_text
+    atomic_write_text(report_path, saved.read_text())
+    if publisher is not None:
+        publisher(request, vectors, json.loads(saved.read_text()), str(binding))
 
 
 def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> Path:
