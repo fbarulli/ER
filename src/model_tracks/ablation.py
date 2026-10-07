@@ -28,6 +28,7 @@ from core.step_trace import timed
 from core.text import normalized_attribute_text
 from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
+from training.masking import field_of
 
 _LOG = RunLogger(__name__)
 
@@ -188,7 +189,6 @@ def _field_surfaces(text: str) -> dict[str, set[str]]:
 
 
 def declaration_removed(row, attribute):
-    from training.masking import field_of
     result = dict(row)
     if result.get('frozen_payload'):
         fields = {'volume': {'volume'}, 'count per unit': {'pack'},
