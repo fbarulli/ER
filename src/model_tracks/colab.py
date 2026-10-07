@@ -9,10 +9,30 @@ from graph_tracks.data import file_hash
 from model_tracks.package import verify, package_member
 
 
+def _publish_git_inputs(paths, message: str) -> None:
+    """Publish the input transport to the branch the Colab VM actually clones.
+
+    ``push_artifacts`` commits on the current branch and pushes its upstream.
+    The VM clones ``colab.branch``, so when the working branch differs from it
+    the clone would miss the transport and the remote stage would abort with a
+    FileNotFoundError. Re-point the publication at the configured branch with a
+    fast-forward push (never forced).
+    """
+    import subprocess
+    from core.common import TRAIN_ROOT, training_cfg
+    from model_tracks.publish import push_artifacts
+    push_artifacts(paths, message)
+    branch = training_cfg().colab.branch
+    head = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                          cwd=TRAIN_ROOT, text=True, capture_output=True, check=True).stdout.strip()
+    if head and head != 'HEAD' and head != branch:
+        subprocess.run(['git', 'push', 'origin', f'HEAD:{branch}'],
+                       cwd=TRAIN_ROOT, check=True)
+
+
 def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publisher=None):
     """Save immutable inputs through the existing Git artifact publisher."""
     from core.common import TRAIN_ROOT
-    from model_tracks.publish import push_artifacts
     metadata = verify(archive)
     files = {'inputs.tar.zst':archive}
     if resume_archive is not None:
@@ -48,7 +68,7 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
                     raise ValueError('Git input transport checksum mismatch')
     if transport.stat().st_size >= 100*1024**2:
         raise ValueError('Suite input transport exceeds GitHub regular-file limit; reduce the input package size')
-    (publisher or push_artifacts)([transport],f'tracks: save immutable GPU inputs {identity[:24]}')
+    (publisher or _publish_git_inputs)([transport],f'tracks: save immutable GPU inputs {identity[:24]}')
     return transport
 
 
