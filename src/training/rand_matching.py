@@ -93,10 +93,14 @@ from core.structured_features import (
     vector as structured_vector,
 )
 from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
+from core.run_log import RunLogger
+from core.step_trace import timed
 import pipeline
 from pipeline import load_canonical_map
 from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
 
+
+_LOG = RunLogger(__name__)
 
 ASSIGNMENT_COLUMNS = ("SKU_ID", "ITEM_ID", "score", "gtin_status")
 
@@ -308,6 +312,10 @@ def targeted_veto_gate(
 ) -> dict[str, object]:
     """Classify a candidate using the shared critical-attribute contract.
 
+    One phase-ordered pass on :class:`_TargetedVetoGateEvaluator`: the
+    statements below are the original gate body verbatim, so the audit dict
+    (key set and insertion order) and every verdict byte stay identical.
+
     Any explicit conflict in any critical dimension hard-blocks a non-exact
     match. Unknown pack or volume evidence -- the decisive identity evidence
     the ``missing_pack_or_volume_route`` dial names -- routes to review, so it
@@ -319,189 +327,358 @@ def targeted_veto_gate(
     and mirrors the full critical-attribute outcome computed below (all
     dimensions explicit and agreeing).
     """
-    settings = config or rand_matching_cfg()["targeted_veto_gates"]
-    left_pack = set(sku_info.get("pack") or set())
-    right_pack = set(candidate_info.get("pack") or set())
-    left_volume = set(sku_info.get("volume") or set())
-    right_volume = set(candidate_info.get("volume") or set())
-    left_package_type = set(sku_info.get("package_type") or set())
-    right_package_type = set(candidate_info.get("package_type") or set())
-    # Brand comparison runs through the sku_identity SSOT fold (see
-    # _brand_conflict): the audit columns carry the FOLDED token sets joined
-    # for display, so a reviewer sees the family key (shoc) next to the
-    # observed spellings.
-    left_brand = " ".join(sorted(sku_identity_normalize_brand(sku_brand)))
-    right_brand = " ".join(
-        sorted(sku_identity_normalize_brand(candidate_brand))
-    )
-    relative_tolerance = float(settings["volume_relative_tolerance"])
-    absolute_tolerance_ml = float(settings["volume_absolute_tolerance_ml"])
-
-    critical = critical_attribute_evaluation(
+    return _TargetedVetoGateEvaluator(
         sku_info,
         candidate_info,
-        volume_relative_tolerance=relative_tolerance,
-        volume_absolute_tolerance_ml=absolute_tolerance_ml,
-    )
-    # THE SINGLE DECISION ENGINE (owner directive 2026-10-01: ALL attributes
-    # × ALL metrics for the ENTIRE decision process). One dataclass
-    # (PairEvidence) loaded across the process evaluates the full 37-key
-    # registry through the ordered stack — unit normalization, negation
-    # hard-veto, alias-folded equality, numeric/band interval math, set
-    # overlaps and the fuzzy surface stage — replacing every hand-rolled
-    # per-dimension clause here (the old material block above included).
-    # Registry-key conflicts map to critical dimension names through the SSOT
-    # inversion table, so the audit and veto columns stay in the critical
-    # vocabulary while the evidence now spans the WHOLE universe.
-    from core.attribute_conflicts import CRITICAL_NAME_BY_CENSUS_KEY
-    from core.attribute_decision import AttributeDecisionEngine
+        sku_brand=sku_brand,
+        candidate_brand=candidate_brand,
+        exact_gtin=exact_gtin,
+        config=config,
+    ).verdict()
 
-    evidence = AttributeDecisionEngine(
-        volume_relative_tolerance=relative_tolerance,
-        volume_absolute_tolerance_ml=absolute_tolerance_ml,
-    ).evaluate(sku_info, candidate_info)
-    registry_conflicts = {
-        CRITICAL_NAME_BY_CENSUS_KEY[census_key]
-        for census_key in evidence.conflicts
-        if census_key in CRITICAL_NAME_BY_CENSUS_KEY
-        and (census_key != "pack type" or (left_package_type and right_package_type))
-    }
-    all_conflicts = list(critical["conflicts"]) + sorted(
-        registry_conflicts - set(critical["conflicts"])
-    )
-    # SSOT (audit 2026-09-15): this audit column used to call a second
-    # ``pack_gate`` that lived in core.attribute_conflicts and answered the
-    # opposite way from the training-label gate for the same input. It is now
-    # derived from the SAME evaluation object that already drives the veto and
-    # defer routing below, so the reported boolean can no longer disagree with
-    # the decision it claims to audit.
-    pack_gate_pass = not all_conflicts and not critical["unknown"]
 
-    pack_conflict = bool(left_pack and right_pack and not (left_pack & right_pack))
-    volume_conflict = bool(
-        left_volume
-        and right_volume
-        and not _sets_overlap_with_volume_tolerance(
-            left_volume,
-            right_volume,
-            relative_tolerance=relative_tolerance,
-            absolute_tolerance_ml=absolute_tolerance_ml,
+class _TargetedVetoGateEvaluator:
+    """One ``targeted_veto_gate`` evaluation over one SKU x candidate pair.
+
+    SR phases, ONE fixed order in ``verdict()``; every statement is the
+    original gate body verbatim, so the flattened ``**targeted_gate`` spread
+    in :func:`candidate_gate_fields` and every reported verdict stay
+    byte-identical.
+
+    Phase map:
+      compare_packets          — raw set/volume/brand comparison evidence
+      evaluate_evidence        — THE single decision engine (PairEvidence)
+                                 plus the registry-conflict audit columns
+                                 (pack_gate_pass derives from the SAME
+                                 evaluation object that drives veto/defer)
+      legacy_conflicts         — the pre-engine hand-rolled conflict flags
+                                 the audit columns still pin
+      missing_report           — per-dimension missing census (ALL dims) and
+                                 the narrower deferral census
+      shadow_policy_evidence   — the pair-policy recording call that runs
+                                 BEFORE any early exit (original precedence)
+      common_record            — the shared ``common`` audit dict
+      preserve_or_disabled     — exact-GTIN lock and disabled-policy exits
+      veto_verdict             — configured veto dimensions + brand
+      declared_identity_verdict / deferral_verdict / policy_verdict —
+                                 the review routes, then the allow verdict
+    """
+
+    def __init__(
+        self,
+        sku_info: dict[str, object],
+        candidate_info: dict[str, object],
+        *,
+        sku_brand: object,
+        candidate_brand: object,
+        exact_gtin: bool,
+        config: dict[str, object] | None = None,
+    ) -> None:
+        self._sku_info = sku_info
+        self._candidate_info = candidate_info
+        self._sku_brand = sku_brand
+        self._candidate_brand = candidate_brand
+        self._exact_gtin = exact_gtin
+        self._config = config
+
+    def compare_packets(self) -> None:
+        """Raw set extraction, brand folds and the volume tolerances."""
+        settings = self._config or rand_matching_cfg()["targeted_veto_gates"]
+        self._settings = settings
+        self._left_pack = set(self._sku_info.get("pack") or set())
+        self._right_pack = set(self._candidate_info.get("pack") or set())
+        self._left_volume = set(self._sku_info.get("volume") or set())
+        self._right_volume = set(self._candidate_info.get("volume") or set())
+        self._left_package_type = set(
+            self._sku_info.get("package_type") or set()
         )
-    )
-    brand_conflict_flag = _brand_conflict(sku_brand, candidate_brand)
-    package_type_conflict = bool(
-        left_package_type
-        and right_package_type
-        and not (left_package_type & right_package_type)
-    )
-    missing: list[str] = []
-    deferral_missing: list[str] = []
-    for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
-        key = "flavor_set" if dimension == "flavor" else dimension
-        decisive = dimension in DEFERRAL_DIMENSIONS
-        for side, info in (("a", sku_info), ("b", candidate_info)):
-            if info.get(key):
-                continue
-            missing.append(f"{dimension}_{side}")
-            if decisive:
-                deferral_missing.append(f"{dimension}_{side}")
-    from core.pair_policy import assess_pair
-    policy_evidence = assess_pair(evidence, sku_info, candidate_info)
-    common = {
-        "targeted_attribute_policy": json.dumps(policy_evidence, sort_keys=True),
-        "targeted_pack_conflict": int(pack_conflict),
-        "targeted_volume_conflict": int(volume_conflict),
-        "targeted_brand_conflict": int(brand_conflict_flag),
-        "targeted_package_type_conflict": int(package_type_conflict),
-        "targeted_missing_attributes": ",".join(missing),
-        "targeted_missing_attribute_count": len(missing),
-        "targeted_pack_a": json.dumps(sorted(left_pack)),
-        "targeted_pack_b": json.dumps(sorted(right_pack)),
-        "targeted_volume_ml_a": json.dumps(sorted(left_volume)),
-        "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
-        "targeted_package_type_a": json.dumps(sorted(left_package_type)),
-        "targeted_package_type_b": json.dumps(sorted(right_package_type)),
-        "targeted_pack_gate_pass": int(pack_gate_pass),
-        # pack_material rides the same conflict/vetoed audit columns as the
-        # shared dimensions, so the difference between the two lists stays
-        # exactly "what the configured veto set excluded".
-        "targeted_critical_conflicts": ",".join(all_conflicts),
-        # The conflicts that were allowed to veto -- the difference between
-        # this and targeted_critical_conflicts is exactly what the configured
-        # veto set excludes, so the decision stays inspectable.
-        "targeted_vetoed_conflicts": ",".join(
-            d for d in all_conflicts if d in set(settings["veto_dimensions"])
-        ),
-        "targeted_critical_agreements": ",".join(critical["agreements"]),
-        "targeted_brand_a": left_brand,
-        "targeted_brand_b": right_brand,
-        "targeted_volume_relative_tolerance": relative_tolerance,
-        "targeted_volume_absolute_tolerance_ml": absolute_tolerance_ml,
-    }
-    if exact_gtin and bool(settings["preserve_exact_gtin"]):
-        return common | {
-            "targeted_gate_decision": "exact_gtin_lock",
-            "targeted_gate_reason": "exact_gtin_preserved",
-            "targeted_gate_route": "auto_merge",
+        self._right_package_type = set(
+            self._candidate_info.get("package_type") or set()
+        )
+        # Brand comparison runs through the sku_identity SSOT fold (see
+        # _brand_conflict): the audit columns carry the FOLDED token sets joined
+        # for display, so a reviewer sees the family key (shoc) next to the
+        # observed spellings.
+        self._left_brand = " ".join(
+            sorted(sku_identity_normalize_brand(self._sku_brand))
+        )
+        self._right_brand = " ".join(
+            sorted(sku_identity_normalize_brand(self._candidate_brand))
+        )
+        self._relative_tolerance = float(settings["volume_relative_tolerance"])
+        self._absolute_tolerance_ml = float(
+            settings["volume_absolute_tolerance_ml"]
+        )
+
+    def evaluate_evidence(self) -> None:
+        """The single decision-engine pass plus the conflict audit union."""
+        critical = critical_attribute_evaluation(
+            self._sku_info,
+            self._candidate_info,
+            volume_relative_tolerance=self._relative_tolerance,
+            volume_absolute_tolerance_ml=self._absolute_tolerance_ml,
+        )
+        self._critical = critical
+        # THE SINGLE DECISION ENGINE (owner directive 2026-10-01: ALL attributes
+        # × ALL metrics for the ENTIRE decision process). One dataclass
+        # (PairEvidence) loaded across the process evaluates the full 37-key
+        # registry through the ordered stack — unit normalization, negation
+        # hard-veto, alias-folded equality, numeric/band interval math, set
+        # overlaps and the fuzzy surface stage — replacing every hand-rolled
+        # per-dimension clause here (the old material block above included).
+        # Registry-key conflicts map to critical dimension names through the SSOT
+        # inversion table, so the audit and veto columns stay in the critical
+        # vocabulary while the evidence now spans the WHOLE universe.
+        from core.attribute_conflicts import CRITICAL_NAME_BY_CENSUS_KEY
+        from core.attribute_decision import AttributeDecisionEngine
+
+        evidence = AttributeDecisionEngine(
+            volume_relative_tolerance=self._relative_tolerance,
+            volume_absolute_tolerance_ml=self._absolute_tolerance_ml,
+        ).evaluate(self._sku_info, self._candidate_info)
+        self._evidence = evidence
+        registry_conflicts = {
+            CRITICAL_NAME_BY_CENSUS_KEY[census_key]
+            for census_key in evidence.conflicts
+            if census_key in CRITICAL_NAME_BY_CENSUS_KEY
+            and (
+                census_key != "pack type"
+                or (self._left_package_type and self._right_package_type)
+            )
         }
-    if not bool(settings["enabled"]):
+        all_conflicts = list(critical["conflicts"]) + sorted(
+            registry_conflicts - set(critical["conflicts"])
+        )
+        self._all_conflicts = all_conflicts
+        # SSOT (audit 2026-09-15): this audit column used to call a second
+        # ``pack_gate`` that lived in core.attribute_conflicts and answered the
+        # opposite way from the training-label gate for the same input. It is now
+        # derived from the SAME evaluation object that already drives the veto and
+        # defer routing below, so the reported boolean can no longer disagree with
+        # the decision it claims to audit.
+        self._pack_gate_pass = (
+            not all_conflicts and not critical["unknown"]
+        )
+
+    def legacy_conflicts(self) -> None:
+        """The hand-rolled per-dimension conflict flags (audit columns)."""
+        self._pack_conflict = bool(
+            self._left_pack
+            and self._right_pack
+            and not (self._left_pack & self._right_pack)
+        )
+        self._volume_conflict = bool(
+            self._left_volume
+            and self._right_volume
+            and not _sets_overlap_with_volume_tolerance(
+                self._left_volume,
+                self._right_volume,
+                relative_tolerance=self._relative_tolerance,
+                absolute_tolerance_ml=self._absolute_tolerance_ml,
+            )
+        )
+        self._brand_conflict_flag = _brand_conflict(
+            self._sku_brand, self._candidate_brand
+        )
+        self._package_type_conflict = bool(
+            self._left_package_type
+            and self._right_package_type
+            and not (self._left_package_type & self._right_package_type)
+        )
+
+    def missing_report(self) -> None:
+        """Census EVERY dimension; defer only on ``DEFERRAL_DIMENSIONS``."""
+        missing: list[str] = []
+        deferral_missing: list[str] = []
+        for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
+            key = "flavor_set" if dimension == "flavor" else dimension
+            decisive = dimension in DEFERRAL_DIMENSIONS
+            for side, info in (
+                ("a", self._sku_info),
+                ("b", self._candidate_info),
+            ):
+                if info.get(key):
+                    continue
+                missing.append(f"{dimension}_{side}")
+                if decisive:
+                    deferral_missing.append(f"{dimension}_{side}")
+        self._missing = missing
+        self._deferral_missing = deferral_missing
+
+    def shadow_policy_evidence(self) -> None:
+        """The pair-policy recording call that ran BEFORE early exits."""
+        from core.pair_policy import assess_pair
+        self._policy_evidence = assess_pair(
+            self._evidence, self._sku_info, self._candidate_info
+        )
+
+    def common_record(self) -> dict[str, object]:
+        """The shared audit ``common`` dict (insertion order is the contract)."""
+        settings = self._settings
+        missing = self._missing
+        deferral_missing = self._deferral_missing
+        left_pack = self._left_pack
+        right_pack = self._right_pack
+        left_volume = self._left_volume
+        right_volume = self._right_volume
+        left_package_type = self._left_package_type
+        right_package_type = self._right_package_type
+        all_conflicts = self._all_conflicts
+        critical = self._critical
+        common = {
+            "targeted_attribute_policy": json.dumps(
+                self._policy_evidence, sort_keys=True
+            ),
+            "targeted_pack_conflict": int(self._pack_conflict),
+            "targeted_volume_conflict": int(self._volume_conflict),
+            "targeted_brand_conflict": int(self._brand_conflict_flag),
+            "targeted_package_type_conflict": int(self._package_type_conflict),
+            "targeted_missing_attributes": ",".join(missing),
+            "targeted_missing_attribute_count": len(missing),
+            "targeted_pack_a": json.dumps(sorted(left_pack)),
+            "targeted_pack_b": json.dumps(sorted(right_pack)),
+            "targeted_volume_ml_a": json.dumps(sorted(left_volume)),
+            "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
+            "targeted_package_type_a": json.dumps(sorted(left_package_type)),
+            "targeted_package_type_b": json.dumps(sorted(right_package_type)),
+            "targeted_pack_gate_pass": int(self._pack_gate_pass),
+            # pack_material rides the same conflict/vetoed audit columns as the
+            # shared dimensions, so the difference between the two lists stays
+            # exactly "what the configured veto set excluded".
+            "targeted_critical_conflicts": ",".join(all_conflicts),
+            # The conflicts that were allowed to veto -- the difference between
+            # this and targeted_critical_conflicts is exactly what the
+            # configured veto set excludes, so the decision stays inspectable.
+            "targeted_vetoed_conflicts": ",".join(
+                d for d in all_conflicts if d in set(settings["veto_dimensions"])
+            ),
+            "targeted_critical_agreements": ",".join(critical["agreements"]),
+            "targeted_brand_a": self._left_brand,
+            "targeted_brand_b": self._right_brand,
+            "targeted_volume_relative_tolerance": self._relative_tolerance,
+            "targeted_volume_absolute_tolerance_ml": self._absolute_tolerance_ml,
+        }
+        self._common = common
+        return common
+
+    def preserve_or_disabled(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Exact-GTIN lock, then the disabled-policy exit (original order)."""
+        settings = self._settings
+        exact_gtin = self._exact_gtin
+        if exact_gtin and bool(settings["preserve_exact_gtin"]):
+            return common | {
+                "targeted_gate_decision": "exact_gtin_lock",
+                "targeted_gate_reason": "exact_gtin_preserved",
+                "targeted_gate_route": "auto_merge",
+            }
+        if not bool(settings["enabled"]):
+            return common | {
+                "targeted_gate_decision": "allow",
+                "targeted_gate_reason": "disabled",
+                "targeted_gate_route": "auto_merge",
+            }
+        return None
+
+    def veto_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Only the configured dimensions may hard-block; all are audited."""
+        settings = self._settings
+        all_conflicts = self._all_conflicts
+        # Only the configured dimensions may hard-block. Every conflict is still
+        # reported in targeted_critical_conflicts below, so an excluded dimension
+        # is AUDITED rather than hidden -- it simply stops spending true matches.
+        # Historical sweetener measurements are documented in config; only the
+        # current configured set determines which conflicts can veto.
+        # pack_material vetoes only when configured; its conflict already shows in
+        # all_conflicts (and therefore targeted_critical_conflicts) either way.
+        veto_dimensions = set(settings["veto_dimensions"])
+        veto_reasons: list[str] = [
+            f"{dimension}_mismatch"
+            for dimension in all_conflicts
+            if dimension in veto_dimensions
+        ]
+        if self._brand_conflict_flag and bool(settings["brand_mismatch_veto"]):
+            veto_reasons.append("brand_mismatch")
+        if veto_reasons:
+            return common | {
+                "targeted_gate_decision": "veto",
+                "targeted_gate_reason": "+".join(veto_reasons),
+                "targeted_gate_route": "reject",
+            }
+        return None
+
+    def declared_identity_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Share the training gate's source-grounded identity review contract."""
+        from core.declared_identity import identity_review_dimensions
+        identity_differences = identity_review_dimensions(
+            self._sku_info, self._candidate_info
+        )
+        if identity_differences:
+            return common | {
+                "targeted_gate_decision": "defer",
+                "targeted_gate_reason": "declared_identity:"
+                + ",".join(identity_differences),
+                "targeted_gate_route": "human_review",
+            }
+        return None
+
+    def deferral_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Unknown decisive evidence routes through the configured dial."""
+        if self._deferral_missing:
+            return common | {
+                "targeted_gate_decision": "defer",
+                "targeted_gate_reason": "missing_pack_or_volume:"
+                + ",".join(self._deferral_missing),
+                "targeted_gate_route": str(
+                    self._settings["missing_pack_or_volume_route"]
+                ),
+            }
+        return None
+
+    def policy_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object]:
+        """The full-evidence review route, then the compat verdict."""
+        from core.pair_policy import assess_pair
+        policy = assess_pair(self._evidence, self._sku_info, self._candidate_info)
+        if policy['review']:
+            return common | {
+                "targeted_gate_decision": "defer",
+                "targeted_gate_reason": "full_evidence:"
+                + ",".join(policy['review']),
+                "targeted_gate_route": "human_review",
+            }
         return common | {
             "targeted_gate_decision": "allow",
-            "targeted_gate_reason": "disabled",
+            "targeted_gate_reason": "attributes_compatible",
             "targeted_gate_route": "auto_merge",
         }
 
-    # Only the configured dimensions may hard-block. Every conflict is still
-    # reported in targeted_critical_conflicts below, so an excluded dimension
-    # is AUDITED rather than hidden -- it simply stops spending true matches.
-    # Historical sweetener measurements are documented in config; only the
-    # current configured set determines which conflicts can veto.
-    # pack_material vetoes only when configured; its conflict already shows in
-    # all_conflicts (and therefore targeted_critical_conflicts) either way.
-    veto_dimensions = set(settings["veto_dimensions"])
-    veto_reasons: list[str] = [
-        f"{dimension}_mismatch"
-        for dimension in all_conflicts
-        if dimension in veto_dimensions
-    ]
-    if brand_conflict_flag and bool(settings["brand_mismatch_veto"]):
-        veto_reasons.append("brand_mismatch")
-    if veto_reasons:
-        return common | {
-            "targeted_gate_decision": "veto",
-            "targeted_gate_reason": "+".join(veto_reasons),
-            "targeted_gate_route": "reject",
-        }
-    # Share the training gate's source-grounded identity review contract.
-    # Exact-GTIN and disabled-policy exits above retain their precedence.
-    from core.declared_identity import identity_review_dimensions
-    identity_differences = identity_review_dimensions(sku_info, candidate_info)
-    if identity_differences:
-        return common | {
-            "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "declared_identity:" + ",".join(identity_differences),
-            "targeted_gate_route": "human_review",
-        }
-    if deferral_missing:
-        return common | {
-            "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "missing_pack_or_volume:"
-            + ",".join(deferral_missing),
-            "targeted_gate_route": str(settings["missing_pack_or_volume_route"]),
-        }
-    from core.pair_policy import assess_pair
-    policy = assess_pair(evidence, sku_info, candidate_info)
-    if policy['review']:
-        return common | {
-            "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "full_evidence:" + ",".join(policy['review']),
-            "targeted_gate_route": "human_review",
-        }
-    return common | {
-        "targeted_gate_decision": "allow",
-        "targeted_gate_reason": "attributes_compatible",
-        "targeted_gate_route": "auto_merge",
-    }
+    def verdict(self) -> dict[str, object]:
+        """One fixed pass: evidence -> audit record -> ordered verdict chain."""
+        self.compare_packets()
+        self.evaluate_evidence()
+        self.legacy_conflicts()
+        self.missing_report()
+        self.shadow_policy_evidence()
+        common = self.common_record()
+        for fallback_verdict in (
+            self.preserve_or_disabled,
+            self.veto_verdict,
+            self.declared_identity_verdict,
+            self.deferral_verdict,
+        ):
+            resolved = fallback_verdict(common)
+            if resolved is not None:
+                return resolved
+        return self.policy_verdict(common)
 
 
 def confidence_penalty_mask(
@@ -907,174 +1084,294 @@ def candidate_gate_fields(
     candidate_rank: int | None = None,
     retrieval_source: str = "unknown",
 ) -> dict[str, object]:
-    """Build the shared candidate gate record used by all matching lanes."""
-    candidate_info = canonical_attribute_info(candidate_record)
-    sku_gtin = metadata_text(row_metadata_text(row, *alias_names("gtin"))).strip()
-    status = gtin_status(sku_gtin, candidate_gtin)
-    exact = int(status == "both_equal")
-    targeted_gate = targeted_veto_gate(
+    """Build the shared candidate gate record used by all matching lanes.
+
+    One phase-ordered pass on :class:`_CandidateGateRecord`: the record's
+    insertion order is a pinned output contract (candidate-trace column
+    order comes from the first row dict), so every key block below is the
+    original literal verbatim and the composition re-joins the blocks in
+    exactly that order.
+    """
+    return _CandidateGateRecord(
+        row,
         sku_info,
-        candidate_info,
-        sku_brand=row_metadata_text(row, "brand"),
-        candidate_brand=candidate_record.get("mode_brand"),
-        exact_gtin=bool(exact),
-    )
-    rules = conflict_columns(sku_info, candidate_info)
-    # The ANN assignment lane owns a configurable volume tolerance.  Replace
-    # the generic exact-set volume result with the targeted gate result while
-    # retaining the shared flavor classification and exact pack semantics.
-    targeted_settings = rand_matching_cfg()["targeted_veto_gates"]
-    if bool(targeted_settings["enabled"]):
-        rules["volume_conflict"] = int(
-            bool(targeted_settings["volume_mismatch_veto"])
-            and bool(targeted_gate["targeted_volume_conflict"])
+        candidate_gtin,
+        candidate_record,
+        score,
+        sku_id=sku_id,
+        source_row_index=source_row_index,
+        candidate_rank=candidate_rank,
+        retrieval_source=retrieval_source,
+    ).record()
+
+
+class _CandidateGateRecord:
+    """One shared candidate gate record (``candidate_gate_fields`` body).
+
+    SR phases, ONE fixed pass in record(): identity -> conflict rules ->
+    penalties -> missing evidence -> brand veto -> reason -> field blocks.
+
+    Column-order invariant: the returned dict's insertion order is the
+    candidate-trace DataFrame's column order, so record() joins the phase
+    blocks in the exact order of the original literal (head fields, then the
+    sku_ endpoint block, source_row_index, the candidate_/brand block, then
+    the rule census and the **targeted_gate spread last).
+    """
+
+    def __init__(
+        self,
+        row: pd.Series,
+        sku_info: dict,
+        candidate_gtin: str,
+        candidate_record: dict[str, object],
+        score: float,
+        *,
+        sku_id: str,
+        source_row_index: str,
+        candidate_rank: int | None = None,
+        retrieval_source: str = "unknown",
+    ) -> None:
+        self._row = row
+        self._sku_info = sku_info
+        self._candidate_gtin = candidate_gtin
+        self._candidate_record = candidate_record
+        self._score = score
+        self._sku_id = sku_id
+        self._source_row_index = source_row_index
+        self._candidate_rank = candidate_rank
+        self._retrieval_source = retrieval_source
+
+    def identity(self) -> None:
+        """GTIN identity plus the shared targeted-gate evaluation."""
+        self._candidate_info = canonical_attribute_info(self._candidate_record)
+        self._sku_gtin = metadata_text(
+            row_metadata_text(self._row, *alias_names("gtin"))
+        ).strip()
+        self._status = gtin_status(self._sku_gtin, self._candidate_gtin)
+        self._exact = int(self._status == "both_equal")
+        self._targeted_gate = targeted_veto_gate(
+            self._sku_info,
+            self._candidate_info,
+            sku_brand=row_metadata_text(self._row, "brand"),
+            candidate_brand=self._candidate_record.get("mode_brand"),
+            exact_gtin=bool(self._exact),
         )
-        rules["pack_conflict"] = int(
-            bool(targeted_settings["pack_mismatch_veto"])
-            and bool(targeted_gate["targeted_pack_conflict"])
-        )
-        rules["package_type_conflict"] = int(
-            bool(targeted_settings["package_type_mismatch_veto"])
-            and bool(targeted_gate["targeted_package_type_conflict"])
-        )
-    conflict_names = [
-        name
-        for name in CRITICAL_ATTRIBUTE_DIMENSIONS
-        if bool(rules[f"{name}_conflict"])
-    ]
-    rules["attribute_conflict_type"] = (
-        "+".join(conflict_names) if conflict_names else "none"
-    )
-    confidence_penalty, confidence_penalty_reason = confidence_penalty_mask(
-        sku_info,
-        candidate_info,
-        exact_gtin=bool(exact),
-    )
-    flavor_jaccard, flavor_overlap, flavor_penalty, flavor_penalty_reason = (
-        flavor_overlap_penalty(
-            sku_info,
-            candidate_info,
-            exact_gtin=bool(exact),
-        )
-    )
-    adjusted_score = max(
-        -1.0,
-        float(score) - confidence_penalty - flavor_penalty,
-    )
-    jointly_missing = _jointly_missing_attributes(sku_info, candidate_info)
-    brand_conflict = int(
-        bool(rand_matching_cfg()["brand_conflict_veto"])
-        and bool(targeted_gate["targeted_brand_conflict"])
-        and (
-            not bool(targeted_settings["enabled"])
-            or bool(targeted_settings["brand_mismatch_veto"])
-        )
-    )
-    gate_reason = (
-        str(targeted_gate["targeted_gate_reason"])
-        if targeted_gate["targeted_gate_route"] != "auto_merge"
-        else "different_gtin_thresholded"
-        if status == "different"
-        else "exact_gtin"
-        if exact
-        else "brand_conflict"
-        if brand_conflict
-        else "attribute_conflict"
-        if rules["attribute_conflict_type"] != "none"
-        else "cosine_candidate"
-    )
-    return {
-        "SKU_ID": sku_id,
-        "sku_gtin": sku_gtin,
-        "sku_gtin_present": _field_present(row, "gtin", "gtin"),
-        "sku_gtin_valid": int(bool(trusted_gtin(sku_gtin))),
-        "candidate_gtin": candidate_gtin,
-        "candidate_rank": candidate_rank,
-        "retrieval_source": retrieval_source,
-        "raw_score": float(score),
-        "confidence_penalty": confidence_penalty,
-        "confidence_penalty_reason": confidence_penalty_reason,
-        "jointly_missing_attributes": ",".join(jointly_missing),
-        "jointly_missing_attribute_count": len(jointly_missing),
-        "flavor_jaccard": flavor_jaccard,
-        "flavor_overlap": flavor_overlap,
-        "flavor_penalty": flavor_penalty,
-        "flavor_penalty_reason": flavor_penalty_reason,
-        "score": adjusted_score,
-        "exact_gtin": exact,
-        "gtin_status": status,
-        "gate_reason": gate_reason,
-        "sku_title": row_metadata_text(row, "sku_name_eng"),
-        "sku_attributes": row_metadata_text(row, "attribute", "attr"),
-        "sku_brand": row_metadata_text(row, "brand"),
-        "sku_country": row_metadata_text(row, "country"),
-        "sku_category": row_metadata_text(row, "category"),
-        "sku_breadcrumbs_eng": row_metadata_text(row, "breadcrumbs_eng"),
-        "sku_retailer": row_metadata_text(row, "retailer"),
-        "sku_volume": json.dumps(sorted(sku_info["volume"])),
-        "sku_pack": json.dumps(sorted(sku_info["pack"])),
-        "sku_package_type": json.dumps(
-            sorted(sku_info.get("package_type") or set())
-        ),
-        "sku_flavor": str(sku_info["flavor"]),
-        "sku_carbonation": json.dumps(sorted(sku_info.get("carbonation") or set())),
-        "sku_sweetener": json.dumps(sorted(sku_info.get("sweetener") or set())),
-        "sku_pulp": json.dumps(sorted(sku_info.get("pulp") or set())),
-        "sku_title_present": _field_present(row, "sku_name_eng"),
-        "sku_attributes_present": _field_present(row, "attribute", "attr"),
-        "sku_brand_present": _field_present(row, "brand"),
-        "sku_country_present": _field_present(row, "country"),
-        "sku_category_present": _field_present(row, "category"),
-        "sku_breadcrumbs_eng_present": _field_present(row, "breadcrumbs_eng"),
-        "sku_retailer_present": _field_present(row, "retailer"),
-        "sku_volume_present": int(bool(sku_info["volume"])),
-        "sku_pack_present": int(bool(sku_info["pack"])),
-        "sku_package_type_present": int(bool(sku_info.get("package_type"))),
-        "sku_flavor_present": int(bool(sku_info["flavor"])),
-        "sku_carbonation_present": int(bool(sku_info.get("carbonation"))),
-        "sku_sweetener_present": int(bool(sku_info.get("sweetener"))),
-        "sku_pulp_present": int(bool(sku_info.get("pulp"))),
-        "source_row_index": source_row_index,
-        "candidate_text": metadata_text(candidate_record.get("canonical")),
-        "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
-        "brand_conflict": brand_conflict,
-        "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
-        "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
-        "candidate_package_type": json.dumps(sorted(candidate_info["package_type"])),
-        "candidate_flavor": str(candidate_info["flavor"]),
-        "candidate_carbonation": json.dumps(sorted(candidate_info.get("carbonation") or set())),
-        "candidate_sweetener": json.dumps(sorted(candidate_info.get("sweetener") or set())),
-        "candidate_pulp": json.dumps(sorted(candidate_info.get("pulp") or set())),
-        "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
-        "candidate_volume_present": int(bool(candidate_info["volume"])),
-        "candidate_pack_present": int(bool(candidate_info["pack"])),
-        "candidate_package_type_present": int(bool(candidate_info["package_type"])),
-        "candidate_flavor_present": int(bool(candidate_info["flavor"])),
-        "candidate_carbonation_present": int(bool(candidate_info.get("carbonation"))),
-        "candidate_sweetener_present": int(bool(candidate_info.get("sweetener"))),
-        "candidate_pulp_present": int(bool(candidate_info.get("pulp"))),
-        "rule_ok": int(rules["attribute_conflict_type"] == "none"),
-        "attribute_conflict_type": str(rules["attribute_conflict_type"]),
-        "attribute_matches": int(
-            sum(
-                not rules[key]
-                for key in (
-                    "volume_conflict",
-                    "pack_conflict",
-                    "package_type_conflict",
-                    "flavor_conflict",
-                    "carbonation_conflict",
-                    "sweetener_conflict",
-                    "pulp_conflict",
-                )
+
+    def conflict_rules(self) -> None:
+        """Attribute conflict rules with the ANN-lane tolerance overrides."""
+        rules = conflict_columns(self._sku_info, self._candidate_info)
+        # The ANN assignment lane owns a configurable volume tolerance.  Replace
+        # the generic exact-set volume result with the targeted gate result while
+        # retaining the shared flavor classification and exact pack semantics.
+        targeted_settings = rand_matching_cfg()["targeted_veto_gates"]
+        if bool(targeted_settings["enabled"]):
+            rules["volume_conflict"] = int(
+                bool(targeted_settings["volume_mismatch_veto"])
+                and bool(self._targeted_gate["targeted_volume_conflict"])
             )
-        ),
-        **targeted_gate,
-    }
+            rules["pack_conflict"] = int(
+                bool(targeted_settings["pack_mismatch_veto"])
+                and bool(self._targeted_gate["targeted_pack_conflict"])
+            )
+            rules["package_type_conflict"] = int(
+                bool(targeted_settings["package_type_mismatch_veto"])
+                and bool(self._targeted_gate["targeted_package_type_conflict"])
+            )
+        conflict_names = [
+            name
+            for name in CRITICAL_ATTRIBUTE_DIMENSIONS
+            if bool(rules[f"{name}_conflict"])
+        ]
+        rules["attribute_conflict_type"] = (
+            "+".join(conflict_names) if conflict_names else "none"
+        )
+        self._rules = rules
+        self._targeted_settings = targeted_settings
+
+    def penalties(self) -> None:
+        """The two audit penalties and the adjusted score."""
+        confidence_penalty, confidence_penalty_reason = confidence_penalty_mask(
+            self._sku_info,
+            self._candidate_info,
+            exact_gtin=bool(self._exact),
+        )
+        flavor_jaccard, flavor_overlap, flavor_penalty, flavor_penalty_reason = (
+            flavor_overlap_penalty(
+                self._sku_info,
+                self._candidate_info,
+                exact_gtin=bool(self._exact),
+            )
+        )
+        adjusted_score = max(
+            -1.0,
+            float(self._score) - confidence_penalty - flavor_penalty,
+        )
+        self._confidence_penalty = confidence_penalty
+        self._confidence_penalty_reason = confidence_penalty_reason
+        self._flavor_jaccard = flavor_jaccard
+        self._flavor_overlap = flavor_overlap
+        self._flavor_penalty = flavor_penalty
+        self._flavor_penalty_reason = flavor_penalty_reason
+        self._adjusted_score = adjusted_score
+
+    def missing_evidence(self) -> None:
+        """The jointly missing evidence census both penalties audit on."""
+        self._jointly_missing = _jointly_missing_attributes(
+            self._sku_info, self._candidate_info
+        )
+
+    def brand_veto(self) -> None:
+        """The configured brand veto bit over the gate's folded conflict."""
+        self._brand_conflict = int(
+            bool(rand_matching_cfg()["brand_conflict_veto"])
+            and bool(self._targeted_gate["targeted_brand_conflict"])
+            and (
+                not bool(self._targeted_settings["enabled"])
+                or bool(self._targeted_settings["brand_mismatch_veto"])
+            )
+        )
+
+    def reason(self) -> str:
+        """The one-line gate reason (first non-compat route wins)."""
+        self._gate_reason = (
+            str(self._targeted_gate["targeted_gate_reason"])
+            if self._targeted_gate["targeted_gate_route"] != "auto_merge"
+            else "different_gtin_thresholded"
+            if self._status == "different"
+            else "exact_gtin"
+            if self._exact
+            else "brand_conflict"
+            if self._brand_conflict
+            else "attribute_conflict"
+            if self._rules["attribute_conflict_type"] != "none"
+            else "cosine_candidate"
+        )
+        return self._gate_reason
+
+    def sku_fields(self) -> dict[str, object]:
+        """The sku_* endpoint block (verbatim literal, order included)."""
+        row = self._row
+        sku_info = self._sku_info
+        return {
+            "sku_title": row_metadata_text(row, "sku_name_eng"),
+            "sku_attributes": row_metadata_text(row, "attribute", "attr"),
+            "sku_brand": row_metadata_text(row, "brand"),
+            "sku_country": row_metadata_text(row, "country"),
+            "sku_category": row_metadata_text(row, "category"),
+            "sku_breadcrumbs_eng": row_metadata_text(row, "breadcrumbs_eng"),
+            "sku_retailer": row_metadata_text(row, "retailer"),
+            "sku_volume": json.dumps(sorted(sku_info["volume"])),
+            "sku_pack": json.dumps(sorted(sku_info["pack"])),
+            "sku_package_type": json.dumps(
+                sorted(sku_info.get("package_type") or set())
+            ),
+            "sku_flavor": str(sku_info["flavor"]),
+            "sku_carbonation": json.dumps(sorted(sku_info.get("carbonation") or set())),
+            "sku_sweetener": json.dumps(sorted(sku_info.get("sweetener") or set())),
+            "sku_pulp": json.dumps(sorted(sku_info.get("pulp") or set())),
+            "sku_title_present": _field_present(row, "sku_name_eng"),
+            "sku_attributes_present": _field_present(row, "attribute", "attr"),
+            "sku_brand_present": _field_present(row, "brand"),
+            "sku_country_present": _field_present(row, "country"),
+            "sku_category_present": _field_present(row, "category"),
+            "sku_breadcrumbs_eng_present": _field_present(row, "breadcrumbs_eng"),
+            "sku_retailer_present": _field_present(row, "retailer"),
+            "sku_volume_present": int(bool(sku_info["volume"])),
+            "sku_pack_present": int(bool(sku_info["pack"])),
+            "sku_package_type_present": int(bool(sku_info.get("package_type"))),
+            "sku_flavor_present": int(bool(sku_info["flavor"])),
+            "sku_carbonation_present": int(bool(sku_info.get("carbonation"))),
+            "sku_sweetener_present": int(bool(sku_info.get("sweetener"))),
+            "sku_pulp_present": int(bool(sku_info.get("pulp"))),
+        }
+
+    def candidate_fields(self) -> dict[str, object]:
+        """The candidate_/brand_conflict block (verbatim literal order)."""
+        candidate_record = self._candidate_record
+        candidate_info = self._candidate_info
+        return {
+            "candidate_text": metadata_text(candidate_record.get("canonical")),
+            "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
+            "brand_conflict": self._brand_conflict,
+            "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
+            "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
+            "candidate_package_type": json.dumps(sorted(candidate_info["package_type"])),
+            "candidate_flavor": str(candidate_info["flavor"]),
+            "candidate_carbonation": json.dumps(sorted(candidate_info.get("carbonation") or set())),
+            "candidate_sweetener": json.dumps(sorted(candidate_info.get("sweetener") or set())),
+            "candidate_pulp": json.dumps(sorted(candidate_info.get("pulp") or set())),
+            "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
+            "candidate_volume_present": int(bool(candidate_info["volume"])),
+            "candidate_pack_present": int(bool(candidate_info["pack"])),
+            "candidate_package_type_present": int(bool(candidate_info["package_type"])),
+            "candidate_flavor_present": int(bool(candidate_info["flavor"])),
+            "candidate_carbonation_present": int(bool(candidate_info.get("carbonation"))),
+            "candidate_sweetener_present": int(bool(candidate_info.get("sweetener"))),
+            "candidate_pulp_present": int(bool(candidate_info.get("pulp"))),
+        }
+
+    def record(self) -> dict[str, object]:
+        """The full gate record: blocks re-joined in the pinned key order."""
+        self.identity()
+        self.conflict_rules()
+        self.penalties()
+        self.missing_evidence()
+        self.brand_veto()
+        self.reason()
+        rules = self._rules
+        return {
+            "SKU_ID": self._sku_id,
+            "sku_gtin": self._sku_gtin,
+            "sku_gtin_present": _field_present(self._row, "gtin", "gtin"),
+            "sku_gtin_valid": int(bool(trusted_gtin(self._sku_gtin))),
+            "candidate_gtin": self._candidate_gtin,
+            "candidate_rank": self._candidate_rank,
+            "retrieval_source": self._retrieval_source,
+            "raw_score": float(self._score),
+            "confidence_penalty": self._confidence_penalty,
+            "confidence_penalty_reason": self._confidence_penalty_reason,
+            "jointly_missing_attributes": ",".join(self._jointly_missing),
+            "jointly_missing_attribute_count": len(self._jointly_missing),
+            "flavor_jaccard": self._flavor_jaccard,
+            "flavor_overlap": self._flavor_overlap,
+            "flavor_penalty": self._flavor_penalty,
+            "flavor_penalty_reason": self._flavor_penalty_reason,
+            "score": self._adjusted_score,
+            "exact_gtin": self._exact,
+            "gtin_status": self._status,
+            "gate_reason": self._gate_reason,
+            **self.sku_fields(),
+            "source_row_index": self._source_row_index,
+            **self.candidate_fields(),
+            "rule_ok": int(rules["attribute_conflict_type"] == "none"),
+            "attribute_conflict_type": str(rules["attribute_conflict_type"]),
+            "attribute_matches": int(
+                sum(
+                    not rules[key]
+                    for key in (
+                        "volume_conflict",
+                        "pack_conflict",
+                        "package_type_conflict",
+                        "flavor_conflict",
+                        "carbonation_conflict",
+                        "sweetener_conflict",
+                        "pulp_conflict",
+                    )
+                )
+            ),
+            **self._targeted_gate,
+        }
 
 
 class RandMatcher:
-    """Encode canonical items and score SKU candidates against them."""
+    """Encode canonical items and score SKU candidates against them.
+
+    The constructor is a phase-ordered owner pass (SR per phase, statements
+    verbatim, so encoder/index calls and every print keep their original
+    order): canonical map -> record map -> model + structured weights +
+    fingerprint -> per-item model inputs -> ANN index open -> restore or
+    rebuild embeddings -> final census line.
+    """
 
     def __init__(
         self,
@@ -1090,6 +1387,21 @@ class RandMatcher:
         self.top_k = top_k
         self.config = load_config()
         self.structured_config = self.config["training"]["structured_features"]
+        self._load_canonical_map()
+        self._load_records()
+        self._load_model()
+        self._prepare_item_inputs()
+        self._open_ann_index(ann_index_dir)
+        rebuild = False
+        if not rebuild_ann_index:
+            rebuild = self._restore_embeddings()
+        if rebuild or rebuild_ann_index:
+            self._build_embeddings()
+
+        print(f"loaded {len(self.item_ids):,} canonical items from {self.checkpoint}")
+
+    def _load_canonical_map(self) -> None:
+        """Canonical ids and the id -> index map (empty-map guard verbatim)."""
         self.canonical = load_canonical_map()
         self.item_ids = [str(value) for value in self.canonical]
         if not self.item_ids:
@@ -1098,6 +1410,8 @@ class RandMatcher:
             item_id: index for index, item_id in enumerate(self.item_ids)
         }
 
+    def _load_records(self) -> None:
+        """Canonical metadata rows keyed by GTIN with the missing-row guard."""
         records = canonical_records_frame()
         if records["gtin"].duplicated().any():
             raise RuntimeError("canonical_records.csv contains duplicate GTIN rows")
@@ -1112,8 +1426,11 @@ class RandMatcher:
                 + (" ..." if len(missing_records) > 10 else "")
             )
 
+    def _load_model(self) -> None:
+        """Encoder, structured weights and the preprocessing fingerprint."""
         self.model = load_local_sentence_transformer(
-            str(checkpoint), device="cuda" if torch.cuda.is_available() else "cpu"
+            str(self.checkpoint),
+            device="cuda" if torch.cuda.is_available() else "cpu",
         )
         self.structured_enabled = bool(self.structured_config["enabled"])
         self.structured_weight = (
@@ -1129,6 +1446,8 @@ class RandMatcher:
             ).encode("utf-8")
         ).hexdigest()
 
+    def _prepare_item_inputs(self) -> None:
+        """Per-item gate infos, composed texts and structured features."""
         item_infos = [
             model_input_info(canonical_structured_info(self.record_map[item_id]))
             if self.structured_enabled
@@ -1139,10 +1458,14 @@ class RandMatcher:
             build_canonical_text(self.record_map[item_id], info)
             for item_id, info in zip(self.item_ids, item_infos, strict=True)
         ]
-        item_features = np.asarray(
+        self._item_features = np.asarray(
             [self._structured_vector(info) for info in item_infos],
             dtype=np.float32,
         )
+        self._item_texts = item_texts
+
+    def _open_ann_index(self, ann_index_dir: Path | None) -> None:
+        """The persistent HNSW index handle (path/config resolution verbatim)."""
         ann_settings = load_ann_config()
         ann_cfg = ann_settings.index
         configured_output = Path(ann_cfg.output_dir)
@@ -1155,50 +1478,53 @@ class RandMatcher:
             ef_search=ann_cfg.ef_search,
             space=ann_cfg.space,
         )
-        model_name = ann_settings.embedding.model
-        if not rebuild_ann_index:
-            try:
-                self.ann_index.load(
-                    ids=self.item_ids,
-                    checkpoint=self.checkpoint,
-                    model_name=model_name,
-                    preprocessing_fingerprint=self.preprocessing_fingerprint,
-                )
-                self.item_embeddings = self.ann_index.embeddings
-                if self.item_embeddings is None:
-                    raise ValueError("persisted HNSW index loaded without embeddings")
-                print(f"loaded persisted HNSW index from {self.ann_index.output_dir}")
-            except (FileNotFoundError, ValueError) as exc:
-                print(f"persisted HNSW index needs rebuild: {exc}")
-                rebuild_ann_index = True
-        if rebuild_ann_index:
-            item_embeddings = self.model.encode(
-                item_texts,
-                batch_size=self.batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                show_progress_bar=True,
-            )
-            self.item_embeddings = normalize_embeddings(
-                fuse_numpy(
-                    item_embeddings,
-                    item_features,
-                    self.structured_weight,
-                )
-            )
-            metadata = self.ann_index.build(
-                self.item_embeddings,
-                self.item_ids,
+        self._ann_model_name = ann_settings.embedding.model
+
+    def _restore_embeddings(self) -> bool:
+        """Load the persisted index; True asks the caller for a rebuild."""
+        try:
+            self.ann_index.load(
+                ids=self.item_ids,
                 checkpoint=self.checkpoint,
-                model_name=model_name,
+                model_name=self._ann_model_name,
                 preprocessing_fingerprint=self.preprocessing_fingerprint,
             )
-            print(
-                f"built HNSW index count={metadata['count']:,} "
-                f"dim={metadata['dim']} at {self.ann_index.output_dir}"
-            )
+            self.item_embeddings = self.ann_index.embeddings
+            if self.item_embeddings is None:
+                raise ValueError("persisted HNSW index loaded without embeddings")
+            print(f"loaded persisted HNSW index from {self.ann_index.output_dir}")
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"persisted HNSW index needs rebuild: {exc}")
+            return True
+        return False
 
-        print(f"loaded {len(self.item_ids):,} canonical items from {self.checkpoint}")
+    def _build_embeddings(self) -> None:
+        """Encode the catalog texts and build the HNSW artifact (verbatim)."""
+        item_embeddings = self.model.encode(
+            self._item_texts,
+            batch_size=self.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=True,
+        )
+        self.item_embeddings = normalize_embeddings(
+            fuse_numpy(
+                item_embeddings,
+                self._item_features,
+                self.structured_weight,
+            )
+        )
+        metadata = self.ann_index.build(
+            self.item_embeddings,
+            self.item_ids,
+            checkpoint=self.checkpoint,
+            model_name=self._ann_model_name,
+            preprocessing_fingerprint=self.preprocessing_fingerprint,
+        )
+        print(
+            f"built HNSW index count={metadata['count']:,} "
+            f"dim={metadata['dim']} at {self.ann_index.output_dir}"
+        )
 
     def _structured_vector(self, info: dict) -> np.ndarray:
         return structured_vector(
@@ -1363,7 +1689,12 @@ class RandMatcher:
         hit_labels, _ = self.ann_index.query(embeddings, top_k=top_k)
 
         rows: list[dict[str, object]] = []
-        for position, (_, row) in enumerate(frame.iterrows()):
+        for position, (_, row) in enumerate(
+            _LOG.progress(
+                frame.iterrows(), desc="score_candidates", unit="sku",
+                total=len(frame),
+            )
+        ):
             sku_gtin = self._gtin(row_metadata_text(row, *alias_names("gtin")))
             candidate_indexes = self._candidate_indexes(
                 hit_labels[position].tolist(), sku_gtin
@@ -1381,14 +1712,22 @@ class RandMatcher:
                     )
                 )
         candidates = pd.DataFrame(rows)
-        candidate_ids = set(candidates["SKU_ID"]) if not candidates.empty else set()
-        missing_ids = sorted(set(frame["SKU_ID"]) - candidate_ids)
-        if missing_ids:
-            raise RuntimeError(
-                "candidate retrieval dropped SKU_ID values: "
-                f"{missing_ids[:10]}" + (" ..." if len(missing_ids) > 10 else "")
-            )
+        _assert_all_skus_retrieved(frame, candidates)
         return candidates
+
+
+def _assert_all_skus_retrieved(
+    frame: pd.DataFrame,
+    candidates: pd.DataFrame,
+) -> None:
+    """The loud populating guard: every SKU must keep at least one candidate."""
+    candidate_ids = set(candidates["SKU_ID"]) if not candidates.empty else set()
+    missing_ids = sorted(set(frame["SKU_ID"]) - candidate_ids)
+    if missing_ids:
+        raise RuntimeError(
+            "candidate retrieval dropped SKU_ID values: "
+            f"{missing_ids[:10]}" + (" ..." if len(missing_ids) > 10 else "")
+        )
 
 
 def _annotate_candidates(
@@ -1397,119 +1736,271 @@ def _annotate_candidates(
     *,
     threshold_by_gtin_status: dict[str, float] | None = None,
 ) -> pd.DataFrame:
-    frame = candidates.copy()
-    if "brand_conflict" not in frame.columns:
-        raise ValueError("candidate trace is missing required brand_conflict")
-    # A different valid GTIN is an explicit threshold stratum, not a hard
-    # veto. It still has to pass score, brand, and attribute gates. Exact GTIN
-    # remains locked; missing-GTIN strata remain thresholded as before.
-    frame["gtin_compatible"] = True
-    if threshold_by_gtin_status is None:
-        effective_threshold = pd.Series(
-            float(threshold), index=frame.index, dtype=float
-        )
-    else:
-        effective_threshold = frame["gtin_status"].map(threshold_by_gtin_status)
-        if effective_threshold.isna().any():
-            missing_statuses = sorted(
-                frame.loc[effective_threshold.isna(), "gtin_status"].unique()
+    return _AssignmentSelector(
+        candidates,
+        threshold,
+        threshold_by_gtin_status=threshold_by_gtin_status,
+    ).annotate()
+
+
+class _AssignmentSelector:
+    """Annotation + direct selection over one candidate population.
+
+    SR phases, ONE fixed call order (annotate -> trace flag -> output);
+    every expression is the original assignment body verbatim, so the frames
+    written into the diagnostics/app-open CSVs are byte-identical.
+
+    Phase map:
+      strata          — effective threshold strata; a different valid GTIN is
+                        an explicit stratum, not a hard veto
+      accept          — score/brand/accepted decision columns (np.select-free)
+      gate_columns    — the six gate/reason columns, each its own SR method
+                        (gtin/attribute/brand/threshold/assignment/rejection)
+      gate_contract   — the GATE_COLUMNS insertion-order guard
+      select_best     — merge-stable best-per-SKU assignment
+      trace_flag      — the selected flag + assignment_gate audit rewrite
+      output_frame    — the all-SKU output incl. unmatched prefix fill
+    """
+
+    def __init__(
+        self,
+        candidates: pd.DataFrame,
+        threshold: float,
+        *,
+        threshold_by_gtin_status: dict[str, float] | None = None,
+    ) -> None:
+        self._candidates = candidates
+        self._threshold = threshold
+        self._threshold_by_gtin_status = threshold_by_gtin_status
+
+    def strata(self) -> None:
+        """Effective thresholds + decision support columns (verbatim)."""
+        frame = self._candidates.copy()
+        if "brand_conflict" not in frame.columns:
+            raise ValueError("candidate trace is missing required brand_conflict")
+        # A different valid GTIN is an explicit threshold stratum, not a hard
+        # veto. It still has to pass score, brand, and attribute gates. Exact GTIN
+        # remains locked; missing-GTIN strata remain thresholded as before.
+        frame["gtin_compatible"] = True
+        if self._threshold_by_gtin_status is None:
+            effective_threshold = pd.Series(
+                float(self._threshold), index=frame.index, dtype=float
             )
-            raise ValueError(
-                "threshold_by_gtin_status is missing GTIN status values: "
-                f"{missing_statuses}"
+        else:
+            effective_threshold = frame["gtin_status"].map(
+                self._threshold_by_gtin_status
             )
-        effective_threshold = effective_threshold.astype(float)
-    frame["effective_threshold"] = effective_threshold
-    frame["score_pass"] = frame["score"] >= frame["effective_threshold"]
-    frame["brand_compatible"] = frame["brand_conflict"].eq(0) | frame[
-        "exact_gtin"
-    ].astype(bool)
-    targeted_route = (
-        frame["targeted_gate_route"].astype(str)
-        if "targeted_gate_route" in frame.columns
-        else pd.Series("auto_merge", index=frame.index, dtype=str)
-    )
-    targeted_auto_merge = targeted_route.eq("auto_merge")
-    frame["accepted"] = frame["gtin_compatible"] & (
-        frame["exact_gtin"].astype(bool)
-        | (
-            targeted_auto_merge
-            & frame["rule_ok"].astype(bool)
-            & frame["brand_compatible"]
-            & frame["score_pass"]
+            if effective_threshold.isna().any():
+                missing_statuses = sorted(
+                    frame.loc[effective_threshold.isna(), "gtin_status"].unique()
+                )
+                raise ValueError(
+                    "threshold_by_gtin_status is missing GTIN status values: "
+                    f"{missing_statuses}"
+                )
+            effective_threshold = effective_threshold.astype(float)
+        frame["effective_threshold"] = effective_threshold
+        frame["score_pass"] = frame["score"] >= frame["effective_threshold"]
+        frame["brand_compatible"] = frame["brand_conflict"].eq(0) | frame[
+            "exact_gtin"
+        ].astype(bool)
+        targeted_route = (
+            frame["targeted_gate_route"].astype(str)
+            if "targeted_gate_route" in frame.columns
+            else pd.Series("auto_merge", index=frame.index, dtype=str)
         )
-    )
-    frame["gtin_gate"] = np.select(
-        [
-            frame["gtin_status"].eq("different"),
-            frame["exact_gtin"].astype(bool),
-        ],
-        ["threshold", "lock"],
-        default="allow_unknown",
-    )
-    frame["attribute_gate"] = np.select(
-        [
-            frame["exact_gtin"].astype(bool) & ~frame["rule_ok"].astype(bool),
-            frame["exact_gtin"].astype(bool),
-            frame["rule_ok"].astype(bool),
-        ],
-        [
-            "override_exact_gtin",
-            "exact_gtin_checked",
-            "allow_agree_or_unknown",
-        ],
-        default="veto_known_conflict",
-    )
-    frame["brand_gate"] = np.select(
-        [
-            frame["exact_gtin"].astype(bool),
-            frame["brand_conflict"].astype(bool),
-        ],
-        ["exact_gtin_lock", "veto"],
-        default="allow_equal_or_unknown",
-    )
-    frame["threshold_gate"] = np.select(
-        [
-            frame["exact_gtin"].astype(bool),
-            frame["score_pass"],
-        ],
-        ["bypass_exact_gtin", "pass"],
-        default="fail",
-    )
-    frame["assignment_gate"] = np.select(
-        [frame["accepted"], targeted_route.eq("human_review")],
-        ["accepted_candidate", "human_review_candidate"],
-        default="rejected_candidate",
-    )
-    frame["rejection_reason"] = np.select(
-        [
-            ~frame["gtin_compatible"],
-            frame["exact_gtin"].astype(bool),
-            targeted_route.eq("reject"),
-            targeted_route.eq("human_review"),
-            frame["brand_conflict"].astype(bool),
-            ~frame["rule_ok"].astype(bool),
-            ~frame["score_pass"],
-        ],
-        [
-            "gtin_conflict",
-            "exact_gtin_lock",
-            "targeted_attribute_veto",
-            "human_review_missing_pack_or_volume",
-            "brand_conflict",
-            "attribute_conflict",
-            "below_threshold",
-        ],
-        default="accepted_candidate",
-    )
-    expected_gate = tuple(GATE_COLUMNS)
-    actual_gate = [c for c in frame.columns if c in expected_gate]
-    if tuple(actual_gate) != expected_gate:
-        raise RuntimeError(
-            f"GATE_COLUMNS contract violated: expected={expected_gate}, "
-            f"actual={tuple(actual_gate)}"
+        self._targeted_route = targeted_route
+        self._frame = frame
+
+    def accept(self) -> None:
+        """The accepted decision column over the strata support."""
+        frame = self._frame
+        targeted_auto_merge = self._targeted_route.eq("auto_merge")
+        frame["accepted"] = frame["gtin_compatible"] & (
+            frame["exact_gtin"].astype(bool)
+            | (
+                targeted_auto_merge
+                & frame["rule_ok"].astype(bool)
+                & frame["brand_compatible"]
+                & frame["score_pass"]
+            )
         )
-    return frame
+
+    def gtin_gate(self) -> None:
+        self._frame["gtin_gate"] = np.select(
+            [
+                self._frame["gtin_status"].eq("different"),
+                self._frame["exact_gtin"].astype(bool),
+            ],
+            ["threshold", "lock"],
+            default="allow_unknown",
+        )
+
+    def attribute_gate(self) -> None:
+        self._frame["attribute_gate"] = np.select(
+            [
+                self._frame["exact_gtin"].astype(bool)
+                & ~self._frame["rule_ok"].astype(bool),
+                self._frame["exact_gtin"].astype(bool),
+                self._frame["rule_ok"].astype(bool),
+            ],
+            [
+                "override_exact_gtin",
+                "exact_gtin_checked",
+                "allow_agree_or_unknown",
+            ],
+            default="veto_known_conflict",
+        )
+
+    def brand_gate(self) -> None:
+        self._frame["brand_gate"] = np.select(
+            [
+                self._frame["exact_gtin"].astype(bool),
+                self._frame["brand_conflict"].astype(bool),
+            ],
+            ["exact_gtin_lock", "veto"],
+            default="allow_equal_or_unknown",
+        )
+
+    def threshold_gate(self) -> None:
+        self._frame["threshold_gate"] = np.select(
+            [
+                self._frame["exact_gtin"].astype(bool),
+                self._frame["score_pass"],
+            ],
+            ["bypass_exact_gtin", "pass"],
+            default="fail",
+        )
+
+    def assignment_gate(self) -> None:
+        self._frame["assignment_gate"] = np.select(
+            [self._frame["accepted"], self._targeted_route.eq("human_review")],
+            ["accepted_candidate", "human_review_candidate"],
+            default="rejected_candidate",
+        )
+
+    def rejection_reason(self) -> None:
+        self._frame["rejection_reason"] = np.select(
+            [
+                ~self._frame["gtin_compatible"],
+                self._frame["exact_gtin"].astype(bool),
+                self._targeted_route.eq("reject"),
+                self._targeted_route.eq("human_review"),
+                self._frame["brand_conflict"].astype(bool),
+                ~self._frame["rule_ok"].astype(bool),
+                ~self._frame["score_pass"],
+            ],
+            [
+                "gtin_conflict",
+                "exact_gtin_lock",
+                "targeted_attribute_veto",
+                "human_review_missing_pack_or_volume",
+                "brand_conflict",
+                "attribute_conflict",
+                "below_threshold",
+            ],
+            default="accepted_candidate",
+        )
+
+    def gate_contract(self) -> None:
+        """The GATE_COLUMNS insertion-order guard (raise unchanged)."""
+        expected_gate = tuple(GATE_COLUMNS)
+        actual_gate = [c for c in self._frame.columns if c in expected_gate]
+        if tuple(actual_gate) != expected_gate:
+            raise RuntimeError(
+                f"GATE_COLUMNS contract violated: expected={expected_gate}, "
+                f"actual={tuple(actual_gate)}"
+            )
+
+    def annotate(self) -> pd.DataFrame:
+        """One fixed pass: strata -> accept -> six gates -> contract."""
+        self.strata()
+        self.accept()
+        for gate_column in (
+            self.gtin_gate,
+            self.attribute_gate,
+            self.brand_gate,
+            self.threshold_gate,
+            self.assignment_gate,
+            self.rejection_reason,
+        ):
+            gate_column()
+        self.gate_contract()
+        return self._frame
+
+    def select_best(self) -> pd.DataFrame:
+        """Merge-stable best-per-SKU selected candidate (verbatim)."""
+        accepted = self._frame[self._frame["accepted"]].sort_values(
+            list(ASSIGNMENT_SORT_COLUMNS),
+            ascending=list(ASSIGNMENT_SORT_ASCENDING),
+            kind="mergesort",
+        )
+        selected = accepted.drop_duplicates("SKU_ID", keep="first").copy()
+        self._selected = selected
+        return selected
+
+    def trace_flag(self) -> pd.DataFrame:
+        """The selected-flag trace with the assignment_gate audit rewrite."""
+        frame = self._frame
+        selected_keys = self._selected[["SKU_ID", "candidate_gtin"]].assign(
+            selected=1
+        )
+        trace = frame.copy()
+        trace_keys = pd.MultiIndex.from_frame(trace[["SKU_ID", "candidate_gtin"]])
+        selected_key_index = pd.MultiIndex.from_frame(
+            selected_keys[["SKU_ID", "candidate_gtin"]]
+        )
+        missing_selected = selected_key_index.difference(trace_keys)
+        if len(missing_selected):
+            raise RuntimeError(
+                "selected assignment key is absent from candidate trace: "
+                f"{list(missing_selected)}"
+            )
+        trace["selected"] = trace_keys.isin(selected_key_index).astype("int8")
+        trace["assignment_gate"] = np.where(
+            trace["selected"].astype(bool),
+            "selected_best_candidate",
+            trace["assignment_gate"],
+        )
+        return trace
+
+    def output_frame(self, trace: pd.DataFrame) -> pd.DataFrame:
+        """One output row per SKU, unmatched ids filled with the prefix."""
+        selected = self._selected
+        best = selected[["SKU_ID", "candidate_gtin", "score", "gtin_status"]].rename(
+            columns={"candidate_gtin": "ITEM_ID"}
+        )
+        best = best.loc[:, list(ASSIGNMENT_COLUMNS)]
+        all_skus = self._candidates[["SKU_ID"]].drop_duplicates()
+        output = all_skus.merge(best, on="SKU_ID", how="left")
+        prefix = _unmatched_prefix()
+        output["ITEM_ID"] = output["ITEM_ID"].fillna(
+            prefix + output["SKU_ID"].astype(str)
+        )
+        return output
+
+    def run(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """One fixed pass: empty pool -> annotate -> best -> trace -> output."""
+        if self._candidates.empty:
+            return (
+                pd.DataFrame(columns=ASSIGNMENT_COLUMNS),
+                self._candidates.copy(),
+            )
+        self.strata()
+        self.accept()
+        for gate_column in (
+            self.gtin_gate,
+            self.attribute_gate,
+            self.brand_gate,
+            self.threshold_gate,
+            self.assignment_gate,
+            self.rejection_reason,
+        ):
+            gate_column()
+        self.gate_contract()
+        self.select_best()
+        trace = self.trace_flag()
+        return self.output_frame(trace), trace
 
 
 def _assignments_with_trace(
@@ -1518,49 +2009,17 @@ def _assignments_with_trace(
     *,
     threshold_by_gtin_status: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if candidates.empty:
-        return (
-            pd.DataFrame(columns=ASSIGNMENT_COLUMNS),
-            candidates.copy(),
-        )
-    frame = _annotate_candidates(
+    """Assign one canonical ID per SKU (phase-ordered pass on the selector).
+
+    This intentionally does not build connected components or perform
+    transitive similarity chaining.
+    """
+    return _AssignmentSelector(
         candidates,
         threshold,
         threshold_by_gtin_status=threshold_by_gtin_status,
-    )
-    accepted = frame[frame["accepted"]].sort_values(
-        list(ASSIGNMENT_SORT_COLUMNS),
-        ascending=list(ASSIGNMENT_SORT_ASCENDING),
-        kind="mergesort",
-    )
-    selected = accepted.drop_duplicates("SKU_ID", keep="first").copy()
-    selected_keys = selected[["SKU_ID", "candidate_gtin"]].assign(selected=1)
-    trace = frame.copy()
-    trace_keys = pd.MultiIndex.from_frame(trace[["SKU_ID", "candidate_gtin"]])
-    selected_key_index = pd.MultiIndex.from_frame(
-        selected_keys[["SKU_ID", "candidate_gtin"]]
-    )
-    missing_selected = selected_key_index.difference(trace_keys)
-    if len(missing_selected):
-        raise RuntimeError(
-            "selected assignment key is absent from candidate trace: "
-            f"{list(missing_selected)}"
-        )
-    trace["selected"] = trace_keys.isin(selected_key_index).astype("int8")
-    trace["assignment_gate"] = np.where(
-        trace["selected"].astype(bool),
-        "selected_best_candidate",
-        trace["assignment_gate"],
-    )
-    best = selected[["SKU_ID", "candidate_gtin", "score", "gtin_status"]].rename(
-        columns={"candidate_gtin": "ITEM_ID"}
-    )
-    best = best.loc[:, list(ASSIGNMENT_COLUMNS)]
-    all_skus = candidates[["SKU_ID"]].drop_duplicates()
-    output = all_skus.merge(best, on="SKU_ID", how="left")
-    prefix = _unmatched_prefix()
-    output["ITEM_ID"] = output["ITEM_ID"].fillna(prefix + output["SKU_ID"].astype(str))
-    return output, trace
+    ).run()
+
 
 
 def _merge_audit_context(
@@ -1594,13 +2053,13 @@ def _merge_audit_context(
     return diagnostics
 
 
-def _truth_audit_context(
+def _audit_truth_lookup(
     candidates: pd.DataFrame,
     trace: pd.DataFrame,
     predictions: pd.DataFrame,
     truth: pd.DataFrame,
-) -> pd.DataFrame:
-    """Build one labeled audit summary per SKU for trace enrichment."""
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Retrieval/acceptance flags keyed per SKU (verbatim, with guards)."""
     truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
     if truth_frame["SKU_ID"].duplicated().any():
         raise RuntimeError("audit truth contains duplicate SKU_ID values")
@@ -1641,7 +2100,19 @@ def _truth_audit_context(
         .groupby("SKU_ID")["is_true_accepted"]
         .any()
     )
+    return true_item_by_sku, retrieved_by_sku, accepted_by_sku
 
+
+def _truth_audit_context(
+    candidates: pd.DataFrame,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build one labeled audit summary per SKU for trace enrichment."""
+    true_item_by_sku, retrieved_by_sku, accepted_by_sku = _audit_truth_lookup(
+        candidates, trace, predictions, truth
+    )
     summary = predictions[["SKU_ID", "ITEM_ID"]].copy()
     summary["true_item_id"] = summary["SKU_ID"].map(true_item_by_sku)
     summary["true_candidate_retrieved"] = (
@@ -1774,68 +2245,132 @@ def pair_disagreements(
     remaining error to ranking/assignment. These evidence fields intentionally
     describe the decision that created the predicted grouping, not a
     separately computed SKU-to-SKU similarity that this lane never used.
+
+    One phase-ordered pass on :class:`_PairDisagreementBuilder`: rows are the
+    original nested-call body verbatim (population merge, selected-evidence
+    join, true-candidate evidence map, error census, pair row build), so the
+    exported pair CSV is byte-identical.
     """
-    truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
-    pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
-    for frame in (truth_frame, pred_frame):
-        frame["SKU_ID"] = frame["SKU_ID"].astype(str)
-    if (
-        truth_frame["SKU_ID"].duplicated().any()
-        or pred_frame["SKU_ID"].duplicated().any()
-    ):
-        raise ValueError("pair disagreement inputs must contain one row per SKU_ID")
-    merged = truth_frame.merge(
-        pred_frame, on="SKU_ID", how="inner", validate="one_to_one"
-    )
-    if len(merged) != len(truth_frame) or len(merged) != len(pred_frame):
-        raise ValueError("pair disagreement population mismatch")
-    merged["true_item_id"] = merged["true_item_id"].astype(str)
-    merged["ITEM_ID"] = merged["ITEM_ID"].astype(str)
+    return _PairDisagreementBuilder(pred, truth, trace).build()
 
-    # At most one selected trace record exists per assigned SKU. An unmatched
-    # SKU has no selected candidate and therefore deliberately gets missing
-    # score/gate evidence rather than invented evidence.
-    selected = trace.loc[trace["selected"].astype(bool)].copy()
-    if selected.duplicated("SKU_ID").any():
-        raise RuntimeError("candidate trace has multiple selected rows for a SKU")
-    evidence = selected[["SKU_ID", "score", "attribute_gate"]].copy()
-    evidence["SKU_ID"] = evidence["SKU_ID"].astype(str)
-    evidence = evidence.rename(
-        columns={"score": "selected_score", "attribute_gate": "selected_attribute_gate"}
-    )
-    merged = merged.merge(evidence, on="SKU_ID", how="left", validate="one_to_one")
-    trace_candidates = trace[["SKU_ID", "candidate_gtin"]].copy()
-    trace_candidates["SKU_ID"] = trace_candidates["SKU_ID"].astype(str)
-    trace_candidates["candidate_gtin"] = trace_candidates["candidate_gtin"].astype(str)
-    for column, default in (
-        ("retrieval_source", "unknown"),
-        ("score_pass", False),
-        ("accepted", False),
-    ):
-        trace_candidates[column] = trace[column] if column in trace else default
-    trace_candidates["retrieval_source"] = trace_candidates["retrieval_source"].astype(
-        str
-    )
-    true_candidate_rows = trace_candidates.merge(
-        truth_frame,
-        on="SKU_ID",
-        how="inner",
-        validate="many_to_one",
-    )
-    true_candidate_rows = true_candidate_rows.loc[
-        true_candidate_rows["candidate_gtin"].eq(true_candidate_rows["true_item_id"])
-    ]
-    true_candidate_evidence = {
-        str(sku): {
-            "source": "+".join(sorted(set(rows["retrieval_source"].astype(str)))),
-            "score_pass": bool(rows["score_pass"].astype(bool).any()),
-            "accepted": bool(rows["accepted"].astype(bool).any()),
+
+class _PairDisagreementBuilder:
+    """The one-row-per-disagreeing-SKU-pair audit export.
+
+    SR phases, ONE fixed pass in build(); statements are the original
+    ``pair_disagreements`` body verbatim (merged population, selected-trace
+    evidence, per-SKU true-candidate evidence, pairwise error census, pair
+    row build), so pair-ordering and every row byte stay identical.
+
+    Phase map:
+      population              — merge truth x predictions with both guards
+      selected_evidence       — selected-candidate score/gate join per SKU
+      true_candidate_evidence — retrieval/score/accept evidence per true
+                                candidate, plus the per-SKU endpoint lookup
+      error_count             — pairwise error census over one grouping
+      pair_row                — one disagreement row over an endpoint pair
+      false_merge_rows        — predicted-equal / true-different pairs
+      false_split_rows        — true-equal / predicted-different pairs
+    """
+
+    def __init__(
+        self,
+        pred: pd.DataFrame,
+        truth: pd.DataFrame,
+        trace: pd.DataFrame,
+    ) -> None:
+        self._pred = pred
+        self._truth = truth
+        self._trace = trace
+
+    def population(self) -> None:
+        """One-row-per-SKU merge of truth and predictions (verbatim)."""
+        truth_frame = self._truth[["SKU_ID", "true_item_id"]].copy()
+        pred_frame = self._pred[["SKU_ID", "ITEM_ID"]].copy()
+        for frame in (truth_frame, pred_frame):
+            frame["SKU_ID"] = frame["SKU_ID"].astype(str)
+        if (
+            truth_frame["SKU_ID"].duplicated().any()
+            or pred_frame["SKU_ID"].duplicated().any()
+        ):
+            raise ValueError(
+                "pair disagreement inputs must contain one row per SKU_ID"
+            )
+        merged = truth_frame.merge(
+            pred_frame, on="SKU_ID", how="inner", validate="one_to_one"
+        )
+        if len(merged) != len(truth_frame) or len(merged) != len(pred_frame):
+            raise ValueError("pair disagreement population mismatch")
+        merged["true_item_id"] = merged["true_item_id"].astype(str)
+        merged["ITEM_ID"] = merged["ITEM_ID"].astype(str)
+        self._truth_frame = truth_frame
+        self._merged = merged
+
+    def selected_evidence(self) -> None:
+        """Selected score/attribute-gate evidence per assigned SKU."""
+        # At most one selected trace record exists per assigned SKU. An unmatched
+        # SKU has no selected candidate and therefore deliberately gets missing
+        # score/gate evidence rather than invented evidence.
+        selected = self._trace.loc[self._trace["selected"].astype(bool)].copy()
+        if selected.duplicated("SKU_ID").any():
+            raise RuntimeError(
+                "candidate trace has multiple selected rows for a SKU"
+            )
+        evidence = selected[["SKU_ID", "score", "attribute_gate"]].copy()
+        evidence["SKU_ID"] = evidence["SKU_ID"].astype(str)
+        evidence = evidence.rename(
+            columns={
+                "score": "selected_score",
+                "attribute_gate": "selected_attribute_gate",
+            }
+        )
+        self._merged = self._merged.merge(
+            evidence, on="SKU_ID", how="left", validate="one_to_one"
+        )
+
+    def true_candidate_evidence(self) -> None:
+        """Retrieval/score/accept evidence keyed by SKU (verbatim)."""
+        trace_candidates = self._trace[["SKU_ID", "candidate_gtin"]].copy()
+        trace_candidates["SKU_ID"] = trace_candidates["SKU_ID"].astype(str)
+        trace_candidates["candidate_gtin"] = trace_candidates[
+            "candidate_gtin"
+        ].astype(str)
+        for column, default in (
+            ("retrieval_source", "unknown"),
+            ("score_pass", False),
+            ("accepted", False),
+        ):
+            trace_candidates[column] = (
+                self._trace[column] if column in self._trace else default
+            )
+        trace_candidates["retrieval_source"] = trace_candidates[
+            "retrieval_source"
+        ].astype(
+            str
+        )
+        true_candidate_rows = trace_candidates.merge(
+            self._truth_frame,
+            on="SKU_ID",
+            how="inner",
+            validate="many_to_one",
+        )
+        true_candidate_rows = true_candidate_rows.loc[
+            true_candidate_rows["candidate_gtin"].eq(
+                true_candidate_rows["true_item_id"]
+            )
+        ]
+        self._true_candidate_evidence = {
+            str(sku): {
+                "source": "+".join(sorted(set(rows["retrieval_source"].astype(str)))),
+                "score_pass": bool(rows["score_pass"].astype(bool).any()),
+                "accepted": bool(rows["accepted"].astype(bool).any()),
+            }
+            for sku, rows in true_candidate_rows.groupby("SKU_ID", sort=False)
         }
-        for sku, rows in true_candidate_rows.groupby("SKU_ID", sort=False)
-    }
-    by_sku = merged.set_index("SKU_ID").to_dict("index")
+        self._by_sku = self._merged.set_index("SKU_ID").to_dict("index")
 
-    def error_count(frame: pd.DataFrame, other_column: str) -> int:
+    def error_count(self, frame: pd.DataFrame, other_column: str) -> int:
+        """Pairwise errors one grouping causes inside the population."""
         return int(
             _combination_count(len(frame))
             - sum(
@@ -1844,11 +2379,16 @@ def pair_disagreements(
         )
 
     def pair_row(
+        self,
         sku_a: str,
         sku_b: str,
         disagreement_type: str,
         caused: int,
     ) -> dict[str, object]:
+        """One disagreement row over an unordered SKU endpoint pair."""
+        by_sku = self._by_sku
+        true_candidate_evidence = self._true_candidate_evidence
+        merged = self._merged
         left, right = by_sku[sku_a], by_sku[sku_b]
         scores = [left["selected_score"], right["selected_score"]]
         finite_scores = [float(score) for score in scores if pd.notna(score)]
@@ -1904,53 +2444,59 @@ def pair_disagreements(
             "number_of_pairwise_errors_caused": caused,
         }
 
-    rows: list[dict[str, object]] = []
-    # False merge: same predicted assignment, different true canonical item.
-    for _, predicted_group in merged.groupby("ITEM_ID", sort=False):
-        caused = error_count(predicted_group, "true_item_id")
-        if not caused:
-            continue
-        true_groups = [
-            sorted(group["SKU_ID"].tolist())
-            for _, group in predicted_group.groupby("true_item_id", sort=False)
-        ]
-        for left_group, right_group in combinations(true_groups, 2):
-            for sku_a, sku_b in product(left_group, right_group):
-                rows.append(pair_row(sku_a, sku_b, "false_merge", caused))
+    def false_merge_rows(self, rows: list[dict[str, object]]) -> None:
+        """False merge: same predicted assignment, different true item."""
+        merged = self._merged
+        for _, predicted_group in merged.groupby("ITEM_ID", sort=False):
+            caused = self.error_count(predicted_group, "true_item_id")
+            if not caused:
+                continue
+            true_groups = [
+                sorted(group["SKU_ID"].tolist())
+                for _, group in predicted_group.groupby("true_item_id", sort=False)
+            ]
+            for left_group, right_group in combinations(true_groups, 2):
+                for sku_a, sku_b in product(left_group, right_group):
+                    rows.append(self.pair_row(sku_a, sku_b, "false_merge", caused))
 
-    # False split: same true canonical item, different predicted assignment.
-    for _, true_group in merged.groupby("true_item_id", sort=False):
-        caused = error_count(true_group, "ITEM_ID")
-        if not caused:
-            continue
-        predicted_groups = [
-            sorted(group["SKU_ID"].tolist())
-            for _, group in true_group.groupby("ITEM_ID", sort=False)
-        ]
-        for left_group, right_group in combinations(predicted_groups, 2):
-            for sku_a, sku_b in product(left_group, right_group):
-                rows.append(pair_row(sku_a, sku_b, "false_split", caused))
+    def false_split_rows(self, rows: list[dict[str, object]]) -> None:
+        """False split: same true canonical item, different assignment."""
+        merged = self._merged
+        for _, true_group in merged.groupby("true_item_id", sort=False):
+            caused = self.error_count(true_group, "ITEM_ID")
+            if not caused:
+                continue
+            predicted_groups = [
+                sorted(group["SKU_ID"].tolist())
+                for _, group in true_group.groupby("ITEM_ID", sort=False)
+            ]
+            for left_group, right_group in combinations(predicted_groups, 2):
+                for sku_a, sku_b in product(left_group, right_group):
+                    rows.append(self.pair_row(sku_a, sku_b, "false_split", caused))
 
-    return pd.DataFrame(rows, columns=PAIR_DISAGREEMENT_COLUMNS)
+    def build(self) -> pd.DataFrame:
+        """One fixed pass: population -> evidence -> census rows -> frame."""
+        self.population()
+        self.selected_evidence()
+        self.true_candidate_evidence()
+        rows: list[dict[str, object]] = []
+        self.false_merge_rows(rows)
+        self.false_split_rows(rows)
+        return pd.DataFrame(rows, columns=PAIR_DISAGREEMENT_COLUMNS)
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator / denominator) if denominator else 0.0
 
 
-def prediction_metrics(
+def _metric_population(
     pred: pd.DataFrame,
     truth: pd.DataFrame,
-    *,
-    candidates: pd.DataFrame,
-    threshold: float,
-    include_graph_diagnostics: bool = True,
-) -> dict[str, float | int | str]:
-    """Return clustering metrics for one assignment population.
+) -> pd.DataFrame:
+    """The guarded one-row-per-SKU metric population (verbatim merge).
 
-    ``group_precision`` and ``group_recall`` are B-cubed, item-weighted
-    measures.  The pairwise measures operate on all unordered SKU pairs;
-    they are the direct group-equivalence interpretation of Rand Index.
+    Both population guards raise here, so the metrics dict below can never
+    be computed on a population the contract did not sanction.
     """
     truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
@@ -1979,14 +2525,11 @@ def prediction_metrics(
     )
     if merged.empty:
         raise ValueError("no calibration rows matched predictions")
+    return merged
 
-    counts = _pairwise_counts(merged["true_item_id"], merged["ITEM_ID"])
-    tp, tn, fp, fn = (
-        counts["tp"],
-        counts["tn"],
-        counts["fp"],
-        counts["fn"],
-    )
+
+def _group_rates(merged: pd.DataFrame) -> tuple[list[float], list[float]]:
+    """B-cubed, item-weighted per-SKU precision and recall rates (verbatim)."""
     intersections = merged.groupby(["true_item_id", "ITEM_ID"], sort=False).size()
     predicted_sizes = merged.groupby("ITEM_ID").size()
     true_sizes = merged.groupby("true_item_id").size()
@@ -1999,6 +2542,32 @@ def prediction_metrics(
         group_recall.extend(
             [float(intersection / true_sizes[true_id])] * int(intersection)
         )
+    return group_precision, group_recall
+
+
+def prediction_metrics(
+    pred: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    candidates: pd.DataFrame,
+    threshold: float,
+    include_graph_diagnostics: bool = True,
+) -> dict[str, float | int | str]:
+    """Return clustering metrics for one assignment population.
+
+    ``group_precision`` and ``group_recall`` are B-cubed, item-weighted
+    measures.  The pairwise measures operate on all unordered SKU pairs;
+    they are the direct group-equivalence interpretation of Rand Index.
+    """
+    merged = _metric_population(pred, truth)
+    counts = _pairwise_counts(merged["true_item_id"], merged["ITEM_ID"])
+    tp, tn, fp, fn = (
+        counts["tp"],
+        counts["tn"],
+        counts["fp"],
+        counts["fn"],
+    )
+    group_precision, group_recall = _group_rates(merged)
 
     graph = (
         candidate_graph_diagnostics(candidates, threshold)
@@ -2041,6 +2610,35 @@ def prediction_metrics(
     return metrics
 
 
+def _empty_gtin_metric_row(
+    fold: object,
+    threshold: float,
+    status: str,
+) -> dict[str, float | int | str]:
+    """The zeroed sensitivity row for an empty GTIN stratum (verbatim)."""
+    row = {key: np.nan for key in METRIC_COLUMNS}
+    row.update(
+        {
+            "check_fold": fold,
+            "threshold": float(threshold),
+            "gtin_status": status,
+            "selection_method": "sensitivity",
+            "n": 0,
+            "predicted_group_count": 0,
+            "true_group_count": 0,
+            "expected_group_count": 0,
+            "unmatched_skus": 0,
+            **empty_candidate_graph_diagnostics(),
+            "tp": 0,
+            "tn": 0,
+            "fp": 0,
+            "fn": 0,
+            "pair_count": 0,
+        }
+    )
+    return row
+
+
 def gtin_metrics(
     pred: pd.DataFrame,
     truth: pd.DataFrame,
@@ -2050,6 +2648,7 @@ def gtin_metrics(
     *,
     include_graph_diagnostics: bool = True,
 ) -> list[dict[str, float | int | str]]:
+    """One prediction_metrics row per GTIN stratum plus the ALL row."""
     truth_frame = truth[["SKU_ID", "true_item_id", "gtin_status"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
     truth_frame["SKU_ID"] = truth_frame["SKU_ID"].astype(str)
@@ -2069,27 +2668,7 @@ def gtin_metrics(
     rows = []
     for status, group in groups:
         if group.empty:
-            row = {key: np.nan for key in METRIC_COLUMNS}
-            row.update(
-                {
-                    "check_fold": fold,
-                    "threshold": float(threshold),
-                    "gtin_status": status,
-                    "selection_method": "sensitivity",
-                    "n": 0,
-                    "predicted_group_count": 0,
-                    "true_group_count": 0,
-                    "expected_group_count": 0,
-                    "unmatched_skus": 0,
-                    **empty_candidate_graph_diagnostics(),
-                    "tp": 0,
-                    "tn": 0,
-                    "fp": 0,
-                    "fn": 0,
-                    "pair_count": 0,
-                }
-            )
-            rows.append(row)
+            rows.append(_empty_gtin_metric_row(fold, threshold, status))
             continue
         rows.append(
             {
@@ -2408,6 +2987,56 @@ def _alternative_thresholds(
     }
 
 
+def _sensitivity_sweep_thresholds(
+    thresholds: np.ndarray,
+    alternatives: dict[str, dict[str, float | str]],
+) -> np.ndarray:
+    """Grid plus every reachable alternative threshold, unioned uniquely."""
+    return np.unique(
+        np.concatenate(
+            [
+                np.asarray(thresholds, dtype=float),
+                np.array(
+                    [
+                        float(info["threshold"])
+                        for info in alternatives.values()
+                        if not np.isnan(float(info["threshold"]))
+                    ],
+                    dtype=float,
+                ),
+            ]
+        )
+    )
+
+
+def _empty_sensitivity_row(
+    fold: object,
+    method: str,
+    reason: str,
+) -> dict[str, float | int | str]:
+    """The zeroed row for an unreachable alternative threshold (verbatim)."""
+    row = {key: np.nan for key in METRIC_COLUMNS}
+    row.update(
+        {
+            "check_fold": fold,
+            "threshold": float("nan"),
+            "gtin_status": "ALL",
+            "selection_method": method,
+            "sensitivity_reason": reason,
+            "n": 0,
+            "predicted_group_count": 0,
+            "true_group_count": 0,
+            "unmatched_skus": 0,
+            "tp": 0,
+            "tn": 0,
+            "fp": 0,
+            "fn": 0,
+            "pair_count": 0,
+        }
+    )
+    return row
+
+
 def _fold_sensitivity(
     check_candidates: pd.DataFrame,
     check_truth: pd.DataFrame,
@@ -2417,47 +3046,14 @@ def _fold_sensitivity(
 ) -> list[dict[str, float | int | str]]:
     sweep = _sweep_assignments(
         check_candidates,
-        np.unique(
-            np.concatenate(
-                [
-                    np.asarray(thresholds, dtype=float),
-                    np.array(
-                        [
-                            float(info["threshold"])
-                            for info in alternatives.values()
-                            if not np.isnan(float(info["threshold"]))
-                        ],
-                        dtype=float,
-                    ),
-                ]
-            )
-        ),
+        _sensitivity_sweep_thresholds(thresholds, alternatives),
     )
     rows: list[dict[str, float | int | str]] = []
     for method, info in alternatives.items():
         threshold = float(info["threshold"])
         reason = str(info["reason"])
         if np.isnan(threshold):
-            row = {key: np.nan for key in METRIC_COLUMNS}
-            row.update(
-                {
-                    "check_fold": fold,
-                    "threshold": float("nan"),
-                    "gtin_status": "ALL",
-                    "selection_method": method,
-                    "sensitivity_reason": reason,
-                    "n": 0,
-                    "predicted_group_count": 0,
-                    "true_group_count": 0,
-                    "unmatched_skus": 0,
-                    "tp": 0,
-                    "tn": 0,
-                    "fp": 0,
-                    "fn": 0,
-                    "pair_count": 0,
-                }
-            )
-            rows.append(row)
+            rows.append(_empty_sensitivity_row(fold, method, reason))
             continue
         prediction = sweep[float(threshold)]
         row_data: dict[str, float | int | str] = {
@@ -2530,17 +3126,129 @@ def calibrate_threshold(
     plateau_tolerance: float,
     plateau_min_points: int,
 ) -> tuple[float, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, pd.DataFrame]:
-    calibration = _load_calibration_frame(matcher, calibration_input)
-    candidates = matcher.score_candidates(calibration)
-    truth = calibration[
-        ["SKU_ID", "true_item_id", "calibration_fold", "gtin_status"]
-    ].drop_duplicates("SKU_ID")
-    folds = sorted(calibration["calibration_fold"].unique())
-    selected = []
-    sensitivity: list[dict] = []
-    audit_traces: list[pd.DataFrame] = []
+    """Canonical-disjoint fold calibration (phase-ordered owner pass).
 
-    for fold in folds:
+    Statement-for-statement the original driver: per-fold selection rows,
+    sensitivity rows and audit traces keep their consumption order and fold
+    iteration order (``sorted(folds)`), so the median threshold and every
+    downstream CSV stay byte-identical.
+    """
+    return _ThresholdCalibrator(
+        matcher,
+        calibration_input,
+        thresholds,
+        target_recall=target_recall,
+        plateau_tolerance=plateau_tolerance,
+        plateau_min_points=plateau_min_points,
+    ).calibrate()
+
+
+class _ThresholdCalibrator:
+    """The fold-loop owner of Rand Index threshold calibration.
+
+    SR phases, ONE fixed pass in calibrate(): per-fold partition -> fit ->
+    assignments -> audit traces -> alternatives -> selection row ->
+    sensitivity, then the cross-fold reconciliation (median threshold,
+    plateau diagnostic, ALL-method comparison table, concatenated trace).
+
+    Determinism invariants: folds iterate in ``sorted`` order as before and
+    each phase's rng-free body is the original statements verbatim, so the
+    selected frames cannot reorder under the new seams.
+    """
+
+    def __init__(
+        self,
+        matcher: RandMatcher,
+        calibration_input: Path,
+        thresholds: np.ndarray,
+        *,
+        target_recall: float,
+        plateau_tolerance: float,
+        plateau_min_points: int,
+    ) -> None:
+        self._matcher = matcher
+        self._calibration_input = calibration_input
+        self._thresholds = thresholds
+        self._target_recall = target_recall
+        self._plateau_tolerance = plateau_tolerance
+        self._plateau_min_points = plateau_min_points
+
+    def prepare(self) -> None:
+        """Load the labeled frame and the canonical-disjoint truth table."""
+        calibration = _load_calibration_frame(
+            self._matcher, self._calibration_input
+        )
+        candidates = self._matcher.score_candidates(calibration)
+        truth = calibration[
+            ["SKU_ID", "true_item_id", "calibration_fold", "gtin_status"]
+        ].drop_duplicates("SKU_ID")
+        self._calibration = calibration
+        self._candidates = candidates
+        self._truth = truth
+
+    def calibrate(self) -> tuple[
+        float,
+        pd.DataFrame,
+        pd.DataFrame,
+        pd.DataFrame,
+        dict,
+        pd.DataFrame,
+    ]:
+        """One timed pass: prepare -> fold loop -> cross-fold assembly."""
+        with _LOG.section("rand_matching.calibrate"):
+            self.prepare()
+            calibration = self._calibration
+            candidates = self._candidates
+            truth = self._truth
+            folds = sorted(calibration["calibration_fold"].unique())
+            selected = []
+            sensitivity: list[dict] = []
+            audit_traces: list[pd.DataFrame] = []
+            for fold in _LOG.progress(
+                folds, desc="calibrate_folds", unit="fold", total=len(folds)
+            ):
+                self.calibrate_fold(
+                    fold,
+                    selected,
+                    sensitivity,
+                    audit_traces,
+                )
+            selected_df = pd.DataFrame(selected)
+            sensitivity_df = pd.DataFrame(sensitivity)
+            final_threshold = float(selected_df.selected_threshold.median())
+            plateau = _plateau_diagnostic(
+                sensitivity_df,
+                self._plateau_tolerance,
+                self._plateau_min_points,
+                selected_df=selected_df,
+            )
+            alternatives = sensitivity_df[
+                sensitivity_df["gtin_status"].eq("ALL")
+                & sensitivity_df["selection_method"].ne("sensitivity")
+            ].copy()
+            calibration_trace = pd.concat(audit_traces, ignore_index=True)
+        return (
+            final_threshold,
+            selected_df,
+            sensitivity_df,
+            alternatives,
+            plateau,
+            calibration_trace,
+        )
+
+    def calibrate_fold(
+        self,
+        fold: object,
+        selected: list[dict[str, object]],
+        sensitivity: list[dict],
+        audit_traces: list[pd.DataFrame],
+    ) -> None:
+        """One fold: fit threshold, audit trace, selection + sensitivity rows."""
+        calibration = self._calibration
+        truth = self._truth
+        candidates = self._candidates
+        thresholds = self._thresholds
+        target_recall = self._target_recall
         fit_truth, check_truth, fit_candidates, check_candidates = _fold_partitions(
             calibration, truth, candidates, fold
         )
@@ -2580,6 +3288,40 @@ def calibrate_threshold(
         alternatives = _alternative_thresholds(
             fit_candidates, fit_truth, best_threshold, target_recall
         )
+        self.append_selection_row(
+            fold,
+            best_threshold,
+            fit_rows,
+            fit_unmatched_fraction,
+            alternatives,
+            fit_candidates,
+            fit_truth,
+            selected,
+        )
+        sensitivity.extend(
+            _fold_sensitivity(
+                check_candidates,
+                check_truth,
+                fold,
+                thresholds,
+                alternatives,
+            )
+        )
+
+    def append_selection_row(
+        self,
+        fold: object,
+        best_threshold: float,
+        fit_rows: list[dict[str, float]],
+        fit_unmatched_fraction: float,
+        alternatives: dict[str, dict[str, float | str]],
+        fit_candidates: pd.DataFrame,
+        fit_truth: pd.DataFrame,
+        selected: list[dict[str, object]],
+    ) -> None:
+        """One fold's threshold-selection row (verbatim key order)."""
+        matcher = self._matcher
+        target_recall = self._target_recall
         fit_by_threshold = {r["threshold"]: r for r in fit_rows}
         youden_info = alternatives["youden"]
         precision_key = f"precision_at_{target_recall:.0%}_recall"
@@ -2616,38 +3358,6 @@ def calibrate_threshold(
                 "reconciliation_scope": _reconciliation_scope(),
             }
         )
-        sensitivity.extend(
-            _fold_sensitivity(
-                check_candidates,
-                check_truth,
-                fold,
-                thresholds,
-                alternatives,
-            )
-        )
-
-    selected_df = pd.DataFrame(selected)
-    sensitivity_df = pd.DataFrame(sensitivity)
-    final_threshold = float(selected_df.selected_threshold.median())
-    plateau = _plateau_diagnostic(
-        sensitivity_df,
-        plateau_tolerance,
-        plateau_min_points,
-        selected_df=selected_df,
-    )
-    alternatives = sensitivity_df[
-        sensitivity_df["gtin_status"].eq("ALL")
-        & sensitivity_df["selection_method"].ne("sensitivity")
-    ].copy()
-    calibration_trace = pd.concat(audit_traces, ignore_index=True)
-    return (
-        final_threshold,
-        selected_df,
-        sensitivity_df,
-        alternatives,
-        plateau,
-        calibration_trace,
-    )
 
 
 def _write_calibration_outputs(
@@ -2916,11 +3626,15 @@ def _retrieval_ablation_metrics(
     return pd.DataFrame(rows)
 
 
-def _evaluate_holdout(
+def _load_holdout_frame(
     matcher: RandMatcher,
     holdout_labels: pd.DataFrame,
-    final_threshold: float,
-) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
+    """The dataset-merged, GTIN-stratified holdout frame (verbatim front).
+
+    The unknown-id and merge/duplication guards raise here so the scoring
+    below can never run on an unsanctioned population.
+    """
     base = _ensure_source_row_identity(
         load_dataset_deduped().rename(columns={"sku_id": "SKU_ID"})
     )
@@ -2949,36 +3663,49 @@ def _evaluate_holdout(
         )
         for _, row in holdout.iterrows()
     ]
-    candidates = matcher.score_candidates(holdout)
-    truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates("SKU_ID")
-    predictions, trace = _assignments_with_trace(
-        candidates,
-        final_threshold,
-        threshold_by_gtin_status=_final_threshold_by_gtin_status(),
-    )
-    metrics = gtin_metrics(
-        predictions,
-        truth,
-        "holdout",
-        final_threshold,
-        candidates,
-        # Holdout is the frozen final evaluation.  Preserve the complete
-        # metric contract, including component/bridge diagnostics, for every
-        # GTIN stratum and the ALL row; do not rely on gtin_metrics' default.
-        include_graph_diagnostics=True,
-    )
-    diagnostics = _audit_trace(
-        candidates,
-        trace,
-        predictions,
-        truth,
-        partition="holdout",
-        fold="holdout",
-        threshold=final_threshold,
-    )
-    disagreements = pair_disagreements(predictions, truth, trace)
-    ann_misses = _ann_missed_true_matches(trace, truth, predictions)
-    ablation = _retrieval_ablation_metrics(candidates, truth, final_threshold)
+    return holdout
+
+
+def _evaluate_holdout(
+    matcher: RandMatcher,
+    holdout_labels: pd.DataFrame,
+    final_threshold: float,
+) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """The frozen holdout evaluation (one timed pass, statements verbatim)."""
+    with _LOG.section("rand_matching.evaluate_holdout"):
+        holdout = _load_holdout_frame(matcher, holdout_labels)
+        candidates = matcher.score_candidates(holdout)
+        truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates(
+            "SKU_ID"
+        )
+        predictions, trace = _assignments_with_trace(
+            candidates,
+            final_threshold,
+            threshold_by_gtin_status=_final_threshold_by_gtin_status(),
+        )
+        metrics = gtin_metrics(
+            predictions,
+            truth,
+            "holdout",
+            final_threshold,
+            candidates,
+            # Holdout is the frozen final evaluation.  Preserve the complete
+            # metric contract, including component/bridge diagnostics, for every
+            # GTIN stratum and the ALL row; do not rely on gtin_metrics' default.
+            include_graph_diagnostics=True,
+        )
+        diagnostics = _audit_trace(
+            candidates,
+            trace,
+            predictions,
+            truth,
+            partition="holdout",
+            fold="holdout",
+            threshold=final_threshold,
+        )
+        disagreements = pair_disagreements(predictions, truth, trace)
+        ann_misses = _ann_missed_true_matches(trace, truth, predictions)
+        ablation = _retrieval_ablation_metrics(candidates, truth, final_threshold)
     return metrics, diagnostics, disagreements, ann_misses, ablation
 
 
@@ -3110,6 +3837,7 @@ def _write_final_submission(
     return submission
 
 
+@timed
 def write_outputs(
     matcher: RandMatcher,
     calibration_input: Path,
@@ -3122,50 +3850,103 @@ def write_outputs(
     plateau_tolerance: float,
     plateau_min_points: int,
 ) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    calibration_labels = _load_labeled_input(calibration_input, "calibration")
-    holdout_labels = _load_labeled_input(holdout_input, "holdout")
-    _check_calibration_holdout_disjoint(calibration_labels, holdout_labels)
-    result = calibrate_threshold(
-        matcher,
-        calibration_input,
-        thresholds,
-        target_recall=target_recall,
-        plateau_tolerance=plateau_tolerance,
-        plateau_min_points=plateau_min_points,
-    )
-    (
-        final_threshold,
-        selected,
-        sensitivity,
-        alternatives,
-        plateau,
-        calibration_diagnostics,
-    ) = result
-    _write_calibration_outputs(
-        matcher,
-        output_dir,
-        output_names,
-        selected,
-        sensitivity,
-        alternatives,
-        plateau,
-        final_threshold,
-        target_recall,
-        calibration_diagnostics,
-    )
-    (
-        holdout_metrics,
-        holdout_diagnostics,
-        holdout_pair_disagreements,
-        holdout_ann_missed_true_matches,
-        holdout_retrieval_ablation_metrics,
-    ) = _evaluate_holdout(
-        matcher,
-        holdout_labels,
-        final_threshold,
-    )
-    holdout_metrics_frame = pd.DataFrame(holdout_metrics)
+    """The full artifact pipeline for one rand matching run (timed pass)."""
+    with _LOG.section("rand_matching.write_outputs"):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        calibration_labels = _load_labeled_input(calibration_input, "calibration")
+        holdout_labels = _load_labeled_input(holdout_input, "holdout")
+        _check_calibration_holdout_disjoint(calibration_labels, holdout_labels)
+        result = calibrate_threshold(
+            matcher,
+            calibration_input,
+            thresholds,
+            target_recall=target_recall,
+            plateau_tolerance=plateau_tolerance,
+            plateau_min_points=plateau_min_points,
+        )
+        (
+            final_threshold,
+            selected,
+            sensitivity,
+            alternatives,
+            plateau,
+            calibration_diagnostics,
+        ) = result
+        _write_calibration_outputs(
+            matcher,
+            output_dir,
+            output_names,
+            selected,
+            sensitivity,
+            alternatives,
+            plateau,
+            final_threshold,
+            target_recall,
+            calibration_diagnostics,
+        )
+        (
+            holdout_metrics,
+            holdout_diagnostics,
+            holdout_pair_disagreements,
+            holdout_ann_missed_true_matches,
+            holdout_retrieval_ablation_metrics,
+        ) = _evaluate_holdout(
+            matcher,
+            holdout_labels,
+            final_threshold,
+        )
+        holdout_metrics_frame = pd.DataFrame(holdout_metrics)
+        _write_holdout_outputs(
+            output_dir,
+            output_names,
+            holdout_metrics_frame,
+            holdout_diagnostics,
+            holdout_pair_disagreements,
+            holdout_ann_missed_true_matches,
+            holdout_retrieval_ablation_metrics,
+        )
+        submission = _write_final_submission(
+            matcher,
+            output_dir,
+            output_names,
+            final_threshold,
+        )
+        _write_provenance(
+            output_dir,
+            output_names["provenance"],
+            matcher,
+            submission,
+            calibration_input,
+            holdout_input,
+            calibration_labels,
+            holdout_labels,
+            final_threshold,
+        )
+        print(
+            {
+                "folds": selected.check_fold.tolist(),
+                "selected_thresholds": selected.selected_threshold.tolist(),
+                "final_threshold": final_threshold,
+                "rows": len(submission),
+                "unique_items": submission.ITEM_ID.nunique(),
+                "unmatched": int(
+                    submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
+                ),
+                "path": str(output_dir / output_names["submission"]),
+            }
+        )
+
+
+def _write_holdout_outputs(
+    output_dir: Path,
+    output_names: dict[str, str],
+    holdout_metrics_frame: pd.DataFrame,
+    holdout_diagnostics: pd.DataFrame,
+    holdout_pair_disagreements: pd.DataFrame,
+    holdout_ann_missed_true_matches: pd.DataFrame,
+    holdout_retrieval_ablation_metrics: pd.DataFrame,
+) -> None:
+    """The five holdout artifacts, each behind its pinned column contract."""
     _METRIC_COLUMNS_SPEC.validate_frame(
         holdout_metrics_frame,
         "holdout metrics",
@@ -3192,36 +3973,6 @@ def write_outputs(
     holdout_retrieval_ablation_metrics.to_csv(
         output_dir / output_names["holdout_retrieval_ablation_metrics"],
         index=False,
-    )
-    submission = _write_final_submission(
-        matcher,
-        output_dir,
-        output_names,
-        final_threshold,
-    )
-    _write_provenance(
-        output_dir,
-        output_names["provenance"],
-        matcher,
-        submission,
-        calibration_input,
-        holdout_input,
-        calibration_labels,
-        holdout_labels,
-        final_threshold,
-    )
-    print(
-        {
-            "folds": selected.check_fold.tolist(),
-            "selected_thresholds": selected.selected_threshold.tolist(),
-            "final_threshold": final_threshold,
-            "rows": len(submission),
-            "unique_items": submission.ITEM_ID.nunique(),
-            "unmatched": int(
-                submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
-            ),
-            "path": str(output_dir / output_names["submission"]),
-        }
     )
 
 
@@ -3273,19 +4024,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    checkpoint = _path_argument(args.checkpoint, "FINETUNED_CHECKPOINT")
-    calibration_input = _path_argument(
-        args.calibration_input,
-        "CALIBRATION_INPUT",
-    )
-    holdout_input = _path_argument(
-        args.holdout_input,
-        "HOLDOUT_INPUT",
-    )
-
-    cfg = rand_matching_cfg()
+@timed
+def _run_output_plan(cfg: dict) -> tuple[Path, np.ndarray]:
+    """The resolved output directory and the configured threshold grid."""
     output_dir = Path(cfg["output_dir"])
     if not output_dir.is_absolute():
         output_dir = TRAIN_ROOT / output_dir
@@ -3295,7 +4036,15 @@ def main() -> None:
         float(cfg["threshold_max"]),
         float(cfg["threshold_step"]),
     )
+    return output_dir, thresholds
 
+
+def _require_run_inputs(
+    checkpoint: Path,
+    calibration_input: Path,
+    holdout_input: Path,
+) -> None:
+    """The three loud raise-sites for missing run inputs (verbatim)."""
     if not checkpoint.is_dir():
         raise FileNotFoundError(
             f"FINETUNED_CHECKPOINT must point to a checkpoint directory: {checkpoint}"
@@ -3308,6 +4057,25 @@ def main() -> None:
         raise FileNotFoundError(
             f"HOLDOUT_INPUT must point to a frozen holdout CSV: {holdout_input}"
         )
+
+
+def main() -> None:
+    RunLogger.configure_console()
+    args = parse_args()
+    checkpoint = _path_argument(args.checkpoint, "FINETUNED_CHECKPOINT")
+    calibration_input = _path_argument(
+        args.calibration_input,
+        "CALIBRATION_INPUT",
+    )
+    holdout_input = _path_argument(
+        args.holdout_input,
+        "HOLDOUT_INPUT",
+    )
+
+    cfg = rand_matching_cfg()
+    output_dir, thresholds = _run_output_plan(cfg)
+
+    _require_run_inputs(checkpoint, calibration_input, holdout_input)
     ann_cfg = load_ann_config()
     matcher = RandMatcher(
         checkpoint,
