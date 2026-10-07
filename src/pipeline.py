@@ -46,6 +46,7 @@ from core.common import (
     vocabulary,
 )
 from core.run_log import RunLogger
+from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
 from core.schemas import (
     CanonicalRecord,
     ExtractedAttributes,
@@ -56,10 +57,8 @@ from core.schemas import (
     require_populated_source_rows,
     upgrade_canonical_records_frame,
 )
-from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
-from core.run_log import RunLogger
-
 _LOG = RunLogger(__name__)
+
 from core.critical_attributes import (
     CRITICAL_ATTRIBUTE_DIMENSIONS,
     categorical_conflict,
