@@ -1427,14 +1427,455 @@ def _wandb_memory_metrics(values: dict[str, float | int]) -> dict[str, float]:
     }
 
 
+class _CollapseReporter:
+    """Owner of the collapse diagnostic wiring (uniformity lane).
+
+    `_metrics` runs the shared unrelated-pair diagnostic on the current
+    model; `_wandb_metrics` projects the result onto the live/ W&B keys —
+    the two pieces ProgressCallback used to inline as private methods.
+    """
+
+    def __init__(
+        self,
+        *,
+        model=None,
+        df=None,
+        payload=None,
+        config=None,
+        batch_size=None,
+        trace_path=None,
+    ):
+        self.model = model
+        self.df = df
+        self.payload = payload
+        self.config = config
+        self.batch_size = batch_size
+        self.trace_path = trace_path
+
+    def _metrics(self, evaluation_step: int) -> dict[str, float | int | str]:
+        """Run the shared unrelated-pair diagnostic on the current model."""
+        if self.model is None:
+            return {}
+        from training.uniformity import collapse_diagnostics
+
+        return collapse_diagnostics(
+            model=self.model,
+            df=self.df,
+            payload=self.payload,
+            config=self.config,
+            batch_size=int(self.batch_size),
+            trace_path=(
+                self.trace_path.with_name(f"{self.trace_path.stem}_collapse_pairs.csv")
+                if self.trace_path is not None
+                else None
+            ),
+            evaluation_step=evaluation_step,
+        )
+
+    @staticmethod
+    def _wandb_metrics(
+        metrics: dict[str, float | int | str],
+    ) -> dict[str, float | int | str]:
+        return {
+            f"live/{key}": value
+            for key, value in metrics.items()
+            if key != "collapse_status" and isinstance(value, (float, int))
+        } | (
+            {"live/collapse_status": metrics["collapse_status"]}
+            if "collapse_status" in metrics
+            else {}
+        )
+
+
+class _LiveStatusWriter:
+    """Owner of the atomic worker heartbeat the Colab launcher polls."""
+
+    def __init__(self, *, wandb_ctx=None):
+        self.wandb_ctx = wandb_ctx
+
+    def _write(self, state, event: str, **values) -> None:
+        """Atomically expose a compact worker heartbeat to the Colab launcher."""
+        write_worker_live_status(
+            target=RESULTS / "live_status.json",
+            event=event,
+            step=int(state.global_step),
+            max_steps=int(state.max_steps),
+            epoch=float(state.epoch or 0.0),
+            wandb_run_id=getattr(self.wandb_ctx, "run_id", None),
+            wandb_url=getattr(self.wandb_ctx, "run_url", None),
+            **values,
+        )
+
+
+class _LossTraceJournal:
+    """Owner of the loss/trace CSV: one row per real step or evaluation event."""
+
+    def __init__(self, trace_path: Path | None):
+        self.trace_path = trace_path
+        self._rows: list[dict[str, object]] = []
+
+    def record_loss_step(
+        self, state, loss: float, grad_norm, loss_stats: dict
+    ) -> None:
+        self._rows.append(
+            {
+                "step": float(state.global_step),
+                "epoch": float(state.epoch or 0.0),
+                "train_loss": loss,
+                "grad_norm": grad_norm,
+                **loss_stats,
+            }
+        )
+
+    def record_collapse_event(
+        self, state, collapse_metrics: dict[str, float | int | str]
+    ) -> None:
+        self._rows.append(
+            {
+                "step": float(state.global_step),
+                "epoch": float(state.epoch or 0.0),
+                "event": "evaluation",
+                **collapse_metrics,
+            }
+        )
+
+    def flush(self) -> None:
+        """The on_train_end write: write-now-rotate keeps reruns honest."""
+        if self.trace_path is not None and self._rows:
+            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+            # A fold owns this file; write mode keeps reruns from appending
+            # stale optimizer telemetry from an earlier attempt.
+            pd.DataFrame(self._rows).to_csv(self.trace_path, index=False, mode="w")
+            print(f"    [loss-trace] wrote {self.trace_path}", flush=True)
+
+
+class _TrainLogDispatcher:
+    """Owner of the on_log body: train-loss presentation, W&B, heartbeat.
+
+    `dev_accuracy` arrives from the evaluate presenter so both hooks read
+    the exact same shared state the original callback held.
+    """
+
+    def __init__(
+        self,
+        *,
+        tracked_loss=None,
+        journal: _LossTraceJournal,
+        live: _LiveStatusWriter,
+        wandb_ctx=None,
+    ):
+        self.tracked_loss = tracked_loss
+        self.journal = journal
+        self.live = live
+        self.wandb_ctx = wandb_ctx
+        self.latest_train_loss: float | None = None
+
+    def pop_tracking_stats(self):
+        """The tracked loss's per-batch stats, when the loss opts into tracking."""
+        return (
+            self.tracked_loss.pop_tracking_stats()
+            if self.tracked_loss is not None
+            and hasattr(self.tracked_loss, "pop_tracking_stats")
+            else {}
+        )
+
+    def dispatch(self, args, state, logs=None, dev_accuracy=None, **kwargs) -> None:
+        if not logs or not state.is_world_process_zero:
+            return
+        if "loss" in logs:
+            loss = float(logs["loss"])
+            self.latest_train_loss = loss
+            loss_stats = self.pop_tracking_stats()
+            grad_norm = (
+                float(logs["grad_norm"])
+                if logs.get("grad_norm") is not None
+                else float("nan")
+            )
+            grad_norm_wire = (
+                float(logs["grad_norm"])
+                if logs.get("grad_norm") is not None
+                else None
+            )
+            self.journal.record_loss_step(state, loss, grad_norm, loss_stats)
+            telemetry = _runtime_telemetry()
+            total_epochs = float(args.num_train_epochs)
+            accuracy = (
+                f" | dev_acc {dev_accuracy:.4f}"
+                if dev_accuracy is not None
+                else ""
+            )
+            print(
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
+                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
+                flush=True,
+            )
+            if self.wandb_ctx is not None:
+                self.wandb_ctx.log_metrics(
+                    {
+                        "live/train_loss": loss,
+                        "live/epoch": float(state.epoch or 0.0),
+                        "live/grad_norm": grad_norm_wire,
+                        **{
+                            f"live/loss_{key}": value
+                            for key, value in loss_stats.items()
+                        },
+                        **_wandb_memory_metrics(telemetry),
+                    },
+                )
+            self.live._write(
+                state,
+                "train",
+                train_loss=loss,
+                dev_accuracy=dev_accuracy,
+                grad_norm=grad_norm_wire,
+                **{f"loss_{key}": value for key, value in loss_stats.items()},
+                **telemetry,
+            )
+
+
+class _DevEvaluatePresenter:
+    """Owner of the on_evaluate body: the dev evaluator's metric contract,
+    its presentation line, the collapse projection, W&B and the heartbeat.
+
+    `_DEV_METRICS` comes straight from the callback class so both surfaces
+    keep one declaration.
+    """
+
+    def __init__(self, *, dev_metrics: dict, journal: _LossTraceJournal, live: _LiveStatusWriter, wandb_ctx=None):
+        self._DEV_METRICS = dev_metrics
+        self.journal = journal
+        self.live = live
+        self.wandb_ctx = wandb_ctx
+        self.latest_dev_accuracy: float | None = None
+        self.latest_collapse_metrics: dict[str, float | int | str] = {}
+        self.collapse = None
+
+    def _contract_values(self, metrics: dict) -> tuple[float, float, float, float, float]:
+        """Validate the structured evaluator contract, then unpack its values."""
+        missing = [key for key in self._DEV_METRICS.values() if key not in metrics]
+        if missing:
+            raise RuntimeError(
+                "structured dev evaluator violated its metric contract; missing "
+                + ", ".join(missing)
+            )
+        accuracy = float(metrics[self._DEV_METRICS["accuracy"]])
+        ap = float(metrics[self._DEV_METRICS["average_precision"]])
+        f1 = float(metrics[self._DEV_METRICS["f1"]])
+        precision = float(metrics[self._DEV_METRICS["precision"]])
+        recall = float(metrics[self._DEV_METRICS["recall"]])
+        return accuracy, ap, f1, precision, recall
+
+    def present(
+        self,
+        args,
+        state,
+        metrics: dict | None,
+        *, collapse, latest_train_loss,
+        **kwargs,
+    ) -> None:
+        if not metrics or not state.is_world_process_zero:
+            return
+        accuracy, ap, f1, precision, recall = self._contract_values(metrics)
+        self.latest_dev_accuracy = accuracy
+        collapse_metrics = collapse._metrics(int(state.global_step))
+        self.latest_collapse_metrics = dict(collapse_metrics)
+        if collapse_metrics:
+            self.journal.record_collapse_event(state, collapse_metrics)
+        telemetry = _runtime_telemetry()
+        parts = [
+            f"dev_ap {ap:.4f}",
+            f"dev_acc {accuracy:.4f}",
+            f"dev_f1 {f1:.4f}",
+        ]
+        if collapse_metrics:
+            parts.append(
+                "collapse "
+                f"status={collapse_metrics['collapse_status']} "
+                f"median={collapse_metrics.get('collapse_median_cosine', float('nan')):.4f} "
+                f"p90={collapse_metrics.get('collapse_p90_cosine', float('nan')):.4f} "
+                f"std={collapse_metrics.get('collapse_cosine_std', float('nan')):.4f} "
+                f"healthy={collapse_metrics['collapse_healthy']}"
+            )
+        parts.append(_format_telemetry(telemetry))
+        if parts:
+            total_epochs = float(args.num_train_epochs)
+            loss = (
+                f"train_loss {latest_train_loss:.4f} | "
+                if latest_train_loss is not None
+                else ""
+            )
+            print(
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step "
+                f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
+                flush=True,
+            )
+        if self.wandb_ctx is not None:
+            self.wandb_ctx.log_metrics(
+                {
+                    "live/dev_loss": float(metrics["eval_loss"])
+                    if metrics.get("eval_loss") is not None else None,
+                    "live/dev_accuracy": accuracy,
+                    "live/dev_average_precision": ap,
+                    "live/dev_f1": f1,
+                    "live/dev_precision": precision,
+                    "live/dev_recall": recall,
+                    "live/epoch": float(state.epoch or 0.0),
+                    **_CollapseReporter._wandb_metrics(collapse_metrics),
+                    **_wandb_memory_metrics(telemetry),
+                },
+            )
+        self.live._write(
+            state,
+            "evaluation",
+            train_loss=latest_train_loss,
+            dev_loss=float(metrics["eval_loss"]) if metrics.get("eval_loss") is not None else None,
+            dev_average_precision=ap,
+            dev_accuracy=self.latest_dev_accuracy,
+            dev_f1=f1,
+            dev_precision=precision,
+            dev_recall=recall,
+            **collapse_metrics,
+            **telemetry,
+        )
+
+
+class _EpochAdvance:
+    """Owner of the on_epoch_begin body: the tracked loss's epoch wiring."""
+
+    def __init__(self, *, tracked_loss=None):
+        self.tracked_loss = tracked_loss
+
+    def advance(self, state, control):
+        epoch = int((state.epoch or 0.0)) + 1
+        if self.tracked_loss is not None and hasattr(self.tracked_loss, "set_epoch"):
+            self.tracked_loss.set_epoch(epoch)
+        dynamic_ref = getattr(self.tracked_loss, "_dynamic_epoch_ref", None)
+        if dynamic_ref is not None:
+            dynamic_ref["epoch"] = epoch
+        return control
+
+
+class _TrainingStartHeartbeat:
+    """Owner of the on_train_begin body: first heartbeat with telemetry."""
+
+    def __init__(self, *, live: _LiveStatusWriter, wandb_ctx=None):
+        self.live = live
+        self.wandb_ctx = wandb_ctx
+
+    def begin(self, state, control) -> None:
+        if state.is_world_process_zero:
+            telemetry = _runtime_telemetry()
+            print(f"    [telemetry] training-started | {_format_telemetry(telemetry)}", flush=True)
+            if self.wandb_ctx is not None:
+                self.wandb_ctx.log_metrics(_wandb_memory_metrics(telemetry))
+            self.live._write(state, "training-started", **telemetry)
+
+
+class _LateEpochLrDecayPolicy:
+    """Owns applying the SSOT late-epoch LR reduction exactly once.
+
+    The HF scheduler still owns its normal warmup/linear schedule. At the
+    configured later-epoch boundary we scale both optimizer and scheduler
+    base LRs, so the reduction survives subsequent scheduler steps and is
+    preserved in resumable optimizer state. The callback hooks delegate here;
+    all observable state (applied / resume fingerprint / LR snapshots) lives
+    on the policy and is exposed through the callback's properties.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        start_epoch_fraction: float,
+        multiplier: float,
+    ):
+        self.enabled = bool(enabled)
+        self.start_epoch_fraction = float(start_epoch_fraction)
+        self.multiplier = float(multiplier)
+        self.applied = False
+        self.applied_epoch: float | None = None
+        self.learning_rates_before: list[float] = []
+        self.learning_rates_after: list[float] = []
+        self.resumed_start = False
+        self.global_step_at_resume = 0
+
+    def record_resume(self, state, control):
+        # D2 telemetry: whether this run STARTED from an existing checkpoint.
+        self.resumed_start = bool(getattr(state, "global_step", 0))
+        self.global_step_at_resume = int(getattr(state, "global_step", 0))
+        return control
+
+    def _boundary_reached(self, args, state) -> tuple[bool, float | None]:
+        """Small SR gates: enabled + once + at or past the epoch boundary."""
+        if not self.enabled or self.applied:
+            return False, None
+        current_epoch = float(state.epoch or 0.0)
+        boundary = float(args.num_train_epochs) * self.start_epoch_fraction
+        if current_epoch + 1e-9 < boundary:
+            return False, None
+        return True, boundary
+
+    @staticmethod
+    def _scale_optimizer(optimizer, multiplier: float) -> list[float]:
+        before = [float(group["lr"]) for group in optimizer.param_groups]
+        for group in optimizer.param_groups:
+            group["lr"] = float(group["lr"]) * multiplier
+            if "initial_lr" in group:
+                group["initial_lr"] = float(group["initial_lr"]) * multiplier
+        return before
+
+    @staticmethod
+    def _scale_scheduler(scheduler, multiplier: float) -> None:
+        if scheduler is not None and hasattr(scheduler, "base_lrs"):
+            scheduler.base_lrs = [
+                float(lr) * multiplier for lr in scheduler.base_lrs
+            ]
+
+    def apply_at_boundary(self, args, state, control, **kwargs):
+        reached, boundary = self._boundary_reached(args, state)
+        if not reached:
+            return control
+        optimizer = kwargs.get("optimizer")
+        scheduler = kwargs.get("lr_scheduler")
+        if optimizer is None:
+            raise RuntimeError(
+                "late-epoch LR decay reached its boundary without an optimizer"
+            )
+        current_epoch = float(state.epoch or 0.0)
+        self.learning_rates_before = self._scale_optimizer(optimizer, self.multiplier)
+        self._scale_scheduler(scheduler, self.multiplier)
+        self.learning_rates_after = [
+            float(group["lr"]) for group in optimizer.param_groups
+        ]
+        self.applied = True
+        self.applied_epoch = current_epoch
+        print(
+            f"    [optim] late-epoch LR decay applied at epoch {current_epoch:.3f} "
+            f"(boundary={boundary:.3f}, multiplier={self.multiplier:.3f})",
+            flush=True,
+        )
+        emit_timing(
+            "[timing] training.late_epoch_lr applied "
+            f"applied_epoch={current_epoch:.3f} boundary={boundary:.3f} "
+            f"multiplier={self.multiplier:.3f} resumed_start={self.resumed_start} "
+            f"global_step_at_resume={self.global_step_at_resume} "
+            f"lr_before_min={min(self.learning_rates_before):.8g} "
+            f"lr_after_min={min(self.learning_rates_after):.8g}"
+        )
+        return control
+
+
 class ProgressCallback(TrainerCallback):
-    """Live per-step display of train loss + dev AP/AUC during training.
+    """Thin hook shell over the presentation owners; behavior pinned.
 
     The modern Trainer path replaces 07b's log_steps=True (which wrapped the
     loss module's forward to print every batch). This is the equivalent on the
     HF contract: on_log fires at logging_steps and carries the running train
     loss; on_evaluate fires at eval_steps and carries the dev metrics the
-    early-stopper is actually watching.
+    early-stopper is actually watching. The hook bodies delegate to
+    `_TrainingStartHeartbeat` / `_EpochAdvance` / `_TrainLogDispatcher` /
+    `_DevEvaluatePresenter` / `_CollapseReporter` / `_LiveStatusWriter` /
+    `_LossTraceJournal`.
     """
 
     # The structured dev evaluator below is the sole source of these values.
@@ -1463,10 +1904,6 @@ class ProgressCallback(TrainerCallback):
         self.wandb_ctx = wandb_ctx
         self.tracked_loss = tracked_loss
         self.trace_path = Path(trace_path) if trace_path is not None else None
-        self._trace_rows: list[dict[str, object]] = []
-        self.latest_train_loss: float | None = None
-        self.latest_dev_accuracy: float | None = None
-        self.latest_collapse_metrics: dict[str, float | int | str] = {}
         collapse_values = (
             collapse_model,
             collapse_df,
@@ -1481,241 +1918,94 @@ class ProgressCallback(TrainerCallback):
                 "collapse monitoring requires model, dataframe, payload, "
                 "config, and batch size together"
             )
-        self.collapse_model = collapse_model
-        self.collapse_df = collapse_df
-        self.collapse_payload = collapse_payload
-        self.collapse_config = collapse_config
-        self.collapse_batch_size = collapse_batch_size
+        self._journal = _LossTraceJournal(self.trace_path)
+        self._collapse = _CollapseReporter(
+            model=collapse_model,
+            df=collapse_df,
+            payload=collapse_payload,
+            config=collapse_config,
+            batch_size=collapse_batch_size,
+            trace_path=self.trace_path,
+        )
+        self._live = _LiveStatusWriter(wandb_ctx=wandb_ctx)
+        self._start = _TrainingStartHeartbeat(live=self._live, wandb_ctx=wandb_ctx)
+        self._advance = _EpochAdvance(tracked_loss=tracked_loss)
+        self._log = _TrainLogDispatcher(
+            tracked_loss=tracked_loss,
+            journal=self._journal,
+            live=self._live,
+            wandb_ctx=wandb_ctx,
+        )
+        self._evaluate = _DevEvaluatePresenter(
+            dev_metrics=self._DEV_METRICS,
+            journal=self._journal,
+            live=self._live,
+            wandb_ctx=wandb_ctx,
+        )
+
+    @property
+    def latest_train_loss(self):
+        return self._log.latest_train_loss
+
+    @property
+    def latest_dev_accuracy(self):
+        return self._evaluate.latest_dev_accuracy
+
+    @property
+    def latest_collapse_metrics(self):
+        return self._evaluate.latest_collapse_metrics
 
     def _collapse_metrics(self, evaluation_step: int) -> dict[str, float | int | str]:
-        """Run the shared unrelated-pair diagnostic on the current model."""
-        if self.collapse_model is None:
-            return {}
-        from training.uniformity import collapse_diagnostics
-
-        return collapse_diagnostics(
-            model=self.collapse_model,
-            df=self.collapse_df,
-            payload=self.collapse_payload,
-            config=self.collapse_config,
-            batch_size=int(self.collapse_batch_size),
-            trace_path=(
-                self.trace_path.with_name(f"{self.trace_path.stem}_collapse_pairs.csv")
-                if self.trace_path is not None
-                else None
-            ),
-            evaluation_step=evaluation_step,
-        )
+        return self._collapse._metrics(evaluation_step)
 
     @staticmethod
     def _collapse_wandb_metrics(
         metrics: dict[str, float | int | str],
     ) -> dict[str, float | int | str]:
-        return {
-            f"live/{key}": value
-            for key, value in metrics.items()
-            if key != "collapse_status" and isinstance(value, (float, int))
-        } | (
-            {"live/collapse_status": metrics["collapse_status"]}
-            if "collapse_status" in metrics
-            else {}
-        )
+        return _CollapseReporter._wandb_metrics(metrics)
 
     def _write_live_status(self, state, event: str, **values) -> None:
-        """Atomically expose a compact worker heartbeat to the Colab launcher."""
-        write_worker_live_status(
-            target=RESULTS / "live_status.json",
-            event=event,
-            step=int(state.global_step),
-            max_steps=int(state.max_steps),
-            epoch=float(state.epoch or 0.0),
-            wandb_run_id=getattr(self.wandb_ctx, "run_id", None),
-            wandb_url=getattr(self.wandb_ctx, "run_url", None),
-            **values,
-        )
+        self._live._write(state, event, **values)
 
     def on_train_begin(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            telemetry = _runtime_telemetry()
-            print(f"    [telemetry] training-started | {_format_telemetry(telemetry)}", flush=True)
-            if self.wandb_ctx is not None:
-                self.wandb_ctx.log_metrics(_wandb_memory_metrics(telemetry))
-            self._write_live_status(state, "training-started", **telemetry)
+        self._start.begin(state, control)
         return control
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        epoch = int((state.epoch or 0.0)) + 1
-        if self.tracked_loss is not None and hasattr(self.tracked_loss, "set_epoch"):
-            self.tracked_loss.set_epoch(epoch)
-        dynamic_ref = getattr(self.tracked_loss, "_dynamic_epoch_ref", None)
-        if dynamic_ref is not None:
-            dynamic_ref["epoch"] = epoch
-        return control
+        return self._advance.advance(state, control)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or not state.is_world_process_zero:
             return
-        if "loss" in logs:
-            loss = float(logs["loss"])
-            self.latest_train_loss = loss
-            loss_stats = (
-                self.tracked_loss.pop_tracking_stats()
-                if self.tracked_loss is not None
-                and hasattr(self.tracked_loss, "pop_tracking_stats")
-                else {}
-            )
-            self._trace_rows.append(
-                {
-                    "step": float(state.global_step),
-                    "epoch": float(state.epoch or 0.0),
-                    "train_loss": loss,
-                    "grad_norm": float(logs["grad_norm"])
-                    if logs.get("grad_norm") is not None
-                    else float("nan"),
-                    **loss_stats,
-                }
-            )
-            telemetry = _runtime_telemetry()
-            total_epochs = float(args.num_train_epochs)
-            accuracy = (
-                f" | dev_acc {self.latest_dev_accuracy:.4f}"
-                if self.latest_dev_accuracy is not None
-                else ""
-            )
-            print(
-                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
-                flush=True,
-            )
-            if self.wandb_ctx is not None:
-                self.wandb_ctx.log_metrics(
-                    {
-                        "live/train_loss": loss,
-                        "live/epoch": float(state.epoch or 0.0),
-                        "live/grad_norm": float(logs["grad_norm"])
-                        if logs.get("grad_norm") is not None
-                        else None,
-                        **{
-                            f"live/loss_{key}": value
-                            for key, value in loss_stats.items()
-                        },
-                        **_wandb_memory_metrics(telemetry),
-                    },
-                )
-            self._write_live_status(
-                state,
-                "train",
-                train_loss=loss,
-                dev_accuracy=self.latest_dev_accuracy,
-                grad_norm=(
-                    float(logs["grad_norm"])
-                    if logs.get("grad_norm") is not None
-                    else None
-                ),
-                **{f"loss_{key}": value for key, value in loss_stats.items()},
-                **telemetry,
-            )
+        self._log.dispatch(
+            args, state, logs=logs, dev_accuracy=self._evaluate.latest_dev_accuracy
+        )
+        return None
 
     def on_train_end(self, args, state, control, **kwargs):
-        if self.trace_path is not None and self._trace_rows:
-            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-            # A fold owns this file; write mode keeps reruns from appending
-            # stale optimizer telemetry from an earlier attempt.
-            pd.DataFrame(self._trace_rows).to_csv(self.trace_path, index=False, mode="w")
-            print(f"    [loss-trace] wrote {self.trace_path}", flush=True)
+        self._journal.flush()
         return control
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
             return
-        missing = [key for key in self._DEV_METRICS.values() if key not in metrics]
-        if missing:
-            raise RuntimeError(
-                "structured dev evaluator violated its metric contract; missing "
-                + ", ".join(missing)
-            )
-        accuracy = float(metrics[self._DEV_METRICS["accuracy"]])
-        ap = float(metrics[self._DEV_METRICS["average_precision"]])
-        f1 = float(metrics[self._DEV_METRICS["f1"]])
-        precision = float(metrics[self._DEV_METRICS["precision"]])
-        recall = float(metrics[self._DEV_METRICS["recall"]])
-        self.latest_dev_accuracy = accuracy
-        collapse_metrics = self._collapse_metrics(int(state.global_step))
-        self.latest_collapse_metrics = dict(collapse_metrics)
-        if collapse_metrics:
-            self._trace_rows.append(
-                {
-                    "step": float(state.global_step),
-                    "epoch": float(state.epoch or 0.0),
-                    "event": "evaluation",
-                    **collapse_metrics,
-                }
-            )
-        telemetry = _runtime_telemetry()
-        parts = [
-            f"dev_ap {ap:.4f}",
-            f"dev_acc {accuracy:.4f}",
-            f"dev_f1 {f1:.4f}",
-        ]
-        if collapse_metrics:
-            parts.append(
-                "collapse "
-                f"status={collapse_metrics['collapse_status']} "
-                f"median={collapse_metrics.get('collapse_median_cosine', float('nan')):.4f} "
-                f"p90={collapse_metrics.get('collapse_p90_cosine', float('nan')):.4f} "
-                f"std={collapse_metrics.get('collapse_cosine_std', float('nan')):.4f} "
-                f"healthy={collapse_metrics['collapse_healthy']}"
-            )
-        parts.append(_format_telemetry(telemetry))
-        if parts:
-            total_epochs = float(args.num_train_epochs)
-            loss = (
-                f"train_loss {self.latest_train_loss:.4f} | "
-                if self.latest_train_loss is not None
-                else ""
-            )
-            print(
-                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step "
-                f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
-                flush=True,
-            )
-        if self.wandb_ctx is not None:
-            self.wandb_ctx.log_metrics(
-                {
-                    "live/dev_loss": float(metrics["eval_loss"])
-                    if metrics.get("eval_loss") is not None else None,
-                    "live/dev_accuracy": accuracy,
-                    "live/dev_average_precision": ap,
-                    "live/dev_f1": f1,
-                    "live/dev_precision": precision,
-                    "live/dev_recall": recall,
-                    "live/epoch": float(state.epoch or 0.0),
-                    **self._collapse_wandb_metrics(collapse_metrics),
-                    **_wandb_memory_metrics(telemetry),
-                },
-            )
-        self._write_live_status(
+        self._evaluate.present(
+            args,
             state,
-            "evaluation",
-            train_loss=self.latest_train_loss,
-            dev_loss=float(metrics["eval_loss"]) if metrics.get("eval_loss") is not None else None,
-            dev_average_precision=ap,
-            dev_accuracy=self.latest_dev_accuracy,
-            dev_f1=f1,
-            dev_precision=precision,
-            dev_recall=recall,
-            **collapse_metrics,
-            **telemetry,
+            metrics,
+            collapse=self._collapse,
+            latest_train_loss=self._log.latest_train_loss,
         )
+        return None
 
 
 class LateEpochLrDecayCallback(TrainerCallback):
-    """Apply the SSOT late-epoch LR reduction exactly once.
+    """Thin hook shell over `_LateEpochLrDecayPolicy`; state is delegated.
 
-    The HF scheduler still owns its normal warmup/linear schedule. At the
-    configured later-epoch boundary we scale both optimizer and scheduler
-    base LRs, so the reduction survives subsequent scheduler steps and is
-    preserved in resumable optimizer state.
+    The policy owns the apply-once boundary logic and the D2 resume
+    fingerprint; observable state (applied, applied_epoch, LR snapshots,
+    resumed_start, global_step_at_resume) is exposed through properties so
+    the fold-metrics reader and the D2 oracle keep their interface.
     """
 
     def __init__(
@@ -1725,66 +2015,43 @@ class LateEpochLrDecayCallback(TrainerCallback):
         start_epoch_fraction: float,
         multiplier: float,
     ):
-        self.enabled = bool(enabled)
-        self.start_epoch_fraction = float(start_epoch_fraction)
-        self.multiplier = float(multiplier)
-        self.applied = False
-        self.applied_epoch: float | None = None
-        self.learning_rates_before: list[float] = []
-        self.learning_rates_after: list[float] = []
-        self.resumed_start = False
-        self.global_step_at_resume = 0
+        self._policy = _LateEpochLrDecayPolicy(
+            enabled=enabled,
+            start_epoch_fraction=start_epoch_fraction,
+            multiplier=multiplier,
+        )
+        self.enabled = self._policy.enabled
+
+    # Policy state surface (was direct attributes on this callback).
+    @property
+    def applied(self) -> bool:
+        return self._policy.applied
+
+    @property
+    def applied_epoch(self):
+        return self._policy.applied_epoch
+
+    @property
+    def learning_rates_before(self) -> list[float]:
+        return self._policy.learning_rates_before
+
+    @property
+    def learning_rates_after(self) -> list[float]:
+        return self._policy.learning_rates_after
+
+    @property
+    def resumed_start(self) -> bool:
+        return self._policy.resumed_start
+
+    @property
+    def global_step_at_resume(self) -> int:
+        return self._policy.global_step_at_resume
 
     def on_train_begin(self, args, state, control, **kwargs):
-        # D2 telemetry: whether this run STARTED from an existing checkpoint.
-        self.resumed_start = bool(getattr(state, "global_step", 0))
-        self.global_step_at_resume = int(getattr(state, "global_step", 0))
-        return control
+        return self._policy.record_resume(state, control)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        if not self.enabled or self.applied:
-            return control
-        current_epoch = float(state.epoch or 0.0)
-        boundary = float(args.num_train_epochs) * self.start_epoch_fraction
-        if current_epoch + 1e-9 < boundary:
-            return control
-
-        optimizer = kwargs.get("optimizer")
-        scheduler = kwargs.get("lr_scheduler")
-        if optimizer is None:
-            raise RuntimeError(
-                "late-epoch LR decay reached its boundary without an optimizer"
-            )
-        self.learning_rates_before = [
-            float(group["lr"]) for group in optimizer.param_groups
-        ]
-        for group in optimizer.param_groups:
-            group["lr"] = float(group["lr"]) * self.multiplier
-            if "initial_lr" in group:
-                group["initial_lr"] = float(group["initial_lr"]) * self.multiplier
-        if scheduler is not None and hasattr(scheduler, "base_lrs"):
-            scheduler.base_lrs = [
-                float(lr) * self.multiplier for lr in scheduler.base_lrs
-            ]
-        self.learning_rates_after = [
-            float(group["lr"]) for group in optimizer.param_groups
-        ]
-        self.applied = True
-        self.applied_epoch = current_epoch
-        print(
-            f"    [optim] late-epoch LR decay applied at epoch {current_epoch:.3f} "
-            f"(boundary={boundary:.3f}, multiplier={self.multiplier:.3f})",
-            flush=True,
-        )
-        emit_timing(
-            "[timing] training.late_epoch_lr applied "
-            f"applied_epoch={current_epoch:.3f} boundary={boundary:.3f} "
-            f"multiplier={self.multiplier:.3f} resumed_start={self.resumed_start} "
-            f"global_step_at_resume={self.global_step_at_resume} "
-            f"lr_before_min={min(self.learning_rates_before):.8g} "
-            f"lr_after_min={min(self.learning_rates_after):.8g}"
-        )
-        return control
+        return self._policy.apply_at_boundary(args, state, control, **kwargs)
 
 
 def checkpoint_publication_deferred() -> bool:
