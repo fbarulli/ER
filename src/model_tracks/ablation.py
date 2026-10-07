@@ -21,10 +21,15 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
+from core.model_input import build_sku_text, model_input_info
 from core.run_log import RunLogger
+from core.sku_identity import row_identity
 from core.step_trace import timed
+from core.text import normalized_attribute_text
 from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
+from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
+from model_tracks.embedding_forward import validate_embedding_device
 
 _LOG = RunLogger(__name__)
 
@@ -187,8 +192,6 @@ def write(path, value):
 
 def _field_surfaces(text: str) -> dict[str, set[str]]:
     """Declared attribute -> set of raw ';'-parts, one pass per endpoint."""
-    from core.text import normalized_attribute_text
-
     surfaces: dict[str, set[str]] = {}
     for part in str(text).split(';'):
         if ':' not in part:
@@ -200,7 +203,6 @@ def _field_surfaces(text: str) -> dict[str, set[str]]:
 
 
 def declaration_removed(row, attribute):
-    from core.text import normalized_attribute_text
     from training.masking import field_of
     result = dict(row)
     if result.get('frozen_payload'):
@@ -281,8 +283,6 @@ class _TextPool:
 
 
 def _compose(row, composer):
-    from core.model_input import build_sku_text, model_input_info
-    from core.sku_identity import row_identity
     if row.get('frozen_payload'):
         return row['frozen_payload']
     if composer is not None:
@@ -318,7 +318,6 @@ def _selected_pairs(pairs, cfg):
 
 
 def _catalog_rows(catalog):
-    from core.text import normalized_attribute_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
@@ -497,7 +496,6 @@ def load_prepared(request_path, request):
 
 
 def _validated_device(device):
-    from model_tracks.embedding_forward import validate_embedding_device
     return validate_embedding_device(device)
 
 
@@ -563,7 +561,6 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
 
 
 def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
-    from model_tracks.ablation_inputs import load_batch
     encoder = None
     graph_batches = {}
     if track != 'text':
@@ -583,7 +580,6 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
 
 
 def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
-    from model_tracks.ablation_inputs import load_batch
     candidate_vectors = saved_candidates
     if candidate_vectors is not None and (candidate_vectors.dtype != np.float32 or candidate_vectors.shape[0] != len(request['candidate_ids']) or not np.isfinite(candidate_vectors).all() or not np.allclose(np.linalg.norm(candidate_vectors,axis=1),1,atol=1e-4)):
         raise ValueError('saved graph candidate vector contract mismatch')
@@ -641,7 +637,6 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
     request = json.loads(request_path.read_text())
     # Sources are relocated by the launcher but expected hashes stay frozen.
     validate_sources(request)
-    from model_tracks.ablation_inputs import load_batch
     from core.encoding_inputs import tokenization_policy, load_token_features
     arrays = load_prepared(request_path,request)
     plan = request['prepared_inputs']
