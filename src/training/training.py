@@ -488,116 +488,20 @@ from core.ranking_metrics import (
 
 @timed
 def _align_model_token_ids(model: SentenceTransformer) -> None:
-    """Make tokenizer special-token IDs the single source of truth.
-
-    Transformers can load a tokenizer whose PAD/BOS/EOS IDs differ from the
-    IDs serialized in the base model config.  It repairs that mismatch in
-    memory, but relying on that implicit repair leaves checkpoint contents
-    dependent on the loader version.  Align both configs explicitly before
-    the trainer starts; the model config is then serialized with each saved
-    checkpoint.  Sentence-transformers models are encoder-only, so the
-    generation config is normally unused, but align it when Transformers
-    exposes one as well.
-    """
-    tokenizer = model.tokenizer
-    auto_model = model[0].auto_model
-
-    token_ids = {
-        "pad_token_id": tokenizer.pad_token_id,
-        "bos_token_id": tokenizer.bos_token_id,
-        "eos_token_id": tokenizer.eos_token_id,
-    }
-    changed: dict[str, tuple[object, int]] = {}
-    for name, token_id in token_ids.items():
-        if token_id is None:
-            continue
-        old_value = getattr(auto_model.config, name, None)
-        if old_value != token_id:
-            changed[name] = (old_value, token_id)
-        setattr(auto_model.config, name, token_id)
-
-        generation_config = getattr(auto_model, "generation_config", None)
-        if generation_config is not None:
-            setattr(generation_config, name, token_id)
-
-    if changed:
-        details = ", ".join(
-            f"{name}={old!r}->{new!r}" for name, (old, new) in changed.items()
-        )
-        print(f"    [tokens] aligned tokenizer IDs in model config: {details}", flush=True)
-
-    unresolved = {
-        name: (getattr(auto_model.config, name, None), token_id)
-        for name, token_id in token_ids.items()
-        if token_id is not None and getattr(auto_model.config, name, None) != token_id
-    }
-    if unresolved:
-        raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
+    """Thin delegate: token-ID alignment lives in _CheckpointPublisher."""
+    _CheckpointPublisher._align_model_token_ids(model)
 
 
 @timed
 def _configure_projection_dropout(model, probability: float) -> bool:
-    """Append serializable dropout after pooling, idempotently.
-
-    Existing regularized checkpoints already contain the SentenceTransformers
-    dropout module. In that case update its probability instead of appending a
-    second layer. Returns whether a new module was added.
-    """
-    probability = float(probability)
-    if not 0.0 <= probability < 1.0:
-        raise ValueError("projection dropout must be in [0, 1)")
-
-    from sentence_transformers.sentence_transformer.modules import Dropout
-
-    existing = [module for module in model.children() if isinstance(module, Dropout)]
-    if len(existing) > 1:
-        raise RuntimeError("model contains multiple SentenceTransformer dropout modules")
-    if existing:
-        existing[0].dropout = probability
-        existing[0].dropout_layer.p = probability
-        return False
-    if probability == 0.0:
-        return False
-    model.add_module("projection_dropout", Dropout(dropout=probability))
-    return True
+    """Thin delegate: projection-dropout wiring lives in _CheckpointPublisher."""
+    return _CheckpointPublisher._configure_projection_dropout(model, probability)
 
 
 @timed
 def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
-    """Keep Transformers 5 tokenizer saves loadable by older HF runtimes.
-
-    Transformers 5 may serialize the fast tokenizer as ``TokenizersBackend``.
-    That name is not an AutoTokenizer class in the older runtime used by some
-    Colab images, even though the accompanying ``tokenizer.json`` is valid.
-    The generic fast-tokenizer class reads the same file and preserves the
-    already aligned special-token IDs.
-    """
-    config_path = checkpoint / "tokenizer_config.json"
-    tokenizer_path = checkpoint / "tokenizer.json"
-    if not config_path.is_file() or not tokenizer_path.is_file():
-        raise RuntimeError(
-            f"checkpoint is missing tokenizer assets: {checkpoint}"
-        )
-
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    if config.get("tokenizer_class") == "TokenizersBackend":
-        config["tokenizer_class"] = "PreTrainedTokenizerFast"
-        config_path.write_text(
-            json.dumps(config, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-    special_tokens = {
-        name: config[name]
-        for name in ("bos_token", "eos_token", "unk_token", "sep_token", "pad_token", "cls_token", "mask_token")
-        if name in config
-    }
-    special_map_path = checkpoint / "special_tokens_map.json"
-    if special_tokens and not special_map_path.exists():
-        special_map_path.write_text(
-            json.dumps(special_tokens, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+    """Thin delegate: tokenizer portability lives in _CheckpointPublisher."""
+    _CheckpointPublisher._make_checkpoint_tokenizer_portable(checkpoint)
 
 
 @timed
@@ -614,71 +518,230 @@ def _write_checkpoint_manifest(
     trainer_control,
     training_args,
 ) -> None:
-    """Describe the complete native HF resume snapshot without duplicating it."""
-    from core.model_input import model_input_composition
-
-    log_history = getattr(trainer_state, "log_history", []) or []
-    losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
-    tokenizer = getattr(model, "tokenizer", None)
-    auto_model = model[0].auto_model
-    token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
-    model_files = sorted(
-        path.name
-        for path in checkpoint.glob("model.safetensors*")
-        if path.is_file()
+    """Thin delegate: the resume manifest lives in _CheckpointPublisher."""
+    _CheckpointPublisher._write_checkpoint_manifest(
+        checkpoint,
+        epoch=epoch,
+        global_step=global_step,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+        trainer_state=trainer_state,
+        trainer_control=trainer_control,
+        training_args=training_args,
     )
-    if not model_files:
+
+
+class _CheckpointPublisher:
+    """Small SR owner of checkpoint publication prerequisites.
+
+    * `_align_model_token_ids`        tokenizer special-token IDs -> model config
+    * `_configure_projection_dropout` idempotent serializable dropout module
+    * `_make_checkpoint_tokenizer_portable`
+                 Transformers 5 -> older HF runtime tokenizer saves
+    * `_write_checkpoint_manifest`    native HF resume snapshot description
+    * `_publication_deferred`         the one env flag parser owned by the
+    run finisher. Module-level `_align_model_token_ids`,
+    `_configure_projection_dropout`, `_make_checkpoint_tokenizer_portable`
+    and `_write_checkpoint_manifest` stay the pinned (@timed) call surface.
+    """
+
+    @staticmethod
+    def _align_model_token_ids(model: SentenceTransformer) -> None:
+        """Make tokenizer special-token IDs the single source of truth.
+
+        Transformers can load a tokenizer whose PAD/BOS/EOS IDs differ from the
+        IDs serialized in the base model config.  It repairs that mismatch in
+        memory, but relying on that implicit repair leaves checkpoint contents
+        dependent on the loader version.  Align both configs explicitly before
+        the trainer starts; the model config is then serialized with each saved
+        checkpoint.  Sentence-transformers models are encoder-only, so the
+        generation config is normally unused, but align it when Transformers
+        exposes one as well.
+        """
+        tokenizer = model.tokenizer
+        auto_model = model[0].auto_model
+
+        token_ids = {
+            "pad_token_id": tokenizer.pad_token_id,
+            "bos_token_id": tokenizer.bos_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
+        changed: dict[str, tuple[object, int]] = {}
+        for name, token_id in token_ids.items():
+            if token_id is None:
+                continue
+            old_value = getattr(auto_model.config, name, None)
+            if old_value != token_id:
+                changed[name] = (old_value, token_id)
+            setattr(auto_model.config, name, token_id)
+
+            generation_config = getattr(auto_model, "generation_config", None)
+            if generation_config is not None:
+                setattr(generation_config, name, token_id)
+
+        if changed:
+            details = ", ".join(
+                f"{name}={old!r}->{new!r}" for name, (old, new) in changed.items()
+            )
+            print(f"    [tokens] aligned tokenizer IDs in model config: {details}", flush=True)
+
+        unresolved = {
+            name: (getattr(auto_model.config, name, None), token_id)
+            for name, token_id in token_ids.items()
+            if token_id is not None and getattr(auto_model.config, name, None) != token_id
+        }
+        if unresolved:
+            raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
+
+    @staticmethod
+    def _configure_projection_dropout(model, probability: float) -> bool:
+        """Append serializable dropout after pooling, idempotently.
+
+        Existing regularized checkpoints already contain the SentenceTransformers
+        dropout module. In that case update its probability instead of appending a
+        second layer. Returns whether a new module was added.
+        """
+        probability = float(probability)
+        if not 0.0 <= probability < 1.0:
+            raise ValueError("projection dropout must be in [0, 1)")
+
+        from sentence_transformers.sentence_transformer.modules import Dropout
+
+        existing = [module for module in model.children() if isinstance(module, Dropout)]
+        if len(existing) > 1:
+            raise RuntimeError("model contains multiple SentenceTransformer dropout modules")
+        if existing:
+            existing[0].dropout = probability
+            existing[0].dropout_layer.p = probability
+            return False
+        if probability == 0.0:
+            return False
+        model.add_module("projection_dropout", Dropout(dropout=probability))
+        return True
+
+    @staticmethod
+    def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
+        """Keep Transformers 5 tokenizer saves loadable by older HF runtimes.
+
+        Transformers 5 may serialize the fast tokenizer as ``TokenizersBackend``.
+        That name is not an AutoTokenizer class in the older runtime used by some
+        Colab images, even though the accompanying ``tokenizer.json`` is valid.
+        The generic fast-tokenizer class reads the same file and preserves the
+        already aligned special-token IDs.
+        """
+        config_path = checkpoint / "tokenizer_config.json"
+        tokenizer_path = checkpoint / "tokenizer.json"
+        if not config_path.is_file() or not tokenizer_path.is_file():
+            raise RuntimeError(
+                f"checkpoint is missing tokenizer assets: {checkpoint}"
+            )
+
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if config.get("tokenizer_class") == "TokenizersBackend":
+            config["tokenizer_class"] = "PreTrainedTokenizerFast"
+            config_path.write_text(
+                json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+        special_tokens = {
+            name: config[name]
+            for name in ("bos_token", "eos_token", "unk_token", "sep_token", "pad_token", "cls_token", "mask_token")
+            if name in config
+        }
+        special_map_path = checkpoint / "special_tokens_map.json"
+        if special_tokens and not special_map_path.exists():
+            special_map_path.write_text(
+                json.dumps(special_tokens, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _write_checkpoint_manifest(
+        checkpoint: Path,
+        *,
+        epoch,
+        global_step: int,
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        trainer_state,
+        trainer_control,
+        training_args,
+    ) -> None:
+        """Describe the complete native HF resume snapshot without duplicating it."""
+        from core.model_input import model_input_composition
+
+        log_history = getattr(trainer_state, "log_history", []) or []
+        losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
+        tokenizer = getattr(model, "tokenizer", None)
+        auto_model = model[0].auto_model
+        token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
         model_files = sorted(
             path.name
-            for path in checkpoint.glob("pytorch_model*.bin*")
+            for path in checkpoint.glob("model.safetensors*")
             if path.is_file()
         )
-    manifest = {
-        "format": "euromonitor-hf-resume-v1",
-        "epoch": epoch,
-        "global_step": global_step,
-        "best_loss": float(min(losses)) if losses else None,
-        # The encoder TEXT this checkpoint was trained on. Weights are only
-        # comparable, and only reusable at scoring time, together with the
-        # composition that produced them — a checkpoint trained on one
-        # composition is not interchangeable with another.
-        "model_input": model_input_composition().model_dump(),
-        # These are the exact components of the requested checkpoint dict.
-        # They remain in their native HF files so model/optimizer tensors are
-        # not serialized a second time into a multi-GB sidecar.
-        "files": {
-            "model_state_dict": model_files,
-            "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
-            "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
-            "scaler_state_dict": "scaler.pt" if scaler is not None else None,
-            "rng_state": "rng_state.pth",
-            "trainer_state": "trainer_state.json",
-            "training_args": "training_args.bin",
-        },
-        "tokenizer_token_ids": {
-            name: getattr(tokenizer, name, None) for name in token_names
-        },
-        "model_config_token_ids": {
-            name: getattr(auto_model.config, name, None) for name in token_names
-        },
-        "generation_config_token_ids": {
-            name: getattr(getattr(auto_model, "generation_config", None), name, None)
-            for name in token_names
-        },
-        "native_hf_resume": {
-            "trainer_state": "trainer_state.json",
-            "trainer_control": "trainer_state.json:control",
-            "training_args": "training_args.bin",
-            "optimizer": "optimizer.pt",
-            "scheduler": "scheduler.pt",
-            "rng": "rng_state.pth",
-        },
-    }
-    with trace_step('training.write_checkpoint_manifest'):
-        (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
-            json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
-            encoding="utf-8",
-        )
+        if not model_files:
+            model_files = sorted(
+                path.name
+                for path in checkpoint.glob("pytorch_model*.bin*")
+                if path.is_file()
+            )
+        manifest = {
+            "format": "euromonitor-hf-resume-v1",
+            "epoch": epoch,
+            "global_step": global_step,
+            "best_loss": float(min(losses)) if losses else None,
+            # The encoder TEXT this checkpoint was trained on. Weights are only
+            # comparable, and only reusable at scoring time, together with the
+            # composition that produced them — a checkpoint trained on one
+            # composition is not interchangeable with another.
+            "model_input": model_input_composition().model_dump(),
+            # These are the exact components of the requested checkpoint dict.
+            # They remain in their native HF files so model/optimizer tensors are
+            # not serialized a second time into a multi-GB sidecar.
+            "files": {
+                "model_state_dict": model_files,
+                "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
+                "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
+                "scaler_state_dict": "scaler.pt" if scaler is not None else None,
+                "rng_state": "rng_state.pth",
+                "trainer_state": "trainer_state.json",
+                "training_args": "training_args.bin",
+            },
+            "tokenizer_token_ids": {
+                name: getattr(tokenizer, name, None) for name in token_names
+            },
+            "model_config_token_ids": {
+                name: getattr(auto_model.config, name, None) for name in token_names
+            },
+            "generation_config_token_ids": {
+                name: getattr(getattr(auto_model, "generation_config", None), name, None)
+                for name in token_names
+            },
+            "native_hf_resume": {
+                "trainer_state": "trainer_state.json",
+                "trainer_control": "trainer_state.json:control",
+                "training_args": "training_args.bin",
+                "optimizer": "optimizer.pt",
+                "scheduler": "scheduler.pt",
+                "rng": "rng_state.pth",
+            },
+        }
+        with trace_step('training.write_checkpoint_manifest'):
+            (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _publication_deferred() -> bool:
+        """One flag parser for checkpoint publication owned by the run finisher."""
+        return os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS", "0").lower() in {"1", "true", "yes"}
 
 
 # _auc/_cos -> _common SSOT (see GATES_MAP.md)
@@ -1602,8 +1665,8 @@ class LateEpochLrDecayCallback(TrainerCallback):
 
 
 def checkpoint_publication_deferred() -> bool:
-    """One flag parser for checkpoint publication owned by the run finisher."""
-    return os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS", "0").lower() in {"1", "true", "yes"}
+    """Thin delegate: the flag parser lives in _CheckpointPublisher."""
+    return _CheckpointPublisher._publication_deferred()
 
 
 class DvcCheckpointCallback(TrainerCallback):
