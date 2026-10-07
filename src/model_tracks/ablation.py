@@ -18,16 +18,20 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
+from core.encoding_inputs import load_token_features, tokenization_policy
 from core.model_input import build_sku_text, model_input_info
 from core.run_log import RunLogger
 from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
 from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
+from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
+from model_tracks.embedding_forward import validate_embedding_device
 
 _LOG = RunLogger(__name__)
 
@@ -410,6 +414,7 @@ def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_che
         'missing_axes':[a for a in cfg.slice_columns if all(p.get(a) is None or p.get(a) == '' for p in chosen)]}
 
 
+@timed
 def _persist_prepared(request, cfg, token_cache):
     from model_tracks.ablation_inputs import prepare_inputs
     out_dir = resolve(cfg.output_dir)
@@ -474,14 +479,11 @@ def load_prepared(request_path, request):
 
 @timed
 def _validated_device(device):
-    from model_tracks.embedding_forward import validate_embedding_device
     return validate_embedding_device(device)
 
 
 @timed
 def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
-    import torch
-    from core.encoding_inputs import tokenization_policy, load_token_features
     if track == 'gnn_only':
         return None
     from sentence_transformers import SentenceTransformer
@@ -542,7 +544,6 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
 
 @timed
 def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
-    from model_tracks.ablation_inputs import load_batch
     encoder = None
     graph_batches = {}
     if track != 'text':
@@ -563,7 +564,6 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
 
 @timed
 def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
-    from model_tracks.ablation_inputs import load_batch
     candidate_vectors = saved_candidates
     if candidate_vectors is not None and (candidate_vectors.dtype != np.float32 or candidate_vectors.shape[0] != len(request['candidate_ids']) or not np.isfinite(candidate_vectors).all() or not np.allclose(np.linalg.norm(candidate_vectors,axis=1),1,atol=1e-4)):
         raise ValueError('saved graph candidate vector contract mismatch')
@@ -576,7 +576,6 @@ def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, s
 
 @timed
 def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
-    import torch
     indices = arrays['pair_indices']
     results = []
     for n,job in enumerate(plan['jobs'],1):
@@ -616,7 +615,6 @@ def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_ve
 @scoped_request
 def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
     """Colab inference only; all interventions and texts arrive prepared."""
-    import torch
     device = _validated_device(device)
     if output.exists():
         raise FileExistsError(output)
@@ -624,8 +622,6 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         request = json.loads(request_path.read_text())
         # Sources are relocated by the launcher but expected hashes stay frozen.
         validate_sources(request)
-        from model_tracks.ablation_inputs import load_batch
-        from core.encoding_inputs import tokenization_policy, load_token_features
         arrays = load_prepared(request_path,request)
         plan = request['prepared_inputs']
         track = request['track']
