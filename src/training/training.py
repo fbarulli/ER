@@ -6478,6 +6478,32 @@ class _HpoStream:
     """
 
     @staticmethod
+    def _retention_artifacts(
+        tag: str, model_tag: str, fold_numbers: list[int]
+    ) -> list[Path]:
+        """One trial's bulky local artifacts: fold logs + checkpoints + dumps."""
+        paths = [RESULTS / "logs" / tag]
+        paths.extend(
+            artifact(
+                "checkpoint_repo",
+                {"model_tag": model_tag, "run_tag": tag, "fold": fold, "step": 0},
+            ).parent
+            for fold in fold_numbers
+        )
+        paths.extend(RESULTS.glob(f"train_{model_tag}_{tag}_fold*_pairs.csv"))
+        return paths
+
+    @staticmethod
+    def _retention_remove(paths: list[Path]) -> None:
+        import shutil
+
+        for path in paths:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+
+    @staticmethod
     def _retain_hpo_champion(
         *, model_id: str, run_tag: str, value: float, folds: list[int]
     ) -> bool:
@@ -6485,34 +6511,21 @@ class _HpoStream:
 
         Optuna may complete two trials concurrently.  The per-model lock makes
         comparison, removal of the previous champion, and champion-record update
-        one transaction.  This mode deliberately retains local artifacts only;
-        DVC checkpoint publishing is disabled by the HPO launcher.
+        one transaction (invariant: compare -> prune/replace -> write record
+        under ONE external lock, so a concurrent trial can never observe a
+        record-less or two-champion state).  This mode deliberately retains
+        local artifacts only; DVC checkpoint publishing is disabled by the HPO
+        launcher.
         """
-        import shutil
         import tempfile
 
         model_tag = model_id.rstrip("/").rsplit("/", 1)[-1]
         record = RESULTS / f"hpo_{model_tag}_champion.json"
         lock_path = RESULTS / f".hpo-{model_tag}-retention.lock"
+        def artifacts(tag, fold_numbers):
+            return _HpoStream._retention_artifacts(tag, model_tag, fold_numbers)
 
-        def artifacts(tag: str, fold_numbers: list[int]) -> list[Path]:
-            paths = [RESULTS / "logs" / tag]
-            paths.extend(
-                artifact(
-                    "checkpoint_repo",
-                    {"model_tag": model_tag, "run_tag": tag, "fold": fold, "step": 0},
-                ).parent
-                for fold in fold_numbers
-            )
-            paths.extend(RESULTS.glob(f"train_{model_tag}_{tag}_fold*_pairs.csv"))
-            return paths
-
-        def remove(paths: list[Path]) -> None:
-            for path in paths:
-                if path.is_dir():
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    path.unlink(missing_ok=True)
+        remove = _HpoStream._retention_remove
 
         with lock_path.open("w", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -6542,50 +6555,61 @@ class _HpoStream:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
+    def _control_plane_storage():
+        """PostgreSQL study name + storage when OPTUNA_STORAGE_URL is set."""
+        if not os.environ.get("OPTUNA_STORAGE_URL"):
+            return None, None
+        from training.hpo_control_plane import (
+            create_storage,
+            generation_study_name,
+            storage_from_environment,
+        )
+
+        generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
+        model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
+        if not generation_id or not model_key:
+            raise RuntimeError(
+                "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
+                "EUROMONITOR_HPO_MODEL_KEY"
+            )
+        study_name = generation_study_name(
+            generation_id=generation_id, model_key=model_key
+        )
+        control_plane = create_storage(storage_from_environment())
+        print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
+        return study_name, control_plane
+
+    @staticmethod
+    def _restore_study_db(args, study_db: Path) -> None:
+        """Resume precondition: a downloaded sqlite study, or restore from DVC."""
+        if not args.resume:
+            return
+        if checkpoint_publication_deferred():
+            if not study_db.is_file():
+                raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
+            print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
+        else:
+            from training.dvc_store import restore_checkpoint
+
+            restore_checkpoint(RESULTS, study_db)
+            print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+
+    @staticmethod
     def _resolve_study(args):
         """Create/load the TPE study (SSOT space, sqlite or control plane)."""
         import optuna
 
         with trace_step('training.run_hpo.study_creation'):
             sampler = optuna.samplers.TPESampler(seed=SEED)
+            control_study_name, control_plane = _HpoStream._control_plane_storage()
             # sqlite storage: the sweep SURVIVES session loss — re-running with the same
             # --study resumes; every trial's params/value persist (the essential record)
+            study_name = control_study_name or f"second08-{args.model.split('/')[-1]}-dlr"
             # dlr suffix: discriminative-LR trials form a NEW objective surface —
             # never mixed into the pre-dlr TPE history (its surrogate would be poisoned
             # by trials whose values came from single-LR training)
-            study_name = f"second08-{args.model.split('/')[-1]}-dlr"
-            study_db = RESULTS / f"{study_name}.optuna.db"
-            control_plane = None
-            if os.environ.get("OPTUNA_STORAGE_URL"):
-                from training.hpo_control_plane import (
-                    create_storage,
-                    fail_stale_trials,
-                    generation_study_name,
-                    storage_from_environment,
-                )
-
-                generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
-                model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
-                if not generation_id or not model_key:
-                    raise RuntimeError(
-                        "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
-                        "EUROMONITOR_HPO_MODEL_KEY"
-                    )
-                study_name = generation_study_name(
-                    generation_id=generation_id, model_key=model_key
-                )
-                control_plane = create_storage(storage_from_environment())
-                print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
-            if args.resume and control_plane is None:
-                if checkpoint_publication_deferred():
-                    if not study_db.is_file():
-                        raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
-                    print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
-                else:
-                    from training.dvc_store import restore_checkpoint
-
-                    restore_checkpoint(RESULTS, study_db)
-                    print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+            study_db = RESULTS / f"second08-{args.model.split('/')[-1]}-dlr.optuna.db"
+            _HpoStream._restore_study_db(args, study_db)
             storage = control_plane or f"sqlite:///{study_db}"
             study = optuna.create_study(
                 direction="maximize",
@@ -6595,6 +6619,8 @@ class _HpoStream:
                 load_if_exists=True,
             )
             if control_plane is not None:
+                from training.hpo_control_plane import fail_stale_trials
+
                 fail_stale_trials(study)
         return study, control_plane, study_db
 
@@ -6612,13 +6638,7 @@ class _HpoStream:
             )
             if remaining:
                 def _persist_study(*_args) -> None:
-                    if checkpoint_publication_deferred():
-                        return
-                    if not os.environ.get("DVC_API_KEY"):
-                        return
-                    from training.dvc_store import publish_checkpoint
-
-                    publish_checkpoint(RESULTS, study_db)
+                    _HpoStream._persist_study(study_db)
 
                 study.optimize(
                     objective,
@@ -6628,48 +6648,72 @@ class _HpoStream:
                 )
 
     @staticmethod
+    def _persist_study(study_db: Path) -> None:
+        """Push the study db after each committed trial (opt-in environment)."""
+        if checkpoint_publication_deferred():
+            return
+        if not os.environ.get("DVC_API_KEY"):
+            return
+        from training.dvc_store import publish_checkpoint
+
+        publish_checkpoint(RESULTS, study_db)
+
+    @staticmethod
+    def _write_decision_trail(study, args) -> Path:
+        """Every trial's params + value on disk for an auditable decision trail."""
+        trials_df = study.trials_dataframe(
+            attrs=("number", "state", "value", "params", "user_attrs")
+        )
+        model_tag = args.model.split("/")[-1]
+        era = "-dlr"  # discriminative-LR sweep era (see study_name above)
+        trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
+        ensure_parent(trials_path)
+        trials_df.to_csv(trials_path, index=False)
+        trace_artifact("hpo_trials", trials_path, producer="training.training")
+        return trials_path
+
+    @staticmethod
+    def _write_best_record(study, args, *, selection_mode: bool) -> tuple[dict, Path]:
+        """The train_<model>_hpo_best.json payload: config + ranked signal."""
+        model_tag = args.model.split("/")[-1]
+        era = "-dlr"
+        best = {
+            "config": study.best_params,
+            "value": study.best_value,
+            "n_trials": len(study.trials),
+            "model": args.model,
+            "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
+            # which signal ranked the trials (test-leak fix, 2026-09-12):
+            # calibration Rand in both holdout and CV selection modes
+            "selection": (
+                HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
+            ),
+        }
+        out_path = artifact("hpo_best", {"model": model_tag, "era": era})
+        ensure_parent(out_path)
+        with open(out_path, "w") as f:
+            json.dump(best, f, indent=2)
+        trace_artifact("hpo_best", out_path, producer="training.training")
+        return best, out_path
+
+    @staticmethod
     def _publish_best(study, args, *, selection_mode: bool, wandb_ctx) -> None:
         """Persist the sweep's decision trail and its best config + metrics."""
         with trace_step('training.run_hpo.best_config'):
-            completed_trials = [
+            if not [
                 trial
                 for trial in study.trials
                 if trial.state.name == "COMPLETE" and trial.value is not None
-            ]
-            if not completed_trials:
+            ]:
                 raise FoldExecutionError(
                     "Optuna selection",
                     [{"status": "no_completed_trials"}],
                 )
 
-            # every trial's params + value, on disk (optuna keeps them in the study;
-            # the CSV makes the sweep's decision trail auditable without re-loading)
-            trials_df = study.trials_dataframe(
-                attrs=("number", "state", "value", "params", "user_attrs")
+            trials_path = _HpoStream._write_decision_trail(study, args)
+            best, out_path = _HpoStream._write_best_record(
+                study, args, selection_mode=selection_mode
             )
-            model_tag = args.model.split("/")[-1]
-            era = "-dlr"  # discriminative-LR sweep era (see study_name above)
-            trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
-            ensure_parent(trials_path)
-            trials_df.to_csv(trials_path, index=False)
-            trace_artifact("hpo_trials", trials_path, producer="training.training")
-            best = {
-                "config": study.best_params,
-                "value": study.best_value,
-                "n_trials": len(study.trials),
-                "model": args.model,
-                "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
-                # which signal ranked the trials (test-leak fix, 2026-09-12):
-                # calibration Rand in both holdout and CV selection modes
-                "selection": (
-                    HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
-                ),
-            }
-            out_path = artifact("hpo_best", {"model": model_tag, "era": era})
-            ensure_parent(out_path)
-            with open(out_path, "w") as f:
-                json.dump(best, f, indent=2)
-            trace_artifact("hpo_best", out_path, producer="training.training")
             if (
                 wandb_ctx is not None
                 and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
@@ -6741,18 +6785,15 @@ class OptunaObjectiveOwner:
 
     def _suggest_configuration(self, trial) -> dict:
         """Sample one config from HPO_SPACE, SSOT-fixed knobs included."""
-        import torch
+        cfg = self._fixed_ssot_knobs()
+        cfg.update(self._suggest_searchable(trial))
+        return cfg
 
-        cfg = {
+    @staticmethod
+    def _fixed_ssot_knobs() -> dict:
+        """Knobs the trial cannot steer: runtime/SSOT values, never literals."""
+        return {
             "architecture": _runtime("architecture"),
-            "epochs": trial.suggest_int("epochs", *HPO_SPACE["epochs"]),
-            "lr": trial.suggest_float("lr", *HPO_SPACE["lr"], log=True),
-            "warmup_ratio": trial.suggest_float(
-                "warmup_ratio", *HPO_SPACE["warmup_ratio"]
-            ),
-            "weight_decay": trial.suggest_float(
-                "weight_decay", *HPO_SPACE["weight_decay"]
-            ),
             "projection_dropout": _runtime("projection_dropout"),
             "label_smoothing": _runtime("label_smoothing"),
             "random_easy_enabled": bool(
@@ -6768,12 +6809,6 @@ class OptunaObjectiveOwner:
             "max_grad_norm": _runtime("max_grad_norm"),  # SSOT
             "patience": ES_PATIENCE,
             "es_threshold": ES_THRESHOLD,
-            "negative_mask_frac": trial.suggest_float(
-                "negative_mask_frac", *HPO_SPACE["negative_mask_frac"]
-            ),
-            "uniformity_weight": trial.suggest_float(
-                "uniformity_weight", *HPO_SPACE["uniformity_weight"]
-            ),
             "late_epoch_decay_enabled": bool(
                 _runtime("late_epoch_lr_decay")["enabled"]
             ),
@@ -6784,7 +6819,31 @@ class OptunaObjectiveOwner:
                 _runtime("late_epoch_lr_decay")["multiplier"]
             ),
         }
-        return cfg
+
+    @staticmethod
+    def _suggest_searchable(trial) -> dict:
+        """The six TPE suggest calls, in the original (pinned) order.
+
+        Invariant: suggest-call ORDER defines the TPE search layout — keep it
+        identical even though the fixed-knob keys were interleaved in the old
+        dict literal (they run no suggest calls).
+        """
+        return {
+            "epochs": trial.suggest_int("epochs", *HPO_SPACE["epochs"]),
+            "lr": trial.suggest_float("lr", *HPO_SPACE["lr"], log=True),
+            "warmup_ratio": trial.suggest_float(
+                "warmup_ratio", *HPO_SPACE["warmup_ratio"]
+            ),
+            "weight_decay": trial.suggest_float(
+                "weight_decay", *HPO_SPACE["weight_decay"]
+            ),
+            "negative_mask_frac": trial.suggest_float(
+                "negative_mask_frac", *HPO_SPACE["negative_mask_frac"]
+            ),
+            "uniformity_weight": trial.suggest_float(
+                "uniformity_weight", *HPO_SPACE["uniformity_weight"]
+            ),
+        }
 
     def _run_trial(self, trial, cfg: dict) -> list[dict]:
         """Train one protocol configuration over the selection folds."""
@@ -6824,6 +6883,11 @@ class OptunaObjectiveOwner:
         _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
         if _trial_loss:
             trial.set_user_attr("mean_final_train_loss", float(np.mean(_trial_loss)))
+        self._set_trajectory_attrs(trial, self._loss_histories(ok_rows))
+
+    @staticmethod
+    def _loss_histories(ok_rows: list[dict]) -> tuple[list, list]:
+        """Parse per-fold dev/train loss histories (skips unparsable rows)."""
         _dev_loss_histories = []
         _train_loss_histories = []
         for row in ok_rows:
@@ -6832,6 +6896,11 @@ class OptunaObjectiveOwner:
                 _train_loss_histories.append(json.loads(row.get("train_loss_hist", "[]")))
             except (TypeError, json.JSONDecodeError):
                 continue
+        return _dev_loss_histories, _train_loss_histories
+
+    def _set_trajectory_attrs(self, trial, histories: tuple[list, list]) -> None:
+        """Best/final dev loss + overfit signature summaries, when present."""
+        _dev_loss_histories, _train_loss_histories = histories
         _best_dev_losses = [min(v) for v in _dev_loss_histories if v]
         _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
         _overfit_flags = [
@@ -6862,9 +6931,18 @@ class OptunaObjectiveOwner:
             raise optuna.TrialPruned(
                 "no fold produced a finite calibrated Rand Index proxy"
             )
+        self._reject_on_collapse_guardrail(proxy_rows, guardrail)
         mean_rand = float(np.mean([r["calibration_rand_index"] for r in proxy_rows]))
         mean_penalty = float(np.mean([r["collapse_penalty"] for r in proxy_rows]))
         value = mean_rand - mean_penalty
+        return value, proxy_rows, mean_rand, mean_penalty
+
+    @staticmethod
+    def _reject_on_collapse_guardrail(proxy_rows: list[dict], guardrail: dict) -> None:
+        """Prune a trial whose median cosine or crossing rate breaches its
+        configured ceiling (the objective value must stay meaningful)."""
+        import optuna
+
         collapse_medians = [
             float(r["collapse_median_cosine"])
             for r in proxy_rows
@@ -6888,11 +6966,23 @@ class OptunaObjectiveOwner:
                 f"crossing_rate={max(collapse_crossing_rates):.4f} "
                 f"ceiling={float(guardrail['crossing_rate_ceiling']):.4f}"
             )
-        return value, proxy_rows, mean_rand, mean_penalty
 
     def _record_proxy_summary(self, trial, proxy_rows, value: float, mean_rand: float, mean_penalty: float, guardrail: dict) -> dict:
         """Mirror every proxy aggregate onto the trial as user attrs."""
         proxy_summary = {
+            **self._rand_summary(proxy_rows, mean_rand, mean_penalty),
+            **self._collapse_summary(proxy_rows, guardrail),
+            **self._diagnostic_summary(proxy_rows),
+        }
+        trial.set_user_attr("rand_index_objective", value)
+        for key, metric in proxy_summary.items():
+            trial.set_user_attr(key, metric)
+        return proxy_summary
+
+    @staticmethod
+    def _rand_summary(proxy_rows: list[dict], mean_rand: float, mean_penalty: float) -> dict:
+        """Calibrated Rand means over the proxy rows (+ penalty)."""
+        return {
             "mean_calibration_rand_index": mean_rand,
             "mean_calibration_adjusted_rand": float(
                 np.mean([r["calibration_adjusted_rand"] for r in proxy_rows])
@@ -6913,6 +7003,12 @@ class OptunaObjectiveOwner:
                 np.mean([r["calibration_threshold_stable"] for r in proxy_rows])
             ),
             "mean_collapse_penalty": mean_penalty,
+        }
+
+    @staticmethod
+    def _collapse_summary(proxy_rows: list[dict], guardrail: dict) -> dict:
+        """Collapse-distribution means + the crossing-rate ceiling used."""
+        return {
             "mean_collapse_median_cosine": float(
                 np.mean([r["collapse_median_cosine"] for r in proxy_rows])
             ),
@@ -6928,6 +7024,12 @@ class OptunaObjectiveOwner:
             "collapse_crossing_rate_ceiling": float(
                 guardrail["crossing_rate_ceiling"]
             ),
+        }
+
+    @staticmethod
+    def _diagnostic_summary(proxy_rows: list[dict]) -> dict:
+        """Plain diagnostic means (bridge edges, attribute-conflict rate)."""
+        return {
             "mean_diagnostic_bridge_edge_count": float(
                 np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])
             ),
@@ -6935,10 +7037,6 @@ class OptunaObjectiveOwner:
                 np.nanmean([r["attribute_conflict_error_rate"] for r in proxy_rows])
             ),
         }
-        trial.set_user_attr("rand_index_objective", value)
-        for key, metric in proxy_summary.items():
-            trial.set_user_attr(key, metric)
-        return proxy_summary
 
     def _retain_champion(self, trial, value: float, proxy_rows: list[dict]) -> None:
         """Local champion retention unless the control plane owns promotion."""
