@@ -1,0 +1,3420 @@
+{
+  "base_commit": "ada5f45",
+  "environment": {
+    "cuda_available": false,
+    "platform": "Linux-6.12.0-206.104.3.3.el9uek.aarch64-aarch64-with-glibc2.34",
+    "python": "3.14.6",
+    "torch": "2.14.0+cu130"
+  },
+  "interleaved": "alternating block order per rep",
+  "phase_stats": {
+    "slice_2000": {
+      "candidate_B": {
+        "bind_template": {
+          "max": 0.00393092699960107,
+          "mean": 0.0037458856008015574,
+          "median": 0.003707886004121974,
+          "min": 0.0035724039989872836,
+          "samples": 5
+        },
+        "bound_folder": {
+          "max": 0.019577317994844634,
+          "mean": 0.018867413599946304,
+          "median": 0.018781668000883656,
+          "min": 0.018408384999929694,
+          "samples": 5
+        },
+        "cleanup_staging": {
+          "max": 0.0012748549997922964,
+          "mean": 0.0009875880008621608,
+          "median": 0.0009886520019790623,
+          "min": 0.0007878899996285327,
+          "samples": 5
+        },
+        "cohort_gate": {
+          "max": 3.0800001695752144e-06,
+          "mean": 2.920000406447798e-06,
+          "median": 3.0000010156072676e-06,
+          "min": 2.7599999157246202e-06,
+          "samples": 5
+        },
+        "cohort_validate": {
+          "max": 1.8039994756691158e-05,
+          "mean": 1.7135999223683028e-05,
+          "median": 1.743999746395275e-05,
+          "min": 1.6000001778593287e-05,
+          "samples": 5
+        },
+        "encode_vectors": {
+          "max": 0.000577366998186335,
+          "mean": 0.0004868779993557837,
+          "median": 0.00046268599544418976,
+          "min": 0.0004474460001802072,
+          "samples": 5
+        },
+        "forward_total": {
+          "max": 1.026330187007261,
+          "mean": 0.3087556780017621,
+          "median": 0.1328658539969183,
+          "min": 0.12461879299735301,
+          "samples": 5
+        },
+        "freeze_config": {
+          "max": 0.002466350000759121,
+          "mean": 0.0024186376002035105,
+          "median": 0.002402189998974791,
+          "min": 0.00239062900072895,
+          "samples": 5
+        },
+        "graph_binding_check": {
+          "max": 0.4822997389965167,
+          "mean": 0.12397673000014038,
+          "median": 0.03538670900161378,
+          "min": 0.03229983200071729,
+          "samples": 5
+        },
+        "inline_remainder": {
+          "max": 0.0015915410076559056,
+          "mean": 0.0015397716022562235,
+          "median": 0.0015763400006107986,
+          "min": 0.001409978991432581,
+          "samples": 5
+        },
+        "prepare_total": {
+          "max": 1.9798472520014911,
+          "mean": 1.7886232172000747,
+          "median": 1.763975190002384,
+          "min": 1.6906379389984068,
+          "samples": 5
+        },
+        "rebind_checkpoint": {
+          "max": 0.00021584299975074828,
+          "mean": 0.00018985039860126564,
+          "median": 0.0001850019980338402,
+          "min": 0.00017768199904821813,
+          "samples": 5
+        },
+        "request_anchor": {
+          "max": 0.0029985959954501595,
+          "mean": 0.002922531399235595,
+          "median": 0.002931915998487966,
+          "min": 0.0028623940015677363,
+          "samples": 5
+        },
+        "reuse_or_encode": {
+          "max": 0.001741740998113528,
+          "mean": 0.0013888727997255045,
+          "median": 0.0013690160049009137,
+          "min": 0.001222896000399487,
+          "samples": 5
+        },
+        "support_load": {
+          "max": 0.08198967600037577,
+          "mean": 0.07786106580097112,
+          "median": 0.07635848700010683,
+          "min": 0.07507447299940395,
+          "samples": 5
+        },
+        "template_checkpoint": {
+          "max": 0.04517782800030545,
+          "mean": 0.0415150401990104,
+          "median": 0.040608253995742416,
+          "min": 0.03965676100051496,
+          "samples": 5
+        },
+        "template_folder": {
+          "max": 0.026464521994057577,
+          "mean": 0.025770552999165374,
+          "median": 0.025783953002246562,
+          "min": 0.024983783001516713,
+          "samples": 5
+        },
+        "track_request": {
+          "max": 1.8191692200016405,
+          "mean": 1.630601329201454,
+          "median": 1.6029207530009444,
+          "min": 1.5369081110002298,
+          "samples": 5
+        }
+      },
+      "incumbent_A": {
+        "bind_template": {
+          "max": 0.0038873269986652303,
+          "mean": 0.003636139998707222,
+          "median": 0.003527083001245046,
+          "min": 0.0034260409956914373,
+          "samples": 5
+        },
+        "bound_folder": {
+          "max": 0.019826440002361778,
+          "mean": 0.01922929760039551,
+          "median": 0.019137432998832082,
+          "min": 0.018954831000883132,
+          "samples": 5
+        },
+        "cleanup_staging": {
+          "max": 0.0008672909971210174,
+          "mean": 0.0007844257990655024,
+          "median": 0.0008017299987841398,
+          "min": 0.000715889000275638,
+          "samples": 5
+        },
+        "cohort_gate": {
+          "max": 2.120003046002239e-06,
+          "mean": 1.9040009647142142e-06,
+          "median": 1.8800019461195916e-06,
+          "min": 1.7999991541728377e-06,
+          "samples": 5
+        },
+        "cohort_validate": {
+          "max": 1.8961000023409724e-05,
+          "mean": 1.78801994479727e-05,
+          "median": 1.8439997802488506e-05,
+          "min": 1.6319998394465074e-05,
+          "samples": 5
+        },
+        "encode_vectors": {
+          "max": 0.0004787260004377458,
+          "mean": 0.0004382378006994259,
+          "median": 0.00043992599967168644,
+          "min": 0.0004086859989911318,
+          "samples": 5
+        },
+        "forward_total": {
+          "max": 0.2754519459922449,
+          "mean": 0.26988524599946684,
+          "median": 0.26957715199750965,
+          "min": 0.2645263739977963,
+          "samples": 5
+        },
+        "freeze_config": {
+          "max": 0.00120677499944577,
+          "mean": 0.0011178137996466831,
+          "median": 0.0010970139992423356,
+          "min": 0.0010878130015044007,
+          "samples": 5
+        },
+        "graph_binding_check": {
+          "max": 0.10655129500082694,
+          "mean": 0.10469507160087232,
+          "median": 0.10470707100103027,
+          "min": 0.10290665000138688,
+          "samples": 5
+        },
+        "inline_remainder": {
+          "max": 0.07196579300216399,
+          "mean": 0.0716976709998562,
+          "median": 0.07169411000722903,
+          "min": 0.0714249490047223,
+          "samples": 5
+        },
+        "prepare_total": {
+          "max": 1.8442879250033002,
+          "mean": 1.8041805579996435,
+          "median": 1.8122975359983684,
+          "min": 1.7573437489991193,
+          "samples": 5
+        },
+        "rebind_checkpoint": {
+          "max": 0.001023291999445064,
+          "mean": 0.0009910442000546026,
+          "median": 0.0009902129968395457,
+          "min": 0.0009646110011090059,
+          "samples": 5
+        },
+        "request_anchor": {
+          "max": 0.0030121579984552227,
+          "mean": 0.0029207234008936213,
+          "median": 0.0029053950056550093,
+          "min": 0.0028403539981809445,
+          "samples": 5
+        },
+        "reuse_or_encode": {
+          "max": 0.0007377279980573803,
+          "mean": 0.0006487999999080785,
+          "median": 0.0006442090016207658,
+          "min": 0.0005935279987170361,
+          "samples": 5
+        },
+        "support_load": {
+          "max": 0.09064606099855155,
+          "mean": 0.08168848839995917,
+          "median": 0.08153139100249973,
+          "min": 0.07614884499707841,
+          "samples": 5
+        },
+        "template_checkpoint": {
+          "max": 0.04163846599840326,
+          "mean": 0.04137143900006777,
+          "median": 0.04148102400358766,
+          "min": 0.041039059000468114,
+          "samples": 5
+        },
+        "template_folder": {
+          "max": 0.02786597800150048,
+          "mean": 0.026171318198612424,
+          "median": 0.025928275998012396,
+          "min": 0.02520898700095131,
+          "samples": 5
+        },
+        "track_request": {
+          "max": 1.6035818409982312,
+          "mean": 1.571284712399938,
+          "median": 1.5792067040019901,
+          "min": 1.5313170420013194,
+          "samples": 5
+        }
+      }
+    },
+    "smoke_200": {
+      "candidate_B": {
+        "bind_template": {
+          "max": 0.003599882998969406,
+          "mean": 0.003512690398201812,
+          "median": 0.0035348419987712987,
+          "min": 0.0033152399919345044,
+          "samples": 5
+        },
+        "bound_folder": {
+          "max": 0.018510584995965473,
+          "mean": 0.018274589999055024,
+          "median": 0.018274301997735165,
+          "min": 0.017909858001075918,
+          "samples": 5
+        },
+        "cleanup_staging": {
+          "max": 0.0009276109994971193,
+          "mean": 0.0008441778001724743,
+          "median": 0.0008381300031032879,
+          "min": 0.0007372079999186099,
+          "samples": 5
+        },
+        "cohort_gate": {
+          "max": 3.879998985212296e-06,
+          "mean": 2.8399997972883282e-06,
+          "median": 2.720000338740647e-06,
+          "min": 2.2800013539381325e-06,
+          "samples": 5
+        },
+        "cohort_validate": {
+          "max": 1.731999873300083e-05,
+          "mean": 1.5624200750607996e-05,
+          "median": 1.5200999769149348e-05,
+          "min": 1.5000005078036338e-05,
+          "samples": 5
+        },
+        "encode_vectors": {
+          "max": 0.0004928460002702195,
+          "mean": 0.00045814959885319694,
+          "median": 0.00044788499872083776,
+          "min": 0.0004194449938950129,
+          "samples": 5
+        },
+        "forward_total": {
+          "max": 0.08532463600568008,
+          "mean": 0.07206506720103789,
+          "median": 0.06927155999437673,
+          "min": 0.06656100700274692,
+          "samples": 5
+        },
+        "freeze_config": {
+          "max": 0.0024007890024222434,
+          "mean": 0.002382653000677237,
+          "median": 0.0023821089998818934,
+          "min": 0.002368428999034222,
+          "samples": 5
+        },
+        "graph_binding_check": {
+          "max": 0.014114371999312425,
+          "mean": 0.0075723162000940645,
+          "median": 0.005824629999551689,
+          "min": 0.00560958799906075,
+          "samples": 5
+        },
+        "inline_remainder": {
+          "max": 0.0015576580008200835,
+          "mean": 0.0014965618021960836,
+          "median": 0.0014986969872552436,
+          "min": 0.0014203380051185377,
+          "samples": 5
+        },
+        "prepare_total": {
+          "max": 1.2695218629996816,
+          "mean": 1.2613712837999629,
+          "median": 1.2603170309994312,
+          "min": 1.2533035849992302,
+          "samples": 5
+        },
+        "rebind_checkpoint": {
+          "max": 0.00016208099987125024,
+          "mean": 0.00015090560118551365,
+          "median": 0.00014976200327510014,
+          "min": 0.00014184199972078204,
+          "samples": 5
+        },
+        "request_anchor": {
+          "max": 0.0028811939992010593,
+          "mean": 0.002826810199621832,
+          "median": 0.002816233998601092,
+          "min": 0.002756592999503482,
+          "samples": 5
+        },
+        "reuse_or_encode": {
+          "max": 0.0012863750016549602,
+          "mean": 0.0011894060000486207,
+          "median": 0.001160134001111146,
+          "min": 0.0011158529996464495,
+          "samples": 5
+        },
+        "support_load": {
+          "max": 0.013936128998466302,
+          "mean": 0.013602149399957852,
+          "median": 0.013540564999857452,
+          "min": 0.013382683002419071,
+          "samples": 5
+        },
+        "template_checkpoint": {
+          "max": 0.004955140004312852,
+          "mean": 0.004889795399503782,
+          "median": 0.004928819998895051,
+          "min": 0.004764138000609819,
+          "samples": 5
+        },
+        "template_folder": {
+          "max": 0.02441453700157581,
+          "mean": 0.02419075819925638,
+          "median": 0.02414765500361682,
+          "min": 0.023899929994513514,
+          "samples": 5
+        },
+        "track_request": {
+          "max": 1.2165448600062518,
+          "mean": 1.208873750199564,
+          "median": 1.2078096739969624,
+          "min": 1.2015781169975526,
+          "samples": 5
+        }
+      },
+      "incumbent_A": {
+        "bind_template": {
+          "max": 0.0036414450041775126,
+          "mean": 0.0034983230019861367,
+          "median": 0.0034494430001359433,
+          "min": 0.003409521003050031,
+          "samples": 5
+        },
+        "bound_folder": {
+          "max": 0.020282727004087064,
+          "mean": 0.01868467519961996,
+          "median": 0.018276461996720172,
+          "min": 0.018135060996428365,
+          "samples": 5
+        },
+        "cleanup_staging": {
+          "max": 0.0008170099972630851,
+          "mean": 0.0007462969988409895,
+          "median": 0.0007330890002776869,
+          "min": 0.0006818080000812188,
+          "samples": 5
+        },
+        "cohort_gate": {
+          "max": 2.4000000848900527e-06,
+          "mean": 2.0800012862309814e-06,
+          "median": 2.0000006770715117e-06,
+          "min": 1.8400023691356182e-06,
+          "samples": 5
+        },
+        "cohort_validate": {
+          "max": 1.8920003640232608e-05,
+          "mean": 1.7656201089266686e-05,
+          "median": 1.7840000509750098e-05,
+          "min": 1.5440004062838852e-05,
+          "samples": 5
+        },
+        "encode_vectors": {
+          "max": 0.00048192599933827296,
+          "mean": 0.00042453340138308703,
+          "median": 0.0004171639993728604,
+          "min": 0.0003712860016094055,
+          "samples": 5
+        },
+        "forward_total": {
+          "max": 0.09896928400485194,
+          "mean": 0.08721802740037674,
+          "median": 0.08455702700302936,
+          "min": 0.08188579299530829,
+          "samples": 5
+        },
+        "freeze_config": {
+          "max": 0.0011530939991644118,
+          "mean": 0.0011094295994553249,
+          "median": 0.0011069739994127303,
+          "min": 0.0010737729971879162,
+          "samples": 5
+        },
+        "graph_binding_check": {
+          "max": 0.02171086399903288,
+          "mean": 0.01491969319904456,
+          "median": 0.01328496099813492,
+          "min": 0.012799315998563543,
+          "samples": 5
+        },
+        "inline_remainder": {
+          "max": 0.008500063006067649,
+          "mean": 0.0084077981991868,
+          "median": 0.008427102991845459,
+          "min": 0.008326141993165947,
+          "samples": 5
+        },
+        "prepare_total": {
+          "max": 1.2941724019983667,
+          "mean": 1.2816217058003532,
+          "median": 1.2778936450013134,
+          "min": 1.2712613240000792,
+          "samples": 5
+        },
+        "rebind_checkpoint": {
+          "max": 0.00047372599874506705,
+          "mean": 0.00045538959748228083,
+          "median": 0.00045612699977937154,
+          "min": 0.00042656399818952195,
+          "samples": 5
+        },
+        "request_anchor": {
+          "max": 0.0028933160028827842,
+          "mean": 0.0028581226004462225,
+          "median": 0.002844554001057986,
+          "min": 0.0028429539925127756,
+          "samples": 5
+        },
+        "reuse_or_encode": {
+          "max": 0.0006937689977348782,
+          "mean": 0.0006355603982228786,
+          "median": 0.0006662889973085839,
+          "min": 0.0005412869977590162,
+          "samples": 5
+        },
+        "support_load": {
+          "max": 0.015161585000896594,
+          "mean": 0.014176068199594738,
+          "median": 0.01419881200126838,
+          "min": 0.013358241998503217,
+          "samples": 5
+        },
+        "template_checkpoint": {
+          "max": 0.006276597003306961,
+          "mean": 0.006136962400341872,
+          "median": 0.0061341940017882735,
+          "min": 0.005992032998619834,
+          "samples": 5
+        },
+        "template_folder": {
+          "max": 0.02591795300031663,
+          "mean": 0.02466033939999761,
+          "median": 0.02442153599986341,
+          "min": 0.023929490998852998,
+          "samples": 5
+        },
+        "track_request": {
+          "max": 1.230679511994822,
+          "mean": 1.2191275227989535,
+          "median": 1.2157957289964543,
+          "min": 1.2086483239982044,
+          "samples": 5
+        }
+      }
+    }
+  },
+  "rep_rows": [
+    {
+      "elapsed_seconds": 0.001088,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.015162,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.005992,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.208648,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.5e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002843,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.02402,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.008328,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000811,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.271261,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00341,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.021711,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000448,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018135,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000694,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000417,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.098969,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002371,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 4e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013394,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.004764,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.201578,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.5e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002757,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.024102,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00142,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000737,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.253304,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003315,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00561,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000145,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.01791,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00116,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00044,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.066561,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 1,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002391,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013383,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.004861,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.20781,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.7e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00287,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.02439,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001456,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000928,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.260317,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003535,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.005764,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000156,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018274,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001286,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000493,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.069272,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001107,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013827,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.006134,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.23068,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.9e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002893,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.025918,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.008427,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000817,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.294172,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003582,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013273,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000456,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.020283,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000666,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00045,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.08804,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 2,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001153,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.014334,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.006277,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.214014,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.8e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002844,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.024422,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.008458,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000682,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.276606,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003449,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.01353,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000427,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018142,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000541,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000371,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.082638,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002382,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013541,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00494,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.206171,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.5e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00281,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.0239,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00155,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000808,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.258416,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.0036,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.005825,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000142,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018269,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001116,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000419,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.067991,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 3,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002368,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013936,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.004955,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.212265,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.5e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002881,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.024148,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001499,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00091,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.265298,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003528,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.014114,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000162,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.01841,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001152,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000448,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.085325,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001074,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013358,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.006187,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.215796,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.8e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002845,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.025013,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.0085,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000733,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.277894,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003641,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013285,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000474,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018587,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000686,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000482,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.084557,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 4,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001125,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.014199,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.006095,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.2265,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.8e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002865,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.023929,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.008326,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000689,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.288175,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00341,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.012799,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000473,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018276,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00059,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000403,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.081886,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002401,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.013757,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.004929,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.216545,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.5e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.002816,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.024415,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001558,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000838,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 1.269522,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.003586,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.006549,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.00015,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.018511,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001233,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.000491,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.071177,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 5,
+      "workload": "smoke_200"
+    },
+    {
+      "elapsed_seconds": 0.001097,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.076149,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.041039,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.531317,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.7e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002973,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.025209,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.071829,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000716,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.757344,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003492,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.102907,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000965,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.019137,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000644,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000448,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.264526,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002438,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.076358,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.039657,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.536908,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.6e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002956,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.024984,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.00141,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000989,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.690638,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003654,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.032983,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000178,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.018408,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001223,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000447,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.124736,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 1,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002466,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.075074,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.040608,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.553185,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.8e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002932,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.025461,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001532,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001044,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.707361,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003864,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.035387,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000188,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.019577,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001369,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000577,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.132866,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001207,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.083878,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.041638,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.5842,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.8e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002905,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.026372,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.071694,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000802,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.82018,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003848,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.106551,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001023,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.019051,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000655,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.00044,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.274348,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 2,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001088,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.081531,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.041627,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.579207,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.9e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002873,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.025928,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.071966,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000815,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.812298,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003887,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.106148,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.00099,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.019826,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000738,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000479,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.275452,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002396,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.08199,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.040447,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.602921,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.7e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002864,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.025784,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001576,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000788,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.763975,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003931,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.4823,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000183,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.018891,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001742,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000488,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.02633,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 3,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002391,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.076341,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.045178,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.819169,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.6e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002999,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.026465,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001592,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000842,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.979847,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003572,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.0323,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000185,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.018679,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001224,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000459,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.124619,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001104,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.090646,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.041481,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.603582,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.6e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.00284,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.025481,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.071425,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000722,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.844288,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003426,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.103162,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000976,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.018955,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000594,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000409,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.265523,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 4,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001093,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "freeze_config",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 2e-06,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_gate",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.076239,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "support_load",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.041071,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_checkpoint",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.558118,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "track_request",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.9e-05,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cohort_validate",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003012,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "request_anchor",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.027866,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "template_folder",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.071575,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "inline_remainder",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000867,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "cleanup_staging",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.786794,
+      "leg": "prepare",
+      "module": "incumbent_A",
+      "phase": "prepare_total",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003527,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bind_template",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.104707,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "graph_binding_check",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001001,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "rebind_checkpoint",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.019176,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "bound_folder",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000613,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "reuse_or_encode",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000416,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "encode_vectors",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.269577,
+      "leg": "forward",
+      "module": "incumbent_A",
+      "phase": "forward_total",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002402,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "freeze_config",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 3e-06,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_gate",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.079542,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "support_load",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.041685,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_checkpoint",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.640823,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "track_request",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.8e-05,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cohort_validate",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.002862,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "request_anchor",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.026159,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "template_folder",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001589,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "inline_remainder",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001275,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "cleanup_staging",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 1.801295,
+      "leg": "prepare",
+      "module": "candidate_B",
+      "phase": "prepare_total",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.003708,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bind_template",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.036914,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "graph_binding_check",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000216,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "rebind_checkpoint",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.018782,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "bound_folder",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.001387,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "reuse_or_encode",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.000463,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "encode_vectors",
+      "rep": 5,
+      "workload": "slice_2000"
+    },
+    {
+      "elapsed_seconds": 0.135227,
+      "leg": "forward",
+      "module": "candidate_B",
+      "phase": "forward_total",
+      "rep": 5,
+      "workload": "slice_2000"
+    }
+  ],
+  "reps": 5,
+  "stub_notes": [
+    "ablation.encode (GPU-only Colab lane, requires CUDA + restored portable local_inputs) replaced by the same no-op stub in BOTH modules; device=\"cpu\" forced",
+    "ablation_inputs._hybrid_metadata neutralized identically for both sides (candidate template placeholders diverge from that shared-leg validation contract)",
+    "incumbent A repaired at runtime for its latent NameError (free variable baseline) so both sides complete"
+  ],
+  "workloads": {
+    "slice_2000": "deterministic 2000-record bounded slice built by cloning smoke_200 records with suffixed sku_ids and cycled splits",
+    "smoke_200": "data/prepared/smoke_200 listings verbatim (200 records)"
+  }
+}
