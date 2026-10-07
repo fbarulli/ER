@@ -1,0 +1,52 @@
+[timing] abl.prepare state=started rss_mb=699.7
+[timing] ablation.prepare state=started rss_mb=699.7
+[timing] ablation.prepare.sources state=started rss_mb=699.7
+[timing] ablation.prepare.sources state=completed elapsed_seconds=0.018 rss_mb=699.7
+[timing] ablation.prepare.cohort state=started rss_mb=699.7
+[timing] ablation.prepare.cohort state=completed elapsed_seconds=16.071 rss_mb=699.7
+[timing] ablation.prepare.baseline_variants state=started rss_mb=699.7
+[timing] ablation.prepare.baseline_variants state=completed elapsed_seconds=12.990 rss_mb=699.7
+[timing] ablation.prepare.candidates state=started rss_mb=699.7
+[timing] ablation.prepare.candidates state=completed elapsed_seconds=75.215 rss_mb=699.7
+[timing] ablation.prepare.persist state=started rss_mb=699.7
+[timing] ablation_inputs.prepare_inputs state=started rss_mb=699.7
+[timing] ablation_inputs.slice_groups state=started rss_mb=699.7
+[timing] ablation_inputs.slice_groups state=completed elapsed_seconds=0.008 rss_mb=699.7
+[timing] ablation_inputs.tokens state=started rss_mb=699.7
+[timing] ablation_inputs.tokens state=completed elapsed_seconds=14.686 rss_mb=1080.4
+[timing] ablation_inputs.graph_topology state=started rss_mb=1080.4
+[timing] ablation_inputs.graph_topology state=completed elapsed_seconds=0.000 rss_mb=1080.4
+[timing] ablation_inputs.candidate_batches state=started rss_mb=1080.4
+[timing] ablation_inputs.candidate_batches state=completed elapsed_seconds=0.000 rss_mb=1080.4
+[timing] ablation_inputs.variant_jobs state=started rss_mb=1080.4
+[timing] ablation_inputs.variant_jobs state=completed elapsed_seconds=0.057 rss_mb=1080.4
+[timing] ablation_inputs.publish state=started rss_mb=1080.4
+[timing] ablation_inputs.publish state=completed elapsed_seconds=0.345 rss_mb=1080.6
+ablation inputs published token_batches=176 jobs=36
+[timing] ablation_inputs.prepare_inputs state=completed elapsed_seconds=15.100 rss_mb=1080.6
+[timing] ablation.prepare.persist state=completed elapsed_seconds=17.704 rss_mb=1086.4
+[timing] ablation.prepare state=completed elapsed_seconds=122.015 rss_mb=1086.4
+[timing] abl.prepare state=completed elapsed_seconds=122.018 rss_mb=1086.4
+[timing] abl.encode state=started rss_mb=1086.4
+[timing] ablation.encode state=started rss_mb=1086.4
+[timing] ablation.encode.text_vectors state=started rss_mb=1090.1
+[timing] ablation.encode.text_vectors state=completed elapsed_seconds=121.806 rss_mb=1370.1
+[timing] ablation.encode.graph_encoder state=started rss_mb=1370.1
+[timing] ablation.encode.graph_encoder state=completed elapsed_seconds=0.000 rss_mb=1370.1
+[timing] ablation.encode.candidates state=started rss_mb=1370.1
+[timing] ablation.encode.candidates state=completed elapsed_seconds=0.003 rss_mb=1370.1
+[timing] ablation.encode.jobs state=started rss_mb=1370.1
+[timing] ablation.encode.jobs state=completed elapsed_seconds=0.016 rss_mb=1370.1
+[timing] ablation.encode.persist state=started rss_mb=1370.1
+[timing] ablation.encode.persist state=completed elapsed_seconds=2.167 rss_mb=1370.1
+[timing] ablation.encode state=completed elapsed_seconds=124.087 rss_mb=1370.1
+[timing] abl.encode state=completed elapsed_seconds=124.088 rss_mb=1370.1
+[timing] abl.report state=started rss_mb=1370.1
+[timing] ablation.report state=started rss_mb=1370.1
+[timing] ablation.report.comparison state=started rss_mb=1370.1
+[timing] ablation._comparison_rows state=started rss_mb=1370.1
+[timing] ablation._comparison_rows state=completed elapsed_seconds=5.602 rss_mb=1370.1
+[timing] ablation.report.comparison state=completed elapsed_seconds=9.216 rss_mb=1370.1
+[timing] ablation.report state=completed elapsed_seconds=24.328 rss_mb=1370.1
+[timing] abl.report state=completed elapsed_seconds=24.329 rss_mb=1370.1
+round 1 wall=270.4s -> /tmp/opc/ER-abl-opt/artifacts/abl_opt/rounds/round1
