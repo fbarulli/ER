@@ -87,7 +87,7 @@ def _template_checkpoint(setup,baseline,track,vocabulary,support):
     return checkpoint
 
 
-def _track_request(setup,checkpoint,track,*,cohort,frozen_config,composer=None,token_cache=None):
+def _track_request(setup,checkpoint,track,*,baseline,cohort,frozen_config,composer=None,token_cache=None):
     """prepare() the track's tokens/tensors and read back its emitted request."""
     path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
         cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
@@ -135,7 +135,7 @@ def _copy_template(setup,track,path,request):
 def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None):
     """One track's template: checkpoint, prepared request, anchors, folder copy."""
     checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
-    path,request = _track_request(setup,checkpoint,track,cohort=cohort,
+    path,request = _track_request(setup,checkpoint,track,baseline=baseline,cohort=cohort,
         frozen_config=frozen_config,composer=composer,token_cache=token_cache)
     common_cohort = _track_cohort(track,request,common_cohort)
     request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None

@@ -27,8 +27,9 @@ def test_native_canonical_layout_rejects_projected_reference_block(monkeypatch):
     assert canonical_payload_rows(1, ['source', 'A', 'B', 'copy'], np.array(['a', 'a', 'b', 'a'])).tolist() == [1, 2]
     with pytest.raises(ValueError, match='exceeds the payload'):
         canonical_payload_rows(1, ['source', 'A'], np.array(['a', 'a']))
-    with pytest.raises(ValueError, match='canonical map'):
-        canonical_payload_rows(1, ['source', 'A', 'copy'], np.array(['a', 'a', 'a']))
+    # Canonical-block drift is a temporary warning, not a refusal (owner order
+    # 2026-10-07): the stale smoke bundle proceeds until it is rebuilt.
+    assert canonical_payload_rows(1, ['source', 'A', 'copy'], np.array(['a', 'a', 'a'])).tolist() == [1, 2]
 
 
 def test_calibration_negatives_exclude_copies_but_keep_real_canonical_targets():

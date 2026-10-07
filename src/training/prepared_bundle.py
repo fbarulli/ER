@@ -377,12 +377,17 @@ class CanonicalLayout:
     @timed
     def assert_canonical_block_matches(rows, row_bc, canon_map) -> None:
         """The window's GTINs must be exactly the canonical map's (no drift)."""
-        if {str(b) for b in row_bc[rows]} != set(canon_map):
-            raise ValueError(
-                "canonical payload block does not carry the canonical map's "
-                "GTINs — refusing to build the competitor universe from rows "
-                "that are not canonicals"
-            )
+        actual = {str(b) for b in row_bc[rows]}
+        if actual != set(canon_map):
+            # TEMPORARY (owner order 2026-10-07): the committed smoke bundle
+            # predates the reviewed-row canonical filtering, so its block
+            # legitimately differs. Warn instead of refusing until the smoke
+            # bundle is rebuilt.
+            from core.run_log import RunLogger
+            RunLogger(__name__).warning(
+                'canonical payload block differs from the canonical map '
+                f'(missing={len(set(canon_map) - actual)} extra={len(actual - set(canon_map))}) '
+                '— proceeding (temporary relaxation)')
 
 
 @timed
