@@ -28,10 +28,17 @@ first if the raw export changed.
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
+
 import pandas as pd
 
 from pipeline import build_reference, census_texts, reference_path
 from core.common import load_dataset
+from core.run_log import RunLogger
+from core.step_trace import timed
+
+log = RunLogger(__name__)
 
 
 def _brand_vocab() -> set[str]:
@@ -42,14 +49,15 @@ def _brand_vocab() -> set[str]:
     normalize_text, NOT the spelled numeric brands. spell_numeric_brand
     is applied by clean_sku_text at USE time, not census time.
     """
-    from core.progress import tracked
     df = load_dataset(columns=["brand"])
     vocab: set[str] = set()
-    for b in tracked(df["brand"].dropna().astype(str), "brand_vocab"):
-        vocab.update(b.lower().split())
+    brands = df["brand"].dropna().astype(str)
+    for brand in log.progress(brands, desc="brand_vocab", unit="brand"):
+        vocab.update(brand.lower().split())
     return vocab
 
 
+@timed
 def build() -> pd.DataFrame:
     """Rebuild the reference from the current dataset_deduped.csv."""
     from core.common import load_dataset_deduped
@@ -60,68 +68,100 @@ def build() -> pd.DataFrame:
     return ref
 
 
-def main() -> None:
-    import argparse
+def _verdict_mismatches(committed: pd.DataFrame, rebuilt: pd.DataFrame) -> pd.DataFrame:
+    """Rows whose verdict drifts between the committed and rebuilt census."""
+    merged = committed.merge(
+        rebuilt, on="token", how="outer", suffixes=("_old", "_new")
+    )
+    return merged[
+        merged["verdict_old"].fillna("") != merged["verdict_new"].fillna("")
+    ]
 
+
+def _require_committed_csv(path: Path) -> pd.DataFrame:
+    """Load the committed reference, failing with the pinned verify message."""
+    if not path.exists():
+        raise SystemExit(
+            f"[verify] FAIL: {path} missing — nothing to compare against"
+        )
+    return pd.read_csv(path, dtype={"token": str})
+
+
+def _rebuilt_reference() -> pd.DataFrame:
+    """The rebuilt reference, reusing the preparation run's object when live."""
+    from training.preparation_run import active_preparation
+
+    run = active_preparation()
+    rebuilt = run._objects.get("number_reference") if run is not None else None
+    return rebuilt if rebuilt is not None else build()
+
+
+def _verify(committed: pd.DataFrame, rebuilt: pd.DataFrame) -> None:
+    """Assert the committed reference reproduces exactly; SystemExit on drift."""
+    if len(committed) != len(rebuilt):
+        raise SystemExit(
+            f"[verify] FAIL: row count {len(committed)} vs rebuilt "
+            f"{len(rebuilt)}"
+        )
+    bad_verdict = _verdict_mismatches(committed, rebuilt)
+    if len(bad_verdict):
+        for _, row in log.progress(
+            bad_verdict.head(10).iterrows(),
+            desc="verdict_drift", unit="token",
+            total=min(10, len(bad_verdict)),
+        ):
+            log.info(
+                f"  token {row['token']!r}: {row['verdict_old']!r} -> "
+                f"{row['verdict_new']!r}"
+            )
+        raise SystemExit(
+            f"[verify] FAIL: {len(bad_verdict)} verdict mismatches"
+        )
+    log.info(
+        f"[verify] PASS: {len(committed):,} rows, all verdicts identical "
+        f"— the committed reference reproduces exactly"
+    )
+
+
+def _register_in_preparation(ref: pd.DataFrame) -> None:
+    """Publish the freshly built frame to a live preparation run, if any."""
+    from training.preparation_run import active_preparation
+
+    run = active_preparation()
+    if run is not None:
+        run._objects["number_reference"] = ref
+
+
+def _write_reference(ref: pd.DataFrame, path: Path) -> None:
+    """Persist the rebuilt reference and register it with a live run."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ref.to_csv(path, index=False)
+    _register_in_preparation(ref)
+    log.info(f"wrote {path} ({len(ref):,} rows)")
+    log.info(f"  verdict mix: {dict(ref['verdict'].value_counts())}")
+
+
+def _parse_args() -> argparse.Namespace:
+    """The lane's only switch: --verify compares instead of writing."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--verify",
         action="store_true",
         help="compare against the committed CSV instead of writing",
     )
-    args = ap.parse_args()
-    p = reference_path()
+    return ap.parse_args()
+
+
+@timed
+def main() -> None:
+    args = _parse_args()
+    path = reference_path()
 
     if args.verify:
-        if not p.exists():
-            raise SystemExit(
-                f"[verify] FAIL: {p} missing — nothing to compare against"
-            )
-        committed = pd.read_csv(p, dtype={"token": str})
-        from training.preparation_run import active_preparation
-        run = active_preparation()
-        rebuilt = run._objects.get('number_reference') if run is not None else None
-        if rebuilt is None:
-            rebuilt = build()
-        if len(committed) != len(rebuilt):
-            raise SystemExit(
-                f"[verify] FAIL: row count {len(committed)} vs rebuilt "
-                f"{len(rebuilt)}"
-            )
-        merged = committed.merge(
-            rebuilt, on="token", how="outer", suffixes=("_old", "_new")
-        )
-        bad_verdict = merged[
-            merged["verdict_old"].fillna("") != merged["verdict_new"].fillna("")
-        ]
-        if len(bad_verdict):
-            for _, r in bad_verdict.head(10).iterrows():
-                print(
-                    f"  token {r['token']!r}: {r['verdict_old']!r} -> "
-                    f"{r['verdict_new']!r}"
-                )
-            raise SystemExit(
-                f"[verify] FAIL: {len(bad_verdict)} verdict mismatches"
-            )
-        print(
-            f"[verify] PASS: {len(committed):,} rows, all verdicts identical "
-            f"— the committed reference reproduces exactly",
-            flush=True,
-        )
+        _verify(_require_committed_csv(path), _rebuilt_reference())
         return
 
-    ref = build()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    ref.to_csv(p, index=False)
-    from training.preparation_run import active_preparation
-    run = active_preparation()
-    if run is not None:
-        run._objects['number_reference'] = ref
-    print(f"wrote {p} ({len(ref):,} rows)", flush=True)
-    print(
-        f"  verdict mix: {dict(ref['verdict'].value_counts())}",
-        flush=True,
-    )
+    _write_reference(build(), path)
 
 
 if __name__ == "__main__":
