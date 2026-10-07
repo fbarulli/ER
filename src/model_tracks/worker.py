@@ -133,10 +133,17 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             if track == 'text':
                 from training.validation_inference import resolve_best_checkpoint
                 checkpoint,_ = resolve_best_checkpoint(output)
-            events.emit('attribute_ablation_export','started',device=cfg.device)
-            forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
-                graph_encoder=selected_graph_encoder if track != 'text' else None)
-            events.emit('attribute_ablation_export','completed',device=cfg.device)
+            if (gpu_only and not (setup/'ablation_templates'/track/'request.json').is_file()):
+                # 47f0641 removed ablation staging from the CPU bundle, so GPU
+                # sessions ship no templates at all; a template read here would
+                # be FileNotFoundError. Local lanes keep the loud read.
+                events.emit('attribute_ablation_export','skipped',device=cfg.device,
+                            reason='ablation is not a GPU-session phase (owner order 2026-10-07); bundle ships no templates')
+            else:
+                events.emit('attribute_ablation_export','started',device=cfg.device)
+                forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
+                    graph_encoder=selected_graph_encoder if track != 'text' else None)
+                events.emit('attribute_ablation_export','completed',device=cfg.device)
         if track == 'text':
             del selected_text_model
         else:
