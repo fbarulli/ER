@@ -218,7 +218,12 @@ def _sealed_track_report(request, validated, config):
     path.parent.mkdir(parents=True, exist_ok=True)
     document = json.dumps(validated, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
     if not path.is_file() or path.read_text() != document:
-        write(path, validated)
+        # Same encode/bytes as ablation.write(), materialized once through the
+        # C-accelerated encoder instead of 56k generator write() calls. The
+        # 1GB streaming safety belongs to ablation.write() and prepare()'s
+        # request persistence; a sealed ablation report is ~0.5-1% of that.
+        with path.open('w', encoding='utf-8') as handle:
+            handle.write(document)
     saved = request.parent/'report.json'
     if saved != path and (not saved.is_file() or saved.read_text() != document):
         write(saved, validated)
