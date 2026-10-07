@@ -1,0 +1,515 @@
+- generic [ref=e2]:
+  - navigation "Main Kaggle page navigation" [ref=e3]:
+    - generic [ref=e5]:
+      - button "Navigation menu" [ref=e7] [cursor=pointer]: menu
+      - link "Skip to content" [ref=e8] [cursor=pointer]:
+        - /url: "#site-content"
+        - text: Skip tocontent
+      - link "Return to Kaggle home page" [ref=e10] [cursor=pointer]:
+        - /url: /
+    - button "Create" [ref=e12] [cursor=pointer]
+    - generic [ref=e21]:
+      - list [ref=e22]:
+        - listitem "Home List Item" [ref=e23]:
+          - link "Home" [ref=e25] [cursor=pointer]:
+            - /url: /
+            - generic [ref=e26]:
+              - generic [aria-hidden] [ref=e29]: explore
+              - paragraph [ref=e31]: Home
+        - listitem "Competitions List Item" [ref=e32]:
+          - link "Competitions" [ref=e34] [cursor=pointer]:
+            - /url: /competitions
+            - generic [ref=e35]:
+              - generic [aria-hidden] [ref=e38]: emoji_events
+              - paragraph [ref=e40]: Competitions
+        - listitem "Benchmarks List Item" [ref=e41]:
+          - link "Benchmarks" [ref=e43] [cursor=pointer]:
+            - /url: /benchmarks
+            - generic [ref=e44]:
+              - generic [aria-hidden] [ref=e47]: leaderboard
+              - paragraph [ref=e49]: Benchmarks
+        - listitem "Game Arena List Item" [ref=e50]:
+          - link "Game Arena" [ref=e52] [cursor=pointer]:
+            - /url: /game-arena
+            - generic [ref=e53]:
+              - generic [aria-hidden] [ref=e56]: smart_toy
+              - paragraph [ref=e58]: Game Arena
+      - list [ref=e59]:
+        - listitem "Data Hub List Item" [ref=e60]:
+          - generic [ref=e61]:
+            - link "Data Hub" [ref=e62] [cursor=pointer]:
+              - /url: "#"
+              - generic [ref=e63]:
+                - generic [aria-hidden] [ref=e66]: code
+                - paragraph [ref=e68]: Data Hub
+            - button "Expand" [ref=e70] [cursor=pointer]: expand_more
+      - list [ref=e71]:
+        - listitem "More on Kaggle List Item" [ref=e72]:
+          - generic [ref=e73]:
+            - link "More on Kaggle" [ref=e74] [cursor=pointer]:
+              - /url: "#"
+              - generic [ref=e75]:
+                - generic [aria-hidden] [ref=e78]: format_list_bulleted
+                - paragraph [ref=e80]: More
+            - button "Expand" [ref=e82] [cursor=pointer]: expand_more
+  - navigation "Main menu, search and your account" [ref=e84]:
+    - generic [ref=e85]:
+      - generic [ref=e89]:
+        - generic [ref=e90]: search
+        - textbox "Search" [ref=e91]
+        - group [aria-hidden]
+      - generic [ref=e93]:
+        - link [ref=e94] [cursor=pointer]:
+          - /url: /account/login?phase=startSignInTab&returnUrl=%2Fcode
+          - button "Sign In" [ref=e95]
+        - link [ref=e97] [cursor=pointer]:
+          - /url: /account/login?phase=startRegisterTab&returnUrl=%2Fcode
+          - button "Register" [ref=e98]
+  - main [ref=e100]:
+    - generic [ref=e102]:
+      - generic [ref=e103]: Kaggle uses cookies from Google to deliver and enhance the quality of its services and to analyze traffic.
+      - generic [ref=e104]:
+        - link "Learn more" [ref=e105] [cursor=pointer]:
+          - /url: /cookies
+        - generic [ref=e107] [cursor=pointer]: OK, Got it.
+    - generic [ref=e108]:
+      - generic [ref=e113]:
+        - heading "Code" [level=1] [ref=e114]
+        - generic [ref=e115]:
+          - text: Explore and run machine learning code with Kaggle Notebooks. Find help in the
+          - link "Documentation" [ref=e116] [cursor=pointer]:
+            - /url: /docs/notebooks
+          - text: .
+        - button "New Notebook" [ref=e119] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e120]: add
+      - generic [ref=e125]:
+        - generic [ref=e128]:
+          - generic [ref=e129]: search
+          - textbox "Search public notebooks" [ref=e130]
+          - generic "Filter is added" [ref=e132]:
+            - button "Filters" [ref=e133] [cursor=pointer]:
+              - generic [aria-hidden] [ref=e134]: filter_list
+          - group [aria-hidden]
+        - generic [ref=e137]:
+          - checkbox "All notebooks" [ref=e138] [cursor=pointer]
+          - checkbox "Recently Viewed" [ref=e140] [cursor=pointer]
+          - checkbox "Package" [ref=e142] [cursor=pointer]
+          - checkbox "Python" [ref=e144] [cursor=pointer]
+          - checkbox "R" [ref=e146] [cursor=pointer]
+          - checkbox "Beginner" [ref=e148] [cursor=pointer]
+          - checkbox "NLP" [ref=e150] [cursor=pointer]
+          - checkbox "Random Forest" [ref=e152] [cursor=pointer]
+          - checkbox "GPU" [ref=e154] [cursor=pointer]
+          - checkbox "TPU" [ref=e156] [cursor=pointer]
+      - generic [ref=e159]:
+        - generic [ref=e160]:
+          - generic [ref=e162]:
+            - generic [ref=e163]:
+              - generic [aria-hidden] [ref=e164]: insights
+              - heading "Trending" [level=2] [ref=e166]
+            - button "See all Trending (604)" [ref=e167] [cursor=pointer]:
+              - generic [ref=e168]: See all (604)
+          - list [ref=e169]:
+            - 'listitem "S6E10 | One LightGBM | PB : 0.96017" [ref=e170]':
+              - 'link "S6E10 | One LightGBM | PB : 0.96017 More options for this notebook Updated 5 hours ago Predicting Airline Satisfaction" [ref=e171] [cursor=pointer]':
+                - /url: /code/miickey/s6e10-one-lightgbm-pb-0-96017
+                - generic [ref=e172]:
+                  - generic [ref=e173]:
+                    - generic [ref=e174]: "S6E10 | One LightGBM | PB : 0.96017"
+                    - button "More options for this notebook" [ref=e176]: more_vert
+                  - generic [ref=e177]: Updated 5 hours ago
+                  - generic [ref=e179]: Predicting Airline Satisfaction
+              - generic [ref=e180]:
+                - generic [ref=e181]:
+                  - button "Upvote" [ref=e182] [cursor=pointer]:
+                    - generic [ref=e183]: arrow_drop_up
+                  - generic "17 votes" [ref=e184]: "17"
+                - generic [ref=e185]:
+                  - img "bronze medal" [ref=e186]
+                  - link "mickey's profile (opens in a new tab)" [ref=e187] [cursor=pointer]:
+                    - /url: /miickey
+                    - generic "mickey" [ref=e188]
+            - 'listitem "S6E10: What Each Step Was Worth" [ref=e192]':
+              - 'link "S6E10: What Each Step Was Worth More options for this notebook Updated 2 hours ago Airline Satisfaction Data ✈️+6" [ref=e193] [cursor=pointer]':
+                - /url: /code/sachith7/s6e10-what-each-step-was-worth
+                - generic [ref=e194]:
+                  - generic [ref=e195]:
+                    - generic [ref=e196]: "S6E10: What Each Step Was Worth"
+                    - button "More options for this notebook" [ref=e198]: more_vert
+                  - generic [ref=e199]: Updated 2 hours ago
+                  - generic [ref=e201]: Airline Satisfaction Data ✈️+6
+              - generic [ref=e203]:
+                - generic [ref=e204]:
+                  - button "Upvote" [ref=e205] [cursor=pointer]:
+                    - generic [ref=e206]: arrow_drop_up
+                  - generic "9 votes" [ref=e207]: "9"
+                - link "Sachith7's profile (opens in a new tab)" [ref=e209] [cursor=pointer]:
+                  - /url: /sachith7
+                  - generic "Sachith7" [ref=e210]
+            - listitem "Stacking TFMs with Public OOF" [ref=e214]:
+              - link "Stacking TFMs with Public OOF More options for this notebook Updated 12 hours ago S6E10 TFM OOF and Test Predictions+2" [ref=e215] [cursor=pointer]:
+                - /url: /code/cdeotte/stacking-tfms-with-public-oof
+                - generic [ref=e216]:
+                  - generic [ref=e217]:
+                    - generic [ref=e218]: Stacking TFMs with Public OOF
+                    - button "More options for this notebook" [ref=e220]: more_vert
+                  - generic [ref=e221]: Updated 12 hours ago
+                  - generic [ref=e223]: S6E10 TFM OOF and Test Predictions+2
+              - generic [ref=e225]:
+                - generic [ref=e226]:
+                  - button "Upvote" [ref=e227] [cursor=pointer]:
+                    - generic [ref=e228]: arrow_drop_up
+                  - generic "25 votes" [ref=e229]: "25"
+                - generic [ref=e230]:
+                  - img "bronze medal" [ref=e231]
+                  - link "Chris Deotte's profile (opens in a new tab)" [ref=e232] [cursor=pointer]:
+                    - /url: /cdeotte
+                    - generic "Chris Deotte" [ref=e233]
+            - listitem "S6E10✈️ | Orange blend" [ref=e237]:
+              - link "S6E10✈️ | Orange blend More options for this notebook Updated 2 hours ago Predicting Airline Satisfaction+2" [ref=e238] [cursor=pointer]:
+                - /url: /code/ou20040313/s6e10-orange-blend
+                - generic [ref=e239]:
+                  - generic [ref=e240]:
+                    - generic [ref=e241]: S6E10✈️ | Orange blend
+                    - button "More options for this notebook" [ref=e243]: more_vert
+                  - generic [ref=e244]: Updated 2 hours ago
+                  - generic [ref=e246]: Predicting Airline Satisfaction+2
+              - generic [ref=e248]:
+                - generic [ref=e249]:
+                  - button "Upvote" [ref=e250] [cursor=pointer]:
+                    - generic [ref=e251]: arrow_drop_up
+                  - generic "11 votes" [ref=e252]: "11"
+                - generic [ref=e253]:
+                  - img "bronze medal" [ref=e254]
+                  - link "Orange's profile (opens in a new tab)" [ref=e255] [cursor=pointer]:
+                    - /url: /ou20040313
+                    - generic "Orange" [ref=e256]
+        - generic [ref=e260]:
+          - generic [ref=e262]:
+            - generic [ref=e263]:
+              - generic [aria-hidden] [ref=e264]: sell
+              - heading "Bigquery" [level=2] [ref=e266]
+            - button "See all Bigquery (741)" [ref=e267] [cursor=pointer]:
+              - generic [ref=e268]: See all (741)
+          - list [ref=e269]:
+            - listitem "Cyclistic Case Study use SQL and Tableau" [ref=e270]:
+              - link "Cyclistic Case Study use SQL and Tableau More options for this notebook Updated 7 months ago RIDERSHIP WEEK DAY PEAKS+3" [ref=e271] [cursor=pointer]:
+                - /url: /code/yamsaar/cyclistic-case-study-use-sql-and-tableau
+                - generic [ref=e272]:
+                  - generic [ref=e273]:
+                    - generic [ref=e274]: Cyclistic Case Study use SQL and Tableau
+                    - button "More options for this notebook" [ref=e276]: more_vert
+                  - generic [ref=e277]: Updated 7 months ago
+                  - generic [ref=e279]: RIDERSHIP WEEK DAY PEAKS+3
+              - generic [ref=e281]:
+                - generic [ref=e282]:
+                  - button "Upvote" [ref=e283] [cursor=pointer]:
+                    - generic [ref=e284]: arrow_drop_up
+                  - generic "19 votes" [ref=e285]: "19"
+                - generic [ref=e286]:
+                  - img "bronze medal" [ref=e287]
+                  - link "yam saar's profile (opens in a new tab)" [ref=e288] [cursor=pointer]:
+                    - /url: /yamsaar
+                    - generic "yam saar" [ref=e289]
+            - listitem "Bellabeat Case Study — Activity, Sleep & Marketing" [ref=e293]:
+              - link "Bellabeat Case Study — Activity, Sleep & Marketing More options for this notebook Updated 9 months ago" [ref=e294] [cursor=pointer]:
+                - /url: /code/jniordionizio/bellabeat-case-study-activity-sleep-marketing
+                - generic [ref=e295]:
+                  - generic [ref=e296]:
+                    - generic [ref=e297]: Bellabeat Case Study — Activity, Sleep & Marketing
+                    - button "More options for this notebook" [ref=e299]: more_vert
+                  - generic [ref=e300]: Updated 9 months ago
+              - generic [ref=e302]:
+                - generic [ref=e303]:
+                  - button "Upvote" [ref=e304] [cursor=pointer]:
+                    - generic [ref=e305]: arrow_drop_up
+                  - generic "22 votes" [ref=e306]: "22"
+                - generic [ref=e307]:
+                  - img "bronze medal" [ref=e308]
+                  - link "Gilson Júnior's profile (opens in a new tab)" [ref=e309] [cursor=pointer]:
+                    - /url: /jniordionizio
+                    - generic "Gilson Júnior" [ref=e310]
+            - listitem "DeepFake-VoiceDetect" [ref=e314]:
+              - link "DeepFake-VoiceDetect More options for this notebook Updated 7 months ago DeepFakeVoice-HuBERT-4Datasets+3" [ref=e315] [cursor=pointer]:
+                - /url: /code/eminkorkut/deepfake-voicedetect
+                - generic [ref=e316]:
+                  - generic [ref=e317]:
+                    - generic [ref=e318]: DeepFake-VoiceDetect
+                    - button "More options for this notebook" [ref=e320]: more_vert
+                  - generic [ref=e321]: Updated 7 months ago
+                  - generic [ref=e323]: DeepFakeVoice-HuBERT-4Datasets+3
+              - generic [ref=e325]:
+                - generic [ref=e326]:
+                  - button "Upvote" [ref=e327] [cursor=pointer]:
+                    - generic [ref=e328]: arrow_drop_up
+                  - generic "25 votes" [ref=e329]: "25"
+                - generic [ref=e330]:
+                  - img "bronze medal" [ref=e331]
+                  - link "Muhammed Emin KORKUT's profile (opens in a new tab)" [ref=e332] [cursor=pointer]:
+                    - /url: /eminkorkut
+                    - generic "Muhammed Emin KORKUT" [ref=e333]
+            - 'listitem "Nova: 50M Transactions (SuperApp E-Commerce & Logi" [ref=e337]':
+              - 'link "Nova: 50M Transactions (SuperApp E-Commerce & Logi More options for this notebook Updated 9 months ago" [ref=e338] [cursor=pointer]':
+                - /url: /code/adityathakekar/nova-50m-transactions-superapp-e-commerce-logi
+                - generic [ref=e339]:
+                  - generic [ref=e340]:
+                    - generic [ref=e341]: "Nova: 50M Transactions (SuperApp E-Commerce & Logi"
+                    - button "More options for this notebook" [ref=e343]: more_vert
+                  - generic [ref=e344]: Updated 9 months ago
+              - generic [ref=e346]:
+                - generic [ref=e347]:
+                  - button "Upvote" [ref=e348] [cursor=pointer]:
+                    - generic [ref=e349]: arrow_drop_up
+                  - generic "13 votes" [ref=e350]: "13"
+                - generic [ref=e351]:
+                  - img "bronze medal" [ref=e352]
+                  - link "Aditya Thakekar's profile (opens in a new tab)" [ref=e353] [cursor=pointer]:
+                    - /url: /adityathakekar
+                    - generic "Aditya Thakekar" [ref=e354]
+        - generic [ref=e358]:
+          - generic [ref=e360]:
+            - generic [ref=e361]:
+              - generic [aria-hidden] [ref=e362]: sell
+              - heading "Public Health" [level=2] [ref=e364]
+            - button "See all Public Health (941)" [ref=e365] [cursor=pointer]:
+              - generic [ref=e366]: See all (941)
+          - list [ref=e367]:
+            - 'listitem "Diabetes Analytics: EDA & Predictive Modeling" [ref=e368]':
+              - 'link "Diabetes Analytics: EDA & Predictive Modeling More options for this notebook Updated 13 days ago Diabetes 💉" [ref=e369] [cursor=pointer]':
+                - /url: /code/datascikhan/diabetes-analytics-eda-predictive-modeling
+                - generic [ref=e370]:
+                  - generic [ref=e371]:
+                    - generic [ref=e372]: "Diabetes Analytics: EDA & Predictive Modeling"
+                    - button "More options for this notebook" [ref=e374]: more_vert
+                  - generic [ref=e375]: Updated 13 days ago
+                  - generic [ref=e377]: Diabetes 💉
+              - generic [ref=e378]:
+                - generic [ref=e379]:
+                  - button "Upvote" [ref=e380] [cursor=pointer]:
+                    - generic [ref=e381]: arrow_drop_up
+                  - generic "11 votes" [ref=e382]: "11"
+                - link "Shair Khan's profile (opens in a new tab)" [ref=e384] [cursor=pointer]:
+                  - /url: /datascikhan
+                  - generic "Shair Khan" [ref=e385]
+            - listitem "Child's Mental Well-Being | Statistical Analysis" [ref=e389]:
+              - link "Child's Mental Well-Being | Statistical Analysis More options for this notebook Updated 4 months ago Children's Mental Well-Being Survey Pabna" [ref=e390] [cursor=pointer]:
+                - /url: /code/adittoahosankabbo/child-s-mental-well-being-statistical-analysis
+                - generic [ref=e391]:
+                  - generic [ref=e392]:
+                    - generic [ref=e393]: Child's Mental Well-Being | Statistical Analysis
+                    - button "More options for this notebook" [ref=e395]: more_vert
+                  - generic [ref=e396]: Updated 4 months ago
+                  - generic [ref=e398]: Children's Mental Well-Being Survey Pabna
+              - generic [ref=e399]:
+                - generic [ref=e400]:
+                  - button "Upvote" [ref=e401] [cursor=pointer]:
+                    - generic [ref=e402]: arrow_drop_up
+                  - generic "24 votes" [ref=e403]: "24"
+                - generic [ref=e404]:
+                  - img "bronze medal" [ref=e405]
+                  - link "Aditto Ahosan Kabbo's profile (opens in a new tab)" [ref=e406] [cursor=pointer]:
+                    - /url: /adittoahosankabbo
+                    - generic "Aditto Ahosan Kabbo" [ref=e407]
+            - listitem "airguardAi" [ref=e411]:
+              - link "airguardAi More options for this notebook Updated 5 months ago Air-quality Data of Dar es salaam, Tanzania.+3" [ref=e412] [cursor=pointer]:
+                - /url: /code/magnus32cpu/airguardai
+                - generic [ref=e413]:
+                  - generic [ref=e414]:
+                    - generic [ref=e415]: airguardAi
+                    - button "More options for this notebook" [ref=e417]: more_vert
+                  - generic [ref=e418]: Updated 5 months ago
+                  - generic [ref=e420]: Air-quality Data of Dar es salaam, Tanzania.+3
+              - generic [ref=e422]:
+                - generic [ref=e423]:
+                  - button "Upvote" [ref=e424] [cursor=pointer]:
+                    - generic [ref=e425]: arrow_drop_up
+                  - generic "10 votes" [ref=e426]: "10"
+                - generic [ref=e427]:
+                  - img "bronze medal" [ref=e428]
+                  - link "Magnus's profile (opens in a new tab)" [ref=e429] [cursor=pointer]:
+                    - /url: /magnus32cpu
+                    - generic "Magnus" [ref=e430]
+            - listitem "Water_Quality_EDA" [ref=e434]:
+              - link "Water_Quality_EDA More options for this notebook Updated 2 months ago Water Quality" [ref=e435] [cursor=pointer]:
+                - /url: /code/mobinaroudgar/water-quality-eda
+                - generic [ref=e436]:
+                  - generic [ref=e437]:
+                    - generic [ref=e438]: Water_Quality_EDA
+                    - button "More options for this notebook" [ref=e440]: more_vert
+                  - generic [ref=e441]: Updated 2 months ago
+                  - generic [ref=e443]: Water Quality
+              - generic [ref=e444]:
+                - generic [ref=e445]:
+                  - button "Upvote" [ref=e446] [cursor=pointer]:
+                    - generic [ref=e447]: arrow_drop_up
+                  - generic "9 votes" [ref=e448]: "9"
+                - link "Mobina Roudgar's profile (opens in a new tab)" [ref=e450] [cursor=pointer]:
+                  - /url: /mobinaroudgar
+                  - generic "Mobina Roudgar" [ref=e451]
+        - generic [ref=e455]:
+          - generic [ref=e457]:
+            - generic [ref=e458]:
+              - generic [aria-hidden] [ref=e459]: sell
+              - heading "Keras" [level=2] [ref=e461]
+            - button "See all Keras (8,520)" [ref=e462] [cursor=pointer]:
+              - generic [ref=e463]: See all (8,520)
+          - list [ref=e464]:
+            - listitem "Credit_Card_Customer_Churn_ANN" [ref=e465]:
+              - link "Credit_Card_Customer_Churn_ANN More options for this notebook Updated 4 months ago Credit Card Customer Churn Prediction" [ref=e466] [cursor=pointer]:
+                - /url: /code/mann14/credit-card-customer-churn-ann
+                - generic [ref=e467]:
+                  - generic [ref=e468]:
+                    - generic [ref=e469]: Credit_Card_Customer_Churn_ANN
+                    - button "More options for this notebook" [ref=e471]: more_vert
+                  - generic [ref=e472]: Updated 4 months ago
+                  - generic [ref=e474]: Credit Card Customer Churn Prediction
+              - generic [ref=e475]:
+                - generic [ref=e476]:
+                  - button "Upvote" [ref=e477] [cursor=pointer]:
+                    - generic [ref=e478]: arrow_drop_up
+                  - generic "12 votes" [ref=e479]: "12"
+                - generic [ref=e480]:
+                  - img "bronze medal" [ref=e481]
+                  - link "Mann Raval's profile (opens in a new tab)" [ref=e482] [cursor=pointer]:
+                    - /url: /mann14
+                    - generic "Mann Raval" [ref=e483]
+            - listitem "[Private Notebook]" [ref=e487]:
+              - link "[Private Notebook] More options for this notebook Updated 17 years ago" [ref=e488] [cursor=pointer]:
+                - /url: "#"
+                - generic [ref=e489]:
+                  - generic [ref=e490]:
+                    - generic [ref=e491]: "[Private Notebook]"
+                    - button "More options for this notebook" [ref=e493]: more_vert
+                  - generic [ref=e494]: Updated 17 years ago
+              - generic [ref=e496]:
+                - generic [ref=e497]:
+                  - button "Upvote" [ref=e498] [cursor=pointer]:
+                    - generic [ref=e499]: arrow_drop_up
+                  - generic "25 votes" [ref=e500]: "25"
+                - generic "Anonymous" [ref=e502]
+            - listitem "single-image-data-augmentation" [ref=e507]:
+              - link "single-image-data-augmentation More options for this notebook Updated 8 months ago [Private Datasource]" [ref=e508] [cursor=pointer]:
+                - /url: /code/mani787060/single-image-data-augmentation
+                - generic [ref=e509]:
+                  - generic [ref=e510]:
+                    - generic [ref=e511]: single-image-data-augmentation
+                    - button "More options for this notebook" [ref=e513]: more_vert
+                  - generic [ref=e514]: Updated 8 months ago
+                  - generic [ref=e516]: "[Private Datasource]"
+              - generic [ref=e517]:
+                - generic [ref=e518]:
+                  - button "Upvote" [ref=e519] [cursor=pointer]:
+                    - generic [ref=e520]: arrow_drop_up
+                  - generic "17 votes" [ref=e521]: "17"
+                - generic [ref=e522]:
+                  - img "bronze medal" [ref=e523]
+                  - link "Mani Ratan's profile (opens in a new tab)" [ref=e524] [cursor=pointer]:
+                    - /url: /mani787060
+                    - generic "Mani Ratan" [ref=e525]
+            - listitem "garbage-image-classification-CNN-Grad-CAM" [ref=e529]:
+              - link "garbage-image-classification-CNN-Grad-CAM More options for this notebook Updated 10 months ago Garbage Dataset" [ref=e530] [cursor=pointer]:
+                - /url: /code/alirezakazemifard/garbage-image-classification-cnn-grad-cam
+                - generic [ref=e531]:
+                  - generic [ref=e532]:
+                    - generic [ref=e533]: garbage-image-classification-CNN-Grad-CAM
+                    - button "More options for this notebook" [ref=e535]: more_vert
+                  - generic [ref=e536]: Updated 10 months ago
+                  - generic [ref=e538]: Garbage Dataset
+              - generic [ref=e539]:
+                - generic [ref=e540]:
+                  - button "Upvote" [ref=e541] [cursor=pointer]:
+                    - generic [ref=e542]: arrow_drop_up
+                  - generic "13 votes" [ref=e543]: "13"
+                - generic [ref=e544]:
+                  - img "bronze medal" [ref=e545]
+                  - link "Alireza Kazemifard's profile (opens in a new tab)" [ref=e546] [cursor=pointer]:
+                    - /url: /alirezakazemifard
+                    - generic "Alireza Kazemifard" [ref=e547]
+        - generic [ref=e551]:
+          - generic [ref=e553]:
+            - generic [ref=e554]:
+              - generic [aria-hidden] [ref=e555]: sell
+              - heading "Competition Notebooks" [level=2] [ref=e557]
+            - button "See all Competition Notebooks (146)" [ref=e558] [cursor=pointer]:
+              - generic [ref=e559]: See all (146)
+          - list [ref=e560]:
+            - listitem "NFL Big Data Bowl 2027" [ref=e561]:
+              - link "NFL Big Data Bowl 2027 More options for this notebook Updated 9 hours ago NFL Big Data Bowl 2027" [ref=e562] [cursor=pointer]:
+                - /url: /code/mpwolke/nfl-big-data-bowl-2027
+                - generic [ref=e563]:
+                  - generic [ref=e564]:
+                    - generic [ref=e565]: NFL Big Data Bowl 2027
+                    - button "More options for this notebook" [ref=e567]: more_vert
+                  - generic [ref=e568]: Updated 9 hours ago
+                  - generic [ref=e570]: NFL Big Data Bowl 2027
+              - generic [ref=e571]:
+                - generic [ref=e572]:
+                  - button "Upvote" [ref=e573] [cursor=pointer]:
+                    - generic [ref=e574]: arrow_drop_up
+                  - generic "16 votes" [ref=e575]: "16"
+                - generic [ref=e576]:
+                  - img "bronze medal" [ref=e577]
+                  - link "Marília Prata's profile (opens in a new tab)" [ref=e578] [cursor=pointer]:
+                    - /url: /mpwolke
+                    - generic "Marília Prata" [ref=e579]
+            - 'listitem "Gemma 4: Measure Before You Tune" [ref=e583]':
+              - 'link "Gemma 4: Measure Before You Tune More options for this notebook Updated 6 hours ago Gemma 4 Task Soundness and Local Results+2" [ref=e584] [cursor=pointer]':
+                - /url: /code/dmitriigluzdov/gemma-4-measure-before-you-tune
+                - generic [ref=e585]:
+                  - generic [ref=e586]:
+                    - generic [ref=e587]: "Gemma 4: Measure Before You Tune"
+                    - button "More options for this notebook" [ref=e589]: more_vert
+                  - generic [ref=e590]: Updated 6 hours ago
+                  - generic [ref=e592]: Gemma 4 Task Soundness and Local Results+2
+              - generic [ref=e594]:
+                - generic [ref=e595]:
+                  - button "Upvote" [ref=e596] [cursor=pointer]:
+                    - generic [ref=e597]: arrow_drop_up
+                  - generic "14 votes" [ref=e598]: "14"
+                - generic [ref=e599]:
+                  - img "bronze medal" [ref=e600]
+                  - link "Dmitrii Gluzdov's profile (opens in a new tab)" [ref=e601] [cursor=pointer]:
+                    - /url: /dmitriigluzdov
+                    - generic "Dmitrii Gluzdov" [ref=e602]
+            - listitem "Enveda CASMI 2026 w/ Sovereign Zenith" [ref=e606]:
+              - link "Enveda CASMI 2026 w/ Sovereign Zenith More options for this notebook Updated 20 hours ago rdkit 2026.3.3 wheel+16" [ref=e607] [cursor=pointer]:
+                - /url: /code/nursrijan/enveda-casmi-2026-w-sovereign-zenith
+                - generic [ref=e608]:
+                  - generic [ref=e609]:
+                    - generic [ref=e610]: Enveda CASMI 2026 w/ Sovereign Zenith
+                    - button "More options for this notebook" [ref=e612]: more_vert
+                  - generic [ref=e613]: Updated 20 hours ago
+                  - generic [ref=e615]: rdkit 2026.3.3 wheel+16
+              - generic [ref=e617]:
+                - generic [ref=e618]:
+                  - button "Upvote" [ref=e619] [cursor=pointer]:
+                    - generic [ref=e620]: arrow_drop_up
+                  - generic "12 votes" [ref=e621]: "12"
+                - generic [ref=e622]:
+                  - img "bronze medal" [ref=e623]
+                  - link "Nur Srijan's profile (opens in a new tab)" [ref=e624] [cursor=pointer]:
+                    - /url: /nursrijan
+                    - generic "Nur Srijan" [ref=e625]
+            - listitem "Gemma 4 | Budget - Aware Coding Agent v2" [ref=e629]:
+              - link "Gemma 4 | Budget - Aware Coding Agent v2 More options for this notebook Updated a day ago Google - The Gemma 4 Developer Agent Competition" [ref=e630] [cursor=pointer]:
+                - /url: /code/flexonafft/gemma-4-budget-aware-coding-agent-v2
+                - generic [ref=e631]:
+                  - generic [ref=e632]:
+                    - generic [ref=e633]: Gemma 4 | Budget - Aware Coding Agent v2
+                    - button "More options for this notebook" [ref=e635]: more_vert
+                  - generic [ref=e636]: Updated a day ago
+                  - generic [ref=e638]: Google - The Gemma 4 Developer Agent Competition
+              - generic [ref=e639]:
+                - generic [ref=e640]:
+                  - button "Upvote" [ref=e641] [cursor=pointer]:
+                    - generic [ref=e642]: arrow_drop_up
+                  - generic "15 votes" [ref=e643]: "15"
+                - generic [ref=e644]:
+                  - img "bronze medal" [ref=e645]
+                  - link "Igor Zharov's profile (opens in a new tab)" [ref=e646] [cursor=pointer]:
+                    - /url: /flexonafft
+                    - generic "Igor Zharov" [ref=e647]
+        - generic [ref=e651]:
+          - heading "Didn't find what you were looking for?" [level=2] [ref=e652]
+          - button "Explore all 1,994,064 public notebooks" [ref=e653] [cursor=pointer]
+  - alert [ref=e655]
