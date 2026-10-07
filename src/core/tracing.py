@@ -83,6 +83,11 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.run_log import RunLogger
+from core.step_trace import timed
+
+_LOG = RunLogger(__name__)
+
 # ── row contract ───────────────────────────────────────────────────────────
 TRACE_COLUMNS: tuple[str, ...] = (
     "run_id",
@@ -155,8 +160,8 @@ def resolve_run_id() -> str:
     return str(resolve_run_identity()["run_id"])
 
 
-def resolve_run_identity() -> dict[str, object]:
-    """Resolve the run id AND how it was resolved.
+def _explicit_run_identity() -> dict[str, object] | None:
+    """The first explicitly pinned run id in the environment, if any.
 
     The provenance matters as much as the value: when a file holds two runs, a
     reader must be able to see WHY they are two runs. The resolution rule plus
@@ -170,13 +175,13 @@ def resolve_run_identity() -> dict[str, object]:
                 "resolution": f"explicit env {variable}",
                 "sources": {},
             }
-    sources = run_artifact_fingerprint()
-    if not sources:
-        return {
-            "run_id": RUN_UNBOUND,
-            "resolution": "no run artifact on disk yet",
-            "sources": {},
-        }
+    return None
+
+
+def _fingerprint_run_identity(
+    sources: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    """The content fingerprint of the run artifacts that define a run."""
     joined = "|".join(
         f"{name}:{entry['size']}:{entry['sha256']}"
         for name, entry in sources.items()
@@ -186,6 +191,21 @@ def resolve_run_identity() -> dict[str, object]:
         "resolution": "content fingerprint of the run artifacts",
         "sources": sources,
     }
+
+
+def resolve_run_identity() -> dict[str, object]:
+    """Resolve the run id AND how it was resolved (see the module docstring)."""
+    explicit = _explicit_run_identity()
+    if explicit is not None:
+        return explicit
+    sources = run_artifact_fingerprint()
+    if not sources:
+        return {
+            "run_id": RUN_UNBOUND,
+            "resolution": "no run artifact on disk yet",
+            "sources": {},
+        }
+    return _fingerprint_run_identity(sources)
 
 
 def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
@@ -222,6 +242,43 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _require_scope(scope: str) -> None:
+    """Only the three declared scopes exist; anything else is a producer bug."""
+    if scope not in (SCOPE_RUN, SCOPE_ENTITY, SCOPE_GROUP):
+        raise ValueError(
+            f"unknown trace scope {scope!r}; expected one of "
+            f"{SCOPE_RUN!r}, {SCOPE_ENTITY!r}, {SCOPE_GROUP!r}"
+        )
+
+
+def _require_stage_step(stage: str, step: str) -> None:
+    """Both stage and step are mandatory (rows require a grep anchor)."""
+    if not stage or not step:
+        raise ValueError("trace rows require both stage and step")
+
+
+def _validated_counts(
+    in_count: int | None, out_count: int | None
+) -> tuple[int | None, int | None]:
+    """Counts become integral-or-None and must never be negative."""
+    incoming = None if in_count is None else int(in_count)
+    outgoing = None if out_count is None else int(out_count)
+    if incoming is not None and incoming < 0:
+        raise ValueError(f"trace in_count must be >= 0, got {incoming}")
+    if outgoing is not None and outgoing < 0:
+        raise ValueError(f"trace out_count must be >= 0, got {outgoing}")
+    return incoming, outgoing
+
+
+def _dropped_count(
+    incoming: int | None, outgoing: int | None
+) -> int | None:
+    """The funnel closes arithmetically: dropped = in − out, derived only."""
+    if incoming is not None and outgoing is not None:
+        return incoming - outgoing
+    return None
+
+
 def record(
     stage: str,
     step: str,
@@ -237,24 +294,9 @@ def record(
     at: str | None = None,
 ) -> dict[str, object]:
     """Build one trace row. ``dropped_count`` is always derived here."""
-    if scope not in (SCOPE_RUN, SCOPE_ENTITY, SCOPE_GROUP):
-        raise ValueError(
-            f"unknown trace scope {scope!r}; expected one of "
-            f"{SCOPE_RUN!r}, {SCOPE_ENTITY!r}, {SCOPE_GROUP!r}"
-        )
-    if not stage or not step:
-        raise ValueError("trace rows require both stage and step")
-    incoming = None if in_count is None else int(in_count)
-    outgoing = None if out_count is None else int(out_count)
-    if incoming is not None and incoming < 0:
-        raise ValueError(f"trace in_count must be >= 0, got {incoming}")
-    if outgoing is not None and outgoing < 0:
-        raise ValueError(f"trace out_count must be >= 0, got {outgoing}")
-    dropped = (
-        incoming - outgoing
-        if incoming is not None and outgoing is not None
-        else None
-    )
+    _require_scope(scope)
+    _require_stage_step(stage, step)
+    incoming, outgoing = _validated_counts(in_count, out_count)
     return {
         # Default to the resolved run identity rather than "". An unlabelled
         # row cannot survive: TraceRow requires run_id min_length=1, and
@@ -270,7 +312,7 @@ def record(
         "key": "" if key is None else str(key),
         "in_count": incoming,
         "out_count": outgoing,
-        "dropped_count": dropped,
+        "dropped_count": _dropped_count(incoming, outgoing),
         "reason": "" if reason is None else str(reason),
         "detail": _detail_text(detail),
         "source": "" if source is None else str(source),
@@ -297,6 +339,72 @@ def read_trace(path: Path | None = None) -> pd.DataFrame:
     return frame[list(TRACE_COLUMNS)]
 
 
+def _bucket_order(counts: Mapping[str, int]) -> list[str]:
+    """Buckets ordered by ``(-count, name)``: data-determined, never dict order."""
+    return sorted(counts, key=lambda name: (-int(counts[name]), name))
+
+
+def _nonempty_buckets_after(
+    counts: Mapping[str, int], buckets: list[str], position: int
+) -> int:
+    """How many still-to-come buckets need a reservation this pass can't eat."""
+    return sum(
+        1 for later in buckets[position + 1 :] if int(counts[later]) > 0
+    )
+
+
+def _reserve_pass(
+    counts: Mapping[str, int],
+    buckets: list[str],
+    quota: dict[str, int],
+    *,
+    per_reason: int,
+    budget: int,
+) -> int:
+    """Pass 1: every non-empty bucket gets ``min(count, per_reason)`` rows.
+
+    RESERVING one row per still-to-come bucket so a bucket can never be
+    squeezed out by a bigger one ahead of it (with a budget smaller than the
+    number of buckets that reservation is impossible; those buckets still get
+    their exact census row, which carries sample keys). Returns the budget
+    spent so far; quota only grows, so the running total equals its recomputed
+    sum.
+    """
+    spent = 0
+    for position, name in enumerate(buckets):
+        if int(counts[name]) <= 0:
+            continue
+        reserve = _nonempty_buckets_after(counts, buckets, position)
+        give = min(
+            int(counts[name]), int(per_reason), budget - spent - reserve
+        )
+        if give > 0:
+            quota[name] = give
+            spent += give
+    return spent
+
+
+def _leftover_pass(
+    counts: Mapping[str, int],
+    buckets: list[str],
+    quota: dict[str, int],
+    *,
+    budget: int,
+) -> None:
+    """Pass 2: spend what is left on the largest populations first."""
+    spent = sum(quota.values())
+    for name in buckets:
+        room = int(counts[name]) - quota[name]
+        if room <= 0:
+            continue
+        give = min(room, budget - spent)
+        if give > 0:
+            quota[name] += give
+            spent += give
+        if spent >= budget:
+            break
+
+
 def _plan_sample(
     counts: Mapping[str, int],
     *,
@@ -305,93 +413,71 @@ def _plan_sample(
 ) -> dict[str, int]:
     """Allocate the entity-row budget across buckets (deterministic).
 
-    Pass 1 gives every non-empty bucket ``min(count, per_reason)`` rows while
-    RESERVING one row for each bucket still to come, so a bucket can never be
-    squeezed out by a bigger one ahead of it (with a budget smaller than the
-    number of buckets that reservation is impossible; those buckets still get
-    their exact census row, which carries sample keys). Pass 2 spends whatever
-    budget is left on the largest populations first. Buckets are ordered by
-    ``(-count, name)``, so the plan depends only on the data, never on dict
-    iteration order.
+    See :func:`_reserve_pass` for the reservation rule; the plan depends only
+    on the data, never on dict iteration order.
     """
-    buckets = sorted(counts, key=lambda name: (-int(counts[name]), name))
+    buckets = _bucket_order(counts)
     quota = {name: 0 for name in buckets}
     budget = max(0, int(total_cap))
     if not buckets or budget <= 0:
         return quota
-
-    def spent() -> int:
-        return sum(quota.values())
-
-    for position, name in enumerate(buckets):
-        if int(counts[name]) <= 0:
-            continue
-        reserve = sum(
-            1 for later in buckets[position + 1 :] if int(counts[later]) > 0
-        )
-        give = min(
-            int(counts[name]), int(per_reason), budget - spent() - reserve
-        )
-        if give > 0:
-            quota[name] = give
-    for name in buckets:
-        room = int(counts[name]) - quota[name]
-        if room <= 0:
-            continue
-        give = min(room, budget - spent())
-        if give > 0:
-            quota[name] += give
-        if spent() >= budget:
-            break
+    _reserve_pass(
+        counts, buckets, quota, per_reason=int(per_reason), budget=budget
+    )
+    _leftover_pass(counts, buckets, quota, budget=budget)
     return quota
 
 
-def _commit(
-    existing: pd.DataFrame,
+def _drop_unlabelled_rows(frame: pd.DataFrame, stage: str) -> pd.DataFrame:
+    """Rule 1 of commit: unlabelled rows (``run_id == ""``) are dropped.
+
+    The row contract has no anonymous run; a legacy file is silently READ but
+    never allowed to masquerade as part of the current run.
+    """
+    if frame.empty:
+        return frame
+    labelled = frame["run_id"].astype(str).str.strip() != ""
+    n_unlabelled = int((~labelled).sum())
+    if n_unlabelled:
+        _LOG.warning(
+            f"[trace] dropping {n_unlabelled} legacy row(s) with no run_id "
+            f"from {stage}: the row contract has no anonymous run"
+        )
+    return frame[labelled]
+
+
+def _retain_recent_runs(
+    frame: pd.DataFrame, run_id: str, history: int
+) -> pd.DataFrame:
+    """Rule 2 of commit: only ``history`` runs survive, whole runs at a time.
+
+    First-seen order defines age (oldest out); the current run is never pruned.
+    """
+    if frame.empty:
+        return frame
+    order: list[str] = []
+    for value in frame["run_id"].astype(str):
+        if value not in order:
+            order.append(value)
+    if run_id not in order:
+        order.append(run_id)
+    keep = order[-max(1, int(history)) :]
+    return frame[frame["run_id"].astype(str).isin(keep)]
+
+
+def _merge_or_replace_stage_rows(
+    frame: pd.DataFrame,
     incoming: pd.DataFrame,
     *,
     run_id: str,
     stage: str,
-    history: int = TRACE_RUN_HISTORY,
 ) -> pd.DataFrame:
-    """Commit one stage's rows into the run-scoped trace (see module docstring).
+    """Rule 3 of commit: this stage's rows for this run REPLACE IN PLACE.
 
-    Three rules, in order:
-      1. unlabelled rows (legacy files, ``run_id == ""``) are dropped — the row
-         contract has no anonymous run;
-      2. only ``history`` runs are kept, oldest first-seen out, whole runs at a
-         time, and the current run is never pruned;
-      3. this stage's rows for this run are REPLACED IN PLACE, so re-running a
-         stage updates its rows instead of appending a second copy.
+    Same position as the rows being replaced, so flow order survives a re-run
+    even when a later stage's rows are already in the file; a stage with no
+    prior rows is concatenated at the end.
     """
-    frame = existing
-    if frame.empty and not incoming.empty:
-        return incoming.reset_index(drop=True)
-
-    if not frame.empty:
-        labelled = frame["run_id"].astype(str).str.strip() != ""
-        n_unlabelled = int((~labelled).sum())
-        if n_unlabelled:
-            print(
-                f"[trace] dropping {n_unlabelled} legacy row(s) with no run_id "
-                f"from {stage}: the row contract has no anonymous run",
-                flush=True,
-            )
-        frame = frame[labelled]
-
-    if not frame.empty:
-        order: list[str] = []
-        for value in frame["run_id"].astype(str):
-            if value not in order:
-                order.append(value)
-        if run_id not in order:
-            order.append(run_id)
-        keep = order[-max(1, int(history)) :]
-        frame = frame[frame["run_id"].astype(str).isin(keep)]
-
-    if frame.empty:
-        return incoming.reset_index(drop=True)
-
     mine = frame["run_id"].astype(str).eq(run_id) & frame["stage"].astype(str).eq(
         stage
     )
@@ -411,6 +497,29 @@ def _commit(
     if not parts:
         return incoming.reset_index(drop=True)
     return pd.concat(parts, ignore_index=True)
+
+
+def _commit(
+    existing: pd.DataFrame,
+    incoming: pd.DataFrame,
+    *,
+    run_id: str,
+    stage: str,
+    history: int = TRACE_RUN_HISTORY,
+) -> pd.DataFrame:
+    """Commit one stage's rows into the run-scoped trace (see module docstring).
+
+    Three rules, in order: drop unlabelled legacy rows (:func:`_drop_unlabelled_rows`),
+    prune whole runs past :func:`_retain_recent_runs`, then replace this
+    stage's own rows in place (:func:`_merge_or_replace_stage_rows`).
+    """
+    if existing.empty and not incoming.empty:
+        return incoming.reset_index(drop=True)
+    frame = _drop_unlabelled_rows(existing, stage)
+    frame = _retain_recent_runs(frame, run_id, history)
+    if frame.empty:
+        return incoming.reset_index(drop=True)
+    return _merge_or_replace_stage_rows(frame, incoming, run_id=run_id, stage=stage)
 
 
 def _as_int_or_none(value: object) -> int | None:
@@ -451,6 +560,14 @@ class TraceRun:
     docstring) and writes the whole frame once via the shared atomic
     mechanism. A crash mid-stage therefore leaves the previous stage's trace
     intact instead of a half-written file.
+
+    Owner-class responsibilities:
+
+      - bucketize a record set and record its exact census -> _bucketize_recordset
+      - emit the group (census) rows                        -> _census_rows
+      - emit the bounded entity-sample rows                 -> _entity_rows
+      - emit the sample-budget run row                      -> _sample_budget_row
+      - resolve and stamp the run identity                  -> _resolved_identity
     """
 
     def __init__(self, stage: str, run_id: str | None = None) -> None:
@@ -551,6 +668,167 @@ class TraceRun:
             source=contract,
         )
 
+    # ── entity sampling: the three owned row kinds ─────────────────────────
+
+    def _bucketize_recordset(
+        self, records: Iterable[object], reason_of: object
+    ) -> tuple[int, dict[str, list[object]], dict[str, int]]:
+        """Population size, labels -> the exact per-bucket membership and counts."""
+        rows = list(records)
+        buckets: dict[str, list[object]] = {}
+        for value in rows:
+            label = "" if reason_of is None else str(reason_of(value))
+            buckets.setdefault(label, []).append(value)
+        counts = {name: len(values) for name, values in buckets.items()}
+        return len(rows), buckets, counts
+
+    def _entity_row(
+        self,
+        step: str,
+        reason: str,
+        value: object,
+        *,
+        key_of: object,
+        detail_of: object,
+        source: object,
+        stamp: str,
+    ) -> dict[str, object]:
+        """One entity row: the sampled pair carries its bucket as its reason."""
+        return {
+            "stage": self.stage,
+            "step": str(step),
+            "scope": SCOPE_ENTITY,
+            "key": "" if key_of is None else str(key_of(value)),
+            "in_count": None,
+            "out_count": None,
+            "dropped_count": None,
+            "reason": reason,
+            "detail": _detail_text(
+                None if detail_of is None else detail_of(value)
+            ),
+            "source": "" if source is None else str(source),
+            "producer": PRODUCER,
+            "run_id": self.run_id,
+            "at": stamp,
+        }
+
+    def _entity_rows(
+        self,
+        step: str,
+        buckets: Mapping[str, list[object]],
+        counts: Mapping[str, int],
+        quota: Mapping[str, int],
+        *,
+        key_of: object,
+        detail_of: object,
+        source: object,
+        stamp: str,
+    ) -> list[dict[str, object]]:
+        """The sampled ENTITY rows, in bucket order, within each bucket's quota."""
+        sampled: list[dict[str, object]] = []
+        for name in sorted(buckets, key=lambda key: (-counts[key], key)):
+            chosen = buckets[name][: int(quota.get(name, 0))]
+            for value in chosen:
+                sampled.append(
+                    self._entity_row(
+                        step,
+                        name,
+                        value,
+                        key_of=key_of,
+                        detail_of=detail_of,
+                        source=source,
+                        stamp=stamp,
+                    )
+                )
+        return sampled
+
+    def _census_detail(
+        self, bucket: list[object], take: int, *, key_of: object
+    ) -> dict[str, object]:
+        """A group row's readback: exact population, sample slice, sample keys."""
+        population = len(bucket)
+        detail: dict[str, object] = {
+            "population": population,
+            "sampled": take,
+            "omitted": population - take,
+        }
+        if population > take:
+            detail["sample_keys"] = [
+                "" if key_of is None else str(key_of(value))
+                for value in bucket[:5]
+            ]
+        return detail
+
+    def _census_rows(
+        self,
+        step: str,
+        buckets: Mapping[str, list[object]],
+        counts: Mapping[str, int],
+        quota: Mapping[str, int],
+        *,
+        key_of: object,
+        source: object,
+        stamp: str,
+    ) -> list[dict[str, object]]:
+        """One GROUP row per bucket: the EXACT census of every reason bucket."""
+        rows: list[dict[str, object]] = []
+        for name in sorted(buckets, key=lambda key: (-counts[key], key)):
+            take = int(quota.get(name, 0))
+            rows.append(
+                record(
+                    self.stage,
+                    f"{step}.reason_census",
+                    scope=SCOPE_GROUP,
+                    key="",
+                    in_count=counts[name],
+                    out_count=take,
+                    reason=name,
+                    detail=self._census_detail(
+                        buckets[name], take, key_of=key_of
+                    ),
+                    source=source,
+                    run_id=self.run_id,
+                    at=stamp,
+                )
+            )
+        return rows
+
+    def _sample_budget_row(
+        self,
+        step: str,
+        *,
+        population: int,
+        sampled: int,
+        n_buckets: int,
+        per_reason: int,
+        total_cap: int,
+        source: object,
+        stamp: str,
+    ) -> dict[str, object]:
+        """One RUN row announcing the sampling budget actually spent."""
+        return record(
+            self.stage,
+            f"{step}.sample_budget",
+            in_count=population,
+            out_count=sampled,
+            reason=(
+                "every reason bucket is censused exactly above; the entity "
+                "rows are a bounded stratified sample of that census"
+            ),
+            detail={
+                "population": population,
+                "sampled": sampled,
+                "omitted": population - sampled,
+                "buckets": n_buckets,
+                "per_reason": int(per_reason),
+                "total_cap": int(total_cap),
+                "full_census": "" if source is None else str(source),
+            },
+            source=source,
+            run_id=self.run_id,
+            at=stamp,
+        )
+
     def add_entities(
         self,
         step: str,
@@ -577,98 +855,37 @@ class TraceRun:
         Returns a summary mapping (population/sampled/omitted/per-bucket) so a
         caller can put the same numbers in its own step row.
         """
-        rows = list(records)
-        stamp = self._stamp()
-        buckets: dict[str, list[object]] = {}
-        for value in rows:
-            label = "" if reason_of is None else str(reason_of(value))
-            buckets.setdefault(label, []).append(value)
-        counts = {name: len(values) for name, values in buckets.items()}
+        population, buckets, counts = self._bucketize_recordset(records, reason_of)
         quota = _plan_sample(
             counts, per_reason=int(per_reason), total_cap=int(total_cap)
         )
-
-        emitted: list[dict[str, object]] = []
-        sampled_rows: list[dict[str, object]] = []
-        for name in sorted(buckets, key=lambda key: (-counts[key], key)):
-            take = int(quota.get(name, 0))
-            chosen = buckets[name][:take]
-            for value in chosen:
-                sampled_rows.append(
-                    {
-                        "stage": self.stage,
-                        "step": str(step),
-                        "scope": SCOPE_ENTITY,
-                        "key": "" if key_of is None else str(key_of(value)),
-                        "in_count": None,
-                        "out_count": None,
-                        "dropped_count": None,
-                        "reason": name,
-                        "detail": _detail_text(
-                            None if detail_of is None else detail_of(value)
-                        ),
-                        "source": "" if source is None else str(source),
-                        "producer": PRODUCER,
-                        "run_id": self.run_id,
-                        "at": stamp,
-                    }
-                )
-            census_detail: dict[str, object] = {
-                "population": counts[name],
-                "sampled": take,
-                "omitted": counts[name] - take,
-            }
-            if counts[name] > take:
-                census_detail["sample_keys"] = [
-                    "" if key_of is None else str(key_of(value))
-                    for value in buckets[name][:5]
-                ]
-            emitted.append(
-                record(
-                    self.stage,
-                    f"{step}.reason_census",
-                    scope=SCOPE_GROUP,
-                    key="",
-                    in_count=counts[name],
-                    out_count=take,
-                    reason=name,
-                    detail=census_detail,
-                    source=source,
-                    run_id=self.run_id,
-                    at=stamp,
-                )
-            )
+        stamp = self._stamp()
+        emitted: list[dict[str, object]] = self._census_rows(
+            step, buckets, counts, quota, key_of=key_of, source=source, stamp=stamp
+        )
+        sampled_rows = self._entity_rows(
+            step, buckets, counts, quota,
+            key_of=key_of, detail_of=detail_of, source=source, stamp=stamp,
+        )
         emitted.extend(sampled_rows)
         sampled = len(sampled_rows)
         emitted.append(
-            record(
-                self.stage,
-                f"{step}.sample_budget",
-                in_count=len(rows),
-                out_count=sampled,
-                reason=(
-                    "every reason bucket is censused exactly above; the entity "
-                    "rows are a bounded stratified sample of that census"
-                ),
-                detail={
-                    "population": len(rows),
-                    "sampled": sampled,
-                    "omitted": len(rows) - sampled,
-                    "buckets": len(buckets),
-                    "per_reason": int(per_reason),
-                    "total_cap": int(total_cap),
-                    "full_census": "" if source is None else str(source),
-                },
+            self._sample_budget_row(
+                step,
+                population=population,
+                sampled=sampled,
+                n_buckets=len(buckets),
+                per_reason=int(per_reason),
+                total_cap=int(total_cap),
                 source=source,
-                run_id=self.run_id,
-                at=stamp,
+                stamp=stamp,
             )
         )
         self._rows.extend(emitted)
         return {
-            "population": len(rows),
+            "population": population,
             "sampled": sampled,
-            "omitted": len(rows) - sampled,
+            "omitted": population - sampled,
             "per_reason": {name: counts[name] for name in counts},
             "sampled_per_reason": {
                 name: int(quota.get(name, 0)) for name in counts
@@ -680,19 +897,43 @@ class TraceRun:
         rows = [self._identity_row(), *self._rows]
         return pd.DataFrame(rows, columns=list(TRACE_COLUMNS))
 
+    @timed
     def write(self, path: Path | None = None) -> Path:
         """Commit this stage's rows to the consolidated trace."""
         from core.manifest import atomic_write_csv
 
         target = path if path is not None else trace_path()
         target.parent.mkdir(parents=True, exist_ok=True)
-        incoming = self.rows()
-        incoming["run_id"] = self.run_id
+        incoming = self._incoming_frame()
         frame = _commit(read_trace(target), incoming, run_id=self.run_id, stage=self.stage)
         frame = _normalize_counts(frame)
         assert_trace_frame(frame, path=target)
         atomic_write_csv(frame, target, index=False)
         return target
+
+    def _incoming_frame(self) -> pd.DataFrame:
+        """This stage's rows with the run id forced onto every one of them.
+
+        The force is load-bearing: the ``run_identity`` row (and any row added
+        before the resolved id was known) may have been built while the run id
+        was still unbound, but after resolution the whole commit belongs to the
+        one resolved run.
+        """
+        incoming = self.rows()
+        incoming["run_id"] = self.run_id
+        return incoming
+
+    def _resolved_identity(self) -> dict[str, object]:
+        """The run identity, resolved once per commit, or the caller's explicit one."""
+        if self._run_id is None:
+            identity = resolve_run_identity()
+            self._run_id = str(identity["run_id"])
+            self._identity = identity
+        return self._identity or {
+            "run_id": self.run_id,
+            "resolution": "explicit run id supplied by the caller",
+            "sources": {},
+        }
 
     def _identity_row(self) -> dict[str, object]:
         """The stage's first row: which run these rows belong to, and why.
@@ -702,15 +943,7 @@ class TraceRun:
         sha256 of each artifact the fingerprint was taken from. Two runs in one
         file are therefore explainable from the file.
         """
-        if self._run_id is None:
-            identity = resolve_run_identity()
-            self._run_id = str(identity["run_id"])
-            self._identity = identity
-        identity = self._identity or {
-            "run_id": self.run_id,
-            "resolution": "explicit run id supplied by the caller",
-            "sources": {},
-        }
+        identity = self._resolved_identity()
         return record(
             self.stage,
             "run_identity",
@@ -757,22 +990,23 @@ def sample_keys(values: object, *, limit: int = 5) -> list[str]:
     return unique[: int(limit)]
 
 
-def assert_trace_frame(frame: pd.DataFrame, *, path: object = "") -> None:
-    """Fail loudly if a trace frame violates the row contract."""
-    missing = [column for column in TRACE_COLUMNS if column not in frame.columns]
-    if missing:
+def _reject_missing_columns(frame: pd.DataFrame, path: object) -> None:
+    if missing := [column for column in TRACE_COLUMNS if column not in frame.columns]:
         raise ValueError(
             f"trace frame {path} is missing columns {missing}; "
             f"expected {list(TRACE_COLUMNS)}"
         )
-    extra = [column for column in frame.columns if column not in TRACE_COLUMNS]
-    if extra:
+
+
+def _reject_undeclared_columns(frame: pd.DataFrame, path: object) -> None:
+    if extra := [column for column in frame.columns if column not in TRACE_COLUMNS]:
         raise ValueError(
             f"trace frame {path} carries undeclared columns {extra}; "
             f"expected {list(TRACE_COLUMNS)}"
         )
-    if frame.empty:
-        return
+
+
+def _reject_blank_stage_or_step(frame: pd.DataFrame, path: object) -> None:
     blank = frame["stage"].astype(str).str.strip().eq("") | frame["step"].astype(
         str
     ).str.strip().eq("")
@@ -780,17 +1014,34 @@ def assert_trace_frame(frame: pd.DataFrame, *, path: object = "") -> None:
         raise ValueError(
             f"trace frame {path} has {int(blank.sum())} rows without stage/step"
         )
+
+
+def _reject_anonymous_rows(frame: pd.DataFrame, path: object) -> None:
     anonymous = frame["run_id"].astype(str).str.strip().eq("")
     if bool(anonymous.any()):
         raise ValueError(
             f"trace frame {path} has {int(anonymous.sum())} rows with no "
             f"run_id — every row must belong to a run"
         )
+
+
+def _reject_unknown_scopes(frame: pd.DataFrame, path: object) -> None:
     unknown = ~frame["scope"].astype(str).isin([SCOPE_RUN, SCOPE_ENTITY, SCOPE_GROUP])
     if bool(unknown.any()):
         raise ValueError(
             f"trace frame {path} has {int(unknown.sum())} rows with an unknown scope"
         )
+
+
+def assert_trace_frame(frame: pd.DataFrame, *, path: object = "") -> None:
+    """Fail loudly if a trace frame violates the row contract."""
+    _reject_missing_columns(frame, path)
+    _reject_undeclared_columns(frame, path)
+    if frame.empty:
+        return
+    _reject_blank_stage_or_step(frame, path)
+    _reject_anonymous_rows(frame, path)
+    _reject_unknown_scopes(frame, path)
 
 
 def detail_json(text: object) -> dict[str, object]:
