@@ -190,24 +190,37 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
             request, result, source, calibration = _calibration_source(destination, track)
             binding, threshold, document = _wrote_binding(request, track, calibration, source)
         with _LOG.section('ablation.complete.report'):
-            previous = request.parent/'report.json'
-            validated = json.loads(previous.read_text()) if previous.exists() else None
-            trusted, cached = _trusted_saved_report(result, threshold, binding, previous, validated, document)
-            from model_tracks.ablation import save_report
-            if trusted:
-                validated = cached
-            else:
-                validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
-            save_report(request,validated,config=resolve(suite.ablation_config))
-            previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')
+            validated = _saved_track_report(request, result, threshold, binding, document, suite)
         with _LOG.section('ablation.complete.persist'):
-            outputs[track] = {'request':source_name(request),'status':'verified saved GPU result'}
-            if publisher is not None:
-                artifact = publisher(request,result,validated,str(binding))
-                outputs[track]['artifact'] = source_name(artifact)
-    receipt = destination/'post_training_ablation.json'
-    write(receipt,{'tracks':outputs,'retraining':False,'gpu_reopened':False})
+            _published_track_outputs(outputs, track, request, result, validated, binding, publisher)
+    with _LOG.section('ablation.complete.receipt'):
+        receipt = destination/'post_training_ablation.json'
+        write(receipt,{'tracks':outputs,'retraining':False,'gpu_reopened':False})
     return receipt
+
+
+def _saved_track_report(request, result, threshold, binding, document, suite):
+    """Restore the cached report when trusted, otherwise recompute and seal it."""
+    from graph_tracks.data import file_hash
+    previous = request.parent/'report.json'
+    validated = json.loads(previous.read_text()) if previous.exists() else None
+    trusted, cached = _trusted_saved_report(result, threshold, binding, previous, validated, document)
+    from model_tracks.ablation import save_report
+    if trusted:
+        validated = cached
+    else:
+        validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
+    save_report(request,validated,config=resolve(suite.ablation_config))
+    previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')
+    return validated
+
+
+def _published_track_outputs(outputs, track, request, result, validated, binding, publisher):
+    """Record one track's saved-artifact status and publish its git artifact."""
+    outputs[track] = {'request':source_name(request),'status':'verified saved GPU result'}
+    if publisher is not None:
+        artifact = publisher(request,result,validated,str(binding))
+        outputs[track]['artifact'] = source_name(artifact)
 
 
 def git_publisher(suite: SuiteConfig):
