@@ -19,9 +19,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from core.run_log import RunLogger
+from core.model_input import model_input_composition
 from training.prepare_all_trace import timed
 from graph_tracks.data import GraphBatch, RELATIONS, tensorize, file_hash
 from graph_tracks.pooling import topology
+from model_tracks.ablation import checkpoint_identity, digest, resolve
+from model_tracks.text_export import prepare_tokens
 
 
 from graph_tracks.prepared_inputs import save_batch, load_batch
@@ -53,7 +56,6 @@ def _frozen_pairs(request, arrays):
 
 def _slice_groups(request, plan):
     """Group pair rows by the configured slice axes, pair order preserved."""
-    from model_tracks.ablation import digest
     axes = request['settings']['slice_columns']
     for n,pair in _LOG.progress(enumerate(request['pairs']),desc='ablation_slice_groups',unit='pair',total=len(request['pairs'])):
         key = digest({axis:pair.get(axis) for axis in axes})
@@ -63,17 +65,14 @@ def _slice_groups(request, plan):
 
 def _token_batches(request, arrays, batch_size, plan, *, token_cache=None):
     """Frozen native tokenization for text/hybrid tracks (no encoding)."""
-    from model_tracks.ablation import resolve
     if request['track'] != 'gnn_only':
         checkpoint = request['checkpoint'] if request['track']=='text' else request['text_checkpoint']
         print('[ablation/local] using frozen native tokenizer; no encoding',flush=True)
-        from model_tracks.text_export import prepare_tokens
         plan.update(prepare_tokens(resolve(checkpoint),request['texts'],arrays,batch_size=batch_size,cache=token_cache))
 
 
 def _graph_payload(request):
     """Load the graph checkpoint, rejecting schema and split-context drift."""
-    from model_tracks.ablation import resolve
     payload = torch.load(resolve(request['checkpoint']),map_location='cpu',weights_only=False)
     if payload.get('schema') != 'er-graph-checkpoint-v1' or payload['manifest']['track'] != request['track']:
         raise ValueError('graph checkpoint schema/track mismatch')
@@ -85,8 +84,6 @@ def _graph_payload(request):
 def _hybrid_metadata(request,payload):
     """Hybrid's text checkpoint sha and model composition must match training."""
     if request['track'] == 'hybrid':
-        from model_tracks.ablation import checkpoint_identity, resolve
-        from core.model_input import model_input_composition
         metadata = payload['manifest']['text_metadata']
         if metadata['checkpoint_sha256'] != checkpoint_identity(resolve(request['text_checkpoint'])) or metadata['composition'] != model_input_composition().model_dump(mode='json'):
             raise ValueError('hybrid text checkpoint/composition differs from training')
@@ -142,7 +139,6 @@ def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,bat
 
 def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Deduped inference jobs; graph batches saved once per record set."""
-    from model_tracks.ablation import digest
     job_lookup = {}
     for variant in _LOG.progress(request['variants'],desc='ablation_variant_jobs',unit='variant',total=len(request['variants'])):
         key = digest({'text':variant['text_indices'],'graph':variant['records']})
