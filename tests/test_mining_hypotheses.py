@@ -456,7 +456,10 @@ def _provenance_blocks() -> dict[str, str]:
                 target = ast.unparse(node.targets[0])
                 if target == "train_neg" and text == "train_neg = neg":
                     _record("alias", node, index)
-                elif target == "neg_sources":
+                elif target == "neg_sources" and "data" in text:
+                    # `neg_sources = self.neg_sources` in the phase-method
+                    # preamble must never win: the real initializer reads the
+                    # neg_source column (or falls back to the "gate" label).
                     _record("sources_init", node, index)
                 elif target == "train_neg_sources":
                     _record("sources_copy", node, index)
@@ -496,7 +499,21 @@ def _provenance_blocks() -> dict[str, str]:
             for nested in _child_bodies(node):
                 walk(nested)
 
-    walk(fn.body)
+    # The statements live (verbatim) inside _TrainerDriver's phase methods;
+    # _main_inner is a thin shell over _TrainerDriver().run(). Walk each
+    # method body in class definition order — the augmentation statements
+    # keep train.py's own source order within and across those methods, and
+    # the miner loop still feeds the train_neg alias that follows it.
+    driver = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_TrainerDriver"
+    )
+    roots = [fn.body]
+    for member in driver.body:
+        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            roots.append(member.body)
+    for root in roots:
+        walk(root)
     order = [
         "alias", "sources_init", "sources_copy", "targeted", "cross_brand",
         "attr_mine", "attr", "guard", "balance_flag", "balance",

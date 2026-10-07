@@ -1150,13 +1150,13 @@ def mine_cross_brand_negatives(
     *,
     existing: np.ndarray | None = None,
     n_target: int,
-    require_agreement: tuple,
-    min_similarity: float,
-    max_per_canonical: int,
-    max_per_brand: int,
+    require_agreement: Sequence[str] = ("volume", "package_type"),
+    min_similarity: float = 0.0,
+    max_per_canonical: int = 0,
+    max_per_brand: int = 0,
     volume_relative_tolerance: float = 0.0,
     volume_absolute_tolerance_ml: float = 0.0,
-    exclude_conflicting: bool = False,
+    exclude_conflicting: bool = True,
     funnel: CrossBrandMiningFunnel | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine cross-brand hard negatives — one phase-ordered pass on
