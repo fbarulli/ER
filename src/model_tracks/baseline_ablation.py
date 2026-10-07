@@ -10,7 +10,7 @@ from core.step_trace import timed
 from graph_tracks.data import file_hash, load_records, load_text_cache
 from graph_tracks.report import dev_threshold
 from graph_tracks.train import load_pairs
-from model_tracks.ablation import checkpoint_identity, report, request_context, write
+from model_tracks.ablation import checkpoint_identity, report, request_context, resolve, write
 from model_tracks.staged_ablation import forward as forward_staged
 
 _LOG = RunLogger(__name__)
@@ -66,7 +66,6 @@ def _dev_scores(pairs_path, records, vectors):
 def _calibrated_calibration(checkpoint_sha256, vectors_path, vectors, metadata, records_path, pairs_path, indices, labels, scores):
     """The BaselineCalibration for the untrained checkpoint, or identity raise."""
     with _LOG.section('ablation.baseline.calibrate'):
-        from model_tracks.ablation import resolve
         if metadata.get('checkpoint_sha256') != checkpoint_sha256:
             raise ValueError('baseline calibration vectors differ from frozen checkpoint')
         return BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
@@ -108,7 +107,6 @@ def _persist_baseline(request_path, result):
 def complete(output: Path, setup: Path, *, config: Path | None = None):
     """Fit the untrained baseline threshold on dev; consume saved ablation only."""
     with _LOG.section('ablation.baseline.load'):
-        from model_tracks.ablation import resolve
         request_path = output/'ablation/request.json'
         request = json.loads(request_path.read_text())
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
