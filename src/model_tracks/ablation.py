@@ -116,6 +116,9 @@ def resolve(path):
     return path if path.is_absolute() else TRAIN_ROOT/path
 
 
+_JSON_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False)
+
+
 def digest(value):
     # STREAMED, never materialized. `json.dumps` builds the whole document as
     # one contiguous string before hashing; an exhaustive-cohort request is
@@ -126,7 +129,7 @@ def digest(value):
     # cohort_sha256 / content-addressed directory name derived from them — are
     # byte-identical to the previous implementation; only peak memory drops.
     hasher = hashlib.sha256()
-    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
+    for chunk in _JSON_ENCODER.iterencode(value):
         hasher.update(chunk.encode())
     return hasher.hexdigest()
 
