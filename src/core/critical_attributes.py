@@ -157,6 +157,20 @@ def _field_tokens_many(attribute: object, keys: tuple[str, ...]) -> dict[str, fr
     from core.text import attribute_fields
 
     wanted = {_normalized_field_key(key): key for key in keys}
+    cell = str(attribute or "")
+    # A key survives the walk only if some segment's key folds to it, and for
+    # ASCII text that fold (unicode_casefold then `[^a-z0-9]+` -> " ") maps
+    # punctuation to a SPACE and never deletes a letter, so every word of the
+    # key must occur in the cell as a substring. Cells that mention none of the
+    # wanted fields therefore skip the walk completely: no segment is folded and
+    # no key is compared. Guarded to ASCII because NFKD expands some non-ASCII
+    # characters (ligature U+FB00 -> "ff"); non-ASCII cells take the old path.
+    if cell.isascii():
+        lowered = cell.lower()
+        wanted = {name: key for name, key in wanted.items()
+                  if all(word in lowered for word in name.split())}
+        if not wanted:
+            return {key: frozenset() for key in keys}
     collected: dict[str, list[str]] = {key: [] for key in keys}
     for name, raw_value in attribute_fields(attribute):
         key = wanted.get(name)
