@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
-import os
 import pickle
 from pathlib import Path
 
@@ -13,8 +12,6 @@ from training.token_inputs import prepare_training_tokens, validate_training_tok
 
 
 def prepare_bundle_tokens(path: Path, checkpoint: str, *, setup: Path | None = None):
-    # Fail on frozen input/config drift before spending local tokenizer time.
-    os.environ['PREPARED_BUNDLE_DRIFT_STRICT'] = 'true'
     header, bundle = load_prepared_bundle(path)
     for key in ('canonical_records', 'gate_results', 'labeled_pairs'):
         if bundle[key + '_csv'] != Path(F[key]).read_bytes():

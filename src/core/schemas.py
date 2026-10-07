@@ -3198,10 +3198,11 @@ class TrainingConfig(BaseModel):
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
     archives: ArchiveSpec
     packaging: PackagingSpec
-    # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
-    # training.prepared_bundle hard-fails a bundle built under drifted
-    # masking config instead of warning. Env PREPARED_BUNDLE_DRIFT_STRICT
-    # wins over this key.
+    # TIER 1(e) bundle-drift switch (see config/training.yaml), retired
+    # owner order 2026-10-07: the key stays a declared policy record, but
+    # training.prepared_bundle never compares recorded masking/easy config,
+    # so neither a warning nor a hard-fail can fire from it. Env
+    # PREPARED_BUNDLE_DRIFT_STRICT stays parsed for compatibility.
     prepared_bundle_drift_strict: bool
     # The NER lane's legacy settings live under the training SSOT too. Their
     # shape is intentionally open while the older standalone scripts are

@@ -133,15 +133,12 @@ masking:
   track_visibility: true      # persist per-copy realized mask percentages
   track_per_epoch: true       # persist dynamic hard-negative mask percentages
 
-# ── prepared-bundle drift switch (TIER 1(e)) ─────────────────────────────────
-# FALSE (today): load_prepared_bundle WARNS on a bundle built under a
-# different masking/easy config (e.g. one recording the deleted
-# once-agreed-surface swap sidecar knobs) so the
-# pre-rebuild audit findings stay reproducible. TRUE: it HARD-FAILS with a
-# ValueError and the bundle must be re-prepared. Flip TRUE immediately after
-# the bundle rebuild lands. The env form wins when set:
-#   export PREPARED_BUNDLE_DRIFT_STRICT=1
-# env unset + key absent => FALSE.
+# ── prepared-bundle drift switch (TIER 1(e), retired) ────────────────────────
+# Owner order 2026-10-07: drift checks are retired. load_prepared_bundle
+# records masking/easy provenance in the header but never compares it, so
+# this key is an inert policy record; no warning and no hard-fail fires from
+# it. The env form (PREPARED_BUNDLE_DRIFT_STRICT) remains parsed for
+# compatibility and has no effect on loading.
 prepared_bundle_drift_strict: true
 
 masking_profiles:

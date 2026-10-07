@@ -49,9 +49,9 @@ class PreparedBundleManifest(BaseModel):
     # Diet/augmentation provenance: the resolved masking profile and the
     # easy-negative quota the bundle was built under. config/ can drift
     # after a build (ratio_to_hard moves the diet verdict without touching
-    # a byte), so the manifest pins what was true at build time and the
-    # loader rejects drift in strict mode. Older headers without provenance
-    # require regeneration in strict mode.
+    # a byte), so the manifest pins what was true at build time. The pins
+    # are records, never compared (owner order 2026-10-07); the diet gate
+    # recomputes its own verdict from the selected pairs.
     masking_config: dict = Field(default_factory=dict)
     easy_config: dict = Field(default_factory=dict)
     # Ratio contracts (audit 2026-09-28): the train-time arithmetic the
@@ -432,37 +432,6 @@ def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBun
             f"active={active.model_dump()}. Re-prepare the bundle; the frozen "
             "payload strings are not the text the active composition produces."
         )
-    if not manifest.masking_config or not manifest.easy_config:
-        detail = f'{path} lacks masking/easy-negative provenance; regenerate the bundle'
-        if prepared_bundle_drift_strict():
-            raise ValueError(f'[bundle-drift] STRICT: {detail}')
-        print(f'[bundle-drift] WARNING: {detail}', flush=True)
-    if manifest.masking_config or manifest.easy_config:
-        from core.common import load_config, masking_cfg
-
-        drifted: list[str] = []
-        if manifest.masking_config and manifest.masking_config != masking_cfg(
-            str(manifest.masking_profile)
-        ):
-            drifted.append("masking")
-        if manifest.easy_config and manifest.easy_config != dict(
-            load_config()["training"]["random_easy_negatives"]
-        ):
-            drifted.append("random_easy_negatives")
-        if drifted:
-            detail = (
-                f"{path} was built under different {'/'.join(drifted)} "
-                f"config than active (bundle={manifest.masking_config} "
-                f"{manifest.easy_config}). Diet verdicts and augmentation "
-                "yields may not reproduce."
-            )
-            if prepared_bundle_drift_strict():
-                raise ValueError(
-                    f"[bundle-drift] STRICT: {detail} Re-prepare the bundle; "
-                    "unset PREPARED_BUNDLE_DRIFT_STRICT only to keep "
-                    "pre-rebuild audit findings reproducible."
-                )
-            print(f"[bundle-drift] WARNING: {detail}", flush=True)
     if (
         "dynamic easy-negative joining at step execution" in manifest.ratio_contract_note
         or manifest.ratio_contract_note == "legacy ratio metadata; recompute"

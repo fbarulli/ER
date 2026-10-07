@@ -119,7 +119,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     identity = suite_identity(cfg, inputs, run_tag)
     if resume:
         validate_suite(output, identity)
-        events.emit('resume', 'verified', provenance='frozen inputs, config and implementation')
+        events.emit('resume', 'verified', provenance='frozen inputs and configuration')
     from core.common import TRAIN_ROOT
     from graph_tracks.data import file_hash
     import torch
