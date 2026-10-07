@@ -256,6 +256,7 @@ def _compose(row, composer):
     return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
 
 
+@timed
 def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
     if track not in {'text', 'gnn_only', 'hybrid'}:
@@ -271,6 +272,7 @@ def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoi
     return cfg, sources
 
 
+@timed
 def _selected_pairs(pairs, cfg):
     chosen = sample_pairs(pd.read_csv(pairs, dtype=str, keep_default_na=False), cfg)
     # A present-but-empty slice column reads as '' (not None); normalize
@@ -283,6 +285,7 @@ def _selected_pairs(pairs, cfg):
     return chosen
 
 
+@timed
 def _catalog_rows(catalog):
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
@@ -290,10 +293,12 @@ def _catalog_rows(catalog):
     return frame.set_index('sku_id', drop=False).to_dict('index')
 
 
+@timed
 def _pair_endpoints(chosen):
     return sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
 
 
+@timed
 def _attributes(cfg):
     from core.attribute_universe import attribute_registry
     attributes = cfg.attributes or sorted(attribute_registry())
@@ -302,6 +307,7 @@ def _attributes(cfg):
     return attributes
 
 
+@timed
 def _listing_records(listings, ids, cfg):
     records = {r['sku_id']: r for r in load_records(listings)} if listings else {}
     if listings and any(i not in records or (cfg.coverage != 'all' and records[i]['split'] != cfg.split) for i in ids):
@@ -309,6 +315,7 @@ def _listing_records(listings, ids, cfg):
     return records
 
 
+@timed
 def _pair_evidence(chosen, rows, cfg):
     from core.attribute_conflicts import canonical_attribute_info
     from core.attribute_decision import engine
