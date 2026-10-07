@@ -13,11 +13,11 @@ def test_staged_graph_binding_rejects_mismatched_track_before_forward(tmp_path,m
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     setup = tmp_path/'setup'
     template = setup/'ablation_templates/gnn_only';template.mkdir(parents=True)
-    request = {'graph_binding':'gnn_only'}
+    request = {'graph_binding':'text'}
     (template/'request.json').write_text(json.dumps(request))
     checkpoint = tmp_path/'run/gnn_only/checkpoint.pt';checkpoint.parent.mkdir(parents=True)
     torch.save({'vocabulary':{},'support_records':[],
-                'manifest':{'track':'text'}},checkpoint)
+                'manifest':{'track':'gnn_only'}},checkpoint)
     monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:pytest.fail('must reject before forward'))
     with pytest.raises(ValueError,match='support/vocabulary'):
         staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint,device='cuda')

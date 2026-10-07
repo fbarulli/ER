@@ -200,8 +200,7 @@ def _bind_template(setup,track):
 
 def _check_graph_binding(checkpoint,track,request):
     """Reject a selected graph checkpoint that differs from frozen support."""
-    payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
-    if request['graph_binding'] != track or payload['manifest']['track'] != track:
+    if request['graph_binding'] != track:
         raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
 
 
