@@ -388,6 +388,10 @@ def test_alias_member_and_its_canonical_are_not_mineable_negatives() -> None:
         df, canon, gtin_to_row, gtin_to_canon_idx,
         n_target=100, require_agreement=("volume", "package_type"),
         min_similarity=0.0, funnel=funnel,
+        # The miner requires the endpoint-diversity caps (production passes
+        # config/training.yaml's mining.cross_brand values); the toy fixture
+        # has 4 GTINs per brand, well under either ceiling.
+        max_per_canonical=20, max_per_brand=100,
     )
     # Pairs are (source-sku ROW index, other-canonical PAYLOAD index) — the
     # canonical side lives OUTSIDE df, so its coordinate resolves through the
