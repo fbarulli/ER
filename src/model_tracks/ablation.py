@@ -26,45 +26,12 @@ from core.run_log import RunLogger
 from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
-from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
+from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 from model_tracks.embedding_forward import validate_embedding_device
 
 _LOG = RunLogger(__name__)
-
-_HASH_MEMO: dict[tuple, str] = {}
-
-
-def _raw_checkpoint_identity(path):
-    """Uncached identity: the verification gates must use this, never the memo."""
-    path = Path(path)
-    return checkpoint_hash(path, use_memo=False) if path.is_dir() else _raw_file_hash(path)
-
-
-def file_hash(path):
-    """Content digest for immutable-within-run paths (stat-signature memo).
-
-    The memo cannot see a same-size rewrite that lands inside the filesystem's
-    mtime tick, so verification gates call ``graph_tracks.data.file_hash``
-    (imported as ``_raw_file_hash``) instead.
-    """
-    path = Path(path)
-    if path.is_dir():
-        return _raw_file_hash(path)
-    try:
-        info = path.stat()
-    except OSError:
-        return _raw_file_hash(path)
-    signature = (str(path.resolve()), info.st_mtime_ns, info.st_size)
-    memoized = _HASH_MEMO.get(signature)
-    if memoized is not None:
-        return memoized
-    result = _raw_file_hash(path)
-    if len(_HASH_MEMO) > 256:
-        _HASH_MEMO.clear()
-    _HASH_MEMO[signature] = result
-    return result
 
 
 def _default_retrieval_ks() -> tuple[int, ...]:
@@ -175,8 +142,6 @@ def source_name(path):
 
 
 def checkpoint_identity(path):
-    """Identity for immutable-within-run construction (stat-signature memo)."""
-    path = Path(path)
     return checkpoint_hash(path) if path.is_dir() else file_hash(path)
 
 
@@ -265,7 +230,7 @@ def validate_sources(request):
         if path.endswith('.py'):
             continue
         source = resolve(path)
-        if not source.exists() or _raw_checkpoint_identity(source) != expected:
+        if not source.exists() or checkpoint_identity(source) != expected:
             raise ValueError(f'ablation source changed: {path}')
 
 
@@ -446,7 +411,7 @@ def _persist_prepared(request, cfg, token_cache):
         output.mkdir(parents=True, exist_ok=True)
         destination = output/prepared.name
         if destination.exists():
-            if _raw_file_hash(destination) != request['prepared_inputs']['sha256']:
+            if file_hash(destination) != request['prepared_inputs']['sha256']:
                 raise ValueError('prepared tensors differ')
         else:
             prepared.replace(destination)
@@ -490,7 +455,7 @@ def load_prepared(request_path, request):
     if request.get('schema') != 'er-attribute-ablation-v2' or not plan:
         raise ValueError('locally prepared model inputs required; prepare again')
     path = request_path.parent/'prepared_inputs.npz'
-    if _raw_file_hash(path) != plan['sha256']:
+    if file_hash(path) != plan['sha256']:
         raise ValueError('prepared input checksum mismatch')
     return np.load(path,allow_pickle=False)
 
@@ -507,7 +472,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     from sentence_transformers import SentenceTransformer
     checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
     model = text_model
-    expected_checkpoint = _raw_checkpoint_identity(resolve(checkpoint))
+    expected_checkpoint = checkpoint_identity(resolve(checkpoint))
     if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
         raise ValueError('shared text model checkpoint differs from frozen request')
     if model is not None and model.device.type != device:
@@ -570,7 +535,7 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
         if encoder is None:
             support = load_batch(arrays,'support',device,vocabulary)
             encoder = GraphEncoder(resolve(request['checkpoint']),device,prepared_support=support)
-        elif encoder.checkpoint_sha256 != _raw_file_hash(resolve(request['checkpoint'])) or encoder.device != device:
+        elif encoder.checkpoint_sha256 != file_hash(resolve(request['checkpoint'])) or encoder.device != device:
             raise ValueError('shared graph encoder differs from frozen checkpoint/device')
         if encoder.vocabulary != vocabulary:
             raise ValueError('prepared vocabulary differs from checkpoint')
@@ -621,9 +586,9 @@ def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_ve
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('xb') as handle:
         np.savez_compressed(handle, vectors=np.asarray(vectors,dtype=np.float32), scores=np.asarray(scores,dtype=np.float32),
-                            request_sha256=_raw_file_hash(request_path),embedding_dtype='float32',
+                            request_sha256=file_hash(request_path),embedding_dtype='float32',
                             **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
-    output.with_suffix('.sha256').write_text(_raw_file_hash(output))
+    output.with_suffix('.sha256').write_text(file_hash(output))
 
 
 @timed
@@ -715,7 +680,7 @@ def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
         raise ValueError('threshold source must be an existing saved report')
-    before = _raw_file_hash(path)
+    before = file_hash(path)
     if path.suffix == '.csv':
         values, track, checkpoint = _threshold_from_csv(path, value, None, None)
         claimed_sha256 = None
@@ -723,7 +688,7 @@ def frozen_threshold(source, value):
         values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
     if not any(isinstance(x, (int,float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
-    if before != _raw_file_hash(path):
+    if before != file_hash(path):
         raise ValueError('threshold report changed while reading')
     return {'path':source_name(path),'sha256':before,'selection':'saved baseline; never refitted during ablation',
             'track':track, 'checkpoint':checkpoint, 'checkpoint_sha256':claimed_sha256}
@@ -749,7 +714,7 @@ def verify_threshold_binding(request, provenance):
         candidates = [resolve(named),resolve(provenance['path']).parent/named,
                       resolve(provenance['path']).parent/Path(named).name]
         located = next((path for path in candidates if path.exists()),None)
-        if located is None or _raw_checkpoint_identity(located) != expected:
+        if located is None or checkpoint_identity(located) != expected:
             raise ValueError('threshold source checkpoint identity differs or cannot be verified')
     return {'track':request['track'],'checkpoint_sha256':expected,'verified':True}
 
@@ -762,7 +727,7 @@ def validate_vectors(request_path, result):
     if 'prepared_inputs' in request:
         load_prepared(request_path,request).close()
     with np.load(result,allow_pickle=False) as data:
-        if str(data['request_sha256'].item()) != _raw_file_hash(request_path):
+        if str(data['request_sha256'].item()) != file_hash(request_path):
             raise ValueError('ablation result belongs to another request')
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None
@@ -820,8 +785,8 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
 
 def _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids):
     return {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
-        'request_path':source_name(request_path), 'request_sha256':_raw_file_hash(request_path),
-        'result_path':source_name(result),'result_sha256':_raw_file_hash(result),
+        'request_path':source_name(request_path), 'request_sha256':file_hash(request_path),
+        'result_path':source_name(result),'result_sha256':file_hash(result),
         'sources':request['sources'],'composition':request['composition'],
         'implementation_sha256':request['implementation_sha256'], 'embedding_dtype':'float32', 'threshold':threshold,
         'threshold_source':str(threshold_source), 'threshold_provenance':threshold_provenance, 'threshold_binding':threshold_binding, 'split':cfg.split, 'sample_pairs':npairs,
