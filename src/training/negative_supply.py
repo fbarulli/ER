@@ -915,14 +915,8 @@ class NegativeSupply(BaseModel):
         the local columns descend by score; same-gtin leftovers are skipped.
         """
         limit = min(self.spec.blocker.top_k, n_anchors)
-        local = np.argpartition(-chunk, limit - 1, axis=1)[:, :limit]
-        local = np.take_along_axis(
-            local,
-            np.argsort(-np.take_along_axis(chunk, local, axis=1), axis=1),
-            axis=1,
-        )
         pairs: list[tuple[int, int, float]] = []
-        for position, nearest in enumerate(local):
+        for position, nearest in enumerate(self._descending_nearest(chunk, limit)):
             for column in nearest:
                 score = float(chunk[position, column])
                 if score <= self.spec.blocker.min_score:
@@ -935,6 +929,15 @@ class NegativeSupply(BaseModel):
                     round(score, 6),
                 ))
         return pairs
+
+    def _descending_nearest(self, chunk: "np.ndarray", limit: int) -> "np.ndarray":
+        """Each anchor's candidate columns, best cosine first, floor-blind."""
+        local = np.argpartition(-chunk, limit - 1, axis=1)[:, :limit]
+        return np.take_along_axis(
+            local,
+            np.argsort(-np.take_along_axis(chunk, local, axis=1), axis=1),
+            axis=1,
+        )
 
     # ── stage 2: real one-diff partners ──────────────────────────────────────
     def _candidate_diff(self, left_gtin: str, right_gtin: str) -> dict[str, bool]:
@@ -988,21 +991,29 @@ class NegativeSupply(BaseModel):
                 candidates, desc="mine_real_partners", unit="candidate",
                 total=len(candidates),
             ):
-                left_gtin = self._anchors.row_gtin(candidate.anchor_row)
-                right_gtin = self._anchors.row_gtin(candidate.candidate_row)
-                if not self._canonical_index.has_record(left_gtin) \
-                        or not self._canonical_index.has_record(right_gtin):
-                    census["no_canonical_record"] += 1
-                    continue
-                diffs = self._candidate_diff(left_gtin, right_gtin)
-                if self._single_whitelisted_diff(diffs):
-                    census["diff_count_1"] += 1
-                    rows.append(self._real_partner_row(candidate, diffs))
-                else:
-                    census["diff_count_other"] += 1
+                row = self._mined_candidate(candidate, census)
+                if row is not None:
+                    rows.append(row)
         rows.sort(key=lambda pair: (pair.anchor_row, pair.partner_row))
         self.funnel["mine_real"] = {**census, "real_partners": len(rows)}
         return rows
+
+    def _mined_candidate(
+        self, candidate, census: dict[str, int]
+    ) -> PairRow | None:
+        """One candidate's outcome: the canonical-gate then one-diff verdict."""
+        left_gtin = self._anchors.row_gtin(candidate.anchor_row)
+        right_gtin = self._anchors.row_gtin(candidate.candidate_row)
+        if not self._canonical_index.has_record(left_gtin) \
+                or not self._canonical_index.has_record(right_gtin):
+            census["no_canonical_record"] += 1
+            return None
+        diffs = self._candidate_diff(left_gtin, right_gtin)
+        if self._single_whitelisted_diff(diffs):
+            census["diff_count_1"] += 1
+            return self._real_partner_row(candidate, diffs)
+        census["diff_count_other"] += 1
+        return None
 
     # ── stage 3: minted partners for uncovered anchors ───────────────────────
     def mint(self, covered: set[int]) -> list[PairRow]:
@@ -1018,32 +1029,49 @@ class NegativeSupply(BaseModel):
             self._prepare()
             anchor_gtins = self._anchors.gtins
             uncovered = self._uncovered_anchor_rows(covered, anchor_gtins)
-            rows: list[PairRow] = []
-            skipped = {"no_move_surface": 0, "empty_pool": 0, "target_cap": 0,
-                       "same_entity": 0, "below_blocker_floor": 0}
-            minted_gtins: set[str] = set()
-            moves = self.spec.mint.moves or ("flavor",)
-            for sequence, anchor in _LOG.progress(
-                enumerate(sorted(uncovered)), desc="mint_partners", unit="anchor",
-                total=len(uncovered),
-            ):
-                outcome = self._mint_outcome(
-                    anchor, sequence, anchor_gtins, moves, skipped, minted_gtins, rows
-                )
-                if outcome is None:
-                    continue
-                rows.append(outcome)
-                minted_gtins.add(anchor_gtins[anchor])
-            rows.sort(key=lambda pair: pair.anchor_row)
-            rows = self._score_below_floor(rows, skipped)
-            self.funnel["mint"] = {
-                **skipped,
-                "anchors_uncovered": (len({anchor_gtins[position] for position in uncovered})
-                                      if self.spec.mint.entity_level == "gtin" else len(uncovered)),
-                "uncovered_sku_rows": len(uncovered),
-                "minted": len(rows),
-            }
+            rows, skipped = self._mint_uncovered(anchor_gtins, uncovered)
+            self.funnel["mint"] = self._mint_funnel(anchor_gtins, uncovered, rows, skipped)
             return rows
+
+    def _mint_uncovered(
+        self, anchor_gtins: "np.ndarray", uncovered: list[int]
+    ) -> tuple[list[PairRow], dict[str, int]]:
+        """One pass over the uncovered anchors, then the under-floor drop."""
+        rows: list[PairRow] = []
+        skipped = {"no_move_surface": 0, "empty_pool": 0, "target_cap": 0,
+                   "same_entity": 0, "below_blocker_floor": 0}
+        minted_gtins: set[str] = set()
+        moves = self.spec.mint.moves or ("flavor",)
+        for sequence, anchor in _LOG.progress(
+            enumerate(sorted(uncovered)), desc="mint_partners", unit="anchor",
+            total=len(uncovered),
+        ):
+            outcome = self._mint_outcome(
+                anchor, sequence, anchor_gtins, moves, skipped, minted_gtins, rows
+            )
+            if outcome is None:
+                continue
+            rows.append(outcome)
+            minted_gtins.add(anchor_gtins[anchor])
+        rows.sort(key=lambda pair: pair.anchor_row)
+        rows = self._score_below_floor(rows, skipped)
+        return rows, skipped
+
+    def _mint_funnel(
+        self,
+        anchor_gtins: "np.ndarray",
+        uncovered: list[int],
+        rows: list[PairRow],
+        skipped: dict[str, int],
+    ) -> dict:
+        """The mint stage's funnel entry: coverage counts, skipped census."""
+        return {
+            **skipped,
+            "anchors_uncovered": (len({anchor_gtins[position] for position in uncovered})
+                                  if self.spec.mint.entity_level == "gtin" else len(uncovered)),
+            "uncovered_sku_rows": len(uncovered),
+            "minted": len(rows),
+        }
 
     def _uncovered_anchor_rows(
         self, covered: set[int], anchor_gtins: "np.ndarray"
@@ -1250,17 +1278,21 @@ class NegativeSupply(BaseModel):
         right = self.canonical_by_gtin(partner_gtin)
         outcome: dict[str, bool] = {}
         for dimension in _DIFF_DIMENSIONS:
-            left_atoms = (
-                read_set_column(left.get(_DIMENSION_COLUMNS[dimension]))
-                if left is not None else frozenset()
-            )
-            right_atoms = (
-                read_set_column(right.get(_DIMENSION_COLUMNS[dimension]))
-                if right is not None else frozenset()
-            )
-            outcome[dimension] = bool(left_atoms and right_atoms
-                                      and left_atoms != right_atoms)
+            outcome[dimension] = self._dimension_diff(left, right, dimension)
         return outcome
+
+    def _dimension_diff(self, left, right, dimension: str) -> bool:
+        """One dimension's bool: both populated and different."""
+        left_atoms = (
+            read_set_column(left.get(_DIMENSION_COLUMNS[dimension]))
+            if left is not None else frozenset()
+        )
+        right_atoms = (
+            read_set_column(right.get(_DIMENSION_COLUMNS[dimension]))
+            if right is not None else frozenset()
+        )
+        return bool(left_atoms and right_atoms
+                    and left_atoms != right_atoms)
 
     # ── shadow-gate attach ───────────────────────────────────────────────────
     def attach_shadow_gate(self) -> None:
@@ -1318,25 +1350,31 @@ class NegativeSupply(BaseModel):
             candidates.itertuples(index=False), desc="base_pairs",
             unit="pair", total=len(candidates),
         ):
-            left_row = self._row_by_gtin(str(pair.gtin1).strip())
-            right_row = self._row_by_gtin(str(pair.gtin2).strip())
-            if left_row is None or right_row is None:
-                continue
-            rows.append(
-                PairRow(
-                    anchor_row=left_row,
-                    partner_row=right_row,
-                    label=wanted,
-                    population=population,
-                    is_real=True,
-                    anchor_gtin=str(pair.gtin1).strip(),
-                    partner_gtin=str(pair.gtin2).strip(),
-                    anchor_text=str(self._texts.iloc[left_row]),
-                    partner_text=str(self._texts.iloc[right_row]),
-                )
-            )
+            row = self._base_pair_row(pair, wanted, population)
+            if row is not None:
+                rows.append(row)
         self._score_pairs(rows)
         return rows
+
+    def _base_pair_row(
+        self, pair, wanted: int, population: _POPULATION_TYPE
+    ) -> PairRow | None:
+        """One real base-pair row (None when an endpoint has no anchor row)."""
+        left_row = self._row_by_gtin(str(pair.gtin1).strip())
+        right_row = self._row_by_gtin(str(pair.gtin2).strip())
+        if left_row is None or right_row is None:
+            return None
+        return PairRow(
+            anchor_row=left_row,
+            partner_row=right_row,
+            label=wanted,
+            population=population,
+            is_real=True,
+            anchor_gtin=str(pair.gtin1).strip(),
+            partner_gtin=str(pair.gtin2).strip(),
+            anchor_text=str(self._texts.iloc[left_row]),
+            partner_text=str(self._texts.iloc[right_row]),
+        )
 
     # ── emit ─────────────────────────────────────────────────────────────────
     def emit(self, run_tag: str) -> dict:
@@ -1345,31 +1383,13 @@ class NegativeSupply(BaseModel):
         Writes pairs.csv + manifest.json and returns the manifest. The
         emitted table is the ONLY interface to the trainer/evaluator.
         """
-        from core.common import RESULTS
-
         with _LOG.section("negative_supply.emit"):
             self._prepare()
-            self.block()
-            real_rows = self.mine_real_partners()
-            covered = {pair.anchor_row for pair in real_rows}
-            minted_rows = self.mint(covered)
-            everything = (
-                self.base_pairs(negative=True)
-                + self.base_pairs(negative=False)
-                + real_rows
-                + minted_rows
-                + self.edited_positives()
-            )
-            frame = pd.DataFrame(
-                [pair.model_dump() for pair in _LOG.progress(
-                    everything, desc="pair_dump", unit="pair", total=len(everything))]
-            )
-            folder = RESULTS / "negative_supply" / run_tag
-            folder.mkdir(parents=True, exist_ok=True)
-            if self.spec.shadow_gate:
-                self.pairs = frame
-                self.attach_shadow_gate()
-                frame = self.pairs
+            real_rows, covered, minted_rows = self._supply_stages()
+            everything = self._collect_pairs(real_rows, minted_rows)
+            frame = self._pairs_frame(everything)
+            folder = self._run_folder(run_tag)
+            frame = self._attached_gate_columns(frame)
             frame.to_csv(folder / "pairs.csv", index=False)
             anchors_total, covered_total = self._coverage_counts(covered)
             from core.coverage_contracts import NegativeSupplyCoverage
@@ -1384,6 +1404,53 @@ class NegativeSupply(BaseModel):
             )
             self.pairs = frame
             return manifest
+
+    def _supply_stages(self) -> tuple[list[PairRow], set[int], list[PairRow]]:
+        """Ordered supply stages: block -> mine real partners -> mint the rest.
+
+        The count of anchors WITH a real partner decides the mint's share;
+        ``covered`` is the emitting funnel's coverage key downstream.
+        """
+        self.block()
+        real_rows = self.mine_real_partners()
+        covered = {pair.anchor_row for pair in real_rows}
+        minted_rows = self.mint(covered)
+        return real_rows, covered, minted_rows
+
+    def _collect_pairs(
+        self, real_rows: list[PairRow], minted_rows: list[PairRow]
+    ) -> list[PairRow]:
+        """Every emitted population: base rows first, real, minted, edited."""
+        return (
+            self.base_pairs(negative=True)
+            + self.base_pairs(negative=False)
+            + real_rows
+            + minted_rows
+            + self.edited_positives()
+        )
+
+    def _pairs_frame(self, everything: list[PairRow]) -> pd.DataFrame:
+        """PairRow models -> the emitted table (one dump pass, one bar)."""
+        return pd.DataFrame(
+            [pair.model_dump() for pair in _LOG.progress(
+                everything, desc="pair_dump", unit="pair", total=len(everything))]
+        )
+
+    def _run_folder(self, run_tag: str) -> Path:
+        """The run's lane output folder, created on demand."""
+        from core.common import RESULTS
+
+        folder = RESULTS / "negative_supply" / run_tag
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _attached_gate_columns(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """The frame with shadow-gate columns attached (comparison only)."""
+        if self.spec.shadow_gate:
+            self.pairs = frame
+            self.attach_shadow_gate()
+            frame = self.pairs
+        return frame
 
     def _manifest(self, run_tag: str, coverage, frame: pd.DataFrame, folder: Path) -> dict:
         """The run's manifest document (spec + coverage + populations + funnel)."""
