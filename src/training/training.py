@@ -1542,6 +1542,14 @@ class _RuntimeTelemetry:
     def _collect() -> dict[str, float | int]:
         """Cheap process and CUDA facts emitted with each training heartbeat."""
         telemetry: dict[str, float | int] = {"pid": os.getpid()}
+        _RuntimeTelemetry._proc_rss(telemetry)
+        _RuntimeTelemetry._host_memory(telemetry)
+        _RuntimeTelemetry._cuda_fact(telemetry)
+        return telemetry
+
+    @staticmethod
+    def _proc_rss(telemetry: dict[str, float | int]) -> None:
+        """Resident-set size of this worker process (absent on OSError)."""
         try:
             for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
                 if line.startswith("VmRSS:"):
@@ -1549,6 +1557,10 @@ class _RuntimeTelemetry:
                     break
         except OSError:
             pass
+
+    @staticmethod
+    def _host_memory(telemetry: dict[str, float | int]) -> None:
+        """Host total/available/used memory in MB (best effort)."""
         try:
             memory = {}
             for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
@@ -1565,6 +1577,10 @@ class _RuntimeTelemetry:
                 )
         except (OSError, ValueError):
             pass
+
+    @staticmethod
+    def _cuda_fact(telemetry: dict[str, float | int]) -> None:
+        """CUDA allocator stats — never interrupting training on failure."""
         try:
             import torch
 
@@ -1579,7 +1595,6 @@ class _RuntimeTelemetry:
                 )
         except Exception as exc:  # telemetry must never interrupt training
             print(f"    [telemetry] CUDA query failed: {exc}", flush=True)
-        return telemetry
 
     @staticmethod
     def _format(values: dict[str, float | int]) -> str:
