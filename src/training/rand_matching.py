@@ -308,6 +308,10 @@ def targeted_veto_gate(
 ) -> dict[str, object]:
     """Classify a candidate using the shared critical-attribute contract.
 
+    One phase-ordered pass on :class:`_TargetedVetoGateEvaluator`: the
+    statements below are the original gate body verbatim, so the audit dict
+    (key set and insertion order) and every verdict byte stay identical.
+
     Any explicit conflict in any critical dimension hard-blocks a non-exact
     match. Unknown pack or volume evidence -- the decisive identity evidence
     the ``missing_pack_or_volume_route`` dial names -- routes to review, so it
@@ -319,189 +323,358 @@ def targeted_veto_gate(
     and mirrors the full critical-attribute outcome computed below (all
     dimensions explicit and agreeing).
     """
-    settings = config or rand_matching_cfg()["targeted_veto_gates"]
-    left_pack = set(sku_info.get("pack") or set())
-    right_pack = set(candidate_info.get("pack") or set())
-    left_volume = set(sku_info.get("volume") or set())
-    right_volume = set(candidate_info.get("volume") or set())
-    left_package_type = set(sku_info.get("package_type") or set())
-    right_package_type = set(candidate_info.get("package_type") or set())
-    # Brand comparison runs through the sku_identity SSOT fold (see
-    # _brand_conflict): the audit columns carry the FOLDED token sets joined
-    # for display, so a reviewer sees the family key (shoc) next to the
-    # observed spellings.
-    left_brand = " ".join(sorted(sku_identity_normalize_brand(sku_brand)))
-    right_brand = " ".join(
-        sorted(sku_identity_normalize_brand(candidate_brand))
-    )
-    relative_tolerance = float(settings["volume_relative_tolerance"])
-    absolute_tolerance_ml = float(settings["volume_absolute_tolerance_ml"])
-
-    critical = critical_attribute_evaluation(
+    return _TargetedVetoGateEvaluator(
         sku_info,
         candidate_info,
-        volume_relative_tolerance=relative_tolerance,
-        volume_absolute_tolerance_ml=absolute_tolerance_ml,
-    )
-    # THE SINGLE DECISION ENGINE (owner directive 2026-10-01: ALL attributes
-    # × ALL metrics for the ENTIRE decision process). One dataclass
-    # (PairEvidence) loaded across the process evaluates the full 37-key
-    # registry through the ordered stack — unit normalization, negation
-    # hard-veto, alias-folded equality, numeric/band interval math, set
-    # overlaps and the fuzzy surface stage — replacing every hand-rolled
-    # per-dimension clause here (the old material block above included).
-    # Registry-key conflicts map to critical dimension names through the SSOT
-    # inversion table, so the audit and veto columns stay in the critical
-    # vocabulary while the evidence now spans the WHOLE universe.
-    from core.attribute_conflicts import CRITICAL_NAME_BY_CENSUS_KEY
-    from core.attribute_decision import AttributeDecisionEngine
+        sku_brand=sku_brand,
+        candidate_brand=candidate_brand,
+        exact_gtin=exact_gtin,
+        config=config,
+    ).verdict()
 
-    evidence = AttributeDecisionEngine(
-        volume_relative_tolerance=relative_tolerance,
-        volume_absolute_tolerance_ml=absolute_tolerance_ml,
-    ).evaluate(sku_info, candidate_info)
-    registry_conflicts = {
-        CRITICAL_NAME_BY_CENSUS_KEY[census_key]
-        for census_key in evidence.conflicts
-        if census_key in CRITICAL_NAME_BY_CENSUS_KEY
-        and (census_key != "pack type" or (left_package_type and right_package_type))
-    }
-    all_conflicts = list(critical["conflicts"]) + sorted(
-        registry_conflicts - set(critical["conflicts"])
-    )
-    # SSOT (audit 2026-09-15): this audit column used to call a second
-    # ``pack_gate`` that lived in core.attribute_conflicts and answered the
-    # opposite way from the training-label gate for the same input. It is now
-    # derived from the SAME evaluation object that already drives the veto and
-    # defer routing below, so the reported boolean can no longer disagree with
-    # the decision it claims to audit.
-    pack_gate_pass = not all_conflicts and not critical["unknown"]
 
-    pack_conflict = bool(left_pack and right_pack and not (left_pack & right_pack))
-    volume_conflict = bool(
-        left_volume
-        and right_volume
-        and not _sets_overlap_with_volume_tolerance(
-            left_volume,
-            right_volume,
-            relative_tolerance=relative_tolerance,
-            absolute_tolerance_ml=absolute_tolerance_ml,
+class _TargetedVetoGateEvaluator:
+    """One ``targeted_veto_gate`` evaluation over one SKU x candidate pair.
+
+    SR phases, ONE fixed order in ``verdict()``; every statement is the
+    original gate body verbatim, so the flattened ``**targeted_gate`` spread
+    in :func:`candidate_gate_fields` and every reported verdict stay
+    byte-identical.
+
+    Phase map:
+      compare_packets          — raw set/volume/brand comparison evidence
+      evaluate_evidence        — THE single decision engine (PairEvidence)
+                                 plus the registry-conflict audit columns
+                                 (pack_gate_pass derives from the SAME
+                                 evaluation object that drives veto/defer)
+      legacy_conflicts         — the pre-engine hand-rolled conflict flags
+                                 the audit columns still pin
+      missing_report           — per-dimension missing census (ALL dims) and
+                                 the narrower deferral census
+      shadow_policy_evidence   — the pair-policy recording call that runs
+                                 BEFORE any early exit (original precedence)
+      common_record            — the shared ``common`` audit dict
+      preserve_or_disabled     — exact-GTIN lock and disabled-policy exits
+      veto_verdict             — configured veto dimensions + brand
+      declared_identity_verdict / deferral_verdict / policy_verdict —
+                                 the review routes, then the allow verdict
+    """
+
+    def __init__(
+        self,
+        sku_info: dict[str, object],
+        candidate_info: dict[str, object],
+        *,
+        sku_brand: object,
+        candidate_brand: object,
+        exact_gtin: bool,
+        config: dict[str, object] | None = None,
+    ) -> None:
+        self._sku_info = sku_info
+        self._candidate_info = candidate_info
+        self._sku_brand = sku_brand
+        self._candidate_brand = candidate_brand
+        self._exact_gtin = exact_gtin
+        self._config = config
+
+    def compare_packets(self) -> None:
+        """Raw set extraction, brand folds and the volume tolerances."""
+        settings = self._config or rand_matching_cfg()["targeted_veto_gates"]
+        self._settings = settings
+        self._left_pack = set(self._sku_info.get("pack") or set())
+        self._right_pack = set(self._candidate_info.get("pack") or set())
+        self._left_volume = set(self._sku_info.get("volume") or set())
+        self._right_volume = set(self._candidate_info.get("volume") or set())
+        self._left_package_type = set(
+            self._sku_info.get("package_type") or set()
         )
-    )
-    brand_conflict_flag = _brand_conflict(sku_brand, candidate_brand)
-    package_type_conflict = bool(
-        left_package_type
-        and right_package_type
-        and not (left_package_type & right_package_type)
-    )
-    missing: list[str] = []
-    deferral_missing: list[str] = []
-    for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
-        key = "flavor_set" if dimension == "flavor" else dimension
-        decisive = dimension in DEFERRAL_DIMENSIONS
-        for side, info in (("a", sku_info), ("b", candidate_info)):
-            if info.get(key):
-                continue
-            missing.append(f"{dimension}_{side}")
-            if decisive:
-                deferral_missing.append(f"{dimension}_{side}")
-    from core.pair_policy import assess_pair
-    policy_evidence = assess_pair(evidence, sku_info, candidate_info)
-    common = {
-        "targeted_attribute_policy": json.dumps(policy_evidence, sort_keys=True),
-        "targeted_pack_conflict": int(pack_conflict),
-        "targeted_volume_conflict": int(volume_conflict),
-        "targeted_brand_conflict": int(brand_conflict_flag),
-        "targeted_package_type_conflict": int(package_type_conflict),
-        "targeted_missing_attributes": ",".join(missing),
-        "targeted_missing_attribute_count": len(missing),
-        "targeted_pack_a": json.dumps(sorted(left_pack)),
-        "targeted_pack_b": json.dumps(sorted(right_pack)),
-        "targeted_volume_ml_a": json.dumps(sorted(left_volume)),
-        "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
-        "targeted_package_type_a": json.dumps(sorted(left_package_type)),
-        "targeted_package_type_b": json.dumps(sorted(right_package_type)),
-        "targeted_pack_gate_pass": int(pack_gate_pass),
-        # pack_material rides the same conflict/vetoed audit columns as the
-        # shared dimensions, so the difference between the two lists stays
-        # exactly "what the configured veto set excluded".
-        "targeted_critical_conflicts": ",".join(all_conflicts),
-        # The conflicts that were allowed to veto -- the difference between
-        # this and targeted_critical_conflicts is exactly what the configured
-        # veto set excludes, so the decision stays inspectable.
-        "targeted_vetoed_conflicts": ",".join(
-            d for d in all_conflicts if d in set(settings["veto_dimensions"])
-        ),
-        "targeted_critical_agreements": ",".join(critical["agreements"]),
-        "targeted_brand_a": left_brand,
-        "targeted_brand_b": right_brand,
-        "targeted_volume_relative_tolerance": relative_tolerance,
-        "targeted_volume_absolute_tolerance_ml": absolute_tolerance_ml,
-    }
-    if exact_gtin and bool(settings["preserve_exact_gtin"]):
-        return common | {
-            "targeted_gate_decision": "exact_gtin_lock",
-            "targeted_gate_reason": "exact_gtin_preserved",
-            "targeted_gate_route": "auto_merge",
+        self._right_package_type = set(
+            self._candidate_info.get("package_type") or set()
+        )
+        # Brand comparison runs through the sku_identity SSOT fold (see
+        # _brand_conflict): the audit columns carry the FOLDED token sets joined
+        # for display, so a reviewer sees the family key (shoc) next to the
+        # observed spellings.
+        self._left_brand = " ".join(
+            sorted(sku_identity_normalize_brand(self._sku_brand))
+        )
+        self._right_brand = " ".join(
+            sorted(sku_identity_normalize_brand(self._candidate_brand))
+        )
+        self._relative_tolerance = float(settings["volume_relative_tolerance"])
+        self._absolute_tolerance_ml = float(
+            settings["volume_absolute_tolerance_ml"]
+        )
+
+    def evaluate_evidence(self) -> None:
+        """The single decision-engine pass plus the conflict audit union."""
+        critical = critical_attribute_evaluation(
+            self._sku_info,
+            self._candidate_info,
+            volume_relative_tolerance=self._relative_tolerance,
+            volume_absolute_tolerance_ml=self._absolute_tolerance_ml,
+        )
+        self._critical = critical
+        # THE SINGLE DECISION ENGINE (owner directive 2026-10-01: ALL attributes
+        # × ALL metrics for the ENTIRE decision process). One dataclass
+        # (PairEvidence) loaded across the process evaluates the full 37-key
+        # registry through the ordered stack — unit normalization, negation
+        # hard-veto, alias-folded equality, numeric/band interval math, set
+        # overlaps and the fuzzy surface stage — replacing every hand-rolled
+        # per-dimension clause here (the old material block above included).
+        # Registry-key conflicts map to critical dimension names through the SSOT
+        # inversion table, so the audit and veto columns stay in the critical
+        # vocabulary while the evidence now spans the WHOLE universe.
+        from core.attribute_conflicts import CRITICAL_NAME_BY_CENSUS_KEY
+        from core.attribute_decision import AttributeDecisionEngine
+
+        evidence = AttributeDecisionEngine(
+            volume_relative_tolerance=self._relative_tolerance,
+            volume_absolute_tolerance_ml=self._absolute_tolerance_ml,
+        ).evaluate(self._sku_info, self._candidate_info)
+        self._evidence = evidence
+        registry_conflicts = {
+            CRITICAL_NAME_BY_CENSUS_KEY[census_key]
+            for census_key in evidence.conflicts
+            if census_key in CRITICAL_NAME_BY_CENSUS_KEY
+            and (
+                census_key != "pack type"
+                or (self._left_package_type and self._right_package_type)
+            )
         }
-    if not bool(settings["enabled"]):
+        all_conflicts = list(critical["conflicts"]) + sorted(
+            registry_conflicts - set(critical["conflicts"])
+        )
+        self._all_conflicts = all_conflicts
+        # SSOT (audit 2026-09-15): this audit column used to call a second
+        # ``pack_gate`` that lived in core.attribute_conflicts and answered the
+        # opposite way from the training-label gate for the same input. It is now
+        # derived from the SAME evaluation object that already drives the veto and
+        # defer routing below, so the reported boolean can no longer disagree with
+        # the decision it claims to audit.
+        self._pack_gate_pass = (
+            not all_conflicts and not critical["unknown"]
+        )
+
+    def legacy_conflicts(self) -> None:
+        """The hand-rolled per-dimension conflict flags (audit columns)."""
+        self._pack_conflict = bool(
+            self._left_pack
+            and self._right_pack
+            and not (self._left_pack & self._right_pack)
+        )
+        self._volume_conflict = bool(
+            self._left_volume
+            and self._right_volume
+            and not _sets_overlap_with_volume_tolerance(
+                self._left_volume,
+                self._right_volume,
+                relative_tolerance=self._relative_tolerance,
+                absolute_tolerance_ml=self._absolute_tolerance_ml,
+            )
+        )
+        self._brand_conflict_flag = _brand_conflict(
+            self._sku_brand, self._candidate_brand
+        )
+        self._package_type_conflict = bool(
+            self._left_package_type
+            and self._right_package_type
+            and not (self._left_package_type & self._right_package_type)
+        )
+
+    def missing_report(self) -> None:
+        """Census EVERY dimension; defer only on ``DEFERRAL_DIMENSIONS``."""
+        missing: list[str] = []
+        deferral_missing: list[str] = []
+        for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
+            key = "flavor_set" if dimension == "flavor" else dimension
+            decisive = dimension in DEFERRAL_DIMENSIONS
+            for side, info in (
+                ("a", self._sku_info),
+                ("b", self._candidate_info),
+            ):
+                if info.get(key):
+                    continue
+                missing.append(f"{dimension}_{side}")
+                if decisive:
+                    deferral_missing.append(f"{dimension}_{side}")
+        self._missing = missing
+        self._deferral_missing = deferral_missing
+
+    def shadow_policy_evidence(self) -> None:
+        """The pair-policy recording call that ran BEFORE early exits."""
+        from core.pair_policy import assess_pair
+        self._policy_evidence = assess_pair(
+            self._evidence, self._sku_info, self._candidate_info
+        )
+
+    def common_record(self) -> dict[str, object]:
+        """The shared audit ``common`` dict (insertion order is the contract)."""
+        settings = self._settings
+        missing = self._missing
+        deferral_missing = self._deferral_missing
+        left_pack = self._left_pack
+        right_pack = self._right_pack
+        left_volume = self._left_volume
+        right_volume = self._right_volume
+        left_package_type = self._left_package_type
+        right_package_type = self._right_package_type
+        all_conflicts = self._all_conflicts
+        critical = self._critical
+        common = {
+            "targeted_attribute_policy": json.dumps(
+                self._policy_evidence, sort_keys=True
+            ),
+            "targeted_pack_conflict": int(self._pack_conflict),
+            "targeted_volume_conflict": int(self._volume_conflict),
+            "targeted_brand_conflict": int(self._brand_conflict_flag),
+            "targeted_package_type_conflict": int(self._package_type_conflict),
+            "targeted_missing_attributes": ",".join(missing),
+            "targeted_missing_attribute_count": len(missing),
+            "targeted_pack_a": json.dumps(sorted(left_pack)),
+            "targeted_pack_b": json.dumps(sorted(right_pack)),
+            "targeted_volume_ml_a": json.dumps(sorted(left_volume)),
+            "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
+            "targeted_package_type_a": json.dumps(sorted(left_package_type)),
+            "targeted_package_type_b": json.dumps(sorted(right_package_type)),
+            "targeted_pack_gate_pass": int(self._pack_gate_pass),
+            # pack_material rides the same conflict/vetoed audit columns as the
+            # shared dimensions, so the difference between the two lists stays
+            # exactly "what the configured veto set excluded".
+            "targeted_critical_conflicts": ",".join(all_conflicts),
+            # The conflicts that were allowed to veto -- the difference between
+            # this and targeted_critical_conflicts is exactly what the
+            # configured veto set excludes, so the decision stays inspectable.
+            "targeted_vetoed_conflicts": ",".join(
+                d for d in all_conflicts if d in set(settings["veto_dimensions"])
+            ),
+            "targeted_critical_agreements": ",".join(critical["agreements"]),
+            "targeted_brand_a": self._left_brand,
+            "targeted_brand_b": self._right_brand,
+            "targeted_volume_relative_tolerance": self._relative_tolerance,
+            "targeted_volume_absolute_tolerance_ml": self._absolute_tolerance_ml,
+        }
+        self._common = common
+        return common
+
+    def preserve_or_disabled(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Exact-GTIN lock, then the disabled-policy exit (original order)."""
+        settings = self._settings
+        exact_gtin = self._exact_gtin
+        if exact_gtin and bool(settings["preserve_exact_gtin"]):
+            return common | {
+                "targeted_gate_decision": "exact_gtin_lock",
+                "targeted_gate_reason": "exact_gtin_preserved",
+                "targeted_gate_route": "auto_merge",
+            }
+        if not bool(settings["enabled"]):
+            return common | {
+                "targeted_gate_decision": "allow",
+                "targeted_gate_reason": "disabled",
+                "targeted_gate_route": "auto_merge",
+            }
+        return None
+
+    def veto_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Only the configured dimensions may hard-block; all are audited."""
+        settings = self._settings
+        all_conflicts = self._all_conflicts
+        # Only the configured dimensions may hard-block. Every conflict is still
+        # reported in targeted_critical_conflicts below, so an excluded dimension
+        # is AUDITED rather than hidden -- it simply stops spending true matches.
+        # Historical sweetener measurements are documented in config; only the
+        # current configured set determines which conflicts can veto.
+        # pack_material vetoes only when configured; its conflict already shows in
+        # all_conflicts (and therefore targeted_critical_conflicts) either way.
+        veto_dimensions = set(settings["veto_dimensions"])
+        veto_reasons: list[str] = [
+            f"{dimension}_mismatch"
+            for dimension in all_conflicts
+            if dimension in veto_dimensions
+        ]
+        if self._brand_conflict_flag and bool(settings["brand_mismatch_veto"]):
+            veto_reasons.append("brand_mismatch")
+        if veto_reasons:
+            return common | {
+                "targeted_gate_decision": "veto",
+                "targeted_gate_reason": "+".join(veto_reasons),
+                "targeted_gate_route": "reject",
+            }
+        return None
+
+    def declared_identity_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Share the training gate's source-grounded identity review contract."""
+        from core.declared_identity import identity_review_dimensions
+        identity_differences = identity_review_dimensions(
+            self._sku_info, self._candidate_info
+        )
+        if identity_differences:
+            return common | {
+                "targeted_gate_decision": "defer",
+                "targeted_gate_reason": "declared_identity:"
+                + ",".join(identity_differences),
+                "targeted_gate_route": "human_review",
+            }
+        return None
+
+    def deferral_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Unknown decisive evidence routes through the configured dial."""
+        if self._deferral_missing:
+            return common | {
+                "targeted_gate_decision": "defer",
+                "targeted_gate_reason": "missing_pack_or_volume:"
+                + ",".join(self._deferral_missing),
+                "targeted_gate_route": str(
+                    self._settings["missing_pack_or_volume_route"]
+                ),
+            }
+        return None
+
+    def policy_verdict(
+        self, common: dict[str, object]
+    ) -> dict[str, object]:
+        """The full-evidence review route, then the compat verdict."""
+        from core.pair_policy import assess_pair
+        policy = assess_pair(self._evidence, self._sku_info, self._candidate_info)
+        if policy['review']:
+            return common | {
+                "targeted_gate_decision": "defer",
+                "targeted_gate_reason": "full_evidence:"
+                + ",".join(policy['review']),
+                "targeted_gate_route": "human_review",
+            }
         return common | {
             "targeted_gate_decision": "allow",
-            "targeted_gate_reason": "disabled",
+            "targeted_gate_reason": "attributes_compatible",
             "targeted_gate_route": "auto_merge",
         }
 
-    # Only the configured dimensions may hard-block. Every conflict is still
-    # reported in targeted_critical_conflicts below, so an excluded dimension
-    # is AUDITED rather than hidden -- it simply stops spending true matches.
-    # Historical sweetener measurements are documented in config; only the
-    # current configured set determines which conflicts can veto.
-    # pack_material vetoes only when configured; its conflict already shows in
-    # all_conflicts (and therefore targeted_critical_conflicts) either way.
-    veto_dimensions = set(settings["veto_dimensions"])
-    veto_reasons: list[str] = [
-        f"{dimension}_mismatch"
-        for dimension in all_conflicts
-        if dimension in veto_dimensions
-    ]
-    if brand_conflict_flag and bool(settings["brand_mismatch_veto"]):
-        veto_reasons.append("brand_mismatch")
-    if veto_reasons:
-        return common | {
-            "targeted_gate_decision": "veto",
-            "targeted_gate_reason": "+".join(veto_reasons),
-            "targeted_gate_route": "reject",
-        }
-    # Share the training gate's source-grounded identity review contract.
-    # Exact-GTIN and disabled-policy exits above retain their precedence.
-    from core.declared_identity import identity_review_dimensions
-    identity_differences = identity_review_dimensions(sku_info, candidate_info)
-    if identity_differences:
-        return common | {
-            "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "declared_identity:" + ",".join(identity_differences),
-            "targeted_gate_route": "human_review",
-        }
-    if deferral_missing:
-        return common | {
-            "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "missing_pack_or_volume:"
-            + ",".join(deferral_missing),
-            "targeted_gate_route": str(settings["missing_pack_or_volume_route"]),
-        }
-    from core.pair_policy import assess_pair
-    policy = assess_pair(evidence, sku_info, candidate_info)
-    if policy['review']:
-        return common | {
-            "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "full_evidence:" + ",".join(policy['review']),
-            "targeted_gate_route": "human_review",
-        }
-    return common | {
-        "targeted_gate_decision": "allow",
-        "targeted_gate_reason": "attributes_compatible",
-        "targeted_gate_route": "auto_merge",
-    }
+    def verdict(self) -> dict[str, object]:
+        """One fixed pass: evidence -> audit record -> ordered verdict chain."""
+        self.compare_packets()
+        self.evaluate_evidence()
+        self.legacy_conflicts()
+        self.missing_report()
+        self.shadow_policy_evidence()
+        common = self.common_record()
+        for fallback_verdict in (
+            self.preserve_or_disabled,
+            self.veto_verdict,
+            self.declared_identity_verdict,
+            self.deferral_verdict,
+        ):
+            resolved = fallback_verdict(common)
+            if resolved is not None:
+                return resolved
+        return self.policy_verdict(common)
 
 
 def confidence_penalty_mask(
@@ -907,170 +1080,283 @@ def candidate_gate_fields(
     candidate_rank: int | None = None,
     retrieval_source: str = "unknown",
 ) -> dict[str, object]:
-    """Build the shared candidate gate record used by all matching lanes."""
-    candidate_info = canonical_attribute_info(candidate_record)
-    sku_gtin = metadata_text(row_metadata_text(row, *alias_names("gtin"))).strip()
-    status = gtin_status(sku_gtin, candidate_gtin)
-    exact = int(status == "both_equal")
-    targeted_gate = targeted_veto_gate(
+    """Build the shared candidate gate record used by all matching lanes.
+
+    One phase-ordered pass on :class:`_CandidateGateRecord`: the record's
+    insertion order is a pinned output contract (candidate-trace column
+    order comes from the first row dict), so every key block below is the
+    original literal verbatim and the composition re-joins the blocks in
+    exactly that order.
+    """
+    return _CandidateGateRecord(
+        row,
         sku_info,
-        candidate_info,
-        sku_brand=row_metadata_text(row, "brand"),
-        candidate_brand=candidate_record.get("mode_brand"),
-        exact_gtin=bool(exact),
-    )
-    rules = conflict_columns(sku_info, candidate_info)
-    # The ANN assignment lane owns a configurable volume tolerance.  Replace
-    # the generic exact-set volume result with the targeted gate result while
-    # retaining the shared flavor classification and exact pack semantics.
-    targeted_settings = rand_matching_cfg()["targeted_veto_gates"]
-    if bool(targeted_settings["enabled"]):
-        rules["volume_conflict"] = int(
-            bool(targeted_settings["volume_mismatch_veto"])
-            and bool(targeted_gate["targeted_volume_conflict"])
+        candidate_gtin,
+        candidate_record,
+        score,
+        sku_id=sku_id,
+        source_row_index=source_row_index,
+        candidate_rank=candidate_rank,
+        retrieval_source=retrieval_source,
+    ).record()
+
+
+class _CandidateGateRecord:
+    """One shared candidate gate record (``candidate_gate_fields`` body).
+
+    SR phases, ONE fixed pass in record(): identity -> conflict rules ->
+    penalties -> missing evidence -> brand veto -> reason -> field blocks.
+
+    Column-order invariant: the returned dict's insertion order is the
+    candidate-trace DataFrame's column order, so record() joins the phase
+    blocks in the exact order of the original literal (head fields, then the
+    sku_ endpoint block, source_row_index, the candidate_/brand block, then
+    the rule census and the **targeted_gate spread last).
+    """
+
+    def __init__(
+        self,
+        row: pd.Series,
+        sku_info: dict,
+        candidate_gtin: str,
+        candidate_record: dict[str, object],
+        score: float,
+        *,
+        sku_id: str,
+        source_row_index: str,
+        candidate_rank: int | None = None,
+        retrieval_source: str = "unknown",
+    ) -> None:
+        self._row = row
+        self._sku_info = sku_info
+        self._candidate_gtin = candidate_gtin
+        self._candidate_record = candidate_record
+        self._score = score
+        self._sku_id = sku_id
+        self._source_row_index = source_row_index
+        self._candidate_rank = candidate_rank
+        self._retrieval_source = retrieval_source
+
+    def identity(self) -> None:
+        """GTIN identity plus the shared targeted-gate evaluation."""
+        self._candidate_info = canonical_attribute_info(self._candidate_record)
+        self._sku_gtin = metadata_text(
+            row_metadata_text(self._row, *alias_names("gtin"))
+        ).strip()
+        self._status = gtin_status(self._sku_gtin, self._candidate_gtin)
+        self._exact = int(self._status == "both_equal")
+        self._targeted_gate = targeted_veto_gate(
+            self._sku_info,
+            self._candidate_info,
+            sku_brand=row_metadata_text(self._row, "brand"),
+            candidate_brand=self._candidate_record.get("mode_brand"),
+            exact_gtin=bool(self._exact),
         )
-        rules["pack_conflict"] = int(
-            bool(targeted_settings["pack_mismatch_veto"])
-            and bool(targeted_gate["targeted_pack_conflict"])
-        )
-        rules["package_type_conflict"] = int(
-            bool(targeted_settings["package_type_mismatch_veto"])
-            and bool(targeted_gate["targeted_package_type_conflict"])
-        )
-    conflict_names = [
-        name
-        for name in CRITICAL_ATTRIBUTE_DIMENSIONS
-        if bool(rules[f"{name}_conflict"])
-    ]
-    rules["attribute_conflict_type"] = (
-        "+".join(conflict_names) if conflict_names else "none"
-    )
-    confidence_penalty, confidence_penalty_reason = confidence_penalty_mask(
-        sku_info,
-        candidate_info,
-        exact_gtin=bool(exact),
-    )
-    flavor_jaccard, flavor_overlap, flavor_penalty, flavor_penalty_reason = (
-        flavor_overlap_penalty(
-            sku_info,
-            candidate_info,
-            exact_gtin=bool(exact),
-        )
-    )
-    adjusted_score = max(
-        -1.0,
-        float(score) - confidence_penalty - flavor_penalty,
-    )
-    jointly_missing = _jointly_missing_attributes(sku_info, candidate_info)
-    brand_conflict = int(
-        bool(rand_matching_cfg()["brand_conflict_veto"])
-        and bool(targeted_gate["targeted_brand_conflict"])
-        and (
-            not bool(targeted_settings["enabled"])
-            or bool(targeted_settings["brand_mismatch_veto"])
-        )
-    )
-    gate_reason = (
-        str(targeted_gate["targeted_gate_reason"])
-        if targeted_gate["targeted_gate_route"] != "auto_merge"
-        else "different_gtin_thresholded"
-        if status == "different"
-        else "exact_gtin"
-        if exact
-        else "brand_conflict"
-        if brand_conflict
-        else "attribute_conflict"
-        if rules["attribute_conflict_type"] != "none"
-        else "cosine_candidate"
-    )
-    return {
-        "SKU_ID": sku_id,
-        "sku_gtin": sku_gtin,
-        "sku_gtin_present": _field_present(row, "gtin", "gtin"),
-        "sku_gtin_valid": int(bool(trusted_gtin(sku_gtin))),
-        "candidate_gtin": candidate_gtin,
-        "candidate_rank": candidate_rank,
-        "retrieval_source": retrieval_source,
-        "raw_score": float(score),
-        "confidence_penalty": confidence_penalty,
-        "confidence_penalty_reason": confidence_penalty_reason,
-        "jointly_missing_attributes": ",".join(jointly_missing),
-        "jointly_missing_attribute_count": len(jointly_missing),
-        "flavor_jaccard": flavor_jaccard,
-        "flavor_overlap": flavor_overlap,
-        "flavor_penalty": flavor_penalty,
-        "flavor_penalty_reason": flavor_penalty_reason,
-        "score": adjusted_score,
-        "exact_gtin": exact,
-        "gtin_status": status,
-        "gate_reason": gate_reason,
-        "sku_title": row_metadata_text(row, "sku_name_eng"),
-        "sku_attributes": row_metadata_text(row, "attribute", "attr"),
-        "sku_brand": row_metadata_text(row, "brand"),
-        "sku_country": row_metadata_text(row, "country"),
-        "sku_category": row_metadata_text(row, "category"),
-        "sku_breadcrumbs_eng": row_metadata_text(row, "breadcrumbs_eng"),
-        "sku_retailer": row_metadata_text(row, "retailer"),
-        "sku_volume": json.dumps(sorted(sku_info["volume"])),
-        "sku_pack": json.dumps(sorted(sku_info["pack"])),
-        "sku_package_type": json.dumps(
-            sorted(sku_info.get("package_type") or set())
-        ),
-        "sku_flavor": str(sku_info["flavor"]),
-        "sku_carbonation": json.dumps(sorted(sku_info.get("carbonation") or set())),
-        "sku_sweetener": json.dumps(sorted(sku_info.get("sweetener") or set())),
-        "sku_pulp": json.dumps(sorted(sku_info.get("pulp") or set())),
-        "sku_title_present": _field_present(row, "sku_name_eng"),
-        "sku_attributes_present": _field_present(row, "attribute", "attr"),
-        "sku_brand_present": _field_present(row, "brand"),
-        "sku_country_present": _field_present(row, "country"),
-        "sku_category_present": _field_present(row, "category"),
-        "sku_breadcrumbs_eng_present": _field_present(row, "breadcrumbs_eng"),
-        "sku_retailer_present": _field_present(row, "retailer"),
-        "sku_volume_present": int(bool(sku_info["volume"])),
-        "sku_pack_present": int(bool(sku_info["pack"])),
-        "sku_package_type_present": int(bool(sku_info.get("package_type"))),
-        "sku_flavor_present": int(bool(sku_info["flavor"])),
-        "sku_carbonation_present": int(bool(sku_info.get("carbonation"))),
-        "sku_sweetener_present": int(bool(sku_info.get("sweetener"))),
-        "sku_pulp_present": int(bool(sku_info.get("pulp"))),
-        "source_row_index": source_row_index,
-        "candidate_text": metadata_text(candidate_record.get("canonical")),
-        "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
-        "brand_conflict": brand_conflict,
-        "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
-        "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
-        "candidate_package_type": json.dumps(sorted(candidate_info["package_type"])),
-        "candidate_flavor": str(candidate_info["flavor"]),
-        "candidate_carbonation": json.dumps(sorted(candidate_info.get("carbonation") or set())),
-        "candidate_sweetener": json.dumps(sorted(candidate_info.get("sweetener") or set())),
-        "candidate_pulp": json.dumps(sorted(candidate_info.get("pulp") or set())),
-        "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
-        "candidate_volume_present": int(bool(candidate_info["volume"])),
-        "candidate_pack_present": int(bool(candidate_info["pack"])),
-        "candidate_package_type_present": int(bool(candidate_info["package_type"])),
-        "candidate_flavor_present": int(bool(candidate_info["flavor"])),
-        "candidate_carbonation_present": int(bool(candidate_info.get("carbonation"))),
-        "candidate_sweetener_present": int(bool(candidate_info.get("sweetener"))),
-        "candidate_pulp_present": int(bool(candidate_info.get("pulp"))),
-        "rule_ok": int(rules["attribute_conflict_type"] == "none"),
-        "attribute_conflict_type": str(rules["attribute_conflict_type"]),
-        "attribute_matches": int(
-            sum(
-                not rules[key]
-                for key in (
-                    "volume_conflict",
-                    "pack_conflict",
-                    "package_type_conflict",
-                    "flavor_conflict",
-                    "carbonation_conflict",
-                    "sweetener_conflict",
-                    "pulp_conflict",
-                )
+
+    def conflict_rules(self) -> None:
+        """Attribute conflict rules with the ANN-lane tolerance overrides."""
+        rules = conflict_columns(self._sku_info, self._candidate_info)
+        # The ANN assignment lane owns a configurable volume tolerance.  Replace
+        # the generic exact-set volume result with the targeted gate result while
+        # retaining the shared flavor classification and exact pack semantics.
+        targeted_settings = rand_matching_cfg()["targeted_veto_gates"]
+        if bool(targeted_settings["enabled"]):
+            rules["volume_conflict"] = int(
+                bool(targeted_settings["volume_mismatch_veto"])
+                and bool(self._targeted_gate["targeted_volume_conflict"])
             )
-        ),
-        **targeted_gate,
-    }
+            rules["pack_conflict"] = int(
+                bool(targeted_settings["pack_mismatch_veto"])
+                and bool(self._targeted_gate["targeted_pack_conflict"])
+            )
+            rules["package_type_conflict"] = int(
+                bool(targeted_settings["package_type_mismatch_veto"])
+                and bool(self._targeted_gate["targeted_package_type_conflict"])
+            )
+        conflict_names = [
+            name
+            for name in CRITICAL_ATTRIBUTE_DIMENSIONS
+            if bool(rules[f"{name}_conflict"])
+        ]
+        rules["attribute_conflict_type"] = (
+            "+".join(conflict_names) if conflict_names else "none"
+        )
+        self._rules = rules
+        self._targeted_settings = targeted_settings
+
+    def penalties(self) -> None:
+        """The two audit penalties and the adjusted score."""
+        confidence_penalty, confidence_penalty_reason = confidence_penalty_mask(
+            self._sku_info,
+            self._candidate_info,
+            exact_gtin=bool(self._exact),
+        )
+        flavor_jaccard, flavor_overlap, flavor_penalty, flavor_penalty_reason = (
+            flavor_overlap_penalty(
+                self._sku_info,
+                self._candidate_info,
+                exact_gtin=bool(self._exact),
+            )
+        )
+        adjusted_score = max(
+            -1.0,
+            float(self._score) - confidence_penalty - flavor_penalty,
+        )
+        self._confidence_penalty = confidence_penalty
+        self._confidence_penalty_reason = confidence_penalty_reason
+        self._flavor_jaccard = flavor_jaccard
+        self._flavor_overlap = flavor_overlap
+        self._flavor_penalty = flavor_penalty
+        self._flavor_penalty_reason = flavor_penalty_reason
+        self._adjusted_score = adjusted_score
+
+    def missing_evidence(self) -> None:
+        """The jointly missing evidence census both penalties audit on."""
+        self._jointly_missing = _jointly_missing_attributes(
+            self._sku_info, self._candidate_info
+        )
+
+    def brand_veto(self) -> None:
+        """The configured brand veto bit over the gate's folded conflict."""
+        self._brand_conflict = int(
+            bool(rand_matching_cfg()["brand_conflict_veto"])
+            and bool(self._targeted_gate["targeted_brand_conflict"])
+            and (
+                not bool(self._targeted_settings["enabled"])
+                or bool(self._targeted_settings["brand_mismatch_veto"])
+            )
+        )
+
+    def reason(self) -> str:
+        """The one-line gate reason (first non-compat route wins)."""
+        self._gate_reason = (
+            str(self._targeted_gate["targeted_gate_reason"])
+            if self._targeted_gate["targeted_gate_route"] != "auto_merge"
+            else "different_gtin_thresholded"
+            if self._status == "different"
+            else "exact_gtin"
+            if self._exact
+            else "brand_conflict"
+            if self._brand_conflict
+            else "attribute_conflict"
+            if self._rules["attribute_conflict_type"] != "none"
+            else "cosine_candidate"
+        )
+        return self._gate_reason
+
+    def sku_fields(self) -> dict[str, object]:
+        """The sku_* endpoint block (verbatim literal, order included)."""
+        row = self._row
+        sku_info = self._sku_info
+        return {
+            "sku_title": row_metadata_text(row, "sku_name_eng"),
+            "sku_attributes": row_metadata_text(row, "attribute", "attr"),
+            "sku_brand": row_metadata_text(row, "brand"),
+            "sku_country": row_metadata_text(row, "country"),
+            "sku_category": row_metadata_text(row, "category"),
+            "sku_breadcrumbs_eng": row_metadata_text(row, "breadcrumbs_eng"),
+            "sku_retailer": row_metadata_text(row, "retailer"),
+            "sku_volume": json.dumps(sorted(sku_info["volume"])),
+            "sku_pack": json.dumps(sorted(sku_info["pack"])),
+            "sku_package_type": json.dumps(
+                sorted(sku_info.get("package_type") or set())
+            ),
+            "sku_flavor": str(sku_info["flavor"]),
+            "sku_carbonation": json.dumps(sorted(sku_info.get("carbonation") or set())),
+            "sku_sweetener": json.dumps(sorted(sku_info.get("sweetener") or set())),
+            "sku_pulp": json.dumps(sorted(sku_info.get("pulp") or set())),
+            "sku_title_present": _field_present(row, "sku_name_eng"),
+            "sku_attributes_present": _field_present(row, "attribute", "attr"),
+            "sku_brand_present": _field_present(row, "brand"),
+            "sku_country_present": _field_present(row, "country"),
+            "sku_category_present": _field_present(row, "category"),
+            "sku_breadcrumbs_eng_present": _field_present(row, "breadcrumbs_eng"),
+            "sku_retailer_present": _field_present(row, "retailer"),
+            "sku_volume_present": int(bool(sku_info["volume"])),
+            "sku_pack_present": int(bool(sku_info["pack"])),
+            "sku_package_type_present": int(bool(sku_info.get("package_type"))),
+            "sku_flavor_present": int(bool(sku_info["flavor"])),
+            "sku_carbonation_present": int(bool(sku_info.get("carbonation"))),
+            "sku_sweetener_present": int(bool(sku_info.get("sweetener"))),
+            "sku_pulp_present": int(bool(sku_info.get("pulp"))),
+        }
+
+    def candidate_fields(self) -> dict[str, object]:
+        """The candidate_/brand_conflict block (verbatim literal order)."""
+        candidate_record = self._candidate_record
+        candidate_info = self._candidate_info
+        return {
+            "candidate_text": metadata_text(candidate_record.get("canonical")),
+            "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
+            "brand_conflict": self._brand_conflict,
+            "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
+            "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
+            "candidate_package_type": json.dumps(sorted(candidate_info["package_type"])),
+            "candidate_flavor": str(candidate_info["flavor"]),
+            "candidate_carbonation": json.dumps(sorted(candidate_info.get("carbonation") or set())),
+            "candidate_sweetener": json.dumps(sorted(candidate_info.get("sweetener") or set())),
+            "candidate_pulp": json.dumps(sorted(candidate_info.get("pulp") or set())),
+            "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
+            "candidate_volume_present": int(bool(candidate_info["volume"])),
+            "candidate_pack_present": int(bool(candidate_info["pack"])),
+            "candidate_package_type_present": int(bool(candidate_info["package_type"])),
+            "candidate_flavor_present": int(bool(candidate_info["flavor"])),
+            "candidate_carbonation_present": int(bool(candidate_info.get("carbonation"))),
+            "candidate_sweetener_present": int(bool(candidate_info.get("sweetener"))),
+            "candidate_pulp_present": int(bool(candidate_info.get("pulp"))),
+        }
+
+    def record(self) -> dict[str, object]:
+        """The full gate record: blocks re-joined in the pinned key order."""
+        self.identity()
+        self.conflict_rules()
+        self.penalties()
+        self.missing_evidence()
+        self.brand_veto()
+        self.reason()
+        rules = self._rules
+        return {
+            "SKU_ID": self._sku_id,
+            "sku_gtin": self._sku_gtin,
+            "sku_gtin_present": _field_present(self._row, "gtin", "gtin"),
+            "sku_gtin_valid": int(bool(trusted_gtin(self._sku_gtin))),
+            "candidate_gtin": self._candidate_gtin,
+            "candidate_rank": self._candidate_rank,
+            "retrieval_source": self._retrieval_source,
+            "raw_score": float(self._score),
+            "confidence_penalty": self._confidence_penalty,
+            "confidence_penalty_reason": self._confidence_penalty_reason,
+            "jointly_missing_attributes": ",".join(self._jointly_missing),
+            "jointly_missing_attribute_count": len(self._jointly_missing),
+            "flavor_jaccard": self._flavor_jaccard,
+            "flavor_overlap": self._flavor_overlap,
+            "flavor_penalty": self._flavor_penalty,
+            "flavor_penalty_reason": self._flavor_penalty_reason,
+            "score": self._adjusted_score,
+            "exact_gtin": self._exact,
+            "gtin_status": self._status,
+            "gate_reason": self._gate_reason,
+            **self.sku_fields(),
+            "source_row_index": self._source_row_index,
+            **self.candidate_fields(),
+            "rule_ok": int(rules["attribute_conflict_type"] == "none"),
+            "attribute_conflict_type": str(rules["attribute_conflict_type"]),
+            "attribute_matches": int(
+                sum(
+                    not rules[key]
+                    for key in (
+                        "volume_conflict",
+                        "pack_conflict",
+                        "package_type_conflict",
+                        "flavor_conflict",
+                        "carbonation_conflict",
+                        "sweetener_conflict",
+                        "pulp_conflict",
+                    )
+                )
+            ),
+            **self._targeted_gate,
+        }
 
 
 class RandMatcher:
