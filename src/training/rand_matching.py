@@ -2424,19 +2424,14 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator / denominator) if denominator else 0.0
 
 
-def prediction_metrics(
+def _metric_population(
     pred: pd.DataFrame,
     truth: pd.DataFrame,
-    *,
-    candidates: pd.DataFrame,
-    threshold: float,
-    include_graph_diagnostics: bool = True,
-) -> dict[str, float | int | str]:
-    """Return clustering metrics for one assignment population.
+) -> pd.DataFrame:
+    """The guarded one-row-per-SKU metric population (verbatim merge).
 
-    ``group_precision`` and ``group_recall`` are B-cubed, item-weighted
-    measures.  The pairwise measures operate on all unordered SKU pairs;
-    they are the direct group-equivalence interpretation of Rand Index.
+    Both population guards raise here, so the metrics dict below can never
+    be computed on a population the contract did not sanction.
     """
     truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
@@ -2465,14 +2460,11 @@ def prediction_metrics(
     )
     if merged.empty:
         raise ValueError("no calibration rows matched predictions")
+    return merged
 
-    counts = _pairwise_counts(merged["true_item_id"], merged["ITEM_ID"])
-    tp, tn, fp, fn = (
-        counts["tp"],
-        counts["tn"],
-        counts["fp"],
-        counts["fn"],
-    )
+
+def _group_rates(merged: pd.DataFrame) -> tuple[list[float], list[float]]:
+    """B-cubed, item-weighted per-SKU precision and recall rates (verbatim)."""
     intersections = merged.groupby(["true_item_id", "ITEM_ID"], sort=False).size()
     predicted_sizes = merged.groupby("ITEM_ID").size()
     true_sizes = merged.groupby("true_item_id").size()
@@ -2485,6 +2477,32 @@ def prediction_metrics(
         group_recall.extend(
             [float(intersection / true_sizes[true_id])] * int(intersection)
         )
+    return group_precision, group_recall
+
+
+def prediction_metrics(
+    pred: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    candidates: pd.DataFrame,
+    threshold: float,
+    include_graph_diagnostics: bool = True,
+) -> dict[str, float | int | str]:
+    """Return clustering metrics for one assignment population.
+
+    ``group_precision`` and ``group_recall`` are B-cubed, item-weighted
+    measures.  The pairwise measures operate on all unordered SKU pairs;
+    they are the direct group-equivalence interpretation of Rand Index.
+    """
+    merged = _metric_population(pred, truth)
+    counts = _pairwise_counts(merged["true_item_id"], merged["ITEM_ID"])
+    tp, tn, fp, fn = (
+        counts["tp"],
+        counts["tn"],
+        counts["fp"],
+        counts["fn"],
+    )
+    group_precision, group_recall = _group_rates(merged)
 
     graph = (
         candidate_graph_diagnostics(candidates, threshold)
@@ -3016,17 +3034,126 @@ def calibrate_threshold(
     plateau_tolerance: float,
     plateau_min_points: int,
 ) -> tuple[float, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, pd.DataFrame]:
-    calibration = _load_calibration_frame(matcher, calibration_input)
-    candidates = matcher.score_candidates(calibration)
-    truth = calibration[
-        ["SKU_ID", "true_item_id", "calibration_fold", "gtin_status"]
-    ].drop_duplicates("SKU_ID")
-    folds = sorted(calibration["calibration_fold"].unique())
-    selected = []
-    sensitivity: list[dict] = []
-    audit_traces: list[pd.DataFrame] = []
+    """Canonical-disjoint fold calibration (phase-ordered owner pass).
 
-    for fold in folds:
+    Statement-for-statement the original driver: per-fold selection rows,
+    sensitivity rows and audit traces keep their consumption order and fold
+    iteration order (``sorted(folds)`), so the median threshold and every
+    downstream CSV stay byte-identical.
+    """
+    return _ThresholdCalibrator(
+        matcher,
+        calibration_input,
+        thresholds,
+        target_recall=target_recall,
+        plateau_tolerance=plateau_tolerance,
+        plateau_min_points=plateau_min_points,
+    ).calibrate()
+
+
+class _ThresholdCalibrator:
+    """The fold-loop owner of Rand Index threshold calibration.
+
+    SR phases, ONE fixed pass in calibrate(): per-fold partition -> fit ->
+    assignments -> audit traces -> alternatives -> selection row ->
+    sensitivity, then the cross-fold reconciliation (median threshold,
+    plateau diagnostic, ALL-method comparison table, concatenated trace).
+
+    Determinism invariants: folds iterate in ``sorted`` order as before and
+    each phase's rng-free body is the original statements verbatim, so the
+    selected frames cannot reorder under the new seams.
+    """
+
+    def __init__(
+        self,
+        matcher: RandMatcher,
+        calibration_input: Path,
+        thresholds: np.ndarray,
+        *,
+        target_recall: float,
+        plateau_tolerance: float,
+        plateau_min_points: int,
+    ) -> None:
+        self._matcher = matcher
+        self._calibration_input = calibration_input
+        self._thresholds = thresholds
+        self._target_recall = target_recall
+        self._plateau_tolerance = plateau_tolerance
+        self._plateau_min_points = plateau_min_points
+
+    def prepare(self) -> None:
+        """Load the labeled frame and the canonical-disjoint truth table."""
+        calibration = _load_calibration_frame(
+            self._matcher, self._calibration_input
+        )
+        candidates = self._matcher.score_candidates(calibration)
+        truth = calibration[
+            ["SKU_ID", "true_item_id", "calibration_fold", "gtin_status"]
+        ].drop_duplicates("SKU_ID")
+        self._calibration = calibration
+        self._candidates = candidates
+        self._truth = truth
+
+    def calibrate(self) -> tuple[
+        float,
+        pd.DataFrame,
+        pd.DataFrame,
+        pd.DataFrame,
+        dict,
+        pd.DataFrame,
+    ]:
+        """One fixed pass: prepare -> fold loop -> cross-fold assembly."""
+        self.prepare()
+        calibration = self._calibration
+        candidates = self._candidates
+        truth = self._truth
+        folds = sorted(calibration["calibration_fold"].unique())
+        selected = []
+        sensitivity: list[dict] = []
+        audit_traces: list[pd.DataFrame] = []
+        for fold in folds:
+            self.calibrate_fold(
+                fold,
+                selected,
+                sensitivity,
+                audit_traces,
+            )
+        selected_df = pd.DataFrame(selected)
+        sensitivity_df = pd.DataFrame(sensitivity)
+        final_threshold = float(selected_df.selected_threshold.median())
+        plateau = _plateau_diagnostic(
+            sensitivity_df,
+            self._plateau_tolerance,
+            self._plateau_min_points,
+            selected_df=selected_df,
+        )
+        alternatives = sensitivity_df[
+            sensitivity_df["gtin_status"].eq("ALL")
+            & sensitivity_df["selection_method"].ne("sensitivity")
+        ].copy()
+        calibration_trace = pd.concat(audit_traces, ignore_index=True)
+        return (
+            final_threshold,
+            selected_df,
+            sensitivity_df,
+            alternatives,
+            plateau,
+            calibration_trace,
+        )
+
+    def calibrate_fold(
+        self,
+        fold: object,
+        selected: list[dict[str, object]],
+        sensitivity: list[dict],
+        audit_traces: list[pd.DataFrame],
+    ) -> None:
+        """One fold: fit threshold, audit trace, selection + sensitivity rows."""
+        calibration = self._calibration
+        truth = self._truth
+        candidates = self._candidates
+        thresholds = self._thresholds
+        target_recall = self._target_recall
         fit_truth, check_truth, fit_candidates, check_candidates = _fold_partitions(
             calibration, truth, candidates, fold
         )
@@ -3066,6 +3193,40 @@ def calibrate_threshold(
         alternatives = _alternative_thresholds(
             fit_candidates, fit_truth, best_threshold, target_recall
         )
+        self.append_selection_row(
+            fold,
+            best_threshold,
+            fit_rows,
+            fit_unmatched_fraction,
+            alternatives,
+            fit_candidates,
+            fit_truth,
+            selected,
+        )
+        sensitivity.extend(
+            _fold_sensitivity(
+                check_candidates,
+                check_truth,
+                fold,
+                thresholds,
+                alternatives,
+            )
+        )
+
+    def append_selection_row(
+        self,
+        fold: object,
+        best_threshold: float,
+        fit_rows: list[dict[str, float]],
+        fit_unmatched_fraction: float,
+        alternatives: dict[str, dict[str, float | str]],
+        fit_candidates: pd.DataFrame,
+        fit_truth: pd.DataFrame,
+        selected: list[dict[str, object]],
+    ) -> None:
+        """One fold's threshold-selection row (verbatim key order)."""
+        matcher = self._matcher
+        target_recall = self._target_recall
         fit_by_threshold = {r["threshold"]: r for r in fit_rows}
         youden_info = alternatives["youden"]
         precision_key = f"precision_at_{target_recall:.0%}_recall"
@@ -3102,38 +3263,6 @@ def calibrate_threshold(
                 "reconciliation_scope": _reconciliation_scope(),
             }
         )
-        sensitivity.extend(
-            _fold_sensitivity(
-                check_candidates,
-                check_truth,
-                fold,
-                thresholds,
-                alternatives,
-            )
-        )
-
-    selected_df = pd.DataFrame(selected)
-    sensitivity_df = pd.DataFrame(sensitivity)
-    final_threshold = float(selected_df.selected_threshold.median())
-    plateau = _plateau_diagnostic(
-        sensitivity_df,
-        plateau_tolerance,
-        plateau_min_points,
-        selected_df=selected_df,
-    )
-    alternatives = sensitivity_df[
-        sensitivity_df["gtin_status"].eq("ALL")
-        & sensitivity_df["selection_method"].ne("sensitivity")
-    ].copy()
-    calibration_trace = pd.concat(audit_traces, ignore_index=True)
-    return (
-        final_threshold,
-        selected_df,
-        sensitivity_df,
-        alternatives,
-        plateau,
-        calibration_trace,
-    )
 
 
 def _write_calibration_outputs(
