@@ -41,6 +41,9 @@ from core.manifest import atomic_write_json, sha256_file
 KINDS = ("kaggle", "colab")
 GPU_KINDS = ("attribute", "identity", "laya-cli-eval")
 LANE_LOG_NAME = "lane.log"
+# One fresh lane.log per run: first write of this process truncates, later
+# writes append (owner order 2026-10-07: overwrite, never append-sprawl).
+_LANE_LOG_STARTED = False
 DEFAULT_GPU = "T4"  # single T4; NEVER "2xT4" (no double accelerator)
 STAGE_ROOT = "results/laya_lane"
 
@@ -227,18 +230,24 @@ def _stamp() -> str:
 
 
 def _log_lane(line: str) -> None:
-    """Timestamped lane logging: console plus append-only lane log.
+    """Timestamped lane logging: console plus one fresh lane log per run.
 
+    The file is truncated on the first write of this process and appended
+    afterwards, so a new run writes over the previous run's transcript
+    (owner order 2026-10-07: fresh file per run, never append-sprawl).
     Best-effort on the file side — a log-write failure is printed and
     never allowed to mask the operation's own outcome.
     """
+    global _LANE_LOG_STARTED
     stamp = f"{datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}"
     print(f"[laya-lane {stamp}] {line}", flush=True)
     try:
         log_dir = lane_logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
-        with (log_dir / LANE_LOG_NAME).open("a", encoding="utf-8") as handle:
+        mode = "a" if _LANE_LOG_STARTED else "w"
+        with (log_dir / LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
             handle.write(f"{stamp} {line}\n")
+        _LANE_LOG_STARTED = True
     except OSError as error:
         print(_stamp(), f"[laya-lane] lane.log write failed ({error}); "
               "continuing", flush=True)

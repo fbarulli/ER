@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 from cli.log_capture import progress_frames_to_lines
 
+# One fresh lane.log per run: the first write of this process truncates, later
+# writes append (owner order 2026-10-07: overwrite, never append-sprawl).
+_LANE_LOG_STARTED = False
+
 
 
 class KaggleRuntime:
@@ -99,11 +103,15 @@ class KaggleRuntime:
 
     @staticmethod
     def _log_lane(line: str) -> None:
-        """Timestamped lane logging: console plus append-only lane log.
+        """Timestamped lane logging: console plus one fresh lane log per run.
 
+        The file is truncated on the first write of this process and appended
+        afterwards, so a new run writes over the previous run's transcript
+        (owner order 2026-10-07: fresh file per run, never append-sprawl).
         Best-effort on the file side — a log-write failure is printed and never
         allowed to mask the operation's own outcome.
         """
+        global _LANE_LOG_STARTED
         from cli import kaggle_lane as lane
 
         stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
@@ -111,8 +119,10 @@ class KaggleRuntime:
         try:
             log_dir = lane.lane_logs_dir()
             log_dir.mkdir(parents=True, exist_ok=True)
-            with (log_dir / lane.LANE_LOG_NAME).open("a", encoding="utf-8") as handle:
+            mode = "a" if _LANE_LOG_STARTED else "w"
+            with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
                 handle.write(f"{stamp} {line}\n")
+            _LANE_LOG_STARTED = True
         except OSError as error:
             print(lane._stamp(), f"[kaggle-lane] lane.log write failed ({error}); continuing",
                   flush=True)
