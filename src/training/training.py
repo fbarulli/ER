@@ -412,32 +412,61 @@ class _CalibrationEvaluator:
                 unavailable=unavailable_calibration_metrics,
             )
         else:
-            # The explicit empty-population branch above is the only
-            # expected unavailable-calibration condition.  An exception
-            # from the evaluator is a programming/data-contract failure,
-            # including in selection mode, and must retain its traceback
-            # instead of becoming a prunable/unavailable result.
-            try:
-                calibration_metrics = evaluate_calibration_trial(
-                    model=model,
-                    df=df,
-                    payload=payload,
-                    structured_features=structured_features,
-                    pos_pairs=calibration_pos,
-                    neg_pairs=calibration_neg,
-                    row_bc=row_bc,
-                    structured_weight=structured_feature_weight,
-                    batch_size=runtime("batch_size_eval"),
-                    config=calibration_config,
-                    include_collapse_guardrail=bool(
-                        calibration_config["collapse_guardrail"]["enabled"]
-                    ),
-                )
-            except Exception as exc:
-                raise CalibrationEvaluatorError(
-                    f"calibration evaluator failed on fold {fold_i}"
-                ) from exc
+            calibration_metrics = _CalibrationEvaluator._evaluate_available(
+                calibration_config,
+                fold_i=fold_i,
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                calibration_pos=calibration_pos,
+                calibration_neg=calibration_neg,
+                row_bc=row_bc,
+                structured_feature_weight=structured_feature_weight,
+            )
         return calibration_metrics
+
+    @staticmethod
+    def _evaluate_available(
+        calibration_config,
+        *,
+        fold_i: int,
+        model,
+        df,
+        payload,
+        structured_features,
+        calibration_pos: np.ndarray,
+        calibration_neg: np.ndarray,
+        row_bc: np.ndarray,
+        structured_feature_weight: float,
+    ) -> dict[str, object]:
+        """The available-population branch: score + wrapped evaluator failure.
+
+        Invariant: the try/except must stay glued to `from exc` — an evaluator
+        exception keeps its traceback instead of becoming a prunable result.
+        """
+        from training.hpo_metrics import evaluate_calibration_trial
+
+        try:
+            return evaluate_calibration_trial(
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                pos_pairs=calibration_pos,
+                neg_pairs=calibration_neg,
+                row_bc=row_bc,
+                structured_weight=structured_feature_weight,
+                batch_size=runtime("batch_size_eval"),
+                config=calibration_config,
+                include_collapse_guardrail=bool(
+                    calibration_config["collapse_guardrail"]["enabled"]
+                ),
+            )
+        except Exception as exc:
+            raise CalibrationEvaluatorError(
+                f"calibration evaluator failed on fold {fold_i}"
+            ) from exc
 
     @staticmethod
     def _empty_split_result(
@@ -735,6 +764,23 @@ class _CheckpointPublisher:
         }
 
     @staticmethod
+    def _files_block(checkpoint: Path, optimizer, scheduler, scaler) -> dict:
+        """The exact components of the requested checkpoint dict.
+
+        Invariant: they remain in their native HF files so model/optimizer
+        tensors are not serialized a second time into a multi-GB sidecar.
+        """
+        return {
+            "model_state_dict": _CheckpointPublisher._model_files(checkpoint),
+            "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
+            "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
+            "scaler_state_dict": "scaler.pt" if scaler is not None else None,
+            "rng_state": "rng_state.pth",
+            "trainer_state": "trainer_state.json",
+            "training_args": "training_args.bin",
+        }
+
+    @staticmethod
     def _resume_block() -> dict:
         """The fixed native-HF resume component map manifest field."""
         return {
@@ -780,18 +826,9 @@ class _CheckpointPublisher:
             # composition that produced them — a checkpoint trained on one
             # composition is not interchangeable with another.
             "model_input": model_input_composition().model_dump(),
-            # These are the exact components of the requested checkpoint dict.
-            # They remain in their native HF files so model/optimizer tensors are
-            # not serialized a second time into a multi-GB sidecar.
-            "files": {
-                "model_state_dict": _CheckpointPublisher._model_files(checkpoint),
-                "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
-                "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
-                "scaler_state_dict": "scaler.pt" if scaler is not None else None,
-                "rng_state": "rng_state.pth",
-                "trainer_state": "trainer_state.json",
-                "training_args": "training_args.bin",
-            },
+            "files": _CheckpointPublisher._files_block(
+                checkpoint, optimizer, scheduler, scaler
+            ),
             **_CheckpointPublisher._token_id_snapshot(tokenizer, auto_model, token_names),
             **_CheckpointPublisher._resume_block(),
         }
@@ -953,6 +990,40 @@ class _PopulationBuilders:
     """
 
     @staticmethod
+    def _sample_split_negatives(
+        subset, seed: int, n_neg: int, split_rows: np.ndarray
+    ) -> np.ndarray:
+        """Halve the request on sampling misses; keep 1 alive once.
+
+        Invariant: a one-pair request must survive the final feasibility
+        check — target //= 2 used to turn 1 into 0 and silently discard the
+        random/easy population after one sampling miss.
+        """
+        from core.blocking import build_pairs
+
+        pairs_cfg = training_cfg().pairs
+        target = min(int(n_neg), len(subset) * 4)
+        while target:
+            try:
+                _, local_neg = build_pairs(
+                    subset,
+                    seed=seed,
+                    max_pos_per_group=int(pairs_cfg.max_pos_per_group),
+                    n_neg=target,
+                )
+                return split_rows[local_neg]
+            except RuntimeError:
+                if target == 1:
+                    break
+                target = max(1, target // 2)
+        print(
+            "[random-easy] WARNING: no split-safe negatives could be sampled "
+            f"(requested={n_neg}, split_rows={len(split_rows)})",
+            flush=True,
+        )
+        return np.empty((0, 2), dtype=int)
+
+    @staticmethod
     def _split_safe_random_negative_pairs(
         df: pd.DataFrame,
         row_bc: np.ndarray,
@@ -967,8 +1038,6 @@ class _PopulationBuilders:
         wrapper restricts its input to the requested split first, then maps the
         returned local row indices back to the training payload indices.
         """
-        from core.blocking import build_pairs
-
         split_rows = np.flatnonzero(
             np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
         )
@@ -981,31 +1050,9 @@ class _PopulationBuilders:
                 )
             return np.empty((0, 2), dtype=int)
 
-        subset = df.iloc[split_rows].reset_index(drop=True)
-        pairs_cfg = training_cfg().pairs
-        target = min(int(n_neg), len(subset) * 4)
-        while target:
-            try:
-                _, local_neg = build_pairs(
-                    subset,
-                    seed=seed,
-                    max_pos_per_group=int(pairs_cfg.max_pos_per_group),
-                    n_neg=target,
-                )
-                return split_rows[local_neg]
-            except RuntimeError:
-                # Keep a one-pair request alive for the final feasibility check;
-                # target //= 2 used to turn 1 into 0 and silently discard the
-                # random/easy population after one sampling miss.
-                if target == 1:
-                    break
-                target = max(1, target // 2)
-        print(
-            "[random-easy] WARNING: no split-safe negatives could be sampled "
-            f"(requested={n_neg}, split_rows={len(split_rows)})",
-            flush=True,
+        return _PopulationBuilders._sample_split_negatives(
+            df.iloc[split_rows].reset_index(drop=True), seed, n_neg, split_rows
         )
-        return np.empty((0, 2), dtype=int)
 
     @staticmethod
     def _mix_random_easy_training_negatives(
@@ -6948,6 +6995,9 @@ class OptunaObjectiveOwner:
         hard_negative_mask_audit,
         wandb_ctx,
     ) -> None:
+        # Boundary plumbing only: kwargs -> instance state; no logic of its
+        # own (the trial contract is owned by the methods), so no extraction
+        # is possible without hiding the fields behind a second indirection.
         self.args = args
         self.data = data
         self.cv_folds = cv_folds
