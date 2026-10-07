@@ -113,6 +113,7 @@ def _publish_track(destination, track, archived, publisher):
         publisher(request, vectors, json.loads(saved.read_text()), str(binding))
 
 
+@timed
 def _calibration_source(destination, track):
     """The one non-interrupted calibration manifest for a track, or nothing."""
     import json
@@ -131,6 +132,7 @@ def _calibration_source(destination, track):
     return request, result, sources[0], calibration
 
 
+@timed
 def _wrote_binding(request, track, calibration, source):
     """Seal the selected checkpoint identity and frozen threshold into binding."""
     from graph_tracks.data import file_hash
@@ -152,6 +154,7 @@ def _wrote_binding(request, track, calibration, source):
     return binding, threshold, document
 
 
+@timed
 def _trusted_saved_report(result, threshold, binding, previous, validated, document):
     """True when a prior saved report bytes-identically covers this result.
 
