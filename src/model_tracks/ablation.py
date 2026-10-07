@@ -21,8 +21,12 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
+from core.run_log import RunLogger
+from core.step_trace import timed
 from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
+
+_LOG = RunLogger(__name__)
 
 
 def _default_retrieval_ks() -> tuple[int, ...]:
@@ -230,6 +234,7 @@ def validate_sources(request):
         raise ValueError('ablation implementation changed; prepare again locally')
 
 
+@timed
 def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_checkpoint=None, config=None, checkpoint_role='selected',composer=None,token_cache=None):
     from core.attribute_universe import attribute_registry
     from core.model_input import build_sku_text, model_input_info
@@ -389,6 +394,7 @@ def load_prepared(request_path, request):
     return np.load(path,allow_pickle=False)
 
 
+@timed
 @scoped_request
 def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
     """Colab inference only; all interventions and texts arrive prepared."""
@@ -629,6 +635,7 @@ def validate_vectors(request_path, result):
     return request,vectors,scores,candidates
 
 
+@timed
 @scoped_request
 def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
     """Paired local comparisons at a supplied, already selected threshold."""
@@ -716,7 +723,9 @@ def save_report(request_path, output, *, config=None):
     return path
 
 
+@timed
 def main():
+    RunLogger.configure_console()
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     prep = sub.add_parser('prepare')
