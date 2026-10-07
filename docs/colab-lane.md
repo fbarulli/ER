@@ -169,6 +169,21 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
   canonical logs root (owner order 2026-10-07); tqdm CR frames are expanded to grep-able
   lines at write time by the shared formatter `cli.log_capture.progress_frames_to_lines`.
 
+## Sparse checkout (prepared runtime)
+
+The Colab lane uses a **sparse checkout** (`git sparse-checkout set --no-cone`) to fetch only the files the suite needs — never the full repo. The base patterns are:
+
+```
+/src/  /config/  /scripts/  /artifacts/wheels/  /artifacts/evidence/
+/pyproject.toml  /requirements.txt  /colab_backend.py
+```
+
+For a prepared-train launch (`--what tracks --prepared-input-package ...`), two more paths are appended from the suite config: the `suite_git_inputs` archive and the resolved text-model directory (e.g. `artifacts/models/all-MiniLM-L6-v2`). The clone is `--depth=1 --single-branch --filter=blob:none --no-tags` (colab_runtime.py:168–245).
+
+## Config verify bypass
+
+`model_tracks.package.verify_current` fails loud when the package's inline configs or source hashes differ from the local tree. Set `ER_SKIP_CONFIG_VERIFY=1` to skip both checks (the package is assumed current). Use only when you know the package matches the pushed source.
+
 ## Artifacts and paths
 
 | artifact | path |
