@@ -303,6 +303,9 @@ class KaggleMonitor:
                         else:
                             append_progress(None, line)
                             print(f"[stream {kernel}] {line}", flush=True)
+                    # A clean connection completed: the counter holds only the
+                    # current burst, never whole-run history.
+                    attempts = 0
                     break
                 except (ProtocolError, requests.exceptions.RequestException) as error:
                     # The midtier SSE proxy drops live connections mid-run; a
@@ -310,9 +313,17 @@ class KaggleMonitor:
                     # each attempt truncates instead of appending duplicates.
                     attempts += 1
                     if attempts > lane._spec().limits.stream_retries:
-                        raise
+                        # Server-side drops exhaust the cap; visibility only —
+                        # never kill the watcher's status-poll contract on it.
+                        lane._log_lane(
+                            f"[stream {kernel}] follower exhausted after "
+                            f"{attempts} reconnects; status-poll only for the rest of the session")
+                        break
                     lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
                               f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
+                    log_handle.seek(0)
+                    log_handle.truncate()
+                    time.sleep(lane._spec().limits.retry_seconds * attempts)
                     log_handle.seek(0)
                     log_handle.truncate()
                     time.sleep(lane._spec().limits.retry_seconds * attempts)
