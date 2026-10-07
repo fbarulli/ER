@@ -315,7 +315,9 @@ def _extract_critical_claims_cached(values: tuple[object, ...]) -> dict[str, fro
     return _extract_critical_claims_impl(*values)
 
 
-def _extract_critical_claims_impl(*values: object) -> dict[str, frozenset[str]]:
+def _extract_critical_claims_impl(
+    *values: object, _with_flavor: bool = True
+) -> dict[str, frozenset[str]]:
     """Extract explicit non-numeric critical claims from source text.
 
     ``no added sugar`` is retained separately: it does not prove that a
@@ -399,22 +401,36 @@ def _extract_critical_claims_impl(*values: object) -> dict[str, frozenset[str]]:
         frozenset({"organic"}) if _ORGANIC_RE.search(text) else frozenset()
     )
 
-    return {
-        "flavor": flavor_tokens_from_text(text) | extract_declared_flavor_tokens(*values),
-        "carbonation": frozenset(carbonation),
-        "sweetener": frozenset(sweetener),
-        "pulp": frozenset(pulp),
-        "organic": organic,
-    }
+    result: dict[str, frozenset[str]] = {}
+    if _with_flavor:
+        # Key order is preserved exactly (flavor first) for callers that
+        # serialize the mapping; the non-flavor four still follow.
+        result["flavor"] = (
+            flavor_tokens_from_text(text) | extract_declared_flavor_tokens(*values)
+        )
+    result["carbonation"] = frozenset(carbonation)
+    result["sweetener"] = frozenset(sweetener)
+    result["pulp"] = frozenset(pulp)
+    result["organic"] = organic
+    return result
+
+
+@lru_cache(maxsize=131072)
+def _extract_description_claims_cached(description: str) -> dict[str, frozenset[str]]:
+    return _extract_critical_claims_impl(description, _with_flavor=False)
 
 
 def extract_description_claims(description: object) -> dict[str, frozenset[str]]:
     """Extract only explicit match-relevant claims from catalog descriptions.
 
     Flavor is omitted: a long description can mention ingredients that are
-    not the product's declared flavor.
+    not the product's declared flavor.  The flavor branch is therefore never
+    run here (it used to be computed and discarded), and the result is
+    memoized on the description text; both are pure and re-returned as a
+    fresh dict.
     """
-    found = extract_critical_claims(str(description or ""))
+    text = str(description or "")
+    found = _extract_description_claims_cached(text)
     return {key: found[key] for key in ("carbonation", "sweetener", "pulp", "organic")}
 
 
