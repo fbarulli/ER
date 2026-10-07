@@ -56,30 +56,58 @@ class ReviewPolicy(BaseModel):
     quarantined_listings: dict[str, ListingHold] = Field(default_factory=dict)
     listing_fields: dict[str, ListingFields] = Field(default_factory=dict)
 
+class ReviewPolicyLoader:
+    """The reviewed-identity policy: one load, one validation pass.
+
+    SR phase methods (order pinned): _read, then one guard family per
+    reviewed channel. The ValueError messages are the byte contract.
+    """
+
+    def _read(self) -> ReviewPolicy:
+        policy = ReviewPolicy.model_validate(json.loads(POLICY_PATH.read_text()))
+        if policy.schema_version != 1:
+            raise ValueError('unsupported identity review schema')
+        return policy
+
+    def _guard_held_gtins(self, policy: ReviewPolicy) -> None:
+        from core.gtin import is_valid_gtin_checksum
+        if any(not is_valid_gtin_checksum(key) for key in policy.quarantined_gtins):
+            raise ValueError('identity review keys must be structurally valid GTINs')
+
+    def _guard_listing_identities(self, policy: ReviewPolicy) -> None:
+        held = {key.zfill(14) for key in policy.quarantined_gtins}
+        for link in policy.listing_identity.values():
+            from core.gtin import is_valid_gtin_checksum
+            if not is_valid_gtin_checksum(link.target_gtin) or link.target_gtin.zfill(14) in held:
+                raise ValueError('reviewed listing identity target must be valid and eligible')
+            if link.source_gtin.zfill(14) not in held:
+                raise ValueError('reviewed identity corrections require a held source identifier')
+
+    def _guard_listing_fields(self, policy: ReviewPolicy) -> None:
+        for fix in policy.listing_fields.values():
+            if not set(fix.fields).issubset({"sku_name_eng", "attribute"}):
+                raise ValueError("reviewed field corrections may only change title or attributes")
+            from core.gtin import normalize_gtin_value
+            _, valid = normalize_gtin_value(fix.expected_gtin)
+            if not valid and not fix.expected_url:
+                raise ValueError("untrusted-GTIN field corrections require an exact source URL")
+
+    def load(self) -> ReviewPolicy:
+        """The one validated policy singleton content (caller caches)."""
+        policy = self._read()
+        self._guard_held_gtins(policy)
+        self._guard_listing_identities(policy)
+        self._guard_listing_fields(policy)
+        return policy
+
+
+_POLICY_LOADER = ReviewPolicyLoader()
+
+
 @lru_cache(maxsize=1)
 def review_policy() -> ReviewPolicy:
-    policy = ReviewPolicy.model_validate(json.loads(POLICY_PATH.read_text()))
-    if policy.schema_version != 1:
-        raise ValueError('unsupported identity review schema')
-    from core.gtin import is_valid_gtin_checksum
-    if any(not is_valid_gtin_checksum(key) for key in policy.quarantined_gtins):
-        raise ValueError('identity review keys must be structurally valid GTINs')
-    held = {key.zfill(14) for key in policy.quarantined_gtins}
-    for link in policy.listing_identity.values():
-        if not is_valid_gtin_checksum(link.target_gtin) or link.target_gtin.zfill(14) in held:
-            raise ValueError('reviewed listing identity target must be valid and eligible')
-        if link.source_gtin.zfill(14) not in held:
-            raise ValueError('reviewed identity corrections require a held source identifier')
-    for fix in policy.listing_fields.values():
-        if not set(fix.fields).issubset({"sku_name_eng", "attribute"}):
-            raise ValueError("reviewed field corrections may only change title or attributes")
-        from core.gtin import normalize_gtin_value
-        _, valid = normalize_gtin_value(fix.expected_gtin)
-        if not valid and not fix.expected_url:
-            raise ValueError("untrusted-GTIN field corrections require an exact source URL")
-    return policy
-
-
+    """The reviewed-identity holds and scoped repairs (validated once)."""
+    return _POLICY_LOADER.load()
 def _field_fix_applies(gtin: object, url: object, fix: ListingFields) -> bool:
     """Bind untrusted identifier repairs to the reviewed listing's source URL.
 
@@ -156,42 +184,73 @@ def exclude_reviewed_rows(frame: pd.DataFrame, *, column: str | None = None) -> 
     return frame.loc[~held].copy()
 
 
+class IdentityLinkApplier:
+    """Apply explicit reviewed links/repairs to a DERIVED view.
+
+    SR phases, ONE fixed order in apply(): the reviewed listing-identity
+    corrections, then the reviewed field repairs (same statement order and
+    conditions as the original apply_identity_links body).
+    """
+
+    def __init__(self, frame: pd.DataFrame) -> None:
+        self._frame = frame
+
+    def _columns(self) -> tuple[str | None, str | None, str | None]:
+        id_column = 'sku_id' if 'sku_id' in self._frame else None
+        gtin_column = 'gtin' if 'gtin' in self._frame else None
+        url_column = 'sku_url' if 'sku_url' in self._frame else None
+        return id_column, gtin_column, url_column
+
+    def apply_links(self, result: pd.DataFrame) -> pd.DataFrame:
+        """Reviewed listing-identity corrections (URL-bound)."""
+        id_column, gtin_column, url_column = self._columns()
+        if not all((id_column, gtin_column)):
+            return result
+        for sku, link in review_policy().listing_identity.items():
+            if url_column is None:
+                continue
+            candidates = result[id_column].astype(str).eq(sku) & result[url_column].eq(link.expected_url)
+            if candidates.any():
+                from core.gtin import normalize_and_validate_gtin
+                actual = normalize_and_validate_gtin(result.loc[candidates,gtin_column]).gtin_clean.astype('string').str.zfill(14)
+                indices = actual.index[actual.eq(link.source_gtin.zfill(14))]
+                result.loc[indices,gtin_column] = link.target_gtin
+        return result
+
+    def apply_field_fixes(self, result: pd.DataFrame) -> pd.DataFrame:
+        """Reviewed field repairs (URL- or cell-verbatim-bound)."""
+        id_column, gtin_column, url_column = self._columns()
+        if not all((id_column, gtin_column)):
+            return result
+        for sku, fix in review_policy().listing_fields.items():
+            candidates = result[id_column].astype(str).eq(sku)
+            if candidates.any():
+                indices = [index for index in result.index[candidates]
+                           if _field_fix_applies(result.at[index, gtin_column],
+                               result.at[index, url_column] if url_column else None, fix)]
+                for field, value in fix.fields.items():
+                    # raw_of resolves the destination through column_mapping
+                    # instead of re-declaring {"sku_name_eng": "sku_name_eng", …} here.
+                    destination = (
+                        field
+                        if field in result
+                        else raw_of(field) or field
+                    )
+                    if destination in result:
+                        result.loc[indices, destination] = value
+        return result
+
+    def apply(self) -> pd.DataFrame:
+        """A copied, reviewed-corrected view; the raw export stays intact."""
+        result = self._frame.copy()
+        result = self.apply_links(result)
+        result = self.apply_field_fixes(result)
+        return result
+
+
 def apply_identity_links(frame: pd.DataFrame) -> pd.DataFrame:
     """Apply explicit reviewed links to a derived view; raw export stays intact."""
-    result = frame.copy()
-    id_column = 'sku_id' if 'sku_id' in frame else None
-    gtin_column = 'gtin' if 'gtin' in frame else None
-    url_column = 'sku_url' if 'sku_url' in frame else None
-    if not all((id_column, gtin_column)):
-        return result
-    for sku, link in review_policy().listing_identity.items():
-        if url_column is None:
-            continue
-        candidates = result[id_column].astype(str).eq(sku) & result[url_column].eq(link.expected_url)
-        if candidates.any():
-            from core.gtin import normalize_and_validate_gtin
-            actual = normalize_and_validate_gtin(result.loc[candidates,gtin_column]).gtin_clean.astype('string').str.zfill(14)
-            indices = actual.index[actual.eq(link.source_gtin.zfill(14))]
-            result.loc[indices,gtin_column] = link.target_gtin
-    for sku, fix in review_policy().listing_fields.items():
-        candidates = result[id_column].astype(str).eq(sku)
-        if candidates.any():
-            indices = [index for index in result.index[candidates]
-                       if _field_fix_applies(result.at[index, gtin_column],
-                           result.at[index, url_column] if url_column else None, fix)]
-            for field, value in fix.fields.items():
-                # raw_of resolves the destination through column_mapping
-                # instead of re-declaring {"sku_name_eng": "sku_name_eng", …} here.
-                destination = (
-                    field
-                    if field in result
-                    else raw_of(field) or field
-                )
-                if destination in result:
-                    result.loc[indices, destination] = value
-    return result
-
-
+    return IdentityLinkApplier(frame).apply()
 def resolve_listing_row(row: dict) -> dict:
     """Scalar adapter to the same reviewed-link conditions."""
     sku = str(row.get('sku_id', '') or '')
