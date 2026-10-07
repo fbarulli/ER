@@ -16,7 +16,6 @@ class RetrievalComparison:
         self.endpoints = [lookup[key] for key in request['ids']]
         query_lookup = {key:n for n,key in enumerate(request['ids'])}
         self.pairs = [(query_lookup[p['sku_id1']],query_lookup[p['sku_id2']]) for p in request['pairs']]
-        self.candidate_order = np.arange(len(vectors))
         targets = {}
         for n,(a,b) in enumerate(self.pairs):
             for side,source,target in ((0,a,b),(1,b,a)):
@@ -33,7 +32,6 @@ class RetrievalComparison:
     def ranks(self, queries):
         # Only compare queries against candidates; never construct catalog².
         pair_ranks = [[None, None] for _ in self.pairs]
-        candidate_order = self.candidate_order
         cache = self.rank_cache
         for source, requested in self.targets:
             # Rank of a query row depends only on the row bytes; unchanged rows
@@ -47,7 +45,7 @@ class RetrievalComparison:
                 for n, side, target_index in requested:
                     value = scores[target_index]
                     rank = 1+np.count_nonzero(scores > value)+np.count_nonzero(
-                        (scores == value)&(candidate_order < target_index))
+                        scores[:target_index] == value)
                     cached.append((n, side, int(rank)))
                 cache[key] = cached
             for n, side, rank in cached:
