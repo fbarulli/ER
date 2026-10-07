@@ -21,8 +21,11 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
+from core.model_input import build_sku_text, model_input_info
 from core.run_log import RunLogger
+from core.sku_identity import row_identity
 from core.step_trace import timed
+from core.text import normalized_attribute_text
 from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 
@@ -116,6 +119,9 @@ def resolve(path):
     return path if path.is_absolute() else TRAIN_ROOT/path
 
 
+_JSON_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False)
+
+
 def digest(value):
     # STREAMED, never materialized. `json.dumps` builds the whole document as
     # one contiguous string before hashing; an exhaustive-cohort request is
@@ -126,7 +132,7 @@ def digest(value):
     # cohort_sha256 / content-addressed directory name derived from them — are
     # byte-identical to the previous implementation; only peak memory drops.
     hasher = hashlib.sha256()
-    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
+    for chunk in _JSON_ENCODER.iterencode(value):
         hasher.update(chunk.encode())
     return hasher.hexdigest()
 
@@ -152,8 +158,6 @@ def write(path, value):
 
 def _field_surfaces(text: str) -> dict[str, set[str]]:
     """Declared attribute -> set of raw ';'-parts, one pass per endpoint."""
-    from core.text import normalized_attribute_text
-
     surfaces: dict[str, set[str]] = {}
     for part in str(text).split(';'):
         if ':' not in part:
@@ -165,7 +169,6 @@ def _field_surfaces(text: str) -> dict[str, set[str]]:
 
 
 def declaration_removed(row, attribute):
-    from core.text import normalized_attribute_text
     from training.masking import field_of
     result = dict(row)
     if result.get('frozen_payload'):
@@ -246,8 +249,6 @@ class _TextPool:
 
 
 def _compose(row, composer):
-    from core.model_input import build_sku_text, model_input_info
-    from core.sku_identity import row_identity
     if row.get('frozen_payload'):
         return row['frozen_payload']
     if composer is not None:
@@ -255,6 +256,7 @@ def _compose(row, composer):
     return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
 
 
+@timed
 def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
     if track not in {'text', 'gnn_only', 'hybrid'}:
@@ -270,6 +272,7 @@ def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoi
     return cfg, sources
 
 
+@timed
 def _selected_pairs(pairs, cfg):
     chosen = sample_pairs(pd.read_csv(pairs, dtype=str, keep_default_na=False), cfg)
     # A present-but-empty slice column reads as '' (not None); normalize
@@ -282,18 +285,20 @@ def _selected_pairs(pairs, cfg):
     return chosen
 
 
+@timed
 def _catalog_rows(catalog):
-    from core.text import normalized_attribute_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
     return frame.set_index('sku_id', drop=False).to_dict('index')
 
 
+@timed
 def _pair_endpoints(chosen):
     return sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
 
 
+@timed
 def _attributes(cfg):
     from core.attribute_universe import attribute_registry
     attributes = cfg.attributes or sorted(attribute_registry())
@@ -302,6 +307,7 @@ def _attributes(cfg):
     return attributes
 
 
+@timed
 def _listing_records(listings, ids, cfg):
     records = {r['sku_id']: r for r in load_records(listings)} if listings else {}
     if listings and any(i not in records or (cfg.coverage != 'all' and records[i]['split'] != cfg.split) for i in ids):
@@ -309,14 +315,16 @@ def _listing_records(listings, ids, cfg):
     return records
 
 
+@timed
 def _pair_evidence(chosen, rows, cfg):
     from core.attribute_conflicts import canonical_attribute_info
     from core.attribute_decision import engine
+    decision = engine()
     for pair in chosen:
         a, b = (rows[pair[k]] for k in ('sku_id1', 'sku_id2'))
         pair['gtin1'], pair['gtin2'] = a.get('gtin'), b.get('gtin')
         pair['current_attribute_evidence'] = ({} if a.get('frozen_payload') or b.get('frozen_payload') else
-            engine().evaluate(canonical_attribute_info(a), canonical_attribute_info(b), left_raw=a, right_raw=b).as_dict())
+            decision.evaluate(canonical_attribute_info(a), canonical_attribute_info(b), left_raw=a, right_raw=b).as_dict())
         if a.get('frozen_payload') or b.get('frozen_payload'):
             pair['evidence_scope'] = 'frozen payload; raw-row evidence unavailable'
         for axis in cfg.slice_columns:
@@ -336,6 +344,7 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
     variants = [{'attribute':None, 'channel':'baseline', 'text_indices':baseline_text,
                  'records':baseline_records, 'changed_listings':0}]
     endpoint_surfaces = {i: _field_surfaces(rows[i].get('attribute', '')) for i in ids}
+    endpoint_parts = {i: str(rows[i].get('attribute', '')).split(';') for i in ids}
     for attr_index, attribute in enumerate(attributes,1):
         altered_text = []
         if baseline_text:
@@ -344,7 +353,7 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
                 frozen = rows[i].get('frozen_payload')
                 if attribute in row_surfaces or frozen:
                     kept_parts = [
-                        part for part in str(rows[i].get('attribute', '')).split(';')
+                        part for part in endpoint_parts[i]
                         if part not in row_surfaces.get(attribute, ())
                     ]
                     kept_attribute = ';'.join(kept_parts)
@@ -403,12 +412,13 @@ def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_che
 
 def _persist_prepared(request, cfg, token_cache):
     from model_tracks.ablation_inputs import prepare_inputs
-    resolve(cfg.output_dir).mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=resolve(cfg.output_dir)) as tmp:
+    out_dir = resolve(cfg.output_dir)
+    out_dir.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=out_dir) as tmp:
         prepared = Path(tmp)/'prepared_inputs.npz'
         request['prepared_inputs'] = prepare_inputs(request,prepared,token_cache=token_cache)
         validate_sources(request)
-        output = resolve(cfg.output_dir)/digest(request)[:24]
+        output = out_dir/digest(request)[:24]
         output.mkdir(parents=True, exist_ok=True)
         destination = output/prepared.name
         if destination.exists():
@@ -451,6 +461,7 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
     return path
 
 
+@timed
 def load_prepared(request_path, request):
     plan = request.get('prepared_inputs')
     if request.get('schema') != 'er-attribute-ablation-v2' or not plan:
@@ -461,11 +472,13 @@ def load_prepared(request_path, request):
     return np.load(path,allow_pickle=False)
 
 
+@timed
 def _validated_device(device):
     from model_tracks.embedding_forward import validate_embedding_device
     return validate_embedding_device(device)
 
 
+@timed
 def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
     import torch
     from core.encoding_inputs import tokenization_policy, load_token_features
@@ -527,6 +540,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     return text_vectors
 
 
+@timed
 def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
     from model_tracks.ablation_inputs import load_batch
     encoder = None
@@ -547,6 +561,7 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
     return encoder, graph_batches
 
 
+@timed
 def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
     from model_tracks.ablation_inputs import load_batch
     candidate_vectors = saved_candidates
@@ -559,6 +574,7 @@ def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, s
     return candidate_vectors
 
 
+@timed
 def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
     import torch
     indices = arrays['pair_indices']
@@ -585,6 +601,7 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
     return vectors, scores
 
 
+@timed
 def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -603,14 +620,15 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
     device = _validated_device(device)
     if output.exists():
         raise FileExistsError(output)
-    request = json.loads(request_path.read_text())
-    # Sources are relocated by the launcher but expected hashes stay frozen.
-    validate_sources(request)
-    from model_tracks.ablation_inputs import load_batch
-    from core.encoding_inputs import tokenization_policy, load_token_features
-    arrays = load_prepared(request_path,request)
-    plan = request['prepared_inputs']
-    track = request['track']
+    with _LOG.section('ablation.encode.load'):
+        request = json.loads(request_path.read_text())
+        # Sources are relocated by the launcher but expected hashes stay frozen.
+        validate_sources(request)
+        from model_tracks.ablation_inputs import load_batch
+        from core.encoding_inputs import tokenization_policy, load_token_features
+        arrays = load_prepared(request_path,request)
+        plan = request['prepared_inputs']
+        track = request['track']
     with _LOG.section('ablation.encode.text_vectors'):
         text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
     with _LOG.section('ablation.encode.graph_encoder'):
@@ -623,6 +641,7 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
 
 
+@timed
 def _threshold_from_csv(path, value, track, checkpoint):
     frame = pd.read_csv(path)
     values = frame['threshold'].tolist() if 'threshold' in frame else []
@@ -642,6 +661,7 @@ def _threshold_from_csv(path, value, track, checkpoint):
     return values, track, checkpoint
 
 
+@timed
 def _threshold_from_json(path, value):
     document = json.loads(path.read_text())
     claimed_sha256 = None
@@ -681,6 +701,7 @@ def _threshold_from_json(path, value):
     return values, track, checkpoint, claimed_sha256
 
 
+@timed
 def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
@@ -699,6 +720,7 @@ def frozen_threshold(source, value):
             'track':track, 'checkpoint':checkpoint, 'checkpoint_sha256':claimed_sha256}
 
 
+@timed
 def verify_threshold_binding(request, provenance):
     if provenance.get('track') != request['track']:
         raise ValueError('threshold source track differs or is missing')
@@ -724,6 +746,7 @@ def verify_threshold_binding(request, provenance):
     return {'track':request['track'],'checkpoint_sha256':expected,'verified':True}
 
 
+@timed
 @scoped_request
 def validate_vectors(request_path, result):
     """Cheap integrity validation before closing the GPU; no metrics or ANN."""
@@ -754,16 +777,19 @@ def validate_vectors(request_path, result):
 @timed
 def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
     rows = []
+    variants = request['variants']
+    pairs = request['pairs']
+    baseline_variant = variants[0]
     def ranks(vec):
         return retrieval.ranks(vec)
-    for n, variant in enumerate(request['variants'][1:], 1):
+    for n, variant in enumerate(variants[1:], 1):
         if not variant['changed_listings'] and (not np.array_equal(vectors[n],vectors[0]) or not np.array_equal(scores[n],scores[0])):
             raise ValueError('no-op ablation changed model output')
         key = hashlib.sha256(vectors[n].tobytes()).hexdigest()
         if key not in comparison_cache:
             comparison_cache[key] = (ranks(vectors[n]),retrieval.ann_hits(vectors[n]))
         rank,ann_ablated = comparison_cache[key]
-        for p, pair in enumerate(request['pairs']):
+        for p, pair in enumerate(pairs):
             endpoints = [id_lookup[pair[k]] for k in ('sku_id1','sku_id2')]
             # The baseline variant ablates no attribute: carry the pair's
             # full evidence map instead of a meaningless {None: None}
@@ -773,8 +799,8 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
                 evidence = {variant['attribute']:evidence.get(variant['attribute'])}
             rows.append({**pair, 'current_attribute_evidence':evidence,
                 'attribute':variant['attribute'],'channel':variant['channel'],
-                'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != request['variants'][0]['text_indices'][i]) or
-                    (bool(variant.get('records')) and variant['records'][i] != request['variants'][0]['records'][i]) for i in endpoints],
+                'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != baseline_variant['text_indices'][i]) or
+                    (bool(variant.get('records')) and variant['records'][i] != baseline_variant['records'][i]) for i in endpoints],
                 'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[0,p]),
                 'ablated_score':float(scores[n,p]), 'score_delta':float(scores[n,p]-scores[0,p]),
                 'decision_flip':bool((scores[n,p]>=threshold)!=(scores[0,p]>=threshold)),
@@ -805,13 +831,14 @@ def _report_document(request, request_path, result, cfg, rows, npairs, threshold
 @scoped_request
 def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
     """Paired local comparisons at a supplied, already selected threshold."""
-    if not np.isfinite(threshold) or not threshold_source:
-        raise ValueError('frozen threshold and its source are required')
-    threshold_provenance = frozen_threshold(threshold_source, threshold)
-    request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
-    threshold_binding = verify_threshold_binding(request,threshold_provenance)
-    nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
-    cfg = Settings.model_validate(request['settings'])
+    with _LOG.section('ablation.report.validate'):
+        if not np.isfinite(threshold) or not threshold_source:
+            raise ValueError('frozen threshold and its source are required')
+        threshold_provenance = frozen_threshold(threshold_source, threshold)
+        request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
+        threshold_binding = verify_threshold_binding(request,threshold_provenance)
+        nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
+        cfg = Settings.model_validate(request['settings'])
     with _LOG.section('ablation.report.comparison'):
         if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
             raise ValueError('retrieval ks must be positive')
@@ -830,10 +857,11 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
                                 baseline_ranks, ann_baseline, comparison_cache)
         retrieval.close()
-    output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
-    validate_sources(request)
-    if frozen_threshold(threshold_source, threshold) != threshold_provenance:
-        raise ValueError('threshold report changed during comparison')
+    with _LOG.section('ablation.report.document'):
+        output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
+        validate_sources(request)
+        if frozen_threshold(threshold_source, threshold) != threshold_provenance:
+            raise ValueError('threshold report changed during comparison')
     if not save:
         return output
     return save_report(request_path, output, config=config)
