@@ -15,9 +15,13 @@ import json
 from pathlib import Path
 import shutil
 import torch
+from core.run_log import RunLogger
+from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.text_cache import checkpoint_hash
 from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context
+
+_LOG = RunLogger(__name__)
 
 
 def _freeze_suite(setup,config,bundle):
@@ -92,25 +96,33 @@ def _drop_staging(setup):
     """Remove generated content-addressed staging dirs; fixed templates stay."""
     # Generated content-addressed staging directories are temporary; retain one
     # fixed template per track and avoid shipping duplicate tensors.
-    for path in (setup/'ablation_templates').iterdir():
-        if path.is_dir() and path.name not in {'text','gnn_only','hybrid'}:
-            shutil.rmtree(path)
+    staging = [path for path in (setup/'ablation_templates').iterdir()
+               if path.is_dir() and path.name not in {'text','gnn_only','hybrid'}]
+    for path in _LOG.progress(staging,desc='ablation_staging_cleanup',unit='dir'):
+        shutil.rmtree(path)
 
 
+@timed
 def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=None):
     """Fix native tokens and vocabulary/support topology before training exists."""
     from core.timing import Timing
     timing = Timing('model_tracks.ablation_prepare')
-    cfg,cohort = _freeze_suite(setup,config,bundle)
-    support,vocabulary = _frozen_support(setup)
+    with _LOG.section('ablation_suite.freeze'):
+        cfg,cohort = _freeze_suite(setup,config,bundle)
+    with _LOG.section('ablation_suite.support_vocabulary'):
+        support,vocabulary = _frozen_support(setup)
     timing.mark('load_support_and_vocabulary')
-    common_cohort = None
-    for track in ('text','gnn_only','hybrid'):
-        common_cohort = _track_template(setup,baseline,track,cohort=cohort,
-            frozen_config=setup/'ablation_settings.yaml',vocabulary=vocabulary,
-            support=support,common_cohort=common_cohort,timing=timing,
-            composer=composer,token_cache=token_cache)
-    _drop_staging(setup)
+    with _LOG.section('ablation_suite.track_templates'):
+        common_cohort = None
+        tracks = ('text','gnn_only','hybrid')
+        for track in _LOG.progress(tracks,desc='ablation_templates',unit='track',total=len(tracks)):
+            _LOG.info('ablation template building track=' + track)
+            common_cohort = _track_template(setup,baseline,track,cohort=cohort,
+                frozen_config=setup/'ablation_settings.yaml',vocabulary=vocabulary,
+                support=support,common_cohort=common_cohort,timing=timing,
+                composer=composer,token_cache=token_cache)
+    with _LOG.section('ablation_suite.cleanup_staging'):
+        _drop_staging(setup)
     timing.mark('cleanup_staging')
     return setup/'ablation_templates'
 
@@ -171,12 +183,20 @@ def _materialize_vectors(path,folder,request,*,output,setup,track,saved_text,tex
         encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
 
 
+@timed
 def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None,graph_encoder=None):
-    template,request = _bind_template(setup,track)
+    """Bind the selected/baseline checkpoint onto its template and encode vectors."""
+    with _LOG.section('ablation_forward.bind_template'):
+        template,request = _bind_template(setup,track)
     if track != 'text':
-        _check_graph_binding(checkpoint,track,request)
-    _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role)
-    path,folder = _bound_folder(output,template,request)
-    _materialize_vectors(path,folder,request,output=output,setup=setup,track=track,
-        saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
+        with _LOG.section('ablation_forward.graph_binding'):
+            _check_graph_binding(checkpoint,track,request)
+    with _LOG.section('ablation_forward.rebind_checkpoint'):
+        _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role)
+    _LOG.info('ablation forward bound track=' + track + ' role=' + checkpoint_role)
+    with _LOG.section('ablation_forward.write_bound_request'):
+        path,folder = _bound_folder(output,template,request)
+    with _LOG.section('ablation_forward.vectors'):
+        _materialize_vectors(path,folder,request,output=output,setup=setup,track=track,
+            saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
     return path
