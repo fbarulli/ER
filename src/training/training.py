@@ -326,14 +326,148 @@ class FoldExecutionError(RuntimeError):
 @timed
 def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
     """Make incomplete calibration evidence fatal before selection aggregation."""
-    incomplete_rows = [
-        row
-        for row in rows
-        if row.get("status") != "ok"
-        or not np.isfinite(row.get("calibration_rand_index", float("nan")))
-    ]
-    if not rows or incomplete_rows:
-        raise FoldExecutionError(lane, incomplete_rows or [{"status": "missing"}])
+    _CalibrationEvaluator._fold_evidence_complete(rows, lane=lane)
+
+
+class _CalibrationEvaluator:
+    """Small SR owner of calibration evaluation discipline.
+
+    Holds the selection-requirement gate (`_fold_evidence_complete`) and one
+    fold's holdout/CV calibration scoring (`_evaluate_fold_calibration`) —
+    the loud RequiredCalibrationError / CalibrationEvaluatorError handling —
+    plus the one _precision_at_recall consumption contract. The module-level
+    `require_no_failed_folds` stays the pinned API for the sweep lanes.
+    """
+
+    @staticmethod
+    def _fold_evidence_complete(rows: list[dict], *, lane: str) -> None:
+        """Make incomplete calibration evidence fatal before selection aggregation."""
+        incomplete_rows = [
+            row
+            for row in rows
+            if row.get("status") != "ok"
+            or not np.isfinite(row.get("calibration_rand_index", float("nan")))
+        ]
+        if not rows or incomplete_rows:
+            raise FoldExecutionError(lane, incomplete_rows or [{"status": "missing"}])
+
+    @staticmethod
+    def _evaluate_fold_calibration(
+        calibration_config,
+        *,
+        fold_i: int,
+        sample: bool,
+        model,
+        df,
+        payload,
+        structured_features,
+        calibration_pos: np.ndarray,
+        calibration_neg: np.ndarray,
+        row_bc: np.ndarray,
+        structured_feature_weight: float,
+    ) -> dict[str, object]:
+        """Score one fold's Rand calibration; unavailable stays loud.
+
+        Every lane uses the same component-safe calibration/Rand
+        computation. The holdout population remains isolated for
+        final reporting and is never used by HPO selection.
+        """
+        from training.hpo_metrics import (
+            CALIBRATION_REASON_EMPTY_SPLIT,
+            evaluate_calibration_trial,
+            unavailable_calibration_metrics,
+        )
+
+        calibration_metrics: dict[str, object]
+        if len(calibration_pos) == 0 or len(calibration_neg) == 0:
+            calibration_metrics = unavailable_calibration_metrics(
+                reason_code=CALIBRATION_REASON_EMPTY_SPLIT,
+                reason=(
+                    "empty calibration split — Rand threshold calibration "
+                    f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
+                ),
+                positive_pairs=len(calibration_pos),
+                negative_pairs=len(calibration_neg),
+            )
+            print(
+                f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
+                f"unavailable; {calibration_metrics['calibration_reason']}",
+                flush=True,
+            )
+            # Chain-check samples intentionally do not reserve a Rand
+            # calibration population: their job is to prove training,
+            # checkpointing, and inference wiring on a bounded input.
+            # Full runs must still fail loudly rather than publish an
+            # uncalibrated threshold.
+            if not sample:
+                raise RequiredCalibrationError(
+                    calibration_metrics["calibration_reason"]
+                )
+        else:
+            # The explicit empty-population branch above is the only
+            # expected unavailable-calibration condition.  An exception
+            # from the evaluator is a programming/data-contract failure,
+            # including in selection mode, and must retain its traceback
+            # instead of becoming a prunable/unavailable result.
+            try:
+                calibration_metrics = evaluate_calibration_trial(
+                    model=model,
+                    df=df,
+                    payload=payload,
+                    structured_features=structured_features,
+                    pos_pairs=calibration_pos,
+                    neg_pairs=calibration_neg,
+                    row_bc=row_bc,
+                    structured_weight=structured_feature_weight,
+                    batch_size=runtime("batch_size_eval"),
+                    config=calibration_config,
+                    include_collapse_guardrail=bool(
+                        calibration_config["collapse_guardrail"]["enabled"]
+                    ),
+                )
+            except Exception as exc:
+                raise CalibrationEvaluatorError(
+                    f"calibration evaluator failed on fold {fold_i}"
+                ) from exc
+        return calibration_metrics
+
+    @staticmethod
+    def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
+        """07-series precision/recall/threshold at a target recall.
+
+        Threshold = the LOWEST score still achieving recall_target (any
+        higher cut drops below it); precision at that cut with the FP count
+        implied. Deterministic: sorted order, ties resolved by score value.
+        """
+        order = np.argsort(-scores, kind="stable")
+        y_sorted = y[order]
+        s_sorted = scores[order]
+        n_pos = int((y == 1).sum())
+        if n_pos == 0 or len(scores) == 0:
+            return float("nan"), float("nan"), float("nan")
+        tp_cum = np.cumsum(y_sorted == 1)
+        # first rank where recall >= target
+        k = int(np.searchsorted(tp_cum, int(np.ceil(recall_target * n_pos))))
+        k = min(k, len(s_sorted) - 1)
+        thr = float(s_sorted[k])
+        tp = int(tp_cum[k])
+        fp = int((k + 1) - tp)
+        prec = tp / (tp + fp) if (tp + fp) else float("nan")
+        rec = tp / n_pos
+        return float(prec), float(rec), thr
+
+    @staticmethod
+    def _precision_at_recall_audit(
+        y: np.ndarray, scores: np.ndarray, recall_target: float
+    ):
+        """One consumer contract: the 07-schema audit triple beside the
+        (precision, recall, threshold) tuple — TP/FP at the same cut."""
+        _prec90, _rec90, _thr90 = _CalibrationEvaluator._precision_at_recall(
+            y, scores, recall_target
+        )
+        _tp90 = int(((scores >= _thr90) & (y == 1)).sum())
+        _fp90 = int(((scores >= _thr90) & (y == 0)).sum())
+        return _prec90, _rec90, _tp90, _fp90, _thr90
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -964,22 +1098,7 @@ def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float
     cut drops below it); precision at that cut with the FP count implied.
     Deterministic: sorted order, ties resolved by score value.
     """
-    order = np.argsort(-scores, kind="stable")
-    y_sorted = y[order]
-    s_sorted = scores[order]
-    n_pos = int((y == 1).sum())
-    if n_pos == 0 or len(scores) == 0:
-        return float("nan"), float("nan"), float("nan")
-    tp_cum = np.cumsum(y_sorted == 1)
-    # first rank where recall >= target
-    k = int(np.searchsorted(tp_cum, int(np.ceil(recall_target * n_pos))))
-    k = min(k, len(s_sorted) - 1)
-    thr = float(s_sorted[k])
-    tp = int(tp_cum[k])
-    fp = int((k + 1) - tp)
-    prec = tp / (tp + fp) if (tp + fp) else float("nan")
-    rec = tp / n_pos
-    return float(prec), float(rec), thr
+    return _CalibrationEvaluator._precision_at_recall(y, scores, recall_target)
 
 
 @timed
@@ -5038,65 +5157,22 @@ def train_one_config(
                 continue
 
             # Every lane uses the same component-safe calibration/Rand
-            # computation. The holdout population below remains isolated for
+            # computation (_CalibrationEvaluator owns the scoring + loud
+            # failures). The holdout population below remains isolated for
             # final reporting and is never used by HPO selection.
-            from training.hpo_metrics import (
-                CALIBRATION_REASON_EMPTY_SPLIT,
-                evaluate_calibration_trial,
-                unavailable_calibration_metrics,
+            calibration_metrics: dict[str, object] = _CalibrationEvaluator._evaluate_fold_calibration(
+                calibration_config,
+                fold_i=fold_i,
+                sample=sample,
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                calibration_pos=calibration_pos,
+                calibration_neg=calibration_neg,
+                row_bc=row_bc,
+                structured_feature_weight=structured_feature_weight,
             )
-
-            calibration_metrics: dict[str, object]
-            if len(calibration_pos) == 0 or len(calibration_neg) == 0:
-                calibration_metrics = unavailable_calibration_metrics(
-                    reason_code=CALIBRATION_REASON_EMPTY_SPLIT,
-                    reason=(
-                        "empty calibration split — Rand threshold calibration "
-                        f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
-                    ),
-                    positive_pairs=len(calibration_pos),
-                    negative_pairs=len(calibration_neg),
-                )
-                print(
-                    f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
-                    f"unavailable; {calibration_metrics['calibration_reason']}",
-                    flush=True,
-                )
-                # Chain-check samples intentionally do not reserve a Rand
-                # calibration population: their job is to prove training,
-                # checkpointing, and inference wiring on a bounded input.
-                # Full runs must still fail loudly rather than publish an
-                # uncalibrated threshold.
-                if not sample:
-                    raise RequiredCalibrationError(
-                        calibration_metrics["calibration_reason"]
-                    )
-            else:
-                # The explicit empty-population branch above is the only
-                # expected unavailable-calibration condition.  An exception
-                # from the evaluator is a programming/data-contract failure,
-                # including in selection mode, and must retain its traceback
-                # instead of becoming a prunable/unavailable result.
-                try:
-                    calibration_metrics = evaluate_calibration_trial(
-                        model=model,
-                        df=df,
-                        payload=payload,
-                        structured_features=structured_features,
-                        pos_pairs=calibration_pos,
-                        neg_pairs=calibration_neg,
-                        row_bc=row_bc,
-                        structured_weight=structured_feature_weight,
-                        batch_size=runtime("batch_size_eval"),
-                        config=calibration_config,
-                        include_collapse_guardrail=bool(
-                            calibration_config["collapse_guardrail"]["enabled"]
-                        ),
-                    )
-                except Exception as exc:
-                    raise CalibrationEvaluatorError(
-                        f"calibration evaluator failed on fold {fold_i}"
-                    ) from exc
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
@@ -5474,9 +5550,7 @@ def train_one_config(
                 _target_recall = float(
                     calibration_config["rand_matching"]["target_recall"]
                 )
-                _prec90, _rec90, _thr90 = _precision_at_recall(_y, _all, _target_recall)
-                _tp90 = int(((_all >= _thr90) & (_y == 1)).sum())
-                _fp90 = int(((_all >= _thr90) & (_y == 0)).sum())
+                _prec90, _rec90, _tp90, _fp90, _thr90 = _CalibrationEvaluator._precision_at_recall_audit(_y, _all, _target_recall)
                 # Same SSOT doctrine as _thr_key above: the recall-tied KEYS must
                 # follow the configured target_recall, not a literal "90pct" —
                 # otherwise a retune writes a 95%-recall number under a 90% header.
@@ -5903,7 +5977,6 @@ class _HpoStream:
     """
 
     @staticmethod
-    @timed
     def _retain_hpo_champion(
         *, model_id: str, run_tag: str, value: float, folds: list[int]
     ) -> bool:
