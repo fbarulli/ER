@@ -1683,119 +1683,271 @@ def _annotate_candidates(
     *,
     threshold_by_gtin_status: dict[str, float] | None = None,
 ) -> pd.DataFrame:
-    frame = candidates.copy()
-    if "brand_conflict" not in frame.columns:
-        raise ValueError("candidate trace is missing required brand_conflict")
-    # A different valid GTIN is an explicit threshold stratum, not a hard
-    # veto. It still has to pass score, brand, and attribute gates. Exact GTIN
-    # remains locked; missing-GTIN strata remain thresholded as before.
-    frame["gtin_compatible"] = True
-    if threshold_by_gtin_status is None:
-        effective_threshold = pd.Series(
-            float(threshold), index=frame.index, dtype=float
-        )
-    else:
-        effective_threshold = frame["gtin_status"].map(threshold_by_gtin_status)
-        if effective_threshold.isna().any():
-            missing_statuses = sorted(
-                frame.loc[effective_threshold.isna(), "gtin_status"].unique()
+    return _AssignmentSelector(
+        candidates,
+        threshold,
+        threshold_by_gtin_status=threshold_by_gtin_status,
+    ).annotate()
+
+
+class _AssignmentSelector:
+    """Annotation + direct selection over one candidate population.
+
+    SR phases, ONE fixed call order (annotate -> trace flag -> output);
+    every expression is the original assignment body verbatim, so the frames
+    written into the diagnostics/app-open CSVs are byte-identical.
+
+    Phase map:
+      strata          — effective threshold strata; a different valid GTIN is
+                        an explicit stratum, not a hard veto
+      accept          — score/brand/accepted decision columns (np.select-free)
+      gate_columns    — the six gate/reason columns, each its own SR method
+                        (gtin/attribute/brand/threshold/assignment/rejection)
+      gate_contract   — the GATE_COLUMNS insertion-order guard
+      select_best     — merge-stable best-per-SKU assignment
+      trace_flag      — the selected flag + assignment_gate audit rewrite
+      output_frame    — the all-SKU output incl. unmatched prefix fill
+    """
+
+    def __init__(
+        self,
+        candidates: pd.DataFrame,
+        threshold: float,
+        *,
+        threshold_by_gtin_status: dict[str, float] | None = None,
+    ) -> None:
+        self._candidates = candidates
+        self._threshold = threshold
+        self._threshold_by_gtin_status = threshold_by_gtin_status
+
+    def strata(self) -> None:
+        """Effective thresholds + decision support columns (verbatim)."""
+        frame = self._candidates.copy()
+        if "brand_conflict" not in frame.columns:
+            raise ValueError("candidate trace is missing required brand_conflict")
+        # A different valid GTIN is an explicit threshold stratum, not a hard
+        # veto. It still has to pass score, brand, and attribute gates. Exact GTIN
+        # remains locked; missing-GTIN strata remain thresholded as before.
+        frame["gtin_compatible"] = True
+        if self._threshold_by_gtin_status is None:
+            effective_threshold = pd.Series(
+                float(self._threshold), index=frame.index, dtype=float
             )
-            raise ValueError(
-                "threshold_by_gtin_status is missing GTIN status values: "
-                f"{missing_statuses}"
+        else:
+            effective_threshold = frame["gtin_status"].map(
+                self._threshold_by_gtin_status
             )
-        effective_threshold = effective_threshold.astype(float)
-    frame["effective_threshold"] = effective_threshold
-    frame["score_pass"] = frame["score"] >= frame["effective_threshold"]
-    frame["brand_compatible"] = frame["brand_conflict"].eq(0) | frame[
-        "exact_gtin"
-    ].astype(bool)
-    targeted_route = (
-        frame["targeted_gate_route"].astype(str)
-        if "targeted_gate_route" in frame.columns
-        else pd.Series("auto_merge", index=frame.index, dtype=str)
-    )
-    targeted_auto_merge = targeted_route.eq("auto_merge")
-    frame["accepted"] = frame["gtin_compatible"] & (
-        frame["exact_gtin"].astype(bool)
-        | (
-            targeted_auto_merge
-            & frame["rule_ok"].astype(bool)
-            & frame["brand_compatible"]
-            & frame["score_pass"]
+            if effective_threshold.isna().any():
+                missing_statuses = sorted(
+                    frame.loc[effective_threshold.isna(), "gtin_status"].unique()
+                )
+                raise ValueError(
+                    "threshold_by_gtin_status is missing GTIN status values: "
+                    f"{missing_statuses}"
+                )
+            effective_threshold = effective_threshold.astype(float)
+        frame["effective_threshold"] = effective_threshold
+        frame["score_pass"] = frame["score"] >= frame["effective_threshold"]
+        frame["brand_compatible"] = frame["brand_conflict"].eq(0) | frame[
+            "exact_gtin"
+        ].astype(bool)
+        targeted_route = (
+            frame["targeted_gate_route"].astype(str)
+            if "targeted_gate_route" in frame.columns
+            else pd.Series("auto_merge", index=frame.index, dtype=str)
         )
-    )
-    frame["gtin_gate"] = np.select(
-        [
-            frame["gtin_status"].eq("different"),
-            frame["exact_gtin"].astype(bool),
-        ],
-        ["threshold", "lock"],
-        default="allow_unknown",
-    )
-    frame["attribute_gate"] = np.select(
-        [
-            frame["exact_gtin"].astype(bool) & ~frame["rule_ok"].astype(bool),
-            frame["exact_gtin"].astype(bool),
-            frame["rule_ok"].astype(bool),
-        ],
-        [
-            "override_exact_gtin",
-            "exact_gtin_checked",
-            "allow_agree_or_unknown",
-        ],
-        default="veto_known_conflict",
-    )
-    frame["brand_gate"] = np.select(
-        [
-            frame["exact_gtin"].astype(bool),
-            frame["brand_conflict"].astype(bool),
-        ],
-        ["exact_gtin_lock", "veto"],
-        default="allow_equal_or_unknown",
-    )
-    frame["threshold_gate"] = np.select(
-        [
-            frame["exact_gtin"].astype(bool),
-            frame["score_pass"],
-        ],
-        ["bypass_exact_gtin", "pass"],
-        default="fail",
-    )
-    frame["assignment_gate"] = np.select(
-        [frame["accepted"], targeted_route.eq("human_review")],
-        ["accepted_candidate", "human_review_candidate"],
-        default="rejected_candidate",
-    )
-    frame["rejection_reason"] = np.select(
-        [
-            ~frame["gtin_compatible"],
-            frame["exact_gtin"].astype(bool),
-            targeted_route.eq("reject"),
-            targeted_route.eq("human_review"),
-            frame["brand_conflict"].astype(bool),
-            ~frame["rule_ok"].astype(bool),
-            ~frame["score_pass"],
-        ],
-        [
-            "gtin_conflict",
-            "exact_gtin_lock",
-            "targeted_attribute_veto",
-            "human_review_missing_pack_or_volume",
-            "brand_conflict",
-            "attribute_conflict",
-            "below_threshold",
-        ],
-        default="accepted_candidate",
-    )
-    expected_gate = tuple(GATE_COLUMNS)
-    actual_gate = [c for c in frame.columns if c in expected_gate]
-    if tuple(actual_gate) != expected_gate:
-        raise RuntimeError(
-            f"GATE_COLUMNS contract violated: expected={expected_gate}, "
-            f"actual={tuple(actual_gate)}"
+        self._targeted_route = targeted_route
+        self._frame = frame
+
+    def accept(self) -> None:
+        """The accepted decision column over the strata support."""
+        frame = self._frame
+        targeted_auto_merge = self._targeted_route.eq("auto_merge")
+        frame["accepted"] = frame["gtin_compatible"] & (
+            frame["exact_gtin"].astype(bool)
+            | (
+                targeted_auto_merge
+                & frame["rule_ok"].astype(bool)
+                & frame["brand_compatible"]
+                & frame["score_pass"]
+            )
         )
-    return frame
+
+    def gtin_gate(self) -> None:
+        self._frame["gtin_gate"] = np.select(
+            [
+                self._frame["gtin_status"].eq("different"),
+                self._frame["exact_gtin"].astype(bool),
+            ],
+            ["threshold", "lock"],
+            default="allow_unknown",
+        )
+
+    def attribute_gate(self) -> None:
+        self._frame["attribute_gate"] = np.select(
+            [
+                self._frame["exact_gtin"].astype(bool)
+                & ~self._frame["rule_ok"].astype(bool),
+                self._frame["exact_gtin"].astype(bool),
+                self._frame["rule_ok"].astype(bool),
+            ],
+            [
+                "override_exact_gtin",
+                "exact_gtin_checked",
+                "allow_agree_or_unknown",
+            ],
+            default="veto_known_conflict",
+        )
+
+    def brand_gate(self) -> None:
+        self._frame["brand_gate"] = np.select(
+            [
+                self._frame["exact_gtin"].astype(bool),
+                self._frame["brand_conflict"].astype(bool),
+            ],
+            ["exact_gtin_lock", "veto"],
+            default="allow_equal_or_unknown",
+        )
+
+    def threshold_gate(self) -> None:
+        self._frame["threshold_gate"] = np.select(
+            [
+                self._frame["exact_gtin"].astype(bool),
+                self._frame["score_pass"],
+            ],
+            ["bypass_exact_gtin", "pass"],
+            default="fail",
+        )
+
+    def assignment_gate(self) -> None:
+        self._frame["assignment_gate"] = np.select(
+            [self._frame["accepted"], self._targeted_route.eq("human_review")],
+            ["accepted_candidate", "human_review_candidate"],
+            default="rejected_candidate",
+        )
+
+    def rejection_reason(self) -> None:
+        self._frame["rejection_reason"] = np.select(
+            [
+                ~self._frame["gtin_compatible"],
+                self._frame["exact_gtin"].astype(bool),
+                self._targeted_route.eq("reject"),
+                self._targeted_route.eq("human_review"),
+                self._frame["brand_conflict"].astype(bool),
+                ~self._frame["rule_ok"].astype(bool),
+                ~self._frame["score_pass"],
+            ],
+            [
+                "gtin_conflict",
+                "exact_gtin_lock",
+                "targeted_attribute_veto",
+                "human_review_missing_pack_or_volume",
+                "brand_conflict",
+                "attribute_conflict",
+                "below_threshold",
+            ],
+            default="accepted_candidate",
+        )
+
+    def gate_contract(self) -> None:
+        """The GATE_COLUMNS insertion-order guard (raise unchanged)."""
+        expected_gate = tuple(GATE_COLUMNS)
+        actual_gate = [c for c in self._frame.columns if c in expected_gate]
+        if tuple(actual_gate) != expected_gate:
+            raise RuntimeError(
+                f"GATE_COLUMNS contract violated: expected={expected_gate}, "
+                f"actual={tuple(actual_gate)}"
+            )
+
+    def annotate(self) -> pd.DataFrame:
+        """One fixed pass: strata -> accept -> six gates -> contract."""
+        self.strata()
+        self.accept()
+        for gate_column in (
+            self.gtin_gate,
+            self.attribute_gate,
+            self.brand_gate,
+            self.threshold_gate,
+            self.assignment_gate,
+            self.rejection_reason,
+        ):
+            gate_column()
+        self.gate_contract()
+        return self._frame
+
+    def select_best(self) -> pd.DataFrame:
+        """Merge-stable best-per-SKU selected candidate (verbatim)."""
+        accepted = self._frame[self._frame["accepted"]].sort_values(
+            list(ASSIGNMENT_SORT_COLUMNS),
+            ascending=list(ASSIGNMENT_SORT_ASCENDING),
+            kind="mergesort",
+        )
+        selected = accepted.drop_duplicates("SKU_ID", keep="first").copy()
+        self._selected = selected
+        return selected
+
+    def trace_flag(self) -> pd.DataFrame:
+        """The selected-flag trace with the assignment_gate audit rewrite."""
+        frame = self._frame
+        selected_keys = self._selected[["SKU_ID", "candidate_gtin"]].assign(
+            selected=1
+        )
+        trace = frame.copy()
+        trace_keys = pd.MultiIndex.from_frame(trace[["SKU_ID", "candidate_gtin"]])
+        selected_key_index = pd.MultiIndex.from_frame(
+            selected_keys[["SKU_ID", "candidate_gtin"]]
+        )
+        missing_selected = selected_key_index.difference(trace_keys)
+        if len(missing_selected):
+            raise RuntimeError(
+                "selected assignment key is absent from candidate trace: "
+                f"{list(missing_selected)}"
+            )
+        trace["selected"] = trace_keys.isin(selected_key_index).astype("int8")
+        trace["assignment_gate"] = np.where(
+            trace["selected"].astype(bool),
+            "selected_best_candidate",
+            trace["assignment_gate"],
+        )
+        return trace
+
+    def output_frame(self, trace: pd.DataFrame) -> pd.DataFrame:
+        """One output row per SKU, unmatched ids filled with the prefix."""
+        selected = self._selected
+        best = selected[["SKU_ID", "candidate_gtin", "score", "gtin_status"]].rename(
+            columns={"candidate_gtin": "ITEM_ID"}
+        )
+        best = best.loc[:, list(ASSIGNMENT_COLUMNS)]
+        all_skus = self._candidates[["SKU_ID"]].drop_duplicates()
+        output = all_skus.merge(best, on="SKU_ID", how="left")
+        prefix = _unmatched_prefix()
+        output["ITEM_ID"] = output["ITEM_ID"].fillna(
+            prefix + output["SKU_ID"].astype(str)
+        )
+        return output
+
+    def run(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """One fixed pass: empty pool -> annotate -> best -> trace -> output."""
+        if self._candidates.empty:
+            return (
+                pd.DataFrame(columns=ASSIGNMENT_COLUMNS),
+                self._candidates.copy(),
+            )
+        self.strata()
+        self.accept()
+        for gate_column in (
+            self.gtin_gate,
+            self.attribute_gate,
+            self.brand_gate,
+            self.threshold_gate,
+            self.assignment_gate,
+            self.rejection_reason,
+        ):
+            gate_column()
+        self.gate_contract()
+        self.select_best()
+        trace = self.trace_flag()
+        return self.output_frame(trace), trace
 
 
 def _assignments_with_trace(
@@ -1804,49 +1956,17 @@ def _assignments_with_trace(
     *,
     threshold_by_gtin_status: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if candidates.empty:
-        return (
-            pd.DataFrame(columns=ASSIGNMENT_COLUMNS),
-            candidates.copy(),
-        )
-    frame = _annotate_candidates(
+    """Assign one canonical ID per SKU (phase-ordered pass on the selector).
+
+    This intentionally does not build connected components or perform
+    transitive similarity chaining.
+    """
+    return _AssignmentSelector(
         candidates,
         threshold,
         threshold_by_gtin_status=threshold_by_gtin_status,
-    )
-    accepted = frame[frame["accepted"]].sort_values(
-        list(ASSIGNMENT_SORT_COLUMNS),
-        ascending=list(ASSIGNMENT_SORT_ASCENDING),
-        kind="mergesort",
-    )
-    selected = accepted.drop_duplicates("SKU_ID", keep="first").copy()
-    selected_keys = selected[["SKU_ID", "candidate_gtin"]].assign(selected=1)
-    trace = frame.copy()
-    trace_keys = pd.MultiIndex.from_frame(trace[["SKU_ID", "candidate_gtin"]])
-    selected_key_index = pd.MultiIndex.from_frame(
-        selected_keys[["SKU_ID", "candidate_gtin"]]
-    )
-    missing_selected = selected_key_index.difference(trace_keys)
-    if len(missing_selected):
-        raise RuntimeError(
-            "selected assignment key is absent from candidate trace: "
-            f"{list(missing_selected)}"
-        )
-    trace["selected"] = trace_keys.isin(selected_key_index).astype("int8")
-    trace["assignment_gate"] = np.where(
-        trace["selected"].astype(bool),
-        "selected_best_candidate",
-        trace["assignment_gate"],
-    )
-    best = selected[["SKU_ID", "candidate_gtin", "score", "gtin_status"]].rename(
-        columns={"candidate_gtin": "ITEM_ID"}
-    )
-    best = best.loc[:, list(ASSIGNMENT_COLUMNS)]
-    all_skus = candidates[["SKU_ID"]].drop_duplicates()
-    output = all_skus.merge(best, on="SKU_ID", how="left")
-    prefix = _unmatched_prefix()
-    output["ITEM_ID"] = output["ITEM_ID"].fillna(prefix + output["SKU_ID"].astype(str))
-    return output, trace
+    ).run()
+
 
 
 def _merge_audit_context(
