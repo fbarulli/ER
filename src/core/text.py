@@ -52,8 +52,21 @@ def normalize_text(text: str) -> str:
 
 
 def normalized_attribute_text(*values: object) -> str:
-    """Shared attribute token normalization without dropping negation words."""
-    text = unicode_casefold(" ".join(str(value or "") for value in values))
+    """Shared attribute token normalization without dropping negation words.
+
+    Pure function with an extremely hot call volume in the ablation lane
+    (>1.5M calls in a 10k-cohort prepare, where the same field names and
+    attribute cells recur across endpoints, variants and identity parsing).
+    Memoized for byte-identical returns: same arguments -> same string,
+    so the cache layer below cannot change output.
+    """
+    return _normalized_attribute_text_cached(
+        *[str(value or "") for value in values])
+
+
+@lru_cache(maxsize=262144)
+def _normalized_attribute_text_cached(*values: str) -> str:
+    text = unicode_casefold(" ".join(values))
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text)).strip()
 
 # ---------------------------------------------------------------------------
