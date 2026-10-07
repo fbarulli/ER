@@ -34,6 +34,7 @@ Class map (one owner per responsibility):
   - TokenMover       — the ONE whitelisted token move both labels share
   - CanonicalIndex   — canonical lookup by GTIN + corpus donor pools
   - AnchorIndex      — anchor-row lookups and the stripped-GTIN array
+  - FinalizedTextPool — finalized model texts: inline or fork-parallel by size
   - LaneAssembler    — the trainer bridge (negative swap + minted leaves)
   - FoldMap          — GTIN-grouped fold buckets over union components
   - NegativeSupply   — the orchestrator: block -> mine -> mint -> emit
@@ -309,6 +310,70 @@ def finalized_texts(df: pd.DataFrame) -> pd.Series:
     from core.record_linkage import finalized_texts as finalized
 
     return finalized(df)
+
+
+_SHARED_FINALIZED_FRAME: pd.DataFrame | None = None
+
+
+def _bind_finalized_frame(df: pd.DataFrame) -> None:
+    """Publish the frame for fork-COW sharing (read-only in every worker)."""
+    global _SHARED_FINALIZED_FRAME
+    _SHARED_FINALIZED_FRAME = df
+
+
+def _finalized_texts_task(bounds: tuple[int, int]) -> pd.Series:
+    """One chunk's finalized texts, read from the fork-inherited frame."""
+    start, stop = bounds
+    return finalized_texts(_SHARED_FINALIZED_FRAME.iloc[start:stop])
+
+
+class FinalizedTextPool:
+    """Finalized texts over one frame: inline or fork-parallel by size.
+
+    ``finalized_texts`` is row-local (per-row extractors + composition, no
+    cross-row state), so the build splits cleanly across CPU cores: the frame
+    is published once for fork-COW sharing, each worker finalizes its slice,
+    and the series are concatenated in submission order — the same Series
+    order and the same bytes the inline single-process build produced.
+    """
+
+    _INLINE_ROW_THRESHOLD = 1024
+    _CHUNK_ROWS = 1024
+    _CHUNKSIZE = 1
+
+    def texts(self, df: pd.DataFrame) -> pd.Series:
+        """df -> finalized text Series (parallel above the threshold)."""
+        if len(df) <= self._INLINE_ROW_THRESHOLD or (os.cpu_count() or 2) < 2:
+            return finalized_texts(df)
+        return self._parallel_texts(df)
+
+    def _parallel_texts(self, df: pd.DataFrame) -> pd.Series:
+        """Fork-parallel finalized texts over row chunks (order preserved)."""
+        import concurrent.futures
+        from multiprocessing import get_context
+
+        _bind_finalized_frame(df)
+        bounds = [
+            (start, min(start + self._CHUNK_ROWS, len(df)))
+            for start in range(0, len(df), self._CHUNK_ROWS)
+        ]
+        chunks: list[pd.Series] = []
+        bar = _LOG.bar(total=len(bounds), desc="finalized_texts", unit="chunk")
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=max(2, (os.cpu_count() or 2) - 1),
+                mp_context=get_context("fork"),
+            ) as pool:
+                for series in pool.map(
+                    _finalized_texts_task, bounds, chunksize=self._CHUNKSIZE
+                ):
+                    chunks.append(series)
+                    bar.update()
+        finally:
+            bar.close()
+            _bind_finalized_frame(None)
+        texts = pd.concat(chunks) if chunks else finalized_texts(df)
+        return texts
 
 
 # ── the ONE token move both labels share ────────────────────────────────────
@@ -812,7 +877,7 @@ class NegativeSupply(BaseModel):
         if self._anchors is None:
             self._anchors = AnchorIndex(self.df)
         if self._texts is None:
-            self._texts = finalized_texts(self.df)
+            self._texts = FinalizedTextPool().texts(self.df)
         if self._rng is None:
             self._rng = np.random.default_rng(self.spec.seed)
 
