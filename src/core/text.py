@@ -22,11 +22,57 @@ from functools import lru_cache
 
 import pandas as pd  # pd.Series annotation in attributes_keys (F17)
 
+# Module-scope compiled patterns (PERF r15).
+#
+# Every `re.sub(...)`/`re.search(...)`/`re.match(...)`/`re.fullmatch(...)` call
+# written against the `re` module goes through `re._compile`, which re-hashes
+# the pattern string and re-reads the module cache on EVERY call (measured
+# 0.36 s of `re/__init__.py:_compile` + wrapper overhead in the text lane
+# benchmark, 325,787 dispatches).  Binding the compiled pattern once at import
+# removes that dispatch entirely; the match semantics are unchanged because the
+# pattern text and flags are copied verbatim from the call sites below.
+_NORM_KEEP_RE = re.compile(r"[^a-z0-9.\s]")
+_SPACE_RUN_RE = re.compile(r"\s+")
+_NON_ALNUM_RUN_RE = re.compile(r"[^a-z0-9]+")
+_UNIT_SEP_RE = re.compile(r"[.\-\s]")
+_GLUED_ZERO_RE = re.compile(r"0\d")
+
+
+# Combining-mark deletion table for str.translate, built at most once.
+#
+# MEASURED (269,867 chars from the smoke_500 catalog, best of 7):
+#   generator + unicodedata.combining per char   0.02544 s
+#   list comprehension + local combining alias   0.01615 s
+#   str.translate with the table below           0.00290 s
+# The table itself costs one full `unicodedata.combining` sweep of the code
+# space, 0.1408 s on this host, and holds the 934 combining code points.  That
+# fixed cost only pays for itself after ~1.7 M characters (0.1408 / 8.36e-8),
+# so short-lived processes keep the list-comprehension path until the running
+# character count has covered it.  Both paths delete exactly the code points
+# whose combining class is non-zero, so the returned string is identical.
+_STRIP_TABLE_THRESHOLD = 1 << 21  # 2,097,152 chars > measured 1.7 M break-even
+_CASEFOLD_CHARS = 0
+_STRIP_TABLE: dict | None = None
+
+
+def _strip_table() -> dict:
+    """code point -> None for every combining mark (built once, then cached)."""
+    global _STRIP_TABLE
+    if _STRIP_TABLE is None:
+        _STRIP_TABLE = {codepoint: None for codepoint in range(0x110000)
+                        if unicodedata.combining(chr(codepoint))}
+    return _STRIP_TABLE
+
 
 def unicode_casefold(value: object) -> str:
     """Shared case/accent folding; punctuation and negation remain intact."""
+    global _CASEFOLD_CHARS
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
-    return "".join(char for char in text if not unicodedata.combining(char))
+    if _CASEFOLD_CHARS > _STRIP_TABLE_THRESHOLD:
+        return text.translate(_strip_table())
+    _CASEFOLD_CHARS += len(text)
+    combining = unicodedata.combining
+    return "".join([char for char in text if not combining(char)])
 
 
 def normalize_text(text: str) -> str:
@@ -47,14 +93,14 @@ def normalize_text(text: str) -> str:
         text = str(text)
     text = text.lower().strip()
     text = text.replace("\u00d7", "x")
-    text = re.sub(r"[^a-z0-9.\s]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = _NORM_KEEP_RE.sub(" ", text)
+    return _SPACE_RUN_RE.sub(" ", text).strip()
 
 
 def normalized_attribute_text(*values: object) -> str:
     """Shared attribute token normalization without dropping negation words."""
     text = unicode_casefold(" ".join(str(value or "") for value in values))
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text)).strip()
+    return _SPACE_RUN_RE.sub(" ", _NON_ALNUM_RUN_RE.sub(" ", text)).strip()
 
 # ---------------------------------------------------------------------------
 # Pack-count phrases: "6-pack", "12 Pack", "12pcs", "10 Packets", "48 pk",
@@ -199,15 +245,15 @@ def normalize_retailer(name: str) -> str:
     alias and could collide distinct retailers on the truncated stem.
     """
     text = unicodedata.normalize("NFKD", str(name or "").casefold())
-    text = "".join(char for char in text if not unicodedata.combining(char))
-    text = re.sub(r"[^a-z0-9]+", " ", text)
+    text = "".join([char for char in text if not unicodedata.combining(char)])
+    text = _NON_ALNUM_RUN_RE.sub(" ", text)
     return " ".join(text.split())
 
 
 def norm_unit(token: str) -> str:
     """Normalize a unit token to a config-units key (tolerates spacing/punct)."""
-    t = re.sub(r"[.\-\s]", " ", token.lower()).strip()
-    t = re.sub(r"\s+", " ", t)
+    t = _UNIT_SEP_RE.sub(" ", token.lower()).strip()
+    t = _SPACE_RUN_RE.sub(" ", t)
     if t == "floz":
         return "fl oz"
     return t
@@ -238,6 +284,26 @@ def extract_volume_measurement(text: str) -> tuple[float | None, str | None, boo
 
 
 _SPACE_THOUSANDS_RE = re.compile(r"\b(\d{1,3})[ \u00a0]+(000)(?=\s*ml\b)", re.IGNORECASE)
+
+# _VolumeEvidenceReader's role ladder and number decode, compiled once (PERF
+# r15).  Pattern text and flags are verbatim from the former module-level
+# re.search/re.match/re.fullmatch/re.sub call sites, so `search`/`match`
+# semantics per position are unchanged.
+_DRY_PRODUCT_RE = re.compile(r"\b(?:powder(?:ed)?|dry mix|drink mix|tea bags?)\b", re.I)
+_PER_TAIL_RE = re.compile(r"\bper\s*$", re.I)
+_PER_SERVING_RE = re.compile(r"\s*(?:per\s+(?:serving|portion)|/\s*serving)\b", re.I)
+_TOTAL_TAIL_RE = re.compile(r"\btotal\s*(?:of\s*)?[:=]?\s*$", re.I)
+_TOTAL_LEAD_RE = re.compile(r"\s*(?:in\s+)?total\b", re.I)
+_YIELD_TAIL_RE = re.compile(r"\b(?:makes?|yields?|dilutes?\s+to)\s*$", re.I)
+_CONTAINS_TAIL_RE = re.compile(r"\bcontains?\s*$", re.I)
+_INGREDIENT_LEAD_RE = re.compile(
+    r"\s*(?:of\s+)?(?:juice|concentrate|syrup)\s+(?:in|per|within)\b", re.I)
+_FRACTION_RE = re.compile(r'(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)')
+_NESTED_COUNT_RE = re.compile(r'\d+\s*[x×]\s*$', re.I)
+_CASE_COUNT_RE = re.compile(r'\bcase\s+of\s*$|\d+\s*/\s*$', re.I)
+_SLASH_NUMBER_RE = re.compile(r'\s/')
+_COUNT_LIST_RE = re.compile(r'([1-9]\d*),\s+(\d{3,})')
+_SEP_TIGHT_RE = re.compile(r'\s*([.,])\s*')
 
 
 def _VOLUME_SEARCH(text: str):
@@ -334,7 +400,7 @@ def _extract_volume_match_legacy(text: str) -> tuple:
     #                           so "0123" can never decode as 123.4),
     #   spaced  "0 8l" -> 0.8 l  via the single-digit branch below eating
     #                           the zero with its optional separator.
-    if re.fullmatch(r"0\d", raw_value):
+    if _GLUED_ZERO_RE.fullmatch(raw_value):
         raw_value = "0." + raw_value[1:]
     value = float(raw_value.replace(",", ".").replace(" ", ""))
     return value, unit, unit in ambiguous_units, match.group(0)
@@ -376,21 +442,21 @@ class _VolumeEvidenceReader:
 
 
     def prepare(self) -> bool:
-        return bool(re.search(r"\b(?:powder(?:ed)?|dry mix|drink mix|tea bags?)\b", self._text, re.I))
+        return bool(_DRY_PRODUCT_RE.search(self._text))
 
     def classify_role(self, preceding: str, following: str, unit: str,
                       dry_product: bool) -> str:
         """The role ladder is precedence-ordered (first proof wins)."""
-        if (re.search(r"\bper\s*$", preceding, re.I)
-                or re.match(r"\s*(?:per\s+(?:serving|portion)|/\s*serving)\b", following, re.I)):
+        if (_PER_TAIL_RE.search(preceding)
+                or _PER_SERVING_RE.match(following)):
             role = 'nutrition'
-        elif (re.search(r"\btotal\s*(?:of\s*)?[:=]?\s*$", preceding, re.I)
-              or re.match(r"\s*(?:in\s+)?total\b", following, re.I)):
+        elif (_TOTAL_TAIL_RE.search(preceding)
+              or _TOTAL_LEAD_RE.match(following)):
             role = 'total_volume'
-        elif re.search(r"\b(?:makes?|yields?|dilutes?\s+to)\s*$", preceding, re.I):
+        elif _YIELD_TAIL_RE.search(preceding):
             role = 'yield'
-        elif (re.search(r"\bcontains?\s*$", preceding, re.I)
-              and re.match(r"\s*(?:of\s+)?(?:juice|concentrate|syrup)\s+(?:in|per|within)\b", following, re.I)):
+        elif (_CONTAINS_TAIL_RE.search(preceding)
+              and _INGREDIENT_LEAD_RE.match(following)):
             role = 'ingredient_volume'
         elif dry_product and unit in {'oz', 'ounce', 'ounces'}:
             role = 'net_weight'
@@ -405,14 +471,14 @@ class _VolumeEvidenceReader:
         candidate dies exactly as before)."""
         if '/' not in number:
             return None
-        fraction = re.fullmatch(r'(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)', number)
+        fraction = _FRACTION_RE.fullmatch(number)
         whole, numerator, denominator = (int(part or 0) for part in fraction.groups())
         if denominator == 0:
             return None
-        nested_count = bool(re.search(r'\d+\s*[x×]\s*$', preceding, re.I))
-        case_count = bool(re.search(r'\bcase\s+of\s*$|\d+\s*/\s*$', preceding, re.I))
+        nested_count = bool(_NESTED_COUNT_RE.search(preceding))
+        case_count = bool(_CASE_COUNT_RE.search(preceding))
         count_size = (nested_count or case_count or (not whole and numerator >= denominator
-                      and unit in _volume_views()[1] and bool(re.search(r'\s/', number))))
+                      and unit in _volume_views()[1] and bool(_SLASH_NUMBER_RE.search(number))))
         value = float(denominator) if count_size else whole + numerator / denominator
         return value, unit, unit in _volume_views()[1]
 
@@ -444,8 +510,8 @@ class _VolumeEvidenceReader:
                 # "concentrate 1 + 4, 200ml" is a dilution ratio followed by
                 # bottle size, not a 4.2 ml package. Preserve genuine 0, 33 l
                 # and 1,25 l decimals while separating integer/size lists.
-                count_list = re.fullmatch(r'([1-9]\d*),\s+(\d{3,})', number)
-                numeric = count_list.group(2) if count_list else re.sub(r'\s*([.,])\s*', r'\1', number)
+                count_list = _COUNT_LIST_RE.fullmatch(number)
+                numeric = count_list.group(2) if count_list else _SEP_TIGHT_RE.sub(r'\1', number)
                 value, parsed_unit, ambiguous, _ = _extract_volume_match_legacy(numeric + ' ' + unit_surface)
             if value is None or parsed_unit is None or value <= 0:
                 continue
