@@ -129,6 +129,7 @@ def _calibration_source(destination, track):
     calibration = TrackReportManifest.model_validate_json(sources[0].read_text())
     if calibration.track != track:
         raise ValueError("ablation calibration belongs to a different track")
+    _LOG.info(f'[ablation] calibration source track={track} manifest={sources[0].name}')
     return request, result, sources[0], calibration
 
 
@@ -151,6 +152,7 @@ def _wrote_binding(request, track, calibration, source):
             'source_calibration':source_name(source),
             'source_calibration_sha256':__import__('graph_tracks.data',fromlist=['file_hash']).file_hash(source),
             'threshold_source':'saved dev calibration; no refit'})
+    _LOG.info(f'[ablation] threshold binding track={track} threshold={threshold}')
     return binding, threshold, document
 
 
@@ -185,7 +187,9 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
     """Consume suite GPU exports after shutdown; no provisioning or forwards."""
     from graph_tracks.data import file_hash
     outputs = {}
+    _LOG.info(f'[ablation] complete_saved destination={destination}')
     for track in _LOG.progress(('text','gnn_only','hybrid'), desc='complete_saved', unit='track'):
+        _LOG.info(f'[ablation] complete track={track}')
         with _LOG.section('ablation.complete.calibration'):
             request, result, source, calibration = _calibration_source(destination, track)
             binding, threshold, document = _wrote_binding(request, track, calibration, source)
@@ -221,6 +225,7 @@ def _published_track_outputs(outputs, track, request, result, validated, binding
     if publisher is not None:
         artifact = publisher(request,result,validated,str(binding))
         outputs[track]['artifact'] = source_name(artifact)
+        _LOG.info(f'[ablation] publisher artifact track={track} name={outputs[track]["artifact"]}')
 
 
 def git_publisher(suite: SuiteConfig):
