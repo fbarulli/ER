@@ -1360,7 +1360,14 @@ class _CandidateGateRecord:
 
 
 class RandMatcher:
-    """Encode canonical items and score SKU candidates against them."""
+    """Encode canonical items and score SKU candidates against them.
+
+    The constructor is a phase-ordered owner pass (SR per phase, statements
+    verbatim, so encoder/index calls and every print keep their original
+    order): canonical map -> record map -> model + structured weights +
+    fingerprint -> per-item model inputs -> ANN index open -> restore or
+    rebuild embeddings -> final census line.
+    """
 
     def __init__(
         self,
@@ -1376,6 +1383,21 @@ class RandMatcher:
         self.top_k = top_k
         self.config = load_config()
         self.structured_config = self.config["training"]["structured_features"]
+        self._load_canonical_map()
+        self._load_records()
+        self._load_model()
+        self._prepare_item_inputs()
+        self._open_ann_index(ann_index_dir)
+        rebuild = False
+        if not rebuild_ann_index:
+            rebuild = self._restore_embeddings()
+        if rebuild or rebuild_ann_index:
+            self._build_embeddings()
+
+        print(f"loaded {len(self.item_ids):,} canonical items from {self.checkpoint}")
+
+    def _load_canonical_map(self) -> None:
+        """Canonical ids and the id -> index map (empty-map guard verbatim)."""
         self.canonical = load_canonical_map()
         self.item_ids = [str(value) for value in self.canonical]
         if not self.item_ids:
@@ -1384,6 +1406,8 @@ class RandMatcher:
             item_id: index for index, item_id in enumerate(self.item_ids)
         }
 
+    def _load_records(self) -> None:
+        """Canonical metadata rows keyed by GTIN with the missing-row guard."""
         records = canonical_records_frame()
         if records["gtin"].duplicated().any():
             raise RuntimeError("canonical_records.csv contains duplicate GTIN rows")
@@ -1398,8 +1422,11 @@ class RandMatcher:
                 + (" ..." if len(missing_records) > 10 else "")
             )
 
+    def _load_model(self) -> None:
+        """Encoder, structured weights and the preprocessing fingerprint."""
         self.model = load_local_sentence_transformer(
-            str(checkpoint), device="cuda" if torch.cuda.is_available() else "cpu"
+            str(self.checkpoint),
+            device="cuda" if torch.cuda.is_available() else "cpu",
         )
         self.structured_enabled = bool(self.structured_config["enabled"])
         self.structured_weight = (
@@ -1415,6 +1442,8 @@ class RandMatcher:
             ).encode("utf-8")
         ).hexdigest()
 
+    def _prepare_item_inputs(self) -> None:
+        """Per-item gate infos, composed texts and structured features."""
         item_infos = [
             model_input_info(canonical_structured_info(self.record_map[item_id]))
             if self.structured_enabled
@@ -1425,10 +1454,14 @@ class RandMatcher:
             build_canonical_text(self.record_map[item_id], info)
             for item_id, info in zip(self.item_ids, item_infos, strict=True)
         ]
-        item_features = np.asarray(
+        self._item_features = np.asarray(
             [self._structured_vector(info) for info in item_infos],
             dtype=np.float32,
         )
+        self._item_texts = item_texts
+
+    def _open_ann_index(self, ann_index_dir: Path | None) -> None:
+        """The persistent HNSW index handle (path/config resolution verbatim)."""
         ann_settings = load_ann_config()
         ann_cfg = ann_settings.index
         configured_output = Path(ann_cfg.output_dir)
@@ -1441,50 +1474,53 @@ class RandMatcher:
             ef_search=ann_cfg.ef_search,
             space=ann_cfg.space,
         )
-        model_name = ann_settings.embedding.model
-        if not rebuild_ann_index:
-            try:
-                self.ann_index.load(
-                    ids=self.item_ids,
-                    checkpoint=self.checkpoint,
-                    model_name=model_name,
-                    preprocessing_fingerprint=self.preprocessing_fingerprint,
-                )
-                self.item_embeddings = self.ann_index.embeddings
-                if self.item_embeddings is None:
-                    raise ValueError("persisted HNSW index loaded without embeddings")
-                print(f"loaded persisted HNSW index from {self.ann_index.output_dir}")
-            except (FileNotFoundError, ValueError) as exc:
-                print(f"persisted HNSW index needs rebuild: {exc}")
-                rebuild_ann_index = True
-        if rebuild_ann_index:
-            item_embeddings = self.model.encode(
-                item_texts,
-                batch_size=self.batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                show_progress_bar=True,
-            )
-            self.item_embeddings = normalize_embeddings(
-                fuse_numpy(
-                    item_embeddings,
-                    item_features,
-                    self.structured_weight,
-                )
-            )
-            metadata = self.ann_index.build(
-                self.item_embeddings,
-                self.item_ids,
+        self._ann_model_name = ann_settings.embedding.model
+
+    def _restore_embeddings(self) -> bool:
+        """Load the persisted index; True asks the caller for a rebuild."""
+        try:
+            self.ann_index.load(
+                ids=self.item_ids,
                 checkpoint=self.checkpoint,
-                model_name=model_name,
+                model_name=self._ann_model_name,
                 preprocessing_fingerprint=self.preprocessing_fingerprint,
             )
-            print(
-                f"built HNSW index count={metadata['count']:,} "
-                f"dim={metadata['dim']} at {self.ann_index.output_dir}"
-            )
+            self.item_embeddings = self.ann_index.embeddings
+            if self.item_embeddings is None:
+                raise ValueError("persisted HNSW index loaded without embeddings")
+            print(f"loaded persisted HNSW index from {self.ann_index.output_dir}")
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"persisted HNSW index needs rebuild: {exc}")
+            return True
+        return False
 
-        print(f"loaded {len(self.item_ids):,} canonical items from {self.checkpoint}")
+    def _build_embeddings(self) -> None:
+        """Encode the catalog texts and build the HNSW artifact (verbatim)."""
+        item_embeddings = self.model.encode(
+            self._item_texts,
+            batch_size=self.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=True,
+        )
+        self.item_embeddings = normalize_embeddings(
+            fuse_numpy(
+                item_embeddings,
+                self._item_features,
+                self.structured_weight,
+            )
+        )
+        metadata = self.ann_index.build(
+            self.item_embeddings,
+            self.item_ids,
+            checkpoint=self.checkpoint,
+            model_name=self._ann_model_name,
+            preprocessing_fingerprint=self.preprocessing_fingerprint,
+        )
+        print(
+            f"built HNSW index count={metadata['count']:,} "
+            f"dim={metadata['dim']} at {self.ann_index.output_dir}"
+        )
 
     def _structured_vector(self, info: dict) -> np.ndarray:
         return structured_vector(
