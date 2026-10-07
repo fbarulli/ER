@@ -2741,6 +2741,90 @@ PREPARATION_REUSABLE_KEYS = (
 )
 
 
+class KaggleFilesSpec(BaseModel):
+    """Configured Kaggle files contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    credentials_file: str = '.kaggle/kaggle.json'
+    access_token_file: str = '.kaggle/access_token'
+    source_dir: str = 'src'
+    checkout_dir: str = 'ER'
+    kernel_stage: str = '{kind}_kernel'
+    kernel_metadata: str = 'kernel-metadata.json'
+    kernel_receipt: str = '{kind}_kernel.receipt.json'
+    code_files: dict[str, str] = Field(default_factory=lambda: {'bundle': 'bundle_cpu.py', 'train': 'train_gpu.py', 'embed': 'embed_gpu.py'})
+    stop_stage: str = '{which}_stop'
+    stop_code: str = 'cancel_stub.py'
+    fetch_stage: str = '{kind}_fetch'
+    unpack_dir: str = 'unpacked'
+    bundle_dir: str = 'bundle'
+    bundle_archive: str = 'all_tracks_inputs.tar.zst'
+    bundle_receipt: str = 'bundle.receipt.json'
+    bundle_sidecars: tuple[str, ...] = ('manifest.json', 'timings.json')
+    result_archive: str = '{kind}.tar.zst'
+    result_manifest: str = '{kind}.manifest.json'
+    result_names: dict[str, str] = Field(default_factory=lambda: {'train': 'result_bundle', 'embed': 'vectors'})
+    failure_archive: str = 'failure.tar.zst'
+    failure_zip: str = 'failure.zip'
+    failure_manifest: str = 'failure.manifest.json'
+    failure_log: str = 'failure.log'
+    worker_log: str = 'worker.log'
+    package_manifest: str = 'model_tracks_package.json'
+    request_file: str = 'request.json'
+    vectors_file: str = 'vectors.npz'
+    embedding_script: str = 'scripts/encode_prepared_embeddings.py'
+    prep_suite_config: str = 'config/model_tracks.yaml'
+    prep_dir: str = 'training_prep'
+    training_dir: str = 'model_tracks'
+    embedding_dir: str = 'embedding_job'
+    lane_log: str = 'lane.log'
+    autowatch_log: str = 'autowatch_{which}.log'
+    stream_log: str = '{kernel}.stream.log'
+    autowatch_receipt: str = 'autowatch_{kind}.receipt.json'
+    supervise_receipt: str = 'supervise.receipt.json'
+    chain_receipt: str = 'chain.receipt.json'
+    publish_receipt: str = 'publish.receipt.json'
+    dataset_metadata: str = 'dataset-metadata.json'
+    log_glob: str = "*.log"
+    install_dir: str = "{kind}"
+    hash_suffix: str = ".sha256"
+
+
+class KaggleRemoteSpec(BaseModel):
+    """Configured Kaggle remote contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    working_dir: str = '/kaggle/working'
+    input_dir: str = '/kaggle/input'
+    scratch_dir: str = '/kaggle/tmp'
+    fallback_scratch: str = 'er_{kind}'
+    extra_artifact_dirs: tuple[str, ...] = ('wandb', 'cache', '.cache')
+
+
+class KaggleLimitsSpec(BaseModel):
+    """Configured Kaggle limits contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: str = 'Europe/Paris'
+    run_tag_format: str = "%m%dT%H%M%S"
+    git_clone_depth: int = Field(default=1, ge=1)
+    error_tail_chars: int = Field(default=800, ge=1)
+    command_error_tail_chars: int = Field(default=4000, ge=1)
+    transfer_attempts: int = Field(default=3, ge=1)
+    stop_attempts: int = Field(default=3, ge=1)
+    retry_seconds: float = Field(default=5.0, gt=0)
+    max_polls: int = Field(default=17280, ge=1)
+    stream_retries: int = Field(default=5, ge=1)
+    stream_join_seconds: float = Field(default=1.0, gt=0)
+    terminal_rows: int = Field(default=40, ge=1)
+    terminal_columns: int = Field(default=160, ge=1)
+    read_buffer_bytes: int = Field(default=4096, ge=1)
+    child_stop_seconds: float = Field(default=10.0, gt=0)
+
+
 class KaggleSpec(BaseModel):
     """training.kaggle — the Kaggle dataset/export transport lane's SSOT.
 
@@ -2751,6 +2835,13 @@ class KaggleSpec(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    cohort_tags: tuple[str, ...] = ("full", "50pct", "10k")
+    default_cohort: str = "full"
+
+    files: KaggleFilesSpec = Field(default_factory=KaggleFilesSpec)
+    remote: KaggleRemoteSpec = Field(default_factory=KaggleRemoteSpec)
+    limits: KaggleLimitsSpec = Field(default_factory=KaggleLimitsSpec)
 
     # Dataset "owner/slug" to publish under; empty keeps every transport call
     # fail-loud until the owner names the target dataset.
@@ -2799,6 +2890,11 @@ class KaggleSpec(BaseModel):
     # kernel attaches (kernel-output mounts go stale on stop-stub versions;
     # a dataset is immutable at fetch time). Cohort implied by the bundle.
     bundle_dataset_slug: str | None = None
+    # Publish default (owner order 2026-10-07): after a verified fetch the
+    # lane builds the dataset stage dir results/kaggle_lane/<cohort> with
+    # this suffix (the ER 10k bundle precedent: dataset-metadata.json +
+    # archive + kernel receipt) and runs `kaggle datasets version` from it.
+    bundle_dataset_stage_suffix: str = "_bundle_dataset"
     checkout_paths: tuple[str, ...] = (
         "src", "scripts", "config", "requirements", "artifacts/models",
     )
@@ -2814,9 +2910,10 @@ class KaggleSpec(BaseModel):
     # checkout_paths, so it arrives with the sparse clone).
     checkpoint: str = "artifacts/models"
     # kernel-logs polling cadence and transcript directory (relative to
-    # staging_dir — colab log-poll mirror, cadence-adapted to kernels).
+    # TRAIN_ROOT — one canonical roof at logs/<lane>/, owner order
+    # 2026-10-07; colab log-poll mirror, cadence-adapted to kernels).
     logs_poll_seconds: float = Field(default=15.0, ge=1.0)
-    logs_dir: str = "logs"
+    logs_dir: str = "logs/kaggle"
     # Tag prefix for generated run tags (gpu_<UTC stamp>).
     run_tag_prefix: str = "gpu_"
 
@@ -2827,17 +2924,115 @@ class KaggleSpec(BaseModel):
                 for key, value in fragment.items():
                     walk(value, f"{where}.{key}")
                 return
+            if isinstance(fragment, (list, tuple)):
+                for index, value in enumerate(fragment):
+                    walk(value, f"{where}[{index}]")
+                return
+            if not isinstance(fragment, str):
+                return
+            candidate = Path(fragment)
+            if not fragment.strip() or candidate.is_absolute() or ".." in candidate.parts:
+                raise ValueError(
+                    f"kaggle.{where} must be a portable name or relative path fragment: {fragment!r}"
+                )
+
+        walk(self.model_dump(exclude={"kaggle_executable", "remote", "limits"}), "paths")
+        for name in ("working_dir", "input_dir", "scratch_dir"):
+            value = Path(getattr(self.remote, name))
+            if not value.is_absolute() or ".." in value.parts:
+                raise ValueError(f"kaggle.remote.{name} must be an absolute remote path")
+        walk(self.remote.fallback_scratch, "remote.fallback_scratch")
+        for fragment in self.remote.extra_artifact_dirs:
+            walk(fragment, "remote.extra_artifact_dirs")
+        from zoneinfo import ZoneInfo
+        ZoneInfo(self.limits.timezone)
+        if (len(self.cohort_tags) != len(self.export_csvs)
+                or len(set(self.cohort_tags)) != len(self.cohort_tags)
+                or self.default_cohort not in self.cohort_tags):
+            raise ValueError("kaggle cohort_tags must pair with export_csvs and include default_cohort")
+        if set(self.files.code_files) != {"bundle", "train", "embed"}:
+            raise ValueError("kaggle.files.code_files requires bundle, train, embed")
+        if set(self.files.result_names) != {"train", "embed"}:
+            raise ValueError("kaggle.files.result_names requires train, embed")
+        if len(self.submission_id_columns) != 2 or len(set(self.submission_id_columns)) != 2:
+            raise ValueError("kaggle.submission_id_columns must be two distinct column names")
+        return self
+
+
+class LayaSpec(BaseModel):
+    """training.laya — the laya decision lane's SSOT (additive).
+
+    Additive exactly like the sibling KaggleSpec (kaggle: above): a
+    config/training.yaml without this block loads byte-identically and no
+    existing default flips. The block declares what the lane stages and
+    what its preconditions check; the SSOT `config/paths.yaml` `files:`
+    bindings are REFERENCES (resolved through core.common.F), never
+    duplicated.
+
+    Whitespace/careat: `laya_decision_epochs <= 0` DISABLES the lane (no
+    payload may stage a GPU session); the knob makes "laya decisions off"
+    reachable by config alone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The laya.question typed-question schema (checked at staging; a
+    # missing file fails the stage, never a silent empty placeholder).
+    question_schema: str = "config/laya.question.json"
+    # Which SSOT binding (config/paths.yaml `files:`) the decision CSV
+    # resolves from per run kind — resolved through core.common.F at
+    # staging, never duplicated. Keys are the lane's decision kinds.
+    decision_csv_bindings: dict[str, str] = Field(
+        default_factory=lambda: {"attribute": "dataset",
+                                 "identity": "final_validation",
+                                 "laya-cli-eval": "final_validation"},
+    )
+    # laya checkpoint hub source (convaiinnovations/laya on the Hugging
+    # Face hub; the kernel loads it explicitly).
+    checkpoint_hub: str = "convaiinnovations/laya"
+    # Staging root (TRAIN_ROOT-relative). Receipts land under
+    # results/laya_lane/<kind>/<op>/...
+    staging_dir: str = "results/laya_lane"
+    # PyPI package (installed over pip on the session, never vendored).
+    laya_package: str = "laya"
+    # Both kaggle dataset slugs ('owner/slug') fail-loud when unset: no
+    # silent default account (kaggle_slug=None sibling precedent).
+    dataset_slug: str | None = None
+    export_dataset_slug: str | None = None
+    run_tag_prefix: str = "laya_"
+    # SINGLE T4 per owner ruling; the meta never requests 2xT4.
+    gpu: Literal["T4"] = "T4"
+    laya_decision_batch_size: int = Field(default=8, ge=1, le=128)
+    # 0 DISABLES the decision lane (no payload may stage a session).
+    laya_decision_epochs: int = Field(default=1, ge=0, le=8)
+    laya_decision_max_rows: int = Field(default=2500, ge=2, le=50000)
+    # Router confidence gate: >0 wires min_confidence into the session's
+    # Router.predict calls (abstention/low-confidence answers flagged).
+    min_router_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Laya-side calibration (recorded as the session-side knob).
+    calibration: bool = False
+    # laya-evals harness score over the same identity decision samples.
+    laya_evals_enabled: bool = False
+    # ONNX export path (Agent backend='onnx'); the kernel wiring is
+    # pending (see docs/laya-lane.md 'Caveats'). Recorded, not hidden.
+    onnx: bool = False
+
+    @model_validator(mode="after")
+    def _declared_paths_are_portable(self) -> "LayaSpec":
+        def walk(fragment: Any, where: str) -> None:
+            if isinstance(fragment, dict):
+                for key, value in fragment.items():
+                    walk(value, f"{where}.{key}")
+                return
             if not isinstance(fragment, str):
                 return
             candidate = Path(fragment)
             if candidate.is_absolute() or ".." in candidate.parts:
                 raise ValueError(
-                    f"kaggle.{where} must be a portable name or relative path fragment: {fragment!r}"
+                    f"laya.{where} must be a portable name or relative path: {fragment!r}"
                 )
 
-        walk(self.model_dump(exclude={"kaggle_executable"}), "paths")
-        if len(self.submission_id_columns) != 2 or len(set(self.submission_id_columns)) != 2:
-            raise ValueError("kaggle.submission_id_columns must be two distinct column names")
+        walk(self.model_dump(), "paths")
         return self
 
 
@@ -2987,6 +3182,9 @@ class TrainingConfig(BaseModel):
     # Kaggle dataset/export transport lane (additive; default factory so the
     # existing YAML without the block stays byte-identical at load).
     kaggle: KaggleSpec = Field(default_factory=KaggleSpec)
+    # Laya decision lane (additive; LayaSpec above; default factory so the
+    # existing YAML without the block stays byte-identical at load).
+    laya: LayaSpec = Field(default_factory=LayaSpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
     archives: ArchiveSpec
     packaging: PackagingSpec
@@ -4509,3 +4707,100 @@ class ColabBundlePlan(BaseModel):
     archive: str
     resume_from: str | None = None
     resume_run_id: str | None = None
+
+
+class SuiteFreshnessManifest(BaseModel):
+    """data/prepared/<suite>/freshness.json — one additive freshness gate
+    record.
+
+    The contract is additive: suites that have no manifest are not gated
+    (the writer is a prep-stage follow-up, documented in docs/colab-lane.md).
+    When a setup dir DOES carry one, the suite-loading lane compares it
+    against the current files and refuses a launch on drift:
+
+    * `catalog_sha256` — sha256 of `<setup>/eligible_catalog.csv`
+    * `graph_sha256`   — sha256 of `<setup>/prepared/input_manifest.json`
+      (the er-graph-inputs-v1 provenance manifest binding the graph inputs)
+    * `timestamp`      — informational only (when the writer saw the files)
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: Literal["er-suite-freshness-v1"] = Field(
+        default="er-suite-freshness-v1", alias="schema"
+    )
+    catalog_sha256: str = Field(min_length=64, max_length=64)
+    graph_sha256: str = Field(min_length=64, max_length=64)
+    timestamp: str = Field(min_length=1)
+
+    @classmethod
+    def current_hashes(cls, setup: Path) -> dict[str, str]:
+        """The two hashes the gate diffs a present manifest against."""
+        from core.manifest import sha256_file
+
+        return {
+            "catalog_sha256": sha256_file(setup / "eligible_catalog.csv"),
+            "graph_sha256": sha256_file(setup / "prepared" / "input_manifest.json"),
+        }
+
+
+class SuiteDeviceFlip(BaseModel):
+    """The automatic device-flip pattern for a tracked device-cpu suite.
+
+    A non-CPU `--gpu` request on a `device: cpu` suite immediately generates
+    the scratch cuda variant under `results/model_tracks/<suite><suffix>/` —
+    only yamls are copied, so every data binding stays under `data/`; the
+    tracks gate then validates the clone like any other suite config. Setting
+    the opt-out env to `1` gives operators the raw must-agree error instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tracks_dir: str = "model_tracks"
+    suffix: str = "__gpu"
+    opt_out_env: str = "ER_SUITES_KEEP_DEVICE"
+
+
+class SuiteMatrixEntry(BaseModel):
+    """One canonical suite of the baked S/M/L dataset matrix."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    size: Literal["S", "M", "L"]
+    name: str
+    suite_config: str | None = None
+    device: Literal["cpu", "cuda"]
+
+
+class SuiteMatrixSpec(BaseModel):
+    """Baked default behaviors for tracked suites (additive, not restrictive).
+
+    Consulted by the suite gate for its canonical labels and by the automatic
+    device flip for its pattern. Unknown suite configs still work: nothing
+    here refuses a suite that is not in `suites`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_flip: SuiteDeviceFlip
+    suites: tuple[SuiteMatrixEntry, ...]
+
+    def entry(self, name: str) -> SuiteMatrixEntry | None:
+        return next((row for row in self.suites if row.name == name), None)
+
+
+def canonical_suite_matrix() -> SuiteMatrixSpec:
+    """The baked S/M/L dataset matrix (owner defaults: S=200 smoke,
+    M=50%, L=full)."""
+    return SuiteMatrixSpec(
+        device_flip=SuiteDeviceFlip(),
+        suites=(
+            SuiteMatrixEntry(size="S", name="smoke_200",
+                             suite_config="data/prepared/smoke_200/suite.yaml",
+                             device="cpu"),
+            SuiteMatrixEntry(size="M", name="50pct", device="cpu"),
+            SuiteMatrixEntry(size="L", name="full",
+                             suite_config="config/model_tracks.yaml",
+                             device="cuda"),
+        ),
+    )

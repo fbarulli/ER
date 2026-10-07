@@ -37,10 +37,10 @@ else
   CSV="dataset.csv"
 fi
 if [[ ! -f "$CSV" ]]; then
-  echo "raw export not found: $CSV" >&2
+  echo "[colab-bundle $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] raw export not found: $CSV" >&2
   exit 1
 fi
-echo "[colab-bundle] raw export: $CSV ($(du -h "$CSV" | cut -f1))"
+echo "[colab-bundle $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] raw export: $CSV ($(du -h "$CSV" | cut -f1))"
 args=(--what bundle --dataset-csv "$CSV" --gpu "${COLAB_GPU:-CPU}")
 if [ "${COLAB_GPU:-CPU}" != "CPU" ]; then
   args+=(--allow-gpu)

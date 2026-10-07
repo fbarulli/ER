@@ -41,6 +41,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from core.common import TRAIN_ROOT, training_cfg
+from cli import log_capture
 from core.schemas import ColabBundlePlan
 
 
@@ -71,6 +74,15 @@ BUNDLE_LAUNCH_TIMEOUT_SECONDS = 300
 BUNDLE_DELIVERY_TIMEOUT_SECONDS = 1800
 RESUME_STATE_UPLOAD_TIMEOUT_SECONDS = 3600
 MAX_PARALLEL_PREP_SESSIONS = 2
+
+
+
+
+def _stamp() -> str:
+    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
+    return (f"[colab-lane {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+
+
 
 
 class ColabLaneBase:
@@ -238,8 +250,7 @@ wrapped = (
     "echo '[prepare-process] resource snapshot after prepare'; free -h || true; "
     "printf '%s\\\\n' \\"$rc\\" > " + shlex.quote(str(status_path)) + "; exit $rc"
 )
-env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(pathlib.Path(root) / "src"),
-    "ER_PACKAGE_SKIP_ABLATION": "1"}}
+env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(pathlib.Path(root) / "src")}}
 with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
         stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
@@ -291,7 +302,7 @@ print(json.dumps(payload), flush=True)
                     raise
                 message = f"[probe] prepare log unavailable; continuing: {exc}"
                 surface._write_training_log(message + "\n")
-                print(message, flush=True)
+                print(_stamp(), message, flush=True)
                 time.sleep(surface._LOG_POLL_SECONDS)
                 continue
             transit_budget = surface._PROBE_RETRIES
@@ -346,6 +357,7 @@ print("[bundle] delivery archive ready", flush=True)
             raise FileNotFoundError(f"resume state not found: {resume_state}")
         run_id = surface._lane_run_stamp()
         print(
+            _stamp(),
             f"[bundle] lane={run_id} cohort export {source.name} rides the sparse "
             f"checkout (no upload; the clone carries the bytes)",
             flush=True,
@@ -355,6 +367,7 @@ print("[bundle] delivery archive ready", flush=True)
         if resume_state is not None:
             resume_state = Path(resume_state)
             print(
+                _stamp(),
                 f"[bundle] resume: uploading {resume_state} -> "
                 f"{self.remote_root}/{RESUME_STATE_ARCHIVE} ...",
                 flush=True,
@@ -381,6 +394,7 @@ print("[bundle] delivery archive ready", flush=True)
             ).replace("@RESUME_RUN_ID@", resume_run_id).replace(
                 "@RESUME_FROM@", resume_from).replace("@COHORT_EXPORT@", source.name)
             print(
+                _stamp(),
                 f"[bundle] resume: prepare_all --run-dir "
                 f"{self.remote_root}/results/training_prep/{resume_run_id} "
                 f"--resume-from {resume_from}",
@@ -410,8 +424,8 @@ print("[bundle] delivery archive ready", flush=True)
         )
         self.result_event(run_id, "download", "completed", archive=str(local),
                           destination=str(local_base))
-        print(f"[bundle] delivered -> {local}", flush=True)
-        print(f"[bundle] {run_id} complete; the VM session stays open", flush=True)
+        print(_stamp(), f"[bundle] delivered -> {local}", flush=True)
+        print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
 
     def resume_args(self, args: argparse.Namespace) -> dict:
         """Validate/echo the resume triplet; empty dict is an exact fresh run."""
@@ -454,8 +468,12 @@ print("[bundle] delivery archive ready", flush=True)
 
     def qualify_session_transcripts(self, file_map: dict, session: str) -> None:
         """Per-session root/training transcript paths for the 2-parallel cap."""
-        file_map["colab_live_log"] = TRAIN_ROOT / f"colab_system_{session}.log"
-        file_map["colab_training_log"] = TRAIN_ROOT / f"training_{session}.log"
+        # One roof (owner order 2026-10-07): per-session transcripts live in
+        # the canonical logs root, colab lane subdir.
+        file_map["colab_live_log"] = log_capture.lane_log(
+            "colab", f"colab_system_{session}.log")
+        file_map["colab_training_log"] = log_capture.lane_log(
+            "colab", f"training_{session}.log")
 
     def run_cpu_prep(self, dataset_csv: Path | None = None) -> None:
         """One CPU prep run with the parity capabilities layered on top of
@@ -465,6 +483,7 @@ print("[bundle] delivery archive ready", flush=True)
         surface = self.surface
         source = Path(dataset_csv) if dataset_csv is not None else Path(DATA_PATH)
         print(
+            _stamp(),
             f"[cpu-prep] cohort={self.cohort_label(source)} dataset={source.name} "
             f"sha256={self.export_digest(source)[:12]} "
             f"max_parallel_sessions={MAX_PARALLEL_PREP_SESSIONS}",

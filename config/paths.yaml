@@ -120,8 +120,8 @@ files:
   # to find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
-  colab_live_log: "repo:colab_system.log"      # launcher/system log
-  colab_training_log: "repo:training.log"      # training stdout/stderr only
+  colab_live_log: "repo:logs/colab/system.log"      # launcher/system log
+  colab_training_log: "repo:logs/colab/training.log"  # training stdout/stderr only
 
 # ── owned layout templates for GENERATED artifacts (training-hpo 2026-09-13)
 # Each layout binds a generated artifact to one root, one template, and one

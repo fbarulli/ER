@@ -248,6 +248,7 @@ def _bounded_dispatch_test(monkeypatch, dataset, direct, lane):
             mock.patch.object(colab, "log_gpu_profile"),
             mock.patch.object(colab, "stop"),
             mock.patch.object(colab, "stop_keep_alive_daemon", return_value=1),
+            mock.patch.object(colab, "spawn_self_watch", return_value={}),
         ]
         saved_gpu = colab.GPU
         for patcher in stack:
@@ -286,6 +287,7 @@ def _run_bundle_main(argv: list[str], bundle) -> None:
         mock.patch.object(colab, "run_bundle", bundle),
         mock.patch.object(colab, "stop"),
         mock.patch.object(colab, "stop_keep_alive_daemon", return_value=1),
+        mock.patch.object(colab, "spawn_self_watch", return_value={}),
     ]
     saved_gpu = colab.GPU
     for patcher in stack:

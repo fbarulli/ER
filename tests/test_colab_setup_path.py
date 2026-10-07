@@ -472,7 +472,8 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "start_local_bundle_prewarm", prewarm), \
              mock.patch.object(
                  colab, "start_validation_upload_prewarm", upload_prewarm
-             ):
+             ), \
+             mock.patch.object(colab, "spawn_self_watch"):
             colab.main()
 
         self.assertEqual(order[:2], ["session", "layout"], order)
@@ -507,7 +508,8 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "drain_local_bundle_prewarm"), \
              mock.patch.object(colab, "drain_validation_upload_prewarm"), \
              mock.patch.object(colab, "start_local_bundle_prewarm"), \
-             mock.patch.object(colab, "start_validation_upload_prewarm") as upload:
+             mock.patch.object(colab, "start_validation_upload_prewarm") as upload, \
+             mock.patch.object(colab, "spawn_self_watch"):
             colab.main()
         upload.assert_not_called()
 

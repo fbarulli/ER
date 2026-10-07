@@ -126,6 +126,7 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
             mock.patch.object(
                 colab, "stop_keep_alive_daemon", record("stop_daemon", 1)
             ),
+            mock.patch.object(colab, "spawn_self_watch"),
         ]
         for target, value in patches.items():
             stack.append(mock.patch.object(colab, target, value))

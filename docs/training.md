@@ -41,7 +41,10 @@ PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
   --gpu T4 --allow-gpu
 
 # CPU smoke
-bash scripts/run_colab_smoke.sh
+er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU
+# (scripts/run_colab_smoke.sh uses the legacy `--what smoke` lane, which
+# src/cli/colab.py rejects: "legacy smoke does not preserve the shared
+# component holdout". The track-config above is the sanctioned path.)
 ```
 
 `COLAB_GPU` overrides the runtime. Only CPU lanes accept `--keep-alive`.

@@ -1,0 +1,22 @@
+{
+  "schema": "er-laya-questions-v1",
+  "questions": {
+    "attribute_alignment": {
+      "type": "choice",
+      "instructions": "Which verdict does this grocery-listing attribute evidence carry? Judge only what the state says; answer with one label.",
+      "criteria": {
+        "aligned": "the state's package, volume, flavour and brand evidence describe one consistent grocery listing",
+        "mismatched": "the state carries contradictory values for one and the same attribute (e.g. two volumes, conflicting pack types)",
+        "obscure": "the state carries too little attribute evidence to align either way"
+      }
+    },
+    "identity_claim": {
+      "type": "noul",
+      "instructions": "Does the paired attribute evidence support the two rows carrying the same grocery item (same physical product, not merely the same brand or category)? Answer true only when the evidence supports the identity claim."
+    },
+    "package_state": {
+      "type": "noul",
+      "instructions": "Does the state carry explicit package-quantity evidence (a pack count or a unit volume)?"
+    }
+  }
+}

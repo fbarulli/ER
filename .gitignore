@@ -50,6 +50,11 @@ training_results/*
 !training_results/*.dvc
 # Colab CLI session state and local runtime logs/cache.
 colab_cli_state/
+# One canonical logs root (owner order 2026-10-07): every lane/periodic log
+# lives under logs/<lane>/ — kaggle/, colab/, train_footprint/. Generated
+# runtime output, ignored wholesale.
+logs/
+# Historical root-level log names retained so stale trees stay ignored.
 colab_system.log
 colab_system_*.log
 colab_setup_timing.log

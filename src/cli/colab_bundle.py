@@ -12,8 +12,8 @@ granularity): provisioning order (check_colab_cli -> ensure_session ->
 prepare_remote_layout(minimal_runtime=True, sparse_paths=...) ->
 install_deps(minimal_runtime=True)); no-upload cohort remap (b1f116f); the
 detached POPEN+status-file prepare with local log polling (be6672b/58aa827)
-streamed unbuffered (8b41dba) with pathlib-joined PYTHONPATH (1952b71) and
-ablation staged off the lane (49fc937); delivery member list from the 8ddc614
+streamed unbuffered (8b41dba) with pathlib-joined PYTHONPATH (1952b71);
+delivery member list from the 8ddc614
 lane; resume triplet (d264af1); delivery root contract (4d40d1e). The VM is
 never stopped: the session stays open by owner directive.
 """

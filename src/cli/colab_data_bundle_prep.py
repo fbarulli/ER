@@ -38,7 +38,10 @@ config/training.yaml colab.cpu_data_bundle_lane is true.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -106,6 +109,15 @@ def _qualify_session_transcripts(session: str) -> None:
     lane().qualify_session_transcripts(F, session)
 
 
+
+
+def _stamp() -> str:
+    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix."""
+    return (f"[colab-data-bundle-prep {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+
+
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-csv", type=Path, default=None,
@@ -119,10 +131,10 @@ def main() -> None:
     colab.start_live_log()
     try:
         run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
-        print("\n[done] cpu prep lane completed and artifacts downloaded locally",
+        print(_stamp(), "\n[done] cpu prep lane completed and artifacts downloaded locally",
               flush=True)
     except BaseException:
-        print("\n[failed] cpu prep lane did not complete successfully", flush=True)
+        print(_stamp(), "\n[failed] cpu prep lane did not complete successfully", flush=True)
         raise
     finally:
         colab.close_live_log()

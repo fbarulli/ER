@@ -11,6 +11,9 @@ candidate pairs.
 | Rebuild the training data | [data-prep.md](data-prep.md) |
 | Train or launch on Colab | [training.md](training.md) |
 | Run a command | [runbook.md](runbook.md) |
+| Operate the Colab lane (sessions, smokes, GPU) | [colab-lane.md](colab-lane.md) |
+| Operate the Kaggle lane (bundles, kernels, chain) | [kaggle-lane.md](kaggle-lane.md) |
+| Operate the Laya lane (typed decisions) | [laya-lane.md](laya-lane.md) |
 | Understand the design | [pipeline.md](pipeline.md) |
 | Know what the audits concluded | [audits.md](audits.md) |
 | Know what JEV (the LLM) found | [jev.md](jev.md) |

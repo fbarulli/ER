@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+from pathlib import Path
 import numpy as np
 from core.common import SEED, load_config, runtime, resolve_model
 
@@ -58,6 +59,19 @@ def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
     from training.training import prepare_fixed_training_inputs
     if np.asarray(bundle['emb0']).size:
         raise ValueError('initial embeddings have no checkpoint producer attestation; prepare verified GPU embeddings before mining')
+    frozen_inputs = {'labeled_pairs': 'labeled_pairs_csv',
+                     'canonical_records': 'canonical_records_csv',
+                     'gate_results': 'gate_results_csv'}
+    bound_files = [key for key in frozen_inputs if key in bundle]
+    if bound_files:
+        from core.common import F, RESULTS
+        for key in bound_files:
+            destination = RESULTS / '_prepared_inputs' / Path(F[key]).name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(bundle[frozen_inputs[key]])
+            F[key] = destination
+            print(f"[prepared-bundle] materialized {key}={destination} "
+                  f"bytes={len(bundle[frozen_inputs[key]]):,}", flush=True)
     cfg=load_config();loss=loss or cfg['training']['loss']
     train_bc,dev_bc,test_bc=prepared_holdout(bundle,cfg['split'],seed=seed)
     data=tuple(bundle[key] for key in ('df','payload','structured_features','row_bc','country','pos','hp_pairs','emb0'))

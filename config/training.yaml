@@ -180,6 +180,85 @@ tracking:
 # never edits colab/preparation keys; no DVC revival. Every transport value
 # lives here so no code-and-config duplicate arises.
 kaggle:
+  cohort_tags: ["full", "50pct", "10k"]
+  default_cohort: "full"
+  # Worker/local layout and lifecycle policy; rendered into each kernel.
+  files:
+    credentials_file: .kaggle/kaggle.json
+    access_token_file: .kaggle/access_token
+    source_dir: src
+    checkout_dir: ER
+    kernel_stage: '{kind}_kernel'
+    kernel_metadata: kernel-metadata.json
+    kernel_receipt: '{kind}_kernel.receipt.json'
+    code_files:
+      bundle: bundle_cpu.py
+      train: train_gpu.py
+      embed: embed_gpu.py
+    stop_stage: '{which}_stop'
+    stop_code: cancel_stub.py
+    fetch_stage: '{kind}_fetch'
+    unpack_dir: unpacked
+    bundle_dir: bundle
+    bundle_archive: all_tracks_inputs.tar.zst
+    bundle_receipt: bundle.receipt.json
+    bundle_sidecars:
+    - manifest.json
+    - timings.json
+    result_archive: '{kind}.tar.zst'
+    result_manifest: '{kind}.manifest.json'
+    result_names:
+      train: result_bundle
+      embed: vectors
+    failure_archive: failure.tar.zst
+    failure_zip: failure.zip
+    failure_manifest: failure.manifest.json
+    failure_log: failure.log
+    worker_log: worker.log
+    package_manifest: model_tracks_package.json
+    request_file: request.json
+    vectors_file: vectors.npz
+    embedding_script: scripts/encode_prepared_embeddings.py
+    prep_suite_config: config/model_tracks.yaml
+    prep_dir: training_prep
+    training_dir: model_tracks
+    embedding_dir: embedding_job
+    lane_log: lane.log
+    autowatch_log: autowatch_{which}.log
+    stream_log: '{kernel}.stream.log'
+    autowatch_receipt: autowatch_{kind}.receipt.json
+    supervise_receipt: supervise.receipt.json
+    chain_receipt: chain.receipt.json
+    publish_receipt: publish.receipt.json
+    dataset_metadata: dataset-metadata.json
+    log_glob: "*.log"
+    install_dir: "{kind}"
+    hash_suffix: ".sha256"
+  remote:
+    working_dir: /kaggle/working
+    input_dir: /kaggle/input
+    scratch_dir: /kaggle/tmp
+    fallback_scratch: er_{kind}
+    extra_artifact_dirs:
+    - wandb
+    - cache
+    - .cache
+  limits:
+    timezone: Europe/Paris
+    run_tag_format: "%m%dT%H%M%S"
+    git_clone_depth: 1
+    error_tail_chars: 800
+    command_error_tail_chars: 4000
+    transfer_attempts: 3
+    stop_attempts: 3
+    retry_seconds: 5.0
+    max_polls: 17280
+    stream_retries: 5
+    stream_join_seconds: 1.0
+    terminal_rows: 40
+    terminal_columns: 160
+    read_buffer_bytes: 4096
+    child_stop_seconds: 10.0
   # "owner/slug" the lane publishes under; null keeps every upload fail-loud
   # until the owner names the target dataset (no silent default account).
   slug: null
@@ -236,9 +315,10 @@ kaggle:
   train_suite_config: "data/model_tracks/suite.yaml"
   # Git-shipped checkpoint the embed kernel encodes against.
   checkpoint: "artifacts/models"
-  # kernel-logs poll cadence + transcript dir (colab log-poll mirror).
+  # kernel-logs poll cadence + transcript dir (TRAIN_ROOT-relative: the one
+  # canonical logs root, logs/kaggle/).
   logs_poll_seconds: 15.0
-  logs_dir: "logs"
+  logs_dir: "logs/kaggle"
   run_tag_prefix: "gpu_"
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is

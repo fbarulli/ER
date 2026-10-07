@@ -2,6 +2,31 @@
 
 All commands run from the repo root with the local venv.
 
+## Lane operations (SSOT pointers)
+
+Every remote surface has one landing doc — never dig history or error
+strings; if knowledge lives anywhere else, it belongs here:
+
+| surface | doc | one-line truth |
+|---|---|---|
+| Colab (CPU/GPU sessions, smokes, train) | [colab-lane.md](colab-lane.md) | `er-colab --what <op> …` (dry-run by default planned for remote ops) |
+| Kaggle (bundle kernels, train/embed, chain, autowatch) | [kaggle-lane.md](kaggle-lane.md) | `er-kaggle --what <op> …`; `--what chain --cohort <c>` runs bundle→fetch→publish→train (→embed) end-to-end |
+| Laya (typed decisions) | [laya-lane.md](laya-lane.md) | `python laya_backend.py --kind kaggle --decision <k> [--execute]` |
+
+Standing rules that live in both lane docs, summarized once here:
+
+- **Auth**: `~/.kaggle/kaggle.json` is the only credential; an existing
+  `~/.kaggle/access_token` fail-louds every lane op (delete it).
+- **Watchers are default**: kaggle pushes and colab remote runs spawn their
+  own detached watcher (same recipe: poll → download → release, always).
+  No operator arg; never launch an unwatched session.
+- **Long-running commands** (watchers, chains, preps) launch detached with
+  `setsid env … < /dev/null &`; plain `nohup` dies with wrapper groups.
+- **Sessions close themselves**: a terminal state always ends in a release
+  plus receipt; if you find an open session, the lane's `stop` op closes it.
+- **Timestamps**: UTC → none. Log stamps are Europe/Paris CET/CEST; logs
+  live under `logs/<lane>/` (one roof; receipts stay under `results/`).
+
 ## Preparation
 
 ```bash
@@ -32,7 +57,11 @@ bash scripts/run_full_training.sh \
   --prepared-input-package results/training_prep/<run>/all_tracks_inputs.tar.zst
 
 # CPU smoke
-bash scripts/run_colab_smoke.sh
+er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU
+# (scripts/run_colab_smoke.sh still emits the legacy `--what smoke` lane,
+# which the gate at src/cli/colab.py rejects: "legacy smoke does not
+# preserve the shared component holdout". The track-config above is the
+# sanctioned path.)
 
 # explicit
 PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
