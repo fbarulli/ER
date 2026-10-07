@@ -3567,11 +3567,15 @@ def _retrieval_ablation_metrics(
     return pd.DataFrame(rows)
 
 
-def _evaluate_holdout(
+def _load_holdout_frame(
     matcher: RandMatcher,
     holdout_labels: pd.DataFrame,
-    final_threshold: float,
-) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
+    """The dataset-merged, GTIN-stratified holdout frame (verbatim front).
+
+    The unknown-id and merge/duplication guards raise here so the scoring
+    below can never run on an unsanctioned population.
+    """
     base = _ensure_source_row_identity(
         load_dataset_deduped().rename(columns={"sku_id": "SKU_ID"})
     )
@@ -3600,6 +3604,16 @@ def _evaluate_holdout(
         )
         for _, row in holdout.iterrows()
     ]
+    return holdout
+
+
+def _evaluate_holdout(
+    matcher: RandMatcher,
+    holdout_labels: pd.DataFrame,
+    final_threshold: float,
+) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """The frozen holdout evaluation (one pass, statements verbatim)."""
+    holdout = _load_holdout_frame(matcher, holdout_labels)
     candidates = matcher.score_candidates(holdout)
     truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates("SKU_ID")
     predictions, trace = _assignments_with_trace(
@@ -3817,32 +3831,14 @@ def write_outputs(
         final_threshold,
     )
     holdout_metrics_frame = pd.DataFrame(holdout_metrics)
-    _METRIC_COLUMNS_SPEC.validate_frame(
+    _write_holdout_outputs(
+        output_dir,
+        output_names,
         holdout_metrics_frame,
-        "holdout metrics",
-    )
-    holdout_metrics_frame.to_csv(
-        output_dir / output_names["holdout_metrics"], index=False
-    )
-    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
         holdout_diagnostics,
-        "holdout diagnostics",
-    )
-    holdout_diagnostics.to_csv(
-        output_dir / output_names["holdout_diagnostics"],
-        index=False,
-    )
-    holdout_pair_disagreements.to_csv(
-        output_dir / output_names["holdout_pair_disagreements"],
-        index=False,
-    )
-    holdout_ann_missed_true_matches.to_csv(
-        output_dir / output_names["holdout_ann_missed_true_matches"],
-        index=False,
-    )
-    holdout_retrieval_ablation_metrics.to_csv(
-        output_dir / output_names["holdout_retrieval_ablation_metrics"],
-        index=False,
+        holdout_pair_disagreements,
+        holdout_ann_missed_true_matches,
+        holdout_retrieval_ablation_metrics,
     )
     submission = _write_final_submission(
         matcher,
@@ -3873,6 +3869,45 @@ def write_outputs(
             ),
             "path": str(output_dir / output_names["submission"]),
         }
+    )
+
+
+def _write_holdout_outputs(
+    output_dir: Path,
+    output_names: dict[str, str],
+    holdout_metrics_frame: pd.DataFrame,
+    holdout_diagnostics: pd.DataFrame,
+    holdout_pair_disagreements: pd.DataFrame,
+    holdout_ann_missed_true_matches: pd.DataFrame,
+    holdout_retrieval_ablation_metrics: pd.DataFrame,
+) -> None:
+    """The five holdout artifacts, each behind its pinned column contract."""
+    _METRIC_COLUMNS_SPEC.validate_frame(
+        holdout_metrics_frame,
+        "holdout metrics",
+    )
+    holdout_metrics_frame.to_csv(
+        output_dir / output_names["holdout_metrics"], index=False
+    )
+    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
+        holdout_diagnostics,
+        "holdout diagnostics",
+    )
+    holdout_diagnostics.to_csv(
+        output_dir / output_names["holdout_diagnostics"],
+        index=False,
+    )
+    holdout_pair_disagreements.to_csv(
+        output_dir / output_names["holdout_pair_disagreements"],
+        index=False,
+    )
+    holdout_ann_missed_true_matches.to_csv(
+        output_dir / output_names["holdout_ann_missed_true_matches"],
+        index=False,
+    )
+    holdout_retrieval_ablation_metrics.to_csv(
+        output_dir / output_names["holdout_retrieval_ablation_metrics"],
+        index=False,
     )
 
 
