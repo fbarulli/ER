@@ -461,6 +461,7 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
     return path
 
 
+@timed
 def load_prepared(request_path, request):
     plan = request.get('prepared_inputs')
     if request.get('schema') != 'er-attribute-ablation-v2' or not plan:
@@ -471,11 +472,13 @@ def load_prepared(request_path, request):
     return np.load(path,allow_pickle=False)
 
 
+@timed
 def _validated_device(device):
     from model_tracks.embedding_forward import validate_embedding_device
     return validate_embedding_device(device)
 
 
+@timed
 def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
     import torch
     from core.encoding_inputs import tokenization_policy, load_token_features
@@ -537,6 +540,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     return text_vectors
 
 
+@timed
 def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
     from model_tracks.ablation_inputs import load_batch
     encoder = None
@@ -557,6 +561,7 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
     return encoder, graph_batches
 
 
+@timed
 def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
     from model_tracks.ablation_inputs import load_batch
     candidate_vectors = saved_candidates
@@ -569,6 +574,7 @@ def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, s
     return candidate_vectors
 
 
+@timed
 def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
     import torch
     indices = arrays['pair_indices']
@@ -595,6 +601,7 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
     return vectors, scores
 
 
+@timed
 def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -633,6 +640,7 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
 
 
+@timed
 def _threshold_from_csv(path, value, track, checkpoint):
     frame = pd.read_csv(path)
     values = frame['threshold'].tolist() if 'threshold' in frame else []
@@ -652,6 +660,7 @@ def _threshold_from_csv(path, value, track, checkpoint):
     return values, track, checkpoint
 
 
+@timed
 def _threshold_from_json(path, value):
     document = json.loads(path.read_text())
     claimed_sha256 = None
@@ -691,6 +700,7 @@ def _threshold_from_json(path, value):
     return values, track, checkpoint, claimed_sha256
 
 
+@timed
 def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
@@ -709,6 +719,7 @@ def frozen_threshold(source, value):
             'track':track, 'checkpoint':checkpoint, 'checkpoint_sha256':claimed_sha256}
 
 
+@timed
 def verify_threshold_binding(request, provenance):
     if provenance.get('track') != request['track']:
         raise ValueError('threshold source track differs or is missing')
@@ -734,6 +745,7 @@ def verify_threshold_binding(request, provenance):
     return {'track':request['track'],'checkpoint_sha256':expected,'verified':True}
 
 
+@timed
 @scoped_request
 def validate_vectors(request_path, result):
     """Cheap integrity validation before closing the GPU; no metrics or ANN."""
