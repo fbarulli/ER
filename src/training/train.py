@@ -794,7 +794,10 @@ class _TrainerDriver:
 
     def log_run_configs(self) -> None:
         """Publish the run scale to W&B and print the pair census."""
+        _wandb = self._wandb
         args = self.args
+        data = self.data
+        cfg = self.cfg
         mask_cfg = self.mask_cfg
         mask_hard_negatives = self.mask_hard_negatives
         mask_hard_negative_frac = self.mask_hard_negative_frac
@@ -942,6 +945,7 @@ class _TrainerDriver:
     def augment(self) -> None:
         """Append the static augmentation lanes (mask, swaps, twins)."""
         args = self.args
+        split_cfg = self.split_cfg
         mask_cfg = self.mask_cfg
         mask_prob = self.mask_prob
         mask_hard_negatives = self.mask_hard_negatives
@@ -1387,6 +1391,7 @@ class _TrainerDriver:
     def resolve_split(self) -> None:
         """Resolve the component-aware split (holdout or cv)."""
         args = self.args
+        frozen_holdout = self.frozen_holdout
         pos = self.pos
         row_bc = self.row_bc
         dev_share = self.dev_share
@@ -1430,6 +1435,7 @@ class _TrainerDriver:
     @timed
     def attach_supply(self) -> None:
         """Hard positives, supplemental miners, minted lane, balance."""
+        _wandb = self._wandb
         args = self.args
         df = self.df
         data = self.data
@@ -1443,6 +1449,15 @@ class _TrainerDriver:
         run_tag = self.run_tag
         mint_rejections = self.mint_rejections
         hard_negative_mask_audit = self.hard_negative_mask_audit
+        attr_cfg = self.attr_cfg
+        targeted_attribute_neg = self.targeted_attribute_neg
+        cross_brand_neg = self.cross_brand_neg
+        attribute_conflict_enabled = self.attribute_conflict_enabled
+        cross_brand_enabled = self.cross_brand_enabled
+        mining_enabled = self.mining_enabled
+        payload = self.payload
+        row_bc = self.row_bc
+        timing = self.timing
         # ── HARD POSITIVES  ─────────────────────────
         # The manifest is regenerated from the frozen deduplicated dataset before
         # the existing volume verifier consumes it, so this lane cannot silently
@@ -1777,6 +1792,7 @@ class _TrainerDriver:
     @timed
     def run_hpo_lanes(self) -> None:
         """Dispatch the grid/TPE sweep lanes (short-circuits)."""
+        _wandb = self._wandb
         args = self.args
         data = self.data
         mask_cfg = self.mask_cfg
@@ -1853,6 +1869,7 @@ class _TrainerDriver:
     @timed
     def train_folds(self) -> None:
         """Run the trainer over the resolved split."""
+        _wandb = self._wandb
         args = self.args
         band = self.band
         data = self.data
@@ -1874,6 +1891,8 @@ class _TrainerDriver:
         attribute_conflict_enabled = self.attribute_conflict_enabled
         run_tag = self.run_tag
         mask_cfg = self.mask_cfg
+        folds_override = self.folds_override
+        dev_override = self.dev_override
         # src/training/training's DEFAULT_CFG key set (train_one_config reads these)
 
         # NO FALLBACK (owner Q27): every optimizer knob comes from the SSOT
@@ -1974,7 +1993,9 @@ class _TrainerDriver:
     @timed
     def mask_effect_audit(self) -> None:
         """Score masked copies under the trained model."""
+        _wandb = self._wandb
         rows = self.rows
+        hard_negative_mask_audit = self.hard_negative_mask_audit
         args = self.args
         mask_audit = self.mask_audit
         payload = self.payload
@@ -2169,6 +2190,7 @@ class _TrainerDriver:
     @timed
     def publish_results(self) -> None:
         """Fold metrics, pointer, 07 emission, report, W&B, plots."""
+        _wandb = self._wandb
         rows = self.rows
         args = self.args
         mask_audit = self.mask_audit
