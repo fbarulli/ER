@@ -403,12 +403,13 @@ def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_che
 
 def _persist_prepared(request, cfg, token_cache):
     from model_tracks.ablation_inputs import prepare_inputs
-    resolve(cfg.output_dir).mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=resolve(cfg.output_dir)) as tmp:
+    out_dir = resolve(cfg.output_dir)
+    out_dir.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=out_dir) as tmp:
         prepared = Path(tmp)/'prepared_inputs.npz'
         request['prepared_inputs'] = prepare_inputs(request,prepared,token_cache=token_cache)
         validate_sources(request)
-        output = resolve(cfg.output_dir)/digest(request)[:24]
+        output = out_dir/digest(request)[:24]
         output.mkdir(parents=True, exist_ok=True)
         destination = output/prepared.name
         if destination.exists():
