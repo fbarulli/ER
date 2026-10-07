@@ -75,19 +75,91 @@ CAFFEINE_SOURCES: tuple[str, ...] = tuple(_VOCAB.get("caffeine_sources") or ())
 SUGAR_INGREDIENTS: frozenset[str] = frozenset(_VOCAB.get("sugar_ingredients") or ())
 DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IGNORECASE)
 
+# ── hoisted module-level dispatch ──────────────────────────────────────────
+# Every `re.search(pattern, text)` below is a call into re's pattern cache plus
+# a wrapper; in the lane profile that dispatch alone was 1.9M `_compile` calls
+# (1.07s self) across the tree. Compiled once here, called as a method.
+_CAFFEINE_BAND = re.compile(r"\s*(\d+)")
+_MADE_FROM_PHRASE_RES: tuple[tuple[str, re.Pattern], ...] = tuple(
+    (phrase, re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"))
+    for phrase in MADE_FROM_PHRASES
+)
+# `\b`/lookaround-free splitter for the declared-flavor field value; `re.escape`
+# and the cache lookup used to run per row.
+_DECLARED_FLAVOR_SPLIT = re.compile(r"[,/;&]")
+
+_DIET_RE = re.compile(r"\bdiet\b")
+_NON_CARBONATED_RE = re.compile(
+    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b")
+# The carbonation scrub keeps "no bubbles?" in the boolean but not in the
+# substitution (the original built two different patterns from one literal).
+_NON_CARBONATED_SCRUB = re.compile(
+    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b")
+_SODA_WORD_RE = re.compile(r"\b(?:baking|washing) soda\b")
+_STILL_RE = re.compile(r"\bstill\b")
+_CARBONATED_RE = re.compile(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b")
+_BARE_SODA_RE = re.compile(r"\bsoda\b")
+_EFFERVESCENT_RE = re.compile(r"\beffervescent\b")
+_EFFERVESCENT_TABLET_RE = re.compile(r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b")
+_NO_PULP_RE = re.compile(r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b")
+_WITH_PULP_RE = re.compile(
+    r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
+    r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b")
+_JUICE_RE = re.compile(r"\bjuice\b")
+_WITH_BITS_RE = re.compile(r"\bwith bits\b")
+_NO_BITS_RE = re.compile(r"\b(?:no bits|without bits)\b")
+_SMOOTH_JUICE_RE = re.compile(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b")
+_ORGANIC_RE = re.compile(r"\b(?:organic|luomu)\b")
+
+
+@lru_cache(maxsize=4096)
+def _normalized_field_key(key: object) -> str:
+    """`Key:` spelling folded once per process, not once per cell segment.
+
+    `_field_tokens` asked for four keys of the SAME cell on every row, and each
+    request re-folded the key through normalized_attribute_text — a full
+    casefold + NFKD + join. The four keys are module constants in practice and
+    the fold is deterministic, so one fold per distinct key is enough.
+    """
+    return normalized_attribute_text(key)
+
 
 def _field_tokens(attribute: object, key: str) -> frozenset[str]:
     """Lowercased comma-split tokens of one `Key:` field in the attribute cell."""
     from core.text import attribute_field_value
 
-    key = normalized_attribute_text(key)
-    return frozenset(attribute_field_value(attribute, key))
+    return frozenset(attribute_field_value(attribute, _normalized_field_key(key)))
+
+
+def _field_tokens_many(attribute: object, keys: tuple[str, ...]) -> dict[str, frozenset[str]]:
+    """The same tokens for several keys of ONE cell, in a single walk.
+
+    `source_consistency_flags` reads four fields (free from, health claims, no
+    artificial ingredients, caffeine) out of one attribute cell, and every
+    `_field_tokens` call re-walked the whole cell through
+    core.text.attribute_fields — which re-folds the key of EVERY segment. Four
+    walks of the same string bought nothing: this is the identical token list
+    per key (same `;` segments in the same document order, same comma split,
+    same strip+lower), computed once.
+    """
+    from core.text import attribute_fields
+
+    wanted = {_normalized_field_key(key): key for key in keys}
+    collected: dict[str, list[str]] = {key: [] for key in keys}
+    for name, raw_value in attribute_fields(attribute):
+        key = wanted.get(name)
+        if key is None:
+            continue
+        collected[key].extend(
+            token.strip().lower() for token in raw_value.split(",") if token.strip()
+        )
+    return {key: frozenset(tokens) for key, tokens in collected.items()}
 
 
 def _caffeine_positive(values: frozenset[str]) -> bool:
     """True when a caffeine band's lower bound is > 0 ("0-15 mg" is trace)."""
     for value in values:
-        match = re.match(r"\s*(\d+)", value)
+        match = _CAFFEINE_BAND.match(value)
         if match and int(match.group(1)) > 0:
             return True
     return False
@@ -111,11 +183,11 @@ def _without_field(attribute: object, key: str) -> str:
     contract. The KEY normalization is the shared semantics; the segment
     reconstruction is not expressible over (key, value) pairs.
     """
-    key = normalized_attribute_text(key)
+    key = _normalized_field_key(key)
     return ";".join(
         part
         for part in str(attribute or "").split(";")
-        if not (":" in part and normalized_attribute_text(part.split(":", 1)[0]) == key)
+        if not (":" in part and _normalized_field_key(part.split(":", 1)[0]) == key)
     )
 
 
@@ -129,10 +201,12 @@ def source_consistency_flags(
     for review, never silently dropped or "corrected" (review-not-guess).
     """
     flags: set[str] = set()
-    free_from = _field_tokens(attribute, "free from")
-    claims = _field_tokens(attribute, "health claims")
-    no_artificial = _field_tokens(attribute, "no artificial ingredients")
-    caffeine = _field_tokens(attribute, "caffeine")
+    fields = _field_tokens_many(attribute, ("free from", "health claims",
+                                            "no artificial ingredients", "caffeine"))
+    free_from = fields["free from"]
+    claims = fields["health claims"]
+    no_artificial = fields["no artificial ingredients"]
+    caffeine = fields["caffeine"]
     caff_pos = _caffeine_positive(caffeine)
     sweeteners = set(sweetener_type)
     if caff_pos and "no caffeine" in free_from:
@@ -157,8 +231,7 @@ def extract_made_from_tokens(*values: object) -> frozenset[str]:
     text = normalized_attribute_text(*values)
     found = {token for token in text.split() if token in MADE_FROM_LEXICON}
     found.update(
-        phrase for phrase in MADE_FROM_PHRASES
-        if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text)
+        phrase for phrase, pattern in _MADE_FROM_PHRASE_RES if pattern.search(text)
     )
     return frozenset(found)
 
@@ -175,9 +248,9 @@ def flavor_tokens_from_text(text: str) -> frozenset[str]:
     pay to fold it again — that re-fold was 116k wasted calls over full titles.
     """
     return frozenset(
-        FLAVOR_ALIASES.get(token, token)
+        alias
         for token in text.split()
-        if FLAVOR_ALIASES.get(token, token) in FLAVOR_LEXICON
+        if (alias := FLAVOR_ALIASES.get(token, token)) in FLAVOR_LEXICON
     )
 
 
@@ -186,7 +259,7 @@ def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
     found: set[str] = set()
     for value in values:
         for field in DECLARED_FLAVOR_FIELD_RE.finditer(str(value or "")):
-            for part in re.split(r"[,/;&]", field.group(1)):
+            for part in _DECLARED_FLAVOR_SPLIT.split(field.group(1)):
                 candidate = normalized_attribute_text(part)
                 if candidate in DECLARED_FLAVOR_LEXICON:
                     found.add(candidate)
@@ -244,20 +317,16 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
         sweetener.add("no_added_sugar")
     if sugar:
         sweetener.add("sugar")
-    if re.search(r"\bdiet\b", text):
+    if _DIET_RE.search(text):
         sweetener.add("diet")
 
     # Remove explicit negative phrases before looking for positive
     # carbonation so "non-carbonated" cannot emit both states.
-    non_carbonated = bool(
-        re.search(r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b", text)
-    )
-    carbonation_text = re.sub(
-        r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b", " ", text
-    )
-    carbonation_text = re.sub(r"\b(?:baking|washing) soda\b", " ", carbonation_text)
+    non_carbonated = bool(_NON_CARBONATED_RE.search(text))
+    carbonation_text = _NON_CARBONATED_SCRUB.sub(" ", text)
+    carbonation_text = _SODA_WORD_RE.sub(" ", carbonation_text)
     carbonation: set[str] = set()
-    if non_carbonated or re.search(r"\bstill\b", text):
+    if non_carbonated or _STILL_RE.search(text):
         carbonation.add("still")
     # NOTE (audit 2026-09-28): only the unambiguous "soda pop" is an
     # unconditional carbonation claim. Bare "soda" fires only for
@@ -265,16 +334,16 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # still-declared drinks (282 titles, e.g. Sunny Delight) are excluded.
     # "still" in the set already covers the non-carbonated branch, since
     # that branch always records still.
-    if re.search(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b", carbonation_text):
+    if _CARBONATED_RE.search(carbonation_text):
         carbonation.add("carbonated")
     if (
-        re.search(r"\bsoda\b", carbonation_text)
+        _BARE_SODA_RE.search(carbonation_text)
         and "still" not in carbonation
         and not _SODA_DRY_PRODUCT_RE.search(carbonation_text)
     ):
         carbonation.add("carbonated")
-    if re.search(r"\beffervescent\b", carbonation_text) and not re.search(
-        r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", carbonation_text
+    if _EFFERVESCENT_RE.search(carbonation_text) and not _EFFERVESCENT_TABLET_RE.search(
+        carbonation_text
     ):
         carbonation.add("carbonated")
 
@@ -290,25 +359,14 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # (16/1l/100/750) and by "free" (65), with no enum spellings present, so
     # the branch bought no recall and only risked label inversion. Absence of
     # a recognized phrase now stays unknown instead of inventing a claim.
-    no_pulp = bool(
-        re.search(
-            r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b",
-            text,
-        )
-    )
-    with_pulp = bool(
-        re.search(
-            r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
-            r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b",
-            text,
-        )
-    )
+    no_pulp = bool(_NO_PULP_RE.search(text))
+    with_pulp = bool(_WITH_PULP_RE.search(text))
     # Bits denotes juice pulp only in an explicit juice context. Smooth
     # alone can describe a smoothie or mouthfeel and is not a pulp claim.
-    if re.search(r"\bjuice\b", text):
-        with_pulp |= bool(re.search(r"\bwith bits\b", text))
-        no_pulp |= bool(re.search(r"\b(?:no bits|without bits)\b", text))
-        no_pulp |= bool(re.search(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b", text))
+    if _JUICE_RE.search(text):
+        with_pulp |= bool(_WITH_BITS_RE.search(text))
+        no_pulp |= bool(_NO_BITS_RE.search(text))
+        no_pulp |= bool(_SMOOTH_JUICE_RE.search(text))
     if no_pulp:
         pulp.add("no_pulp")
     if with_pulp:
@@ -321,7 +379,7 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # organic badge and unrelated parts of brand names, too ambiguous to
     # carry a certification claim alone.
     organic: frozenset[str] = (
-        frozenset({"organic"}) if re.search(r"\b(?:organic|luomu)\b", text) else frozenset()
+        frozenset({"organic"}) if _ORGANIC_RE.search(text) else frozenset()
     )
 
     return {
