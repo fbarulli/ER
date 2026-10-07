@@ -861,3 +861,253 @@ def test_builder_final_validation_columns_match_the_frozen_file():
     with fv.open(newline="") as handle:
         header = next(csv.reader(handle))
     assert header == list(builder.FINAL_VALIDATION_COLUMNS)
+
+
+# ── the fine-tune corpus builder (scripts/laya_build_dataset.py) ───────────
+# Owner order 2026-10-07: "we will finetune laya with the correct dataset".
+# The builder emits the JSONL the laya trainer consumes — one case per line:
+#   {"state": <str>, "questions": {<schema verbatim>}, "expected": {qid: lbl}}
+# STATE cases (one per eligible_catalog row) label `package_state`; PAIR
+# cases label `identity_claim` over the ground-truth listing pairs PLUS a
+# balanced stratified gate `hard_no` negative sample; gate `fallback` rows
+# are quarantined (never corpus). Deterministic (seed 1729).
+def _corpus_builder():
+    import importlib.util
+
+    path = (Path(__file__).resolve().parents[1]
+            / "scripts/laya_build_dataset.py")
+    spec = importlib.util.spec_from_file_location("laya_build_dataset", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _corpus_question_fixture(tmp_path):
+    """The config/laya.question.json contract in miniature (three questions,
+    verbatim into every case)."""
+    questions = {
+        "attribute_alignment": {"type": "choice", "instructions": "verdict?",
+                                "criteria": {"aligned": None}},
+        "identity_claim": {"type": "noul", "instructions": "same item?"},
+        "package_state": {"type": "noul", "instructions": "has pack?"},
+    }
+    path = tmp_path / "laya.question.json"
+    path.write_text(json.dumps({"schema": "test", "questions": questions}),
+                    encoding="utf-8")
+    return path, questions
+
+
+def _corpus_sources_fixture(tmp_path):
+    """Hermetic catalog / listing_pairs / gate_results:
+
+      * S1 Volume numeric, S4 numeric Pack Size, S5 'NxM<unit>' multipack
+        -> package_state true; S2 Pack Type only, S3 flavour only -> false.
+      * two listing positives (train/test) + one listing negative (dev).
+      * three joinable gate hard_no rows (two reasons) + one hard_no row
+        with a missing gtin (dropped), one fallback (quarantined), one
+        proceed (ignored).
+    """
+    catalog = tmp_path / "catalog.csv"
+    catalog.write_text(
+        "sku_id,retailer,gtin,attribute\n"
+        "S1,r,4000000001,Volume: 500; Pack Type: Bottle\n"
+        "S2,r,4000000002,Pack Type: Bottle\n"
+        "S3,r,4000000003,Flavour: lime\n"
+        "S4,r,4000000004,Pack Size: 6\n"
+        "S5,r,4000000005,Pack Type: Can; 24x330ml\n",
+        encoding="utf-8")
+    pairs = tmp_path / "pairs.csv"
+    pairs.write_text(
+        "sku_id1,sku_id2,label,split\n"
+        "S1,S2,1,train\n"
+        "S3,S4,0,dev\n"
+        "S4,S5,1,test\n",
+        encoding="utf-8")
+    gate = tmp_path / "gate.csv"
+    gate.write_text(
+        "gtin1,gtin2,canon1,canon2,gate_decision,gate_reason,similarity\n"
+        "4000000001,4000000003,c1,c2,hard_no,"
+        "Critical attribute mismatch: flavor,0.90\n"
+        "4000000002,4000000004,c1,c2,hard_no,"
+        "Pack blocker: pack size,0.80\n"
+        "4000000005,4000000001,c1,c2,hard_no,"
+        "Critical attribute mismatch: flavor,0.85\n"
+        "9999999999,4000000001,c1,c2,hard_no,Package material mismatch,0.70\n"
+        "4000000002,4000000003,c1,c2,fallback,unresolved,0.50\n"
+        "4000000002,4000000003,c1,c2,proceed,ok,0.99\n",
+        encoding="utf-8")
+    return catalog, pairs, gate
+
+
+def test_corpus_package_state_rule_is_documented_and_explicit():
+    builder = _corpus_builder()
+    # measured unit volume (finite numeric Volume:) -> true
+    assert builder.package_state("Volume: 500") is True
+    assert builder.package_state("Volume: 1500; Pack Type: Carton") is True
+    assert builder.package_state("Volume: 1.5") is True
+    # a Pack Type alone is a FORM, not a quantity -> false
+    assert builder.package_state("Pack Type: Bottle") is False
+    assert builder.package_state("Pack Type: Can") is False
+    # explicit numeric pack-count key -> true
+    assert builder.package_state("Pack Size: 6") is True
+    assert builder.package_state("Number of items: 12") is True
+    # an 'NxM<unit>' multipack token -> true
+    assert builder.package_state("Pack Type: Can; 24x330ml") is True
+    # no package evidence at all -> false
+    assert builder.package_state("Flavour: lime") is False
+    # the rule is published in the receipt (no undocumented scoring)
+    assert "Pack Type" in builder.PACKAGE_STATE_RULE
+    assert "Volume" in builder.PACKAGE_STATE_RULE
+
+
+def test_corpus_build_emits_laya_jsonl_counts_and_receipt(tmp_path):
+    builder = _corpus_builder()
+    catalog, pairs, gate = _corpus_sources_fixture(tmp_path)
+    question_path, questions = _corpus_question_fixture(tmp_path)
+    out = tmp_path / "laya"
+    receipt = builder.build(catalog_path=catalog, pairs_path=pairs,
+                            gate_path=gate, question_path=question_path,
+                            output_dir=out, seed=1729, hard_no_cap=1000)
+
+    counts = receipt["counts"]
+    # STATE: one case per catalog row; the explicit rule splits 3/2
+    assert counts["state_cases"] == 5
+    assert counts["state_package_state_true"] == 3
+    assert counts["state_package_state_false"] == 2
+    # the Pack-Type-only diagnostic never leaks into the gold
+    assert counts["state_pack_type_only_no_quantity"] == 1
+    # PAIRS: all ground-truth listing pairs, split preserved
+    assert counts["listing_pairs_positive"] == 2
+    assert counts["listing_pairs_negative"] == 1
+    # GATE: joinable hard_no negatives, balanced against the positives;
+    # the missing-gtin hard_no is dropped+counted, fallback quarantined
+    assert counts["gate_hard_no_available"] == 3
+    assert counts["gate_hard_no_sampled"] == 1
+    assert counts["gate_fallback_quarantined"] == 1
+    assert counts["dropped_missing"]["hard_no"] == 1
+    assert counts["dropped_missing"]["total"] == 1
+    assert counts["identity_positive_total"] == 2
+    assert counts["identity_negative_total"] == 2  # balanced
+    # the published rule + seed ride the receipt
+    assert receipt["seed"] == 1729
+    assert receipt["package_state_rule"] == builder.PACKAGE_STATE_RULE
+
+    # every split jsonl: laya case shape, questions verbatim, valid labels
+    import hashlib
+
+    for key in ("train", "dev", "test"):
+        path = out / f"{key}.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == receipt["split_sizes"][key]
+        assert receipt["sha256"][f"{key}.jsonl"] == hashlib.sha256(
+            path.read_bytes()).hexdigest()
+        for line in lines:
+            record = json.loads(line)
+            assert set(record) == {"state", "questions", "expected"}
+            assert isinstance(record["state"], str) and record["state"]
+            assert record["questions"] == questions
+            # only noul golds; attribute_alignment is deliberately unlabelled
+            assert set(record["expected"]) <= {"package_state",
+                                               "identity_claim"}
+            for qid, label in record["expected"].items():
+                assert record["questions"][qid]["type"] == "noul"
+                assert label in ("true", "false")
+    # balanced identity gold end to end
+    identity = [
+        json.loads(line)["expected"]["identity_claim"]
+        for key in ("train", "dev", "test")
+        for line in (out / f"{key}.jsonl").read_text().splitlines()
+        if "identity_claim" in json.loads(line)["expected"]]
+    assert identity.count("true") == 2
+    assert identity.count("false") == 2
+    # the listing-pair split is preserved exactly
+    assert receipt["split_counts"]["train"]["listing_positive"] == 1
+    assert receipt["split_counts"]["dev"]["listing_negative"] == 1
+    assert receipt["split_counts"]["test"]["listing_positive"] == 1
+    # one state package_state gold per state line
+    package = [
+        json.loads(line)["expected"]["package_state"]
+        for key in ("train", "dev", "test")
+        for line in (out / f"{key}.jsonl").read_text().splitlines()
+        if "package_state" in json.loads(line)["expected"]]
+    assert package.count("true") == 3
+    assert package.count("false") == 2
+    assert receipt["sha256"]["train.jsonl"]  # present
+
+
+def test_corpus_fallback_is_quarantined_never_in_corpus(tmp_path):
+    builder = _corpus_builder()
+    catalog, pairs, gate = _corpus_sources_fixture(tmp_path)
+    question_path, _ = _corpus_question_fixture(tmp_path)
+    out = tmp_path / "laya"
+    builder.build(catalog_path=catalog, pairs_path=pairs, gate_path=gate,
+                  question_path=question_path, output_dir=out, seed=1729)
+    import csv
+
+    unknown = out / "unknown_pairs.csv"
+    with unknown.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["gate_decision"] == "fallback"
+    # the quarantined row carries its join flags + composed state
+    assert rows[0]["gtin1_in_catalog"] == "True"
+    assert rows[0]["gtin2_in_catalog"] == "True"
+    assert rows[0]["attribute_pairs"]
+    # NEVER in the corpus: no fallback state string appears in any split
+    body = "".join((out / f"{key}.jsonl").read_text()
+                   for key in ("train", "dev", "test"))
+    assert rows[0]["attribute_pairs"] not in body
+
+
+def test_corpus_build_is_deterministic(tmp_path):
+    builder = _corpus_builder()
+    catalog, pairs, gate = _corpus_sources_fixture(tmp_path)
+    question_path, _ = _corpus_question_fixture(tmp_path)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    receipt_one = builder.build(catalog_path=catalog, pairs_path=pairs,
+                                gate_path=gate, question_path=question_path,
+                                output_dir=first, seed=1729)
+    receipt_two = builder.build(catalog_path=catalog, pairs_path=pairs,
+                                gate_path=gate, question_path=question_path,
+                                output_dir=second, seed=1729)
+    # a rerun reproduces every byte (seed + deterministic split allocation)
+    assert receipt_one["sha256"] == receipt_two["sha256"]
+    for name in ("train.jsonl", "dev.jsonl", "test.jsonl",
+                 "unknown_pairs.csv", "receipt.json"):
+        assert (first / name).read_bytes() == (second / name).read_bytes()
+
+
+def test_corpus_fails_loud_on_listing_pairs_header_drift(tmp_path):
+    builder = _corpus_builder()
+    catalog, _, gate = _corpus_sources_fixture(tmp_path)
+    question_path, _ = _corpus_question_fixture(tmp_path)
+    drifted = tmp_path / "drifted.csv"
+    drifted.write_text("wrong,header\nc,1\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="listing_pairs header drifted"):
+        builder.build(catalog_path=catalog, pairs_path=drifted,
+                      gate_path=gate, question_path=question_path,
+                      output_dir=tmp_path / "out")
+
+
+def test_corpus_fails_loud_on_missing_pair_sku(tmp_path):
+    builder = _corpus_builder()
+    catalog, _, gate = _corpus_sources_fixture(tmp_path)
+    question_path, _ = _corpus_question_fixture(tmp_path)
+    pairs = tmp_path / "pairs.csv"
+    pairs.write_text("sku_id1,sku_id2,label,split\nS1,S9,0,dev\n",
+                     encoding="utf-8")
+    with pytest.raises(RuntimeError, match="resolve to no catalog row"):
+        builder.build(catalog_path=catalog, pairs_path=pairs, gate_path=gate,
+                      question_path=question_path, output_dir=tmp_path / "out")
+
+
+def test_corpus_fails_loud_on_catalog_missing_columns(tmp_path):
+    builder = _corpus_builder()
+    _, pairs, gate = _corpus_sources_fixture(tmp_path)
+    question_path, _ = _corpus_question_fixture(tmp_path)
+    catalog = tmp_path / "catalog.csv"
+    catalog.write_text("sku_id,attribute\nS1,Volume: 500\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="missing required columns"):
+        builder.build(catalog_path=catalog, pairs_path=pairs, gate_path=gate,
+                      question_path=question_path, output_dir=tmp_path / "out")
