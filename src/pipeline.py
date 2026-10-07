@@ -3243,184 +3243,233 @@ def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',
     return _CARD_POOL.build(grouped, global_idf, brand_idf_map)
 
 
-def run_within_brand_pipeline(
-    df_full: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
-    # Preserve the evidence-bearing source fields as canonical-level inputs.
-    #  They remain OUTSIDE the frozen canonical
-    # text until a component-safe ablation establishes their value.
-    for column in (
-        "description_short_eng", "breadcrumbs_eng",
-        "sku_url", "image_url", "category", "country", "retailer",
-    ):
-        if column not in df_full:
-            df_full = df_full.assign(**{column: ""})
+class _PipelineSteering:
+    """Own one stage-1 data-prep steering pass: raw export in, two CSVs out.
 
-    def _source_evidence(values: pd.Series) -> list[str]:
-        """Deterministic, non-empty raw strings for review/feature ablation."""
-        return sorted(
-            {
-                str(value).strip()
-                for value in values
-                if pd.notna(value) and str(value).strip()
-            }
-        )
+    Every phase below is a single responsibility and runs in ONE fixed order
+    inside steer(); the statements are the pre-refactor body verbatim, so the
+    printed guard lines, the trace rows, the timing marks (byte-identical
+    labels: guards_grouping_idf / canonical_cards / pre_gate_census /
+    gate_loop / csv_write) and the CSV bytes all survive untouched.
 
-    # ── CONSOLIDATED TRACE: stage 1 writer ────────────────────────────────
-    # ONE writer for the whole stage, committed once at the end of the
-    # function. The first row records the COLUMN CONTRACT this frame arrived
-    # with, because the frame is loaded separately from the one stage 2 builds
-    # and that handoff used to be invisible until a KeyError fired somewhere
-    # downstream.
-    from core.tracing import TraceRun
+    Phase map:
+      column_backfill      — evidence columns guaranteed on the raw export
+      open_stage           — consolidated trace + Timing("data_prep.pipeline")
+      gtin_guard           — identity links, NaN + GS1-checksum quarantine
+      grouping_and_idf     — gtin boxing, global + per-brand NgramIDF
+      canonical_stage      — the fork-parallel card pool + identity-close &
+                             universe-evidence census trace rows
+      pre_gate_census      — attribute-gate doctrine evidence rows
+      brand_blocking_gate  — same-brand pair space + the scalar gate loop
+      sort_validate_write  — PYTHONHASHSEED-safe display sort, frame
+                             contracts, atomic CSV writes
+      gate_trace_rows      — decision/reason census + bounded pair samples
+    """
 
-    trace = TraceRun("data_prep")
-    trace.add_column_contract(
-        df_full,
-        contract="raw_export (core.common.load_raw_export)",
-        required=RAW_EXPORT_REQUIRED_COLUMNS,
-        note=(
-            "stage 2 (build_training_data) does NOT consume this frame: it "
-            "reloads the deduped dataset through load_dataset_deduped(). Both "
-            "stages use the raw export's column names (c698200), so the two "
-            "contracts are identical by construction — they are separate "
-            "datasets joined at canonical_records.csv + gate_results.csv, not "
-            "separate column vocabularies"
-        ),
-    )
+    def __init__(self, df_full: pd.DataFrame) -> None:
+        self.df_full = df_full
+        self.trace = None
+        self.timing = None
+        self.grouped: pd.DataFrame | None = None
+        self.global_idf: NgramIDF | None = None
+        self.brand_to_gtins: dict[str, list[str]] = {}
+        self.brand_idf_map: dict[str, NgramIDF] = {}
+        self.df_canon: pd.DataFrame | None = None
+        self.candidate_pairs: set[tuple[str, str]] = set()
+        self.gtin_to_canon: dict[str, dict] = {}
+        self.results: list[dict] = []
+        self.gate_vis: list[dict] = []
+        self.results_df: pd.DataFrame | None = None
 
-    from core.timing import Timing
+    # ── phase: columns + trace + timing ────────────────────────────────────
 
-    timing = Timing("data_prep.pipeline")
+    def column_backfill(self) -> None:
+        """Preserve the evidence-bearing source fields as canonical-level
+        inputs. They remain OUTSIDE the frozen canonical text until a
+        component-safe ablation establishes their value."""
+        for column in (
+            "description_short_eng", "breadcrumbs_eng",
+            "sku_url", "image_url", "category", "country", "retailer",
+        ):
+            if column not in self.df_full:
+                self.df_full = self.df_full.assign(**{column: ""})
 
-    # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
-    # share gtin=NaN and used to collapse into ONE canonical record with an
-    # arbitrary mode-brand — poisoning canonical_records.csv AND the global
-    # IDF every other GTIN was scored against. Drop them explicitly.
-    from core.identity_policy import apply_identity_links
-    df_full = apply_identity_links(df_full)
-    n_before = len(df_full)
-    gtin_valid = (
-        df_full["gtin"].notna()
-        & (df_full["gtin"].astype(str).str.strip() != "")
-        & (df_full["gtin"].astype(str).str.lower() != "nan")
-    )
-    # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct gtins
-    # (3,715 rows) FAIL the GS1 check digit — retailer-export noise. An
-    # invalid gtin must not assert product identity: no canonical forms
-    # on it, so no (sku, canonical) positive pairs and no false labels leak
-    # into training/eval. The ROWS survive (corpus unchanged); only the
-    # identity claim dies. Loud per lane doctrine — never silent.
-    from core.gtin import gtin_validity
+    def open_stage(self) -> None:
+        """The consolidated-trace writer + the pipeline Timing instance."""
+        # ── CONSOLIDATED TRACE: stage 1 writer ────────────────────────────
+        # ONE writer for the whole stage, committed once at the end of the
+        # function. The first row records the COLUMN CONTRACT this frame arrived
+        # with, because the frame is loaded separately from the one stage 2 builds
+        # and that handoff used to be invisible until a KeyError fired somewhere
+        # downstream.
+        from core.tracing import TraceRun
 
-    bc_valid = gtin_validity(df_full["gtin"].fillna("").astype(str).str.strip())
-    from core.identity_policy import reviewed_row_mask
-    reviewed = reviewed_row_mask(df_full)
-    bc_valid &= ~reviewed
-    checksum_bad = gtin_valid & ~bc_valid & ~reviewed
-    n_checksum_dropped = int(checksum_bad.sum())
-    df_full = df_full[gtin_valid & bc_valid]
-    if reviewed.any():
-        print(f"[gtin-guard] excluded {int(reviewed.sum()):,} identity-review rows (GLN or unresolved formulation)", flush=True)
-    if n_checksum_dropped:
-        print(
-            f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
-            f"FAILS the GS1 check digit (no canonical/labels form on a "
-            f"gtin that cannot be trusted as identity)",
-            flush=True,
-        )
-    if n_before != len(df_full):
-        print(
-            f"[gtin-guard] total dropped {n_before - len(df_full):,} rows "
-            f"(missing/NaN gtin or failed checksum) — they cannot be "
-            f"grouped by product",
-            flush=True,
-        )
-    # CONSOLIDATED TRACE (§gtin-guard): the guard is where identity dies, so
-    # both populations are recorded with the reason that removed them.
-    trace.add(
-        "gtin_guard",
-        "identity_claims_evaluated",
-        in_count=n_before,
-        out_count=len(df_full),
-        reason="rows keep identity only with a present, GS1-valid gtin",
-        detail={
-            "gtin_missing_or_nan": int((~gtin_valid).sum()),
-            "gs1_checksum_failed": n_checksum_dropped,
-            "identity_review_quarantined": int(reviewed.sum()),
-            "rows_retained": int(len(df_full)),
-        },
-        source="raw export",
-    )
-
-    # Group by GTIN (vectorized index assembly; per-group python lambdas
-    # through .agg are ~3x slower than one pass of dict-of-lists, and every
-    # column below is exactly a per-order-group collection).
-    grouped, rows_by_gtin_source = _assemble_gtin_groups(df_full)
-    rows_by_gtin = dict(zip(grouped["gtin"], grouped["rows"], strict=True))
-    global_idf = NgramIDF(rows_by_gtin)
-
-    # Precompute within-brand IDF per brand
-    brand_to_gtins = defaultdict(list)
-    for gtin, brand in zip(grouped["gtin"], grouped["brand"], strict=True):
-        brand_to_gtins[brand.lower().strip()].append(gtin)
-
-    # For each brand, build an IDF from that brand's GTINs
-    brand_idf_map = {}
-    for brand, gtins in brand_to_gtins.items():
-        brand_rows = {gtin: rows_by_gtin[gtin] for gtin in gtins}
-        brand_idf_map[brand] = NgramIDF(brand_rows)
-
-    timing.mark("guards_grouping_idf")
-
-    # Generate canonical records
-    df_canon = _canonical_records_df(grouped, global_idf, brand_idf_map)
-    timing.mark("canonical_cards")
-
-    # ── CONSOLIDATED TRACE: the row identity closes here ──────────────────
-    # Every GS1-valid row is either promoted to its gtin's canonical record or
-    # collapsed into it (kept and aggregated — a distinct destiny from the
-    # guard's two drop populations). With this row the trace alone closes
-    #   rows_in == canonical_records + collapsed_same_gtin
-    #              + gtin_missing_or_nan + gs1_checksum_failed
-    # which is what core.tracing.accounting() recomputes from the file.
-    trace.add(
-        "canonical",
-        "records_built",
-        in_count=len(df_full),
-        out_count=len(df_canon),
-        reason=(
-            "one canonical record per distinct GS1-valid gtin; the other rows "
-            "collapse into their own gtin's record (kept and aggregated, not "
-            "dropped)"
-        ),
-        detail={
-            "distinct_gtins": int(len(df_canon)),
-            "collapsed_same_gtin": int(len(df_full) - len(df_canon)),
-            "brands": int(grouped["brand"].nunique()) if len(grouped) else 0,
-            "brands_with_pairs": int(
-                sum(1 for gtins in brand_to_gtins.values() if len(gtins) > 1)
+        self.trace = TraceRun("data_prep")
+        self.trace.add_column_contract(
+            self.df_full,
+            contract="raw_export (core.common.load_raw_export)",
+            required=RAW_EXPORT_REQUIRED_COLUMNS,
+            note=(
+                "stage 2 (build_training_data) does NOT consume this frame: it "
+                "reloads the deduped dataset through load_dataset_deduped(). Both "
+                "stages use the raw export's column names (c698200), so the two "
+                "contracts are identical by construction — they are separate "
+                "datasets joined at canonical_records.csv + gate_results.csv, not "
+                "separate column vocabularies"
             ),
-        },
-        source="raw export",
-    )
+        )
 
-    # ── CONSOLIDATED TRACE: canonical-side universe-evidence census ──────
-    # Closure evidence for the wiring gap this column closes: how many
-    # canonicals carry ANY universe evidence, per registered key. Audit
-    # readback only — no decision reads this row.
-    if len(df_canon):
+        from core.timing import Timing
+
+        self.timing = Timing("data_prep.pipeline")
+
+    # ── phase: gtin guard ──────────────────────────────────────────────────
+
+    def gtin_guard(self) -> None:
+        """NaN/invalid identity quarantine + the guard trace row."""
+        # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
+        # share gtin=NaN and used to collapse into ONE canonical record with an
+        # arbitrary mode-brand — poisoning canonical_records.csv AND the global
+        # IDF every other GTIN was scored against. Drop them explicitly.
+        from core.identity_policy import apply_identity_links
+        self.df_full = apply_identity_links(self.df_full)
+        n_before = len(self.df_full)
+        gtin_valid = (
+            self.df_full["gtin"].notna()
+            & (self.df_full["gtin"].astype(str).str.strip() != "")
+            & (self.df_full["gtin"].astype(str).str.lower() != "nan")
+        )
+        # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct gtins
+        # (3,715 rows) FAIL the GS1 check digit — retailer-export noise. An
+        # invalid gtin must not assert product identity: no canonical forms
+        # on it, so no (sku, canonical) positive pairs and no false labels leak
+        # into training/eval. The ROWS survive (corpus unchanged); only the
+        # identity claim dies. Loud per lane doctrine — never silent.
+        from core.gtin import gtin_validity
+
+        bc_valid = gtin_validity(self.df_full["gtin"].fillna("").astype(str).str.strip())
+        from core.identity_policy import reviewed_row_mask
+        reviewed = reviewed_row_mask(self.df_full)
+        bc_valid &= ~reviewed
+        checksum_bad = gtin_valid & ~bc_valid & ~reviewed
+        n_checksum_dropped = int(checksum_bad.sum())
+        self.df_full = self.df_full[gtin_valid & bc_valid]
+        if reviewed.any():
+            print(f"[gtin-guard] excluded {int(reviewed.sum()):,} identity-review rows (GLN or unresolved formulation)", flush=True)
+        if n_checksum_dropped:
+            print(
+                f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
+                f"FAILS the GS1 check digit (no canonical/labels form on a "
+                f"gtin that cannot be trusted as identity)",
+                flush=True,
+            )
+        if n_before != len(self.df_full):
+            print(
+                f"[gtin-guard] total dropped {n_before - len(self.df_full):,} rows "
+                f"(missing/NaN gtin or failed checksum) — they cannot be "
+                f"grouped by product",
+                flush=True,
+            )
+        # CONSOLIDATED TRACE (§gtin-guard): the guard is where identity dies, so
+        # both populations are recorded with the reason that removed them.
+        self.trace.add(
+            "gtin_guard",
+            "identity_claims_evaluated",
+            in_count=n_before,
+            out_count=len(self.df_full),
+            reason="rows keep identity only with a present, GS1-valid gtin",
+            detail={
+                "gtin_missing_or_nan": int((~gtin_valid).sum()),
+                "gs1_checksum_failed": n_checksum_dropped,
+                "identity_review_quarantined": int(reviewed.sum()),
+                "rows_retained": int(len(self.df_full)),
+            },
+            source="raw export",
+        )
+
+    # ── phase: grouping + IDF ──────────────────────────────────────────────
+
+    def grouping_and_idf(self) -> None:
+        """Vectorized gtin boxing + the global and per-brand IDF indexes."""
+        # Group by GTIN (vectorized index assembly; per-group python lambdas
+        # through .agg are ~3x slower than one pass of dict-of-lists, and every
+        # column below is exactly a per-order-group collection).
+        self.grouped, _rows_by_gtin_source = _assemble_gtin_groups(self.df_full)
+        rows_by_gtin = dict(zip(self.grouped["gtin"], self.grouped["rows"], strict=True))
+        self.global_idf = NgramIDF(rows_by_gtin)
+
+        # Precompute within-brand IDF per brand
+        self.brand_to_gtins = defaultdict(list)
+        for gtin, brand in zip(self.grouped["gtin"], self.grouped["brand"], strict=True):
+            self.brand_to_gtins[brand.lower().strip()].append(gtin)
+
+        # For each brand, build an IDF from that brand's GTINs
+        self.brand_idf_map = {}
+        for brand, gtins in self.brand_to_gtins.items():
+            brand_rows = {gtin: rows_by_gtin[gtin] for gtin in gtins}
+            self.brand_idf_map[brand] = NgramIDF(brand_rows)
+
+        self.timing.mark("guards_grouping_idf")
+
+    # ── phase: canonical cards ─────────────────────────────────────────────
+
+    def canonical_stage(self) -> None:
+        """The card pool + the row-identity close and universe census rows."""
+        # Generate canonical records
+        self.df_canon = _canonical_records_df(
+            self.grouped, self.global_idf, self.brand_idf_map
+        )
+        self.timing.mark("canonical_cards")
+
+        # ── CONSOLIDATED TRACE: the row identity closes here ──────────────
+        # Every GS1-valid row is either promoted to its gtin's canonical record or
+        # collapsed into it (kept and aggregated — a distinct destiny from the
+        # guard's two drop populations). With this row the trace alone closes
+        #   rows_in == canonical_records + collapsed_same_gtin
+        #              + gtin_missing_or_nan + gs1_checksum_failed
+        # which is what core.tracing.accounting() recomputes from the file.
+        self.trace.add(
+            "canonical",
+            "records_built",
+            in_count=len(self.df_full),
+            out_count=len(self.df_canon),
+            reason=(
+                "one canonical record per distinct GS1-valid gtin; the other rows "
+                "collapse into their own gtin's record (kept and aggregated, not "
+                "dropped)"
+            ),
+            detail={
+                "distinct_gtins": int(len(self.df_canon)),
+                "collapsed_same_gtin": int(len(self.df_full) - len(self.df_canon)),
+                "brands": int(self.grouped["brand"].nunique()) if len(self.grouped) else 0,
+                "brands_with_pairs": int(
+                    sum(1 for gtins in self.brand_to_gtins.values() if len(gtins) > 1)
+                ),
+            },
+            source="raw export",
+        )
+
+        self._universe_evidence_census()
+
+    def _universe_evidence_census(self) -> None:
+        """Canonical-side universe-evidence census row (audit readback only)."""
+        # ── CONSOLIDATED TRACE: canonical-side universe-evidence census ──
+        # Closure evidence for the wiring gap this column closes: how many
+        # canonicals carry ANY universe evidence, per registered key. Audit
+        # readback only — no decision reads this row.
+        if not len(self.df_canon):
+            return
         from core.attribute_conflicts import _universe_evidence_of
 
-        _evid = [ _universe_evidence_of(row) for row in df_canon.to_dict("records") ]
+        _evid = [ _universe_evidence_of(row) for row in self.df_canon.to_dict("records") ]
         _per_key: Counter[str] = Counter()
         for evidence in _evid:
             for key in evidence:
                 _per_key[key] += 1
-        trace.add(
+        self.trace.add(
             "canonical",
             "universe_evidence_census",
-            in_count=int(len(df_canon)),
+            in_count=int(len(self.df_canon)),
             out_count=int(sum(1 for item in _evid if item)),
             reason="canonicals persisting non-empty universe_evidence (per-key counts in detail)",
             detail={
@@ -3434,81 +3483,95 @@ def run_within_brand_pipeline(
             source="canonical_records.csv (in-memory frame)",
         )
 
-    # ── CONSOLIDATED TRACE: attribute-gate evidence sections (owner ruling
-    # 2026-10-01, "ALL ATTRIBUTES are used to make ALL DECISIONS") ──────────
-    # The registry census (results/attribute_universe_census.json) measured
-    # every raw key; the decision layer (core.attribute_conflicts
-    # full_attribute_evaluation) now evaluates ALL of them per pair with each
-    # field's own measured conflict semantics, while the VETO still votes only
-    # where config permits (vetoes stay absence-blind and config-owned). These
-    # two run-scope rows sit next to the canonical row so the decision
-    # doctrine and its evidence live in one file. The detail builders live at
-    # module scope (attribute_gate_* below) so the contracts are unit-testable
-    # without a full data-prep run. The ledger reads ONLY the census artifact
-    # + the current config (never writes either).
-    from core.attribute_conflicts import veto_eligibility_ledger
+    # ── phase: pre-gate census rows ────────────────────────────────────────
 
-    trace.add(
-        "attribute_gate",
-        "universe_decision_scope",
-        reason="every AttributeUniverse-registered dimension enters pair-level evaluation; absence never vetoes",
-        detail=attribute_gate_universe_scope_detail(),
-        source="core.attribute_universe census artifact",
-    )
-    trace.add(
-        "attribute_gate",
-        "veto_eligibility",
-        reason="per-dimension veto-eligibility ledger: evidence class + CURRENT config state + the exact owner delta",
-        detail={"ledger": veto_eligibility_ledger()},
-        source="core.attribute_universe census + config/training.yaml (both read-only)",
-    )
+    def pre_gate_census(self) -> None:
+        """Attribute-gate doctrine evidence rows (read-only census + config)."""
+        # ── CONSOLIDATED TRACE: attribute-gate evidence sections (owner ruling
+        # 2026-10-01, "ALL ATTRIBUTES are used to make ALL DECISIONS") ──────
+        # The registry census (results/attribute_universe_census.json) measured
+        # every raw key; the decision layer (core.attribute_conflicts
+        # full_attribute_evaluation) now evaluates ALL of them per pair with each
+        # field's own measured conflict semantics, while the VETO still votes only
+        # where config permits (vetoes stay absence-blind and config-owned). These
+        # two run-scope rows sit next to the canonical row so the decision
+        # doctrine and its evidence live in one file. The detail builders live at
+        # module scope (attribute_gate_* below) so the contracts are unit-testable
+        # without a full data-prep run. The ledger reads ONLY the census artifact
+        # + the current config (never writes either).
+        from core.attribute_conflicts import veto_eligibility_ledger
 
-    timing.mark("pre_gate_census")
+        self.trace.add(
+            "attribute_gate",
+            "universe_decision_scope",
+            reason="every AttributeUniverse-registered dimension enters pair-level evaluation; absence never vetoes",
+            detail=attribute_gate_universe_scope_detail(),
+            source="core.attribute_universe census artifact",
+        )
+        self.trace.add(
+            "attribute_gate",
+            "veto_eligibility",
+            reason="per-dimension veto-eligibility ledger: evidence class + CURRENT config state + the exact owner delta",
+            detail={"ledger": veto_eligibility_ledger()},
+            source="core.attribute_universe census + config/training.yaml (both read-only)",
+        )
 
-    # Brand blocking
-    candidate_pairs = set()
-    for brand, gtins in brand_to_gtins.items():
-        if len(gtins) < 2:
-            continue
-        for i in range(len(gtins)):
-            for j in range(i + 1, len(gtins)):
-                candidate_pairs.add((gtins[i], gtins[j]))
+        self.timing.mark("pre_gate_census")
 
-    # Gate and similarity
-    gtin_to_canon = dict(zip(df_canon["gtin"], df_canon.to_dict(orient="records"), strict=True))
-    results = []
-    # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
-    # exactly what it SAW (both sides' volume/pack/flavor + confidences)
-    # next to what it DECIDED — auditable inputs→outputs, rewritten every
-    # run. Since 2026-09-15 these rows land in the ONE consolidated trace
-    # (core.tracing) instead of a per-stage results/logs CSV, so a decision
-    # and its readback are never in two places. Full census, not a sample:
-    # the whole point is no invisibility.
-    from core.attribute_conflicts import (
-        canonical_attribute_info,
-        full_attribute_evaluation,
-    )
+    # ── phase: blocking + gate loop ────────────────────────────────────────
 
-    gate_vis = []
-    from tqdm import tqdm as _tqdm_pairs
-    # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
-    # loop is deliberately kept scalar. "Optimize and vectorize wherever
-    # possible" reaches HOT paths; this is not one — it runs ONCE per
-    # data-prep regeneration (src/training/data_prep.py is the sole caller) and
-    # no training/eval step executes it (they consume the CSVs it writes).
-    # three_way_gate is the label source — every training label flows
-    # through its decision table — so an equivalent-but-restructured
-    # rewrite puts all pinned counts (135,769 / 92,650 / 29,351 / 13,768)
-    # at risk for seconds saved on a one-time run. Two vectorization
-    # attempts were abandoned for exactly this risk/benefit. If this ever
-    # becomes a hot path, vectorize with the equivalence protocol:
-    # pinned counts + diagonal crosstab vs the previous CSV + 0-tolerance
-    # confidence match, revert on ANY divergence.
-    for g1, g2 in _tqdm_pairs(sorted(candidate_pairs), unit="pair", desc="gate", disable=None):
-        a1 = gtin_to_canon[g1]
-        a2 = gtin_to_canon[g2]
-        gate = three_way_gate(a1, a2)
+    def brand_blocking_gate(self) -> None:
+        """Same-brand candidate space + the deliberate scalar gate loop."""
+        # Brand blocking
+        candidate_pairs = set()
+        for brand, gtins in self.brand_to_gtins.items():
+            if len(gtins) < 2:
+                continue
+            for i in range(len(gtins)):
+                for j in range(i + 1, len(gtins)):
+                    candidate_pairs.add((gtins[i], gtins[j]))
+
+        # Gate and similarity
+        self.gtin_to_canon = dict(zip(self.df_canon["gtin"], self.df_canon.to_dict(orient="records"), strict=True))
+        self.results = []
+        self.candidate_pairs = candidate_pairs
+        # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
+        # exactly what it SAW (both sides' volume/pack/flavor + confidences)
+        # next to what it DECIDED — auditable inputs→outputs, rewritten every
+        # run. Since 2026-09-15 these rows land in the ONE consolidated trace
+        # (core.tracing) instead of a per-stage results/logs CSV, so a decision
+        # and its readback are never in two places. Full census, not a sample:
+        # the whole point is no invisibility.
+        from core.attribute_conflicts import (
+            canonical_attribute_info,
+            full_attribute_evaluation,
+        )
+
+        self.gate_vis = []
+        # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
+        # loop is deliberately kept scalar. "Optimize and vectorize wherever
+        # possible" reaches HOT paths; this is not one — it runs ONCE per
+        # data-prep regeneration (src/training/data_prep.py is the sole caller) and
+        # no training/eval step executes it (they consume the CSVs it writes).
+        # three_way_gate is the label source — every training label flows
+        # through its decision table — so an equivalent-but-restructured
+        # rewrite puts all pinned counts (135,769 / 92,650 / 29,351 / 13,768)
+        # at risk for seconds saved on a one-time run. Two vectorization
+        # attempts were abandoned for exactly this risk/benefit. If this ever
+        # becomes a hot path, vectorize with the equivalence protocol:
+        # pinned counts + diagonal crosstab vs the previous CSV + 0-tolerance
+        # confidence match, revert on ANY divergence.
+        for g1, g2 in _LOG.progress(sorted(candidate_pairs), desc="gate", unit="pair"):
+            self._gate_one_pair(g1, g2, canonical_attribute_info, full_attribute_evaluation)
+        self.timing.mark("gate_loop")
+
+    def _gate_one_pair(self, g1: str, g2: str, canonical_attribute_info, full_attribute_evaluation) -> None:
+        """One candidate pair: gate verdict + Jaccard + the visibility row."""
         from core.pair_policy import identity_similarity
+
+        a1 = self.gtin_to_canon[g1]
+        a2 = self.gtin_to_canon[g2]
+        gate = three_way_gate(a1, a2)
         sim = identity_similarity(a1["canonical"], a2["canonical"])
         evaluation = full_attribute_evaluation(
             canonical_attribute_info(a1),
@@ -3524,7 +3587,7 @@ def run_within_brand_pipeline(
                 training_cfg().gate.vol_abs_tolerance
             ),
         )
-        results.append(
+        self.results.append(
             {
                 "gtin1": g1,
                 "gtin2": g2,
@@ -3535,7 +3598,11 @@ def run_within_brand_pipeline(
                 "similarity": sim,
             }
         )
-        gate_vis.append(
+        self._visibility_row(g1, g2, a1, a2, gate, sim, evaluation)
+
+    def _visibility_row(self, g1: str, g2: str, a1: dict, a2: dict, gate: dict, sim: float, evaluation: dict) -> None:
+        """The gate-visibility row the consolidated trace samples from."""
+        self.gate_vis.append(
             {
                 "gtin1": g1,
                 "gtin2": g2,
@@ -3574,108 +3641,133 @@ def run_within_brand_pipeline(
                 ),
             }
         )
-    timing.mark("gate_loop")
-    results_df = pd.DataFrame(results)
 
-    # TRAIN_GPU writes ONLY inside its own tree (lib.common RESULTS —
-    # the repo's results dir must never be touched by the standalone lane).
-    # DETERMINISM: set->display columns render in
-    # PYTHONHASHSEED-random order otherwise; sort the DISPLAY (after all
-    # gate logic consumed the real sets) so the CSV is byte-reproducible.
-    for _col in (
-        "volume_set",
-        "pack_set",
-        "package_type_set",
-        "packaging_level_set",
-        "package_material_set",
-        "flavor_set",
-        "made_from_set",
-        "carbonation_set",
-        "sweetener_set",
-        "sweetener_type_set",
-        "sweetening_set",
-        "attribute_consistency_flags",
-        "pulp_set",
-    ):
-        df_canon[_col] = df_canon[_col].map(lambda s: sorted(s))
-    # Same for the pair ROW ORDER: candidate_pairs is a SET, so iteration
-    # order is process-random. Gate decisions themselves are order-free —
-    # only the CSV row sequence drifted. Sort on the identity columns.
-    results_df = results_df.sort_values(
-        ["gtin1", "gtin2"], kind="stable"
-    ).reset_index(drop=True)
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
-    # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
-    # transform can never land in the CSVs every downstream step reads.
-    require_populated_source_rows(check_canonical_records_frame(df_canon))
-    check_gate_results_frame(results_df)
-    # SILENT_DROPS task 6: every CSV write goes through the atomic
-    # mechanism (tmp sibling + fsync + rename) so an interrupt can never
-    # leave a truncated artifact for downstream steps to read.
-    from core.manifest import atomic_write_csv
+    # ── phase: sort + validate + write ─────────────────────────────────────
 
-    atomic_write_csv(df_canon, RESULTS / F["canonical_records"], index=False)
-    atomic_write_csv(results_df, RESULTS / F["gate_results"], index=False)
-    timing.mark("csv_write")
-    # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────────
-    # One CSV carries the whole story: run-scope funnels (candidate census →
-    # decision census → complete reason census), one exact group row per
-    # (decision, reason) bucket, then a bounded stratified SAMPLE of pairs with
-    # the literal readback. Every pair's decision and reason is counted exactly
-    # in the census rows; the sample exists so the evidence can be eyeballed
-    # without opening gate_results.csv. Replaces the former
-    # results/logs/gate_visibility.csv.
-    gate_frame = (
-        pd.DataFrame(gate_vis).sort_values(["gtin1", "gtin2"], kind="stable")
-        if gate_vis
-        else pd.DataFrame()
-    )
-    vis_counts = (
-        gate_frame["decision"].value_counts().to_dict() if len(gate_frame) else {}
-    )
-    vis_reasons = (
-        gate_frame["reason"].value_counts().to_dict() if len(gate_frame) else {}
-    )
-    trace.add(
-        "gate",
-        "candidates_gated",
-        in_count=len(candidate_pairs),
-        out_count=len(results_df),
-        reason="every same-brand pair receives exactly one decision; none is dropped",
-        detail={"decisions": {str(k): int(v) for k, v in vis_counts.items()}},
-        source="canonical_records.csv (in-memory frame)",
-    )
-    # One group row per decision: its EXACT population plus the complete reason
-    # distribution inside it (count_rows with no limit — the label set is small
-    # and bounded, so "which pairs got which decision and why" is answered here
-    # rather than by opening gate_results.csv).
-    for decision in ("hard_no", "fallback", "proceed"):
-        subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
-        trace.add(
-            "gate",
-            f"decision_{decision}",
-            scope="group",
-            in_count=len(candidate_pairs),
-            out_count=int(len(subset)),
-            reason=f"gate_decision == {decision}",
-            detail={
-                "reasons": count_rows(subset["reason"]) if len(subset) else [],
-                "reason_census": (
-                    count_rows(subset["reason"], limit=None) if len(subset) else []
-                ),
-            },
-            source="gate_results.csv",
+    def sort_validate_write(self) -> None:
+        """Display sort, frame contracts, atomic CSV writes."""
+        self.results_df = pd.DataFrame(self.results)
+
+        # TRAIN_GPU writes ONLY inside its own tree (lib.common RESULTS —
+        # the repo's results dir must never be touched by the standalone lane).
+        # DETERMINISM: set->display columns render in
+        # PYTHONHASHSEED-random order otherwise; sort the DISPLAY (after all
+        # gate logic consumed the real sets) so the CSV is byte-reproducible.
+        for _col in (
+            "volume_set",
+            "pack_set",
+            "package_type_set",
+            "packaging_level_set",
+            "package_material_set",
+            "flavor_set",
+            "made_from_set",
+            "carbonation_set",
+            "sweetener_set",
+            "sweetener_type_set",
+            "sweetening_set",
+            "attribute_consistency_flags",
+            "pulp_set",
+        ):
+            self.df_canon[_col] = self.df_canon[_col].map(lambda s: sorted(s))
+        # Same for the pair ROW ORDER: candidate_pairs is a SET, so iteration
+        # order is process-random. Gate decisions themselves are order-free —
+        # only the CSV row sequence drifted. Sort on the identity columns.
+        self.results_df = self.results_df.sort_values(
+            ["gtin1", "gtin2"], kind="stable"
+        ).reset_index(drop=True)
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
+        # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
+        # transform can never land in the CSVs every downstream step reads.
+        require_populated_source_rows(check_canonical_records_frame(self.df_canon))
+        check_gate_results_frame(self.results_df)
+        # SILENT_DROPS task 6: every CSV write goes through the atomic
+        # mechanism (tmp sibling + fsync + rename) so an interrupt can never
+        # leave a truncated artifact for downstream steps to read.
+        from core.manifest import atomic_write_csv
+
+        atomic_write_csv(self.df_canon, RESULTS / F["canonical_records"], index=False)
+        atomic_write_csv(self.results_df, RESULTS / F["gate_results"], index=False)
+        self.timing.mark("csv_write")
+
+    # ── phase: gate trace census + close ───────────────────────────────────
+
+    def gate_trace_rows(self) -> None:
+        """Decision/reason census rows, bounded pair samples, trace close."""
+        # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────
+        # One CSV carries the whole story: run-scope funnels (candidate census →
+        # decision census → complete reason census), one exact group row per
+        # (decision, reason) bucket, then a bounded stratified SAMPLE of pairs with
+        # the literal readback. Every pair's decision and reason is counted exactly
+        # in the census rows; the sample exists so the evidence can be eyeballed
+        # without opening gate_results.csv. Replaces the former
+        # results/logs/gate_visibility.csv.
+        gate_frame = (
+            pd.DataFrame(self.gate_vis).sort_values(["gtin1", "gtin2"], kind="stable")
+            if self.gate_vis
+            else pd.DataFrame()
         )
-    # FULL-ATTRIBUTES pair census rollup (owner ruling 2026-10-01): a
-    # run-scope row over the whole gated population states exactly how many
-    # pairs carried at least one recorded dimension conflict and which
-    # dimensions are the loud ones — per-pair detail rides the sampled
-    # pair_decision rows (bounded sample, see core.tracing) and this row
-    # carries the exact counts.
-    if len(gate_frame):
+        vis_counts = (
+            gate_frame["decision"].value_counts().to_dict() if len(gate_frame) else {}
+        )
+        vis_reasons = (
+            gate_frame["reason"].value_counts().to_dict() if len(gate_frame) else {}
+        )
+        self.trace.add(
+            "gate",
+            "candidates_gated",
+            in_count=len(self.candidate_pairs),
+            out_count=len(self.results_df),
+            reason="every same-brand pair receives exactly one decision; none is dropped",
+            detail={"decisions": {str(k): int(v) for k, v in vis_counts.items()}},
+            source="canonical_records.csv (in-memory frame)",
+        )
+        self._decision_bucket_rows(gate_frame)
+        self._dimension_rollup_row(gate_frame)
+        self._reason_census_and_samples(gate_frame, vis_reasons)
+        self.trace.write()
+        print(
+            f"[trace] data_prep steps written -> {trace_path()} | "
+            f"gate decisions: {vis_counts}",
+            flush=True,
+        )
+
+    def _decision_bucket_rows(self, gate_frame: pd.DataFrame) -> None:
+        """One group row per decision: exact population + reason distribution."""
+        # One group row per decision: its EXACT population plus the complete reason
+        # distribution inside it (count_rows with no limit — the label set is small
+        # and bounded, so "which pairs got which decision and why" is answered here
+        # rather than by opening gate_results.csv).
+        for decision in ("hard_no", "fallback", "proceed"):
+            subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
+            self.trace.add(
+                "gate",
+                f"decision_{decision}",
+                scope="group",
+                in_count=len(self.candidate_pairs),
+                out_count=int(len(subset)),
+                reason=f"gate_decision == {decision}",
+                detail={
+                    "reasons": count_rows(subset["reason"]) if len(subset) else [],
+                    "reason_census": (
+                        count_rows(subset["reason"], limit=None) if len(subset) else []
+                    ),
+                },
+                source="gate_results.csv",
+            )
+
+    def _dimension_rollup_row(self, gate_frame: pd.DataFrame) -> None:
+        """FULL-ATTRIBUTES pair census rollup over the whole gated population."""
+        # FULL-ATTRIBUTES pair census rollup (owner ruling 2026-10-01): a
+        # run-scope row over the whole gated population states exactly how many
+        # pairs carried at least one recorded dimension conflict and which
+        # dimensions are the loud ones — per-pair detail rides the sampled
+        # pair_decision rows (bounded sample, see core.tracing) and this row
+        # carries the exact counts.
+        if not len(gate_frame):
+            return
         conflicts = gate_frame["dimension_conflicts"].astype(str)
-        trace.add(
+        self.trace.add(
             "attribute_gate",
             "pair_dimension_census",
             scope="group",
@@ -3689,12 +3781,16 @@ def run_within_brand_pipeline(
             },
             source="gate_stage in-memory readback",
         )
-    if len(gate_frame):
+
+    def _reason_census_and_samples(self, gate_frame: pd.DataFrame, vis_reasons: dict) -> None:
+        """Cross-decision reason census + the bounded per-pair readback."""
+        if not len(gate_frame):
+            return
         # Named `reason_census`, NOT `decision_reasons`: every group step
         # starting with "gate.decision_" is a decision bucket and is summed by
         # core.tracing.accounting(), so this cross-decision row must not share
         # that prefix.
-        trace.add(
+        self.trace.add(
             "gate",
             "reason_census",
             scope="group",
@@ -3713,7 +3809,7 @@ def run_within_brand_pipeline(
         # The inputs are JSON so one cell stays machine-readable. Bucketed by
         # (decision :: reason) so the census rows above and the sampled rows
         # below join on the same label.
-        trace.add_entities(
+        self.trace.add_entities(
             "pair_decision",
             list(gate_frame.itertuples(index=False)),
             key_of=lambda r: f"{r.gtin1}|{r.gtin2}",
@@ -3751,15 +3847,30 @@ def run_within_brand_pipeline(
             per_reason=ENTITY_PER_REASON,
             total_cap=ENTITY_TOTAL_CAP,
         )
-    trace.write()
-    print(
-        f"[trace] data_prep steps written -> {trace_path()} | "
-        f"gate decisions: {vis_counts}",
-        flush=True,
-    )
-    timing.dump_if_requested()
 
-    return results_df, df_canon
+    # ── orchestration ──────────────────────────────────────────────────────
+
+    def steer(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Run the load-bearing phase order, return (gate results, canonicals)."""
+        self.column_backfill()
+        self.open_stage()
+        self.gtin_guard()
+        self.grouping_and_idf()
+        self.canonical_stage()
+        self.pre_gate_census()
+        self.brand_blocking_gate()
+        self.sort_validate_write()
+        self.gate_trace_rows()
+        self.timing.dump_if_requested()
+
+        return self.results_df, self.df_canon
+
+
+def run_within_brand_pipeline(
+    df_full: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
+    """Stage 1 of data prep: canonical cards + gate decisions over the RAW export."""
+    return _PipelineSteering(df_full).steer()
 
 
 # ============================================================================
