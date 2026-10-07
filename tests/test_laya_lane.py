@@ -68,6 +68,28 @@ def _dataset_fixture(tmp_path, monkeypatch, *, rows=2):
     monkeypatch.setitem(core_common.F, "final_validation", final_validation)
 
 
+REVISION_PIN = "abc123def"
+
+
+def _hermetic_staging(monkeypatch, *, origin_tip: str = REVISION_PIN):
+    """Kernel staging pins the worktree HEAD into the payload constants;
+    these pins only need the payload contracts, so the fake closes
+    that door (kaggle test file precedent). The staged-pin guard
+    (runtime_inputs.require_published_tip_match) rides the same fake:
+    `git fetch origin` is rc=0 and `git rev-parse origin/<branch>`
+    prints the origin tip (default: the pin matches REVISION_PIN)."""
+    monkeypatch.setattr(laya_lane, "_git_revision", lambda: REVISION_PIN)
+    import subprocess
+
+    def fake_run(args, **kwargs):
+        if "rev-parse" in args:
+            return subprocess.CompletedProcess(args, 0, stdout=origin_tip,
+                                               stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
 # ── SSOT/additive contract ─────────────────────────────────────────────────
 def test_laya_spec_additive_and_yaml_unchanged():
     cfg_spec = common.training_cfg().laya
@@ -172,6 +194,7 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
     assert receipt["kernel"] == "fbarulli/er-laya-decision"
     assert receipt["kind"] == "attribute"
@@ -205,12 +228,45 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     assert "BATCH_SIZE = 8" in script
     # the run tag is embedded for the receipt read-back
     assert receipt["run_tag"] in script
+    # the runtime preflight inventory bake: the staged payload carries the
+    # publish pin constants + the checkout preflight block (kaggle-lane
+    # sibling shape; the push gate reads these constants)
+    assert 'REPOSITORY = "https://github.com/fbarulli/ER.git"' in script
+    assert 'BRANCH = "kaggle-lane"' in script
+    assert f'REVISION = "{REVISION_PIN}"' in script
+    # THE ATTACHED-INPUTS preflight (BUG 1 fix): root is /kaggle/input
+    # (never `_runtime_root = Path(root)` — no clone root is defined),
+    # the inventory shrank to the two attached staged files, and the
+    # verified-N print is the sibling kaggle-lane shape
+    assert 'INPUT_ROOT = Path("/kaggle/input")' in script
+    assert "_runtime_root = Path(root)" not in script
+    assert '_runtime_files = ("dataset.csv"' in script
+    assert "[runtime-preflight] verified %d required files" in script
+    # BUG 2 fix: the inputs travel as the dataset — metadata attaches the
+    # slug and the staging receipt records the dataset payload files
+    assert metadata["dataset_sources"] == ["fbarulli/er-laya-payload"]
+    payload_dir = stage / "dataset_payload"
+    assert (payload_dir / "dataset-metadata.json").is_file()
+    assert (payload_dir / "dataset.csv").is_file()
+    assert (payload_dir / "laya.question.json").is_file()
+    assert receipt["dataset"]["slug"] == "fbarulli/er-laya-payload"
+    # the kernel resolves the RENAMED csv by name (the dataset csv lands
+    # under /kaggle/input/<slug>/dataset.csv; rglob finds it)
+    assert 'DECISION_CSV = "dataset.csv"' in script
+    # the receipt publishes the pin so the orchestrator knows the
+    # publish-tip expectation
+    assert receipt["published_pin"] == {
+        "repository": "https://github.com/fbarulli/ER.git",
+        "branch": "kaggle-lane",
+        "revision": REVISION_PIN,
+    }
 
 
 def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="identity")
     assert receipt["kind"] == "identity"
     assert (Path(receipt["staged"]) / "laya_decision.py").is_file()
@@ -222,15 +278,194 @@ def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     assert eval_receipt["kernel"] == "fbarulli/er-laya-eval"
     assert eval_receipt["code_file"] == "laya_evals.py"
     assert (Path(eval_receipt["staged"]) / "laya_evals.py").is_file()
+    # the eval kernel carries the same preflight inventory bake
+    eval_script = (Path(eval_receipt["staged"])
+                   / "laya_evals.py").read_text()
+    assert 'REPOSITORY = "https://github.com/fbarulli/ER.git"' in eval_script
+    assert "_runtime_files = (" in eval_script
+    assert eval_receipt["published_pin"] == {
+        "repository": "https://github.com/fbarulli/ER.git",
+        "branch": "kaggle-lane",
+        "revision": REVISION_PIN,
+    }
     # the eval harness is unlatched by config default; the receipt records
     # what toggle state the kernel actually holds
     assert eval_receipt["evals_enabled"] is False
+
+
+def test_stage_decision_kernel_fails_loud_without_dataset_slug(
+        tmp_path, monkeypatch):
+    """BUG 2 regression pin: the kernel inputs travel as the dataset; an
+    unset laya.dataset_slug may never stage a push-less payload silently."""
+    _spec(tmp_path, monkeypatch, dataset_slug=None)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="dataset_slug"):
+        laya_lane.stage_decision_kernel(decision_kind="attribute")
+
+
+def test_stage_decision_kernel_refuses_stale_published_tip(
+        tmp_path, monkeypatch):
+    """The staged-race guard: local HEAD must BE the fetched origin
+    tip before any payload writes; the 84ce2d0-vs-02dec14 pin may
+    never stage again."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch, origin_tip="fed321cba9" + "0" * 35)
+    with pytest.raises(RuntimeError, match="origin/kaggle-lane tip"):
+        laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert not (stage / "kernel-metadata.json").exists()
+    assert not (stage / "laya.question.json").exists()
+
+
+def test_stage_kaggle_payload_contract_receipts_published_tip(
+        tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    # the sibling published_tip records the verified origin tip; the
+    # pin itself still names HEAD
+    assert receipt["published_tip"] == REVISION_PIN
+    assert receipt["published_pin"]["revision"] == REVISION_PIN
+
+
+def test_dataset_payload_contract(tmp_path, monkeypatch):
+    """The DATASET payload the inputs travel with (BUG 2 fix): metadata
+    shape (kaggle-lane payload shape) + the renamed csv + schema copies."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    import hashlib
+
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = Path(receipt["staged"])
+    payload = stage / "dataset_payload"
+    metadata = json.loads(
+        (payload / "dataset-metadata.json").read_text())
+    assert metadata == {
+        "title": "er laya requests",
+        "id": "fbarulli/er-laya-payload",
+        "licenses": [{"name": "other"}],
+    }
+    data = Path(receipt["decision_input"])
+    assert (payload / "dataset.csv").read_bytes() == data.read_bytes()
+    assert (payload / "laya.question.json").is_file()
+    payload_receipt = json.loads(
+        (payload / "dataset_payload.receipt.json").read_text())
+    assert payload_receipt["dataset"] == "fbarulli/er-laya-payload"
+    assert payload_receipt["files"]["dataset.csv"] == hashlib.sha256(
+        data.read_bytes()).hexdigest()
+    # the attach itself is recorded in the KERNel staging receipt; the
+    # executed publish adds action + version later (see the publish pin)
+    assert receipt["dataset"]["payload"] == str(payload)
+
+
+def test_dataset_publish_dry_run_and_activate_gate(tmp_path, monkeypatch):
+    """publish_laya_dataset: dry run never spawns, and an un-staged
+    payload fails loud at the --activate gate (mirroring kernels push)."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    laya_lane.stage_decision_kernel(decision_kind="attribute")
+
+    def no_subprocess(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("offline: dry-run must not spawn the CLI")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", no_subprocess)
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=False)
+    assert plan["mode"] == "dry-run"
+    with pytest.raises(RuntimeError, match="--activate gate"):
+        laya_lane.publish_laya_dataset("identity", run_tag="laya_t",
+                                       execute=True)
+
+
+def test_dataset_publish_executed_uses_kaggle_lane_helpers(
+        tmp_path, monkeypatch):
+    """Executed attach: version-existing datasets via the IMPORTED
+    kaggle-lane helpers (never copied), zip payload + receipt carries
+    the recorded dataset version (offline-pinned, no network)."""
+    from cli import kaggle_datasets
+    from cli import kaggle_lane as lane
+
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    stage_receipt_path = (tmp_path / "results/laya_lane/kaggle/attribute"
+                          / "attribute.receipt.json")
+    laya_lane.stage_decision_kernel(decision_kind="attribute")
+    commands = []
+    monkeypatch.setattr(
+        kaggle_datasets.KaggleDatasets, "_dataset_current_version",
+        staticmethod(lambda slug: {"dataset_version": 3, "slug": slug}))
+    monkeypatch.setattr(
+        lane, "_require_kaggle_executable", staticmethod(
+            lambda executable: str(tmp_path / "fake-kaggle")))
+    def fake_run_kaggle(command):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr(
+        lane, "_run_kaggle", staticmethod(fake_run_kaggle))
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=True)
+    assert plan["mode"] == "executed"
+    assert plan["action"] == "version"
+    assert plan["dataset_version"] == 3
+    assert commands and commands[0][-5:] == [
+        "zip", "-m", "laya inputs laya_t", "-p",
+        str(tmp_path / "results/laya_lane/kaggle/attribute/dataset_payload")
+    ] and "datasets" in commands[0] and "version" in commands[0]
+    receipt = json.loads(stage_receipt_path.read_text())
+    assert receipt["dataset"]["action"] == "version"
+    assert receipt["dataset"]["version"] == 3
+
+
+def test_module_scope_gate_pins_nameerror_payload():
+    """AST-gate hardening regression pin (BUG 1): a post-substitution
+    payload loading an undefined TOP-LEVEL name (the `_runtime_root =
+    Path(root)` NameError class) never stages again."""
+    laya_lane._module_scope_gate(
+        "import json\nfrom pathlib import Path\n"
+        "QUESTION_SCHEMA_FILE = 'laya.question.json'\n"
+        "INPUT_ROOT = Path('/kaggle/input')\n"
+        "_runtime_files = (QUESTION_SCHEMA_FILE,)\n"
+        "print('ok')\n")
+    with pytest.raises(ValueError, match="undefined top-level names"):
+        laya_lane._module_scope_gate(
+            "import json\nfrom pathlib import Path\n"
+            "print(Path(root))\n")
+
+
+def test_staging_fails_loud_on_undefined_name_before_writes(
+        tmp_path, monkeypatch):
+    """End-to-end pin: a payload whose preflight emits an undefined
+    name fails staging BEFORE the kernel metadata lands (atomic
+    writes stay behind the gate)."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(laya_lane, "LAYA_RUNTIME_PREFLIGHT",
+                        "print(boom_undefined_name)\n")
+    with pytest.raises(ValueError, match="undefined top-level names"):
+        laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert not (stage / "kernel-metadata.json").exists()
 
 
 def test_stage_identity_csv_header_contract_fails_loud(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     # the identity binding wants the frozen P0 columns; a dataset.csv
     # forged onto the F binding raises the header mismatch
     import core.common as core_common
@@ -340,7 +575,289 @@ def test_stage_receipts_layout_is_per_op(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="identity")
     stage = Path(receipt["staged"])
     relative = stage.relative_to(tmp_path).as_posix()
     assert relative == "results/laya_lane/kaggle/identity"
+
+
+def test_decision_input_flag_forwards_override(tmp_path, monkeypatch):
+    """--decision-input drives the stage_decision_input override (kaggle)."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    alternate = tmp_path / "alternate.csv"
+    alternate.write_text(
+        "sku_id,sku_name_eng,attribute\nSKU0,Name 0 500 ml,Vol: 500\n",
+        encoding="utf-8")
+    argv = ["laya", "--kind", "kaggle", "--decision", "attribute",
+            "--decision-input", str(alternate)]
+    monkeypatch.setattr("sys.argv", argv)
+    laya_lane.main()
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert (stage / "alternate.csv").is_file()
+    receipt = json.loads((stage / "attribute.receipt.json").read_text())
+    # the kernel receipt carries the override (the decision-input receipt
+    # of the same name is superseded by the kernel receipt co-located there)
+    import hashlib
+
+    assert receipt["decision_input"].endswith("alternate.csv")
+    assert receipt["decision_sha256"] == hashlib.sha256(
+        alternate.read_bytes()).hexdigest()
+
+
+# ── accuracy/F1 metric contract (owner order 2026-10-07) ──────────────────
+# The owner order: "add accuracy + f1, change the dataset to pairs we
+# already know are the same — give it all the pairs we know are the
+# same". The identity decision CSV (data/laya/metrics_pairs.csv, built by
+# scripts/laya_metrics_pairs.py over the GROUND-TRUTH pairs) must stage
+# with the EXPECTED-metric receipt contract: expected rows + label
+# distribution computed from the csv + the gold columns the harvest
+# computes accuracy/F1 against, WITHOUT re-deriving.
+def test_metric_expectation_contract_rides_identity_receipt(
+        tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch, rows=3)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_decision_kernel(decision_kind="identity")
+    assert receipt["expected_rows"] == 3
+    assert receipt["expected_label_distribution"] == {"0": 2, "1": 1}
+    assert receipt["metric_expectation"]["accuracy_gold"] == "label"
+    assert receipt["metric_expectation"]["f1_gold"] == (
+        "identity_claim-vs-true_label")
+
+
+def test_metric_expectation_computed_from_the_csv_itself(
+        tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch, rows=7)
+    receipt = laya_lane.stage_decision_input(
+        "kaggle", decision_kind="identity")
+    # 7 rows -> labels 0,1,0,1,... = 4 zeros / 3 ones, read from the CSV
+    assert receipt["rows"] == 7
+    assert receipt["expected_rows"] == 7
+    assert receipt["expected_label_distribution"] == {"0": 4, "1": 3}
+    # the expectation is COMPUTED, not asserted: re-derive once to compare
+    import csv
+
+    with open(receipt["source"], newline="") as handle:
+        values = [row["true_label"] for row in csv.DictReader(handle)]
+    assert sorted(values) == ["0"] * 4 + ["1"] * 3
+
+
+def test_metric_expectation_absent_without_true_label_column(
+        tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    # the attribute decision csv carries no ground-truth labels: the
+    # labeled decision contract keys stay ABSENT, never silently claimed
+    assert "expected_label_distribution" not in receipt
+    assert "expected_rows" not in receipt
+    assert "metric_expectation" not in receipt
+
+
+
+
+# ── the ground-truth pairs metrics builder (scripts/laya_metrics_pairs.py) ──
+# Owner order 2026-10-07: the identity dataset becomes the GROUND-TRUTH
+# pairs — every track_setup listing pair (owner approved: 564 confirmed-
+# same + 12 confirmed-different), composed in the final_validation.csv
+# `attribute_pairs` shape, deterministic row order (never a shuffle).
+def _builder():
+    import importlib.util
+
+    path = (Path(__file__).resolve().parents[1]
+            / "scripts/laya_metrics_pairs.py")
+    spec = importlib.util.spec_from_file_location("laya_metrics_pairs", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _pairs_fixture(tmp_path, *, rows=(("S1", "S2", "1", "train"),
+                                      ("S2", "S3", "0", "dev"))):
+    catalog = tmp_path / "catalog.csv"
+    catalog.write_text(
+        "sku_id,gtin,attribute\n"
+        + "".join(
+            f"S{index},4{index:09}"
+            f",Volume: 500; Pack Type: Bottle; Flavour: lemon, lime\n"
+            for index in range(1, 4)),
+        encoding="utf-8")
+    pairs = tmp_path / "pairs.csv"
+    pairs.write_text(
+        "sku_id1,sku_id2,label,split\n"
+        + "".join(f"{a},{b},{label},{split}\n" for a, b, label, split in rows),
+        encoding="utf-8")
+    return pairs, catalog
+
+
+def _fv_fixture(tmp_path, *, rows=(("15", "16", "1"), ("25", "26", "0"))):
+    """rows are (gtin1, gtin2, true_label)."""
+    fv = tmp_path / "final_validation.csv"
+    fv.write_text(
+        "gtin1,gtin2,gtin1_norm,gtin2_norm,true_label,fold,fold_2,"
+        "component_id,component_id_2,straddles_fold,endpoint_in_train,"
+        "v1_volume,v2_volume,v1_pack,v2_pack,v1_package_type,"
+        "v2_package_type,v1_sweetener,v2_sweetener,v1_flavor,v2_flavor,"
+        "v1_carbonation,v2_carbonation\n"
+        + "".join(
+            f"{g1},{g2},{g1.zfill(14)},{g2.zfill(14)},{label},2,2,7,7,False,False,"
+            f"[500.0],[500.0],[],[],['bottle'],['bottle'],[],[],"
+            f"['lemon'],['lemon'],['still'],['still']\n"
+            for g1, g2, label in rows),
+        encoding="utf-8")
+    return fv
+
+
+def test_builder_side_composition_mirrors_final_validation_shape():
+    builder = _builder()
+    side = builder.compose_side(
+        "Volume: 1500; Juice Content: 0-2%; Pack Type: Liquid Carton; "
+        "Sweetener: no sugar; Flavour: apple, pear; Carbonization: still")
+    # the six slice fields in the final_validation list-literal shape:
+    # bare tokens, never quoted, sorted; unmeasured fields are ''.
+    # Pin the side composition against the frozen header convention the
+    # emitted columns carry (v1_* / v2_* over the same field names).
+    assert builder.SLICE_FIELDS == (
+        "volume", "pack", "package_type", "sweetener", "flavor",
+        "carbonation")
+    assert side["volume"] == "[1500.0]"
+    assert side["package_type"] == "[liquid_carton]"
+    assert side["sweetener"] == "[no_sugar]"
+    assert side["flavor"] == "[apple, pear]"
+    assert side["carbonation"] == "[still]"
+    assert side["pack"] == ""  # no pack-count field in the catalog vocabulary
+    empty = builder.compose_side("Juice Content: 0-2%")
+    assert empty == {field: "" for field in builder.SLICE_FIELDS}
+
+
+def test_builder_state_is_one_joined_v1_v2_string():
+    builder = _builder()
+    state = builder.compose_state(
+        builder.compose_side("Volume: 500"),
+        builder.compose_side("Volume: 500; Flavour: lime"))
+    assert state == ("volume: v1=[500.0] v2=[500.0]; pack: v1= v2=; "
+                     "package_type: v1= v2=; sweetener: v1= v2=; "
+                     "flavor: v1= v2=[lime]; carbonation: v1= v2=")
+
+
+def test_builder_emits_all_pairs_in_row_order_with_fv_columns(tmp_path):
+    builder = _builder()
+    pairs, catalog = _pairs_fixture(tmp_path)
+    output = tmp_path / "metrics_pairs.csv"
+    census = builder.build(pairs_path=pairs, catalog_path=catalog,
+                           output=output)
+    import csv
+
+    with output.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    # every pair, none invented, pairs-file row order preserved
+    assert len(rows) == 2
+    assert (rows[0]["gtin1"], rows[0]["gtin2"], rows[0]["true_label"]) == (
+        "4000000001", "4000000002", "1")
+    assert rows[1]["true_label"] == "0"
+    # the SAME columns final_validation.csv carries + the state column
+    assert list(rows[0]) == list(builder.FINAL_VALIDATION_COLUMNS) + [
+        builder.STATE_COLUMN]
+    # normalized gtins left-zero-pad to 14 (the folds.normalize_gtin rule)
+    assert (rows[0]["gtin1_norm"], rows[0]["gtin2_norm"]) == (
+        "00004000000001", "00004000000002")
+    # values that do not exist in the pairs source stay EMPTY, never invented
+    for column in ("fold", "fold_2", "component_id", "component_id_2",
+                   "straddles_fold", "endpoint_in_train"):
+        assert rows[0][column] == ""
+    # census: rows + label distribution + 0 missing lookups
+    assert census["rows"] == 2
+    assert census["label_distribution"] == {"0": 1, "1": 1}
+    assert census["missing_sku_lookups"] == 0
+    import hashlib
+
+    assert census["sha256"] == hashlib.sha256(
+        output.read_bytes()).hexdigest()
+
+
+def test_builder_missing_sku_lookup_fails_loud_before_writing(tmp_path):
+    builder = _builder()
+    pairs, catalog = _pairs_fixture(tmp_path, rows=(("S9", "S2", "0", "dev"),))
+    output = tmp_path / "metrics_pairs.csv"
+    with pytest.raises(RuntimeError, match="resolve to no eligible_catalog"):
+        builder.build(pairs_path=pairs, catalog_path=catalog, output=output)
+    assert not output.exists()
+
+
+def test_builder_fails_loud_on_bad_labels(tmp_path):
+    builder = _builder()
+    pairs, catalog = _pairs_fixture(
+        tmp_path, rows=(("S1", "S2", "1", "train"), ("S2", "S3", "7", "dev")))
+    with pytest.raises(RuntimeError, match="outside \\{0, 1\\}"):
+        builder.build(pairs_path=pairs, catalog_path=catalog,
+                      output=tmp_path / "metrics_pairs.csv")
+
+
+def test_builder_fails_loud_on_listing_pairs_header_drift(tmp_path):
+    builder = _builder()
+    _, catalog = _pairs_fixture(tmp_path)
+    pairs = tmp_path / "drifted.csv"
+    pairs.write_text("wrong,header\nc,1\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="listing_pairs header drifted"):
+        builder.build(pairs_path=pairs, catalog_path=catalog,
+                      output=tmp_path / "metrics_pairs.csv")
+
+
+def test_builder_fails_loud_on_final_validation_header_drift(tmp_path):
+    builder = _builder()
+    pairs, catalog = _pairs_fixture(tmp_path)
+    fv = tmp_path / "final_validation.csv"
+    fv.write_text("gtin1,gtin2,true_label\n1,2,1\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="header drifted"):
+        builder.build(pairs_path=pairs, catalog_path=catalog,
+                      final_validation_path=fv,
+                      output=tmp_path / "metrics_pairs.csv")
+
+
+def test_builder_shape_proof_matches_final_validation_rows(tmp_path):
+    builder = _builder()
+    pairs, catalog = _pairs_fixture(tmp_path)
+    output = tmp_path / "metrics_pairs.csv"
+    builder.build(pairs_path=pairs, catalog_path=catalog, output=output)
+    fv = _fv_fixture(tmp_path)
+    samples = builder.shape_proof(
+        final_validation_path=fv, pairs_path=pairs,
+        catalog_path=catalog, proof_samples=3)
+    assert samples == []
+    # a normalized-gtin match against the real population proves the
+    # shape: same six slice fields, v1 first then v2, list-literal sides
+    fv2 = _fv_fixture(
+        tmp_path,
+        rows=(("4000000001", "4000000002", "1"),))
+    samples = builder.shape_proof(
+        final_validation_path=fv2, pairs_path=pairs,
+        catalog_path=catalog, proof_samples=3)
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["true_label"] == 1
+    assert sample["final_validation_true_label"] == 1
+    assert sample["attribute_pairs"].split(";")[0] == (
+        "volume: v1=[500.0] v2=[500.0]")
+
+
+def test_builder_final_validation_columns_match_the_frozen_file():
+    """The mirrored header stays pinned to the actual data/final_validation
+   .csv file (drift between the two is a fail-loud build error, so the
+    pin guards both directions)."""
+    builder = _builder()
+    fv = builder.FINAL_VALIDATION_PATH
+    if not fv.is_file():
+        pytest.skip(f"{fv} not built")
+    import csv
+
+    with fv.open(newline="") as handle:
+        header = next(csv.reader(handle))
+    assert header == list(builder.FINAL_VALIDATION_COLUMNS)

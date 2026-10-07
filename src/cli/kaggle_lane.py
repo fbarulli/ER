@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 from core.common import TRAIN_ROOT, training_cfg
-from core.manifest import atomic_write_json, sha256_file
+from core.manifest import atomic_write_json, atomic_write_text, sha256_file
 from core.runtime_inputs import checkout_members, checkout_inventory, checkout_preflight_script
 from cli.log_capture import progress_frames_to_lines
 from cli.kaggle_lifecycle import KernelLifecycle
@@ -130,6 +130,7 @@ _dataset_current_version = KaggleDatasets._dataset_current_version
 publish_bundle_dataset = KaggleDatasets.publish_bundle_dataset
 _publish_after_verified_fetch = KaggleDatasets._publish_after_verified_fetch
 _kernel_script_gate = KaggleKernels._kernel_script_gate
+_attachment_gate = KaggleKernels._attachment_gate
 stage_bundle_kernel = KaggleKernels.stage_bundle_kernel
 push_bundle_kernel = KaggleKernels.push_bundle_kernel
 stage_gpu_kernel = KaggleKernels.stage_gpu_kernel

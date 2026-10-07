@@ -27,6 +27,12 @@ def test_resume_rejects_changed_provenance_and_unverified_marker(tmp_path):
     validate_suite(tmp_path, identity)
     with pytest.raises(ValueError, match='provenance mismatch'):
         validate_suite(tmp_path, {'run_tag': 'run', 'inputs': {'sha': 'changed'}})
+    # Owner order 2026-10-07: the implementation inventory stays a recorded
+    # field but is never compared — a code-only difference cannot block resume.
+    recorded = dict(identity, implementation={'src/model_tracks/run.py': 'a' * 64})
+    fresh = dict(identity, implementation={'src/model_tracks/run.py': 'b' * 64})
+    (tmp_path / 'suite_manifest.json').write_text(json.dumps({'resume_identity': recorded}))
+    validate_suite(tmp_path, fresh)
     (tmp_path / 'track_complete.json').write_text(json.dumps(
         {'track': 'text', 'status': 'ok', 'postprocess_complete': True}))
     with pytest.raises(ValueError, match='inventory missing'):

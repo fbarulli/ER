@@ -110,6 +110,49 @@ def remote_revision_preflight(repository: str, branch: str, files, *, revision=N
     return published
 
 
+def published_tip(repository: str, branch: str) -> str:
+    """Resolve <branch> tip ON THE ORIGIN after fetching it (the SSOT pin).
+
+    `repository` comes from the lane config the caller already resolved
+    (the fetch rides git's own `origin` remote, so it is validated once
+    there); a fetch or rev-parse failure raises loud — a stale or
+    unreachable tip may never back a staged payload.
+    """
+    import subprocess
+
+    from core.common import TRAIN_ROOT
+
+    fetch = subprocess.run(
+        ['git', 'fetch', 'origin', branch, '-q'], cwd=TRAIN_ROOT,
+        capture_output=True, text=True)
+    if fetch.returncode != 0:
+        raise RuntimeError(
+            f'git fetch origin {branch} failed in {TRAIN_ROOT}: '
+            f'{fetch.stderr.strip()}')
+    parse = subprocess.run(
+        ['git', 'rev-parse', f'origin/{branch}'], cwd=TRAIN_ROOT,
+        capture_output=True, text=True)
+    if parse.returncode != 0:
+        raise RuntimeError(
+            f'git rev-parse origin/{branch} failed in {TRAIN_ROOT}: '
+            f'{parse.stdout.strip()}{parse.stderr.strip()}')
+    return parse.stdout.strip()
+
+
+def require_published_tip_match(head: str, repository: str, branch: str) -> str:
+    """The owner order 'origin/<branch> == HEAD' baked into every staging
+    surface: a staging surface that sets a REVISION pin calls this BEFORE it
+    writes any payload; a pin that is not the published branch tip is a
+    staged race (the 84ce2d0 receipt vs 02dec14 HEAD class) and must never
+    stage. Returns the published tip so receipts can record it."""
+    tip = published_tip(repository, branch)
+    if head != tip:
+        raise RuntimeError(
+            f'staged revision {head[:12]} != origin/{branch} tip {tip[:12]} '
+            '— pull or push so the pin is the published state, then re-stage')
+    return tip
+
+
 def staged_kernel_preflight(stage_dir: Path) -> None:
     """Check the actual staged script, before any Kaggle CLI call."""
     import ast
