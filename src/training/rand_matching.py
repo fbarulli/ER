@@ -93,10 +93,14 @@ from core.structured_features import (
     vector as structured_vector,
 )
 from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
+from core.run_log import RunLogger
+from core.step_trace import timed
 import pipeline
 from pipeline import load_canonical_map
 from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
 
+
+_LOG = RunLogger(__name__)
 
 ASSIGNMENT_COLUMNS = ("SKU_ID", "ITEM_ID", "score", "gtin_status")
 
@@ -1685,7 +1689,12 @@ class RandMatcher:
         hit_labels, _ = self.ann_index.query(embeddings, top_k=top_k)
 
         rows: list[dict[str, object]] = []
-        for position, (_, row) in enumerate(frame.iterrows()):
+        for position, (_, row) in enumerate(
+            _LOG.progress(
+                frame.iterrows(), desc="score_candidates", unit="sku",
+                total=len(frame),
+            )
+        ):
             sku_gtin = self._gtin(row_metadata_text(row, *alias_names("gtin")))
             candidate_indexes = self._candidate_indexes(
                 hit_labels[position].tolist(), sku_gtin
@@ -3138,36 +3147,39 @@ class _ThresholdCalibrator:
         dict,
         pd.DataFrame,
     ]:
-        """One fixed pass: prepare -> fold loop -> cross-fold assembly."""
-        self.prepare()
-        calibration = self._calibration
-        candidates = self._candidates
-        truth = self._truth
-        folds = sorted(calibration["calibration_fold"].unique())
-        selected = []
-        sensitivity: list[dict] = []
-        audit_traces: list[pd.DataFrame] = []
-        for fold in folds:
-            self.calibrate_fold(
-                fold,
-                selected,
-                sensitivity,
-                audit_traces,
+        """One timed pass: prepare -> fold loop -> cross-fold assembly."""
+        with _LOG.section("rand_matching.calibrate"):
+            self.prepare()
+            calibration = self._calibration
+            candidates = self._candidates
+            truth = self._truth
+            folds = sorted(calibration["calibration_fold"].unique())
+            selected = []
+            sensitivity: list[dict] = []
+            audit_traces: list[pd.DataFrame] = []
+            for fold in _LOG.progress(
+                folds, desc="calibrate_folds", unit="fold", total=len(folds)
+            ):
+                self.calibrate_fold(
+                    fold,
+                    selected,
+                    sensitivity,
+                    audit_traces,
+                )
+            selected_df = pd.DataFrame(selected)
+            sensitivity_df = pd.DataFrame(sensitivity)
+            final_threshold = float(selected_df.selected_threshold.median())
+            plateau = _plateau_diagnostic(
+                sensitivity_df,
+                self._plateau_tolerance,
+                self._plateau_min_points,
+                selected_df=selected_df,
             )
-        selected_df = pd.DataFrame(selected)
-        sensitivity_df = pd.DataFrame(sensitivity)
-        final_threshold = float(selected_df.selected_threshold.median())
-        plateau = _plateau_diagnostic(
-            sensitivity_df,
-            self._plateau_tolerance,
-            self._plateau_min_points,
-            selected_df=selected_df,
-        )
-        alternatives = sensitivity_df[
-            sensitivity_df["gtin_status"].eq("ALL")
-            & sensitivity_df["selection_method"].ne("sensitivity")
-        ].copy()
-        calibration_trace = pd.concat(audit_traces, ignore_index=True)
+            alternatives = sensitivity_df[
+                sensitivity_df["gtin_status"].eq("ALL")
+                & sensitivity_df["selection_method"].ne("sensitivity")
+            ].copy()
+            calibration_trace = pd.concat(audit_traces, ignore_index=True)
         return (
             final_threshold,
             selected_df,
@@ -3612,38 +3624,41 @@ def _evaluate_holdout(
     holdout_labels: pd.DataFrame,
     final_threshold: float,
 ) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """The frozen holdout evaluation (one pass, statements verbatim)."""
-    holdout = _load_holdout_frame(matcher, holdout_labels)
-    candidates = matcher.score_candidates(holdout)
-    truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates("SKU_ID")
-    predictions, trace = _assignments_with_trace(
-        candidates,
-        final_threshold,
-        threshold_by_gtin_status=_final_threshold_by_gtin_status(),
-    )
-    metrics = gtin_metrics(
-        predictions,
-        truth,
-        "holdout",
-        final_threshold,
-        candidates,
-        # Holdout is the frozen final evaluation.  Preserve the complete
-        # metric contract, including component/bridge diagnostics, for every
-        # GTIN stratum and the ALL row; do not rely on gtin_metrics' default.
-        include_graph_diagnostics=True,
-    )
-    diagnostics = _audit_trace(
-        candidates,
-        trace,
-        predictions,
-        truth,
-        partition="holdout",
-        fold="holdout",
-        threshold=final_threshold,
-    )
-    disagreements = pair_disagreements(predictions, truth, trace)
-    ann_misses = _ann_missed_true_matches(trace, truth, predictions)
-    ablation = _retrieval_ablation_metrics(candidates, truth, final_threshold)
+    """The frozen holdout evaluation (one timed pass, statements verbatim)."""
+    with _LOG.section("rand_matching.evaluate_holdout"):
+        holdout = _load_holdout_frame(matcher, holdout_labels)
+        candidates = matcher.score_candidates(holdout)
+        truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates(
+            "SKU_ID"
+        )
+        predictions, trace = _assignments_with_trace(
+            candidates,
+            final_threshold,
+            threshold_by_gtin_status=_final_threshold_by_gtin_status(),
+        )
+        metrics = gtin_metrics(
+            predictions,
+            truth,
+            "holdout",
+            final_threshold,
+            candidates,
+            # Holdout is the frozen final evaluation.  Preserve the complete
+            # metric contract, including component/bridge diagnostics, for every
+            # GTIN stratum and the ALL row; do not rely on gtin_metrics' default.
+            include_graph_diagnostics=True,
+        )
+        diagnostics = _audit_trace(
+            candidates,
+            trace,
+            predictions,
+            truth,
+            partition="holdout",
+            fold="holdout",
+            threshold=final_threshold,
+        )
+        disagreements = pair_disagreements(predictions, truth, trace)
+        ann_misses = _ann_missed_true_matches(trace, truth, predictions)
+        ablation = _retrieval_ablation_metrics(candidates, truth, final_threshold)
     return metrics, diagnostics, disagreements, ann_misses, ablation
 
 
@@ -3775,6 +3790,7 @@ def _write_final_submission(
     return submission
 
 
+@timed
 def write_outputs(
     matcher: RandMatcher,
     calibration_input: Path,
@@ -3787,89 +3803,91 @@ def write_outputs(
     plateau_tolerance: float,
     plateau_min_points: int,
 ) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    calibration_labels = _load_labeled_input(calibration_input, "calibration")
-    holdout_labels = _load_labeled_input(holdout_input, "holdout")
-    _check_calibration_holdout_disjoint(calibration_labels, holdout_labels)
-    result = calibrate_threshold(
-        matcher,
-        calibration_input,
-        thresholds,
-        target_recall=target_recall,
-        plateau_tolerance=plateau_tolerance,
-        plateau_min_points=plateau_min_points,
-    )
-    (
-        final_threshold,
-        selected,
-        sensitivity,
-        alternatives,
-        plateau,
-        calibration_diagnostics,
-    ) = result
-    _write_calibration_outputs(
-        matcher,
-        output_dir,
-        output_names,
-        selected,
-        sensitivity,
-        alternatives,
-        plateau,
-        final_threshold,
-        target_recall,
-        calibration_diagnostics,
-    )
-    (
-        holdout_metrics,
-        holdout_diagnostics,
-        holdout_pair_disagreements,
-        holdout_ann_missed_true_matches,
-        holdout_retrieval_ablation_metrics,
-    ) = _evaluate_holdout(
-        matcher,
-        holdout_labels,
-        final_threshold,
-    )
-    holdout_metrics_frame = pd.DataFrame(holdout_metrics)
-    _write_holdout_outputs(
-        output_dir,
-        output_names,
-        holdout_metrics_frame,
-        holdout_diagnostics,
-        holdout_pair_disagreements,
-        holdout_ann_missed_true_matches,
-        holdout_retrieval_ablation_metrics,
-    )
-    submission = _write_final_submission(
-        matcher,
-        output_dir,
-        output_names,
-        final_threshold,
-    )
-    _write_provenance(
-        output_dir,
-        output_names["provenance"],
-        matcher,
-        submission,
-        calibration_input,
-        holdout_input,
-        calibration_labels,
-        holdout_labels,
-        final_threshold,
-    )
-    print(
-        {
-            "folds": selected.check_fold.tolist(),
-            "selected_thresholds": selected.selected_threshold.tolist(),
-            "final_threshold": final_threshold,
-            "rows": len(submission),
-            "unique_items": submission.ITEM_ID.nunique(),
-            "unmatched": int(
-                submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
-            ),
-            "path": str(output_dir / output_names["submission"]),
-        }
-    )
+    """The full artifact pipeline for one rand matching run (timed pass)."""
+    with _LOG.section("rand_matching.write_outputs"):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        calibration_labels = _load_labeled_input(calibration_input, "calibration")
+        holdout_labels = _load_labeled_input(holdout_input, "holdout")
+        _check_calibration_holdout_disjoint(calibration_labels, holdout_labels)
+        result = calibrate_threshold(
+            matcher,
+            calibration_input,
+            thresholds,
+            target_recall=target_recall,
+            plateau_tolerance=plateau_tolerance,
+            plateau_min_points=plateau_min_points,
+        )
+        (
+            final_threshold,
+            selected,
+            sensitivity,
+            alternatives,
+            plateau,
+            calibration_diagnostics,
+        ) = result
+        _write_calibration_outputs(
+            matcher,
+            output_dir,
+            output_names,
+            selected,
+            sensitivity,
+            alternatives,
+            plateau,
+            final_threshold,
+            target_recall,
+            calibration_diagnostics,
+        )
+        (
+            holdout_metrics,
+            holdout_diagnostics,
+            holdout_pair_disagreements,
+            holdout_ann_missed_true_matches,
+            holdout_retrieval_ablation_metrics,
+        ) = _evaluate_holdout(
+            matcher,
+            holdout_labels,
+            final_threshold,
+        )
+        holdout_metrics_frame = pd.DataFrame(holdout_metrics)
+        _write_holdout_outputs(
+            output_dir,
+            output_names,
+            holdout_metrics_frame,
+            holdout_diagnostics,
+            holdout_pair_disagreements,
+            holdout_ann_missed_true_matches,
+            holdout_retrieval_ablation_metrics,
+        )
+        submission = _write_final_submission(
+            matcher,
+            output_dir,
+            output_names,
+            final_threshold,
+        )
+        _write_provenance(
+            output_dir,
+            output_names["provenance"],
+            matcher,
+            submission,
+            calibration_input,
+            holdout_input,
+            calibration_labels,
+            holdout_labels,
+            final_threshold,
+        )
+        print(
+            {
+                "folds": selected.check_fold.tolist(),
+                "selected_thresholds": selected.selected_threshold.tolist(),
+                "final_threshold": final_threshold,
+                "rows": len(submission),
+                "unique_items": submission.ITEM_ID.nunique(),
+                "unmatched": int(
+                    submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
+                ),
+                "path": str(output_dir / output_names["submission"]),
+            }
+        )
 
 
 def _write_holdout_outputs(
@@ -3959,7 +3977,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@timed
 def main() -> None:
+    RunLogger.configure_console()
     args = parse_args()
     checkpoint = _path_argument(args.checkpoint, "FINETUNED_CHECKPOINT")
     calibration_input = _path_argument(
