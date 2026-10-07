@@ -1,0 +1,29 @@
+{
+  "mode": "10k",
+  "reps": 6,
+  "candidates": 10000,
+  "ids": 179,
+  "pairs": 100,
+  "before_seconds": 0.0493,
+  "after_seconds": 0.0146,
+  "speedup": 3.37,
+  "before_samples": [
+    0.0415,
+    0.0508,
+    0.039,
+    0.0551,
+    0.0479,
+    0.0525
+  ],
+  "after_samples": [
+    0.0153,
+    0.0139,
+    0.0118,
+    0.0128,
+    0.0202,
+    0.02
+  ],
+  "cprofile_self_seconds": {},
+  "ranks_identical": true,
+  "rank_entries": 200
+}
