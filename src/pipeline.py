@@ -2720,42 +2720,144 @@ def token_verdict(tok: str, brand_vocab: set[str]) -> tuple[str, str]:
     return cls, "strip"
 
 
+class NumberTokenAuthority:
+    """The number-token reference: census, verdict map, per-row strip.
+
+    Single responsibility per method: corpus text census (census_corpus),
+    the digit-token reference frame (reference_frame), the cached SSOT read
+    (verdicts), and the model-side strip (strip). The verdict cache and the
+    unseen-token counter stay MODULE-LEVEL on purpose: prepare_all resets
+    them to force a fresh read between stages (pipeline._VERDICTS_CACHE /
+    _VERDICTS_LOADED are the pinned external interface, never copied).
+    """
+
+    def census_corpus(self, df: pd.DataFrame) -> list[str]:
+        """Pre-number-strip sku texts (the census input): the official cleaning
+        WITHOUT the final number-token strip, so every digit token in the corpus
+        appears in the reference."""
+        out = []
+        for t, a in zip(df["sku_name_eng"].fillna(""), df["attribute"].fillna(""), strict=True):
+            text = normalize_text(t) + " " + normalize_text(a or "")
+            text = _VOLUME_PACK_RE.sub(" ", text)
+            toks = [x for x in text.split() if x not in MINIMAL_STOPWORDS and len(x) > 1]
+            out.append(" ".join(toks))
+        return out
+
+    def reference_frame(self, texts: list[str], brand_vocab: set[str]) -> pd.DataFrame:
+        """Census every digit-token in the corpus with its verdict.
+
+        One row per distinct token: token, class, n_occurrences, verdict, rule.
+        """
+        tokens = Counter()
+        for tx in texts:
+            for t in tx.split():
+                if re.search(r"\d", t):
+                    tokens[t] += 1
+        rows = []
+        for tok, n in sorted(tokens.items(), key=lambda x: (-x[1], x[0])):
+            cls, v = token_verdict(tok, brand_vocab)
+            rows.append(
+                {
+                    "token": tok,
+                    "class": cls,
+                    "n_occurrences": n,
+                    "verdict": v,
+                    "rule": v,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def verdicts(self) -> dict[str, str] | None:
+        """token -> verdict map from the reference CSV (None if not built yet).
+
+        Cached at module level: strip_number_tokens calls this once PER TOKEN
+        (up to 41k digit-texts × 2.7ms CSV re-read ≈ 112s of pure re-read per
+        full-corpus pass). One read, memoized for the process lifetime — the
+        CSV is written by src/training/build_reference.py, not mutated mid-run.
+        """
+        global _VERDICTS_CACHE, _VERDICTS_LOADED
+        if _VERDICTS_LOADED:
+            return _VERDICTS_CACHE
+        p = reference_path()
+        if not p.exists():
+            # SSOT missing: SAY IT — the caller falls back to regex rules only
+            # (95.2% coverage comes from the CSV; regex-only is a degradation)
+            print(
+                f"[numbers] reference CSV missing ({p}) — regex-rule fallback only",
+                flush=True,
+            )
+            _VERDICTS_LOADED = True
+            return None
+        df = pd.read_csv(p, dtype={"token": str})
+        # BOUNDARY CONTRACT (lib.schemas): every verdict must be in the
+        # strip/keep_* vocabulary — a typo'd CSV value would silently never
+        # match the startswith("keep") branch in strip_number_tokens.
+        _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"], strict=True)))
+        _VERDICTS_LOADED = True
+        return _VERDICTS_CACHE
+
+    def strip(self, text: str, brand: str = "") -> str:
+        """Remove number tokens from an already-clean sku text.
+
+        `brand` is the ROW's brand string: numeric brand tokens ("28" in
+        "28 Black") survive only when that number appears in this row's own
+        brand; the same number in another row's title (e.g. a 24-pack of a
+        different brand) is stripped. A digit token that IS this row's spelled
+        numeric brand (1724 → seventeen) is replaced by the spelled form.
+        Everything else resolves via the reference CSV (SSOT) with the
+        regex-rule fallback.
+        """
+        global _UNSEEN_TOKEN_TOTAL
+        if not re.search(r"\d", text):
+            return text
+        verdicts = self.verdicts()
+        # brand arrives PRE-SPELLED from clean_sku_text; recover the digit key
+        # (if this row's brand was numeric) so the keep-brand test still matches
+        brand_l = (brand or "").lower()
+        digit_key = next((k for k, w in NUMERIC_BRAND_WORDS.items() if w == brand_l), "")
+        spelled = NUMERIC_BRAND_WORDS.get(digit_key, "")
+        out = []
+        # AUDIT 2026-09-09 (visibility): tokens missing from the reference CSV
+        # fall through to regex rules with an EMPTY brand vocab — correct by
+        # design (the CSV is the SSOT for seen tokens), but the count of
+        # unseen-token resolutions was invisible. Count them per call.
+        n_unseen = 0
+        for t in text.split():
+            if not re.search(r"\d", t):
+                out.append(t)
+                continue
+            v = (verdicts or {}).get(t)
+            if v is None:
+                n_unseen += 1
+                _, v = token_verdict(t, set())
+            if v == "keep_brand":
+                # numeric brand token: keep only if THIS row's brand carries it.
+                # this row's numeric brand (1724/1642) emits its WORD form; other
+                # numeric brands (28 in "28 Black") keep their digit form
+                core = re.sub(r"[^a-z0-9]", "", t.lower())
+                if spelled and core == digit_key:
+                    out.extend(spelled.split())
+                elif core and core in brand_l:
+                    out.append(t)
+            elif v.startswith("keep"):
+                out.append(t)
+        if n_unseen:
+            _UNSEEN_TOKEN_TOTAL += n_unseen
+        return " ".join(out)
+
+
+_NUMBERS = NumberTokenAuthority()
+
+
 def census_texts(df: pd.DataFrame) -> list[str]:
-    """Pre-number-strip sku texts (the census input): the official cleaning
-    WITHOUT the final number-token strip, so every digit token in the corpus
-    appears in the reference."""
-    out = []
-    for t, a in zip(df["sku_name_eng"].fillna(""), df["attribute"].fillna(""), strict=True):
-        text = normalize_text(t) + " " + normalize_text(a or "")
-        text = _VOLUME_PACK_RE.sub(" ", text)
-        toks = [x for x in text.split() if x not in MINIMAL_STOPWORDS and len(x) > 1]
-        out.append(" ".join(toks))
-    return out
+    """Pre-number-strip sku texts (the census input) — see _NUMBERS.census_corpus."""
+    return _NUMBERS.census_corpus(df)
 
 
 def build_reference(texts: list[str], brand_vocab: set[str]) -> pd.DataFrame:
-    """Census every digit-token in the corpus with its verdict.
-
-    One row per distinct token: token, class, n_occurrences, verdict, rule.
-    """
-    tokens = Counter()
-    for tx in texts:
-        for t in tx.split():
-            if re.search(r"\d", t):
-                tokens[t] += 1
-    rows = []
-    for tok, n in sorted(tokens.items(), key=lambda x: (-x[1], x[0])):
-        cls, v = token_verdict(tok, brand_vocab)
-        rows.append(
-            {
-                "token": tok,
-                "class": cls,
-                "n_occurrences": n,
-                "verdict": v,
-                "rule": v,
-            }
-        )
-    return pd.DataFrame(rows)
+    """Census every digit-token in the corpus with its verdict —
+    see _NUMBERS.reference_frame."""
+    return _NUMBERS.reference_frame(texts, brand_vocab)
 
 
 def reference_path() -> Path:
@@ -2772,33 +2874,12 @@ _UNSEEN_TOKEN_TOTAL = 0
 
 
 def load_verdicts() -> dict[str, str] | None:
-    """token -> verdict map from the reference CSV (None if not built yet).
+    """token -> verdict map from the reference CSV — see _NUMBERS.verdicts.
 
-    Cached at module level: strip_number_tokens calls this once PER TOKEN
-    (up to 41k digit-texts × 2.7ms CSV re-read ≈ 112s of pure re-read per
-    full-corpus pass). One read, memoized for the process lifetime — the
-    CSV is written by src/training/build_reference.py, not mutated mid-run.
+    The module-level cache attributes are the pinned external interface
+    (prepare_all resets them to force a per-stage fresh read).
     """
-    global _VERDICTS_CACHE, _VERDICTS_LOADED
-    if _VERDICTS_LOADED:
-        return _VERDICTS_CACHE
-    p = reference_path()
-    if not p.exists():
-        # SSOT missing: SAY IT — the caller falls back to regex rules only
-        # (95.2% coverage comes from the CSV; regex-only is a degradation)
-        print(
-            f"[numbers] reference CSV missing ({p}) — regex-rule fallback only",
-            flush=True,
-        )
-        _VERDICTS_LOADED = True
-        return None
-    df = pd.read_csv(p, dtype={"token": str})
-    # BOUNDARY CONTRACT (lib.schemas): every verdict must be in the
-    # strip/keep_* vocabulary — a typo'd CSV value would silently never
-    # match the startswith("keep") branch in strip_number_tokens.
-    _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"], strict=True)))
-    _VERDICTS_LOADED = True
-    return _VERDICTS_CACHE
+    return _NUMBERS.verdicts()
 
 
 # Pure-numeric BRAND values are year-styled names ("1642", "1724") — the
@@ -2819,53 +2900,8 @@ def spell_numeric_brand(value: str) -> str:
 
 
 def strip_number_tokens(text: str, brand: str = "") -> str:
-    """Remove number tokens from an already-clean sku text.
-
-    `brand` is the ROW's brand string: numeric brand tokens ("28" in
-    "28 Black") survive only when that number appears in this row's own
-    brand; the same number in another row's title (e.g. a 24-pack of a
-    different brand) is stripped. A digit token that IS this row's spelled
-    numeric brand (1724 → seventeen) is replaced by the spelled form.
-    Everything else resolves via the reference CSV (SSOT) with the
-    regex-rule fallback.
-    """
-    if not re.search(r"\d", text):
-        return text
-    verdicts = load_verdicts()
-    # brand arrives PRE-SPELLED from clean_sku_text; recover the digit key
-    # (if this row's brand was numeric) so the keep-brand test still matches
-    brand_l = (brand or "").lower()
-    digit_key = next((k for k, w in NUMERIC_BRAND_WORDS.items() if w == brand_l), "")
-    spelled = NUMERIC_BRAND_WORDS.get(digit_key, "")
-    out = []
-    # AUDIT 2026-09-09 (visibility): tokens missing from the reference CSV
-    # fall through to regex rules with an EMPTY brand vocab — correct by
-    # design (the CSV is the SSOT for seen tokens), but the count of
-    # unseen-token resolutions was invisible. Count them per call.
-    n_unseen = 0
-    for t in text.split():
-        if not re.search(r"\d", t):
-            out.append(t)
-            continue
-        v = (verdicts or {}).get(t)
-        if v is None:
-            n_unseen += 1
-            _, v = token_verdict(t, set())
-        if v == "keep_brand":
-            # numeric brand token: keep only if THIS row's brand carries it.
-            # this row's numeric brand (1724/1642) emits its WORD form; other
-            # numeric brands (28 in "28 Black") keep their digit form
-            core = re.sub(r"[^a-z0-9]", "", t.lower())
-            if spelled and core == digit_key:
-                out.extend(spelled.split())
-            elif core and core in brand_l:
-                out.append(t)
-        elif v.startswith("keep"):
-            out.append(t)
-    if n_unseen:
-        global _UNSEEN_TOKEN_TOTAL
-        _UNSEEN_TOKEN_TOTAL += n_unseen
-    return " ".join(out)
+    """Remove number tokens from an already-clean sku text — see _NUMBERS.strip."""
+    return _NUMBERS.strip(text, brand)
 
 
 # ============================================================================
