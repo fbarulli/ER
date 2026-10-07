@@ -107,12 +107,30 @@ def normalized_attribute_text(*values: object) -> str:
     arguments; the cached body only ever sees the exact strings the
     uncached body would have seen, so no object is stringified once and
     reused for a mutated receiver.
+
+    PERF r22: the stringifying tuple build is itself per-call recomputation
+    that a cache HIT does not need — it was rebuilt on every one of the 90 % of
+    calls that pass a single string, only to be thrown away. That case now goes
+    straight to a cache keyed on the string. `type(only) is str` (exact type,
+    not isinstance) keeps str SUBCLASSES on the generic path, where they still
+    round-trip through `str(value or "")` exactly as before; for an exact str,
+    `str(value or "")` is the value itself, so the two paths agree by
+    construction.
     """
+    if len(values) == 1:
+        only = values[0]
+        if type(only) is str:
+            return _normalized_attribute_text_one(only)
     return _normalized_attribute_text_cached(
         tuple(str(value or "") for value in values))
 
 
 @lru_cache(maxsize=65536)
+def _normalized_attribute_text_one(text: str) -> str:
+    return _normalized_attribute_text_cached((text,))
+
+
+@lru_cache(maxsize=16384)
 def _normalized_attribute_text_cached(texts: tuple) -> str:
     # The second (whitespace-collapsing) substitution the uncached body used
     # to run here is a provable no-op and is gone: `[^a-z0-9]+` replaces every
