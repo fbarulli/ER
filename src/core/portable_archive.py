@@ -96,6 +96,49 @@ _COMPRESSED_SUFFIXES = frozenset({'.gz', '.bz2', '.xz', '.zst', '.zip', '.npz',
                                   '.png', '.jpg', '.jpeg', '.webp', '.parquet'})
 
 
+#: Repository neighborhoods owned by the pinned checkout. A prepared bundle is
+#: built at bundle time and its embedded snapshot can predate the checkout's
+#: revision; installing those members over the checkout clobbers code/config and
+#: crashes on a layout key added after the bundle was built
+#: (KeyError: 'source_code_dir'). Only bundle DATA may be installed.
+CHECKOUT_AUTHORITATIVE_PREFIXES = ('src/', 'config/', 'scripts/')
+
+
+def is_checkout_authoritative(name: str) -> bool:
+    """True when installing ``name`` would overwrite checkout-owned code/config.
+
+    Matches both the directory member itself (``config``) and every descendant
+    (``config/paths.yaml``) so a bundle can never shadow a neighborhood.
+    """
+    member = name.rstrip('/')
+    return any(member == prefix.rstrip('/') or name.startswith(prefix)
+               for prefix in CHECKOUT_AUTHORITATIVE_PREFIXES)
+
+
+def install_data_members(archive, root) -> list[str]:
+    """Install only an archive's DATA members under ``root``.
+
+    Members inside :data:`CHECKOUT_AUTHORITATIVE_PREFIXES` are skipped so the
+    pinned checkout stays authoritative for code, config and scripts; every
+    other member (data, artifacts, inline configs under the declared layouts)
+    is extracted, with directory members created explicitly. Returns the
+    installed file member names so a caller can log or pin what the bundle
+    contributed. Dependency-free: works for the ZIP and tar readers alike.
+    """
+    root = Path(root)
+    installed: list[str] = []
+    for info in archive.infolist():
+        name = info.filename
+        if is_checkout_authoritative(name):
+            continue
+        if info.is_dir():
+            (root / name).mkdir(parents=True, exist_ok=True)
+            continue
+        archive.extract(name, root)
+        installed.append(name)
+    return installed
+
+
 def _write_zip(candidate, files, inline, manifest_name, manifest):
     """Stream standard ZIP64 with fast deflate; copy compressed payloads as-is."""
     with zipfile.ZipFile(candidate, 'x', compression=zipfile.ZIP_DEFLATED,

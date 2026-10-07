@@ -145,12 +145,18 @@ if file_hash(archive_path) != {file_hash(archive)!r}:
 subprocess.run(["git","fetch","--depth=1","--filter=blob:none","--no-tags",
                 {backend.GIT_REMOTE_NAME!r},{metadata['revision']!r}],cwd=root,check=True)
 subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
-from core.portable_archive import verified_archive, verify_archive
+from core.portable_archive import verified_archive, verify_archive, install_data_members
 with verified_archive(archive_path,"model_tracks_package.json") as (archive, _):
     for member in archive.infolist():
         if not (root/member.filename).resolve().is_relative_to(root.resolve()):
             raise ValueError("unsafe input package member")
-    archive.extractall(root)
+    # The pinned checkout (git checkout --detach <package revision>) is
+    # authoritative for src/config/scripts: the package's embedded snapshot is
+    # built from the packaging working tree, which can drift from this revision
+    # (the transport clone itself is newer), so installing it would clobber the
+    # checkout exactly like the Kaggle train-kernel bundle did. Only data
+    # installs.
+    install_data_members(archive, root)
 output_path=pathlib.Path({remote_output!r})
 if {resume_archive is not None!r} and not output_path.exists():
     from model_tracks.package import restore_recovery
