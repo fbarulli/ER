@@ -49,7 +49,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from core.common import TRAIN_ROOT, training_cfg
+from core.common import TRAIN_ROOT
 from cli import log_capture
 from core.schemas import ColabBundlePlan
 from cli.colab_lane_contracts import (  # noqa: F401
@@ -69,11 +69,12 @@ from cli.colab_lane_contracts import (  # noqa: F401
     ColabLaneBase,
     _stamp,
 )
+from cli.colab_lane_cpu_provision import ColabCPULaneProvision
 
 
 
 
-class ColabCPULane(ColabLaneBase):
+class ColabCPULane(ColabCPULaneProvision, ColabLaneBase):
     """CPU lanes: committed-export delivery + data-bundle prep parity."""
 
     kind = "cpu"
@@ -99,64 +100,6 @@ class ColabCPULane(ColabLaneBase):
             resume_from=resume_from,
             resume_run_id=resume_run_id,
         )
-
-    def provision(self, dataset_csv: Path | None = None) -> None:
-        """cli.colab main()'s provisioning order for a full-runtime CPU lane."""
-        surface = self.surface
-        from core.common import resolve_model
-
-        surface.check_colab_cli()
-        surface.ensure_session()
-        root = TRAIN_ROOT.resolve()
-        chosen = dataset_csv if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
-        export = chosen.name
-        if export not in training_cfg().kaggle.export_csvs:
-            raise ValueError(
-                "bundle exports must be committed config kaggle.export_csvs "
-                f"entries (no upload exists on this lane); got {export!r}")
-        checkout_paths = (
-            Path(resolve_model(training_cfg().training.base_model)),
-            TRAIN_ROOT / "data/prepared/smoke_200",
-            TRAIN_ROOT / export,
-        )
-        surface.prepare_remote_layout(minimal_runtime=True, sparse_paths=tuple(
-            path.resolve().relative_to(root).as_posix() for path in checkout_paths))
-        surface.install_deps(minimal_runtime=True)
-
-    def launch_prepare_script(self) -> str:
-        remote_root = self.remote_root
-        return self.bundle_head() + f"""
-import json, pathlib, shlex, shutil
-
-# Cohort remap copies the committed export the sparse checkout carries onto
-# dataset.csv — the kaggle lane's proven contract (cli.kaggle_lane). The
-# clone is the only source of bytes this lane consumes.
-chosen = pathlib.Path(root) / "@COHORT_EXPORT@"
-if not chosen.is_file():
-    raise SystemExit("committed cohort export absent from the checkout: @COHORT_EXPORT@")
-if chosen.name != "dataset.csv":
-    shutil.copy2(chosen, pathlib.Path(root) / "dataset.csv")
-    print("[bundle-cpu] cohort remap: @COHORT_EXPORT@ -> dataset.csv", flush=True)
-
-base = pathlib.Path(root)
-log_path, status_path = base / "{PREPARE_LOG_NAME}", base / "{PREPARE_STATUS_NAME}"
-command_args = [sys.executable, "-u", "-m", "training.prepare_all"LAUNCH_ARGS_LIST]
-command = " ".join(shlex.quote(part) for part in command_args)
-wrapped = (
-    "echo '[prepare-process] starting pid=$$'; "
-    "echo '[prepare-process] resource snapshot before prepare'; free -h || true; "
-    "timeout --signal=TERM --kill-after=60 {PREPARE_BUDGET_SECONDS} " + command + "; rc=$?; "
-    "echo '[prepare-process] exited rc='$rc; "
-    "echo '[prepare-process] resource snapshot after prepare'; free -h || true; "
-    "printf '%s\\\\n' \\"$rc\\" > " + shlex.quote(str(status_path)) + "; exit $rc"
-)
-env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(pathlib.Path(root) / "src")}}
-with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
-    child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
-        stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
-        start_new_session=True)
-print("[prepare] pid=%d" % child.pid, flush=True)
-"""
 
     def poll_prepare_log(self, deadline_seconds: int) -> None:
         """Stream the VM-side prepare log into both local transcripts."""
