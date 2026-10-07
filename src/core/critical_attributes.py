@@ -195,8 +195,7 @@ def flavor_tokens_from_text(text: str) -> frozenset[str]:
     )
 
 
-def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
-    """Accept reviewed flavor values only when the catalog declares the field."""
+def _extract_declared_flavor_tokens_impl(*values: object) -> frozenset[str]:
     found: set[str] = set()
     for value in values:
         for field in DECLARED_FLAVOR_FIELD_RE.finditer(str(value or "")):
@@ -205,6 +204,26 @@ def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
                 if candidate in DECLARED_FLAVOR_LEXICON:
                     found.add(candidate)
     return frozenset(found)
+
+
+@lru_cache(maxsize=131072)
+def _extract_declared_flavor_tokens_cached(values: tuple[object, ...]) -> frozenset[str]:
+    return _extract_declared_flavor_tokens_impl(*values)
+
+
+def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
+    """Accept reviewed flavor values only when the catalog declares the field.
+
+    Memoized: the corpus repeats the same attribute cell across endpoints,
+    variants and identity parsing, and the function is pure (it returns an
+    immutable frozenset, so a cached result is safe to share).  Non-hashable
+    arguments fall back to the uncached path unchanged.
+    """
+    try:
+        key = tuple(values)
+        return _extract_declared_flavor_tokens_cached(key)
+    except TypeError:
+        return _extract_declared_flavor_tokens_impl(*values)
 
 
 # Explicit negative-sugar surfaces only.  A typo is accepted only in the
@@ -275,6 +294,28 @@ _ORGANIC_RE = re.compile(r"\b(?:organic|luomu)\b")
 
 
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
+    """Extract explicit non-numeric critical claims from source text.
+
+    Memoized over ``values``: every check runs at most once per distinct input
+    tuple, and the result is returned as a FRESH dict each call (the pipeline
+    mutates the dict it receives, so the cached dict itself must never leak).
+    The values are frozensets, so sharing them is safe.  Non-hashable
+    arguments fall back to the uncached path with identical semantics.
+    """
+    try:
+        key = tuple(values)
+        cached = _extract_critical_claims_cached(key)
+    except TypeError:
+        return _extract_critical_claims_impl(*values)
+    return dict(cached)
+
+
+@lru_cache(maxsize=131072)
+def _extract_critical_claims_cached(values: tuple[object, ...]) -> dict[str, frozenset[str]]:
+    return _extract_critical_claims_impl(*values)
+
+
+def _extract_critical_claims_impl(*values: object) -> dict[str, frozenset[str]]:
     """Extract explicit non-numeric critical claims from source text.
 
     ``no added sugar`` is retained separately: it does not prove that a
