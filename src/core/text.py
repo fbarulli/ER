@@ -23,6 +23,16 @@ from functools import lru_cache
 import pandas as pd  # pd.Series annotation in attributes_keys (F17)
 
 
+# Hoisted patterns for the per-call cleaners. ``re.sub``/``re.fullmatch`` with a
+# string pattern re-enter ``re._compile`` (dict lookup) on every call; these are
+# called hundreds of thousands of times per prepare, so binding the compiled
+# Pattern once removes that lookup without changing a single byte of output.
+_UNIT_PUNCT_RE = re.compile(r"[.\-\s]")
+_WS_COLLAPSE_RE = re.compile(r"\s+")
+_NORMALIZE_KEEP_RE = re.compile(r"[^a-z0-9.\s]")
+_ZERO_HEAD_FUSED_RE = re.compile(r"0\d")
+
+
 def unicode_casefold(value: object) -> str:
     """Shared case/accent folding; punctuation and negation remain intact."""
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
@@ -47,8 +57,8 @@ def normalize_text(text: str) -> str:
         text = str(text)
     text = text.lower().strip()
     text = text.replace("\u00d7", "x")
-    text = re.sub(r"[^a-z0-9.\s]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = _NORMALIZE_KEEP_RE.sub(" ", text)
+    return _WS_COLLAPSE_RE.sub(" ", text).strip()
 
 
 def normalized_attribute_text(*values: object) -> str:
@@ -219,8 +229,8 @@ def normalize_retailer(name: str) -> str:
 
 def norm_unit(token: str) -> str:
     """Normalize a unit token to a config-units key (tolerates spacing/punct)."""
-    t = re.sub(r"[.\-\s]", " ", token.lower()).strip()
-    t = re.sub(r"\s+", " ", t)
+    t = _UNIT_PUNCT_RE.sub(" ", token.lower()).strip()
+    t = _WS_COLLAPSE_RE.sub(" ", t)
     if t == "floz":
         return "fl oz"
     return t
@@ -347,7 +357,7 @@ def _extract_volume_match_legacy(text: str) -> tuple:
     #                           so "0123" can never decode as 123.4),
     #   spaced  "0 8l" -> 0.8 l  via the single-digit branch below eating
     #                           the zero with its optional separator.
-    if re.fullmatch(r"0\d", raw_value):
+    if _ZERO_HEAD_FUSED_RE.fullmatch(raw_value):
         raw_value = "0." + raw_value[1:]
     value = float(raw_value.replace(",", ".").replace(" ", ""))
     return value, unit, unit in ambiguous_units, match.group(0)
