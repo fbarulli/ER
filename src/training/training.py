@@ -85,13 +85,8 @@ _CFG_DEEPCOPY_TOTALS: dict[str, float] = {}
 
 @timed
 def _timed_load_config(key: str) -> dict:
-    """Behavior-identical load_config with a measured deepcopy component."""
-    started = time.perf_counter()
-    value = load_config()
-    _CFG_DEEPCOPY_TOTALS[key] = _CFG_DEEPCOPY_TOTALS.get(key, 0.0) + (
-        time.perf_counter() - started
-    )
-    return value
+    """Thin delegate: the measured load_config lives in _LaneContext."""
+    return _LaneContext._load_config_measured(key)
 
 _SSOT_HP = bool(_runtime("hard_positives"))  # no-fallback SSOT
 from core.hard_negatives import mine_hard_negatives, pairs_in_set
@@ -257,11 +252,37 @@ AUG_SOURCE_SUFFIX = "+aug"
 
 
 def _base_population_tag(source: str) -> str:
-    """Strip the static-copy '+aug' suffix minted by train.py's augmentation."""
-    source = str(source)
-    if source.endswith(AUG_SOURCE_SUFFIX):
-        return source[: -len(AUG_SOURCE_SUFFIX)]
-    return source
+    """Thin delegate: ownership lives in _LaneContext."""
+    return _LaneContext._base_population_tag(source)
+
+
+class _LaneContext:
+    """Small SR owner of the lane's context knobs: the '+aug' tag owner
+    (`_base_population_tag`), the deepcopy-measured config loader
+    (`_load_config_measured`, behind the pinned `_timed_load_config`), and
+    the registry-violation signal the coverage audit raises."""
+
+    # Re-exported for the coverage-audit message consumers; the class stays
+    # module-level below (tests import it from training.training).
+    Unregistered = None  # bound after UnregisteredDatapointPopulationError is defined
+
+    @staticmethod
+    def _base_population_tag(source: str) -> str:
+        """Strip the static-copy '+aug' suffix minted by train.py's augmentation."""
+        source = str(source)
+        if source.endswith(AUG_SOURCE_SUFFIX):
+            return source[: -len(AUG_SOURCE_SUFFIX)]
+        return source
+
+    @staticmethod
+    def _load_config_measured(key: str) -> dict:
+        """Behavior-identical load_config with a measured deepcopy component."""
+        started = time.perf_counter()
+        value = load_config()
+        _CFG_DEEPCOPY_TOTALS[key] = _CFG_DEEPCOPY_TOTALS.get(key, 0.0) + (
+            time.perf_counter() - started
+        )
+        return value
 
 
 class UnregisteredDatapointPopulationError(RuntimeError):
@@ -273,6 +294,9 @@ class UnregisteredDatapointPopulationError(RuntimeError):
     (audit A4-2): a tag outside the registry used to be dropped from the
     coverage rows with no warning at all.
     """
+
+# bind the violation signal after its definition (class-body ordering).
+_LaneContext.Unregistered = UnregisteredDatapointPopulationError
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -326,14 +350,197 @@ class FoldExecutionError(RuntimeError):
 @timed
 def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
     """Make incomplete calibration evidence fatal before selection aggregation."""
-    incomplete_rows = [
-        row
-        for row in rows
-        if row.get("status") != "ok"
-        or not np.isfinite(row.get("calibration_rand_index", float("nan")))
-    ]
-    if not rows or incomplete_rows:
-        raise FoldExecutionError(lane, incomplete_rows or [{"status": "missing"}])
+    _CalibrationEvaluator._fold_evidence_complete(rows, lane=lane)
+
+
+class _CalibrationEvaluator:
+    """Small SR owner of calibration evaluation discipline.
+
+    Holds the selection-requirement gate (`_fold_evidence_complete`) and one
+    fold's holdout/CV calibration scoring (`_evaluate_fold_calibration`) —
+    the loud RequiredCalibrationError / CalibrationEvaluatorError handling —
+    plus the one _precision_at_recall consumption contract. The module-level
+    `require_no_failed_folds` stays the pinned API for the sweep lanes.
+    """
+
+    @staticmethod
+    def _fold_evidence_complete(rows: list[dict], *, lane: str) -> None:
+        """Make incomplete calibration evidence fatal before selection aggregation."""
+        incomplete_rows = [
+            row
+            for row in rows
+            if row.get("status") != "ok"
+            or not np.isfinite(row.get("calibration_rand_index", float("nan")))
+        ]
+        if not rows or incomplete_rows:
+            raise FoldExecutionError(lane, incomplete_rows or [{"status": "missing"}])
+
+    @staticmethod
+    def _evaluate_fold_calibration(
+        calibration_config,
+        *,
+        fold_i: int,
+        sample: bool,
+        model,
+        df,
+        payload,
+        structured_features,
+        calibration_pos: np.ndarray,
+        calibration_neg: np.ndarray,
+        row_bc: np.ndarray,
+        structured_feature_weight: float,
+    ) -> dict[str, object]:
+        """Score one fold's Rand calibration; unavailable stays loud.
+
+        Every lane uses the same component-safe calibration/Rand
+        computation. The holdout population remains isolated for
+        final reporting and is never used by HPO selection.
+        """
+        from training.hpo_metrics import (
+            CALIBRATION_REASON_EMPTY_SPLIT,
+            evaluate_calibration_trial,
+            unavailable_calibration_metrics,
+        )
+
+        if len(calibration_pos) == 0 or len(calibration_neg) == 0:
+            calibration_metrics = _CalibrationEvaluator._empty_split_result(
+                fold_i,
+                sample,
+                calibration_pos,
+                calibration_neg,
+                reason_code=CALIBRATION_REASON_EMPTY_SPLIT,
+                unavailable=unavailable_calibration_metrics,
+            )
+        else:
+            calibration_metrics = _CalibrationEvaluator._evaluate_available(
+                calibration_config,
+                fold_i=fold_i,
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                calibration_pos=calibration_pos,
+                calibration_neg=calibration_neg,
+                row_bc=row_bc,
+                structured_feature_weight=structured_feature_weight,
+            )
+        return calibration_metrics
+
+    @staticmethod
+    def _evaluate_available(
+        calibration_config,
+        *,
+        fold_i: int,
+        model,
+        df,
+        payload,
+        structured_features,
+        calibration_pos: np.ndarray,
+        calibration_neg: np.ndarray,
+        row_bc: np.ndarray,
+        structured_feature_weight: float,
+    ) -> dict[str, object]:
+        """The available-population branch: score + wrapped evaluator failure.
+
+        Invariant: the try/except must stay glued to `from exc` — an evaluator
+        exception keeps its traceback instead of becoming a prunable result.
+        """
+        from training.hpo_metrics import evaluate_calibration_trial
+
+        try:
+            return evaluate_calibration_trial(
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                pos_pairs=calibration_pos,
+                neg_pairs=calibration_neg,
+                row_bc=row_bc,
+                structured_weight=structured_feature_weight,
+                batch_size=runtime("batch_size_eval"),
+                config=calibration_config,
+                include_collapse_guardrail=bool(
+                    calibration_config["collapse_guardrail"]["enabled"]
+                ),
+            )
+        except Exception as exc:
+            raise CalibrationEvaluatorError(
+                f"calibration evaluator failed on fold {fold_i}"
+            ) from exc
+
+    @staticmethod
+    def _empty_split_result(
+        fold_i: int,
+        sample: bool,
+        calibration_pos: np.ndarray,
+        calibration_neg: np.ndarray,
+        *,
+        reason_code: str,
+        unavailable,
+    ):
+        """The empty-split branch: unavailable record + loud failure gate."""
+        calibration_metrics = unavailable(
+            reason_code=reason_code,
+            reason=(
+                "empty calibration split — Rand threshold calibration "
+                f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
+            ),
+            positive_pairs=len(calibration_pos),
+            negative_pairs=len(calibration_neg),
+        )
+        print(
+            f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
+            f"unavailable; {calibration_metrics['calibration_reason']}",
+            flush=True,
+        )
+        # Chain-check samples intentionally do not reserve a Rand
+        # calibration population: their job is to prove training,
+        # checkpointing, and inference wiring on a bounded input.
+        # Full runs must still fail loudly rather than publish an
+        # uncalibrated threshold.
+        if not sample:
+            raise RequiredCalibrationError(
+                calibration_metrics["calibration_reason"]
+            )
+        return calibration_metrics
+
+    @staticmethod
+    def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
+        """07-series precision/recall/threshold at a target recall.
+
+        Threshold = the LOWEST score still achieving recall_target (any
+        higher cut drops below it); precision at that cut with the FP count
+        implied. Deterministic: sorted order, ties resolved by score value.
+        """
+        order = np.argsort(-scores, kind="stable")
+        y_sorted = y[order]
+        s_sorted = scores[order]
+        n_pos = int((y == 1).sum())
+        if n_pos == 0 or len(scores) == 0:
+            return float("nan"), float("nan"), float("nan")
+        tp_cum = np.cumsum(y_sorted == 1)
+        # first rank where recall >= target
+        k = int(np.searchsorted(tp_cum, int(np.ceil(recall_target * n_pos))))
+        k = min(k, len(s_sorted) - 1)
+        thr = float(s_sorted[k])
+        tp = int(tp_cum[k])
+        fp = int((k + 1) - tp)
+        prec = tp / (tp + fp) if (tp + fp) else float("nan")
+        rec = tp / n_pos
+        return float(prec), float(rec), thr
+
+    @staticmethod
+    def _precision_at_recall_audit(
+        y: np.ndarray, scores: np.ndarray, recall_target: float
+    ):
+        """One consumer contract: the 07-schema audit triple beside the
+        (precision, recall, threshold) tuple — TP/FP at the same cut."""
+        _prec90, _rec90, _thr90 = _CalibrationEvaluator._precision_at_recall(
+            y, scores, recall_target
+        )
+        _tp90 = int(((scores >= _thr90) & (y == 1)).sum())
+        _fp90 = int(((scores >= _thr90) & (y == 0)).sum())
+        return _prec90, _rec90, _tp90, _fp90, _thr90
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -354,116 +561,20 @@ from core.ranking_metrics import (
 
 @timed
 def _align_model_token_ids(model: SentenceTransformer) -> None:
-    """Make tokenizer special-token IDs the single source of truth.
-
-    Transformers can load a tokenizer whose PAD/BOS/EOS IDs differ from the
-    IDs serialized in the base model config.  It repairs that mismatch in
-    memory, but relying on that implicit repair leaves checkpoint contents
-    dependent on the loader version.  Align both configs explicitly before
-    the trainer starts; the model config is then serialized with each saved
-    checkpoint.  Sentence-transformers models are encoder-only, so the
-    generation config is normally unused, but align it when Transformers
-    exposes one as well.
-    """
-    tokenizer = model.tokenizer
-    auto_model = model[0].auto_model
-
-    token_ids = {
-        "pad_token_id": tokenizer.pad_token_id,
-        "bos_token_id": tokenizer.bos_token_id,
-        "eos_token_id": tokenizer.eos_token_id,
-    }
-    changed: dict[str, tuple[object, int]] = {}
-    for name, token_id in token_ids.items():
-        if token_id is None:
-            continue
-        old_value = getattr(auto_model.config, name, None)
-        if old_value != token_id:
-            changed[name] = (old_value, token_id)
-        setattr(auto_model.config, name, token_id)
-
-        generation_config = getattr(auto_model, "generation_config", None)
-        if generation_config is not None:
-            setattr(generation_config, name, token_id)
-
-    if changed:
-        details = ", ".join(
-            f"{name}={old!r}->{new!r}" for name, (old, new) in changed.items()
-        )
-        print(f"    [tokens] aligned tokenizer IDs in model config: {details}", flush=True)
-
-    unresolved = {
-        name: (getattr(auto_model.config, name, None), token_id)
-        for name, token_id in token_ids.items()
-        if token_id is not None and getattr(auto_model.config, name, None) != token_id
-    }
-    if unresolved:
-        raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
+    """Thin delegate: token-ID alignment lives in _CheckpointPublisher."""
+    _CheckpointPublisher._align_model_token_ids(model)
 
 
 @timed
 def _configure_projection_dropout(model, probability: float) -> bool:
-    """Append serializable dropout after pooling, idempotently.
-
-    Existing regularized checkpoints already contain the SentenceTransformers
-    dropout module. In that case update its probability instead of appending a
-    second layer. Returns whether a new module was added.
-    """
-    probability = float(probability)
-    if not 0.0 <= probability < 1.0:
-        raise ValueError("projection dropout must be in [0, 1)")
-
-    from sentence_transformers.sentence_transformer.modules import Dropout
-
-    existing = [module for module in model.children() if isinstance(module, Dropout)]
-    if len(existing) > 1:
-        raise RuntimeError("model contains multiple SentenceTransformer dropout modules")
-    if existing:
-        existing[0].dropout = probability
-        existing[0].dropout_layer.p = probability
-        return False
-    if probability == 0.0:
-        return False
-    model.add_module("projection_dropout", Dropout(dropout=probability))
-    return True
+    """Thin delegate: projection-dropout wiring lives in _CheckpointPublisher."""
+    return _CheckpointPublisher._configure_projection_dropout(model, probability)
 
 
 @timed
 def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
-    """Keep Transformers 5 tokenizer saves loadable by older HF runtimes.
-
-    Transformers 5 may serialize the fast tokenizer as ``TokenizersBackend``.
-    That name is not an AutoTokenizer class in the older runtime used by some
-    Colab images, even though the accompanying ``tokenizer.json`` is valid.
-    The generic fast-tokenizer class reads the same file and preserves the
-    already aligned special-token IDs.
-    """
-    config_path = checkpoint / "tokenizer_config.json"
-    tokenizer_path = checkpoint / "tokenizer.json"
-    if not config_path.is_file() or not tokenizer_path.is_file():
-        raise RuntimeError(
-            f"checkpoint is missing tokenizer assets: {checkpoint}"
-        )
-
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    if config.get("tokenizer_class") == "TokenizersBackend":
-        config["tokenizer_class"] = "PreTrainedTokenizerFast"
-        config_path.write_text(
-            json.dumps(config, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-    special_tokens = {
-        name: config[name]
-        for name in ("bos_token", "eos_token", "unk_token", "sep_token", "pad_token", "cls_token", "mask_token")
-        if name in config
-    }
-    special_map_path = checkpoint / "special_tokens_map.json"
-    if special_tokens and not special_map_path.exists():
-        special_map_path.write_text(
-            json.dumps(special_tokens, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+    """Thin delegate: tokenizer portability lives in _CheckpointPublisher."""
+    _CheckpointPublisher._make_checkpoint_tokenizer_portable(checkpoint)
 
 
 @timed
@@ -480,71 +591,257 @@ def _write_checkpoint_manifest(
     trainer_control,
     training_args,
 ) -> None:
-    """Describe the complete native HF resume snapshot without duplicating it."""
-    from core.model_input import model_input_composition
-
-    log_history = getattr(trainer_state, "log_history", []) or []
-    losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
-    tokenizer = getattr(model, "tokenizer", None)
-    auto_model = model[0].auto_model
-    token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
-    model_files = sorted(
-        path.name
-        for path in checkpoint.glob("model.safetensors*")
-        if path.is_file()
+    """Thin delegate: the resume manifest lives in _CheckpointPublisher."""
+    _CheckpointPublisher._write_checkpoint_manifest(
+        checkpoint,
+        epoch=epoch,
+        global_step=global_step,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+        trainer_state=trainer_state,
+        trainer_control=trainer_control,
+        training_args=training_args,
     )
-    if not model_files:
+
+
+class _CheckpointPublisher:
+    """Small SR owner of checkpoint publication prerequisites.
+
+    * `_align_model_token_ids`        tokenizer special-token IDs -> model config
+    * `_configure_projection_dropout` idempotent serializable dropout module
+    * `_make_checkpoint_tokenizer_portable`
+                 Transformers 5 -> older HF runtime tokenizer saves
+    * `_write_checkpoint_manifest`    native HF resume snapshot description
+    * `_publication_deferred`         the one env flag parser owned by the
+    run finisher. Module-level `_align_model_token_ids`,
+    `_configure_projection_dropout`, `_make_checkpoint_tokenizer_portable`
+    and `_write_checkpoint_manifest` stay the pinned (@timed) call surface.
+    """
+
+    @staticmethod
+    def _align_model_token_ids(model: SentenceTransformer) -> None:
+        """Make tokenizer special-token IDs the single source of truth.
+
+        Transformers can load a tokenizer whose PAD/BOS/EOS IDs differ from the
+        IDs serialized in the base model config.  It repairs that mismatch in
+        memory, but relying on that implicit repair leaves checkpoint contents
+        dependent on the loader version.  Align both configs explicitly before
+        the trainer starts; the model config is then serialized with each saved
+        checkpoint.  Sentence-transformers models are encoder-only, so the
+        generation config is normally unused, but align it when Transformers
+        exposes one as well.
+        """
+        tokenizer = model.tokenizer
+        auto_model = model[0].auto_model
+
+        token_ids = {
+            "pad_token_id": tokenizer.pad_token_id,
+            "bos_token_id": tokenizer.bos_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
+        changed: dict[str, tuple[object, int]] = {}
+        for name, token_id in token_ids.items():
+            if token_id is None:
+                continue
+            old_value = getattr(auto_model.config, name, None)
+            if old_value != token_id:
+                changed[name] = (old_value, token_id)
+            setattr(auto_model.config, name, token_id)
+
+            generation_config = getattr(auto_model, "generation_config", None)
+            if generation_config is not None:
+                setattr(generation_config, name, token_id)
+
+        if changed:
+            details = ", ".join(
+                f"{name}={old!r}->{new!r}" for name, (old, new) in changed.items()
+            )
+            print(f"    [tokens] aligned tokenizer IDs in model config: {details}", flush=True)
+
+        unresolved = {
+            name: (getattr(auto_model.config, name, None), token_id)
+            for name, token_id in token_ids.items()
+            if token_id is not None and getattr(auto_model.config, name, None) != token_id
+        }
+        if unresolved:
+            raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
+
+    @staticmethod
+    def _configure_projection_dropout(model, probability: float) -> bool:
+        """Append serializable dropout after pooling, idempotently.
+
+        Existing regularized checkpoints already contain the SentenceTransformers
+        dropout module. In that case update its probability instead of appending a
+        second layer. Returns whether a new module was added.
+        """
+        probability = float(probability)
+        if not 0.0 <= probability < 1.0:
+            raise ValueError("projection dropout must be in [0, 1)")
+
+        from sentence_transformers.sentence_transformer.modules import Dropout
+
+        existing = [module for module in model.children() if isinstance(module, Dropout)]
+        if len(existing) > 1:
+            raise RuntimeError("model contains multiple SentenceTransformer dropout modules")
+        if existing:
+            existing[0].dropout = probability
+            existing[0].dropout_layer.p = probability
+            return False
+        if probability == 0.0:
+            return False
+        model.add_module("projection_dropout", Dropout(dropout=probability))
+        return True
+
+    @staticmethod
+    def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
+        """Keep Transformers 5 tokenizer saves loadable by older HF runtimes.
+
+        Transformers 5 may serialize the fast tokenizer as ``TokenizersBackend``.
+        That name is not an AutoTokenizer class in the older runtime used by some
+        Colab images, even though the accompanying ``tokenizer.json`` is valid.
+        The generic fast-tokenizer class reads the same file and preserves the
+        already aligned special-token IDs.
+        """
+        config_path = checkpoint / "tokenizer_config.json"
+        tokenizer_path = checkpoint / "tokenizer.json"
+        if not config_path.is_file() or not tokenizer_path.is_file():
+            raise RuntimeError(
+                f"checkpoint is missing tokenizer assets: {checkpoint}"
+            )
+
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if config.get("tokenizer_class") == "TokenizersBackend":
+            config["tokenizer_class"] = "PreTrainedTokenizerFast"
+            config_path.write_text(
+                json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+        special_tokens = {
+            name: config[name]
+            for name in ("bos_token", "eos_token", "unk_token", "sep_token", "pad_token", "cls_token", "mask_token")
+            if name in config
+        }
+        special_map_path = checkpoint / "special_tokens_map.json"
+        if special_tokens and not special_map_path.exists():
+            special_map_path.write_text(
+                json.dumps(special_tokens, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _model_files(checkpoint: Path) -> list[str]:
+        """The serialized weight files of this checkpoint (safetensors first)."""
         model_files = sorted(
             path.name
-            for path in checkpoint.glob("pytorch_model*.bin*")
+            for path in checkpoint.glob("model.safetensors*")
             if path.is_file()
         )
-    manifest = {
-        "format": "euromonitor-hf-resume-v1",
-        "epoch": epoch,
-        "global_step": global_step,
-        "best_loss": float(min(losses)) if losses else None,
-        # The encoder TEXT this checkpoint was trained on. Weights are only
-        # comparable, and only reusable at scoring time, together with the
-        # composition that produced them — a checkpoint trained on one
-        # composition is not interchangeable with another.
-        "model_input": model_input_composition().model_dump(),
-        # These are the exact components of the requested checkpoint dict.
-        # They remain in their native HF files so model/optimizer tensors are
-        # not serialized a second time into a multi-GB sidecar.
-        "files": {
-            "model_state_dict": model_files,
+        if not model_files:
+            model_files = sorted(
+                path.name
+                for path in checkpoint.glob("pytorch_model*.bin*")
+                if path.is_file()
+            )
+        return model_files
+
+    @staticmethod
+    def _token_id_snapshot(tokenizer, auto_model, token_names) -> dict:
+        """The three tokenizer/model/generation token-ID blocks of the manifest."""
+        return {
+            "tokenizer_token_ids": {
+                name: getattr(tokenizer, name, None) for name in token_names
+            },
+            "model_config_token_ids": {
+                name: getattr(auto_model.config, name, None) for name in token_names
+            },
+            "generation_config_token_ids": {
+                name: getattr(getattr(auto_model, "generation_config", None), name, None)
+                for name in token_names
+            },
+        }
+
+    @staticmethod
+    def _files_block(checkpoint: Path, optimizer, scheduler, scaler) -> dict:
+        """The exact components of the requested checkpoint dict.
+
+        Invariant: they remain in their native HF files so model/optimizer
+        tensors are not serialized a second time into a multi-GB sidecar.
+        """
+        return {
+            "model_state_dict": _CheckpointPublisher._model_files(checkpoint),
             "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
             "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
             "scaler_state_dict": "scaler.pt" if scaler is not None else None,
             "rng_state": "rng_state.pth",
             "trainer_state": "trainer_state.json",
             "training_args": "training_args.bin",
-        },
-        "tokenizer_token_ids": {
-            name: getattr(tokenizer, name, None) for name in token_names
-        },
-        "model_config_token_ids": {
-            name: getattr(auto_model.config, name, None) for name in token_names
-        },
-        "generation_config_token_ids": {
-            name: getattr(getattr(auto_model, "generation_config", None), name, None)
-            for name in token_names
-        },
-        "native_hf_resume": {
-            "trainer_state": "trainer_state.json",
-            "trainer_control": "trainer_state.json:control",
-            "training_args": "training_args.bin",
-            "optimizer": "optimizer.pt",
-            "scheduler": "scheduler.pt",
-            "rng": "rng_state.pth",
-        },
-    }
-    with trace_step('training.write_checkpoint_manifest'):
-        (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
-            json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
-            encoding="utf-8",
-        )
+        }
+
+    @staticmethod
+    def _resume_block() -> dict:
+        """The fixed native-HF resume component map manifest field."""
+        return {
+            "native_hf_resume": {
+                "trainer_state": "trainer_state.json",
+                "trainer_control": "trainer_state.json:control",
+                "training_args": "training_args.bin",
+                "optimizer": "optimizer.pt",
+                "scheduler": "scheduler.pt",
+                "rng": "rng_state.pth",
+            }
+        }
+
+    @staticmethod
+    def _write_checkpoint_manifest(
+        checkpoint: Path,
+        *,
+        epoch,
+        global_step: int,
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        trainer_state,
+        trainer_control,
+        training_args,
+    ) -> None:
+        """Describe the complete native HF resume snapshot without duplicating it."""
+        from core.model_input import model_input_composition
+
+        log_history = getattr(trainer_state, "log_history", []) or []
+        losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
+        tokenizer = getattr(model, "tokenizer", None)
+        auto_model = model[0].auto_model
+        token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
+        manifest = {
+            "format": "euromonitor-hf-resume-v1",
+            "epoch": epoch,
+            "global_step": global_step,
+            "best_loss": float(min(losses)) if losses else None,
+            # The encoder TEXT this checkpoint was trained on. Weights are only
+            # comparable, and only reusable at scoring time, together with the
+            # composition that produced them — a checkpoint trained on one
+            # composition is not interchangeable with another.
+            "model_input": model_input_composition().model_dump(),
+            "files": _CheckpointPublisher._files_block(
+                checkpoint, optimizer, scheduler, scaler
+            ),
+            **_CheckpointPublisher._token_id_snapshot(tokenizer, auto_model, token_names),
+            **_CheckpointPublisher._resume_block(),
+        }
+        with trace_step('training.write_checkpoint_manifest'):
+            (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _publication_deferred() -> bool:
+        """One flag parser for checkpoint publication owned by the run finisher."""
+        return os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS", "0").lower() in {"1", "true", "yes"}
 
 
 # _auc/_cos -> _common SSOT (see GATES_MAP.md)
@@ -563,51 +860,10 @@ def _split_safe_random_negative_pairs(
     seed: int,
     n_neg: int,
 ) -> np.ndarray:
-    """Build known-different random negatives using only one split.
-
-    ``build_pairs`` owns the gtin validity/title-difference rules. This
-    wrapper restricts its input to the requested split first, then maps the
-    returned local row indices back to the training payload indices.
-    """
-    from core.blocking import build_pairs
-
-    split_rows = np.flatnonzero(
-        np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._split_safe_random_negative_pairs(
+        df, row_bc, split_gtins, seed=seed, n_neg=n_neg
     )
-    if len(split_rows) < 2 or n_neg <= 0:
-        if n_neg > 0:
-            print(
-                "[random-easy] WARNING: split-safe negative sampling skipped "
-                f"(requested={n_neg}, split_rows={len(split_rows)})",
-                flush=True,
-            )
-        return np.empty((0, 2), dtype=int)
-
-    subset = df.iloc[split_rows].reset_index(drop=True)
-    pairs_cfg = training_cfg().pairs
-    target = min(int(n_neg), len(subset) * 4)
-    while target:
-        try:
-            _, local_neg = build_pairs(
-                subset,
-                seed=seed,
-                max_pos_per_group=int(pairs_cfg.max_pos_per_group),
-                n_neg=target,
-            )
-            return split_rows[local_neg]
-        except RuntimeError:
-            # Keep a one-pair request alive for the final feasibility check;
-            # target //= 2 used to turn 1 into 0 and silently discard the
-            # random/easy population after one sampling miss.
-            if target == 1:
-                break
-            target = max(1, target // 2)
-    print(
-        "[random-easy] WARNING: no split-safe negatives could be sampled "
-        f"(requested={n_neg}, split_rows={len(split_rows)})",
-        flush=True,
-    )
-    return np.empty((0, 2), dtype=int)
 
 
 @timed
@@ -623,65 +879,18 @@ def _mix_random_easy_training_negatives(
     ratio_to_hard: float,
     candidate_pool_size: int,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Retain hard negatives and deterministically add split-local easy ones.
-
-    When the unique easy pool is smaller than the ratio target, deterministic
-    sampling with replacement replenishes it. The returned integer is the
-    unique candidate count before replenishment, useful for telemetry.
-    """
-    hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
-    hard_sources = np.asarray(hard_sources, dtype=object)
-    if len(hard_sources) != len(hard_pairs):
-        raise ValueError("hard negative/source lengths differ")
-    ratio_to_hard = float(ratio_to_hard)
-    if ratio_to_hard < 0:
-        raise ValueError("random/easy to hard ratio must be non-negative")
-    if int(candidate_pool_size) < 1:
-        raise ValueError("random/easy candidate pool size must be positive")
-    target = int(np.ceil(len(hard_pairs) * ratio_to_hard))
-    if not enabled or target == 0:
-        return hard_pairs, hard_sources, 0
-
-    candidates = _split_safe_random_negative_pairs(
-        df,
-        row_bc,
-        train_gtins,
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._mix_random_easy_training_negatives(
+        hard_pairs,
+        hard_sources,
+        df=df,
+        row_bc=row_bc,
+        train_gtins=train_gtins,
         seed=seed,
-        n_neg=min(target, int(candidate_pool_size)),
+        enabled=enabled,
+        ratio_to_hard=ratio_to_hard,
+        candidate_pool_size=candidate_pool_size,
     )
-    if not len(candidates):
-        return hard_pairs, hard_sources, 0
-    if not pairs_in_set(candidates, row_bc, train_gtins).all():
-        raise RuntimeError("random/easy training negatives crossed the train split")
-
-    normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
-    unique_candidates = np.asarray(
-        [
-            pair
-            for pair in np.unique(np.sort(candidates, axis=1), axis=0)
-            if tuple(pair) not in normalized_hard
-        ],
-        dtype=int,
-    ).reshape(-1, 2)
-    if not len(unique_candidates):
-        print(
-            "[random-easy] WARNING: candidate pool only duplicated hard negatives",
-            flush=True,
-        )
-        return hard_pairs, hard_sources, 0
-    rng = np.random.default_rng(seed + 1)
-    chosen = unique_candidates[
-        rng.choice(
-            len(unique_candidates),
-            size=target,
-            replace=len(unique_candidates) < target,
-        )
-    ]
-    mixed_pairs = np.vstack([hard_pairs, chosen])
-    mixed_sources = np.concatenate(
-        [hard_sources, np.full(target, "random_easy", dtype=object)]
-    )
-    return mixed_pairs, mixed_sources, len(unique_candidates)
 
 
 @timed
@@ -692,155 +901,13 @@ def _mnrl_training_triples_with_populations(
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[tuple[tuple[int, int, int], str]]:
-    """Join explicit negatives to positives without losing augmented anchors.
-
-    Masked/swapped copies have new payload indices; audit rows identify the
-    original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
-    one of their source's explicit negatives, if available. Never infer a
-    positive or negative from a gtin alone: that can silently mislabel.
-
-    Each triple is paired with its training population so train-time
-    per-subset loss monitoring can attribute loss to the population that
-    generated the negative pressure:
-      * ``base``   — ordinary source-anchored triples (no augmentation copy)
-      * ``masked`` — triples anchored on a masked/swap hard-negative copy
-      * ``twin``   — counterfactual twin negatives trained against their source
-    """
-    positives_by_anchor: dict[int, set[int]] = {}
-    for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
-        positives_by_anchor.setdefault(int(anchor), set()).add(int(positive))
-
-    original_by_copy_pair: dict[tuple[int, int], int] = {}
-    mode_by_copy_pair: dict[tuple[int, int], str] = {}
-    for audit in hard_negative_mask_audit or []:
-        key = (int(audit["copy_payload_idx"]), int(audit["pair_payload_idx"]))
-        original = int(audit["anchor_payload_idx"])
-        if key in original_by_copy_pair and original_by_copy_pair[key] != original:
-            raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
-        original_by_copy_pair[key] = original
-        mode_by_copy_pair[key] = str(audit.get("target_mode", ""))
-
-    negatives_by_anchor: dict[int, list[int]] = {}
-    for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
-        negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
-    selected_edges = set(map(tuple,np.asarray(train_neg,dtype=int).reshape(-1,2).tolist()))
-    for audit in hard_negative_mask_audit or []:
-        if audit.get('target_mode') == 'counterfactual':
-            source, pair, copy = (int(audit[key]) for key in ('anchor_payload_idx','pair_payload_idx','copy_payload_idx'))
-            if (copy,pair) in selected_edges and pair in positives_by_anchor.get(source,set()):
-                negatives_by_anchor.setdefault(source,[]).append(copy)
-
-    triples: list[tuple[tuple[int, int, int], str]] = []
-    seen: set[tuple[int, int, int]] = set()
-    for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
-        anchor_i, negative_i = int(anchor), int(negative)
-        mode = mode_by_copy_pair.get((anchor_i, negative_i))
-        if mode == "counterfactual":
-            # Counterfactual twins get source-anchored triples below; treating
-            # the twin copy as an anchor would inherit an incompatible positive.
-            continue
-        if mode == "swap_values":
-            # An anchor-only transplant CONTRADICTS the source's unchanged
-            # positive, so that positive is not a valid target for this row.
-            # TIER 1(a) replays the same transplant onto the source positive
-            # and registers the result against the COPY anchor, so the copy
-            # has a compatible positive of its own. With no counterpart the row
-            # is still omitted rather than trained against a false match.
-            positives = sorted(positives_by_anchor.get(anchor_i, ()))
-        else:
-            source_anchor = original_by_copy_pair.get(
-                (anchor_i, negative_i), anchor_i
-            )
-            positives = sorted(positives_by_anchor.get(source_anchor, ()))
-        positive_i = positives[0] if positives else None
-        if positive_i is None or positive_i == negative_i:
-            continue
-        triple = (anchor_i, positive_i, negative_i)
-        if triple not in seen:
-            seen.add(triple)
-            # A hard-negative copy anchor means the triple's negative is a
-            # masked/swap augmentation; otherwise it is an organic base triple.
-            population = (
-                "masked"
-                if (anchor_i, negative_i) in original_by_copy_pair
-                else "base"
-            )
-            triples.append((triple, population))
-
-    train_positive_pairs = {
-        (int(anchor), int(positive))
-        for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2)
-    }
-    for audit in mask_audit or []:
-        source_i = int(audit["anchor_payload_idx"])
-        copy_i = int(audit["copy_payload_idx"])
-        # Symmetric value swaps append a counterpart copy alongside the
-        # anchor copy: the copy's positive side is that counterpart copy,
-        # not the original pair side. Older audits lack the key and fall
-        # back to the original pair side.
-        source_positive_i = int(audit["pair_payload_idx"])
-        positive_i = int(
-            audit.get("copy_pair_payload_idx")
-            if audit.get("copy_pair_payload_idx") is not None
-            else source_positive_i
-        )
-        # Fold membership is checked on both edges independently: the
-        # original source pair licenses the augmentation, while a symmetric
-        # swap's generated counterpart must itself survive in this fold.
-        if (source_i, source_positive_i) not in train_positive_pairs:
-            continue
-        if (copy_i, positive_i) not in train_positive_pairs:
-            continue
-        negative_i = next(
-            (
-                negative
-                for negative in negatives_by_anchor.get(source_i, [])
-                if negative not in {source_positive_i, positive_i}
-            ),
-            None,
-        )
-        if negative_i is None:
-            continue
-        triple = (copy_i, positive_i, negative_i)
-        if triple not in seen:
-            seen.add(triple)
-            triples.append((triple, "masked"))
-    # Counterfactual twins never survive the main loop above: a twin row is
-    # (copy, pair-side) with label 0, and its source's positive IS the pair
-    # side, so positive_i == negative_i skips it — silently dropping every
-    # twin from training (they would linger in eval/diet only). Twins train
-    # as explicit negatives of their own source: (source, pair-side, copy),
-    # i.e. "the original matches its canonical better than its one-flip
-    # twin". That is the counterfactual pressure; without this branch the
-    # twin lane mints evaluation rows that never see a gradient.
-    selected_negative_pairs = selected_edges
-    for audit in hard_negative_mask_audit or []:
-        if audit.get("target_mode") != "counterfactual":
-            continue
-        source_i = int(audit["anchor_payload_idx"])
-        copy_i = int(audit["copy_payload_idx"])
-        pair_i = int(audit["pair_payload_idx"])
-        # Twins are eligible only if the twin edge survived negative
-        # balancing/filtering and the exact counterpart survived positives.
-        if (copy_i, pair_i) not in selected_negative_pairs:
-            continue
-        if pair_i not in positives_by_anchor.get(source_i, set()):
-            continue
-        if audit.get('copy_source_payload_idx') == pair_i:
-            # Compare a canonical-derived twin to its clean canonical parent.
-            # The listing remains the licensed positive, while vendor wording
-            # cannot dilute the minimal attribute distinction on the negative.
-            triple = (pair_i, source_i, copy_i)
-            if triple not in seen:
-                seen.add(triple)
-                triples.append((triple, 'twin'))
-            continue
-        for positive_i in sorted(positives_by_anchor.get(source_i, set())):
-            triple = (source_i, positive_i, copy_i)
-            if triple not in seen:
-                seen.add(triple)
-                triples.append((triple, "twin"))
-    return triples
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._mnrl_training_triples_with_populations(
+        train_pos,
+        train_neg,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
 
 
 @timed
@@ -851,16 +918,13 @@ def _build_mnrl_training_triples(
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[tuple[int, int, int]]:
-    """Join explicit negatives to positives without losing augmented anchors."""
-    return [
-        triple
-        for triple, _population in _mnrl_training_triples_with_populations(
-            train_pos,
-            train_neg,
-            mask_audit=mask_audit,
-            hard_negative_mask_audit=hard_negative_mask_audit,
-        )
-    ]
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._build_mnrl_training_triples(
+        train_pos,
+        train_neg,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
 
 
 @timed
@@ -871,37 +935,21 @@ def _build_mnrl_triple_populations(
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[str]:
-    """Per-triple training population (base/masked/twin) for MNRL monitoring.
-
-    Returned in the same order as ``_build_mnrl_training_triples`` so the
-    i-th population tag attributes the i-th triple.
-    """
-    return [
-        population
-        for _triple, population in _mnrl_training_triples_with_populations(
-            train_pos,
-            train_neg,
-            mask_audit=mask_audit,
-            hard_negative_mask_audit=hard_negative_mask_audit,
-        )
-    ]
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._build_mnrl_triple_populations(
+        train_pos,
+        train_neg,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
 
 
 @timed
 def _mnrl_shared_positive_gtin_rows(
     triples: list[tuple[int, int, int]], row_bc: np.ndarray
 ) -> int:
-    """Count triple rows whose positive GTIN occurs in another triple.
-
-    The no-duplicate-text sampler cannot protect nonidentical payloads for
-    the same product from becoming in-batch negatives. This is an exposure
-    count, not the number actually colliding in a shuffled batch.
-    """
-    from collections import Counter
-
-    gtins = [str(row_bc[positive]) for _, positive, _ in triples]
-    counts = Counter(gtins)
-    return sum(counts[gtin] > 1 for gtin in gtins)
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders._mnrl_shared_positive_gtin_rows(triples, row_bc)
 
 
 @timed
@@ -912,74 +960,536 @@ def select_balanced_negatives(
     target: int,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, int, int]:
-    """Subsample negatives to ``target`` rows, keeping every base row first.
+    """Thin delegate: ownership lives in _PopulationBuilders."""
+    return _PopulationBuilders.select_balanced_negatives(
+        train_neg,
+        train_neg_sources,
+        neg_copy_anchors,
+        target,
+        seed,
+    )
 
-    Augmented copies are trimmed before real base pairs — never the reverse:
-    a neat 1.000 ratio must not cost organic data. Only when the base pool
-    alone exceeds the target is the base itself trimmed (reported, not
-    silent). Deterministic in ``seed``. Returns (selected, sources,
-    n_discarded_base, n_discarded_aug).
+
+class _PopulationBuilders:
+    """Small SR owner of the training population/negative builders.
+
+    Contrastive random/easy lane:
+      * `_split_safe_random_negative_pairs` split-local random negatives
+      * `_mix_random_easy_training_negatives` hard + deterministic easy mix
+
+    MNRL triple lane (+ negative-population owners):
+      * `_mnrl_training_triples_with_populations` triples with base/masked/
+        twin population tags (the single source of both projections below)
+      * `_build_mnrl_training_triples` / `_build_mnrl_triple_populations`
+        the two projections consumers pin
+      * `_mnrl_shared_positive_gtin_rows` positive-GTIN repeat exposure
+      * `select_balanced_negatives` base-first negative subsampling
+
+    Module-level names stay the pinned (@timed) call surface; the bodies
+    here are behavior-identical (verified row-for-row).
     """
-    pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
-    sources = np.asarray(train_neg_sources, dtype=object)
-    if len(pairs) != len(sources):
-        raise ValueError("negative/source lengths differ")
-    if target < 0:
-        raise ValueError("balance target must be non-negative")
-    if target >= len(pairs):
-        return pairs, sources, 0, 0
-    rng = np.random.default_rng(seed)
-    base_idx = np.array(
-        [i for i, (a, _b) in enumerate(pairs) if int(a) not in neg_copy_anchors],
-        dtype=int,
-    )
-    aug_idx = np.array(
-        [i for i, (a, _b) in enumerate(pairs) if int(a) in neg_copy_anchors],
-        dtype=int,
-    )
-    if len(base_idx) > target:
-        keep_base = rng.choice(base_idx, size=target, replace=False)
-        keep_aug: np.ndarray = np.empty(0, dtype=int)
-    else:
-        keep_base = base_idx
-        need = target - len(keep_base)
-        keep_aug = (
-            rng.choice(aug_idx, size=min(need, len(aug_idx)), replace=False)
-            if need > 0 and len(aug_idx)
-            else np.empty(0, dtype=int)
+
+    @staticmethod
+    def _sample_split_negatives(
+        subset, seed: int, n_neg: int, split_rows: np.ndarray
+    ) -> np.ndarray:
+        """Halve the request on sampling misses; keep 1 alive once.
+
+        Invariant: a one-pair request must survive the final feasibility
+        check — target //= 2 used to turn 1 into 0 and silently discard the
+        random/easy population after one sampling miss.
+        """
+        from core.blocking import build_pairs
+
+        pairs_cfg = training_cfg().pairs
+        target = min(int(n_neg), len(subset) * 4)
+        while target:
+            try:
+                _, local_neg = build_pairs(
+                    subset,
+                    seed=seed,
+                    max_pos_per_group=int(pairs_cfg.max_pos_per_group),
+                    n_neg=target,
+                )
+                return split_rows[local_neg]
+            except RuntimeError:
+                if target == 1:
+                    break
+                target = max(1, target // 2)
+        print(
+            "[random-easy] WARNING: no split-safe negatives could be sampled "
+            f"(requested={n_neg}, split_rows={len(split_rows)})",
+            flush=True,
         )
-    keep = np.concatenate([keep_base, keep_aug])
-    return (
-        pairs[keep],
-        sources[keep],
-        int(len(base_idx) - len(keep_base)),
-        int(len(aug_idx) - len(keep_aug)),
-    )
+        return np.empty((0, 2), dtype=int)
 
+    @staticmethod
+    def _split_safe_random_negative_pairs(
+        df: pd.DataFrame,
+        row_bc: np.ndarray,
+        split_gtins: set[str],
+        *,
+        seed: int,
+        n_neg: int,
+    ) -> np.ndarray:
+        """Build known-different random negatives using only one split.
 
-def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
-    """Precision/recall/threshold at a target recall (07-series schema).
+        ``build_pairs`` owns the gtin validity/title-difference rules. This
+        wrapper restricts its input to the requested split first, then maps the
+        returned local row indices back to the training payload indices.
+        """
+        split_rows = np.flatnonzero(
+            np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
+        )
+        if len(split_rows) < 2 or n_neg <= 0:
+            if n_neg > 0:
+                print(
+                    "[random-easy] WARNING: split-safe negative sampling skipped "
+                    f"(requested={n_neg}, split_rows={len(split_rows)})",
+                    flush=True,
+                )
+            return np.empty((0, 2), dtype=int)
 
-    Threshold = the LOWEST score still achieving recall_target (any higher
-    cut drops below it); precision at that cut with the FP count implied.
-    Deterministic: sorted order, ties resolved by score value.
-    """
-    order = np.argsort(-scores, kind="stable")
-    y_sorted = y[order]
-    s_sorted = scores[order]
-    n_pos = int((y == 1).sum())
-    if n_pos == 0 or len(scores) == 0:
-        return float("nan"), float("nan"), float("nan")
-    tp_cum = np.cumsum(y_sorted == 1)
-    # first rank where recall >= target
-    k = int(np.searchsorted(tp_cum, int(np.ceil(recall_target * n_pos))))
-    k = min(k, len(s_sorted) - 1)
-    thr = float(s_sorted[k])
-    tp = int(tp_cum[k])
-    fp = int((k + 1) - tp)
-    prec = tp / (tp + fp) if (tp + fp) else float("nan")
-    rec = tp / n_pos
-    return float(prec), float(rec), thr
+        return _PopulationBuilders._sample_split_negatives(
+            df.iloc[split_rows].reset_index(drop=True), seed, n_neg, split_rows
+        )
+
+    @staticmethod
+    def _mix_random_easy_training_negatives(
+        hard_pairs: np.ndarray,
+        hard_sources: np.ndarray,
+        *,
+        df: pd.DataFrame,
+        row_bc: np.ndarray,
+        train_gtins: set[str],
+        seed: int,
+        enabled: bool,
+        ratio_to_hard: float,
+        candidate_pool_size: int,
+    ) -> tuple[np.ndarray, np.ndarray, int]:
+        """Retain hard negatives and deterministically add split-local easy ones.
+
+        When the unique easy pool is smaller than the ratio target, deterministic
+        sampling with replacement replenishes it. The returned integer is the
+        unique candidate count before replenishment, useful for telemetry.
+        """
+        cls = _PopulationBuilders
+        hard_pairs, hard_sources, target = cls._mix_inputs(
+            hard_pairs, hard_sources, ratio_to_hard, candidate_pool_size
+        )
+        if not enabled or target == 0:
+            return hard_pairs, hard_sources, 0
+
+        candidates = _split_safe_random_negative_pairs(
+            df,
+            row_bc,
+            train_gtins,
+            seed=seed,
+            n_neg=min(target, int(candidate_pool_size)),
+        )
+        if not len(candidates):
+            return hard_pairs, hard_sources, 0
+        cls._assert_still_inside_train_split(candidates, row_bc, train_gtins)
+
+        unique_candidates = cls._unique_easy_candidates(candidates, hard_pairs)
+        if not len(unique_candidates):
+            print(
+                "[random-easy] WARNING: candidate pool only duplicated hard negatives",
+                flush=True,
+            )
+            return hard_pairs, hard_sources, 0
+        chosen = cls._replenish(rng_seed=seed, unique_candidates=unique_candidates, target=target)
+        mixed_pairs = np.vstack([hard_pairs, chosen])
+        mixed_sources = np.concatenate(
+            [hard_sources, np.full(target, "random_easy", dtype=object)]
+        )
+        return mixed_pairs, mixed_sources, len(unique_candidates)
+
+    @staticmethod
+    def _mix_inputs(hard_pairs, hard_sources, ratio_to_hard, candidate_pool_size):
+        """Coerce + validate the mix inputs; return the easy-diversity target."""
+        hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
+        hard_sources = np.asarray(hard_sources, dtype=object)
+        if len(hard_sources) != len(hard_pairs):
+            raise ValueError("hard negative/source lengths differ")
+        ratio_to_hard = float(ratio_to_hard)
+        if ratio_to_hard < 0:
+            raise ValueError("random/easy to hard ratio must be non-negative")
+        if int(candidate_pool_size) < 1:
+            raise ValueError("random/easy candidate pool size must be positive")
+        return hard_pairs, hard_sources, int(np.ceil(len(hard_pairs) * ratio_to_hard))
+
+    @staticmethod
+    def _assert_still_inside_train_split(candidates, row_bc, train_gtins) -> None:
+        """The mixed population may never cross the train component boundary."""
+        if not pairs_in_set(candidates, row_bc, train_gtins).all():
+            raise RuntimeError("random/easy training negatives crossed the train split")
+
+    @staticmethod
+    def _unique_easy_candidates(candidates: np.ndarray, hard_pairs: np.ndarray) -> np.ndarray:
+        """Deduplicated candidate rows minus the ones already hard negatives."""
+        normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
+        return np.asarray(
+            [
+                pair
+                for pair in np.unique(np.sort(candidates, axis=1), axis=0)
+                if tuple(pair) not in normalized_hard
+            ],
+            dtype=int,
+        ).reshape(-1, 2)
+
+    @staticmethod
+    def _replenish(*, rng_seed: int, unique_candidates: np.ndarray, target: int) -> np.ndarray:
+        """Deterministic (with-replacement) sampling up to the ratio target."""
+        rng = np.random.default_rng(rng_seed + 1)
+        return unique_candidates[
+            rng.choice(
+                len(unique_candidates),
+                size=target,
+                replace=len(unique_candidates) < target,
+            )
+        ]
+
+    @staticmethod
+    @staticmethod
+    def _positives_by_anchor(train_pos: np.ndarray) -> dict[int, set[int]]:
+        """Anchor -> its explicit positive endpoints."""
+        positives_by_anchor: dict[int, set[int]] = {}
+        for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
+            positives_by_anchor.setdefault(int(anchor), set()).add(int(positive))
+        return positives_by_anchor
+
+    @staticmethod
+    def _copy_lineage_maps(hard_negative_mask_audit: list[dict] | None):
+        """The copy->original-anchor and copy->mode maps; conflicting lineage dies."""
+        original_by_copy_pair: dict[tuple[int, int], int] = {}
+        mode_by_copy_pair: dict[tuple[int, int], str] = {}
+        for audit in hard_negative_mask_audit or []:
+            key = (int(audit["copy_payload_idx"]), int(audit["pair_payload_idx"]))
+            original = int(audit["anchor_payload_idx"])
+            if key in original_by_copy_pair and original_by_copy_pair[key] != original:
+                raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
+            original_by_copy_pair[key] = original
+            mode_by_copy_pair[key] = str(audit.get("target_mode", ""))
+        return original_by_copy_pair, mode_by_copy_pair
+
+    @staticmethod
+    def _negatives_by_anchor(
+        train_neg: np.ndarray,
+        selected_edges: set,
+        hard_negative_mask_audit: list[dict] | None,
+        positives_by_anchor: dict[int, set[int]],
+    ) -> dict[int, list[int]]:
+        """Anchor -> explicit negative endpoints, plus the counterfactual twin addendum."""
+        negatives_by_anchor: dict[int, list[int]] = {}
+        for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+            negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
+        for audit in hard_negative_mask_audit or []:
+            if audit.get('target_mode') == 'counterfactual':
+                source, pair, copy = (int(audit[key]) for key in ('anchor_payload_idx','pair_payload_idx','copy_payload_idx'))
+                if (copy,pair) in selected_edges and pair in positives_by_anchor.get(source,set()):
+                    negatives_by_anchor.setdefault(source,[]).append(copy)
+        return negatives_by_anchor
+
+    @staticmethod
+    def _base_mnrl_candidates(
+        train_neg: np.ndarray,
+        positives_by_anchor: dict[int, set[int]],
+        original_by_copy_pair: dict[tuple[int, int], int],
+        mode_by_copy_pair: dict[tuple[int, int], str],
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Source-anchored triples for every train negative with a positive.
+
+        Counterfactual twin rows are skipped here (source-anchored branches
+        below); swap_values replays the transplant onto the source positive
+        and registers the result against the COPY anchor."""
+        candidates: list[tuple[tuple[int, int, int], str]] = []
+        for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+            anchor_i, negative_i = int(anchor), int(negative)
+            mode = mode_by_copy_pair.get((anchor_i, negative_i))
+            if mode == "counterfactual":
+                # Counterfactual twins get source-anchored triples below; treating
+                # the twin copy as an anchor would inherit an incompatible positive.
+                continue
+            if mode == "swap_values":
+                # An anchor-only transplant CONTRADICTS the source's unchanged
+                # positive, so that positive is not a valid target for this row.
+                # TIER 1(a) replays the same transplant onto the source positive
+                # and registers the result against the COPY anchor, so the copy
+                # has a compatible positive of its own. With no counterpart the row
+                # is still omitted rather than trained against a false match.
+                positives = sorted(positives_by_anchor.get(anchor_i, ()))
+            else:
+                source_anchor = original_by_copy_pair.get(
+                    (anchor_i, negative_i), anchor_i
+                )
+                positives = sorted(positives_by_anchor.get(source_anchor, ()))
+            positive_i = positives[0] if positives else None
+            if positive_i is None or positive_i == negative_i:
+                continue
+            triple = (anchor_i, positive_i, negative_i)
+            # A hard-negative copy anchor means the triple's negative is a
+            # masked/swap augmentation; otherwise it is an organic base triple.
+            population = (
+                "masked"
+                if (anchor_i, negative_i) in original_by_copy_pair
+                else "base"
+            )
+            candidates.append((triple, population))
+        return candidates
+
+    @staticmethod
+    def _masked_counterpart_candidates(
+        mask_audit: list[dict] | None,
+        train_pos: np.ndarray,
+        negatives_by_anchor: dict[int, list[int]],
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Triples anchored on a masked-copy anchor with its own positive.
+
+        Symmetric value swaps append a counterpart copy alongside the anchor
+        copy: the copy's positive side is that counterpart copy, not the
+        original pair side (older audits fall back to the original pair
+        side). Fold membership is checked on both edges independently."""
+        candidates: list[tuple[tuple[int, int, int], str]] = []
+        train_positive_pairs = {
+            (int(anchor), int(positive))
+            for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2)
+        }
+        for audit in mask_audit or []:
+            source_i = int(audit["anchor_payload_idx"])
+            copy_i = int(audit["copy_payload_idx"])
+            source_positive_i = int(audit["pair_payload_idx"])
+            positive_i = int(
+                audit.get("copy_pair_payload_idx")
+                if audit.get("copy_pair_payload_idx") is not None
+                else source_positive_i
+            )
+            # Fold membership is checked on both edges independently: the
+            # original source pair licenses the augmentation, while a symmetric
+            # swap's generated counterpart must itself survive in this fold.
+            if (source_i, source_positive_i) not in train_positive_pairs:
+                continue
+            if (copy_i, positive_i) not in train_positive_pairs:
+                continue
+            negative_i = next(
+                (
+                    negative
+                    for negative in negatives_by_anchor.get(source_i, [])
+                    if negative not in {source_positive_i, positive_i}
+                ),
+                None,
+            )
+            if negative_i is None:
+                continue
+            candidates.append(((copy_i, positive_i, negative_i), "masked"))
+        return candidates
+
+    @staticmethod
+    def _twin_candidates(
+        selected_negative_pairs: set,
+        positives_by_anchor: dict[int, set[int]],
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Counterfactual twin triples: source trains against its own flip.
+
+        Twins never survive _base_mnrl_candidates: a twin row is (copy,
+        pair-side) with label 0, and its source's positive IS the pair side,
+        so positive_i == negative_i skips it — silently dropping every twin
+        from training (they would linger in eval/diet only). Twins train as
+        explicit negatives of their own source: (source, pair-side, copy),
+        i.e. "the original matches its canonical better than its one-flip
+        twin". That is the counterfactual pressure; without this branch the
+        twin lane mints evaluation rows that never see a gradient."""
+        candidates: list[tuple[tuple[int, int, int], str]] = []
+        for audit in hard_negative_mask_audit or []:
+            if audit.get("target_mode") != "counterfactual":
+                continue
+            source_i = int(audit["anchor_payload_idx"])
+            copy_i = int(audit["copy_payload_idx"])
+            pair_i = int(audit["pair_payload_idx"])
+            # Twins are eligible only if the twin edge survived negative
+            # balancing/filtering and the exact counterpart survived positives.
+            if (copy_i, pair_i) not in selected_negative_pairs:
+                continue
+            if pair_i not in positives_by_anchor.get(source_i, set()):
+                continue
+            if audit.get('copy_source_payload_idx') == pair_i:
+                # Compare a canonical-derived twin to its clean canonical parent.
+                # The listing remains the licensed positive, while vendor wording
+                # cannot dilute the minimal attribute distinction on the negative.
+                candidates.append(((pair_i, source_i, copy_i), 'twin'))
+                continue
+            for positive_i in sorted(positives_by_anchor.get(source_i, set())):
+                candidates.append(((source_i, positive_i, copy_i), "twin"))
+        return candidates
+
+    @staticmethod
+    def _mnrl_training_triples_with_populations(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Join explicit negatives to positives without losing augmented anchors.
+
+        Masked/swapped copies have new payload indices; audit rows identify the
+        original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
+        one of their source's explicit negatives, if available. Never infer a
+        positive or negative from a gtin alone: that can silently mislabel.
+
+        Each triple is paired with its training population so train-time
+        per-subset loss monitoring can attribute loss to the population that
+        generated the negative pressure:
+          * ``base``   — ordinary source-anchored triples (no augmentation copy)
+          * ``masked`` — triples anchored on a masked/swap hard-negative copy
+          * ``twin``   — counterfactual twin negatives trained against their source
+
+        Invariant: the four generators emit candidates in EXACTLY the old
+        in-loop order; the single dedup pass below reproduces the old
+        `if triple not in seen` behavior row-for-row (seen was only updated
+        on append, and no candidate generation depended on it).
+        """
+        cls = _PopulationBuilders
+        positives_by_anchor = cls._positives_by_anchor(train_pos)
+        original_by_copy_pair, mode_by_copy_pair = cls._copy_lineage_maps(
+            hard_negative_mask_audit
+        )
+        selected_edges = set(
+            map(tuple, np.asarray(train_neg, dtype=int).reshape(-1, 2).tolist())
+        )
+        negatives_by_anchor = cls._negatives_by_anchor(
+            train_neg, selected_edges, hard_negative_mask_audit, positives_by_anchor
+        )
+        candidates = [
+            *cls._base_mnrl_candidates(
+                train_neg, positives_by_anchor, original_by_copy_pair, mode_by_copy_pair
+            ),
+            *cls._masked_counterpart_candidates(
+                mask_audit, train_pos, negatives_by_anchor
+            ),
+            *cls._twin_candidates(
+                selected_edges, positives_by_anchor, hard_negative_mask_audit
+            ),
+        ]
+        triples: list[tuple[tuple[int, int, int], str]] = []
+        seen: set[tuple[int, int, int]] = set()
+        for candidate in candidates:
+            if candidate[0] not in seen:
+                seen.add(candidate[0])
+                triples.append(candidate)
+        return triples
+
+    @staticmethod
+    def _build_mnrl_training_triples(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[int, int, int]]:
+        """Join explicit negatives to positives without losing augmented anchors."""
+        return [
+            triple
+            for triple, _population in _mnrl_training_triples_with_populations(
+                train_pos,
+                train_neg,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
+            )
+        ]
+
+    @staticmethod
+    def _build_mnrl_triple_populations(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[str]:
+        """Per-triple training population (base/masked/twin) for MNRL monitoring.
+
+        Returned in the same order as ``_build_mnrl_training_triples`` so the
+        i-th population tag attributes the i-th triple.
+        """
+        return [
+            population
+            for _triple, population in _mnrl_training_triples_with_populations(
+                train_pos,
+                train_neg,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
+            )
+        ]
+
+    @staticmethod
+    def _mnrl_shared_positive_gtin_rows(
+        triples: list[tuple[int, int, int]], row_bc: np.ndarray
+    ) -> int:
+        """Count triple rows whose positive GTIN occurs in another triple.
+
+        The no-duplicate-text sampler cannot protect nonidentical payloads for
+        the same product from becoming in-batch negatives. This is an exposure
+        count, not the number actually colliding in a shuffled batch.
+        """
+        from collections import Counter
+
+        gtins = [str(row_bc[positive]) for _, positive, _ in triples]
+        counts = Counter(gtins)
+        return sum(counts[gtin] > 1 for gtin in gtins)
+
+    @staticmethod
+    def select_balanced_negatives(
+        train_neg: np.ndarray,
+        train_neg_sources: np.ndarray,
+        neg_copy_anchors: set[int],
+        target: int,
+        seed: int,
+    ) -> tuple[np.ndarray, np.ndarray, int, int]:
+        """Subsample negatives to ``target`` rows, keeping every base row first.
+
+        Augmented copies are trimmed before real base pairs — never the reverse:
+        a neat 1.000 ratio must not cost organic data. Only when the base pool
+        alone exceeds the target is the base itself trimmed (reported, not
+        silent). Deterministic in ``seed``. Returns (selected, sources,
+        n_discarded_base, n_discarded_aug).
+        """
+        pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
+        sources = np.asarray(train_neg_sources, dtype=object)
+        if len(pairs) != len(sources):
+            raise ValueError("negative/source lengths differ")
+        if target < 0:
+            raise ValueError("balance target must be non-negative")
+        if target >= len(pairs):
+            return pairs, sources, 0, 0
+        rng = np.random.default_rng(seed)
+        base_idx = np.array(
+            [i for i, (a, _b) in enumerate(pairs) if int(a) not in neg_copy_anchors],
+            dtype=int,
+        )
+        aug_idx = np.array(
+            [i for i, (a, _b) in enumerate(pairs) if int(a) in neg_copy_anchors],
+            dtype=int,
+        )
+        if len(base_idx) > target:
+            keep_base = rng.choice(base_idx, size=target, replace=False)
+            keep_aug: np.ndarray = np.empty(0, dtype=int)
+        else:
+            keep_base = base_idx
+            need = target - len(keep_base)
+            keep_aug = (
+                rng.choice(aug_idx, size=min(need, len(aug_idx)), replace=False)
+                if need > 0 and len(aug_idx)
+                else np.empty(0, dtype=int)
+            )
+        keep = np.concatenate([keep_base, keep_aug])
+        return (
+            pairs[keep],
+            sources[keep],
+            int(len(base_idx) - len(keep_base)),
+            int(len(aug_idx) - len(keep_aug)),
+        )
+
 
 
 @timed
@@ -1053,83 +1563,601 @@ from training.losses import (
 
 @timed
 def _runtime_telemetry() -> dict[str, float | int]:
-    """Cheap process and CUDA facts emitted with each training heartbeat."""
-    telemetry: dict[str, float | int] = {"pid": os.getpid()}
-    try:
-        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
-            if line.startswith("VmRSS:"):
-                telemetry["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
-                break
-    except OSError:
-        pass
-    try:
-        memory = {}
-        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-            key, value = line.split(":", 1)
-            if key in {"MemTotal", "MemAvailable"}:
-                memory[key] = int(value.strip().split()[0])
-        if "MemTotal" in memory and "MemAvailable" in memory:
-            telemetry.update(
-                memory_total_mb=round(memory["MemTotal"] / 1024, 1),
-                memory_available_mb=round(memory["MemAvailable"] / 1024, 1),
-                memory_used_mb=round(
-                    (memory["MemTotal"] - memory["MemAvailable"]) / 1024, 1
-                ),
-            )
-    except (OSError, ValueError):
-        pass
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info()
-            telemetry.update(
-                gpu_allocated_gb=round(torch.cuda.memory_allocated() / 1e9, 2),
-                gpu_reserved_gb=round(torch.cuda.memory_reserved() / 1e9, 2),
-                gpu_peak_gb=round(torch.cuda.max_memory_allocated() / 1e9, 2),
-                gpu_free_gb=round(free / 1e9, 2),
-                gpu_total_gb=round(total / 1e9, 2),
-            )
-    except Exception as exc:  # telemetry must never interrupt training
-        print(f"    [telemetry] CUDA query failed: {exc}", flush=True)
-    return telemetry
+    """Thin delegate: collection lives in _RuntimeTelemetry."""
+    return _RuntimeTelemetry._collect()
 
 
 def _format_telemetry(values: dict[str, float | int]) -> str:
-    pieces = [f"pid={values['pid']}"]
-    if "rss_mb" in values:
-        pieces.append(f"rss={values['rss_mb']:.0f}MB")
-    if "gpu_allocated_gb" in values:
-        pieces.append(
-            f"gpu={values['gpu_allocated_gb']:.2f}G alloc/"
-            f"{values['gpu_reserved_gb']:.2f}G reserved/"
-            f"{values['gpu_free_gb']:.2f}G free"
-        )
-    return " | ".join(pieces)
+    """Thin delegate: formatting lives in _RuntimeTelemetry."""
+    return _RuntimeTelemetry._format(values)
 
 
 def _wandb_memory_metrics(values: dict[str, float | int]) -> dict[str, float]:
-    """Return the only system telemetry allowed into W&B."""
-    names = {
-        "rss_mb": "memory/worker_rss_mb",
-        "memory_used_mb": "memory/total_used_mb",
-        "memory_available_mb": "memory/total_available_mb",
-    }
-    return {
-        target: float(values[source])
-        for source, target in names.items()
-        if source in values
-    }
+    """Thin delegate: the W&B projection lives in _RuntimeTelemetry."""
+    return _RuntimeTelemetry._memory_metrics(values)
+
+
+class _RuntimeTelemetry:
+    """Small SR owner of system telemetry facts and their two projections.
+
+    `_collect` — process/CUDA facts (pid, rss, host memory, GPU allocator);
+    `_format` — the pinned heartbeat console fragment;
+    `_memory_metrics` — the ONLY memory fields allowed into W&B.
+    """
+
+    @staticmethod
+    def _collect() -> dict[str, float | int]:
+        """Cheap process and CUDA facts emitted with each training heartbeat."""
+        telemetry: dict[str, float | int] = {"pid": os.getpid()}
+        _RuntimeTelemetry._proc_rss(telemetry)
+        _RuntimeTelemetry._host_memory(telemetry)
+        _RuntimeTelemetry._cuda_fact(telemetry)
+        return telemetry
+
+    @staticmethod
+    def _proc_rss(telemetry: dict[str, float | int]) -> None:
+        """Resident-set size of this worker process (absent on OSError)."""
+        try:
+            for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmRSS:"):
+                    telemetry["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
+                    break
+        except OSError:
+            pass
+
+    @staticmethod
+    def _host_memory(telemetry: dict[str, float | int]) -> None:
+        """Host total/available/used memory in MB (best effort)."""
+        try:
+            memory = {}
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                key, value = line.split(":", 1)
+                if key in {"MemTotal", "MemAvailable"}:
+                    memory[key] = int(value.strip().split()[0])
+            if "MemTotal" in memory and "MemAvailable" in memory:
+                telemetry.update(
+                    memory_total_mb=round(memory["MemTotal"] / 1024, 1),
+                    memory_available_mb=round(memory["MemAvailable"] / 1024, 1),
+                    memory_used_mb=round(
+                        (memory["MemTotal"] - memory["MemAvailable"]) / 1024, 1
+                    ),
+                )
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _cuda_fact(telemetry: dict[str, float | int]) -> None:
+        """CUDA allocator stats — never interrupting training on failure."""
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                telemetry.update(
+                    gpu_allocated_gb=round(torch.cuda.memory_allocated() / 1e9, 2),
+                    gpu_reserved_gb=round(torch.cuda.memory_reserved() / 1e9, 2),
+                    gpu_peak_gb=round(torch.cuda.max_memory_allocated() / 1e9, 2),
+                    gpu_free_gb=round(free / 1e9, 2),
+                    gpu_total_gb=round(total / 1e9, 2),
+                )
+        except Exception as exc:  # telemetry must never interrupt training
+            print(f"    [telemetry] CUDA query failed: {exc}", flush=True)
+
+    @staticmethod
+    def _format(values: dict[str, float | int]) -> str:
+        pieces = [f"pid={values['pid']}"]
+        if "rss_mb" in values:
+            pieces.append(f"rss={values['rss_mb']:.0f}MB")
+        if "gpu_allocated_gb" in values:
+            pieces.append(
+                f"gpu={values['gpu_allocated_gb']:.2f}G alloc/"
+                f"{values['gpu_reserved_gb']:.2f}G reserved/"
+                f"{values['gpu_free_gb']:.2f}G free"
+            )
+        return " | ".join(pieces)
+
+    @staticmethod
+    def _memory_metrics(values: dict[str, float | int]) -> dict[str, float]:
+        """Return the only system telemetry allowed into W&B."""
+        names = {
+            "rss_mb": "memory/worker_rss_mb",
+            "memory_used_mb": "memory/total_used_mb",
+            "memory_available_mb": "memory/total_available_mb",
+        }
+        return {
+            target: float(values[source])
+            for source, target in names.items()
+            if source in values
+        }
+
+
+class _CollapseReporter:
+    """Owner of the collapse diagnostic wiring (uniformity lane).
+
+    `_metrics` runs the shared unrelated-pair diagnostic on the current
+    model; `_wandb_metrics` projects the result onto the live/ W&B keys —
+    the two pieces ProgressCallback used to inline as private methods.
+    """
+
+    def __init__(
+        self,
+        *,
+        model=None,
+        df=None,
+        payload=None,
+        config=None,
+        batch_size=None,
+        trace_path=None,
+    ):
+        self.model = model
+        self.df = df
+        self.payload = payload
+        self.config = config
+        self.batch_size = batch_size
+        self.trace_path = trace_path
+
+    def _metrics(self, evaluation_step: int) -> dict[str, float | int | str]:
+        """Run the shared unrelated-pair diagnostic on the current model."""
+        if self.model is None:
+            return {}
+        from training.uniformity import collapse_diagnostics
+
+        return collapse_diagnostics(
+            model=self.model,
+            df=self.df,
+            payload=self.payload,
+            config=self.config,
+            batch_size=int(self.batch_size),
+            trace_path=(
+                self.trace_path.with_name(f"{self.trace_path.stem}_collapse_pairs.csv")
+                if self.trace_path is not None
+                else None
+            ),
+            evaluation_step=evaluation_step,
+        )
+
+    @staticmethod
+    def _wandb_metrics(
+        metrics: dict[str, float | int | str],
+    ) -> dict[str, float | int | str]:
+        return {
+            f"live/{key}": value
+            for key, value in metrics.items()
+            if key != "collapse_status" and isinstance(value, (float, int))
+        } | (
+            {"live/collapse_status": metrics["collapse_status"]}
+            if "collapse_status" in metrics
+            else {}
+        )
+
+
+class _LiveStatusWriter:
+    """Owner of the atomic worker heartbeat the Colab launcher polls."""
+
+    def __init__(self, *, wandb_ctx=None):
+        self.wandb_ctx = wandb_ctx
+
+    def _write(self, state, event: str, **values) -> None:
+        """Atomically expose a compact worker heartbeat to the Colab launcher."""
+        write_worker_live_status(
+            target=RESULTS / "live_status.json",
+            event=event,
+            step=int(state.global_step),
+            max_steps=int(state.max_steps),
+            epoch=float(state.epoch or 0.0),
+            wandb_run_id=getattr(self.wandb_ctx, "run_id", None),
+            wandb_url=getattr(self.wandb_ctx, "run_url", None),
+            **values,
+        )
+
+
+class _LossTraceJournal:
+    """Owner of the loss/trace CSV: one row per real step or evaluation event."""
+
+    def __init__(self, trace_path: Path | None):
+        self.trace_path = trace_path
+        self._rows: list[dict[str, object]] = []
+
+    def record_loss_step(
+        self, state, loss: float, grad_norm, loss_stats: dict
+    ) -> None:
+        self._rows.append(
+            {
+                "step": float(state.global_step),
+                "epoch": float(state.epoch or 0.0),
+                "train_loss": loss,
+                "grad_norm": grad_norm,
+                **loss_stats,
+            }
+        )
+
+    def record_collapse_event(
+        self, state, collapse_metrics: dict[str, float | int | str]
+    ) -> None:
+        self._rows.append(
+            {
+                "step": float(state.global_step),
+                "epoch": float(state.epoch or 0.0),
+                "event": "evaluation",
+                **collapse_metrics,
+            }
+        )
+
+    def flush(self) -> None:
+        """The on_train_end write: write-now-rotate keeps reruns honest."""
+        if self.trace_path is not None and self._rows:
+            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+            # A fold owns this file; write mode keeps reruns from appending
+            # stale optimizer telemetry from an earlier attempt.
+            pd.DataFrame(self._rows).to_csv(self.trace_path, index=False, mode="w")
+            print(f"    [loss-trace] wrote {self.trace_path}", flush=True)
+
+
+class _TrainLogDispatcher:
+    """Owner of the on_log body: train-loss presentation, W&B, heartbeat.
+
+    `dev_accuracy` arrives from the evaluate presenter so both hooks read
+    the exact same shared state the original callback held.
+    """
+
+    def __init__(
+        self,
+        *,
+        tracked_loss=None,
+        journal: _LossTraceJournal,
+        live: _LiveStatusWriter,
+        wandb_ctx=None,
+    ):
+        self.tracked_loss = tracked_loss
+        self.journal = journal
+        self.live = live
+        self.wandb_ctx = wandb_ctx
+        self.latest_train_loss: float | None = None
+
+    def pop_tracking_stats(self):
+        """The tracked loss's per-batch stats, when the loss opts into tracking."""
+        return (
+            self.tracked_loss.pop_tracking_stats()
+            if self.tracked_loss is not None
+            and hasattr(self.tracked_loss, "pop_tracking_stats")
+            else {}
+        )
+
+    def dispatch(self, args, state, logs=None, dev_accuracy=None, **kwargs) -> None:
+        if not logs or not state.is_world_process_zero:
+            return
+        if "loss" in logs:
+            loss, loss_stats, grad_norm, grad_norm_wire = self._record(state, logs)
+            telemetry = _runtime_telemetry()
+            self._console(args, state, loss, dev_accuracy, telemetry)
+            self._wandb_log(state, loss, loss_stats, grad_norm_wire, telemetry)
+            self._heartbeat(state, loss, dev_accuracy, loss_stats, grad_norm_wire, telemetry)
+
+    def _record(self, state, logs) -> tuple[float, dict, float, float | None]:
+        """Persist the step into the journal; return its loss facts."""
+        loss = float(logs["loss"])
+        self.latest_train_loss = loss
+        loss_stats = self.pop_tracking_stats()
+        grad_norm = (
+            float(logs["grad_norm"])
+            if logs.get("grad_norm") is not None
+            else float("nan")
+        )
+        grad_norm_wire = (
+            float(logs["grad_norm"])
+            if logs.get("grad_norm") is not None
+            else None
+        )
+        self.journal.record_loss_step(state, loss, grad_norm, loss_stats)
+        return loss, loss_stats, grad_norm, grad_norm_wire
+
+    @staticmethod
+    def _console(args, state, loss, dev_accuracy, telemetry) -> None:
+        """The pinned train-loss epoch line."""
+        total_epochs = float(args.num_train_epochs)
+        accuracy = (
+            f" | dev_acc {dev_accuracy:.4f}"
+            if dev_accuracy is not None
+            else ""
+        )
+        print(
+            f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
+            f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
+            flush=True,
+        )
+
+    def _wandb_log(self, state, loss, loss_stats, grad_norm_wire, telemetry) -> None:
+        """The live/ W&B projection of a training log event."""
+        if self.wandb_ctx is None:
+            return
+        self.wandb_ctx.log_metrics(
+            {
+                "live/train_loss": loss,
+                "live/epoch": float(state.epoch or 0.0),
+                "live/grad_norm": grad_norm_wire,
+                **{
+                    f"live/loss_{key}": value
+                    for key, value in loss_stats.items()
+                },
+                **_wandb_memory_metrics(telemetry),
+            },
+        )
+
+    def _heartbeat(self, state, loss, dev_accuracy, loss_stats, grad_norm_wire, telemetry) -> None:
+        """The shared worker live-status event for a training log event."""
+        self.live._write(
+            state,
+            "train",
+            train_loss=loss,
+            dev_accuracy=dev_accuracy,
+            grad_norm=grad_norm_wire,
+            **{f"loss_{key}": value for key, value in loss_stats.items()},
+            **telemetry,
+        )
+
+
+class _DevEvaluatePresenter:
+    """Owner of the on_evaluate body: the dev evaluator's metric contract,
+    its presentation line, the collapse projection, W&B and the heartbeat.
+
+    `_DEV_METRICS` comes straight from the callback class so both surfaces
+    keep one declaration.
+    """
+
+    def __init__(self, *, dev_metrics: dict, journal: _LossTraceJournal, live: _LiveStatusWriter, wandb_ctx=None):
+        self._DEV_METRICS = dev_metrics
+        self.journal = journal
+        self.live = live
+        self.wandb_ctx = wandb_ctx
+        self.latest_dev_accuracy: float | None = None
+        self.latest_collapse_metrics: dict[str, float | int | str] = {}
+
+    def _contract_values(self, metrics: dict) -> tuple[float, float, float, float, float]:
+        """Validate the structured evaluator contract, then unpack its values."""
+        missing = [key for key in self._DEV_METRICS.values() if key not in metrics]
+        if missing:
+            raise RuntimeError(
+                "structured dev evaluator violated its metric contract; missing "
+                + ", ".join(missing)
+            )
+        accuracy = float(metrics[self._DEV_METRICS["accuracy"]])
+        ap = float(metrics[self._DEV_METRICS["average_precision"]])
+        f1 = float(metrics[self._DEV_METRICS["f1"]])
+        precision = float(metrics[self._DEV_METRICS["precision"]])
+        recall = float(metrics[self._DEV_METRICS["recall"]])
+        return accuracy, ap, f1, precision, recall
+
+    def present(
+        self,
+        args,
+        state,
+        metrics: dict | None,
+        *, collapse, latest_train_loss,
+        **kwargs,
+    ) -> None:
+        if not metrics or not state.is_world_process_zero:
+            return
+        accuracy, ap, f1, precision, recall = self._contract_values(metrics)
+        self.latest_dev_accuracy = accuracy
+        collapse_metrics = collapse._metrics(int(state.global_step))
+        self.latest_collapse_metrics = dict(collapse_metrics)
+        if collapse_metrics:
+            self.journal.record_collapse_event(state, collapse_metrics)
+        telemetry = _runtime_telemetry()
+        self._console(args, state, ap, accuracy, f1, collapse_metrics, latest_train_loss, telemetry)
+        self._wandb_evaluation(state, metrics, accuracy, ap, f1, precision, recall, collapse_metrics, telemetry)
+        self._heartbeat(state, metrics, latest_train_loss, accuracy, ap, f1, precision, recall, collapse_metrics, telemetry)
+
+    @staticmethod
+    def _console(args, state, ap, accuracy, f1, collapse_metrics, latest_train_loss, telemetry) -> None:
+        """The pinned dev-evaluation epoch line (+ collapse status when run)."""
+        parts = [
+            f"dev_ap {ap:.4f}",
+            f"dev_acc {accuracy:.4f}",
+            f"dev_f1 {f1:.4f}",
+        ]
+        if collapse_metrics:
+            parts.append(
+                "collapse "
+                f"status={collapse_metrics['collapse_status']} "
+                f"median={collapse_metrics.get('collapse_median_cosine', float('nan')):.4f} "
+                f"p90={collapse_metrics.get('collapse_p90_cosine', float('nan')):.4f} "
+                f"std={collapse_metrics.get('collapse_cosine_std', float('nan')):.4f} "
+                f"healthy={collapse_metrics['collapse_healthy']}"
+            )
+        parts.append(_format_telemetry(telemetry))
+        if parts:
+            total_epochs = float(args.num_train_epochs)
+            loss = (
+                f"train_loss {latest_train_loss:.4f} | "
+                if latest_train_loss is not None
+                else ""
+            )
+            print(
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step "
+                f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
+                flush=True,
+            )
+
+    def _wandb_evaluation(
+        self, state, metrics, accuracy, ap, f1, precision, recall,
+        collapse_metrics, telemetry,
+    ) -> None:
+        """The live/ W&B projection of an evaluation event."""
+        if self.wandb_ctx is None:
+            return
+        self.wandb_ctx.log_metrics(
+            {
+                "live/dev_loss": float(metrics["eval_loss"])
+                if metrics.get("eval_loss") is not None else None,
+                "live/dev_accuracy": accuracy,
+                "live/dev_average_precision": ap,
+                "live/dev_f1": f1,
+                "live/dev_precision": precision,
+                "live/dev_recall": recall,
+                "live/epoch": float(state.epoch or 0.0),
+                **_CollapseReporter._wandb_metrics(collapse_metrics),
+                **_wandb_memory_metrics(telemetry),
+            },
+        )
+
+    def _heartbeat(
+        self, state, metrics, latest_train_loss, accuracy, ap, f1, precision, recall,
+        collapse_metrics, telemetry,
+    ) -> None:
+        """The shared worker live-status event for an evaluation event."""
+        self.live._write(
+            state,
+            "evaluation",
+            train_loss=latest_train_loss,
+            dev_loss=float(metrics["eval_loss"]) if metrics.get("eval_loss") is not None else None,
+            dev_average_precision=ap,
+            dev_accuracy=self.latest_dev_accuracy,
+            dev_f1=f1,
+            dev_precision=precision,
+            dev_recall=recall,
+            **collapse_metrics,
+            **telemetry,
+        )
+
+
+class _EpochAdvance:
+    """Owner of the on_epoch_begin body: the tracked loss's epoch wiring."""
+
+    def __init__(self, *, tracked_loss=None):
+        self.tracked_loss = tracked_loss
+
+    def advance(self, state, control):
+        epoch = int((state.epoch or 0.0)) + 1
+        if self.tracked_loss is not None and hasattr(self.tracked_loss, "set_epoch"):
+            self.tracked_loss.set_epoch(epoch)
+        dynamic_ref = getattr(self.tracked_loss, "_dynamic_epoch_ref", None)
+        if dynamic_ref is not None:
+            dynamic_ref["epoch"] = epoch
+        return control
+
+
+class _TrainingStartHeartbeat:
+    """Owner of the on_train_begin body: first heartbeat with telemetry."""
+
+    def __init__(self, *, live: _LiveStatusWriter, wandb_ctx=None):
+        self.live = live
+        self.wandb_ctx = wandb_ctx
+
+    def begin(self, state, control) -> None:
+        if state.is_world_process_zero:
+            telemetry = _runtime_telemetry()
+            print(f"    [telemetry] training-started | {_format_telemetry(telemetry)}", flush=True)
+            if self.wandb_ctx is not None:
+                self.wandb_ctx.log_metrics(_wandb_memory_metrics(telemetry))
+            self.live._write(state, "training-started", **telemetry)
+
+
+class _LateEpochLrDecayPolicy:
+    """Owns applying the SSOT late-epoch LR reduction exactly once.
+
+    The HF scheduler still owns its normal warmup/linear schedule. At the
+    configured later-epoch boundary we scale both optimizer and scheduler
+    base LRs, so the reduction survives subsequent scheduler steps and is
+    preserved in resumable optimizer state. The callback hooks delegate here;
+    all observable state (applied / resume fingerprint / LR snapshots) lives
+    on the policy and is exposed through the callback's properties.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        start_epoch_fraction: float,
+        multiplier: float,
+    ):
+        self.enabled = bool(enabled)
+        self.start_epoch_fraction = float(start_epoch_fraction)
+        self.multiplier = float(multiplier)
+        self.applied = False
+        self.applied_epoch: float | None = None
+        self.learning_rates_before: list[float] = []
+        self.learning_rates_after: list[float] = []
+        self.resumed_start = False
+        self.global_step_at_resume = 0
+
+    def record_resume(self, state, control):
+        # D2 telemetry: whether this run STARTED from an existing checkpoint.
+        self.resumed_start = bool(getattr(state, "global_step", 0))
+        self.global_step_at_resume = int(getattr(state, "global_step", 0))
+        return control
+
+    def _boundary_reached(self, args, state) -> tuple[bool, float | None]:
+        """Small SR gates: enabled + once + at or past the epoch boundary."""
+        if not self.enabled or self.applied:
+            return False, None
+        current_epoch = float(state.epoch or 0.0)
+        boundary = float(args.num_train_epochs) * self.start_epoch_fraction
+        if current_epoch + 1e-9 < boundary:
+            return False, None
+        return True, boundary
+
+    @staticmethod
+    def _scale_optimizer(optimizer, multiplier: float) -> list[float]:
+        before = [float(group["lr"]) for group in optimizer.param_groups]
+        for group in optimizer.param_groups:
+            group["lr"] = float(group["lr"]) * multiplier
+            if "initial_lr" in group:
+                group["initial_lr"] = float(group["initial_lr"]) * multiplier
+        return before
+
+    @staticmethod
+    def _scale_scheduler(scheduler, multiplier: float) -> None:
+        if scheduler is not None and hasattr(scheduler, "base_lrs"):
+            scheduler.base_lrs = [
+                float(lr) * multiplier for lr in scheduler.base_lrs
+            ]
+
+    def apply_at_boundary(self, args, state, control, **kwargs):
+        reached, boundary = self._boundary_reached(args, state)
+        if not reached:
+            return control
+        optimizer = kwargs.get("optimizer")
+        scheduler = kwargs.get("lr_scheduler")
+        if optimizer is None:
+            raise RuntimeError(
+                "late-epoch LR decay reached its boundary without an optimizer"
+            )
+        current_epoch = float(state.epoch or 0.0)
+        self.learning_rates_before = self._scale_optimizer(optimizer, self.multiplier)
+        self._scale_scheduler(scheduler, self.multiplier)
+        self.learning_rates_after = [
+            float(group["lr"]) for group in optimizer.param_groups
+        ]
+        self.applied = True
+        self.applied_epoch = current_epoch
+        print(
+            f"    [optim] late-epoch LR decay applied at epoch {current_epoch:.3f} "
+            f"(boundary={boundary:.3f}, multiplier={self.multiplier:.3f})",
+            flush=True,
+        )
+        emit_timing(
+            "[timing] training.late_epoch_lr applied "
+            f"applied_epoch={current_epoch:.3f} boundary={boundary:.3f} "
+            f"multiplier={self.multiplier:.3f} resumed_start={self.resumed_start} "
+            f"global_step_at_resume={self.global_step_at_resume} "
+            f"lr_before_min={min(self.learning_rates_before):.8g} "
+            f"lr_after_min={min(self.learning_rates_after):.8g}"
+        )
+        return control
 
 
 class ProgressCallback(TrainerCallback):
-    """Live per-step display of train loss + dev AP/AUC during training.
+    """Thin hook shell over the presentation owners; behavior pinned.
 
     The modern Trainer path replaces 07b's log_steps=True (which wrapped the
     loss module's forward to print every batch). This is the equivalent on the
     HF contract: on_log fires at logging_steps and carries the running train
     loss; on_evaluate fires at eval_steps and carries the dev metrics the
-    early-stopper is actually watching.
+    early-stopper is actually watching. The hook bodies delegate to
+    `_TrainingStartHeartbeat` / `_EpochAdvance` / `_TrainLogDispatcher` /
+    `_DevEvaluatePresenter` / `_CollapseReporter` / `_LiveStatusWriter` /
+    `_LossTraceJournal`.
     """
 
     # The structured dev evaluator below is the sole source of these values.
@@ -1158,10 +2186,6 @@ class ProgressCallback(TrainerCallback):
         self.wandb_ctx = wandb_ctx
         self.tracked_loss = tracked_loss
         self.trace_path = Path(trace_path) if trace_path is not None else None
-        self._trace_rows: list[dict[str, object]] = []
-        self.latest_train_loss: float | None = None
-        self.latest_dev_accuracy: float | None = None
-        self.latest_collapse_metrics: dict[str, float | int | str] = {}
         collapse_values = (
             collapse_model,
             collapse_df,
@@ -1176,241 +2200,94 @@ class ProgressCallback(TrainerCallback):
                 "collapse monitoring requires model, dataframe, payload, "
                 "config, and batch size together"
             )
-        self.collapse_model = collapse_model
-        self.collapse_df = collapse_df
-        self.collapse_payload = collapse_payload
-        self.collapse_config = collapse_config
-        self.collapse_batch_size = collapse_batch_size
+        self._journal = _LossTraceJournal(self.trace_path)
+        self._collapse = _CollapseReporter(
+            model=collapse_model,
+            df=collapse_df,
+            payload=collapse_payload,
+            config=collapse_config,
+            batch_size=collapse_batch_size,
+            trace_path=self.trace_path,
+        )
+        self._live = _LiveStatusWriter(wandb_ctx=wandb_ctx)
+        self._start = _TrainingStartHeartbeat(live=self._live, wandb_ctx=wandb_ctx)
+        self._advance = _EpochAdvance(tracked_loss=tracked_loss)
+        self._log = _TrainLogDispatcher(
+            tracked_loss=tracked_loss,
+            journal=self._journal,
+            live=self._live,
+            wandb_ctx=wandb_ctx,
+        )
+        self._evaluate = _DevEvaluatePresenter(
+            dev_metrics=self._DEV_METRICS,
+            journal=self._journal,
+            live=self._live,
+            wandb_ctx=wandb_ctx,
+        )
+
+    @property
+    def latest_train_loss(self):
+        return self._log.latest_train_loss
+
+    @property
+    def latest_dev_accuracy(self):
+        return self._evaluate.latest_dev_accuracy
+
+    @property
+    def latest_collapse_metrics(self):
+        return self._evaluate.latest_collapse_metrics
 
     def _collapse_metrics(self, evaluation_step: int) -> dict[str, float | int | str]:
-        """Run the shared unrelated-pair diagnostic on the current model."""
-        if self.collapse_model is None:
-            return {}
-        from training.uniformity import collapse_diagnostics
-
-        return collapse_diagnostics(
-            model=self.collapse_model,
-            df=self.collapse_df,
-            payload=self.collapse_payload,
-            config=self.collapse_config,
-            batch_size=int(self.collapse_batch_size),
-            trace_path=(
-                self.trace_path.with_name(f"{self.trace_path.stem}_collapse_pairs.csv")
-                if self.trace_path is not None
-                else None
-            ),
-            evaluation_step=evaluation_step,
-        )
+        return self._collapse._metrics(evaluation_step)
 
     @staticmethod
     def _collapse_wandb_metrics(
         metrics: dict[str, float | int | str],
     ) -> dict[str, float | int | str]:
-        return {
-            f"live/{key}": value
-            for key, value in metrics.items()
-            if key != "collapse_status" and isinstance(value, (float, int))
-        } | (
-            {"live/collapse_status": metrics["collapse_status"]}
-            if "collapse_status" in metrics
-            else {}
-        )
+        return _CollapseReporter._wandb_metrics(metrics)
 
     def _write_live_status(self, state, event: str, **values) -> None:
-        """Atomically expose a compact worker heartbeat to the Colab launcher."""
-        write_worker_live_status(
-            target=RESULTS / "live_status.json",
-            event=event,
-            step=int(state.global_step),
-            max_steps=int(state.max_steps),
-            epoch=float(state.epoch or 0.0),
-            wandb_run_id=getattr(self.wandb_ctx, "run_id", None),
-            wandb_url=getattr(self.wandb_ctx, "run_url", None),
-            **values,
-        )
+        self._live._write(state, event, **values)
 
     def on_train_begin(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            telemetry = _runtime_telemetry()
-            print(f"    [telemetry] training-started | {_format_telemetry(telemetry)}", flush=True)
-            if self.wandb_ctx is not None:
-                self.wandb_ctx.log_metrics(_wandb_memory_metrics(telemetry))
-            self._write_live_status(state, "training-started", **telemetry)
+        self._start.begin(state, control)
         return control
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        epoch = int((state.epoch or 0.0)) + 1
-        if self.tracked_loss is not None and hasattr(self.tracked_loss, "set_epoch"):
-            self.tracked_loss.set_epoch(epoch)
-        dynamic_ref = getattr(self.tracked_loss, "_dynamic_epoch_ref", None)
-        if dynamic_ref is not None:
-            dynamic_ref["epoch"] = epoch
-        return control
+        return self._advance.advance(state, control)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or not state.is_world_process_zero:
             return
-        if "loss" in logs:
-            loss = float(logs["loss"])
-            self.latest_train_loss = loss
-            loss_stats = (
-                self.tracked_loss.pop_tracking_stats()
-                if self.tracked_loss is not None
-                and hasattr(self.tracked_loss, "pop_tracking_stats")
-                else {}
-            )
-            self._trace_rows.append(
-                {
-                    "step": float(state.global_step),
-                    "epoch": float(state.epoch or 0.0),
-                    "train_loss": loss,
-                    "grad_norm": float(logs["grad_norm"])
-                    if logs.get("grad_norm") is not None
-                    else float("nan"),
-                    **loss_stats,
-                }
-            )
-            telemetry = _runtime_telemetry()
-            total_epochs = float(args.num_train_epochs)
-            accuracy = (
-                f" | dev_acc {self.latest_dev_accuracy:.4f}"
-                if self.latest_dev_accuracy is not None
-                else ""
-            )
-            print(
-                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
-                flush=True,
-            )
-            if self.wandb_ctx is not None:
-                self.wandb_ctx.log_metrics(
-                    {
-                        "live/train_loss": loss,
-                        "live/epoch": float(state.epoch or 0.0),
-                        "live/grad_norm": float(logs["grad_norm"])
-                        if logs.get("grad_norm") is not None
-                        else None,
-                        **{
-                            f"live/loss_{key}": value
-                            for key, value in loss_stats.items()
-                        },
-                        **_wandb_memory_metrics(telemetry),
-                    },
-                )
-            self._write_live_status(
-                state,
-                "train",
-                train_loss=loss,
-                dev_accuracy=self.latest_dev_accuracy,
-                grad_norm=(
-                    float(logs["grad_norm"])
-                    if logs.get("grad_norm") is not None
-                    else None
-                ),
-                **{f"loss_{key}": value for key, value in loss_stats.items()},
-                **telemetry,
-            )
+        self._log.dispatch(
+            args, state, logs=logs, dev_accuracy=self._evaluate.latest_dev_accuracy
+        )
+        return None
 
     def on_train_end(self, args, state, control, **kwargs):
-        if self.trace_path is not None and self._trace_rows:
-            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-            # A fold owns this file; write mode keeps reruns from appending
-            # stale optimizer telemetry from an earlier attempt.
-            pd.DataFrame(self._trace_rows).to_csv(self.trace_path, index=False, mode="w")
-            print(f"    [loss-trace] wrote {self.trace_path}", flush=True)
+        self._journal.flush()
         return control
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
             return
-        missing = [key for key in self._DEV_METRICS.values() if key not in metrics]
-        if missing:
-            raise RuntimeError(
-                "structured dev evaluator violated its metric contract; missing "
-                + ", ".join(missing)
-            )
-        accuracy = float(metrics[self._DEV_METRICS["accuracy"]])
-        ap = float(metrics[self._DEV_METRICS["average_precision"]])
-        f1 = float(metrics[self._DEV_METRICS["f1"]])
-        precision = float(metrics[self._DEV_METRICS["precision"]])
-        recall = float(metrics[self._DEV_METRICS["recall"]])
-        self.latest_dev_accuracy = accuracy
-        collapse_metrics = self._collapse_metrics(int(state.global_step))
-        self.latest_collapse_metrics = dict(collapse_metrics)
-        if collapse_metrics:
-            self._trace_rows.append(
-                {
-                    "step": float(state.global_step),
-                    "epoch": float(state.epoch or 0.0),
-                    "event": "evaluation",
-                    **collapse_metrics,
-                }
-            )
-        telemetry = _runtime_telemetry()
-        parts = [
-            f"dev_ap {ap:.4f}",
-            f"dev_acc {accuracy:.4f}",
-            f"dev_f1 {f1:.4f}",
-        ]
-        if collapse_metrics:
-            parts.append(
-                "collapse "
-                f"status={collapse_metrics['collapse_status']} "
-                f"median={collapse_metrics.get('collapse_median_cosine', float('nan')):.4f} "
-                f"p90={collapse_metrics.get('collapse_p90_cosine', float('nan')):.4f} "
-                f"std={collapse_metrics.get('collapse_cosine_std', float('nan')):.4f} "
-                f"healthy={collapse_metrics['collapse_healthy']}"
-            )
-        parts.append(_format_telemetry(telemetry))
-        if parts:
-            total_epochs = float(args.num_train_epochs)
-            loss = (
-                f"train_loss {self.latest_train_loss:.4f} | "
-                if self.latest_train_loss is not None
-                else ""
-            )
-            print(
-                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step "
-                f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
-                flush=True,
-            )
-        if self.wandb_ctx is not None:
-            self.wandb_ctx.log_metrics(
-                {
-                    "live/dev_loss": float(metrics["eval_loss"])
-                    if metrics.get("eval_loss") is not None else None,
-                    "live/dev_accuracy": accuracy,
-                    "live/dev_average_precision": ap,
-                    "live/dev_f1": f1,
-                    "live/dev_precision": precision,
-                    "live/dev_recall": recall,
-                    "live/epoch": float(state.epoch or 0.0),
-                    **self._collapse_wandb_metrics(collapse_metrics),
-                    **_wandb_memory_metrics(telemetry),
-                },
-            )
-        self._write_live_status(
+        self._evaluate.present(
+            args,
             state,
-            "evaluation",
-            train_loss=self.latest_train_loss,
-            dev_loss=float(metrics["eval_loss"]) if metrics.get("eval_loss") is not None else None,
-            dev_average_precision=ap,
-            dev_accuracy=self.latest_dev_accuracy,
-            dev_f1=f1,
-            dev_precision=precision,
-            dev_recall=recall,
-            **collapse_metrics,
-            **telemetry,
+            metrics,
+            collapse=self._collapse,
+            latest_train_loss=self._log.latest_train_loss,
         )
+        return None
 
 
 class LateEpochLrDecayCallback(TrainerCallback):
-    """Apply the SSOT late-epoch LR reduction exactly once.
+    """Thin hook shell over `_LateEpochLrDecayPolicy`; state is delegated.
 
-    The HF scheduler still owns its normal warmup/linear schedule. At the
-    configured later-epoch boundary we scale both optimizer and scheduler
-    base LRs, so the reduction survives subsequent scheduler steps and is
-    preserved in resumable optimizer state.
+    The policy owns the apply-once boundary logic and the D2 resume
+    fingerprint; observable state (applied, applied_epoch, LR snapshots,
+    resumed_start, global_step_at_resume) is exposed through properties so
+    the fold-metrics reader and the D2 oracle keep their interface.
     """
 
     def __init__(
@@ -1420,71 +2297,48 @@ class LateEpochLrDecayCallback(TrainerCallback):
         start_epoch_fraction: float,
         multiplier: float,
     ):
-        self.enabled = bool(enabled)
-        self.start_epoch_fraction = float(start_epoch_fraction)
-        self.multiplier = float(multiplier)
-        self.applied = False
-        self.applied_epoch: float | None = None
-        self.learning_rates_before: list[float] = []
-        self.learning_rates_after: list[float] = []
-        self.resumed_start = False
-        self.global_step_at_resume = 0
+        self._policy = _LateEpochLrDecayPolicy(
+            enabled=enabled,
+            start_epoch_fraction=start_epoch_fraction,
+            multiplier=multiplier,
+        )
+        self.enabled = self._policy.enabled
+
+    # Policy state surface (was direct attributes on this callback).
+    @property
+    def applied(self) -> bool:
+        return self._policy.applied
+
+    @property
+    def applied_epoch(self):
+        return self._policy.applied_epoch
+
+    @property
+    def learning_rates_before(self) -> list[float]:
+        return self._policy.learning_rates_before
+
+    @property
+    def learning_rates_after(self) -> list[float]:
+        return self._policy.learning_rates_after
+
+    @property
+    def resumed_start(self) -> bool:
+        return self._policy.resumed_start
+
+    @property
+    def global_step_at_resume(self) -> int:
+        return self._policy.global_step_at_resume
 
     def on_train_begin(self, args, state, control, **kwargs):
-        # D2 telemetry: whether this run STARTED from an existing checkpoint.
-        self.resumed_start = bool(getattr(state, "global_step", 0))
-        self.global_step_at_resume = int(getattr(state, "global_step", 0))
-        return control
+        return self._policy.record_resume(state, control)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        if not self.enabled or self.applied:
-            return control
-        current_epoch = float(state.epoch or 0.0)
-        boundary = float(args.num_train_epochs) * self.start_epoch_fraction
-        if current_epoch + 1e-9 < boundary:
-            return control
-
-        optimizer = kwargs.get("optimizer")
-        scheduler = kwargs.get("lr_scheduler")
-        if optimizer is None:
-            raise RuntimeError(
-                "late-epoch LR decay reached its boundary without an optimizer"
-            )
-        self.learning_rates_before = [
-            float(group["lr"]) for group in optimizer.param_groups
-        ]
-        for group in optimizer.param_groups:
-            group["lr"] = float(group["lr"]) * self.multiplier
-            if "initial_lr" in group:
-                group["initial_lr"] = float(group["initial_lr"]) * self.multiplier
-        if scheduler is not None and hasattr(scheduler, "base_lrs"):
-            scheduler.base_lrs = [
-                float(lr) * self.multiplier for lr in scheduler.base_lrs
-            ]
-        self.learning_rates_after = [
-            float(group["lr"]) for group in optimizer.param_groups
-        ]
-        self.applied = True
-        self.applied_epoch = current_epoch
-        print(
-            f"    [optim] late-epoch LR decay applied at epoch {current_epoch:.3f} "
-            f"(boundary={boundary:.3f}, multiplier={self.multiplier:.3f})",
-            flush=True,
-        )
-        emit_timing(
-            "[timing] training.late_epoch_lr applied "
-            f"applied_epoch={current_epoch:.3f} boundary={boundary:.3f} "
-            f"multiplier={self.multiplier:.3f} resumed_start={self.resumed_start} "
-            f"global_step_at_resume={self.global_step_at_resume} "
-            f"lr_before_min={min(self.learning_rates_before):.8g} "
-            f"lr_after_min={min(self.learning_rates_after):.8g}"
-        )
-        return control
+        return self._policy.apply_at_boundary(args, state, control, **kwargs)
 
 
 def checkpoint_publication_deferred() -> bool:
-    """One flag parser for checkpoint publication owned by the run finisher."""
-    return os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS", "0").lower() in {"1", "true", "yes"}
+    """Thin delegate: the flag parser lives in _CheckpointPublisher."""
+    return _CheckpointPublisher._publication_deferred()
 
 
 class DvcCheckpointCallback(TrainerCallback):
@@ -1982,65 +2836,10 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
 def retain_hpo_champion(
     *, model_id: str, run_tag: str, value: float, folds: list[int]
 ) -> bool:
-    """Keep exactly one completed HPO trial's bulky local artifacts per model.
-
-    Optuna may complete two trials concurrently.  The per-model lock makes
-    comparison, removal of the previous champion, and champion-record update
-    one transaction.  This mode deliberately retains local artifacts only;
-    DVC checkpoint publishing is disabled by the HPO launcher.
-    """
-    import shutil
-    import tempfile
-
-    model_tag = model_id.rstrip("/").rsplit("/", 1)[-1]
-    record = RESULTS / f"hpo_{model_tag}_champion.json"
-    lock_path = RESULTS / f".hpo-{model_tag}-retention.lock"
-
-    def artifacts(tag: str, fold_numbers: list[int]) -> list[Path]:
-        paths = [RESULTS / "logs" / tag]
-        paths.extend(
-            artifact(
-                "checkpoint_repo",
-                {"model_tag": model_tag, "run_tag": tag, "fold": fold, "step": 0},
-            ).parent
-            for fold in fold_numbers
-        )
-        paths.extend(RESULTS.glob(f"train_{model_tag}_{tag}_fold*_pairs.csv"))
-        return paths
-
-    def remove(paths: list[Path]) -> None:
-        for path in paths:
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                path.unlink(missing_ok=True)
-
-    with lock_path.open("w", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            previous = json.loads(record.read_text(encoding="utf-8")) if record.is_file() else None
-            if previous is not None and float(previous["value"]) >= value:
-                remove(artifacts(run_tag, folds))
-                print(
-                    f"[hpo-retention] pruned trial {run_tag}: {value:.6f} "
-                    f"<= champion {previous['value']:.6f}",
-                    flush=True,
-                )
-                return False
-            if previous is not None:
-                remove(artifacts(previous["run_tag"], list(previous["folds"])))
-            payload = {"model": model_id, "run_tag": run_tag, "value": value, "folds": folds}
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=RESULTS,
-                prefix=f".{record.name}.", suffix=".tmp", delete=False,
-            ) as handle:
-                json.dump(payload, handle, indent=2, sort_keys=True)
-                temporary = Path(handle.name)
-            os.replace(temporary, record)
-            print(f"[hpo-retention] champion {run_tag}: {value:.6f}", flush=True)
-            return True
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    """Thin delegate: champion retention lives in _HpoStream (one owner)."""
+    return _HpoStream._retain_hpo_champion(
+        model_id=model_id, run_tag=run_tag, value=value, folds=folds
+    )
 
 
 @timed
@@ -5093,65 +5892,22 @@ def train_one_config(
                 continue
 
             # Every lane uses the same component-safe calibration/Rand
-            # computation. The holdout population below remains isolated for
+            # computation (_CalibrationEvaluator owns the scoring + loud
+            # failures). The holdout population below remains isolated for
             # final reporting and is never used by HPO selection.
-            from training.hpo_metrics import (
-                CALIBRATION_REASON_EMPTY_SPLIT,
-                evaluate_calibration_trial,
-                unavailable_calibration_metrics,
+            calibration_metrics: dict[str, object] = _CalibrationEvaluator._evaluate_fold_calibration(
+                calibration_config,
+                fold_i=fold_i,
+                sample=sample,
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                calibration_pos=calibration_pos,
+                calibration_neg=calibration_neg,
+                row_bc=row_bc,
+                structured_feature_weight=structured_feature_weight,
             )
-
-            calibration_metrics: dict[str, object]
-            if len(calibration_pos) == 0 or len(calibration_neg) == 0:
-                calibration_metrics = unavailable_calibration_metrics(
-                    reason_code=CALIBRATION_REASON_EMPTY_SPLIT,
-                    reason=(
-                        "empty calibration split — Rand threshold calibration "
-                        f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
-                    ),
-                    positive_pairs=len(calibration_pos),
-                    negative_pairs=len(calibration_neg),
-                )
-                print(
-                    f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
-                    f"unavailable; {calibration_metrics['calibration_reason']}",
-                    flush=True,
-                )
-                # Chain-check samples intentionally do not reserve a Rand
-                # calibration population: their job is to prove training,
-                # checkpointing, and inference wiring on a bounded input.
-                # Full runs must still fail loudly rather than publish an
-                # uncalibrated threshold.
-                if not sample:
-                    raise RequiredCalibrationError(
-                        calibration_metrics["calibration_reason"]
-                    )
-            else:
-                # The explicit empty-population branch above is the only
-                # expected unavailable-calibration condition.  An exception
-                # from the evaluator is a programming/data-contract failure,
-                # including in selection mode, and must retain its traceback
-                # instead of becoming a prunable/unavailable result.
-                try:
-                    calibration_metrics = evaluate_calibration_trial(
-                        model=model,
-                        df=df,
-                        payload=payload,
-                        structured_features=structured_features,
-                        pos_pairs=calibration_pos,
-                        neg_pairs=calibration_neg,
-                        row_bc=row_bc,
-                        structured_weight=structured_feature_weight,
-                        batch_size=runtime("batch_size_eval"),
-                        config=calibration_config,
-                        include_collapse_guardrail=bool(
-                            calibration_config["collapse_guardrail"]["enabled"]
-                        ),
-                    )
-                except Exception as exc:
-                    raise CalibrationEvaluatorError(
-                        f"calibration evaluator failed on fold {fold_i}"
-                    ) from exc
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
@@ -5529,9 +6285,7 @@ def train_one_config(
                 _target_recall = float(
                     calibration_config["rand_matching"]["target_recall"]
                 )
-                _prec90, _rec90, _thr90 = _precision_at_recall(_y, _all, _target_recall)
-                _tp90 = int(((_all >= _thr90) & (_y == 1)).sum())
-                _fp90 = int(((_all >= _thr90) & (_y == 0)).sum())
+                _prec90, _rec90, _tp90, _fp90, _thr90 = _CalibrationEvaluator._precision_at_recall_audit(_y, _all, _target_recall)
                 # Same SSOT doctrine as _thr_key above: the recall-tied KEYS must
                 # follow the configured target_recall, not a literal "90pct" —
                 # otherwise a retune writes a 95%-recall number under a 90% header.
@@ -5946,7 +6700,609 @@ def train_one_config(
 # ═══════════════════════════════════════════════════════════════════════════
 # Optuna
 # ═══════════════════════════════════════════════════════════════════════════
+class _HpoStream:
+    """One owner for the TPE sweep stream (OPUNA mode --hpo --n-trials).
 
+    Small SR methods, each verbatim-from-run_hpo in behavior:
+      * `_retain_hpo_champion`  per-model champion artifact retention
+      * `_resolve_study`        study/storage/control-plane resolution
+      * `_optimize`             resume-safe prior-trial accounting + optimize
+      * `_publish_best`         train_<model>_hpo_best.json publication
+    `run_hpo` stays the pinned API surface; this class owns the steps.
+    """
+
+    @staticmethod
+    def _retention_artifacts(
+        tag: str, model_tag: str, fold_numbers: list[int]
+    ) -> list[Path]:
+        """One trial's bulky local artifacts: fold logs + checkpoints + dumps."""
+        paths = [RESULTS / "logs" / tag]
+        paths.extend(
+            artifact(
+                "checkpoint_repo",
+                {"model_tag": model_tag, "run_tag": tag, "fold": fold, "step": 0},
+            ).parent
+            for fold in fold_numbers
+        )
+        paths.extend(RESULTS.glob(f"train_{model_tag}_{tag}_fold*_pairs.csv"))
+        return paths
+
+    @staticmethod
+    def _retention_remove(paths: list[Path]) -> None:
+        import shutil
+
+        for path in paths:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _retain_hpo_champion(
+        *, model_id: str, run_tag: str, value: float, folds: list[int]
+    ) -> bool:
+        """Keep exactly one completed HPO trial's bulky local artifacts per model.
+
+        Optuna may complete two trials concurrently.  The per-model lock makes
+        comparison, removal of the previous champion, and champion-record update
+        one transaction (invariant: compare -> prune/replace -> write record
+        under ONE external lock, so a concurrent trial can never observe a
+        record-less or two-champion state).  This mode deliberately retains
+        local artifacts only; DVC checkpoint publishing is disabled by the HPO
+        launcher.
+        """
+        import tempfile
+
+        model_tag = model_id.rstrip("/").rsplit("/", 1)[-1]
+        record = RESULTS / f"hpo_{model_tag}_champion.json"
+        lock_path = RESULTS / f".hpo-{model_tag}-retention.lock"
+        def artifacts(tag, fold_numbers):
+            return _HpoStream._retention_artifacts(tag, model_tag, fold_numbers)
+
+        remove = _HpoStream._retention_remove
+
+        with lock_path.open("w", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                previous = json.loads(record.read_text(encoding="utf-8")) if record.is_file() else None
+                if previous is not None and float(previous["value"]) >= value:
+                    remove(artifacts(run_tag, folds))
+                    print(
+                        f"[hpo-retention] pruned trial {run_tag}: {value:.6f} "
+                        f"<= champion {previous['value']:.6f}",
+                        flush=True,
+                    )
+                    return False
+                if previous is not None:
+                    remove(artifacts(previous["run_tag"], list(previous["folds"])))
+                payload = {"model": model_id, "run_tag": run_tag, "value": value, "folds": folds}
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=RESULTS,
+                    prefix=f".{record.name}.", suffix=".tmp", delete=False,
+                ) as handle:
+                    json.dump(payload, handle, indent=2, sort_keys=True)
+                    temporary = Path(handle.name)
+                os.replace(temporary, record)
+                print(f"[hpo-retention] champion {run_tag}: {value:.6f}", flush=True)
+                return True
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    @staticmethod
+    def _control_plane_storage():
+        """PostgreSQL study name + storage when OPTUNA_STORAGE_URL is set."""
+        if not os.environ.get("OPTUNA_STORAGE_URL"):
+            return None, None
+        from training.hpo_control_plane import (
+            create_storage,
+            generation_study_name,
+            storage_from_environment,
+        )
+
+        generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
+        model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
+        if not generation_id or not model_key:
+            raise RuntimeError(
+                "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
+                "EUROMONITOR_HPO_MODEL_KEY"
+            )
+        study_name = generation_study_name(
+            generation_id=generation_id, model_key=model_key
+        )
+        control_plane = create_storage(storage_from_environment())
+        print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
+        return study_name, control_plane
+
+    @staticmethod
+    def _restore_study_db(args, study_db: Path) -> None:
+        """Resume precondition: a downloaded sqlite study, or restore from DVC."""
+        if not args.resume:
+            return
+        if checkpoint_publication_deferred():
+            if not study_db.is_file():
+                raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
+            print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
+        else:
+            from training.dvc_store import restore_checkpoint
+
+            restore_checkpoint(RESULTS, study_db)
+            print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+
+    @staticmethod
+    def _resolve_study(args):
+        """Create/load the TPE study (SSOT space, sqlite or control plane)."""
+        import optuna
+
+        with trace_step('training.run_hpo.study_creation'):
+            sampler = optuna.samplers.TPESampler(seed=SEED)
+            control_study_name, control_plane = _HpoStream._control_plane_storage()
+            # sqlite storage: the sweep SURVIVES session loss — re-running with the same
+            # --study resumes; every trial's params/value persist (the essential record)
+            study_name = control_study_name or f"second08-{args.model.split('/')[-1]}-dlr"
+            # dlr suffix: discriminative-LR trials form a NEW objective surface —
+            # never mixed into the pre-dlr TPE history (its surrogate would be poisoned
+            # by trials whose values came from single-LR training)
+            study_db = RESULTS / f"second08-{args.model.split('/')[-1]}-dlr.optuna.db"
+            _HpoStream._restore_study_db(args, study_db)
+            storage = control_plane or f"sqlite:///{study_db}"
+            study = optuna.create_study(
+                direction="maximize",
+                sampler=sampler,
+                study_name=study_name,
+                storage=storage,
+                load_if_exists=True,
+            )
+            if control_plane is not None:
+                from training.hpo_control_plane import fail_stale_trials
+
+                fail_stale_trials(study)
+        return study, control_plane, study_db
+
+    @staticmethod
+    def _optimize(study, objective, *, n_trials: int, n_jobs: int, wandb_ctx, study_db: Path) -> None:
+        """Resume-safe optimize: count prior trials, run only what remains."""
+        with trace_step('training.run_hpo.optimize'):
+            prior = len(
+                [t for t in study.trials if t.state.name in ("COMPLETE", "PRUNED", "FAIL")]
+            )
+            remaining = max(0, n_trials - prior)
+            print(
+                f"HPO: {prior} prior trials on record, running {remaining} more (n_jobs={n_jobs})",
+                flush=True,
+            )
+            if remaining:
+                def _persist_study(*_args) -> None:
+                    _HpoStream._persist_study(study_db)
+
+                study.optimize(
+                    objective,
+                    n_trials=remaining,
+                    n_jobs=n_jobs,
+                    callbacks=[_optuna_tracking_cb(wandb_ctx), _persist_study],
+                )
+
+    @staticmethod
+    def _persist_study(study_db: Path) -> None:
+        """Push the study db after each committed trial (opt-in environment)."""
+        if checkpoint_publication_deferred():
+            return
+        if not os.environ.get("DVC_API_KEY"):
+            return
+        from training.dvc_store import publish_checkpoint
+
+        publish_checkpoint(RESULTS, study_db)
+
+    @staticmethod
+    def _write_decision_trail(study, args) -> Path:
+        """Every trial's params + value on disk for an auditable decision trail."""
+        trials_df = study.trials_dataframe(
+            attrs=("number", "state", "value", "params", "user_attrs")
+        )
+        model_tag = args.model.split("/")[-1]
+        era = "-dlr"  # discriminative-LR sweep era (see study_name above)
+        trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
+        ensure_parent(trials_path)
+        trials_df.to_csv(trials_path, index=False)
+        trace_artifact("hpo_trials", trials_path, producer="training.training")
+        return trials_path
+
+    @staticmethod
+    def _write_best_record(study, args, *, selection_mode: bool) -> tuple[dict, Path]:
+        """The train_<model>_hpo_best.json payload: config + ranked signal."""
+        model_tag = args.model.split("/")[-1]
+        era = "-dlr"
+        best = {
+            "config": study.best_params,
+            "value": study.best_value,
+            "n_trials": len(study.trials),
+            "model": args.model,
+            "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
+            # which signal ranked the trials (test-leak fix, 2026-09-12):
+            # calibration Rand in both holdout and CV selection modes
+            "selection": (
+                HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
+            ),
+        }
+        out_path = artifact("hpo_best", {"model": model_tag, "era": era})
+        ensure_parent(out_path)
+        with open(out_path, "w") as f:
+            json.dump(best, f, indent=2)
+        trace_artifact("hpo_best", out_path, producer="training.training")
+        return best, out_path
+
+    @staticmethod
+    def _publish_best(study, args, *, selection_mode: bool, wandb_ctx) -> None:
+        """Persist the sweep's decision trail and its best config + metrics."""
+        with trace_step('training.run_hpo.best_config'):
+            if not [
+                trial
+                for trial in study.trials
+                if trial.state.name == "COMPLETE" and trial.value is not None
+            ]:
+                raise FoldExecutionError(
+                    "Optuna selection",
+                    [{"status": "no_completed_trials"}],
+                )
+
+            trials_path = _HpoStream._write_decision_trail(study, args)
+            best, out_path = _HpoStream._write_best_record(
+                study, args, selection_mode=selection_mode
+            )
+            if (
+                wandb_ctx is not None
+                and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
+            ):
+                wandb_ctx.log_artifact(trials_path, "hpo-trials")
+                wandb_ctx.log_artifact(out_path, "hpo-best")
+                wandb_ctx.set_summary(
+                    {"hpo_best_objective": study.best_value, "hpo_completed_trials": len(study.trials)}
+                )
+            _sel = best["selection"]
+            print(f"\nBEST: {study.best_params} -> {_sel} {study.best_value:.4f}", flush=True)
+            # AUDIT FIX (round 2, F02): print the path ACTUALLY written — the old
+            # line named train_hpo_best.json, a file never written by this lane.
+            print(f"wrote {out_path}", flush=True)
+
+
+class OptunaObjectiveOwner:
+    """One TPE trial, end to end, owned: configuration sampling from
+    HPO_SPACE (hpo.tpe_space), protocol-row training, trajectory evidence,
+    calibrated-Rand ranking + guardrails, and champion retention.
+
+    run_hpo holds this owner so the objective contract (optuna.Trial -> float
+    with TrialPruned semantics) stays byte-identical for the sweep consumers.
+    """
+
+    def __init__(
+        self,
+        args,
+        data,
+        *,
+        cv_folds,
+        folds_override,
+        dev_fraction,
+        dev_override,
+        selection_mode: bool,
+        neg_pairs,
+        train_neg_pairs,
+        neg_pair_sources,
+        train_neg_pair_sources,
+        dynamic_mask_hard_negatives: bool,
+        dynamic_mask_prob,
+        dynamic_mask_lo,
+        dynamic_mask_hi,
+        mask_audit,
+        hard_negative_mask_audit,
+        wandb_ctx,
+    ) -> None:
+        # Boundary plumbing only: kwargs -> instance state; no logic of its
+        # own (the trial contract is owned by the methods), so no extraction
+        # is possible without hiding the fields behind a second indirection.
+        self.args = args
+        self.data = data
+        self.cv_folds = cv_folds
+        self.folds_override = folds_override
+        self.dev_fraction = dev_fraction
+        self.dev_override = dev_override
+        self.selection_mode = selection_mode
+        self.neg_pairs = neg_pairs
+        self.train_neg_pairs = train_neg_pairs
+        self.neg_pair_sources = neg_pair_sources
+        self.train_neg_pair_sources = train_neg_pair_sources
+        self.dynamic_mask_hard_negatives = dynamic_mask_hard_negatives
+        self.dynamic_mask_prob = dynamic_mask_prob
+        self.dynamic_mask_lo = dynamic_mask_lo
+        self.dynamic_mask_hi = dynamic_mask_hi
+        self.mask_audit = mask_audit
+        self.hard_negative_mask_audit = hard_negative_mask_audit
+        self.wandb_ctx = wandb_ctx
+        # Set once the study stream resolved its control plane (PostgreSQL
+        # mode); None means local champion retention stays enabled.
+        self.control_plane = None
+
+    def _suggest_configuration(self, trial) -> dict:
+        """Sample one config from HPO_SPACE, SSOT-fixed knobs included."""
+        cfg = self._fixed_ssot_knobs()
+        cfg.update(self._suggest_searchable(trial))
+        return cfg
+
+    @staticmethod
+    def _fixed_ssot_knobs() -> dict:
+        """Knobs the trial cannot steer: runtime/SSOT values, never literals."""
+        return {
+            "architecture": _runtime("architecture"),
+            "projection_dropout": _runtime("projection_dropout"),
+            "label_smoothing": _runtime("label_smoothing"),
+            "random_easy_enabled": bool(
+                _runtime("random_easy_negatives")["enabled"]
+            ),
+            "random_easy_ratio_to_hard": float(
+                _runtime("random_easy_negatives")["ratio_to_hard"]
+            ),
+            "random_easy_candidate_pool_size": int(
+                _runtime("random_easy_negatives")["candidate_pool_size"]
+            ),
+            "lr_scheduler": _runtime("lr_scheduler"),  # SSOT
+            "max_grad_norm": _runtime("max_grad_norm"),  # SSOT
+            "patience": ES_PATIENCE,
+            "es_threshold": ES_THRESHOLD,
+            "late_epoch_decay_enabled": bool(
+                _runtime("late_epoch_lr_decay")["enabled"]
+            ),
+            "late_epoch_decay_start_fraction": float(
+                _runtime("late_epoch_lr_decay")["start_epoch_fraction"]
+            ),
+            "late_epoch_decay_multiplier": float(
+                _runtime("late_epoch_lr_decay")["multiplier"]
+            ),
+        }
+
+    @staticmethod
+    def _suggest_searchable(trial) -> dict:
+        """The six TPE suggest calls, in the original (pinned) order.
+
+        Invariant: suggest-call ORDER defines the TPE search layout — keep it
+        identical even though the fixed-knob keys were interleaved in the old
+        dict literal (they run no suggest calls).
+        """
+        return {
+            "epochs": trial.suggest_int("epochs", *HPO_SPACE["epochs"]),
+            "lr": trial.suggest_float("lr", *HPO_SPACE["lr"], log=True),
+            "warmup_ratio": trial.suggest_float(
+                "warmup_ratio", *HPO_SPACE["warmup_ratio"]
+            ),
+            "weight_decay": trial.suggest_float(
+                "weight_decay", *HPO_SPACE["weight_decay"]
+            ),
+            "negative_mask_frac": trial.suggest_float(
+                "negative_mask_frac", *HPO_SPACE["negative_mask_frac"]
+            ),
+            "uniformity_weight": trial.suggest_float(
+                "uniformity_weight", *HPO_SPACE["uniformity_weight"]
+            ),
+        }
+
+    def _run_trial(self, trial, cfg: dict) -> list[dict]:
+        """Train one protocol configuration over the selection folds."""
+        import torch
+
+        return train_one_config(
+            cfg,
+            loss=self.args.loss,
+            model_id=self.args.model,
+            use_hp=_SSOT_HP,
+            band=_band_tuple(self.args.band),
+            data=self.data,
+            seed=SEED,
+            on_cuda=torch.cuda.is_available(),
+            cv_folds=self.cv_folds,
+            run_tag=f"{self.args.model.split('/')[-1]}_t{trial.number}",
+            folds_override=self.folds_override,
+            dev_fraction=self.dev_fraction,
+            dev_override=self.dev_override,
+            selection_mode=self.selection_mode,
+            neg_pairs=self.neg_pairs,
+            train_neg_pairs=self.train_neg_pairs,
+            neg_pair_sources=self.neg_pair_sources,
+            train_neg_pair_sources=self.train_neg_pair_sources,
+            dynamic_mask_hard_negatives=self.dynamic_mask_hard_negatives,
+            dynamic_mask_frac=cfg["negative_mask_frac"],
+            dynamic_mask_prob=self.dynamic_mask_prob,
+            dynamic_mask_lo=self.dynamic_mask_lo,
+            dynamic_mask_hi=self.dynamic_mask_hi,
+            mask_audit=self.mask_audit,
+            hard_negative_mask_audit=self.hard_negative_mask_audit,
+            wandb_ctx=self.wandb_ctx,
+        )
+
+    def _record_loss_trajectory(self, trial, ok_rows: list[dict]) -> None:
+        """Persist the actual trial evidence in Optuna as user attrs."""
+        _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
+        if _trial_loss:
+            trial.set_user_attr("mean_final_train_loss", float(np.mean(_trial_loss)))
+        self._set_trajectory_attrs(trial, self._loss_histories(ok_rows))
+
+    @staticmethod
+    def _loss_histories(ok_rows: list[dict]) -> tuple[list, list]:
+        """Parse per-fold dev/train loss histories (skips unparsable rows)."""
+        _dev_loss_histories = []
+        _train_loss_histories = []
+        for row in ok_rows:
+            try:
+                _dev_loss_histories.append(json.loads(row.get("dev_loss_hist", "[]")))
+                _train_loss_histories.append(json.loads(row.get("train_loss_hist", "[]")))
+            except (TypeError, json.JSONDecodeError):
+                continue
+        return _dev_loss_histories, _train_loss_histories
+
+    def _set_trajectory_attrs(self, trial, histories: tuple[list, list]) -> None:
+        """Best/final dev loss + overfit signature summaries, when present."""
+        _dev_loss_histories, _train_loss_histories = histories
+        _best_dev_losses = [min(v) for v in _dev_loss_histories if v]
+        _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
+        _overfit_flags = [
+            int(bool(t) and bool(d) and t[-1] < t[0] and d[-1] > min(d))
+            for t, d in zip(_train_loss_histories, _dev_loss_histories, strict=True)
+        ]
+        if _best_dev_losses:
+            trial.set_user_attr("mean_best_dev_loss", float(np.mean(_best_dev_losses)))
+        if _final_dev_losses:
+            trial.set_user_attr("mean_final_dev_loss", float(np.mean(_final_dev_losses)))
+        if _overfit_flags:
+            trial.set_user_attr("overfit_signature_rate", float(np.mean(_overfit_flags)))
+
+    def _rank_on_calibration_proxy(self, ok_rows: list[dict], guardrail: dict):
+        """Rank trials on the calibrated direct-assignment Rand proxy.
+
+        Returns (value, proxy_rows, mean_rand, mean_penalty). Trials with no
+        finite proxy row are pruned; the collapse guardrail prunes on either
+        configured breach before the objective value becomes meaningful.
+        """
+        import optuna
+
+        proxy_rows = [
+            r for r in ok_rows
+            if np.isfinite(r.get("calibration_rand_index", float("nan")))
+        ]
+        if not proxy_rows:
+            raise optuna.TrialPruned(
+                "no fold produced a finite calibrated Rand Index proxy"
+            )
+        self._reject_on_collapse_guardrail(proxy_rows, guardrail)
+        mean_rand = float(np.mean([r["calibration_rand_index"] for r in proxy_rows]))
+        mean_penalty = float(np.mean([r["collapse_penalty"] for r in proxy_rows]))
+        value = mean_rand - mean_penalty
+        return value, proxy_rows, mean_rand, mean_penalty
+
+    @staticmethod
+    def _reject_on_collapse_guardrail(proxy_rows: list[dict], guardrail: dict) -> None:
+        """Prune a trial whose median cosine or crossing rate breaches its
+        configured ceiling (the objective value must stay meaningful)."""
+        import optuna
+
+        collapse_medians = [
+            float(r["collapse_median_cosine"])
+            for r in proxy_rows
+            if np.isfinite(r.get("collapse_median_cosine", float("nan")))
+        ]
+        collapse_crossing_rates = [
+            float(r["collapse_crossing_rate"])
+            for r in proxy_rows
+            if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
+        ]
+        if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
+            raise optuna.TrialPruned(
+                "collapse guardrail rejected trial: "
+                f"median_cosine={max(collapse_medians):.4f}"
+            )
+        if collapse_crossing_rates and max(collapse_crossing_rates) > float(
+            guardrail["crossing_rate_ceiling"]
+        ):
+            raise optuna.TrialPruned(
+                "collapse guardrail rejected trial: "
+                f"crossing_rate={max(collapse_crossing_rates):.4f} "
+                f"ceiling={float(guardrail['crossing_rate_ceiling']):.4f}"
+            )
+
+    def _record_proxy_summary(self, trial, proxy_rows, value: float, mean_rand: float, mean_penalty: float, guardrail: dict) -> dict:
+        """Mirror every proxy aggregate onto the trial as user attrs."""
+        proxy_summary = {
+            **self._rand_summary(proxy_rows, mean_rand, mean_penalty),
+            **self._collapse_summary(proxy_rows, guardrail),
+            **self._diagnostic_summary(proxy_rows),
+        }
+        trial.set_user_attr("rand_index_objective", value)
+        for key, metric in proxy_summary.items():
+            trial.set_user_attr(key, metric)
+        return proxy_summary
+
+    @staticmethod
+    def _rand_summary(proxy_rows: list[dict], mean_rand: float, mean_penalty: float) -> dict:
+        """Calibrated Rand means over the proxy rows (+ penalty)."""
+        return {
+            "mean_calibration_rand_index": mean_rand,
+            "mean_calibration_adjusted_rand": float(
+                np.mean([r["calibration_adjusted_rand"] for r in proxy_rows])
+            ),
+            "mean_calibration_precision_at_threshold": float(
+                np.mean([r["calibration_precision_at_threshold"] for r in proxy_rows])
+            ),
+            "mean_calibration_recall_at_threshold": float(
+                np.mean([r["calibration_recall_at_threshold"] for r in proxy_rows])
+            ),
+            "mean_calibration_over_merge_rate": float(
+                np.mean([r["calibration_over_merge_rate"] for r in proxy_rows])
+            ),
+            "mean_calibration_under_merge_rate": float(
+                np.mean([r["calibration_under_merge_rate"] for r in proxy_rows])
+            ),
+            "mean_calibration_threshold_stable": float(
+                np.mean([r["calibration_threshold_stable"] for r in proxy_rows])
+            ),
+            "mean_collapse_penalty": mean_penalty,
+        }
+
+    @staticmethod
+    def _collapse_summary(proxy_rows: list[dict], guardrail: dict) -> dict:
+        """Collapse-distribution means + the crossing-rate ceiling used."""
+        return {
+            "mean_collapse_median_cosine": float(
+                np.mean([r["collapse_median_cosine"] for r in proxy_rows])
+            ),
+            "mean_collapse_p90_cosine": float(
+                np.mean([r["collapse_p90_cosine"] for r in proxy_rows])
+            ),
+            "mean_collapse_cosine_std": float(
+                np.mean([r["collapse_cosine_std"] for r in proxy_rows])
+            ),
+            "mean_collapse_crossing_rate": float(
+                np.mean([r["collapse_crossing_rate"] for r in proxy_rows])
+            ),
+            "collapse_crossing_rate_ceiling": float(
+                guardrail["crossing_rate_ceiling"]
+            ),
+        }
+
+    @staticmethod
+    def _diagnostic_summary(proxy_rows: list[dict]) -> dict:
+        """Plain diagnostic means (bridge edges, attribute-conflict rate)."""
+        return {
+            "mean_diagnostic_bridge_edge_count": float(
+                np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])
+            ),
+            "mean_attribute_conflict_error_rate": float(
+                np.nanmean([r["attribute_conflict_error_rate"] for r in proxy_rows])
+            ),
+        }
+
+    def _retain_champion(self, trial, value: float, proxy_rows: list[dict]) -> None:
+        """Local champion retention unless the control plane owns promotion."""
+        if self.control_plane is None:
+            retain_hpo_champion(
+                model_id=self.args.model,
+                run_tag=f"{self.args.model.split('/')[-1]}_t{trial.number}",
+                value=value,
+                folds=[int(r["fold"]) for r in proxy_rows],
+            )
+
+    def objective(self, trial) -> float:
+        """The pinned Optuna objective: one TPE trial, complete."""
+        cfg = self._suggest_configuration(trial)
+        rows = self._run_trial(trial, cfg)
+        require_no_failed_folds(rows, lane=f"HPO trial {trial.number}")
+        ok_rows = rows
+        self._record_loss_trajectory(trial, ok_rows)
+        guardrail = _timed_load_config("hpo.guardrail")["collapse_guardrail"]
+        value, proxy_rows, mean_rand, mean_penalty = (
+            self._rank_on_calibration_proxy(ok_rows, guardrail)
+        )
+        self._record_proxy_summary(
+            trial, proxy_rows, value, mean_rand, mean_penalty, guardrail
+        )
+        # PostgreSQL mode promotes only from the controller after Optuna
+        # commits COMPLETE and a sealed artifact snapshot is READY.
+        self._retain_champion(trial, value, proxy_rows)
+        return value
 
 @timed
 def run_hpo(
@@ -5973,329 +7329,47 @@ def run_hpo(
     hard_negative_mask_audit: list[dict] | None = None,
     wandb_ctx=None,
 ) -> None:
+    """Thin orchestrator over `_HpoStream` + `OptunaObjectiveOwner`: the TPE
+    HPO mode (--hpo / --n-trials surface, protocol rows, best-config
+    publication). Behavior is byte-identical to the pre-owner monolith."""
     import optuna
-    import torch
+
+    stream = _HpoStream()
+    owner = OptunaObjectiveOwner(
+        args,
+        data,
+        cv_folds=cv_folds,
+        folds_override=folds_override,
+        dev_fraction=dev_fraction,
+        dev_override=dev_override,
+        selection_mode=selection_mode,
+        neg_pairs=neg_pairs,
+        train_neg_pairs=train_neg_pairs,
+        neg_pair_sources=neg_pair_sources,
+        train_neg_pair_sources=train_neg_pair_sources,
+        dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
+        dynamic_mask_prob=dynamic_mask_prob,
+        dynamic_mask_lo=dynamic_mask_lo,
+        dynamic_mask_hi=dynamic_mask_hi,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+        wandb_ctx=wandb_ctx,
+    )
 
     def objective(trial: optuna.Trial) -> float:
-        cfg = {
-            "architecture": _runtime("architecture"),
-            "epochs": trial.suggest_int("epochs", *HPO_SPACE["epochs"]),
-            "lr": trial.suggest_float("lr", *HPO_SPACE["lr"], log=True),
-            "warmup_ratio": trial.suggest_float(
-                "warmup_ratio", *HPO_SPACE["warmup_ratio"]
-            ),
-            "weight_decay": trial.suggest_float(
-                "weight_decay", *HPO_SPACE["weight_decay"]
-            ),
-            "projection_dropout": _runtime("projection_dropout"),
-            "label_smoothing": _runtime("label_smoothing"),
-            "random_easy_enabled": bool(
-                _runtime("random_easy_negatives")["enabled"]
-            ),
-            "random_easy_ratio_to_hard": float(
-                _runtime("random_easy_negatives")["ratio_to_hard"]
-            ),
-            "random_easy_candidate_pool_size": int(
-                _runtime("random_easy_negatives")["candidate_pool_size"]
-            ),
-            "lr_scheduler": _runtime("lr_scheduler"),  # SSOT
-            "max_grad_norm": _runtime("max_grad_norm"),  # SSOT
-            "patience": ES_PATIENCE,
-            "es_threshold": ES_THRESHOLD,
-            "negative_mask_frac": trial.suggest_float(
-                "negative_mask_frac", *HPO_SPACE["negative_mask_frac"]
-            ),
-            "uniformity_weight": trial.suggest_float(
-                "uniformity_weight", *HPO_SPACE["uniformity_weight"]
-            ),
-            "late_epoch_decay_enabled": bool(
-                _runtime("late_epoch_lr_decay")["enabled"]
-            ),
-            "late_epoch_decay_start_fraction": float(
-                _runtime("late_epoch_lr_decay")["start_epoch_fraction"]
-            ),
-            "late_epoch_decay_multiplier": float(
-                _runtime("late_epoch_lr_decay")["multiplier"]
-            ),
-        }
-        rows = train_one_config(
-            cfg,
-            loss=args.loss,
-            model_id=args.model,
-            use_hp=_SSOT_HP,
-            band=_band_tuple(args.band),
-            data=data,
-            seed=SEED,
-            on_cuda=torch.cuda.is_available(),
-            cv_folds=cv_folds,
-            run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-            folds_override=folds_override,
-            dev_fraction=dev_fraction,
-            dev_override=dev_override,
-            selection_mode=selection_mode,
-            neg_pairs=neg_pairs,
-            train_neg_pairs=train_neg_pairs,
-            neg_pair_sources=neg_pair_sources,
-            train_neg_pair_sources=train_neg_pair_sources,
-            dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
-            dynamic_mask_frac=cfg["negative_mask_frac"],
-            dynamic_mask_prob=dynamic_mask_prob,
-            dynamic_mask_lo=dynamic_mask_lo,
-            dynamic_mask_hi=dynamic_mask_hi,
-            mask_audit=mask_audit,
-            hard_negative_mask_audit=hard_negative_mask_audit,
-            wandb_ctx=wandb_ctx,
-        )
-        require_no_failed_folds(rows, lane=f"HPO trial {trial.number}")
-        ok_rows = rows
-        # Persist the actual trial evidence in Optuna. The callback below
-        # mirrors these values to W&B after the trial has committed.
-        _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
-        if _trial_loss:
-            trial.set_user_attr("mean_final_train_loss", float(np.mean(_trial_loss)))
-        _dev_loss_histories = []
-        _train_loss_histories = []
-        for row in ok_rows:
-            try:
-                _dev_loss_histories.append(json.loads(row.get("dev_loss_hist", "[]")))
-                _train_loss_histories.append(json.loads(row.get("train_loss_hist", "[]")))
-            except (TypeError, json.JSONDecodeError):
-                continue
-        _best_dev_losses = [min(v) for v in _dev_loss_histories if v]
-        _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
-        _overfit_flags = [
-            int(bool(t) and bool(d) and t[-1] < t[0] and d[-1] > min(d))
-            for t, d in zip(_train_loss_histories, _dev_loss_histories, strict=True)
-        ]
-        if _best_dev_losses:
-            trial.set_user_attr("mean_best_dev_loss", float(np.mean(_best_dev_losses)))
-        if _final_dev_losses:
-            trial.set_user_attr("mean_final_dev_loss", float(np.mean(_final_dev_losses)))
-        if _overfit_flags:
-            trial.set_user_attr("overfit_signature_rate", float(np.mean(_overfit_flags)))
-        proxy_rows = [
-            r for r in ok_rows
-            if np.isfinite(r.get("calibration_rand_index", float("nan")))
-        ]
-        if not proxy_rows:
-            raise optuna.TrialPruned(
-                "no fold produced a finite calibrated Rand Index proxy"
-            )
-        mean_rand = float(np.mean([r["calibration_rand_index"] for r in proxy_rows]))
-        mean_penalty = float(np.mean([r["collapse_penalty"] for r in proxy_rows]))
-        value = mean_rand - mean_penalty
-        collapse_medians = [
-            float(r["collapse_median_cosine"])
-            for r in proxy_rows
-            if np.isfinite(r.get("collapse_median_cosine", float("nan")))
-        ]
-        collapse_crossing_rates = [
-            float(r["collapse_crossing_rate"])
-            for r in proxy_rows
-            if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
-        ]
-        guardrail = _timed_load_config("hpo.guardrail")["collapse_guardrail"]
-        if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
-            raise optuna.TrialPruned(
-                "collapse guardrail rejected trial: "
-                f"median_cosine={max(collapse_medians):.4f}"
-            )
-        if collapse_crossing_rates and max(collapse_crossing_rates) > float(
-            guardrail["crossing_rate_ceiling"]
-        ):
-            raise optuna.TrialPruned(
-                "collapse guardrail rejected trial: "
-                f"crossing_rate={max(collapse_crossing_rates):.4f} "
-                f"ceiling={float(guardrail['crossing_rate_ceiling']):.4f}"
-            )
-        proxy_summary = {
-            "mean_calibration_rand_index": mean_rand,
-            "mean_calibration_adjusted_rand": float(
-                np.mean([r["calibration_adjusted_rand"] for r in proxy_rows])
-            ),
-            "mean_calibration_precision_at_threshold": float(
-                np.mean([r["calibration_precision_at_threshold"] for r in proxy_rows])
-            ),
-            "mean_calibration_recall_at_threshold": float(
-                np.mean([r["calibration_recall_at_threshold"] for r in proxy_rows])
-            ),
-            "mean_calibration_over_merge_rate": float(
-                np.mean([r["calibration_over_merge_rate"] for r in proxy_rows])
-            ),
-            "mean_calibration_under_merge_rate": float(
-                np.mean([r["calibration_under_merge_rate"] for r in proxy_rows])
-            ),
-            "mean_calibration_threshold_stable": float(
-                np.mean([r["calibration_threshold_stable"] for r in proxy_rows])
-            ),
-            "mean_collapse_penalty": mean_penalty,
-            "mean_collapse_median_cosine": float(
-                np.mean([r["collapse_median_cosine"] for r in proxy_rows])
-            ),
-            "mean_collapse_p90_cosine": float(
-                np.mean([r["collapse_p90_cosine"] for r in proxy_rows])
-            ),
-            "mean_collapse_cosine_std": float(
-                np.mean([r["collapse_cosine_std"] for r in proxy_rows])
-            ),
-            "mean_collapse_crossing_rate": float(
-                np.mean([r["collapse_crossing_rate"] for r in proxy_rows])
-            ),
-            "collapse_crossing_rate_ceiling": float(
-                guardrail["crossing_rate_ceiling"]
-            ),
-            "mean_diagnostic_bridge_edge_count": float(
-                np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])
-            ),
-            "mean_attribute_conflict_error_rate": float(
-                np.nanmean([r["attribute_conflict_error_rate"] for r in proxy_rows])
-            ),
-        }
-        trial.set_user_attr("rand_index_objective", value)
-        for key, metric in proxy_summary.items():
-            trial.set_user_attr(key, metric)
-        # PostgreSQL mode promotes only from the controller after Optuna
-        # commits COMPLETE and a sealed artifact snapshot is READY.
-        if control_plane is None:
-            retain_hpo_champion(
-                model_id=args.model,
-                run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                value=value,
-                folds=[int(r["fold"]) for r in proxy_rows],
-            )
-        return value
+        return owner.objective(trial)
 
-    with trace_step('training.run_hpo.study_creation'):
-        sampler = optuna.samplers.TPESampler(seed=SEED)
-        # sqlite storage: the sweep SURVIVES session loss — re-running with the same
-        # --study resumes; every trial's params/value persist (the essential record)
-        # dlr suffix: discriminative-LR trials form a NEW objective surface —
-        # never mixed into the pre-dlr TPE history (its surrogate would be poisoned
-        # by trials whose values came from single-LR training)
-        study_name = f"second08-{args.model.split('/')[-1]}-dlr"
-        study_db = RESULTS / f"{study_name}.optuna.db"
-        control_plane = None
-        if os.environ.get("OPTUNA_STORAGE_URL"):
-            from training.hpo_control_plane import (
-                create_storage,
-                fail_stale_trials,
-                generation_study_name,
-                storage_from_environment,
-            )
-
-            generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
-            model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
-            if not generation_id or not model_key:
-                raise RuntimeError(
-                    "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
-                    "EUROMONITOR_HPO_MODEL_KEY"
-                )
-            study_name = generation_study_name(
-                generation_id=generation_id, model_key=model_key
-            )
-            control_plane = create_storage(storage_from_environment())
-            print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
-        if args.resume and control_plane is None:
-            if checkpoint_publication_deferred():
-                if not study_db.is_file():
-                    raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
-                print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
-            else:
-                from training.dvc_store import restore_checkpoint
-
-                restore_checkpoint(RESULTS, study_db)
-                print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
-        storage = control_plane or f"sqlite:///{study_db}"
-        study = optuna.create_study(
-            direction="maximize",
-            sampler=sampler,
-            study_name=study_name,
-            storage=storage,
-            load_if_exists=True,
-        )
-        if control_plane is not None:
-            fail_stale_trials(study)
-    # resume-safe: count prior trials, run only what remains
-    with trace_step('training.run_hpo.optimize'):
-        prior = len(
-            [t for t in study.trials if t.state.name in ("COMPLETE", "PRUNED", "FAIL")]
-        )
-        remaining = max(0, args.n_trials - prior)
-        print(
-            f"HPO: {prior} prior trials on record, running {remaining} more (n_jobs={args.n_jobs})",
-            flush=True,
-        )
-        if remaining:
-            def _persist_study(*_args) -> None:
-                if checkpoint_publication_deferred():
-                    return
-                if not os.environ.get("DVC_API_KEY"):
-                    return
-                from training.dvc_store import publish_checkpoint
-
-                publish_checkpoint(RESULTS, study_db)
-
-            study.optimize(
-                objective,
-                n_trials=remaining,
-                n_jobs=args.n_jobs,
-                callbacks=[_optuna_tracking_cb(wandb_ctx), _persist_study],
-            )
-
-    with trace_step('training.run_hpo.best_config'):
-        completed_trials = [
-            trial
-            for trial in study.trials
-            if trial.state.name == "COMPLETE" and trial.value is not None
-        ]
-        if not completed_trials:
-            raise FoldExecutionError(
-                "Optuna selection",
-                [{"status": "no_completed_trials"}],
-            )
-
-        # every trial's params + value, on disk (optuna keeps them in the study;
-        # the CSV makes the sweep's decision trail auditable without re-loading)
-        trials_df = study.trials_dataframe(
-            attrs=("number", "state", "value", "params", "user_attrs")
-        )
-        model_tag = args.model.split("/")[-1]
-        era = "-dlr"  # discriminative-LR sweep era (see study_name above)
-        trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
-        ensure_parent(trials_path)
-        trials_df.to_csv(trials_path, index=False)
-        trace_artifact("hpo_trials", trials_path, producer="training.training")
-        best = {
-            "config": study.best_params,
-            "value": study.best_value,
-            "n_trials": len(study.trials),
-            "model": args.model,
-            "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
-            # which signal ranked the trials (test-leak fix, 2026-09-12):
-            # calibration Rand in both holdout and CV selection modes
-            "selection": (
-                HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
-            ),
-        }
-        out_path = artifact("hpo_best", {"model": model_tag, "era": era})
-        ensure_parent(out_path)
-        with open(out_path, "w") as f:
-            json.dump(best, f, indent=2)
-        trace_artifact("hpo_best", out_path, producer="training.training")
-        if (
-            wandb_ctx is not None
-            and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
-        ):
-            wandb_ctx.log_artifact(trials_path, "hpo-trials")
-            wandb_ctx.log_artifact(out_path, "hpo-best")
-            wandb_ctx.set_summary(
-                {"hpo_best_objective": study.best_value, "hpo_completed_trials": len(study.trials)}
-            )
-        _sel = best["selection"]
-        print(f"\nBEST: {study.best_params} -> {_sel} {study.best_value:.4f}", flush=True)
-        # AUDIT FIX (round 2, F02): print the path ACTUALLY written — the old
-        # line named train_hpo_best.json, a file never written by this lane.
-        print(f"wrote {out_path}", flush=True)
+    study, control_plane, study_db = stream._resolve_study(args)
+    owner.control_plane = control_plane
+    stream._optimize(
+        study,
+        objective,
+        n_trials=args.n_trials,
+        n_jobs=args.n_jobs,
+        wandb_ctx=wandb_ctx,
+        study_db=study_db,
+    )
+    stream._publish_best(study, args, selection_mode=selection_mode, wandb_ctx=wandb_ctx)
 
 
 def _optuna_tracking_cb(wandb_ctx):
