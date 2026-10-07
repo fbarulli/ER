@@ -72,11 +72,11 @@ def _calibrated_calibration(checkpoint_sha256, metadata, labels, scores):
 
 
 @timed
-def _frozen_report(request_path, calibration, *, config, saved=None):
+def _frozen_report(request_path, calibration, *, saved=None):
     """Compute the threshold-frozen report at the baseline calibration threshold."""
     with _LOG.section('ablation.baseline.frozen_report'):
         return report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
-                      threshold_source=str(saved), config=config, save=False)
+                      threshold_source=str(saved), save=False)
 
 
 @timed
@@ -112,7 +112,7 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
             checkpoint_sha256 = request['sources'][request['checkpoint']]
             calibration = _calibrated_calibration(checkpoint_sha256, metadata, labels, scores)
             binding = _frozen_calibration(request_path, calibration)
-            result = _frozen_report(request_path, calibration, config=config, saved=binding)
+            result = _frozen_report(request_path, calibration, saved=binding)
             # Keep this baseline report separate from trained-text dashboard pointers.
             _persist_baseline(request_path, result)
     return request_path.parent/'report.json'
