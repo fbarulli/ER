@@ -17,7 +17,8 @@ _REMOTE_ROOT = training_cfg().colab.remote_root
 
 
 def _hub():
-    return sys.modules["__colab_runtime_self__"]
+    """The RUNNING cli.colab module (never a second import copy)."""
+    return sys.modules.get("__colab_runtime_self__") or sys.modules["cli.colab"]
 
 
 def _timed_colab(kind: str):
