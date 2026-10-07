@@ -203,6 +203,28 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
     return receipt
 
 
+@timed
+def _sealed_track_report(request, validated, config):
+    """Persist the validated report exactly once per round when it changed.
+
+    Byte-identity short-circuit: the round's documents must be serialized
+    exactly once (not once per write site), and when the existing dashboard
+    pointer already holds those exact bytes the rewrite is a legal no-op.
+    Digests are compared against `json.dumps(sort_keys=True)` — the same
+    canonical form `write()` persists.
+    """
+    from model_tracks.ablation import settings, write
+    path = resolve(settings(config).report_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = json.dumps(validated, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
+    if not path.is_file() or path.read_text() != document:
+        write(path, validated)
+    saved = request.parent/'report.json'
+    if saved != path and (not saved.is_file() or saved.read_text() != document):
+        write(saved, validated)
+    return path
+
+
 def _saved_track_report(request, result, threshold, binding, document, suite):
     """Restore the cached report when trusted, otherwise recompute and seal it."""
     from graph_tracks.data import file_hash
@@ -214,7 +236,7 @@ def _saved_track_report(request, result, threshold, binding, document, suite):
         validated = cached
     else:
         validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
-    save_report(request,validated,config=resolve(suite.ablation_config))
+    _sealed_track_report(request,validated,resolve(suite.ablation_config))
     previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')
     return validated
 
