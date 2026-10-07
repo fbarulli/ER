@@ -1,0 +1,12 @@
+[timing] abl.forward state=started rss_mb=614.3
+[timing] staged_ablation.forward state=started rss_mb=617.4
+[timing] ablation_forward.bind_template state=started rss_mb=617.4
+[timing] ablation_forward.bind_template state=completed elapsed_seconds=0.007 rss_mb=618.8
+[timing] ablation_forward.rebind_checkpoint state=started rss_mb=618.8
+[timing] ablation_forward.rebind_checkpoint state=completed elapsed_seconds=0.100 rss_mb=705.4
+ablation forward bound track=text role=baseline
+[timing] ablation_forward.write_bound_request state=started rss_mb=705.4
+[timing] ablation_forward.write_bound_request state=completed elapsed_seconds=0.248 rss_mb=705.4
+[timing] ablation_forward.vectors state=started rss_mb=705.4
+[timing] ablation.encode state=started rss_mb=705.4
+[timing] ablation.encode.text_vectors state=started rss_mb=705.4

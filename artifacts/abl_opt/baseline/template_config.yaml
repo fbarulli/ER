@@ -1,0 +1,20 @@
+accelerator: T4
+attributes: []
+batch_size: 64
+coverage: sampled
+graph_fields: {}
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
+hnsw_m: 16
+output_dir: /tmp/opc/ER-opt-E/artifacts/abl_opt/baseline/ablation_templates
+report_path: /tmp/opc/ER-opt-E/artifacts/abl_opt/baseline/report.json
+retrieval_catalog: full
+retrieval_ks:
+- 1
+- 5
+- 10
+sample_pairs: 32
+seed: 1729
+slice_columns: []
+split: dev
+uniform_channels: true

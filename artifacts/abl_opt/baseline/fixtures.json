@@ -1,0 +1,25 @@
+{
+  "catalog_sha256": "275d12eefec3184a7c60a0db7efe323a5770b52111017a62526c001c2781ed7a",
+  "checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
+  "cohort_note": "baseline smoke_500 cohort recorded 2026-10-07: catalog = first 500 reviewed unique-sku_id rows of dataset_10k.csv sorted by sku_id; gtin duplicate-product groups (sorted by gtin), group 0 -> dev with the rest -> train; positive pairs are consecutive gtin matches (label 1), negatives are consecutive sorted neighbors with differing gtins (label 0), 32 per split; sampled sample_pairs=32 split=dev; slice_columns=[]; retrieval_catalog=full; real MiniLM checkpoint",
+  "listings_sha256": "e3fa75be5d629029b339dcef7da41898d39cb50432d1514f9a4998f46cb987b6",
+  "shared_npz_arrays": {
+    "embeddings": [
+      [
+        500,
+        384
+      ],
+      "float32",
+      "f8c14c0d72b910f6f3069d5756416df94796235df12713eb97cccec966654405"
+    ],
+    "ids": [
+      [
+        500
+      ],
+      "<U10",
+      "c226e2d3a49ce1eb38e839185e054115ea9340172868ea321d09217c6bcf8513"
+    ],
+    "metadata": "f4ea7dea442d6312272d9731f846d40bfba0e1d413c89c75e375c4e45f1aa9f0"
+  },
+  "template_request_sha256": "d060ad66d80dc42604d9cecee13b92dfaa43660e7941359a39b64795fd096650"
+}
