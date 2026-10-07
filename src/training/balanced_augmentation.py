@@ -124,6 +124,65 @@ def context_mask(text, field, extent, rng):
     return ' '.join(tokens), n / max(len(tokens), 1)
 
 
+def _vendor_pair_valid(left,right,member_retailer,fields):
+    """Cross-vendor and hold-everywhere: one mutually-valid same-entity pair."""
+    if member_retailer[left]==member_retailer[right]: return False
+    return all(not _field_values_conflict(f,fields[left].get(f,[]),fields[right].get(f,[]))
+        for f in _FIELD_PREFIXES)
+
+
+def _entity_vendor_pairs(members,member_retailer,fields):
+    """All valid cross-vendor pairs of one entity, in fixed member order.
+
+    Left-major over the members (payload-row order), right scanning the full
+    member list; each row pair is licensed once (first orientation kept). The
+    head of this sequence is exactly the historical single-pass loop's choice:
+    first member holding any valid partner, then that partner in order.
+    """
+    pairs=[]
+    seen=set()
+    for left in members:
+        for right in members:
+            if right==left or (left,right) in seen: continue
+            if _vendor_pair_valid(left,right,member_retailer,fields):
+                seen.add((left,right));seen.add((right,left))
+                pairs.append((left,right))
+    return pairs
+
+
+def _mine_vendor_pairs(by_entity,fields,retailer_of,quota):
+    """Cross-vendor positive mining deepened by round-robin passes.
+
+    Pass 1 replays the historical selection byte for byte: every entity (dict
+    insertion order from sorted(train_indices)) contributes exactly its first
+    valid pair, stopping at the quota — populations whose eligible-entity
+    count reaches the quota therefore see a byte-identical vendor_pairs list.
+    Only after pass 1 has run over ALL entities do deeper passes engage:
+    pass k gives each entity its k-th valid pair (round-robin across entities,
+    mirrors of mint_field's group scheduling), until the quota is met or the
+    valid-pair pool is exhausted. Fixed ordering, no rng, deterministic.
+    """
+    vendor_pairs=[]
+    if quota<=0 or not by_entity: return vendor_pairs
+    enumerations: dict[str,list[tuple[int,int]]]={}
+    cursors: dict[str,int]={}
+    while len(vendor_pairs)<quota:
+        contributed=0
+        for key in by_entity:
+            if len(vendor_pairs)>=quota: break
+            pairs=enumerations.get(key)
+            if pairs is None:
+                members=by_entity[key]
+                member_retailer={member:retailer_of(member) for member in members}
+                pairs=_entity_vendor_pairs(members,member_retailer,fields)
+                enumerations[key]=pairs
+            cursor=cursors.get(key,0)
+            if cursor<len(pairs):
+                vendor_pairs.append(pairs[cursor]);cursors[key]=cursor+1;contributed+=1
+        if not contributed: break
+    return vendor_pairs
+
+
 def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
                      canonical_indices, spec: BalancedAugmentationSpec, seed):
     rng = random.Random(seed)
@@ -249,13 +308,7 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     by_entity=defaultdict(list)
     for index in sorted(train_indices):
         if index<len(df): by_entity[normalize_entity_key(row_bc[index],str(index))].append(index)
-    vendor_pairs=[]
-    for members in by_entity.values():
-        if len(vendor_pairs)>=spec.counts.vendor_variation_positives: break
-        for left in members:
-            right=next((i for i in members if str(df.iloc[left].get('retailer','')) != str(df.iloc[i].get('retailer',''))
-                and all(not _field_values_conflict(f,fields[left].get(f,[]),fields[i].get(f,[])) for f in _FIELD_PREFIXES)),None)
-            if right is not None: vendor_pairs.append((left,right));break
+    vendor_pairs=_mine_vendor_pairs(by_entity,fields,retailer_of,spec.counts.vendor_variation_positives)
     pos_with_vendors=np.vstack([pos,np.asarray(vendor_pairs,dtype=int)]) if vendor_pairs else np.asarray(pos)
     # Only originals that now have an explicit negative are masked: no dead
     # positive copies are minted speculatively.
