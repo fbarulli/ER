@@ -59,7 +59,7 @@ def _dev_scores(pairs_path, records, vectors):
     """Dev-split indices/labels with dot-product scores from saved vectors."""
     with _LOG.section('ablation.baseline.dev_scores'):
         indices, labels = load_pairs(pairs_path, records)['dev']
-        return indices, labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
+        return labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
 
 
 @timed
@@ -114,7 +114,7 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
         records_path, pairs_path = setup/'prepared/listings.json', setup/'prepared/pairs.csv'
         records = load_records(records_path)
         vectors_path, vectors, metadata = _saved_vectors(records, output)
-        indices, labels, scores = _dev_scores(pairs_path, records, vectors)
+        labels, scores = _dev_scores(pairs_path, records, vectors)
     with _LOG.section('ablation.baseline.calibration'):
         with request_context(request_path):
             checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
