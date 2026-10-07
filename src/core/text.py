@@ -38,38 +38,38 @@ _UNIT_SEP_RE = re.compile(r"[.\-\s]")
 _GLUED_ZERO_RE = re.compile(r"0\d")
 
 
-# Combining-mark deletion table for str.translate, built at most once.
+# Combining-mark strip: list comprehension + a LOCAL `combining` alias.
 #
 # MEASURED (269,867 chars from the smoke_500 catalog, best of 7):
 #   generator + unicodedata.combining per char   0.02544 s
-#   list comprehension + local combining alias   0.01615 s
-#   str.translate with the table below           0.00290 s
-# The table itself costs one full `unicodedata.combining` sweep of the code
-# space, 0.1408 s on this host, and holds the 934 combining code points.  That
-# fixed cost only pays for itself after ~1.7 M characters (0.1408 / 8.36e-8),
-# so short-lived processes keep the list-comprehension path until the running
-# character count has covered it.  Both paths delete exactly the code points
-# whose combining class is non-zero, so the returned string is identical.
-_STRIP_TABLE_THRESHOLD = 1 << 21  # 2,097,152 chars > measured 1.7 M break-even
-_CASEFOLD_CHARS = 0
-_STRIP_TABLE: dict | None = None
-
-
+#   list comprehension + local combining alias   0.01615 s   <- kept
+#   str.translate with a precomputed table       0.00290 s   <- REJECTED
+#
+# The str.translate variant was implemented, measured and REMOVED (r20).  It
+# needs a table of every combining code point, which costs one full
+# `unicodedata.combining` sweep of the code space (0.1408 s, 934 code points),
+# so it was built lazily behind a character counter with a 2,097,152 threshold
+# (just above the ~1.7 M break-even).  That machinery DOES fire in the
+# single-process micro-benchmark (which is where an earlier -89 % casefold
+# figure came from), but it does NOT fire in the real pipeline:
+#
+#   * the real 5k composition path is FORK-PARALLEL — `SkuTextPool` forks when
+#     the frame is >= _INLINE_THRESHOLD (4096) rows, observed as
+#     "payload: fork-parallel sku-text compose over 5,000 rows";
+#   * measured on the real 5k cohort, the per-row call mix costs 419.5 chars
+#     (`unicode_casefold` sees every brand/title/attribute/description fold);
+#   * 3 workers x ~1,667 rows/worker x 419.5 chars = ~699,348 chars per worker
+#     — a third of the 2,097,152 threshold.  At 10,000 rows it is ~1,398,613,
+#     still under.  The counter is per-process, so no worker ever crosses.
+#
+# So the table would have been unexercised global mutable state on a per-row
+# path in the workload that matters, while its 0.1408 s build cost is real.
+# Only the unconditional list-comprehension win is kept.
 def unicode_casefold(value: object) -> str:
     """Shared case/accent folding; punctuation and negation remain intact."""
-    global _CASEFOLD_CHARS, _STRIP_TABLE
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
-    table = _STRIP_TABLE
-    if table is None:
-        if _CASEFOLD_CHARS > _STRIP_TABLE_THRESHOLD:
-            table = _STRIP_TABLE = {
-                codepoint: None for codepoint in range(0x110000)
-                if unicodedata.combining(chr(codepoint))}
-        else:
-            _CASEFOLD_CHARS += len(text)
-            combining = unicodedata.combining
-            return "".join([char for char in text if not combining(char)])
-    return text.translate(table)
+    combining = unicodedata.combining
+    return "".join([char for char in text if not combining(char)])
 
 
 def normalize_text(text: str) -> str:

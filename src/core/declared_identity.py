@@ -64,14 +64,17 @@ _NAMED_FAMILIES = (
 
 # flavor -> the `\b<flavor>\b` probe, built once per lexicon entry instead of
 # re-escaping and re-compiling it inside the per-phrase loop.
-_FLAVOR_PROBES: dict[str, "re.Pattern"] = {}
-
-
+#
+# The key space is CLOSED: `_flavor_probe` is only ever called with members of
+# `core.critical_attributes.DECLARED_FLAVOR_LEXICON`, which is a frozenset built
+# from `_VOCAB["declared_flavor_lexicon"]` in config/vocabulary.json — 89
+# entries at the time of writing, and re-read only at import. Nothing derived
+# from a row can enter the key. `lru_cache` is used anyway rather than a bare
+# module dict so the bound is structural: if that vocabulary ever becomes
+# dynamic, the cache can still not grow without limit on a per-row path.
+@lru_cache(maxsize=256)
 def _flavor_probe(flavor: str) -> "re.Pattern":
-    probe = _FLAVOR_PROBES.get(flavor)
-    if probe is None:
-        probe = _FLAVOR_PROBES[flavor] = re.compile(r'\b' + re.escape(flavor) + r'\b')
-    return probe
+    return re.compile(r'\b' + re.escape(flavor) + r'\b')
 
 
 def listing_identity(title: str, attributes: str = '', description: str = '') -> dict[str, list[str]]:
