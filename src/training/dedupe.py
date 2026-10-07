@@ -176,37 +176,49 @@ class IdentityDecider:
             [row_identity(row) for row in sub.to_dict("records")]
         )
 
-    @staticmethod
+    @classmethod
+    def pair_review_record(
+        cls, anchor, other, retailer: str, gtin: str, titles: tuple[str, str]
+    ) -> tuple[dict, bool]:
+        """ONE pairing review row: (row, unresolved?).
+
+        `label` distinguishes "descriptor proves different" from "descriptor
+        had nothing to say" — the row is a review queue entry, not a silent
+        either/or.
+        """
+        evaluation = evaluate_sku_identity(anchor, other)
+        reasons = evaluation["identity_conflicts"]
+        reviews = evaluation["review_dimensions"] + evaluation["unclassified_keys"]
+        record = {
+            "tier": "T1.5", "retailer": retailer, "gtin": gtin,
+            "label": "proven_split" if reasons else "unresolved",
+            "reasons": "|".join(reasons or [f"review:{r}" for r in reviews]) or "-",
+            "title_a": titles[0], "title_b": titles[1],
+            "brand_a": anchor.brand and " ".join(sorted(anchor.brand)) or "",
+            "brand_b": other.brand and " ".join(sorted(other.brand)) or "",
+        }
+        return record, not reasons
+
+    @classmethod
     def review_records(
-        sub: pd.DataFrame, retailer: str, gtin: str
+        cls, sub: pd.DataFrame, retailer: str, gtin: str
     ) -> tuple[list[dict], int]:
         """Review rows for a group the descriptor bundle cannot settle.
 
-        Anchors on the first row and records each pairing, so the identity
-        question is a review queue rather than a silent either/or. `label`
-        distinguishes "descriptor proves different" from "descriptor had
-        nothing to say". Returns the rows and the count of unresolved
-        (non-proven) ones.
+        Anchors on the first row and records each pairing. Returns the rows
+        and the count of unresolved (non-proven) ones.
         """
         identities = [row_identity(r) for r in sub.to_dict("records")]
         anchor = identities[0]
+        titles = (sub["sku_name_eng"].iat[0], sub["sku_name_eng"].iat[1])
         records: list[dict] = []
         unresolved = 0
         for other in identities[1:]:
-            evaluation = evaluate_sku_identity(anchor, other)
-            reasons = evaluation["identity_conflicts"]
-            reviews = evaluation["review_dimensions"] + evaluation["unclassified_keys"]
-            records.append({
-                "tier": "T1.5", "retailer": retailer, "gtin": gtin,
-                "label": "proven_split" if reasons else "unresolved",
-                "reasons": "|".join(reasons or [f"review:{r}" for r in reviews]) or "-",
-                "title_a": sub["sku_name_eng"].iat[0],
-                "title_b": sub["sku_name_eng"].iat[1],
-                "brand_a": anchor.brand and " ".join(sorted(anchor.brand)) or "",
-                "brand_b": other.brand and " ".join(sorted(other.brand)) or "",
-            })
-            if not reasons:
-                unresolved += 1
+            record, is_unresolved = cls.pair_review_record(
+                anchor, other, retailer, gtin, titles
+            )
+            records.append(record)
+            unresolved += int(is_unresolved)
         return records, unresolved
 
 
@@ -456,27 +468,38 @@ class TieredCollapse:
         for (retailer, gtin), sub in _LOG.progress(
             groups, desc="T1.5 malformed-gtin groups", unit="group"
         ):
-            if len(sub) <= 1:
-                kept.append(sub)
-                continue
-            if self._identity.same_product(sub, retailer, gtin):
-                rep_idx, rep = self._most_informative_representative(sub)
-                for idx in sub.index:
-                    self.parent[idx] = rep_idx
-                dropped.extend(sub.index.difference([rep_idx]))
-                kept.append(rep)
-                collapsed += 1
-            else:
-                records, group_unresolved = self._identity.review_records(
-                    sub, retailer, gtin
-                )
-                conflicts.extend(records)
-                unresolved += group_unresolved
-                kept.append(sub)
+            piece, piece_dropped, piece_conflicts, piece_unresolved = (
+                self._settle_group(sub, retailer, gtin)
+            )
+            kept.append(piece)
+            dropped.extend(piece_dropped)
+            conflicts.extend(piece_conflicts)
+            collapsed += bool(piece_dropped)
+            unresolved += piece_unresolved
         kept_frame = pd.concat(kept)
         _LOG.info(f"[dedupe] T1.5 complete: {len(dropped):,} dropped across "
                   f"{collapsed:,} groups; {unresolved:,} unresolved escalations")
         return kept_frame, dropped, collapsed, unresolved, conflicts
+
+    def _settle_group(
+        self, sub: pd.DataFrame, retailer: str, gtin: str
+    ) -> tuple[pd.DataFrame, list, list[dict], int]:
+        """Settle ONE malformed-gtin group: collapse it or escalate it.
+
+        Returns (kept_frame, dropped_indices, conflict_rows, unresolved_count);
+        a group with a single row passes through untouched.
+        """
+        if len(sub) <= 1:
+            return sub, [], [], 0
+        if self._identity.same_product(sub, retailer, gtin):
+            rep_idx, rep = self._most_informative_representative(sub)
+            for idx in sub.index:
+                self.parent[idx] = rep_idx
+            return rep, list(sub.index.difference([rep_idx])), [], 0
+        records, group_unresolved = self._identity.review_records(
+            sub, retailer, gtin
+        )
+        return sub, [], records, group_unresolved
 
     @timed
     def _tier_t2(self, work: pd.DataFrame):
@@ -626,10 +649,19 @@ class TieredCollapse:
             "unresolved_identity_review_rows": len(conflicts),
         }
 
-    # delegate kept for the report surface of the old module function name
-    _most_informative_representative = staticmethod(
-        lambda sub: (None, None)  # replaced below
-    )
+    def _most_informative_representative(self, sub: pd.DataFrame):
+        """Rank a candidate group and return (rep_index, rep_row_frame).
+
+        Most complete descriptors, then a trusted gtin, then the most
+        informative title. NOT price — the cheapest listing is not the most
+        truthful one.
+        """
+        order = sub.sort_values(
+            ["_complete", "_ident", "sku_name_eng"],
+            ascending=[False, False, True],
+            na_position="last", kind="stable",
+        )
+        return order.index[0], order.iloc[[0]]
 
 
 # ── hard invariants ─────────────────────────────────────────────────────────
@@ -725,18 +757,23 @@ class StageWriter:
         atomic_write_csv(pd.DataFrame(summary), CSV_SUMMARY, index=False)
         _LOG.info(f"wrote {CSV_SUMMARY} (display table, {len(summary)} rows)")
 
-    @staticmethod
-    def ambiguous(ambiguous: pd.DataFrame) -> pd.DataFrame:
+    @classmethod
+    def ambiguous(cls, ambiguous: pd.DataFrame) -> pd.DataFrame:
         """retailer+title groups flagged as ambiguous offers (pv)."""
-        ambiguous_out = ambiguous.rename(
+        flattened = ambiguous.rename(
             columns={"count": "rows", "nunique": "distinct_prices"}
         ).reset_index()
-        atomic_write_csv(ambiguous_out, CSV_OFFERS, index=False)
+        return cls.publish_offers(flattened)
+
+    @staticmethod
+    def publish_offers(flattened: pd.DataFrame) -> pd.DataFrame:
+        """The atomic publication of one flattened-offers table."""
+        atomic_write_csv(flattened, CSV_OFFERS, index=False)
         _LOG.info(
-            f"wrote {CSV_OFFERS} (display table, {len(ambiguous_out):,} rows) "
-            f"— {len(ambiguous_out):,} ambiguous-offer groups flagged"
+            f"wrote {CSV_OFFERS} (display table, {len(flattened):,} rows) "
+            f"— {len(flattened):,} ambiguous-offer groups flagged"
         )
-        return ambiguous_out
+        return flattened
 
     @staticmethod
     def conflicts(conflicts: pd.DataFrame) -> None:
@@ -750,26 +787,6 @@ class StageWriter:
             f"{n_unresolved:,} identity questions the descriptor bundle could "
             f"not settle, escalated instead of guessed"
         )
-
-
-def _most_informative_representative(sub: pd.DataFrame) -> tuple[object, pd.DataFrame]:
-    """Rank a candidate group and return (rep_index, rep_row_frame).
-
-    Most complete descriptors, then a trusted gtin, then the most
-    informative title. NOT price — the cheapest listing is not the most
-    truthful one.
-    """
-    order = sub.sort_values(
-        ["_complete", "_ident", "sku_name_eng"],
-        ascending=[False, False, True],
-        na_position="last", kind="stable",
-    )
-    return order.index[0], order.iloc[[0]]
-
-
-TieredCollapse._most_informative_representative = staticmethod(
-    _most_informative_representative
-)
 
 
 @timed
