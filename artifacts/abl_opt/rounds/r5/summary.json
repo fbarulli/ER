@@ -1,0 +1,48 @@
+{
+  "round": "r5",
+  "workload": "smoke_200",
+  "reps": 3,
+  "prepare_old_s": 1.7473,
+  "prepare_new_s": 1.5296,
+  "forward_old_s": 0.0753,
+  "forward_new_s": 0.077,
+  "prepare_speedup": 1.1423,
+  "forward_speedup": 0.9772,
+  "total_speedup": 1.1344,
+  "byte_identical": true,
+  "checks": {
+    "templates_identical": true,
+    "tensors_identical": true,
+    "bound_identical": true
+  },
+  "samples": {
+    "old": [
+      {
+        "prepare_total": 6.208251757998369,
+        "forward_total": 0.07564646399987396
+      },
+      {
+        "prepare_total": 1.7472609689975798,
+        "forward_total": 0.07525385899862158
+      },
+      {
+        "prepare_total": 1.2794676900011837,
+        "forward_total": 0.0743331279954873
+      }
+    ],
+    "new": [
+      {
+        "prepare_total": 1.5295861689992307,
+        "forward_total": 0.147965688000113
+      },
+      {
+        "prepare_total": 1.7134320229997684,
+        "forward_total": 0.07658323500072584
+      },
+      {
+        "prepare_total": 1.3207997669996985,
+        "forward_total": 0.07700748099887278
+      }
+    ]
+  }
+}

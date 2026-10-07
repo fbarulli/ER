@@ -1,0 +1,76 @@
+[timing] abl.prepare state=started rss_mb=1386.7
+[timing] ablation.prepare state=started rss_mb=1386.7
+[timing] ablation.prepare.sources state=started rss_mb=1386.7
+[timing] ablation.prepare.sources state=completed elapsed_seconds=0.015 rss_mb=1386.7
+[timing] ablation.prepare.cohort state=started rss_mb=1386.7
+[timing] ablation.prepare.cohort state=completed elapsed_seconds=29.822 rss_mb=1386.7
+[timing] ablation.prepare.baseline_variants state=started rss_mb=1386.7
+[timing] ablation.prepare.baseline_variants state=completed elapsed_seconds=19.595 rss_mb=1386.7
+[timing] ablation.prepare.candidates state=started rss_mb=1386.7
+[timing] ablation.prepare.candidates state=completed elapsed_seconds=122.437 rss_mb=1386.7
+[timing] ablation.prepare.persist state=started rss_mb=1386.7
+[timing] ablation_inputs.prepare_inputs state=started rss_mb=1386.7
+[timing] ablation_inputs.slice_groups state=started rss_mb=1386.7
+[timing] ablation_inputs.slice_groups state=completed elapsed_seconds=0.024 rss_mb=1386.7
+[timing] ablation_inputs.tokens state=started rss_mb=1386.7
+[timing] ablation_inputs.tokens state=completed elapsed_seconds=8.236 rss_mb=1386.7
+[timing] ablation_inputs.graph_topology state=started rss_mb=1386.7
+[timing] ablation_inputs.graph_topology state=completed elapsed_seconds=0.000 rss_mb=1386.7
+[timing] ablation_inputs.candidate_batches state=started rss_mb=1386.7
+[timing] ablation_inputs.candidate_batches state=completed elapsed_seconds=0.000 rss_mb=1386.7
+[timing] ablation_inputs.variant_jobs state=started rss_mb=1386.7
+[timing] ablation_inputs.variant_jobs state=completed elapsed_seconds=0.058 rss_mb=1386.7
+[timing] ablation_inputs.publish state=started rss_mb=1386.7
+[timing] ablation_inputs.publish state=completed elapsed_seconds=0.613 rss_mb=1386.7
+ablation inputs published token_batches=176 jobs=36
+[timing] ablation_inputs.prepare_inputs state=completed elapsed_seconds=8.939 rss_mb=1386.7
+[timing] ablation.prepare.persist state=completed elapsed_seconds=12.279 rss_mb=1386.7
+[timing] ablation.prepare state=completed elapsed_seconds=184.169 rss_mb=1386.7
+[timing] abl.prepare state=completed elapsed_seconds=184.170 rss_mb=1386.7
+[timing] abl.encode state=started rss_mb=1386.7
+[timing] ablation.encode state=started rss_mb=1386.7
+[timing] ablation.encode.text_vectors state=started rss_mb=1386.7
+[timing] ablation.encode.text_vectors state=failed elapsed_seconds=0.402 rss_mb=1386.7
+[traceback] ablation.encode.text_vectors
+Traceback (most recent call last):
+  File "/tmp/opc/ER-opt-C/src/core/step_trace.py", line 103, in trace_step
+    yield
+  File "/tmp/opc/ER-opt-C/src/core/run_log.py", line 81, in section
+    yield
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 617, in encode
+    text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 502, in _prepared_text_vectors
+    raise ValueError('baseline text export differs from prepared native text/checkpoint')
+ValueError: baseline text export differs from prepared native text/checkpoint
+
+[timing] ablation.encode state=failed elapsed_seconds=0.522 rss_mb=1386.7
+[traceback] ablation.encode
+Traceback (most recent call last):
+  File "/tmp/opc/ER-opt-C/src/core/step_trace.py", line 81, in wrapper
+    result = function(*args, **kwargs)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 101, in wrapped
+    return function(request_path,*args,**kwargs)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 617, in encode
+    text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 502, in _prepared_text_vectors
+    raise ValueError('baseline text export differs from prepared native text/checkpoint')
+ValueError: baseline text export differs from prepared native text/checkpoint
+
+[timing] abl.encode state=failed elapsed_seconds=0.523 rss_mb=1386.7
+[traceback] abl.encode
+Traceback (most recent call last):
+  File "/tmp/opc/ER-opt-C/src/core/step_trace.py", line 103, in trace_step
+    yield
+  File "/tmp/opc/ER-opt-C/scripts/ablation_timing.py", line 257, in run_round
+    ablation.encode(request_path, result, device='cpu', saved_text=SAVED_TEXT)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/opc/ER-opt-C/src/core/step_trace.py", line 81, in wrapper
+    result = function(*args, **kwargs)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 101, in wrapped
+    return function(request_path,*args,**kwargs)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 617, in encode
+    text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+  File "/tmp/opc/ER-opt-C/src/model_tracks/ablation.py", line 502, in _prepared_text_vectors
+    raise ValueError('baseline text export differs from prepared native text/checkpoint')
+ValueError: baseline text export differs from prepared native text/checkpoint
+
