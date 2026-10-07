@@ -32,7 +32,8 @@ from core.timing import Timing
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
-from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context, validate_vectors
+from graph_tracks.text_cache import checkpoint_hash
+from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors
 from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
@@ -84,11 +85,12 @@ def _frozen_support(setup):
 @timed
 def _template_checkpoint(setup,baseline,track,vocabulary,support):
     """The text baseline checkpoint, or the other tracks' template tensor file."""
+    from core.model_input import model_input_composition
     checkpoint = baseline
     if track != 'text':
         checkpoint = setup/(track+'__ablation_template.pt')
         payload = {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
-            'text_metadata':{}},
+            'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
             'vocabulary':vocabulary,'support_records':support}
         torch.save(payload,checkpoint)
     return checkpoint
@@ -150,7 +152,7 @@ def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,suppo
     path,request = _track_request(setup,checkpoint,track,cohort=cohort,
         frozen_config=frozen_config,baseline=baseline,composer=composer,token_cache=token_cache)
     common_cohort = _track_cohort(track,request,common_cohort)
-    request['graph_binding'] = track if track != 'text' else None
+    request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
     _anchor_request(setup,request)
     _copy_template(setup,track,path,request)
     timing.mark(track + '_tokens_tensors_and_request')
@@ -217,7 +219,9 @@ def _bind_template(setup,track):
 @timed
 def _check_graph_binding(checkpoint,track,request):
     """Reject a selected graph checkpoint that differs from frozen support."""
-    if request['graph_binding'] != track:
+    payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
+    actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})
+    if actual != request['graph_binding'] or payload['manifest']['track'] != track:
         raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
 
 

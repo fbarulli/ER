@@ -8,15 +8,15 @@ import torch
 from model_tracks import ablation, staged_ablation, text_export
 
 
-def test_staged_graph_binding_rejects_mismatched_track_before_forward(tmp_path,monkeypatch):
+def test_staged_graph_binding_rejects_changed_support_before_forward(tmp_path,monkeypatch):
     import core.common
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     setup = tmp_path/'setup'
     template = setup/'ablation_templates/gnn_only';template.mkdir(parents=True)
-    request = {'graph_binding':'text'}
+    request = {'graph_binding':ablation.digest({'vocabulary':{},'support_records':[]})}
     (template/'request.json').write_text(json.dumps(request))
     checkpoint = tmp_path/'run/gnn_only/checkpoint.pt';checkpoint.parent.mkdir(parents=True)
-    torch.save({'vocabulary':{},'support_records':[],
+    torch.save({'vocabulary':{},'support_records':[{'sku_id':'unexpected'}],
                 'manifest':{'track':'gnn_only'}},checkpoint)
     monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:pytest.fail('must reject before forward'))
     with pytest.raises(ValueError,match='support/vocabulary'):
@@ -31,7 +31,7 @@ def test_bound_request_preserves_prepared_tensor_hash_and_relative_checkpoint(tm
     payload = {'vocabulary':{},'support_records':[],'manifest':{'track':'gnn_only'}}
     torch.save(payload,checkpoint)
     tensors = template/'prepared_inputs.npz';tensors.write_bytes(b'frozen local topology')
-    request = {'checkpoint':'@setup/template.pt','graph_binding':'gnn_only',
+    request = {'checkpoint':'@setup/template.pt','graph_binding':ablation.digest({'vocabulary':{},'support_records':[]}),
                'sources':{'@setup/template.pt':'placeholder'},'settings':{'retrieval_catalog':'full'},'prepared_inputs':{'sha256':ablation.file_hash(tensors)}}
     (template/'request.json').write_text(json.dumps(request))
     calls = []

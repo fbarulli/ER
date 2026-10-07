@@ -137,10 +137,6 @@ def source_name(path):
 
 
 def checkpoint_identity(path):
-    path = Path(path)
-    sidecar = Path(str(path)+'.sha256')
-    if sidecar.is_file():
-        return sidecar.read_text().strip()
     return checkpoint_hash(path) if path.is_dir() else file_hash(path)
 
 
@@ -732,7 +728,12 @@ def verify_threshold_binding(request, provenance):
 def validate_vectors(request_path, result):
     """Cheap integrity validation before closing the GPU; no metrics or ANN."""
     request = json.loads(request_path.read_text())
+    validate_sources(request)
+    if 'prepared_inputs' in request:
+        load_prepared(request_path,request).close()
     with np.load(result,allow_pickle=False) as data:
+        if str(data['request_sha256'].item()) != file_hash(request_path):
+            raise ValueError('ablation result belongs to another request')
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None
     expected = (len(request['variants']),len(request['ids']))
