@@ -1,13 +1,19 @@
 """Local-only tokenization, graph tensorization/topology and execution planning.
 
 Single-responsibility phases (behaviour pinned, statements split verbatim):
-  - :func:`_frozen_pairs`       — frozen pair endpoints and the plan skeleton
+  - :func:`_pair_indices`       — endpoint index array over the frozen identity order
+  - :func:`_open_plan`          — the plan skeleton opened from the frozen pairs
   - :func:`_slice_groups`       — pair rows grouped by the configured slice axes
   - :func:`_token_batches`      — native frozen tokenization (no model forward)
-  - :func:`_graph_topology`     — graph checkpoint load/validation + support batch
+  - :func:`_graph_payload`      — graph checkpoint load/validation
+  - :func:`_hybrid_metadata`    — hybrid text checkpoint/composition match
+  - :func:`_support_batch`      — frozen support topology under the vocabulary
+  - :func:`_candidate_tensors`  — candidate text indices and ids frozen
   - :func:`_candidate_batches`  — out-of-support candidate tensorization
-  - :func:`_variant_jobs`       — deduped inference jobs over intervention variants
-  - :func:`_publish`            — compressed tensor file, hash and census print
+  - :func:`_graph_batch_prefixes` — one record set's graph tensor batches
+  - :func:`_variant_jobs`       — deduped inference jobs over variants
+  - :func:`_freeze_arrays`      — exclusive-create the compressed tensor file
+  - :func:`_publish`            — tensor file, hash and census print
 """
 from pathlib import Path
 import numpy as np
@@ -23,16 +29,26 @@ from graph_tracks.prepared_inputs import save_batch, load_batch
 _LOG = RunLogger(__name__)
 
 
-def _frozen_pairs(request, arrays):
-    """Freeze candidate order/endpoint indices and open the plan skeleton."""
+def _pair_indices(request, arrays):
+    """Endpoint index array over the frozen identity order."""
     lookup = {key:n for n,key in enumerate(request['ids'])}
     arrays['pair_indices'] = np.asarray([[lookup[p['sku_id1']],lookup[p['sku_id2']]] for p in request['pairs']],dtype=np.int64)
+
+
+def _open_plan(request, arrays):
+    """Open the plan skeleton from the frozen pair endpoints."""
     # Candidate order and endpoint indices are frozen before vectors exist.
     plan = {'schema':'er-ablation-prepared-inputs-v1','token_batches':[], 'graph_batches':{},
             'candidate_ids':request['ids'], 'pair_indices':arrays['pair_indices'].tolist(),
             'known_positive_pairs':[n for n,p in enumerate(request['pairs']) if p['label']=='1'],
             'slice_groups':{}, 'variant_jobs':[], 'jobs':[]}
     return plan
+
+
+def _frozen_pairs(request, arrays):
+    """Freeze candidate order/endpoint indices and open the plan skeleton."""
+    _pair_indices(request,arrays)
+    return _open_plan(request,arrays)
 
 
 def _slice_groups(request, plan):
@@ -95,11 +111,16 @@ def _graph_topology(request,arrays,plan):
     return payload,vocabulary
 
 
+def _candidate_tensors(request, arrays, plan):
+    """Freeze candidate text indices and ids into the arrays/plan pair."""
+    arrays['candidate_text_indices'] = np.asarray(request['candidate_text_indices'],dtype=np.int64)
+    plan['candidate_ids'] = request['candidate_ids']
+
+
 def _candidate_batches(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Tensorize the out-of-support candidate records when supplied."""
     if request.get('candidate_ids'):
-        arrays['candidate_text_indices'] = np.asarray(request['candidate_text_indices'],dtype=np.int64)
-        plan['candidate_ids'] = request['candidate_ids']
+        _candidate_tensors(request,arrays,plan)
         if payload:
             plan['candidate_batches'] = []
             starts = range(0,len(request['candidate_records']),batch_size)
@@ -107,6 +128,16 @@ def _candidate_batches(request, arrays, plan, *, payload, vocabulary, batch_size
                 prefix = f'candidate/{start}'
                 save_batch(arrays,prefix,tensorize(request['candidate_records'][start:start+batch_size],vocabulary,'cpu'),vocabulary)
                 plan['candidate_batches'].append(prefix)
+
+
+def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,batch_size):
+    """Save the record set's graph tensor batches once; keep their prefixes."""
+    prefixes = []
+    for start in range(0,len(records),batch_size):
+        prefix = f'graph/{graph_key}/{start}'
+        save_batch(arrays,prefix,tensorize(records[start:start+batch_size],vocabulary,'cpu'),vocabulary)
+        prefixes.append(prefix)
+    plan['graph_batches'][graph_key] = prefixes
 
 
 def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
@@ -119,23 +150,24 @@ def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
             job_lookup[key] = len(plan['jobs'])
             graph_key = digest(variant['records'])
             if payload and graph_key not in plan['graph_batches']:
-                prefixes = []
-                for start in range(0,len(variant['records']),batch_size):
-                    prefix = f'graph/{graph_key}/{start}'
-                    save_batch(arrays,prefix,tensorize(variant['records'][start:start+batch_size],vocabulary,'cpu'),vocabulary)
-                    prefixes.append(prefix)
-                plan['graph_batches'][graph_key] = prefixes
+                _graph_batch_prefixes(plan,arrays,graph_key,variant['records'],
+                    payload=payload,vocabulary=vocabulary,batch_size=batch_size)
             text_key = 'indices/'+key
             arrays[text_key] = np.asarray(variant['text_indices'],dtype=np.int64)
             plan['jobs'].append({'text_indices_key':text_key,'graph_key':graph_key})
         plan['variant_jobs'].append(job_lookup[key])
 
 
-def _publish(arrays, output, plan):
-    """Write the compressed tensor file, hash it and report the plan census."""
+def _freeze_arrays(arrays, output):
+    """Exclusive-create the compressed tensor file next to its consumers."""
     output.parent.mkdir(parents=True,exist_ok=True)
     with output.open('xb') as handle:
         np.savez_compressed(handle,**arrays)
+
+
+def _publish(arrays, output, plan):
+    """Write the compressed tensor file, hash it and report the plan census."""
+    _freeze_arrays(arrays,output)
     plan['sha256'] = file_hash(output)
     print(f'[ablation/local] prepared token batches={len(plan["token_batches"])} unique inference jobs={len(plan["jobs"])}',flush=True)
 
