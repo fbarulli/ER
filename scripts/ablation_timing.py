@@ -52,9 +52,14 @@ if os.environ.get('TOKENIZERS_PARALLELISM') is None:
 if os.environ.get('OMP_NUM_THREADS') is None:
     os.environ['OMP_NUM_THREADS'] = '1'
 
+from core.run_log import RunLogger  # noqa: E402
+from core.step_trace import timed  # noqa: E402
+
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
+
+_LOG = RunLogger('abl_timing')
 
 ABL = ROOT / 'artifacts' / 'abl_opt'
 INPUTS = ABL / 'inputs'
@@ -148,22 +153,25 @@ def ensure_inputs(profile=False, rebuild_cache=False):
     return identity
 
 
-def build_saved_text_cache():
-    """One-time CPU encode of the 10k-catalog native baseline texts, then
-    freeze the shared saved-text cache npz used by encode(saved_text=...)."""
+@timed
+def _encode_baseline() -> tuple[dict, Path]:
+    """The one-time CPU encode of the 10k-catalog native baseline texts."""
     from model_tracks.ablation import prepare
-    from graph_tracks.text_cache import texts_hash
-    from core.model_input import model_input_composition
+    import model_tracks.ablation as ablation
     work = ABL / 'cache_staging'
-    config = CONFIG
     print('[ablbm] one-time full CPU encode for seeded cache (a few minutes).', flush=True)
-    request_path = prepare(CATALOG, PAIRS, CHECKPOINT, config=config)
+    request_path = prepare(CATALOG, PAIRS, CHECKPOINT, config=CONFIG)
     request = json.loads(request_path.read_text())
     out = work / 'vectors.npz'
     if out.exists():
         out.unlink()
-    import model_tracks.ablation as ablation
     ablation.encode(request_path, out, device='cpu')
+    return request, out
+
+
+def _seed_saved_text(request: dict, out: Path) -> None:
+    """Freeze the shared saved-text cache npz from the baseline vectors."""
+    from graph_tracks.text_cache import texts_hash
     ids = request['candidate_ids']
     with np.load(out, allow_pickle=False) as data:
         candidates = np.asarray(data['candidate_vectors'], dtype=np.float32)
@@ -182,32 +190,24 @@ def build_saved_text_cache():
                             embeddings=candidates,
                             metadata=json.dumps(metadata, sort_keys=True))
     (SAVED_TEXT.with_suffix('.npz.tmp')).replace(SAVED_TEXT)
-    shutil.rmtree(work, ignore_errors=True)
     print(f'[ablbm] seeded cache written; baseline vector block '
           f'{vectors.shape}', flush=True)
 
 
+def _clear_cache_staging() -> None:
+    """Remove the encoder staging warehouse used by the baseline encode."""
+    shutil.rmtree(ABL / 'cache_staging', ignore_errors=True)
+
+
+def build_saved_text_cache():
+    """Seed the shared saved-text cache: encode the baseline, freeze, cleanup."""
+    _LOG.info('[ablbm] one-time full CPU encode for seeded cache (a few minutes)')
+    request, out = _encode_baseline()
+    _seed_saved_text(request, out)
+    _clear_cache_staging()
+
+
 PROFILE_PREDICATES = ('model_tracks/', 'core/', 'graph_tracks/', 'training/')
-
-
-def rank_profile(prof, out_csv: Path, top=40):
-    stats = pstats.Stats(prof)
-    rows = []
-    for (file, line, name), (cc, nc, tottime, cumtime, callers) in stats.stats.items():
-        module = file.replace(ROOT.as_posix(), '') + ':' + str(line)
-        if not any(part in file for part in PROFILE_PREDICATES):
-            continue
-        if name.startswith('<') or 'run_colab' in file:
-            continue
-        rows.append((tottime, nc, cumtime, f'{module}:{name}'))
-    rows.sort(reverse=True)
-    import csv
-    with out_csv.open('w', newline='') as handle:
-        writer = csv.writer(handle)
-        writer.writerow(['self_seconds', 'ncalls', 'total_seconds', 'function'])
-        for row in rows[:top]:
-            writer.writerow([f'{row[0]:.3f}', row[1], f'{row[2]:.3f}', row[3]])
-    return rows[:top]
 
 
 volatile = {'implementation_sha256', 'composition', 'sources'}
@@ -227,31 +227,28 @@ def fingerprint_report(path: Path):
     return sha_json(cleaned)
 
 
-def run_round(round_no: int, rebuild_cache=False):
-    identity = ensure_inputs(rebuild_cache=rebuild_cache)
-    ROUNDS.mkdir(parents=True, exist_ok=True)
+def _session(round_no: int) -> dict:
+    """The round's artifact folder with stale outputs cleared, timing bound."""
     folder = ROUNDS / f'round{round_no}'
     folder.mkdir(parents=True, exist_ok=True)
     for stale in (folder/'vectors.npz', folder/'summary.json', folder/'ranking.csv',
                   folder/'timings.log', folder/'profile.prof'):
         if stale.exists():
             stale.unlink()
-    import core.step_trace as step_trace
     os.environ['ER_TIMING_LOG'] = str(folder / 'timings.log')
+    return {'round': round_no, 'folder': folder}
 
+
+@timed
+def _measure(session: dict, identity: str) -> tuple[cProfile.Profile, float, Path, Path]:
+    """The instrumented fixed-workload pass: prepare, encode, report."""
     import torch  # noqa: E402
+    from core.step_trace import trace_step
+    from model_tracks import ablation as ablation
     torch.set_num_threads(4)
     torch.manual_seed(1729)
-
-    from core.step_trace import trace_step
-    from core.run_log import RunLogger
-    logger = RunLogger('abl_timing')
-
     profiler = cProfile.Profile()
-    from model_tracks import ablation as ablation
-
-    summary = {'notes': REPORT_NOTE, 'cohort': '10k', 'pairs_source': str(PAIRS),
-               'checkpoint_sha256': identity, 'torch_threads': 4}
+    folder = session['folder']
     started = time.perf_counter()
     profiler.enable()
     with trace_step('abl.prepare'):
@@ -261,25 +258,68 @@ def run_round(round_no: int, rebuild_cache=False):
         ablation.encode(request_path, result, device='cpu', saved_text=SAVED_TEXT)
     threshold = json.loads(THRESHOLD_STATE.read_text())['threshold']
     with trace_step('abl.report'):
-        report = ablation.report(request_path, result, threshold,
-                                 threshold_source=str(BINDING), config=CONFIG)
+        ablation.report(request_path, result, threshold,
+                        threshold_source=str(BINDING), config=CONFIG)
     profiler.disable()
-    elapsed = time.perf_counter() - started
+    return profiler, time.perf_counter() - started, request_path, result
 
-    top = rank_profile(profiler, folder / 'ranking.csv')
+
+def _rank(profiler: cProfile.Profile) -> list[tuple]:
+    """The per-function self-time ranking of one measured round."""
+    stats = pstats.Stats(profiler)
+    rows = []
+    for (file, line, name), (cc, nc, tottime, cumtime, callers) in stats.stats.items():
+        module = file.replace(ROOT.as_posix(), '') + ':' + str(line)
+        if not any(part in file for part in PROFILE_PREDICATES):
+            continue
+        if name.startswith('<') or 'run_colab' in file:
+            continue
+        rows.append((tottime, nc, cumtime, f'{module}:{name}'))
+    rows.sort(reverse=True)
+    return rows
+
+
+@timed
+def _persist_round(session: dict, identity: str, profiler: cProfile.Profile,
+                   elapsed: float, request_path: Path, result: Path,
+                   rows: list[tuple]) -> dict:
+    """Freeze one round's artifacts: ranking csv, profile stats, summary."""
+    import csv
+    folder = session['folder']
+    top = 40
+    with (folder / 'ranking.csv').open('w', newline='') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(['self_seconds', 'ncalls', 'total_seconds', 'function'])
+        for row in rows[:top]:
+            writer.writerow([f'{row[0]:.3f}', row[1], f'{row[2]:.3f}', row[3]])
     profiler.dump_stats(folder / 'profile.prof')
-    summary.update({
-        'wall_seconds': round(elapsed, 3),
-        'prepare_seconds': phase_seconds(folder / 'timings.log', 'abl.prepare'),
-        'encode_seconds': phase_seconds(folder / 'timings.log', 'abl.encode'),
-        'report_seconds': phase_seconds(folder / 'timings.log', 'abl.report'),
-        'fingerprint_request': fingerprint_prepare(request_path),
-        'fingerprint_report': fingerprint_report(ABL / 'results' / 'report.json'),
-    })
+    summary = {'notes': REPORT_NOTE, 'cohort': '10k', 'pairs_source': str(PAIRS),
+               'checkpoint_sha256': identity, 'torch_threads': 4,
+               'wall_seconds': round(elapsed, 3),
+               'prepare_seconds': phase_seconds(folder / 'timings.log', 'abl.prepare'),
+               'encode_seconds': phase_seconds(folder / 'timings.log', 'abl.encode'),
+               'report_seconds': phase_seconds(folder / 'timings.log', 'abl.report'),
+               'fingerprint_request': fingerprint_prepare(request_path),
+               'fingerprint_report': fingerprint_report(ABL / 'results' / 'report.json')}
     (folder / 'summary.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
-    logger.info(f'round {round_no} wall={elapsed:.1f}s -> {folder}')
-    return summary, top
+    return summary
+
+
+@timed
+def run_round(round_no: int, rebuild_cache=False):
+    """One optimization round: measure the fixed workload, rank it, persist."""
+    identity = ensure_inputs(rebuild_cache=rebuild_cache)
+    session = _session(round_no)
+    with _LOG.section('abltiming.measure'):
+        profiler, elapsed, request_path, result = _measure(session, identity)
+    with _LOG.section('abltiming.rank'):
+        rows = _rank(profiler)
+    with _LOG.section('abltiming.persist'):
+        summary = _persist_round(session, identity, profiler, elapsed,
+                                 request_path, result, rows)
+    _LOG.info(f'round {round_no} wall={elapsed:.1f}s -> {session["folder"]}')
+    return summary, rows[:40]
 
 
 def phase_seconds(log_path: Path, label: str) -> float | None:
