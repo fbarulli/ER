@@ -63,7 +63,7 @@ def _forget_cached_session() -> None:
             command = proc_cmdline.read_bytes().replace(b"\0", b" ").decode(errors="replace")
         except OSError:
             command = ""
-        if _is_keep_alive_daemon(command):
+        if _hub()._is_keep_alive_daemon(command):
             try:
                 os.kill(keep_alive_pid, 15)
                 print(_hub()._stamp(), f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
@@ -99,7 +99,7 @@ def keep_alive_daemon_pids() -> list[int]:
             )
         except OSError:
             continue
-        if _is_keep_alive_daemon(command) and _hub().SESSION in command:
+        if _hub()._is_keep_alive_daemon(command) and _hub().SESSION in command:
             found.append(int(entry.name))
     return sorted(found)
 
@@ -114,7 +114,7 @@ def stop_keep_alive_daemon(*, reason: str) -> int:
     its own daemon.  A daemon that cannot be found is reported loudly rather
     than passed over in silence.
     """
-    pids = keep_alive_daemon_pids()
+    pids = _hub().keep_alive_daemon_pids()
     if not pids:
         print(
             f"[session] no keep-alive daemon found for '{_hub().SESSION}' ({reason}); "
@@ -145,15 +145,15 @@ def ensure_session() -> None:
     if r.returncode == 0 and _hub().SESSION in (r.stdout or ""):
         print(_hub()._stamp(), f"[session] '{_hub().SESSION}' already active; verifying control channel ...")
         try:
-            _verify_session_handshake()
+            _hub()._verify_session_handshake()
             return
         except BaseException as exc:
             print(_hub()._stamp(), f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
-            _forget_cached_session()
+            _hub()._forget_cached_session()
     else:
         # The CLI may retain a named session locally after the VM has been
         # torn down.  Never let that record prevent a fresh allocation.
-        _forget_cached_session()
+        _hub()._forget_cached_session()
     accelerator = [] if _hub().GPU.upper() == "CPU" else ["--gpu", _hub().GPU]
     print(_hub()._stamp(), f"[session] provisioning {_hub().SESSION} ({'cpu' if not accelerator else f'gpu={_hub().GPU}'}) ...")
     # Owner ruling 8: the CPU high-RAM production shape belongs to its own
@@ -162,7 +162,7 @@ def ensure_session() -> None:
     from cli.colab_data_bundle_prep import cpu_shape_args
     _hub().colab("new", "-s", _hub().SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
     print(_hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
-    _verify_session_handshake()
+    _hub()._verify_session_handshake()
 
 @_timed_colab("step")
 def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[str, ...] = ()) -> None:
@@ -376,7 +376,7 @@ def _env_value(name: str) -> str | None:
 
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk."""
-    key = _env_value("WANDB_API_KEY")
+    key = _hub()._env_value("WANDB_API_KEY")
     if not key:
         print(_hub()._stamp(), "[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
         return ""
@@ -385,7 +385,7 @@ def _wandb_env_script() -> str:
 
 def _optuna_env_script() -> str:
     """Inject the shared PostgreSQL control-plane URL into the VM only."""
-    url = _env_value("OPTUNA_STORAGE_URL")
+    url = _hub()._env_value("OPTUNA_STORAGE_URL")
     if not url:
         print(_hub()._stamp(), "[hpo-control] OPTUNA_STORAGE_URL absent; concurrent HPO is disabled")
         return ""
@@ -398,10 +398,10 @@ def _remote_auth_env_script(
     *, include_optuna: bool = False, include_wandb: bool = True,
 ) -> str:
     """Credential exports used by remote subprocess launch cells only."""
-    wandb = _wandb_env_script() if include_wandb else ""
+    wandb = _hub()._wandb_env_script() if include_wandb else ""
     return ("os.environ['EUROMONITOR_DISABLE_DVC_CHECKPOINTS'] = '1'\n"
             "os.environ['ER_INCREMENTAL_DVC'] = '0'\n"
-            + wandb + (_optuna_env_script() if include_optuna else ""))
+            + wandb + (_hub()._optuna_env_script() if include_optuna else ""))
 
 @_timed_colab("step")
 @timed
