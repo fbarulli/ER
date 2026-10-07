@@ -230,6 +230,32 @@ def merged_positive_graph(
     )
 
 
+class LabeledPairsCache:
+    """The (path, mtime, size) keyed cache for the loaded labeled census.
+
+    A retrain that regenerates the census in place must see the new rows,
+    and a long-running HPO sweep that calls the entry point dozens of times
+    must not re-parse the file each time.
+    """
+
+    def __init__(self):
+        self._key: tuple | None = None
+        self._frame: pd.DataFrame | None = None
+
+    def get(self, path: Path) -> pd.DataFrame:
+        stat = path.stat()
+        key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+        if key != self._key:
+            frame = pd.read_csv(
+                path, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
+            )
+            self._key, self._frame = key, frame
+        return self._frame
+
+
+_CENSUS_CACHE = LabeledPairsCache()
+
+
 def load_labeled_pairs(labeled_pairs_csv: str | Path | None = None) -> pd.DataFrame:
     """Read the labeled pair census (gtin1, gtin2, true_label) ONCE, cached.
 
@@ -237,7 +263,7 @@ def load_labeled_pairs(labeled_pairs_csv: str | Path | None = None) -> pd.DataFr
     on every call, so the read is cached on (path, mtime, size): a retrain
     that regenerates the census in place must see the new rows, and a
     long-running HPO sweep that calls the entry point dozens of times must not
-    re-parse the file each time.
+    re-parse the file each time. (Cache contract: :class:`LabeledPairsCache`.)
     """
     from core.common import F
 
@@ -250,19 +276,7 @@ def load_labeled_pairs(labeled_pairs_csv: str | Path | None = None) -> pd.DataFr
             "exists to prevent. Regenerate it with "
             "`PYTHONPATH=src python -m src.training.labeled_pairs`."
         )
-    stat = path.stat()
-    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
-    cached = _LABELED_PAIRS_CACHE.get("key")
-    if cached == key:
-        return _LABELED_PAIRS_CACHE["frame"]
-    frame = pd.read_csv(
-        path, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
-    )
-    _LABELED_PAIRS_CACHE.update(key=key, frame=frame)
-    return frame
-
-
-_LABELED_PAIRS_CACHE: dict[str, Any] = {}
+    return _CENSUS_CACHE.get(path)
 
 
 class LabeledPairCensus:
@@ -588,6 +602,7 @@ def derive_holdout(
     ).cut()
 
 
+@timed
 def merged_component_graph(
     pos: np.ndarray,
     row_bc: np.ndarray,

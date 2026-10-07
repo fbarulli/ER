@@ -24,6 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.run_log import RunLogger
+from training.prepare_all_trace import timed
 from graph_tracks.data import RELATIONS, NUMERIC, file_hash, load_records
 
 _LOG = RunLogger(__name__)
@@ -154,6 +155,7 @@ class PreparedManifest:
         })
 
 
+@timed
 def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_tensors: bool = True) -> Path:
     from graph_tracks.train import load_pairs, write_json
     from core.common import TRAIN_ROOT

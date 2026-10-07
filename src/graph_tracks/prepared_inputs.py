@@ -20,6 +20,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.run_log import RunLogger
+from training.prepare_all_trace import timed
 from graph_tracks.data import (
     GraphBatch,
     NUMERIC,
@@ -286,6 +287,7 @@ class PreparedPoolingInputs(BaseModel):
                    offsets=offsets, count=count)
 
 
+@timed
 def prepare_training(listings: Path, pairs: Path, output: Path | None = None, *, batch_size=1024):
     """Run locally before packaging; never perform a model forward.
 
@@ -325,6 +327,7 @@ def prepare_training(listings: Path, pairs: Path, output: Path | None = None, *,
     return output/PLAN
 
 
+@timed
 def prepare_inference(listings: Path, checkpoint: Path, output: Path | None = None, *, batch_size=1024):
     """Prepare new inductive queries locally with checkpoint-native support.
 
@@ -359,6 +362,7 @@ def prepare_inference(listings: Path, checkpoint: Path, output: Path | None = No
     return output/PLAN
 
 
+@timed
 def load_plan(listings: Path, pairs: Path | None = None):
     """Hash-check the prepared package, then CPU-validate its topology."""
     path = listings.parent/PLAN
