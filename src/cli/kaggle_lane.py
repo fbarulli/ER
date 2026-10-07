@@ -130,6 +130,7 @@ _dataset_current_version = KaggleDatasets._dataset_current_version
 publish_bundle_dataset = KaggleDatasets.publish_bundle_dataset
 _publish_after_verified_fetch = KaggleDatasets._publish_after_verified_fetch
 _kernel_script_gate = KaggleKernels._kernel_script_gate
+_attachment_gate = KaggleKernels._attachment_gate
 stage_bundle_kernel = KaggleKernels.stage_bundle_kernel
 push_bundle_kernel = KaggleKernels.push_bundle_kernel
 stage_gpu_kernel = KaggleKernels.stage_gpu_kernel
