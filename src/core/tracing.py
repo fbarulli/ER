@@ -208,8 +208,13 @@ def resolve_run_identity() -> dict[str, object]:
     return _fingerprint_run_identity(sources)
 
 
+@timed
 def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
-    """Size + sha256 of every artifact that defines the current run."""
+    """Size + sha256 of every artifact that defines the current run.
+
+    Runs on every unbound TraceRun write, so its hashing cost is traced; the
+    stage's own artifacts are the digest input.
+    """
     from core.common import F
     from core.manifest import sha256_file
 
@@ -227,6 +232,38 @@ def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
             "sha256": sha256_file(path),
         }
     return found
+
+
+def _row_accounting(row, result: dict[str, object]) -> None:
+    """Augment ``result`` with the row-population identity of the guard row."""
+    if row is not None:
+        detail = detail_json(row["detail"])
+        result["rows_in"] = int(float(row["in_count"]))
+        result["rows_identity_valid"] = int(float(row["out_count"]))
+        result["gtin_missing_or_nan"] = int(detail.get("gtin_missing_or_nan", 0))
+        result["gs1_checksum_failed"] = int(detail.get("gs1_checksum_failed", 0))
+
+
+def _canonical_accounting(row, result: dict[str, object]) -> None:
+    """Augment ``result`` with the canonical-records identity of its row."""
+    if row is not None:
+        detail = detail_json(row["detail"])
+        result["canonical_records"] = int(float(row["out_count"]))
+        result["collapsed_same_gtin"] = int(detail.get("collapsed_same_gtin", 0))
+
+
+def _census_accounting(
+    frame: pd.DataFrame, step_prefix: str
+) -> dict[str, int]:
+    """Every group row whose step starts with ``step_prefix``, by suffix."""
+    hit = frame[
+        frame["step"].astype(str).str.startswith(step_prefix)
+        & frame["scope"].astype(str).eq(SCOPE_GROUP)
+    ]
+    return {
+        str(rec["step"])[len(step_prefix) :]: int(float(rec["out_count"]))
+        for _, rec in hit.iterrows()
+    }
 
 
 def _detail_text(detail: object) -> str:
@@ -1074,35 +1111,14 @@ def accounting(frame: pd.DataFrame) -> dict[str, object]:
         ]
         return None if hit.empty else hit.iloc[-1]
 
-    def census(step_prefix: str) -> dict[str, int]:
-        """Every group row whose step starts with ``step_prefix``, by suffix."""
-        hit = frame[
-            frame["step"].astype(str).str.startswith(step_prefix)
-            & frame["scope"].astype(str).eq(SCOPE_GROUP)
-        ]
-        return {
-            str(rec["step"])[len(step_prefix) :]: int(float(rec["out_count"]))
-            for _, rec in hit.iterrows()
-        }
-
-    guard = row("data_prep", "gtin_guard.identity_claims_evaluated")
-    canon = row("data_prep", "canonical.records_built")
     result: dict[str, object] = {}
-    if guard is not None:
-        detail = detail_json(guard["detail"])
-        result["rows_in"] = int(float(guard["in_count"]))
-        result["rows_identity_valid"] = int(float(guard["out_count"]))
-        result["gtin_missing_or_nan"] = int(detail.get("gtin_missing_or_nan", 0))
-        result["gs1_checksum_failed"] = int(detail.get("gs1_checksum_failed", 0))
-    if canon is not None:
-        detail = detail_json(canon["detail"])
-        result["canonical_records"] = int(float(canon["out_count"]))
-        result["collapsed_same_gtin"] = int(detail.get("collapsed_same_gtin", 0))
-    decisions = census("gate.decision_")
+    _row_accounting(row("data_prep", "gtin_guard.identity_claims_evaluated"), result)
+    _canonical_accounting(row("data_prep", "canonical.records_built"), result)
+    decisions = _census_accounting(frame, "gate.decision_")
     if decisions:
         result["gate_decisions"] = decisions
         result["gate_pairs"] = sum(decisions.values())
-    labels = census("labels.destiny_")
+    labels = _census_accounting(frame, "labels.destiny_")
     if labels:
         result["label_destiny"] = labels
         result["label_pairs"] = sum(labels.values())
