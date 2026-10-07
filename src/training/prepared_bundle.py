@@ -131,6 +131,7 @@ class BundleDriftPolicy:
         print(f'[bundle-drift] WARNING: {detail}', flush=True)
 
     @staticmethod
+    @timed
     def check_provenance_drift(path: Path, manifest: PreparedBundleManifest) -> None:
         """Detect config drift against the manifest's build-time snapshot."""
         from core.common import load_config, masking_cfg
@@ -179,6 +180,7 @@ class FrozenHoldoutPolicy:
     """The frozen holdout contract: split shape, entity coverage, pair integrity."""
 
     @staticmethod
+    @timed
     def validate_frozen(data: dict, frozen: dict, normalize_gtin):
         """The three SR checks on a frozen holdout: shape, entity coverage, pairs."""
         if set(frozen) != {'train', 'dev', 'test'}:
@@ -189,6 +191,7 @@ class FrozenHoldoutPolicy:
         return populations
 
     @staticmethod
+    @timed
     def entities_cover_payload(data: dict, populations, normalize_gtin) -> None:
         """Every payload entity sits in exactly one frozen holdout split."""
         roles = {}
@@ -198,25 +201,28 @@ class FrozenHoldoutPolicy:
                 if key in roles and roles[key] != role:
                     raise ValueError('frozen holdout contains overlapping entities')
                 roles[key] = role
-        for value in data['row_bc']:
+        for value in _LOG.progress(data['row_bc'], desc='holdout_coverage',
+                                   unit='entity'):
             key = normalize_gtin(value)
             if key and key not in roles:
                 raise ValueError('frozen holdout misses a payload entity')
 
     @staticmethod
+    @timed
     def pairs_stay_in_split(data: dict, normalize_gtin) -> None:
         """No positive pair may cross the frozen split boundary."""
         roles = {}
         for split in ('train', 'dev', 'test'):
             for value in data['holdout_populations'][split]:
                 roles[normalize_gtin(value)] = split
-        for a, b in data['pos']:
+        for a, b in _LOG.progress(data['pos'], desc='holdout_pairs', unit='pair'):
             ka = normalize_gtin(data['row_bc'][a])
             kb = normalize_gtin(data['row_bc'][b])
             if roles.get(ka) != roles.get(kb):
                 raise ValueError('positive pair crosses frozen holdout')
 
 
+@timed
 def prepared_holdout(data: dict, split_cfg: dict, *, seed: int):
     """Reuse a frozen parent split for sampled smokes; otherwise derive SSOT."""
     from training.folds import derive_holdout, normalize_gtin
@@ -230,6 +236,7 @@ class LineageAuditor:
     """Payload lineage attestation shared by the write and load lanes."""
 
     @staticmethod
+    @timed
     def validate_augmented_features(payload, features, audit) -> None:
         """Payload rows and features align; audited augmentation reproduces itself."""
         if len(features) != len(payload):
@@ -239,6 +246,7 @@ class LineageAuditor:
         LineageAuditor.assert_audited_reproducible(payload, features, audit)
 
     @staticmethod
+    @timed
     def assert_audited_reproducible(payload, features, audit) -> None:
         """Recompute the audited augmentation once; refuse any byte of drift."""
         from training.masking import extend_augmented_features
@@ -251,6 +259,7 @@ class LineageAuditor:
             )
 
     @staticmethod
+    @timed
     def validate_counterfactual_audits(payload, audit) -> None:
         """Reject stored twin negatives whose claimed field flip is compatible."""
         twins = [row for row in audit if row.get("target_mode") == "counterfactual"]
@@ -294,6 +303,7 @@ class PayloadContract:
             raise ValueError(f"prepared training bundle missing fields: {missing}")
 
     @staticmethod
+    @timed
     def validate_arrays(data) -> None:
         """Reject malformed CPU inputs before casts or GPU compute hide defects."""
         required = {"payload", "row_bc", "country", "structured_features", "pos",
@@ -307,6 +317,7 @@ class PayloadContract:
         PayloadContract.validate_embeddings(data, size)
 
     @staticmethod
+    @timed
     def validate_aligned_columns(data, size: int) -> None:
         """Per-row columns: payload index arrays and feature windows alike."""
         for key in ("row_bc", "country"):
@@ -325,6 +336,7 @@ class PayloadContract:
             validate_training_tokens(data["training_tokens"])
 
     @staticmethod
+    @timed
     def validate_pair_arrays(data, size: int) -> None:
         """Pair columns: exact (n,2) integer arrays, indices inside the payload."""
         for key in ("pos", "hp_pairs", "neg", "train_neg"):
@@ -335,6 +347,7 @@ class PayloadContract:
                 raise ValueError(f"prepared {key} contains out-of-bounds payload indices")
 
     @staticmethod
+    @timed
     def validate_embeddings(data, size: int) -> None:
         """Initial embeddings: finite and aligned with the payload (or empty)."""
         embeddings = np.asarray(data["emb0"])
@@ -348,6 +361,7 @@ class CanonicalLayout:
     """The source/canonical/augmentation row layout candidates are drawn from."""
 
     @staticmethod
+    @timed
     def canonical_row_window(n_source: int, n_canonical: int, n_payload: int) -> np.ndarray:
         """The [n_source, n_source+n_canonical) row window, bounds-checked."""
         end = n_source + n_canonical
@@ -359,6 +373,7 @@ class CanonicalLayout:
         return np.arange(n_source, end, dtype=int)
 
     @staticmethod
+    @timed
     def assert_canonical_block_matches(rows, row_bc, canon_map) -> None:
         """The window's GTINs must be exactly the canonical map's (no drift)."""
         if {str(b) for b in row_bc[rows]} != set(canon_map):
@@ -369,6 +384,7 @@ class CanonicalLayout:
             )
 
 
+@timed
 def canonical_payload_rows(n_source: int, payload: list[str], row_bc: np.ndarray) -> np.ndarray:
     """Validate the native source/canonical/augmentation layout for retrieval.
 
@@ -386,6 +402,7 @@ class BundleCodec:
     """Freeze + restore the pickle payload for preparation workers of any host."""
 
     @staticmethod
+    @timed
     def portable_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         """Freeze values without pandas-version-specific string dtype metadata."""
         result = df.astype(object)
@@ -395,12 +412,14 @@ class BundleCodec:
         return result
 
     @staticmethod
+    @timed
     def write_pickle(path: Path, payload_data: dict[str, Any]) -> None:
         """Gzip-pickle the payload with the pipeline's pinned compression level."""
         with gzip.open(path, "wb", compresslevel=6) as handle:
             pickle.dump(payload_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     @staticmethod
+    @timed
     def read_payload(path) -> dict[str, Any]:
         """The in-memory built bundle wins; otherwise decompress + unpickle, typed."""
         built = PreparationStore.pop_built(path)
@@ -462,6 +481,7 @@ class BundleWriter:
     """One write's CPU-side assembly: provenance, materialization, manifest."""
 
     @staticmethod
+    @timed
     def resolve_masking_provenance(masking_profile: str) -> dict[str, Any]:
         """The masking/easy-negative config snapshot the manifest will pin."""
         from core.common import load_config, masking_cfg
@@ -483,6 +503,7 @@ class BundleWriter:
                 'effective_train_ratio': float(effective_ratio)}
 
     @staticmethod
+    @timed
     def materialize_payload_data(**inputs) -> dict[str, Any]:
         """The pickle-ready payload dict (portable df keeps pandas versions off)."""
         # Colab and preparation hosts can use different pandas versions.
@@ -511,6 +532,7 @@ class BundleWriter:
         }
 
     @staticmethod
+    @timed
     def materialize_training_tokens(timing, token_checkpoint, payload, training_tokens):
         """The native token table: checkpoint-supplied when given, else as passed in."""
         if token_checkpoint is None:
@@ -524,6 +546,7 @@ class BundleWriter:
         return training_tokens
 
     @staticmethod
+    @timed
     def validate_and_attach_tokens(payload_data: dict[str, Any], training_tokens) -> None:
         """Validate the token table, then embed it under its contract key."""
         if training_tokens is None:
@@ -533,6 +556,7 @@ class BundleWriter:
         payload_data["training_tokens"] = training_tokens
 
     @staticmethod
+    @timed
     def maybe_attach_plans(timing, payload_data, *, token_checkpoint, holdout_populations,
                            augmentation_coverage, plan_loss, plan_train_frac, plan_sample) -> None:
         """Append the optional recipe segments: holdout, coverage, epoch plan."""
@@ -551,6 +575,7 @@ class BundleWriter:
                     sample=plan_sample)
 
     @staticmethod
+    @timed
     def build_manifest(path: Path, payload_data: dict[str, Any], **headers) -> PreparedBundleManifest:
         """Assemble + persist the manifest sidecar (hash included, not computed here)."""
         manifest = PreparedBundleManifest(**headers)
@@ -570,6 +595,7 @@ class BundleWriter:
         )
 
 
+@timed
 def _audit_payload_lineage(payload, structured_features, mask_audit,
                            hard_negative_mask_audit) -> None:
     """Write-side lineage attestation under its own trace step."""
@@ -579,6 +605,7 @@ def _audit_payload_lineage(payload, structured_features, mask_audit,
         _validate_counterfactual_audits(payload, hard_negative_mask_audit)
 
 
+@timed
 def write_prepared_bundle(
     path: Path,
     *,
@@ -666,6 +693,7 @@ def write_prepared_bundle(
     )
     timing.mark('hash_and_write_manifest')
     PreparationStore.register_built(path, manifest, payload_data)
+    _LOG.info(f'[bundle] wrote {path} sha256={manifest.sha256}')
     return manifest
 
 
@@ -683,6 +711,7 @@ class BundleReader:
         return not _owner_trusted('text bundle')
 
     @staticmethod
+    @timed
     def load_manifest(path: Path) -> PreparedBundleManifest:
         """Parse + fail-loud the bundle's sidecar manifest."""
         manifest_path = path.with_suffix(path.suffix + ".json")
@@ -695,6 +724,7 @@ class BundleReader:
         )
 
     @staticmethod
+    @timed
     def verify_bytes(path: Path, manifest: PreparedBundleManifest) -> None:
         """The whole-file digest must match the manifest's recorded hash."""
         actual_digest = _digest(path)
@@ -705,6 +735,7 @@ class BundleReader:
             )
 
     @staticmethod
+    @timed
     def validate_manifest_counts(path: Path, manifest: PreparedBundleManifest,
                                  data: dict[str, Any]) -> None:
         """Every manifest count must still match the payload it describes."""
@@ -717,6 +748,7 @@ class BundleReader:
         BundleReader.validate_embedded_csv_bytes(path, manifest, data)
 
     @staticmethod
+    @timed
     def validate_embedded_csv_bytes(path: Path, manifest: PreparedBundleManifest,
                                     data: dict[str, Any]) -> None:
         """The embedded raw CSVs are byte-count contracted per manifest."""
@@ -733,6 +765,7 @@ class BundleReader:
                 raise ValueError(f"prepared bundle {field} bytes disagree with manifest")
 
     @staticmethod
+    @timed
     def validate_identity_fields(path: Path, manifest: PreparedBundleManifest,
                                  data: dict[str, Any]) -> None:
         """Variant/profile identity and the encoder-text contract must hold."""
@@ -743,6 +776,7 @@ class BundleReader:
         BundleReader.assert_model_input_contract(manifest)
 
     @staticmethod
+    @timed
     def assert_model_input_contract(manifest: PreparedBundleManifest) -> None:
         """The frozen text must be what the active composition still produces."""
         from core.model_input import model_input_spec
@@ -777,6 +811,7 @@ def _timed_lineage_validations(data) -> None:
     timing.mark("counterfactual_audit")
 
 
+@timed
 def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBundleManifest, dict[str, Any]]:
     """Load and validate a bundle before it crosses into the training lane.
 
@@ -803,4 +838,5 @@ def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBun
     BundleDriftPolicy.check_provenance_drift(path, manifest)
     BundleDriftPolicy.check_legacy_ratio_note(path, manifest)
     PreparationStore.cache(path, manifest, data)
+    _LOG.info(f'[bundle] loaded {path} sha256={manifest.sha256}')
     return manifest, data
