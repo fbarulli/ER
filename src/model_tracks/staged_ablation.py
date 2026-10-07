@@ -147,15 +147,20 @@ def _copy_template(setup,track,path,request):
 @timed
 def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None,graph_binding=_BINDING_UNSET):
     """One track's template: checkpoint, prepared request, anchors, folder copy."""
-    checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
-    path,request = _track_request(setup,checkpoint,track,cohort=cohort,
-        frozen_config=frozen_config,composer=composer,token_cache=token_cache)
-    common_cohort = _track_cohort(track,request,common_cohort)
-    if graph_binding is _BINDING_UNSET and track != 'text':
-        graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
-    request['graph_binding'] = graph_binding if track != 'text' else None
-    _anchor_request(setup,request)
-    _copy_template(setup,track,path,request)
+    with _LOG.section('ablation_template.checkpoint'):
+        checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
+    with _LOG.section('ablation_template.prepared_request'):
+        path,request = _track_request(setup,checkpoint,track,cohort=cohort,
+            frozen_config=frozen_config,composer=composer,token_cache=token_cache)
+    with _LOG.section('ablation_template.cohort_validate'):
+        common_cohort = _track_cohort(track,request,common_cohort)
+    with _LOG.section('ablation_template.graph_binding'):
+        if graph_binding is _BINDING_UNSET and track != 'text':
+            graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
+        request['graph_binding'] = graph_binding if track != 'text' else None
+    with _LOG.section('ablation_template.anchor_and_copy'):
+        _anchor_request(setup,request)
+        _copy_template(setup,track,path,request)
     timing.mark(track + '_tokens_tensors_and_request')
     return common_cohort
 
