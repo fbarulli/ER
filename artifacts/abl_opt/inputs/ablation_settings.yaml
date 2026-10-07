@@ -1,0 +1,37 @@
+accelerator: T4
+attributes: []
+batch_size: 64
+coverage: sampled
+graph_fields:
+  carbonization:
+  - attribute.carbonation
+  count per unit:
+  - numeric.pack
+  flavour:
+  - attribute.flavor
+  pack material type:
+  - attribute.package_material
+  pack type:
+  - attribute.package_type
+  sweetener:
+  - attribute.sweetener
+  - attribute.sweetener_type
+  - attribute.sweetening
+  volume:
+  - numeric.volume_ml
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
+hnsw_m: 16
+output_dir: /tmp/opc/ER-abl-opt/artifacts/abl_opt/results
+report_path: /tmp/opc/ER-abl-opt/artifacts/abl_opt/results/report.json
+retrieval_catalog: full
+retrieval_ks:
+- 1
+- 5
+- 10
+sample_pairs: 100
+seed: 1729
+slice_columns:
+- population
+split: dev
+uniform_channels: true
