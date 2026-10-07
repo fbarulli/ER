@@ -17,14 +17,30 @@ SWEETENER_TYPES = frozenset({
 ATTRIBUTE_ITEM_RE = re.compile(r"(?:^|;)\s*([^:;]+):\s*([^;]*)")
 SWEETENER_CLAIMS = frozenset({"diet", "no sugar", "no added sugar", "sugar free"})
 
-SWEETENING_PATTERNS = {
-    "unsweetened": re.compile(r"\bunsweetened\b", re.I),
-    "no_sweeteners": re.compile(r"\b(?:no|without)\s+sweeteners?\b", re.I),
-    "no_artificial_sweeteners": re.compile(r"\b(?:no|without)\s+artificial\s+sweeteners?\b", re.I),
-    "no_added_sweeteners": re.compile(r"\b(?:no|without)\s+added\s+sweeteners?\b", re.I),
-    "low_sugar": re.compile(r"\b(?:low|less|light)\s+(?:in\s+)?sugar\b", re.I),
-    "reduced_sugar": re.compile(r"\breduced\s+(?:in\s+)?sugar\b", re.I),
-    "sweetened": re.compile(r"\b(?:lightly\s+)?sweetened\b", re.I),
+# (state, pattern source, required substring). Every pattern is
+# re.IGNORECASE, so the gate cannot be a bare `in` test on the raw text; the
+# third column is instead a substring that is NECESSARY for that pattern to
+# match — it names one of the literal words the pattern demands — and it is
+# tested against a lowercased copy. Keeping all three in one table is what
+# stops the gate from drifting away from the pattern it guards.
+#
+# Measured: the seven searches cost one full case-insensitive scan each over
+# the joined title+attribute+description, while a single str.lower() plus seven
+# substring tests rejects almost all of them.
+_SWEETENING_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("unsweetened", r"\bunsweetened\b", "unsweetened"),
+    ("no_sweeteners", r"\b(?:no|without)\s+sweeteners?\b", "sweetener"),
+    ("no_artificial_sweeteners", r"\b(?:no|without)\s+artificial\s+sweeteners?\b", "artificial"),
+    ("no_added_sweeteners", r"\b(?:no|without)\s+added\s+sweeteners?\b", "added"),
+    ("low_sugar", r"\b(?:low|less|light)\s+(?:in\s+)?sugar\b", "sugar"),
+    ("reduced_sugar", r"\breduced\s+(?:in\s+)?sugar\b", "sugar"),
+    ("sweetened", r"\b(?:lightly\s+)?sweetened\b", "sweetened"),
+)
+SWEETENING_PATTERNS: dict[str, re.Pattern] = {
+    state: re.compile(source, re.I) for state, source, _hint in _SWEETENING_SPECS
+}
+_SWEETENING_HINTS: dict[str, str] = {
+    state: hint for state, _source, hint in _SWEETENING_SPECS
 }
 
 _SUGAR_KIND_RE = re.compile(r"\b(?:cane|brown|raw) sugar\b")
@@ -53,7 +69,18 @@ _INGREDIENT_FREE_RE = re.compile(r"\b(" + _FREE_INGREDIENT_ALTERNATION + r")\s+f
 def extract_sweetening_status(*values: object) -> set[str]:
     """Return narrowly phrased sweetening states, separate from sugar claims."""
     text = " ".join(str(value or "") for value in values)
-    return {state for state, pattern in SWEETENING_PATTERNS.items() if pattern.search(text)}
+    # The gate is applied only to ASCII text: str.lower() reproduces exactly the
+    # folding IGNORECASE performs over the ASCII letters these words are made of,
+    # while IGNORECASE additionally folds U+017F, U+0130, U+0131 and U+212A.
+    # Non-ASCII text takes the unchanged seven-search path.
+    low = text.lower() if text.isascii() else None
+    found: set[str] = set()
+    for state, pattern in SWEETENING_PATTERNS.items():
+        if low is not None and _SWEETENING_HINTS[state] not in low:
+            continue
+        if pattern.search(text):
+            found.add(state)
+    return found
 
 
 def title_sweetener_types(title: str) -> set[str]:
@@ -93,10 +120,24 @@ def declared_sweeteners(attributes: str) -> dict[str, set[str]]:
     Contradictory source declarations are retained and flagged. Missing and
     unrecognized values remain explicit; neither is inferred from a title.
     """
+    cell = str(attributes or "")
     types: set[str] = set()
     states: set[str] = set()
     unknown: set[str] = set()
-    for item in ATTRIBUTE_ITEM_RE.finditer(str(attributes or "")):
+    # The loop only ever reports a non-empty result through a segment whose key
+    # normalizes to "sweetener", and normalized_attribute_text folds case and
+    # punctuation without deleting letters, so an ASCII cell that does not
+    # contain "sweetener" at all cannot contribute anything. Skipping the walk
+    # avoids folding the key of every segment of every such cell (the same
+    # repeated-fold shape that paid off in critical_attributes._field_tokens).
+    if cell.isascii() and "sweetener" not in cell.lower():
+        return {
+            "sweetener_type": types,
+            "sweetening": states,
+            "unmapped": unknown,
+            "consistency_flags": set(),
+        }
+    for item in ATTRIBUTE_ITEM_RE.finditer(cell):
         if normalized_attribute_text(item.group(1)) != "sweetener":
             continue
         for part in _DECLARED_ITEM_SPLIT.split(item.group(2)):
