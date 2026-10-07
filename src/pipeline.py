@@ -26,6 +26,7 @@ import json
 import math
 import os
 import re
+from functools import lru_cache
 from collections import Counter
 from pathlib import Path
 
@@ -236,6 +237,18 @@ _PACK_OUTER_RE = re.compile(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){_PACK_COUN
 # str.translate table is the same deletion as re.sub(r'[.,]', '', ...) without
 # a regex call (this runs on every recognized match).
 _PACK_DIGITS_STRIP = str.maketrans("", "", ".,")
+
+
+@lru_cache(maxsize=8)
+def _bulk_container_re(terms: tuple[str, ...]) -> re.Pattern[str]:
+    """`\\b(?:term|...)\\b` over the configured bulk-container vocabulary.
+
+    The vocabulary is config-owned and constant for the process, so the
+    alternation, the escaping of every term and the pattern compilation are
+    built once instead of on every fused row (11,441 calls on the 10k cohort).
+    """
+    escaped = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in terms)
+    return re.compile(r"\b(?:" + escaped + r")\b", re.I)
 
 
 class _PackEvidenceReader:
@@ -1226,8 +1239,8 @@ class ListingCardBuilder:
         # does not make an implausible per-package size legitimate; named bulk
         # containers use the separately configured ceiling.
         extraction_policy = data_cfg().extraction
-        bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
-        bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{self._sku_name_eng} {self._attribute}", re.I))
+        bulk_container = bool(_bulk_container_re(tuple(extraction_policy.bulk_container_terms)).search(
+            f"{self._sku_name_eng} {self._attribute}"))
         volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
         if self.volume_ml > 0 and not extraction_policy.volume_min_ml <= self.volume_ml <= volume_max:
             self.flags.add("ambiguous_volume")
