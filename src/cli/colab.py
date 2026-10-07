@@ -91,9 +91,15 @@ from cli.colab_lane import (
     DELIVERY_PREPARED_DIRS,
     DELIVERY_TRACKED_DIRS,
 )
-from cli.log_capture import progress_frames_to_lines
+from cli.log_capture import lane_log, progress_frames_to_lines
 
 _LOG = RunLogger(__name__)
+
+# The ONE per-run Colab lane transcript (owner order 2026-10-07): every lane
+# surface — stdout/stderr system transcript, trainer/worker view, setup
+# timing, and streamed per-stage output — folds into this single file under
+# the canonical logs root, exactly like the Kaggle lane's lane.log.
+LANE_LOG_NAME = "lane.log"
 
 # Smoke and normal training defaults come from the Colab runtime config.
 # Sweep fractions remain exclusive to the sweep lane.
@@ -358,14 +364,18 @@ class _Tee:
     def write(self, text: str) -> int:
         self._stream.write(text)
         if not _SUPPRESS_LIVE_LOG:
+            # The system tee and the trainer writer share ONE lane handle, so
+            # both lock around the file to keep lines from interleaving.
             # tqdm CR frames must survive capture as grep-able lines.
-            self._log_file.write(progress_frames_to_lines(text))
+            with _training_log_lock:
+                self._log_file.write(progress_frames_to_lines(text))
         return len(text)
 
     def flush(self) -> None:
         self._stream.flush()
         if not _SUPPRESS_LIVE_LOG:
-            self._log_file.flush()
+            with _training_log_lock:
+                self._log_file.flush()
 
     def isatty(self) -> bool:
         return self._stream.isatty()
@@ -384,7 +394,11 @@ class _LiveLogSuppressed:
         return False
 
 def _write_training_log(text: str) -> None:
-    """Write trainer output to the dedicated local training log immediately."""
+    """Write the trainer/worker view into the shared per-run lane transcript.
+
+    The same handle backs the system tee (see start_live_log), so the trainer
+    view and the stdout/stderr transcript are one file, never two.
+    """
     if _training_log is None or not text:
         return
     with _training_log_lock:
@@ -437,11 +451,10 @@ def _colab_timing(kind: str, name: str):
     """Emit monotonic wall times to stdout and the launcher's durable transcript."""
     started = time.perf_counter()
     def emit(message):
+        # Timing is part of the one lane transcript: the flush=True print is
+        # captured by the system tee, whose handle IS SETUP_TIMING_LOG_PATH
+        # (logs/colab/lane.log).  No second handle can clobber the transcript.
         print(f"{_stamp()} {message}", flush=True)
-        if _setup_timing_active and SETUP_TIMING_LOG_PATH is not None:
-            with _setup_timing_lock:
-                with SETUP_TIMING_LOG_PATH.open('a', encoding='utf-8') as handle:
-                    handle.write(message + '\n')
 
     emit(f"[timing] {kind}={name} state=started")
     state = "completed"
@@ -827,9 +840,9 @@ print(json.dumps(payload), flush=True)
                       (" | " + " | ".join(metrics) if metrics else "") +
                       (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
             for worker, chunk in payload["chunks"].items():
-                # Forward the complete worker log to both transcripts: the root
-                # system log is the single chronological record of every Colab
-                # stage, and training.log is the trainer-only view.
+                # Forward the complete worker log into the one lane transcript
+                # (logs/colab/lane.log): the single chronological record of
+                # every Colab stage, including the trainer/worker view.
                 for line in str(chunk).splitlines():
                     _write_training_log(f"[worker {worker}] {line}\n")
                     print(f"[worker {worker}] {line}", flush=True)
@@ -864,39 +877,50 @@ from cli.colab_retention import (  # noqa: E402,F401
     publish_local_hpo_results,
 )
 def start_live_log() -> None:
-    """Start the root-level live Colab log, replacing the prior run's log."""
+    """Start the ONE per-run Colab lane transcript, replacing the prior run's.
+
+    `logs/colab/lane.log` is opened exactly once per run and shared by the
+    system stdout/stderr tee, the trainer/worker writer, and setup timing.
+    The file is truncated once (write_text) and then held in append mode so a
+    detached self-watch child can append its own lines to the same transcript
+    without a second "w" open clobbering it.
+    """
     global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
     global _original_stdout, _original_stderr
     global SETUP_TIMING_LOG_PATH, _setup_timing_active
     if _live_log is not None:
         _live_log.close()
-    LIVE_LOG_PATH = F["colab_live_log"]
-    TRAINING_LOG_PATH = F["colab_training_log"]
-    SETUP_TIMING_LOG_PATH = LIVE_LOG_PATH.with_name('colab_setup_timing.log')
-    SETUP_TIMING_LOG_PATH.write_text('', encoding='utf-8')
+    lane_path = lane_log("colab", LANE_LOG_NAME)
+    LIVE_LOG_PATH = lane_path
+    TRAINING_LOG_PATH = lane_path
+    SETUP_TIMING_LOG_PATH = lane_path
+    lane_path.parent.mkdir(parents=True, exist_ok=True)
+    lane_path.write_text("", encoding="utf-8")  # exactly one truncation per run
     _setup_timing_active = True
-    _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
-    _training_log = TRAINING_LOG_PATH.open("w", encoding="utf-8")
+    handle = lane_path.open("a", encoding="utf-8")
+    _live_log = handle
+    _training_log = handle
     _original_stdout = sys.stdout
     _original_stderr = sys.stderr
     sys.stdout = _Tee(_original_stdout, _live_log)
     sys.stderr = _Tee(_original_stderr, _live_log)
-    print(_stamp(), f"[log] capturing Colab output -> {LIVE_LOG_PATH}", flush=True)
+    print(_stamp(), f"[log] capturing Colab output -> {lane_path}", flush=True)
 
 def close_live_log() -> None:
     global _live_log, _training_log, _original_stdout, _original_stderr
     _finish_setup_timing()
-    if _live_log is not None:
+    handle = _live_log if _live_log is not None else _training_log
+    if handle is not None:
         sys.stdout = _original_stdout or sys.stdout
         sys.stderr = _original_stderr or sys.stderr
-        _live_log.close()
-        _live_log = None
-    if _training_log is not None:
-        _training_log.flush()
-        _training_log.close()
-        _training_log = None
-        _original_stdout = None
-        _original_stderr = None
+        try:
+            handle.flush()
+        finally:
+            handle.close()
+    _live_log = None
+    _training_log = None
+    _original_stdout = None
+    _original_stderr = None
 
 
 

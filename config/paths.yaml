@@ -120,8 +120,12 @@ files:
   # to find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
-  colab_live_log: "repo:logs/colab/system.log"      # launcher/system log
-  colab_training_log: "repo:logs/colab/training.log"  # training stdout/stderr only
+  # One fresh per-run Colab lane transcript (owner order 2026-10-07): the
+  # system stdout/stderr tee, the trainer/worker view, and setup timing all
+  # fold into this single file. Both legacy keys are kept for the tests and
+  # any external reader, mapped to the same lane.log.
+  colab_live_log: "repo:logs/colab/lane.log"      # the ONE lane transcript
+  colab_training_log: "repo:logs/colab/lane.log"  # trainer view folds in
 
 # ── owned layout templates for GENERATED artifacts (training-hpo 2026-09-13)
 # Each layout binds a generated artifact to one root, one template, and one

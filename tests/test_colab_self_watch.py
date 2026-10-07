@@ -55,9 +55,12 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
     assert spawn["start_new_session"] is True
     assert spawn["stderr"] == colab.subprocess.STDOUT
     log_roof = tmp_path / "logs" / "colab"
-    spawned_logs = list(log_roof.glob("self_watch_*.log"))
-    assert len(spawned_logs) == 1
-    assert "launching watcher for what=sims" in spawned_logs[0].read_text()
+    # One file per run: the detached watcher appends to the lane transcript,
+    # it never spawns its own self_watch_*.log sidecar.
+    lane_log = log_roof / "lane.log"
+    assert lane_log.is_file()
+    assert "launching watcher for what=sims" in lane_log.read_text()
+    assert not list(log_roof.glob("self_watch_*.log"))
 
 
 def test_plan_paths_and_watchers_never_spin_the_session_surface(monkeypatch, tmp_path):

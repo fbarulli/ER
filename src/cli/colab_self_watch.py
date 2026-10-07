@@ -60,8 +60,11 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     and explicit --keep-alive retention never reach here — main() guards the
     spawn point (after the first healthy provisioning stream).
     """
+    # The watcher appends to the SAME per-run lane transcript (owner order:
+    # one file).  It is a detached child, so it never truncates: the launcher
+    # opened lane.log fresh (start_live_log) and this child only appends.
     from cli import log_capture
-    log_path = log_capture.lane_log("colab", f"self_watch_{run_id}.log")
+    log_path = log_capture.lane_log("colab", _colab().LANE_LOG_NAME)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # The runbook's "never python -m cli.colab for a launch" rule stands: this
     # child is a watcher, not a launch — it provisions nothing.
@@ -108,7 +111,7 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
         captured: list[str] = []
         destination = _self_watch_root(run_id)
         for name in (f"colab_system_{_colab().SESSION}.log", f"training_{_colab().SESSION}.log",
-                     "system.log", "training.log"):
+                     "lane.log", "system.log", "training.log"):
             try:
                 from cli import log_capture
                 source = log_capture.lane_log("colab", name)

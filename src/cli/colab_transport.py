@@ -134,11 +134,10 @@ def run_colab_exec_stream(
 ) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
-    log_name labels a stage in the launcher transcript (the SSOT
-    colab_live_log: logs/colab/system.log under the canonical logs root).
-    The file is
-    opened once per invocation, line-flushed, and survives VM teardown so
-    every Colab stage is inspectable in one chronological log.
+    log_name labels a stage in the one per-run launcher transcript
+    (logs/colab/lane.log under the canonical logs root). The file is opened
+    once per run, line-flushed, and survives VM teardown so every Colab stage
+    is inspectable in one chronological log.
     """
     surface = _hub()
     if surface._live_log and log_name:
