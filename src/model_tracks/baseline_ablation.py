@@ -31,61 +31,68 @@ class BaselineCalibration(BaseModel):
 @timed
 def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_model=None):
     """Reuse text interventions and frozen catalog vectors in this suite session."""
-    from model_tracks.staged_ablation import forward as forward_staged
-    template = json.loads((setup/'ablation_templates/text/request.json').read_text())
-    saved = (setup/'shared_minilm__embeddings.npz'
-             if template['settings']['retrieval_catalog'] == 'full' and template['settings'].get('coverage') != 'all' else None)
-    return forward_staged(output, setup, 'text', checkpoint, device=device,
-                          checkpoint_role='baseline', saved_text=saved, text_model=text_model)
+    with _LOG.section('ablation.baseline.forward'):
+        from model_tracks.staged_ablation import forward as forward_staged
+        template = json.loads((setup/'ablation_templates/text/request.json').read_text())
+        saved = (setup/'shared_minilm__embeddings.npz'
+                 if template['settings']['retrieval_catalog'] == 'full' and template['settings'].get('coverage') != 'all' else None)
+        return forward_staged(output, setup, 'text', checkpoint, device=device,
+                              checkpoint_role='baseline', saved_text=saved, text_model=text_model)
 
 
 @timed
 def _saved_vectors(records, output):
     """Vectors and metadata for the saved catalog snapshot."""
-    vectors, metadata = load_text_cache(output/'shared_minilm__embeddings.npz',
-                                        [row['sku_id'] for row in records])
-    return vectors, metadata
+    with _LOG.section('ablation.baseline.saved_vectors'):
+        vectors, metadata = load_text_cache(output/'shared_minilm__embeddings.npz',
+                                            [row['sku_id'] for row in records])
+        return vectors, metadata
 
 
 @timed
 def _dev_scores(pairs_path, records, vectors):
     """Dev-split indices/labels with dot-product scores from saved vectors."""
-    from graph_tracks.train import load_pairs
-    indices, labels = load_pairs(pairs_path, records)['dev']
-    return labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
+    with _LOG.section('ablation.baseline.dev_scores'):
+        from graph_tracks.train import load_pairs
+        indices, labels = load_pairs(pairs_path, records)['dev']
+        return labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
 
 
 @timed
 def _calibrated_calibration(checkpoint_sha256, metadata, labels, scores):
     """The BaselineCalibration for the untrained checkpoint, or identity raise."""
-    from graph_tracks.report import dev_threshold
-    if metadata.get('checkpoint_sha256') != checkpoint_sha256:
-        raise ValueError('baseline calibration vectors differ from frozen checkpoint')
-    return BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
-        threshold=dev_threshold(labels, scores),
-        dev_pairs=len(labels), dev_positives=int(labels.sum()),
-        dev_negatives=int((labels == 0).sum()))
+    with _LOG.section('ablation.baseline.calibrate'):
+        from graph_tracks.report import dev_threshold
+        if metadata.get('checkpoint_sha256') != checkpoint_sha256:
+            raise ValueError('baseline calibration vectors differ from frozen checkpoint')
+        return BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
+            threshold=dev_threshold(labels, scores),
+            dev_pairs=len(labels), dev_positives=int(labels.sum()),
+            dev_negatives=int((labels == 0).sum()))
 
 
 @timed
 def _frozen_report(request_path, request, calibration, *, config, saved=None):
     """Compute the threshold-frozen report at the baseline calibration threshold."""
-    return report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
-                  threshold_source=str(saved), config=config, save=False)
+    with _LOG.section('ablation.baseline.frozen_report'):
+        return report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
+                      threshold_source=str(saved), config=config, save=False)
 
 
 @timed
 def _frozen_calibration(request_path, calibration):
     """Seal the calibration document into baseline_threshold.json."""
-    binding = request_path.parent/'baseline_threshold.json'
-    write(binding, calibration.model_dump(mode='json'))
-    return binding
+    with _LOG.section('ablation.baseline.seal'):
+        binding = request_path.parent/'baseline_threshold.json'
+        write(binding, calibration.model_dump(mode='json'))
+        return binding
 
 
 @timed
 def _persist_baseline(request_path, result):
     """Write the baseline report beside its request."""
-    write(request_path.parent/'report.json', result)
+    with _LOG.section('ablation.baseline.persist'):
+        write(request_path.parent/'report.json', result)
 
 
 @timed
