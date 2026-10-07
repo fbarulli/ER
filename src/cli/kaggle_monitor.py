@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -278,6 +279,17 @@ class KaggleMonitor:
                     # FileDownload.prepare_from returns the live streamed requests.Response
                     # (text/event-stream, "data: {stream_name,time,data}" SSE frames).
                     plan["stream_url"] = str(getattr(response, "url", "") or "")
+                    # The SSE proxy URL embeds the kernel_session_id (the same
+                    # id the manual kill switch consumes): capture it once the
+                    # stream URL is known so the verified stop can cancel the
+                    # exact session instead of blind version replace.
+                    url_match = re.search(r'(\d{3,})(?:\?.*)?$', str(plan['stream_url']) or '')
+                    if url_match:
+                        session_id = int(url_match.group(1))
+                        lane.atomic_write_text(
+                            lane.lane_logs_dir()
+                            / lane._spec().files.session_id_file.format(kernel=kernel),
+                            str(session_id) + '\n')
                     # Decode UTF-8 explicitly: iter_lines(decode_unicode=True) would use
                     # requests' latin-1 default and mangle the box-drawing progress bars.
                     for raw in response.iter_lines():

@@ -136,6 +136,14 @@ class KaggleChain:
                         "mode": "planned",
                     }
             return plan
+        # ── the published-tip invariant: the chain pins per-step revisions
+        # from `head`; before any staging write, the head must BE the
+        # published origin tip (the staged-race guard shared with the
+        # stage surfaces, which re-check as they pin).
+        from core import runtime_inputs
+        tip = runtime_inputs.require_published_tip_match(
+            head, spec.repository, spec.branch)
+        plan["published_tip"] = tip
 
         def assert_revision(pinned: str, where: str) -> None:
             if pinned != head:

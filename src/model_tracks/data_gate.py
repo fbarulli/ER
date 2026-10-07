@@ -274,6 +274,16 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
                                                   allow_gpu_pending=allow_gpu_pending))
 
 
+def census_tracks(result: DataGateResult) -> dict[str, dict]:
+    """The gate's per-track census as plain JSON-serializable values.
+
+    The events/attestation boundary needs bytes, not model objects: emitting
+    this dict through json.dump/events.emit must never raise on a census type.
+    """
+    return {track: census.model_dump(mode='json')
+            for track, census in result.tracks.items()}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
