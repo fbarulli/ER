@@ -287,10 +287,15 @@ env = {**os.environ, "PYTHONPATH": str(root / LANE["files"]["source_dir"]), "PYT
 sys.path.insert(0, str(root / LANE["files"]["source_dir"]))
 from core.portable_archive import verified_archive
 with verified_archive(archive_path, LANE["files"]["package_manifest"]) as (archive, _):
-    # src/ is authoritative from the pinned checkout; the bundle's embedded
-    # snapshot predates the train kernel's revision and must not clobber it.
+    # Code/config neighborhoods are authoritative from the pinned checkout:
+    # the bundle's embedded snapshot is built at bundle time and predates the
+    # train kernel's revision. Loading its stale config/paths.yaml clobbered
+    # the checkout's config and crashed package.py with
+    # KeyError: 'source_code_dir' (owner order 2026-10-07). Only the bundle's
+    # DATA installs (data/, model_tracks_package.json, artifacts/).
+    checkout_authoritative = (LANE["files"]["source_dir"] + "/", "config/", "scripts/")
     for name in archive.namelist():
-        if name.startswith(LANE["files"]["source_dir"] + "/") or name == LANE["files"]["source_dir"]:
+        if name == LANE["files"]["source_dir"] or name.startswith(checkout_authoritative):
             continue
         archive.extract(name, root)
 package_manifest = root / LANE["files"]["package_manifest"]

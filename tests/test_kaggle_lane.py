@@ -694,6 +694,79 @@ def test_stamp_matches_paris_local_format():
         kaggle_lane._stamp())
 
 
+# ── train-kernel bundle install: pinned checkout stays authoritative ─────────
+
+def _train_install_loop_source() -> str:
+    """The exact with verified_archive(...) install block from the template.
+
+    Sliced out so this pin runs the shipped source, not a re-typed copy: a
+    regression that drops the config/scripts skip must fail the test below.
+    """
+    body = kaggle_lane.TRAIN_KERNEL_BODY
+    start = body.index("with verified_archive(")
+    end = body.index("package_manifest = root /", start)
+    return body[start:end]
+
+
+def test_train_install_loop_skips_code_and_config_keeps_data(tmp_path):
+    """Regression for KeyError: 'source_code_dir' (owner order 2026-10-07).
+
+    The bundle's embedded config/paths.yaml predates the source_code_dir
+    layout; extracting it over the pinned checkout crashed
+    model_tracks.package. The install loop must skip src/, config/ and
+    scripts/ and install only the bundle's data.
+    """
+    import contextlib
+    import zipfile
+
+    source = _train_install_loop_source()
+    # the pin names the crash and the owner order date, so the rationale
+    # cannot be silently deleted without failing here
+    assert "source_code_dir" in source
+    assert "2026-10-07" in source
+    assert '"config/"' in source and '"scripts/"' in source
+
+    names = [
+        "src/model_tracks/package.py",
+        "src/core/common.py",
+        "config/paths.yaml",
+        "config/training.yaml",
+        "scripts/encode_prepared_embeddings.py",
+        "data/model_tracks/suite.yaml",
+        "data/cohort/dataset.csv",
+        "artifacts/models/checkpoint.bin",
+        "model_tracks_package.json",
+    ]
+    archive_path = tmp_path / "all_tracks_inputs.zip"
+    with zipfile.ZipFile(archive_path, "w") as bundle:
+        for name in names:
+            bundle.writestr(name, b"payload")
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    lane = {"files": {"source_dir": "src",
+                      "package_manifest": "model_tracks_package.json"}}
+
+    @contextlib.contextmanager
+    def fake_verified_archive(path, manifest_name):
+        with zipfile.ZipFile(path) as archive:
+            yield archive, {"files": {}}
+
+    namespace = {"verified_archive": fake_verified_archive,
+                 "archive_path": archive_path, "LANE": lane, "root": root}
+    exec(compile(source, "<train-kernel-install>", "exec"), namespace)
+
+    # pinned checkout neighborhoods never get clobbered by the bundle
+    assert not (root / "src").exists()
+    assert not (root / "config").exists()
+    assert not (root / "scripts").exists()
+    # only the bundle's data installs
+    assert (root / "data" / "model_tracks" / "suite.yaml").read_bytes() == b"payload"
+    assert (root / "data" / "cohort" / "dataset.csv").read_bytes() == b"payload"
+    assert (root / "artifacts" / "models" / "checkpoint.bin").read_bytes() == b"payload"
+    assert (root / "model_tracks_package.json").read_bytes() == b"payload"
+
+
 # ── publish default + chain op (owner order 2026-10-07) ─────────────────────
 
 def _verified_bundle_install(tmp_path: Path, revision="abc123def") -> Path:
