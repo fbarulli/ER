@@ -188,7 +188,8 @@ def _publish(arrays, output, plan):
 def prepare_inputs(request, output, *, token_cache=None):
     """No model forward here: CPU text tokenization and frozen-vocabulary topology."""
     arrays = {}
-    plan = _frozen_pairs(request,arrays)
+    with _LOG.section('ablation_inputs.frozen_pairs'):
+        plan = _frozen_pairs(request,arrays)
     with _LOG.section('ablation_inputs.slice_groups'):
         _slice_groups(request,plan)
     batch_size = request['settings']['batch_size']
