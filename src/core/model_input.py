@@ -33,7 +33,10 @@ import pandas as pd  # frame access in build_sku_texts (consolidated loop)
 
 from core.columns import alias_names
 from core.common import load_config, row_metadata_text, config_section
+from core.run_log import RunLogger
 from core.schemas import TrainingSpec
+
+_LOG = RunLogger(__name__)
 
 __all__ = [
     "build_canonical_text",
@@ -395,6 +398,115 @@ def build_sku_text(
     return _legacy_sku_text(row, info)
 
 
+class SkuPayloadComposer:
+    """One frame's per-row payload composition (the SSOT loop).
+
+    SR phases, ONE fixed order in compose(); statements are the original
+    build_sku_texts body verbatim, so (texts, infos) are byte-identical and
+    the bars keep their labels.
+
+    Phase map:
+      resolve_columns — title/attribute defaults + the description alias
+                        diplomacy (canonical name wins, alias fills NaN,
+                        same-index so duplicate indexes cannot misalign)
+      structured_infos — the per-row numeric-channel info (empty sets when
+                        structured features are disabled)
+      encode_texts    — the per-row encoder text via the documented call
+    """
+
+    def __init__(self, frame: pd.DataFrame, *, structured_enabled: bool) -> None:
+        self._frame = frame
+        self._structured_enabled = structured_enabled
+
+    # ── phase: column diplomacy ─────────────────────────────────────────────
+
+    def resolve_columns(self) -> tuple[pd.Series, pd.Series, pd.Series]:
+        frame = self._frame
+        from core.structured_features import sku_info as sku_structured_info
+
+        title = frame["sku_name_eng"].fillna("") if "sku_name_eng" in frame else pd.Series([""] * len(frame))
+        attrs = frame["attribute"].fillna("") if "attribute" in frame else pd.Series([""] * len(frame))
+        # Description column resolved by bounded alias: the raw Euromonitor
+        # export names the column ``description_short_eng``, which is also the
+        # canonical name (config/paths.yaml column_mapping is the identity);
+        # frames from the transition may still carry the old ``description``
+        # alias. Before this resolution the renamed lane silently lost its
+        # description (sku_info saw ""), because the reader only knew one name.
+        # The canonical name wins when both exist so a canonical-frame path can
+        # never change behavior simply because an alias twin happened to ride
+        # along; only a NaN in the canonical column is filled from the alias.
+        # The fill uses the frame's own index ( .where with a same-index
+        # series, not a positional fillna against a fresh RangeIndex series)
+        # so duplicated / non-default row indexes cannot misalign. No lane's
+        # output changes when the canonical name is present and observed —
+        # the NaN cases were already coerced to "" downstream — only the
+        # previously empty alias lane regains its description.
+        if "description_short_eng" in frame:
+            raw = frame["description_short_eng"]
+            renamed = frame["description"] if "description" in frame else pd.Series(
+                [""] * len(frame), index=frame.index
+            )
+            descriptions = raw.where(raw.notna(), renamed)
+        elif "description" in frame:
+            descriptions = frame["description"]
+        else:
+            descriptions = pd.Series([""] * len(frame), index=frame.index)
+        del sku_structured_info
+        return title, attrs, descriptions
+
+    # ── phase: structured infos ─────────────────────────────────────────────
+
+    def structured_infos(self, title: pd.Series, attrs: pd.Series,
+                         descriptions: pd.Series) -> list[dict[str, set]]:
+        from core.structured_features import sku_info as sku_structured_info
+
+        if self._structured_enabled:
+            infos = [
+                model_input_info(sku_structured_info(t, a, d))
+                for t, a, d in _LOG.progress(
+                    zip(title, attrs, descriptions, strict=True),
+                    total=len(title), unit="row", desc="sku-structured",
+                )
+            ]
+        else:
+            empty_info: dict[str, set] = {
+                "volume": set(),
+                "pack": set(),
+                "package_type": set(),
+            }
+            infos = [
+                {k: set(v) for k, v in empty_info.items()}
+                for t, a, d in _LOG.progress(
+                    zip(title, attrs, descriptions, strict=True),
+                    total=len(title), unit="row", desc="sku-structured",
+                )
+            ]
+        return infos
+
+    # ── phase: encoder texts ────────────────────────────────────────────────
+
+    def encode_texts(self, infos: list[dict[str, set]]) -> list[str]:
+        texts = [
+            build_sku_text(row, info)
+            for (_, row), info in _LOG.progress(
+                zip(self._frame.iterrows(), infos, strict=True),
+                total=len(self._frame),
+                unit="row",
+                desc="sku-text",
+            )
+        ]
+        return texts
+
+    # ── orchestration ───────────────────────────────────────────────────────
+
+    def compose(self) -> tuple[list[str], list[dict[str, set]]]:
+        """(texts, infos): text + numeric channel built once, never disagreeing."""
+        title, attrs, descriptions = self.resolve_columns()
+        infos = self.structured_infos(title, attrs, descriptions)
+        texts = self.encode_texts(infos)
+        return texts, infos
+
+
 def build_sku_texts(
     frame: pd.DataFrame,
     *,
@@ -407,79 +519,14 @@ def build_sku_texts(
     (pipeline.build_training_data payload, predict_items, rand_matching, and
     the record-linkage lane) — a text-normalization fork in waiting: any
     fix here had to be replicated four times or the lanes silently diverged.
-    One definition now; callers must not rebuild it inline.
-
-    Returns (texts, infos): ``texts`` feed the encoder (or any text-side
-    consumer such as the record-linkage similarity), ``infos`` are the
-    structured source of truth for the numeric channel, built once so the
-    text and the vector can never disagree on an attribute's treatment.
+    One definition now; callers must not rebuild it inline. The phases run
+    on :class:`SkuPayloadComposer`.
 
     ``structured_enabled`` is the caller's resolved structured_features.enabled
     (pipeline/rand_matching read the same config knob); when False the info
     side degrades to empty sets exactly as the payload builder always did.
     """
-    from core.structured_features import sku_info as sku_structured_info
-
-    title = frame["sku_name_eng"].fillna("") if "sku_name_eng" in frame else pd.Series([""] * len(frame))
-    attrs = frame["attribute"].fillna("") if "attribute" in frame else pd.Series([""] * len(frame))
-    # Description column resolved by bounded alias: the raw Euromonitor
-    # export names the column ``description_short_eng``, which is also the
-    # canonical name (config/paths.yaml column_mapping is the identity);
-    # frames from the transition may still carry the old ``description``
-    # alias. Before this resolution the renamed lane silently lost its
-    # description (sku_info saw ""), because the reader only knew one name.
-    # The canonical name wins when both exist so a canonical-frame path can
-    # never change behavior simply because an alias twin happened to ride
-    # along; only a NaN in the canonical column is filled from the alias.
-    # The fill uses the frame's own index ( .where with a same-index
-    # series, not a positional fillna against a fresh RangeIndex series)
-    # so duplicated / non-default row indexes cannot misalign. No lane's
-    # output changes when the canonical name is present and observed —
-    # the NaN cases were already coerced to "" downstream — only the
-    # previously empty alias lane regains its description.
-    if "description_short_eng" in frame:
-        raw = frame["description_short_eng"]
-        renamed = frame["description"] if "description" in frame else pd.Series(
-            [""] * len(frame), index=frame.index
-        )
-        descriptions = raw.where(raw.notna(), renamed)
-    elif "description" in frame:
-        descriptions = frame["description"]
-    else:
-        descriptions = pd.Series([""] * len(frame), index=frame.index)
-    empty_info: dict[str, set] = {
-        "volume": set(),
-        "pack": set(),
-        "package_type": set(),
-    }
-    from tqdm import tqdm
-
-    structured_span = tqdm(
-        zip(title, attrs, descriptions, strict=True),
-        total=len(title),
-        unit="row",
-        desc="sku-structured",
-        disable=None,
-    )
-    infos = [
-        model_input_info(sku_structured_info(t, a, d))
-        if structured_enabled
-        else {k: set(v) for k, v in empty_info.items()}
-        for t, a, d in structured_span
-    ]
-    texts = [
-        build_sku_text(row, info)
-        for (_, row), info in tqdm(
-            zip(frame.iterrows(), infos, strict=True),
-            total=len(frame),
-            unit="row",
-            desc="sku-text",
-            disable=None,
-        )
-    ]
-    return texts, infos
-
-
+    return SkuPayloadComposer(frame, structured_enabled=structured_enabled).compose()
 def build_canonical_text(
     record: Mapping[str, object],
     info: Mapping[str, object],
