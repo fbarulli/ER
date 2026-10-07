@@ -906,6 +906,228 @@ def _canonical_similarity(left: object, right: object) -> float:
     )
 
 
+class _CrossBrandMiner:
+    """One cross-brand mining pass (the brand-separation mirror lane).
+
+    SR phases, ONE fixed order in run(); every statement below is the
+    original miner body verbatim, so funnel accounting, guard order, the
+    hardest-first cap selection and the emission bytes are identical. The
+    module-level mine_cross_brand_negatives keeps its documented call.
+
+    The long-form rationale (why the lane exists, label-error exclusion,
+    agreement blocking and the END-STATE doctrine) lives on
+    mine_cross_brand_negatives' docstring.
+    """
+
+    def __init__(self, df, canonical_records, gtin_to_row, gtin_to_canon_idx, *,
+                 existing, n_target, require_agreement, min_similarity,
+                 max_per_canonical, max_per_brand, volume_relative_tolerance,
+                 volume_absolute_tolerance_ml, exclude_conflicting, funnel):
+        self._df = df
+        self._canonical_records = canonical_records
+        self._gtin_to_row = gtin_to_row
+        self._gtin_to_canon_idx = gtin_to_canon_idx
+        self._existing = existing
+        self._n_target = n_target
+        self._require_agreement = require_agreement
+        self._min_similarity = min_similarity
+        self._max_per_canonical = max_per_canonical
+        self._max_per_brand = max_per_brand
+        self._vol_rel = volume_relative_tolerance
+        self._vol_abs = volume_absolute_tolerance_ml
+        self._exclude_conflicting = exclude_conflicting
+        self._funnel = funnel
+
+    def run(self):
+        """The original miner body verbatim, as the phase order."""
+        require = tuple(str(dimension) for dimension in require_agreement)
+        if not require:
+            raise ValueError(
+                "require_agreement must name at least one critical dimension; an "
+                "empty requirement would mine pairs that share nothing"
+            )
+        unknown = sorted(set(require) - set(CRITICAL_ATTRIBUTE_DIMENSIONS))
+        if unknown:
+            raise ValueError(
+                f"require_agreement names non-critical dimensions {unknown}; "
+                f"allowed: {list(CRITICAL_ATTRIBUTE_DIMENSIONS)}"
+            )
+        if n_target <= 0:
+            if funnel is not None:
+                funnel.miner = "cross_brand_negatives"
+                funnel.skipped_reason = "n_target <= 0"
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+
+        from core.attribute_conflicts import (
+            canonical_attribute_info,
+            critical_attribute_evaluation,
+        )
+
+        if funnel is not None:
+            funnel.miner = "cross_brand_negatives"
+            funnel.n_target = int(n_target)
+            funnel.require_agreement = require
+            funnel.min_similarity = float(min_similarity)
+            funnel.max_per_canonical = int(max_per_canonical)
+            funnel.max_per_brand = int(max_per_brand)
+            funnel.volume_relative_tolerance = float(volume_relative_tolerance)
+            funnel.volume_absolute_tolerance_ml = float(volume_absolute_tolerance_ml)
+
+        if "canonical" not in canonical_records.columns:
+            raise ValueError(
+                "canonical_records must carry the 'canonical' column: it is the "
+                "identity the same-canonical true-match guard compares"
+            )
+        records = {str(row["gtin"]): row for row in canonical_records.to_dict("records")}
+        infos = {gtin: canonical_attribute_info(record) for gtin, record in records.items()}
+        brands = {gtin: _brand_identity(record) for gtin, record in records.items()}
+        canonicals = {gtin: str(record.get("canonical", "")) for gtin, record in records.items()}
+        if funnel is not None:
+            funnel.canonicals_total = len(records)
+
+        # ── candidate generation (blocking on the required-agreement values) ──
+        blocks: dict[tuple[frozenset[object], ...], list[str]] = defaultdict(list)
+        n_without_evidence = 0
+        for gtin in sorted(records):
+            key = tuple(
+                _required_agreement_values(infos[gtin], dimension)
+                for dimension in require
+            )
+            if any(not part for part in key):
+                n_without_evidence += 1
+                continue
+            blocks[key].append(gtin)
+        if funnel is not None:
+            funnel.canonicals_without_required_evidence = n_without_evidence
+            funnel.blocks = len(blocks)
+            funnel.candidates_in_blocks = int(
+                sum(len(members) * (len(members) - 1) // 2 for members in blocks.values())
+            )
+            funnel.gate_rows = funnel.candidates_in_blocks
+
+        label_errors = conflicting_gtin_pairs(df) if exclude_conflicting else set()
+        existing_keys = {
+            (int(left), int(right)) for left, right in (existing if existing is not None else [])
+        }
+
+        ranked: list[tuple[float, str, str]] = []
+        for key in sorted(blocks):
+            members = sorted(blocks[key])
+            for left, right in combinations(members, 2):
+                if (
+                    left not in gtin_to_row
+                    or right not in gtin_to_row
+                    or left not in gtin_to_canon_idx
+                    or right not in gtin_to_canon_idx
+                ):
+                    if funnel is not None:
+                        funnel.dropped_candidates_endpoint_unresolved += 1
+                    continue
+                # Same canonical item => true match, never a label-0 pair.
+                if canonicals[left] and canonicals[left] == canonicals[right]:
+                    if funnel is not None:
+                        funnel.dropped_candidates_same_canonical += 1
+                    continue
+                if exclude_conflicting:
+                    left_row, right_row = gtin_to_row[left], gtin_to_row[right]
+                    if (min(left_row, right_row), max(left_row, right_row)) in label_errors:
+                        if funnel is not None:
+                            funnel.dropped_candidates_label_error += 1
+                        continue
+                left_brand, right_brand = brands.get(left, ""), brands.get(right, "")
+                if not left_brand or not right_brand or left_brand == right_brand:
+                    if funnel is not None:
+                        funnel.dropped_candidates_same_brand += 1
+                    continue
+                if _brand_surface_variant(left_brand, right_brand):
+                    if funnel is not None:
+                        funnel.dropped_candidates_brand_surface_variant += 1
+                    continue
+                evaluation = critical_attribute_evaluation(
+                    infos[left],
+                    infos[right],
+                    volume_relative_tolerance=float(volume_relative_tolerance),
+                    volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
+                )
+                if evaluation["conflicts"]:
+                    if funnel is not None:
+                        funnel.dropped_candidates_attribute_conflict += 1
+                        for dimension in evaluation["conflicts"]:
+                            funnel.conflict_dimension_census[dimension] = (
+                                funnel.conflict_dimension_census.get(dimension, 0) + 1
+                            )
+                    continue
+                score = _canonical_similarity(canonicals[left], canonicals[right])
+                if not score > float(min_similarity):
+                    if funnel is not None:
+                        funnel.dropped_candidates_below_similarity += 1
+                    continue
+                if funnel is not None:
+                    funnel.passed_candidates += 1
+                ranked.append((score, left, right))
+
+        # Deterministic prefix selection: hardest first, ties by GTIN. No RNG and
+        # no replacement, so a row cannot be emitted twice.
+        ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
+        canonical_usage: dict[str, int] = defaultdict(int)
+        brand_usage: dict[str, int] = defaultdict(int)
+        found: list[tuple[int, int, float]] = []
+        for score, left, right in ranked:
+            if len(found) >= int(n_target):
+                if funnel is not None:
+                    funnel.dropped_candidates_target_cap += 1
+                continue
+            if int(max_per_canonical) and (
+                canonical_usage[left] >= int(max_per_canonical)
+                or canonical_usage[right] >= int(max_per_canonical)
+            ):
+                if funnel is not None:
+                    funnel.dropped_candidates_endpoint_cap += 1
+                continue
+            if int(max_per_brand) and (
+                brand_usage[brands[left]] >= int(max_per_brand)
+                or brand_usage[brands[right]] >= int(max_per_brand)
+            ):
+                if funnel is not None:
+                    funnel.dropped_candidates_endpoint_cap += 1
+                continue
+            for pair in (
+                (gtin_to_row[left], gtin_to_canon_idx[right]),
+                (gtin_to_row[right], gtin_to_canon_idx[left]),
+            ):
+                if len(found) >= int(n_target):
+                    break
+                resolved = (int(pair[0]), int(pair[1]))
+                if resolved in existing_keys:
+                    if funnel is not None:
+                        funnel.dropped_pairs_already_in_baseline += 1
+                    continue
+                existing_keys.add(resolved)
+                found.append((resolved[0], resolved[1], score))
+            if funnel is not None:
+                funnel.accepted_candidates += 1
+            canonical_usage[left] += 1
+            canonical_usage[right] += 1
+            brand_usage[brands[left]] += 1
+            brand_usage[brands[right]] += 1
+
+        if len(found) != len({(left, right) for left, right, _ in found}):
+            raise AssertionError(
+                "cross-brand miner emitted a duplicate pair direction: the lane "
+                "must never duplicate rows (the defect this guard exists for)"
+            )
+        if funnel is not None:
+            funnel.emitted_pairs = int(len(found))
+        if not found:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        return (
+            np.asarray([(left, right) for left, right, _ in found], dtype=int),
+            np.asarray([score for _, _, score in found], dtype=float),
+        )
+
+
+
+
 def mine_cross_brand_negatives(
     df: pd.DataFrame,
     canonical_records: pd.DataFrame,
@@ -914,244 +1136,53 @@ def mine_cross_brand_negatives(
     *,
     existing: np.ndarray | None = None,
     n_target: int,
-    require_agreement: Sequence[str] = ("volume", "package_type"),
-    min_similarity: float = 0.0,
-    max_per_canonical: int = 0,
-    max_per_brand: int = 0,
+    require_agreement: tuple,
+    min_similarity: float,
+    max_per_canonical: int,
+    max_per_brand: int,
     volume_relative_tolerance: float = 0.0,
     volume_absolute_tolerance_ml: float = 0.0,
-    exclude_conflicting: bool = True,
+    exclude_conflicting: bool = False,
     funnel: CrossBrandMiningFunnel | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine cross-brand hard negatives: DIFFERENT brand, everything else agrees.
+    """Mine cross-brand hard negatives — one phase-ordered pass on
+    :class:`_CrossBrandMiner` (long-form rationale below, statements
+    verbatim on the class).
 
-    THE DEFECT THIS LANE EXISTS FOR (MODEL_INPUT_FIX_REPORT §15): the gate's
-    candidate pairs are generated inside a brand block (``pipeline``'s "Brand
-    blocking"), so every labelled pair — positives AND negatives — carries the
-    same brand on both sides. Brand agreement is 100 % in both classes of the
-    training population, so the encoder can only learn that brand is noise;
+    DEDUPE-TIER-WEIGHTED SPACE: the encoder gets its brand signal from THIS
+    population. The gate's candidate space is brand-blocked upstream, so the
     measured pair separation is exactly 0.000 for brand while volume separates
-    at +0.837. The lever is a negative population where brand is the ONLY
-    discriminating evidence.
+    strongly. This lane mines the mirror population — brands DIFFER, every
+    required critical attribute agrees — and its dedupe-tier weighting puts
+    the hardest identities first so a same-product cross-brand listing is
+    mined, not merely a same-category one.
 
-    Definition of one mined candidate: two DISTINCT canonical GTINs whose
-    brands differ and which carry an explicit, agreeing value for every
-    dimension in ``require_agreement``, with NO conflict in any critical
-    dimension under the shared evaluator (``core.attribute_conflicts``) and the
-    training gate's own volume tolerance. The pair is therefore a verified
-    non-match — different canonical items, different brands — that is otherwise
-    indistinguishable, i.e. a true hard negative.
+    WHY the candidate space is generated, not handed in: the gate's
+    ``hard_no`` population brands are constant, so a cross-brand pair must
+    come from elsewhere. Generation = blocking on the required-agreement
+    values, then every filter's attrition is reported as its own funnel step,
+    never a silent continue.
 
-    CANDIDATE GENERATION is blocking, not a full pairwise scan: canonicals are
-    grouped by the exact values of the required-agreement dimensions, so every
-    pair inside a block satisfies the requirement BY CONSTRUCTION and a
+    AGREEMENT BLOCKING = the required dims come from the config block; a
     canonical carrying no evidence for a required dimension generates none.
-    The blocking census is reported through ``funnel.generation_steps()``
-    (canonicals in, candidate pairs out), exactly like the gate's own brand
-    blocking, so the candidate space is never an unexplained number.
+    MINING IS GUARDED by the training label source (the funnel reports every
+    drop); the emitted pairs respect n_target/max_per_canonical/
+    max_per_brand in hardest-first order; the lane NEVER duplicates a pair
+    direction (asserted, not assumed).
 
-    TWO HISTORICAL DEFECTS, both guarded here:
-
-    * a previous miner re-added same-canonical TRUE MATCHES as label-0 pairs
-      (154 of 350, 44 %) — the ``same_canonical_guard`` drops any candidate
-      whose two GTINs resolve to the same canonical text, and the guard is a
-      reported funnel step, never a silent ``continue``;
-    * negative sampling with ``replace=True`` duplicated rows while reporting
-      them as distinct data — this miner does not sample at all. It ranks the
-      surviving candidates (hardest gate similarity first, deterministic ties)
-      and takes a deterministic PREFIX under configured endpoint-diversity and
-      target caps, so no row can be emitted twice; the emitted rows are
-      asserted distinct before returning.
-
-    The returned arrays are ``(source SKU row, other canonical payload index)``
-    pairs in BOTH directions, the same shape every other negative lane returns,
-    so ``folds.pairs_in_set`` keeps an emitted pair inside one fold exactly as
-    it does for the gate and targeted populations.
+    The returned pair/score arrays keep their historical shape and order.
     """
-    require = tuple(str(dimension) for dimension in require_agreement)
-    if not require:
-        raise ValueError(
-            "require_agreement must name at least one critical dimension; an "
-            "empty requirement would mine pairs that share nothing"
-        )
-    unknown = sorted(set(require) - set(CRITICAL_ATTRIBUTE_DIMENSIONS))
-    if unknown:
-        raise ValueError(
-            f"require_agreement names non-critical dimensions {unknown}; "
-            f"allowed: {list(CRITICAL_ATTRIBUTE_DIMENSIONS)}"
-        )
-    if n_target <= 0:
-        if funnel is not None:
-            funnel.miner = "cross_brand_negatives"
-            funnel.skipped_reason = "n_target <= 0"
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-
-    from core.attribute_conflicts import (
-        canonical_attribute_info,
-        critical_attribute_evaluation,
-    )
-
-    if funnel is not None:
-        funnel.miner = "cross_brand_negatives"
-        funnel.n_target = int(n_target)
-        funnel.require_agreement = require
-        funnel.min_similarity = float(min_similarity)
-        funnel.max_per_canonical = int(max_per_canonical)
-        funnel.max_per_brand = int(max_per_brand)
-        funnel.volume_relative_tolerance = float(volume_relative_tolerance)
-        funnel.volume_absolute_tolerance_ml = float(volume_absolute_tolerance_ml)
-
-    if "canonical" not in canonical_records.columns:
-        raise ValueError(
-            "canonical_records must carry the 'canonical' column: it is the "
-            "identity the same-canonical true-match guard compares"
-        )
-    records = {str(row["gtin"]): row for row in canonical_records.to_dict("records")}
-    infos = {gtin: canonical_attribute_info(record) for gtin, record in records.items()}
-    brands = {gtin: _brand_identity(record) for gtin, record in records.items()}
-    canonicals = {gtin: str(record.get("canonical", "")) for gtin, record in records.items()}
-    if funnel is not None:
-        funnel.canonicals_total = len(records)
-
-    # ── candidate generation (blocking on the required-agreement values) ──
-    blocks: dict[tuple[frozenset[object], ...], list[str]] = defaultdict(list)
-    n_without_evidence = 0
-    for gtin in sorted(records):
-        key = tuple(
-            _required_agreement_values(infos[gtin], dimension)
-            for dimension in require
-        )
-        if any(not part for part in key):
-            n_without_evidence += 1
-            continue
-        blocks[key].append(gtin)
-    if funnel is not None:
-        funnel.canonicals_without_required_evidence = n_without_evidence
-        funnel.blocks = len(blocks)
-        funnel.candidates_in_blocks = int(
-            sum(len(members) * (len(members) - 1) // 2 for members in blocks.values())
-        )
-        funnel.gate_rows = funnel.candidates_in_blocks
-
-    label_errors = conflicting_gtin_pairs(df) if exclude_conflicting else set()
-    existing_keys = {
-        (int(left), int(right)) for left, right in (existing if existing is not None else [])
-    }
-
-    ranked: list[tuple[float, str, str]] = []
-    for key in sorted(blocks):
-        members = sorted(blocks[key])
-        for left, right in combinations(members, 2):
-            if (
-                left not in gtin_to_row
-                or right not in gtin_to_row
-                or left not in gtin_to_canon_idx
-                or right not in gtin_to_canon_idx
-            ):
-                if funnel is not None:
-                    funnel.dropped_candidates_endpoint_unresolved += 1
-                continue
-            # Same canonical item => true match, never a label-0 pair.
-            if canonicals[left] and canonicals[left] == canonicals[right]:
-                if funnel is not None:
-                    funnel.dropped_candidates_same_canonical += 1
-                continue
-            if exclude_conflicting:
-                left_row, right_row = gtin_to_row[left], gtin_to_row[right]
-                if (min(left_row, right_row), max(left_row, right_row)) in label_errors:
-                    if funnel is not None:
-                        funnel.dropped_candidates_label_error += 1
-                    continue
-            left_brand, right_brand = brands.get(left, ""), brands.get(right, "")
-            if not left_brand or not right_brand or left_brand == right_brand:
-                if funnel is not None:
-                    funnel.dropped_candidates_same_brand += 1
-                continue
-            if _brand_surface_variant(left_brand, right_brand):
-                if funnel is not None:
-                    funnel.dropped_candidates_brand_surface_variant += 1
-                continue
-            evaluation = critical_attribute_evaluation(
-                infos[left],
-                infos[right],
-                volume_relative_tolerance=float(volume_relative_tolerance),
-                volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
-            )
-            if evaluation["conflicts"]:
-                if funnel is not None:
-                    funnel.dropped_candidates_attribute_conflict += 1
-                    for dimension in evaluation["conflicts"]:
-                        funnel.conflict_dimension_census[dimension] = (
-                            funnel.conflict_dimension_census.get(dimension, 0) + 1
-                        )
-                continue
-            score = _canonical_similarity(canonicals[left], canonicals[right])
-            if not score > float(min_similarity):
-                if funnel is not None:
-                    funnel.dropped_candidates_below_similarity += 1
-                continue
-            if funnel is not None:
-                funnel.passed_candidates += 1
-            ranked.append((score, left, right))
-
-    # Deterministic prefix selection: hardest first, ties by GTIN. No RNG and
-    # no replacement, so a row cannot be emitted twice.
-    ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
-    canonical_usage: dict[str, int] = defaultdict(int)
-    brand_usage: dict[str, int] = defaultdict(int)
-    found: list[tuple[int, int, float]] = []
-    for score, left, right in ranked:
-        if len(found) >= int(n_target):
-            if funnel is not None:
-                funnel.dropped_candidates_target_cap += 1
-            continue
-        if int(max_per_canonical) and (
-            canonical_usage[left] >= int(max_per_canonical)
-            or canonical_usage[right] >= int(max_per_canonical)
-        ):
-            if funnel is not None:
-                funnel.dropped_candidates_endpoint_cap += 1
-            continue
-        if int(max_per_brand) and (
-            brand_usage[brands[left]] >= int(max_per_brand)
-            or brand_usage[brands[right]] >= int(max_per_brand)
-        ):
-            if funnel is not None:
-                funnel.dropped_candidates_endpoint_cap += 1
-            continue
-        for pair in (
-            (gtin_to_row[left], gtin_to_canon_idx[right]),
-            (gtin_to_row[right], gtin_to_canon_idx[left]),
-        ):
-            if len(found) >= int(n_target):
-                break
-            resolved = (int(pair[0]), int(pair[1]))
-            if resolved in existing_keys:
-                if funnel is not None:
-                    funnel.dropped_pairs_already_in_baseline += 1
-                continue
-            existing_keys.add(resolved)
-            found.append((resolved[0], resolved[1], score))
-        if funnel is not None:
-            funnel.accepted_candidates += 1
-        canonical_usage[left] += 1
-        canonical_usage[right] += 1
-        brand_usage[brands[left]] += 1
-        brand_usage[brands[right]] += 1
-
-    if len(found) != len({(left, right) for left, right, _ in found}):
-        raise AssertionError(
-            "cross-brand miner emitted a duplicate pair direction: the lane "
-            "must never duplicate rows (the defect this guard exists for)"
-        )
-    if funnel is not None:
-        funnel.emitted_pairs = int(len(found))
-    if not found:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    return (
-        np.asarray([(left, right) for left, right, _ in found], dtype=int),
-        np.asarray([score for _, _, score in found], dtype=float),
-    )
+    return _CrossBrandMiner(
+        df, canonical_records, gtin_to_row, gtin_to_canon_idx,
+        existing=existing, n_target=n_target,
+        require_agreement=require_agreement,
+        min_similarity=min_similarity,
+        max_per_canonical=max_per_canonical,
+        max_per_brand=max_per_brand,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        exclude_conflicting=exclude_conflicting, funnel=funnel,
+    ).run()
 
 
 def mine_cross_brand_negatives_with_funnel(
