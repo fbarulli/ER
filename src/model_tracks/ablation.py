@@ -25,6 +25,7 @@ from core.model_input import build_sku_text, model_input_info
 from core.run_log import RunLogger
 from core.sku_identity import row_identity
 from core.step_trace import timed
+from core.text import normalized_attribute_text
 from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 
@@ -157,8 +158,6 @@ def write(path, value):
 
 def _field_surfaces(text: str) -> dict[str, set[str]]:
     """Declared attribute -> set of raw ';'-parts, one pass per endpoint."""
-    from core.text import normalized_attribute_text
-
     surfaces: dict[str, set[str]] = {}
     for part in str(text).split(';'):
         if ':' not in part:
@@ -170,7 +169,6 @@ def _field_surfaces(text: str) -> dict[str, set[str]]:
 
 
 def declaration_removed(row, attribute):
-    from core.text import normalized_attribute_text
     from training.masking import field_of
     result = dict(row)
     if result.get('frozen_payload'):
@@ -286,7 +284,6 @@ def _selected_pairs(pairs, cfg):
 
 
 def _catalog_rows(catalog):
-    from core.text import normalized_attribute_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
