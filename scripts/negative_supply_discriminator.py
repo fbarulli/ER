@@ -12,6 +12,10 @@ two arms:
 If the arms separate easily (AUC near 1.0), the generator has a
 detectable signature and the mint rules get fixed BEFORE minting 50k
 rows. Loud verdict, not a silent number.
+
+Class map (one owner per responsibility):
+  - ArmGeometry     — the universe-geometry feature columns
+  - RealMintedArms  — arm selection + the grouped-anchor fold key
 """
 
 from __future__ import annotations
@@ -23,41 +27,91 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from core.run_log import RunLogger
+
+_LOG = RunLogger(__name__)
 
 REPO_NOTE = "features are universe-geometry only; mint provenance is NOT a feature"
 
+_REAL_POPULATIONS = ("base_negative", "real_partner")
+_MINTED_POPULATION = "minted_partner"
+
+
+class ArmGeometry:
+    """The universe-geometry features over one arm frame.
+
+    Four cheap columns: token jaccard, subset share, the token-count gap
+    and the blocker cosine. Mint provenance is deliberately NOT a feature
+    (REPO_NOTE): the discriminator must not see the answer key.
+    """
+
+    @staticmethod
+    def columns(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
+        """The feature matrix plus its pinned column names."""
+        anchor = frame["anchor_text"].fillna("").astype(str)
+        partner = frame["partner_text"].fillna("").astype(str)
+        for column in ("anchor_gtin", "partner_gtin", "score"):
+            if column not in frame.columns:
+                frame = frame.assign(**{column: "" if column != "score" else 0.0})
+        sets_a = anchor.map(lambda cell: set(cell.split()))
+        sets_p = partner.map(lambda cell: set(cell.split()))
+        jaccard: list[float] = []
+        subset_share: list[float] = []
+        for x, y in _LOG.progress(
+            zip(sets_a, sets_p), desc="arm_features", unit="row",
+            total=len(anchor),
+        ):
+            overlap = len(x & y)
+            jaccard.append(overlap / max(len(x | y), 1))
+            subset_share.append(overlap / max(min(len(x), len(y)), 1))
+        a_len = anchor.str.split().map(len).to_numpy()
+        p_len = partner.str.split().map(len).to_numpy()
+        cols = np.column_stack([
+            jaccard,
+            subset_share,
+            np.abs(a_len.astype(float) - p_len.astype(float)) / np.maximum(a_len, 1),
+            frame["score"].fillna(0.0).astype(float).to_numpy(),
+        ])
+        names = [
+            "token_jaccard",
+            "subset_share",
+            "token_count_gap",
+            "blocker_score",
+        ]
+        return cols, names
+
 
 def _features(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-    anchor = frame["anchor_text"].fillna("").astype(str)
-    partner = frame["partner_text"].fillna("").astype(str)
-    for column in ("anchor_gtin", "partner_gtin", "score"):
-        if column not in frame.columns:
-            frame = frame.assign(**{column: "" if column != "score" else 0.0})
-    sets_a = anchor.map(lambda cell: set(cell.split()))
-    sets_p = partner.map(lambda cell: set(cell.split()))
-    jaccard = [
-        len(x & y) / max(len(x | y), 1)
-        for x, y in zip(sets_a, sets_p)
-    ]
-    subset_share = [
-        len(x & y) / max(min(len(x), len(y)), 1)
-        for x, y in zip(sets_a, sets_p)
-    ]
-    a_len = anchor.str.split().map(len).to_numpy()
-    p_len = partner.str.split().map(len).to_numpy()
-    cols = np.column_stack([
-        jaccard,
-        subset_share,
-        np.abs(a_len.astype(float) - p_len.astype(float)) / np.maximum(a_len, 1),
-        frame["score"].fillna(0.0).astype(float).to_numpy(),
-    ])
-    names = [
-        "token_jaccard",
-        "subset_share",
-        "token_count_gap",
-        "blocker_score",
-    ]
-    return cols, names
+    """The universe-geometry feature matrix (see :class:`ArmGeometry`)."""
+    return ArmGeometry.columns(frame)
+
+
+class RealMintedArms:
+    """The two comparison arms and the grouped-anchor fold key."""
+
+    @staticmethod
+    def split(pairs: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """(real, minted, stacked arm) frames, real first."""
+        real = pairs[pairs.population.isin(_REAL_POPULATIONS)].copy()
+        minted = pairs[pairs.population == _MINTED_POPULATION].copy()
+        arm = pd.concat([real, minted], ignore_index=True)
+        for column in ("anchor_gtin", "partner_gtin"):
+            if column not in arm.columns:
+                arm[column] = ""
+        return real, minted, arm
+
+    @staticmethod
+    def anchor_groups(arm: pd.DataFrame) -> np.ndarray:
+        """The fold key: the anchor gtin, or a per-row group when missing."""
+        groups: list[str] = []
+        rows = list(arm.itertuples(index=False))
+        for position, row in _LOG.progress(
+            enumerate(rows), desc="anchor_groups", unit="row", total=len(rows),
+        ):
+            value = getattr(row, "anchor_gtin", "")
+            anchor = "" if pd.isna(value) else str(value).strip()
+            groups.append(anchor if anchor else f"__mint__{position}")
+        return np.asarray(groups)
 
 
 def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
@@ -74,14 +128,7 @@ def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import StratifiedGroupKFold, cross_val_score
 
-    real = pairs[
-        pairs.population.isin(["base_negative", "real_partner"])
-    ].copy()
-    minted = pairs[pairs.population == "minted_partner"].copy()
-    arm = pd.concat([real, minted], ignore_index=True)
-    for column in ("anchor_gtin", "partner_gtin"):
-        if column not in arm.columns:
-            arm[column] = ""
+    real, minted, arm = RealMintedArms.split(pairs)
     if arm["population"].nunique() < 2 or len(minted) < spec.min_arm_rows or len(real) < spec.min_arm_rows:
         return {
             "verdict": "insufficient",
@@ -92,13 +139,8 @@ def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
             ),
         }
     X, names = _features(arm)
-    y = (arm["population"] == "minted_partner").astype(int).to_numpy()
-    groups = []
-    for position, row in enumerate(arm.itertuples(index=False)):
-        value = getattr(row, "anchor_gtin", "")
-        anchor = "" if pd.isna(value) else str(value).strip()
-        groups.append(anchor if anchor else f"__mint__{position}")
-    groups = np.asarray(groups)
+    y = (arm["population"] == _MINTED_POPULATION).astype(int).to_numpy()
+    groups = RealMintedArms.anchor_groups(arm)
     model = LogisticRegression(max_iter=spec.max_iter)
     group_count = np.unique(groups).shape[0]
     if group_count < 2:
@@ -141,6 +183,7 @@ def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
 
 
 def main() -> None:
+    RunLogger.configure_console()
     from training.negative_supply import DiscriminatorSpec, load_spec
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -157,6 +200,7 @@ def main() -> None:
     spec = supply_spec.discriminator or DiscriminatorSpec()
     report = discriminate(pairs, spec=spec)
     print(json.dumps(report, indent=2, sort_keys=True))
+    _LOG.info(f"[discriminator] verdict={report.get('verdict')}")
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
