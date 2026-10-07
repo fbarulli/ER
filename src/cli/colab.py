@@ -54,6 +54,12 @@ import shutil
 import signal
 import subprocess
 import sys
+# Capability-module identity anchor (phase-1 split of colab.py, see
+# cli/colab_self_watch.py): whichever identity runs this file (`cli.colab`
+# import or `__main__` under `python -m cli.colab`) registers the RUNNING
+# module here, and split modules resolve it at call time — never importing a
+# second copy.
+sys.modules["__colab_runtime_self__"] = sys.modules[__name__]
 import tarfile
 from core.archive_reader import tar_archive
 import tempfile
@@ -62,6 +68,8 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
 # via lib.common (config/paths.yaml paths.results_dir/data_dir) — were
@@ -80,13 +88,13 @@ from core.common import (
     training_cfg,
 )
 from core.manifest import sha256_file
-from core.schemas import ResultBundleManifest, StageManifest
+from core.schemas import ResultBundleManifest, StageManifest, canonical_suite_matrix
 from cli.colab_lane import (
     DELIVERY_DATA_MEMBERS,
     DELIVERY_PREPARED_DIRS,
     DELIVERY_TRACKED_DIRS,
 )
-
+from cli.log_capture import logs_root, progress_frames_to_lines
 
 # Smoke and normal training defaults come from the Colab runtime config.
 # Sweep fractions remain exclusive to the sweep lane.
@@ -177,24 +185,21 @@ _FINAL_INFERENCE = _COLAB.final_inference
 # population 6,351 pairs (565 pos / 5,786 neg); train side
 # 63,079 - 13,927 validation-entity rows = 49,152.
 
-
 @lru_cache(maxsize=1)
+
 def _scored_validation_census() -> dict[str, object]:
     """The exec-time scored-pair row census and its identity (fail-loud)."""
     from training.complete_colab_worker import scored_validation_accounting
 
     return scored_validation_accounting()
 
-
 def _expected_training_rows() -> int:
     """Train-side rows: deduped rows minus validation fold 2+3 entities."""
     return int(_scored_validation_census()["train_side_rows"])
 
-
 def _expected_inference_rows() -> int:
     """Scored-pair population rows, re-measured from final_validation.csv."""
     return int(_scored_validation_census()["scored_pair_rows"])
-
 
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
@@ -215,7 +220,6 @@ _result_event_lock = threading.Lock()
 _original_stdout = None
 _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
-
 
 def _legacy_validation_sources() -> dict[str, Path]:
     """Materialize listing partitions from the validated shared component split.
@@ -270,7 +274,6 @@ def _legacy_validation_sources() -> dict[str, Path]:
         temporary.replace(target)
     return sources
 
-
 def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
     """Reject cached or sampled bundles using a different component holdout."""
     import pandas as pd
@@ -293,7 +296,6 @@ def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
                     'legacy prepared bundle differs from the shared component split; '
                     'use --tracks-config results/model_tracks/smoke_20261001_128/suite.yaml '
                     'for a sampled CPU smoke, or rebuild full bundles from the current catalog')
-
 
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
@@ -349,6 +351,12 @@ def training_lifecycle_preflight(
     }
 
 
+
+def _stamp() -> str:
+    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
+    return (f"[colab {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+
+
 class _Tee:
     """Mirror launcher output to the terminal and the root live log."""
 
@@ -359,7 +367,8 @@ class _Tee:
     def write(self, text: str) -> int:
         self._stream.write(text)
         if not _SUPPRESS_LIVE_LOG:
-            self._log_file.write(text)
+            # tqdm CR frames must survive capture as grep-able lines.
+            self._log_file.write(progress_frames_to_lines(text))
         return len(text)
 
     def flush(self) -> None:
@@ -369,7 +378,6 @@ class _Tee:
 
     def isatty(self) -> bool:
         return self._stream.isatty()
-
 
 class _LiveLogSuppressed:
     """Temporarily keep streamed worker training out of the system log."""
@@ -384,15 +392,14 @@ class _LiveLogSuppressed:
         _SUPPRESS_LIVE_LOG = self._previous
         return False
 
-
 def _write_training_log(text: str) -> None:
     """Write trainer output to the dedicated local training log immediately."""
     if _training_log is None or not text:
         return
     with _training_log_lock:
-        _training_log.write(text)
+        # CR-separated tqdm frames become grep-able lines (shared formatter).
+        _training_log.write(progress_frames_to_lines(text))
         _training_log.flush()
-
 
 def _result_event(
     run_id: str,
@@ -414,8 +421,7 @@ def _result_event(
             handle.write(json.dumps(event, sort_keys=True) + "\n")
     suffix = f" worker={worker}" if worker is not None else ""
     detail_text = " ".join(f"{key}={value}" for key, value in details.items())
-    print(f"[result-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
-
+    print(_stamp(), f"[result-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
 
 def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
     """Persist the remote location before uploads or training begin."""
@@ -433,15 +439,14 @@ def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
     (root / "remote_run.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(f"[run] remote metadata recorded -> {root / 'remote_run.json'}", flush=True)
-
+    print(_stamp(), f"[run] remote metadata recorded -> {root / 'remote_run.json'}", flush=True)
 
 @contextmanager
 def _colab_timing(kind: str, name: str):
     """Emit monotonic wall times to stdout and the launcher's durable transcript."""
     started = time.perf_counter()
     def emit(message):
-        print(message, flush=True)
+        print(f"{_stamp()} {message}", flush=True)
         if _setup_timing_active and SETUP_TIMING_LOG_PATH is not None:
             with _setup_timing_lock:
                 with SETUP_TIMING_LOG_PATH.open('a', encoding='utf-8') as handle:
@@ -473,11 +478,9 @@ def _colab_timing(kind: str, name: str):
         if kind == 'step' and name == 'initialization':
             _finish_setup_timing()
 
-
 def _finish_setup_timing():
     global _setup_timing_active
     _setup_timing_active = False
-
 
 def _timed_colab(kind: str):
     def decorate(function):
@@ -497,7 +500,6 @@ def _timed_colab(kind: str):
         return wrapped
     return decorate
 
-
 @_timed_colab("step")
 def check_colab_cli() -> None:
     """Ensure the colab CLI is installed and authenticated."""
@@ -510,11 +512,9 @@ def check_colab_cli() -> None:
             "Then: colab sessions  (to complete OAuth sign-in)"
         )
 
-
 def _colab_launch_lock_path() -> Path:
     lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", SESSION)
     return _COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
-
 
 def _process_start_ticks(pid: int) -> int | None:
     """Return Linux's immutable process-start marker, if it is available."""
@@ -523,14 +523,12 @@ def _process_start_ticks(pid: int) -> int | None:
     except (FileNotFoundError, IndexError, ValueError):
         return None
 
-
 def _read_colab_launch_owner(lock_path: Path) -> dict[str, object] | None:
     try:
         payload = json.loads(lock_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
-
 
 def _colab_launch_lock_is_held(lock_path: Path) -> bool:
     """Probe the advisory lock without altering its owner metadata."""
@@ -544,7 +542,6 @@ def _colab_launch_lock_is_held(lock_path: Path) -> bool:
         return False
     finally:
         handle.close()
-
 
 @_timed_colab("step")
 def acquire_colab_launch_lock():
@@ -580,7 +577,6 @@ def acquire_colab_launch_lock():
     handle.flush()
     return handle
 
-
 def release_colab_launch_lock(handle) -> None:
     """Release the process-scoped Colab session ownership lock."""
     if handle is None:
@@ -589,7 +585,6 @@ def release_colab_launch_lock(handle) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     finally:
         handle.close()
-
 
 def _colab_command(*args: str) -> list[str]:
     """Build every Colab CLI command through the shared safe entrypoint."""
@@ -609,9 +604,7 @@ def _colab_command(*args: str) -> list[str]:
         *args,
     ]
 
-
 _colab_control_lock = threading.RLock()
-
 
 def _serialize_colab_control(function):
     """Keep one notebook kernel control request in flight per launcher."""
@@ -619,7 +612,6 @@ def _serialize_colab_control(function):
         with _colab_control_lock:
             return function(*args, **kwargs)
     return wrapped
-
 
 @_serialize_colab_control
 @_timed_colab("event")
@@ -630,14 +622,13 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
     try:
         return subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
     except subprocess.CalledProcessError as e:
-        print(f"\n[error] colab command failed: {' '.join(display_cmd)}", file=sys.stderr)
+        print(_stamp(), f"\n[error] colab command failed: {' '.join(display_cmd)}", file=sys.stderr)
         if e.stdout:
             print(f"stdout:\n{e.stdout}", file=sys.stderr)
         if e.stderr:
             print(f"stderr:\n{e.stderr}", file=sys.stderr)
         traceback.print_exc()
         raise
-
 
 @_timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
@@ -671,12 +662,14 @@ def run_colab_exec_stream(
 ) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
-    log_name labels a stage in the root colab_system.log transcript. The file is
+    log_name labels a stage in the launcher transcript (the SSOT
+    colab_live_log: logs/colab/system.log under the canonical logs root).
+    The file is
     opened once per invocation, line-flushed, and survives VM teardown so
     every Colab stage is inspectable in one chronological log.
     """
     if _live_log and log_name:
-        print(f"\n===== {log_name} =====", flush=True)
+        print(_stamp(), f"\n===== {log_name} =====", flush=True)
 
     def stream_output(pipe, prefix, captured, remote_output=None):
         pending = ""
@@ -739,6 +732,7 @@ def run_colab_exec_stream(
             started = time.monotonic()
             while not heartbeat_stop.wait(30):
                 print(
+                    _stamp(),
                     f"[stream] {log_name or 'remote stage'} still active "
                     f"({time.monotonic() - started:.0f}s elapsed; awaiting remote output)",
                     flush=True,
@@ -792,6 +786,7 @@ def run_colab_exec_stream(
         if retry_safe and transient and attempt < attempts:
             delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
             print(
+                _stamp(),
                 f"[stream] transient kernel connection loss ({attempt}/{attempts}); "
                 f"retrying safe stage in {delay}s",
                 flush=True,
@@ -803,7 +798,6 @@ def run_colab_exec_stream(
             "--- complete remote output / traceback ---\n"
             f"{output}"
         )
-
 
 @_serialize_colab_control
 @_timed_colab("event")
@@ -817,7 +811,7 @@ def run_colab_exec_capture(
     """
     def report_probe_progress(message: str) -> None:
         """Make a blocked training-log probe observable in its durable log."""
-        print(message, flush=True)
+        print(f"{_stamp()} {message}", flush=True)
         if training_output:
             _write_training_log(message + "\n")
 
@@ -896,7 +890,6 @@ def run_colab_exec_capture(
             time.sleep(delay)
     raise RuntimeError(f"remote log probe failed after {_PROBE_RETRIES} attempts: {last_error}")
 
-
 def _parse_remote_json(output: str) -> dict:
     """Read the last JSON object from a Colab probe without trusting banners."""
     clean_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
@@ -906,7 +899,6 @@ def _parse_remote_json(output: str) -> dict:
         except json.JSONDecodeError:
             continue
     raise RuntimeError(f"remote log probe returned no JSON: {clean_output[-1000:]}")
-
 
 @_timed_colab("event")
 def run_detached_stage(stage: str, command_expr: list[str], timeout: int) -> None:
@@ -959,12 +951,12 @@ else:
         running_pid = child.pid
 print(json.dumps({{"pid": running_pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
-    print(f"[{stage}] starting detached remote stage; durable log={remote_log}", flush=True)
+    print(_stamp(), f"[{stage}] starting detached remote stage; durable log={remote_log}", flush=True)
     try:
         launched = _parse_remote_json(
             run_colab_exec_capture(SESSION, launch, timeout=120)
         )
-        print(f"[{stage}] remote pid={launched.get('pid')}", flush=True)
+        print(_stamp(), f"[{stage}] remote pid={launched.get('pid')}", flush=True)
         offset = 0
         delay = _LOG_POLL_INITIAL_SECONDS
         probes = 0
@@ -1006,7 +998,7 @@ print(json.dumps(payload), flush=True)
                     raise
                 message = f"[{stage}] log/status unavailable; detached training continues: {exc}"
                 _write_training_log(message + "\n")
-                print(message, flush=True)
+                print(f"{_stamp()} {message}", flush=True)
                 time.sleep(_LOG_POLL_SECONDS)
                 continue
             offset = int(payload["offset"])
@@ -1041,11 +1033,6 @@ print(json.dumps(payload), flush=True)
             f"system log contains the streamed output; remote log={remote_log}; cause={exc}"
         ) from exc
 
-
-
-
-
-
 def _format_bytes(value: int) -> str:
     """Format transfer progress without hiding the raw byte count."""
     units = ("B", "KiB", "MiB", "GiB")
@@ -1056,14 +1043,12 @@ def _format_bytes(value: int) -> str:
         amount /= 1024.0
     raise AssertionError("unreachable byte-format branch")
 
-
 def _local_file_size(path: Path) -> int:
     """Return partial-download size while tolerating a missing destination."""
     try:
         return path.stat().st_size
     except FileNotFoundError:
         return 0
-
 
 def _download_file_with_visibility(
     *,
@@ -1078,6 +1063,7 @@ def _download_file_with_visibility(
     relative = local.relative_to(TRAINING_RESULTS / run_id)
     worker_label = str(worker) if worker is not None else "all"
     print(
+        _stamp(),
         f"[download] worker={worker_label} file={index}/{total} starting "
         f"remote={remote} destination={local}",
         flush=True,
@@ -1097,6 +1083,7 @@ def _download_file_with_visibility(
         while not stop_heartbeat.wait(_RESULT_DOWNLOAD_HEARTBEAT_SECONDS):
             received = _local_file_size(local)
             print(
+                _stamp(),
                 f"[download] worker={worker_label} file={index}/{total} active "
                 f"received={_format_bytes(received)}; waiting for transfer",
                 flush=True,
@@ -1131,6 +1118,7 @@ def _download_file_with_visibility(
             error=f"{type(exc).__name__}: {exc}",
         )
         print(
+            _stamp(),
             f"[download] worker={worker_label} file={index}/{total} FAILED "
             f"received={_format_bytes(received)} error={type(exc).__name__}: {exc}",
             flush=True,
@@ -1151,16 +1139,12 @@ def _download_file_with_visibility(
         received_bytes=received,
     )
     print(
+        _stamp(),
         f"[download] worker={worker_label} file={index}/{total} completed "
         f"received={_format_bytes(received)}",
         flush=True,
     )
     return received
-
-
-
-
-
 
 def run_detached_train_and_tail(args: list[str]) -> None:
     """Start training outside the Jupyter cell and mirror its remote log live.
@@ -1194,7 +1178,7 @@ with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     )
 print(json.dumps({{"pid": child.pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
-    print("[run] starting detached train.py on the VM; streaming its remote log ...", flush=True)
+    print(_stamp(), "[run] starting detached train.py on the VM; streaming its remote log ...", flush=True)
     # Resume validates each worker's local checkpoint before
     # it emits the launch JSON.  A full checkpoint pull can legitimately take
     # longer than the short probe budget, so use the configured worker
@@ -1202,7 +1186,7 @@ print(json.dumps({{"pid": child.pid, "log": str(log_path), "status": str(status_
     launched = _parse_remote_json(
         run_colab_exec_capture(SESSION, launch, timeout=_WORKER_TIMEOUT_SECONDS)
     )
-    print(f"[train] remote pid={launched['pid']} log={launched['log']}", flush=True)
+    print(_stamp(), f"[train] remote pid={launched['pid']} log={launched['log']}", flush=True)
 
     offset = 0
     while True:
@@ -1236,10 +1220,9 @@ print(json.dumps(payload), flush=True)
                     f"remote training failed (rc={returncode}); "
                     f"full remote log was streamed above"
                 )
-            print("[train] remote process completed successfully", flush=True)
+            print(_stamp(), "[train] remote process completed successfully", flush=True)
             return
         time.sleep(_LOG_POLL_SECONDS)
-
 
 def run_parallel_train_and_tail(
     args: list[str], workers: int, *, resume_run: str | None = None,
@@ -1436,7 +1419,7 @@ for number in range(1, {workers} + 1):
     started.append({{"worker": number, "pid": child.pid}})
 print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
 """
-    print(f"[run] starting {workers} isolated full-data trainers; streaming all worker logs ...", flush=True)
+    print(_stamp(), f"[run] starting {workers} isolated full-data trainers; streaming all worker logs ...", flush=True)
     # Resume validates each worker's local checkpoint before
     # it emits the launch JSON. A full checkpoint pull can legitimately take
     # longer than the short probe budget, so use the configured worker
@@ -1444,7 +1427,7 @@ print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
     launched = _parse_remote_json(
         run_colab_exec_capture(SESSION, launch, timeout=_WORKER_TIMEOUT_SECONDS)
     )
-    print(f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
+    print(_stamp(), f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
     # Fetch finished artifacts from every worker while they train, so the end
     # of the run is a short delta rather than the whole result set.  Stopped
     # before the authoritative download so the two cannot race on one file.
@@ -1508,7 +1491,7 @@ print(json.dumps(payload), flush=True)
                     raise
                 message = f"[probe] log/status unavailable; continuing worker: {exc}"
                 _write_training_log(message + "\n")
-                print(message, flush=True)
+                print(f"{_stamp()} {message}", flush=True)
                 time.sleep(_LOG_POLL_SECONDS)
                 continue
             offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
@@ -1530,7 +1513,7 @@ print(json.dumps(payload), flush=True)
                         f"{float(live['gpu_free_gb']):.2f}G free"
                     )
                 position = f"step {live.get('step', 0)}/{live.get('max_steps', '?')}"
-                print(f"[worker {worker}] {live.get('event', 'running')} | {position}" +
+                print(_stamp(), f"[worker {worker}] {live.get('event', 'running')} | {position}" +
                       (" | " + " | ".join(metrics) if metrics else "") +
                       (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
             for worker, chunk in payload["chunks"].items():
@@ -1545,14 +1528,12 @@ print(json.dumps(payload), flush=True)
                 if failed:
                     raise RuntimeError(f"parallel trainers failed: {failed}")
                 download_verified_training_results(remote_base, workers, smoke=smoke)
-                print(f"[train] all {workers} remote workers completed successfully", flush=True)
+                print(_stamp(), f"[train] all {workers} remote workers completed successfully", flush=True)
                 return remote_base, workers
             time.sleep(_LOG_POLL_SECONDS)
     finally:
         if syncer is not None:
             syncer.stop()
-
-
 
 def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
     """Build one manifest-backed archive on the VM before transfer."""
@@ -1668,6 +1649,7 @@ print("[result-archive] included={{}} excluded={{}} archive_bytes={{}}".format(
 ), flush=True)
 """
     print(
+        _stamp(),
         f"[download] preparing one remote result archive for {workers} worker(s): "
         f"{archive_path}",
         flush=True,
@@ -1679,7 +1661,6 @@ print("[result-archive] included={{}} excluded={{}} archive_bytes={{}}".format(
         log_name="result_archive",
     )
     return archive_path
-
 
 def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundleManifest:
     """Validate manifest coverage, paths, sizes, and hashes after extraction."""
@@ -1731,7 +1712,6 @@ def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundle
         )
     return manifest
 
-
 def _extract_result_archive(
     archive_path: Path, local_base: Path, run_id: str, workers: int
 ) -> ResultBundleManifest:
@@ -1764,7 +1744,6 @@ def _extract_result_archive(
         return manifest
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
-
 
 class _IncrementalResultSync:
     """Keep the newest *best* checkpoint on the laptop while training runs.
@@ -1827,6 +1806,7 @@ class _IncrementalResultSync:
                 self._pass()
             except BaseException as exc:  # never fail the run from the syncer
                 print(
+                    _stamp(),
                     f"[result-sync] pass failed ({type(exc).__name__}: {exc}); "
                     "final download still covers every file",
                     flush=True,
@@ -1840,6 +1820,7 @@ class _IncrementalResultSync:
                 # A listing failure, a timeout, or a download error all land
                 # here: one pass must never escape into the run.
                 print(
+                    _stamp(),
                     f"[result-sync] worker {worker} pass skipped "
                     f"({type(exc).__name__}: {exc}); final download covers it",
                     flush=True,
@@ -1920,6 +1901,7 @@ class _IncrementalResultSync:
         self._held[worker] = (score, directory)
         self._synced_bytes += transferred
         print(
+            _stamp(),
             f"[result-sync] worker {worker} kept {checkpoint_name} "
             f"(step {step}, score={score:.4f}, "
             f"{_format_bytes(transferred)}) as latest_best",
@@ -1979,7 +1961,6 @@ class _IncrementalResultSync:
         except (OSError, ValueError, KeyError, TypeError):
             return (float("-inf"), None)
 
-
 def _download_one_remote_file(remote: str, local: Path) -> None:
     """Fetch one remote file through the module's Colab CLI wrapper.
 
@@ -1991,7 +1972,6 @@ def _download_one_remote_file(remote: str, local: Path) -> None:
         "download", "-s", SESSION, remote, str(local),
         timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
     )
-
 
 def _read_remote_text(remote: str) -> str:
     """Read one small remote file through the shared stdin-exec channel."""
@@ -2018,7 +1998,6 @@ def _read_remote_text(remote: str) -> str:
                 raise RuntimeError(f"remote file is missing: {remote}")
             return base64.b64decode(payload).decode("utf-8")
     raise RuntimeError("remote read returned no marker")
-
 
 def download_verified_training_results(
     remote_base: str, workers: int, *, smoke: bool = False
@@ -2053,6 +2032,7 @@ def download_verified_training_results(
         destination=str(local_base),
     )
     print(
+        _stamp(),
         f"[download] verified result archive -> {local_base} "
         f"({len(manifest.included)} included, {len(manifest.excluded)} excluded)",
         flush=True,
@@ -2060,39 +2040,18 @@ def download_verified_training_results(
     from model_tracks.run_retention import publish_training_run, replace_smoke
     if smoke:
         replace_smoke(local_base)
-        print("[retention] smoke: newest result is the only local smoke run", flush=True)
+        print(_stamp(), "[retention] smoke: newest result is the only local smoke run", flush=True)
     else:
         receipt = publish_training_run(local_base)
-        print(f"[retention] dvc published run={Path(local_base).name} "
+        print(_stamp(), f"[retention] dvc published run={Path(local_base).name} "
               f"pruned={len(receipt.pruned)} in {receipt.seconds:.1f}s", flush=True)
 
-
-
-def publish_local_hpo_results(run_id: str, persistence: str) -> None:
-    """Generate HPO reports and persist snapshots before VM teardown."""
-    from training.generate_training_report import generate_report
-
-    generation = TRAINING_RESULTS / "hpo_runs" / run_id
-    if not generation.is_dir():
-        raise FileNotFoundError(f"local HPO archive missing: {generation}")
-    for model_dir in sorted((generation / "models").iterdir()):
-        if not model_dir.is_dir():
-            continue
-        metrics = sorted(model_dir.glob("*_holdout_*_fold_metrics.csv"))
-        pairs = sorted(model_dir.glob("*_fold*_pairs.csv"))
-        if metrics and pairs:
-            pointer = model_dir / F["results_pointer"].name
-            pointer_data = json.loads(pointer.read_text(encoding="utf-8")) if pointer.is_file() else {}
-            report_tag = str(pointer_data.get("run_tag") or model_dir.name)
-            generate_report(
-                metrics[-1], pairs, model_dir / f"report_{report_tag}",
-                sorted(model_dir.glob("*_fold*_train_scores.csv")),
-                sorted(model_dir.glob("*_fold*_random_easy_scores.csv")),
-            )
-            print(f"[report-local] HPO {model_dir.name}: report generated", flush=True)
-    print("[report-local] HPO results retained locally", flush=True)
-
-
+# publish_local_hpo_results moved to cli.colab_retention (phase-1 split of
+# colab.py); re-exported so the legacy `from cli import colab` surface and
+# its monkeypatch needles are unchanged.
+from cli.colab_retention import (  # noqa: E402,F401
+    publish_local_hpo_results,
+)
 def start_live_log() -> None:
     """Start the root-level live Colab log, replacing the prior run's log."""
     global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
@@ -2111,8 +2070,7 @@ def start_live_log() -> None:
     _original_stderr = sys.stderr
     sys.stdout = _Tee(_original_stdout, _live_log)
     sys.stderr = _Tee(_original_stderr, _live_log)
-    print(f"[log] capturing Colab output -> {LIVE_LOG_PATH}", flush=True)
-
+    print(_stamp(), f"[log] capturing Colab output -> {LIVE_LOG_PATH}", flush=True)
 
 def close_live_log() -> None:
     global _live_log, _training_log, _original_stdout, _original_stderr
@@ -2129,7 +2087,6 @@ def close_live_log() -> None:
         _original_stdout = None
         _original_stderr = None
 
-
 @_timed_colab("step")
 def _verify_session_handshake() -> None:
     """Fail before checkout if the CLI cannot execute on the VM."""
@@ -2144,8 +2101,7 @@ def _verify_session_handshake() -> None:
             f"Colab session '{SESSION}' failed the control-channel handshake "
             f"before training: {exc}"
         ) from exc
-    print(f"[session] control-channel handshake passed: {heartbeat.strip()}")
-
+    print(_stamp(), f"[session] control-channel handshake passed: {heartbeat.strip()}")
 
 @_timed_colab("step")
 def _forget_cached_session() -> None:
@@ -2169,15 +2125,14 @@ def _forget_cached_session() -> None:
         if _is_keep_alive_daemon(command):
             try:
                 os.kill(keep_alive_pid, 15)
-                print(f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
+                print(_stamp(), f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
             except ProcessLookupError:
                 pass
     state.pop(SESSION, None)
     temporary = _COLAB_CLI_CONFIG.with_name(_COLAB_CLI_CONFIG.name + ".tmp")
     temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, _COLAB_CLI_CONFIG)
-    print(f"[session] removed stale cached record for '{SESSION}'", flush=True)
-
+    print(_stamp(), f"[session] removed stale cached record for '{SESSION}'", flush=True)
 
 def _is_keep_alive_daemon(command: str) -> bool:
     """Whether a /proc command line is this wrapper's keep-alive daemon."""
@@ -2185,7 +2140,6 @@ def _is_keep_alive_daemon(command: str) -> bool:
         _COLAB_CLI_ENTRYPOINT.name in command
         and "keep-alive" in command
     )
-
 
 def keep_alive_daemon_pids() -> list[int]:
     """PIDs of keep-alive daemons serving THIS session.
@@ -2207,7 +2161,6 @@ def keep_alive_daemon_pids() -> list[int]:
         if _is_keep_alive_daemon(command) and SESSION in command:
             found.append(int(entry.name))
     return sorted(found)
-
 
 @_timed_colab("step")
 def stop_keep_alive_daemon(*, reason: str) -> int:
@@ -2235,41 +2188,40 @@ def stop_keep_alive_daemon(*, reason: str) -> int:
             continue
         except OSError as exc:
             print(
+                _stamp(),
                 f"[session] could not stop keep-alive pid={pid} ({exc!r}); "
                 "the VM is released by the launcher's own teardown",
                 flush=True,
             )
             continue
-        print(f"[session] stopped keep-alive daemon pid={pid} ({reason})", flush=True)
+        print(_stamp(), f"[session] stopped keep-alive daemon pid={pid} ({reason})", flush=True)
     return len(pids)
-
 
 @_timed_colab("step")
 def ensure_session() -> None:
     """Provision and verify the session before any training stage starts."""
     r = colab("sessions", check=False)
     if r.returncode == 0 and SESSION in (r.stdout or ""):
-        print(f"[session] '{SESSION}' already active; verifying control channel ...")
+        print(_stamp(), f"[session] '{SESSION}' already active; verifying control channel ...")
         try:
             _verify_session_handshake()
             return
         except BaseException as exc:
-            print(f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
+            print(_stamp(), f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
             _forget_cached_session()
     else:
         # The CLI may retain a named session locally after the VM has been
         # torn down.  Never let that record prevent a fresh allocation.
         _forget_cached_session()
     accelerator = [] if GPU.upper() == "CPU" else ["--gpu", GPU]
-    print(f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
+    print(_stamp(), f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
     # Owner ruling 8: the CPU high-RAM production shape belongs to its own
     # lane (cli.colab_data_bundle_prep); this line is the thin passthrough.
     # With the lane's config flag off it returns (), byte-identical argv.
     from cli.colab_data_bundle_prep import cpu_shape_args
     colab("new", "-s", SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
-    print("[session] provisioned; running control-channel handshake ...")
+    print(_stamp(), "[session] provisioned; running control-channel handshake ...")
     _verify_session_handshake()
-
 
 @_timed_colab("step")
 def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[str, ...] = ()) -> None:
@@ -2277,6 +2229,7 @@ def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[
     if sparse_paths and not minimal_runtime:
         raise ValueError('sparse checkout requires a prepared runtime')
     patterns = ['/src/', '/config/', '/scripts/', '/artifacts/wheels/',
+                '/artifacts/evidence/',
                 '/pyproject.toml', '/requirements.txt', '/colab_backend.py']
     for value in sparse_paths:
         path = Path(value)
@@ -2298,7 +2251,6 @@ def run_git(command, **kwargs):
         raise
     print(f"[checkout] event={{name}} state={{'completed' if result.returncode == 0 else 'failed'}} elapsed_seconds={{time.perf_counter() - started:.3f}}", flush=True)
     return result
-
 
 root = pathlib.Path({REMOTE_ROOT!r})
 remote_name = {GIT_REMOTE_NAME!r}
@@ -2350,7 +2302,6 @@ print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
       "prepared_runtime=" + str({minimal_runtime!r}), "at", root)
 """
     run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
-
 
 def _runtime_install_command(
     packages: list[str], *, prefer_uv: bool, wheel_paths: list[str],
@@ -2420,7 +2371,6 @@ raise SystemExit(subprocess.call(command))
 """
     return f"[sys.executable, '-c', {program!r}]"
 
-
 @_timed_colab("step")
 def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) -> None:
     packages = list(
@@ -2429,6 +2379,7 @@ def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) 
     if graph_runtime:
         packages = list(dict.fromkeys([*packages, *_RUNTIME_PACKAGES.graph]))
     print(
+        _stamp(),
         "[deps] installing "
         + ("prepared training runtime" if minimal_runtime else "full lane dependencies")
         + f" on the VM ({len(packages)} distributions: {', '.join(packages)}) ...",
@@ -2447,7 +2398,6 @@ def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) 
         timeout=900,
     )
 
-
 @_timed_colab("step")
 def log_gpu_profile() -> None:
     """Record the runtime hardware before training, including CPU smoke runs."""
@@ -2461,7 +2411,6 @@ else:
 """
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="runtime_profile", retry_safe=True)
 
-
 _BOOTSTRAP = f"""
 import sys, runpy, pathlib, os
 sys.path.insert(0, "{REMOTE_ROOT}/src")
@@ -2469,7 +2418,6 @@ os.environ["PYTHONPATH"] = "{REMOTE_ROOT}/src" + os.pathsep + os.environ.get("PY
 (pathlib.Path("{REMOTE_ROOT}/results")).mkdir(parents=True, exist_ok=True)
 (pathlib.Path("{REMOTE_ROOT}/artifacts/data")).mkdir(parents=True, exist_ok=True)
 """
-
 
 def _env_value(name: str) -> str | None:
     """Read a simple KEY=VALUE entry without printing or cloning secrets."""
@@ -2485,28 +2433,25 @@ def _env_value(name: str) -> str | None:
     return os.environ.get(name) or None
     return None
 
-
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk."""
     key = _env_value("WANDB_API_KEY")
     if not key:
-        print("[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
+        print(_stamp(), "[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
         return ""
-    print("[wandb] API key loaded from local .env and injected into VM process")
+    print(_stamp(), "[wandb] API key loaded from local .env and injected into VM process")
     return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
-
 
 def _optuna_env_script() -> str:
     """Inject the shared PostgreSQL control-plane URL into the VM only."""
     url = _env_value("OPTUNA_STORAGE_URL")
     if not url:
-        print("[hpo-control] OPTUNA_STORAGE_URL absent; concurrent HPO is disabled")
+        print(_stamp(), "[hpo-control] OPTUNA_STORAGE_URL absent; concurrent HPO is disabled")
         return ""
     if not url.startswith(("postgresql://", "postgresql+psycopg://")):
         raise RuntimeError("OPTUNA_STORAGE_URL must use a PostgreSQL URL")
-    print("[hpo-control] PostgreSQL Optuna URL loaded from local .env and injected into VM process")
+    print(_stamp(), "[hpo-control] PostgreSQL Optuna URL loaded from local .env and injected into VM process")
     return f"os.environ['OPTUNA_STORAGE_URL'] = {url!r}\n"
-
 
 def _remote_auth_env_script(
     *, include_optuna: bool = False, include_wandb: bool = True,
@@ -2517,7 +2462,6 @@ def _remote_auth_env_script(
             "os.environ['ER_INCREMENTAL_DVC'] = '0'\n"
             + wandb + (_optuna_env_script() if include_optuna else ""))
 
-
 @_timed_colab("step")
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
@@ -2527,7 +2471,7 @@ def run_data_prep() -> None:
     -> data_prep. Running all three keeps the VM replay identical to the
     local worktree replay (byte-comparable outputs).
     """
-    print("[run] dedupe + reference-verify + data_prep on the VM ...")
+    print(_stamp(), "[run] dedupe + reference-verify + data_prep on the VM ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
 for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "src/training/build_reference.py --verify", "src/training/data_prep.py", "src/training/labeled_pairs.py"):
@@ -2538,7 +2482,6 @@ for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "
 """
     # dedupe 1-2 min + reference verify ~3 min + data_prep ~2 min
     run_colab_exec_stream(SESSION, script, timeout=1800, log_name="data_prep")
-
 
 @_timed_colab("step")
 def verify_remote_models(model_keys: list[str]) -> None:
@@ -2553,6 +2496,7 @@ def verify_remote_models(model_keys: list[str]) -> None:
         raise KeyError(f"unknown local model registry key(s): {unknown}")
     model_root_relative = str(config["paths"]["models_dir"])
     print(
+        _stamp(),
         f"[models] source=git-shipped requested={keys} status=validation-start",
         flush=True,
     )
@@ -2592,11 +2536,10 @@ print(
         retry_safe=False,
     )
 
-
 @_timed_colab("step")
 def verify_training_inputs() -> None:
     """Use frozen CSV inputs and materialize derived calibration input."""
-    print("[data] validating frozen training CSVs from the cloned branch ...")
+    print(_stamp(), "[data] validating frozen training CSVs from the cloned branch ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
 from core.common import F
@@ -2629,7 +2572,6 @@ print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes
 """
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
-
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
@@ -2648,7 +2590,7 @@ def run_train(
     smoke: bool = False,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
-    print("[run] train.py on the configured VM runtime ...")
+    print(_stamp(), "[run] train.py on the configured VM runtime ...")
     # AUDIT 2026-09-09: --mask-frac 0.15 REMOVED — it hardcoded a value that
     # silently contradicted the SSOT (masking.frac: 1.00 in
     # config/training.yaml). train.py's own default resolves from the config
@@ -2752,7 +2694,6 @@ def run_train(
         incremental_sync=incremental_sync,
     )
 
-
 def _expand_worker_profiles(raw: str, workers: int, label: str) -> list[str]:
     """Resolve one profile or one explicit profile per concurrent worker."""
     values = [item.strip() for item in raw.split(",") if item.strip()]
@@ -2763,7 +2704,6 @@ def _expand_worker_profiles(raw: str, workers: int, label: str) -> list[str]:
             f"{label} profile count must be 1 or exactly {workers}; got {len(values)}"
         )
     return values
-
 
 def _training_bundle_profiles(masking_profile: str | None, workers: int) -> list[str]:
     """Resolve the masking profiles one lane's prepared bundles are built for.
@@ -2776,7 +2716,6 @@ def _training_bundle_profiles(masking_profile: str | None, workers: int) -> list
         masking_profile or _MASKING_PROFILE, workers, "masking"
     )
 
-
 def _bundle_request_key(request: dict) -> tuple:
     """Identity of one local bundle request, for prewarm reuse checks."""
     return (
@@ -2786,7 +2725,6 @@ def _bundle_request_key(request: dict) -> tuple:
         request.get("dataset_csv"),
         request.get("payload", "full"),
     )
-
 
 class _BundlePrewarm:
     """One local bundle build running while the VM provisions and installs.
@@ -2811,7 +2749,7 @@ class _BundlePrewarm:
             self.error = exc
             # Also print: a prewarm abandoned by a mismatched request would
             # otherwise fail invisibly (no silent drops).
-            print(f"[local-prepare] concurrent build failed: {exc!r}", flush=True)
+            print(_stamp(), f"[local-prepare] concurrent build failed: {exc!r}", flush=True)
 
     def join(self) -> list[Path]:
         self.thread.join()
@@ -2821,9 +2759,7 @@ class _BundlePrewarm:
             raise RuntimeError("the concurrent bundle build returned no bundles")
         return self.bundles
 
-
 _BUNDLE_PREWARM: _BundlePrewarm | None = None
-
 
 @_timed_colab("step")
 def start_local_bundle_prewarm(**request) -> None:
@@ -2833,21 +2769,20 @@ def start_local_bundle_prewarm(**request) -> None:
     _BUNDLE_PREWARM = prewarm
     prewarm.thread.start()
     print(
+        _stamp(),
         "[local-prepare] building "
         f"{len(request['profiles'])} bundle(s) concurrently with the VM "
         "dependency install",
         flush=True,
     )
 
-
 def drain_local_bundle_prewarm() -> None:
     """Never leave a prewarm thread writing into a closing live log."""
     global _BUNDLE_PREWARM
     prewarm, _BUNDLE_PREWARM = _BUNDLE_PREWARM, None
     if prewarm is not None and prewarm.thread.is_alive():
-        print("[local-prepare] waiting for the concurrent build to finish ...", flush=True)
+        print(_stamp(), "[local-prepare] waiting for the concurrent build to finish ...", flush=True)
         prewarm.thread.join()
-
 
 def _take_prewarmed_bundles(**request) -> list[Path] | None:
     """Hand over the in-flight build when it matches this exact request."""
@@ -2857,14 +2792,14 @@ def _take_prewarmed_bundles(**request) -> list[Path] | None:
         return None
     if prewarm.key != _bundle_request_key(request):
         print(
+            _stamp(),
             "[local-prepare] concurrent build was started for a different "
             f"request {prewarm.key}; rebuilding for {_bundle_request_key(request)}",
             flush=True,
         )
         return None
-    print("[local-prepare] joining the build started before the VM setup", flush=True)
+    print(_stamp(), "[local-prepare] joining the build started before the VM setup", flush=True)
     return prewarm.join()
-
 
 def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     """The exact local bundle request a lane's `run_train` call will make.
@@ -2898,7 +2833,6 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
         request["dataset_csv"] = dataset_csv
     return request
 
-
 _BUNDLE_CACHE_DIRNAME = "_cache"
 # Every file whose content can change what a prepared bundle contains.  A miss
 # on any of them must invalidate the cache: a stale bundle would train on data
@@ -2906,7 +2840,6 @@ _BUNDLE_CACHE_DIRNAME = "_cache"
 # repository treats as a bug rather than an inconvenience.
 _BUNDLE_SOURCE_DIRS = ("src",)
 _BUNDLE_SOURCE_FILES = ("scripts/diet_manifest.py",)
-
 
 def _tree_digest() -> str:
     """Digest every config file and bundle-producing source file."""
@@ -2923,11 +2856,9 @@ def _tree_digest() -> str:
         digest.update(sha256_file(path).encode("ascii"))
     return digest.hexdigest()
 
-
 def _bundle_model_digest(model_key: str) -> str:
     from graph_tracks.text_cache import checkpoint_hash
     return checkpoint_hash(Path(resolve_model(model_key)))
-
 
 def _bundle_cache_dir(
     *,
@@ -2963,7 +2894,6 @@ def _bundle_cache_dir(
     key = hashlib.sha256(request.encode("utf-8")).hexdigest()[:32]
     return RESULTS / "prepared_training" / _BUNDLE_CACHE_DIRNAME / key
 
-
 def _run_diet_gate(bundle: Path) -> int:
     """The bundle diet gate (scripts/diet_manifest.py), exit 0 pass / 2 fail."""
     if str(TRAIN_ROOT) not in sys.path:
@@ -2972,12 +2902,10 @@ def _run_diet_gate(bundle: Path) -> int:
 
     return diet_manifest_main([sys.argv[0], str(bundle)])
 
-
 def _bundle_manifest(bundle: Path):
     from training.prepared_bundle import load_prepared_bundle
 
     return load_prepared_bundle(bundle)[0]
-
 
 def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | None:
     """The cached bundles for this request, when every worker's pair is intact.
@@ -2997,6 +2925,7 @@ def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | Non
             _bundle_manifest(bundle)
         except Exception as exc:
             print(
+                _stamp(),
                 f"[local-prepare] cached bundle {bundle} is not reusable "
                 f"({exc!r}); rebuilding",
                 flush=True,
@@ -3004,13 +2933,13 @@ def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | Non
             return None
         if _run_diet_gate(bundle) != 0:
             print(
+                _stamp(),
                 f"[local-prepare] cached bundle {bundle} fails the diet "
                 "gate; rebuilding",
                 flush=True,
             )
             return None
     return expected
-
 
 def _populate_bundle_cache(cache_dir: Path, bundles: list[Path]) -> None:
     """Publish freshly built bundles under their content address."""
@@ -3020,10 +2949,9 @@ def _populate_bundle_cache(cache_dir: Path, bundles: list[Path]) -> None:
             for source in (bundle, bundle.with_suffix(bundle.suffix + ".json")):
                 shutil.copy2(source, cache_dir / source.name)
     except OSError as exc:
-        print(f"[local-prepare] could not populate {cache_dir} ({exc!r})", flush=True)
+        print(_stamp(), f"[local-prepare] could not populate {cache_dir} ({exc!r})", flush=True)
         return
-    print(f"[local-prepare] cached {len(bundles)} bundle(s) at {cache_dir}", flush=True)
-
+    print(_stamp(), f"[local-prepare] cached {len(bundles)} bundle(s) at {cache_dir}", flush=True)
 
 def _build_local_training_bundles(
     *,
@@ -3064,6 +2992,7 @@ def _build_local_training_bundles(
         for number, bundle in enumerate(cached, start=1):
             manifest = _bundle_manifest(bundle)
             print(
+                _stamp(),
                 f"[local-prepare] cache hit worker={number} "
                 f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
                 f"pos={manifest.n_pos:,} neg={manifest.n_neg:,} "
@@ -3108,6 +3037,7 @@ def _build_local_training_bundles(
             "EUROMONITOR_RUN_ID": f"local-prepare-{stamp}-worker_{number}",
         }
         print(
+            _stamp(),
             f"[local-prepare] worker={number} profile={profile} "
             f"bundle={bundle}",
             flush=True,
@@ -3123,6 +3053,7 @@ def _build_local_training_bundles(
                 "config/training.yaml's diet contract"
             )
         print(
+            _stamp(),
             f"[local-prepare] validated worker={number} "
             f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
             f"pos={manifest.n_pos:,} neg={manifest.n_neg:,} "
@@ -3135,7 +3066,6 @@ def _build_local_training_bundles(
     _legacy_validation_sources()
     _validate_legacy_bundle_partitions(bundles)
     return bundles
-
 
 def _prepare_local_training_bundles(
     *,
@@ -3162,7 +3092,6 @@ def _prepare_local_training_bundles(
     if prewarmed is not None:
         return prewarmed
     return _build_local_training_bundles(**request)
-
 
 def _upload_prepared_bundles(
     *,
@@ -3194,13 +3123,12 @@ for worker_dir in {worker_dirs!r}:
     for number, bundle in enumerate(bundles, start=1):
         for source in (bundle, bundle.with_suffix(bundle.suffix + ".json")):
             remote = f"{remote_dir}/worker_{number}/{source.name}"
-            print(f"[upload] prepared bundle file={source} -> {remote}", flush=True)
+            print(_stamp(), f"[upload] prepared bundle file={source} -> {remote}", flush=True)
             _upload_with_retries(
                 source, remote, timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS
             )
         remote_paths.append(f"{remote_dir}/worker_{number}/{bundle.name}")
     return remote_paths
-
 
 def _validation_input_path(configured_value: str) -> Path:
     """Resolve one configured lane input artifact inside the repository.
@@ -3219,7 +3147,6 @@ def _validation_input_path(configured_value: str) -> Path:
     if _FINAL_INFERENCE.enabled and not source.is_file():
         raise FileNotFoundError(f"configured final-inference CSV is missing: {source}")
     return source
-
 
 def _remote_checkout_copy(source: Path) -> str | None:
     """Return the VM's own checkout copy of `source` when its bytes match.
@@ -3252,6 +3179,7 @@ else:
         reported = run_colab_exec_capture(SESSION, probe, timeout=120).strip()
     except Exception as exc:
         print(
+            _stamp(),
             f"[upload] could not verify the VM checkout copy of {source.name} "
             f"({exc}); uploading instead",
             flush=True,
@@ -3261,7 +3189,6 @@ else:
         return remote
     return None
 
-
 _RUN_STAMP_FORMAT = "%m%dT%H%M%S%fZ"
 # How long the prewarmed upload waits for the session gate before giving up and
 # letting the lane upload serially.  Generous enough for a slow GPU allocation,
@@ -3270,7 +3197,6 @@ _PREWARM_GATE_TIMEOUT_SECONDS = 900
 # How long starting a new prewarm waits for a previous one to retire.  Bounded
 # so that starting a lane never depends on an earlier lane's transfer.
 _PREWARM_RETIRE_SECONDS = 30
-
 
 class _ValidationUploadPrewarm:
     """One lane's validation uploads, travelling during the VM dependency install.
@@ -3301,6 +3227,7 @@ class _ValidationUploadPrewarm:
         # drain joins it and an unbounded wait would hang teardown forever.
         if not self.session_ready.wait(_PREWARM_GATE_TIMEOUT_SECONDS):
             print(
+                _stamp(),
                 f"[upload] session was not ready within "
                 f"{_PREWARM_GATE_TIMEOUT_SECONDS}s; uploading serially instead",
                 flush=True,
@@ -3311,6 +3238,7 @@ class _ValidationUploadPrewarm:
         except BaseException as exc:  # handed back to the owning run, or fallen back from
             self.error = exc
             print(
+                _stamp(),
                 f"[upload] concurrent validation upload failed: {exc!r}", flush=True
             )
 
@@ -3322,9 +3250,7 @@ class _ValidationUploadPrewarm:
             raise RuntimeError("the concurrent validation upload returned no paths")
         return self.remote_paths
 
-
 _VALIDATION_UPLOAD_PREWARM: _ValidationUploadPrewarm | None = None
-
 
 @_timed_colab("step")
 def start_validation_upload_prewarm() -> str:
@@ -3344,19 +3270,19 @@ def start_validation_upload_prewarm() -> str:
     _VALIDATION_UPLOAD_PREWARM = prewarm
     prewarm.thread.start()
     print(
+        _stamp(),
         f"[upload] sending validation inputs for run {stamp} concurrently with "
         "the VM dependency install",
         flush=True,
     )
     return stamp
 
-
 def drain_validation_upload_prewarm() -> None:
     """Never leave an upload thread writing while the live log closes."""
     global _VALIDATION_UPLOAD_PREWARM
     prewarm, _VALIDATION_UPLOAD_PREWARM = _VALIDATION_UPLOAD_PREWARM, None
     if prewarm is not None and prewarm.thread.is_alive():
-        print("[upload] waiting for the concurrent upload to finish ...", flush=True)
+        print(_stamp(), "[upload] waiting for the concurrent upload to finish ...", flush=True)
         # The thread may still be blocked on the session gate; release it so a
         # drain at exit cannot hang forever on a VM that never came up.
         prewarm.session_ready.set()
@@ -3365,11 +3291,11 @@ def drain_validation_upload_prewarm() -> None:
         prewarm.thread.join(timeout=_PREWARM_RETIRE_SECONDS)
         if prewarm.thread.is_alive():
             print(
+                _stamp(),
                 "[upload] concurrent upload did not finish within "
                 f"{_PREWARM_RETIRE_SECONDS}s; continuing with teardown",
                 flush=True,
             )
-
 
 @_timed_colab("step")
 def release_validation_upload_prewarm() -> None:
@@ -3378,13 +3304,11 @@ def release_validation_upload_prewarm() -> None:
     if prewarm is not None:
         prewarm.session_ready.set()
 
-
 def _lane_run_stamp() -> str:
     """Adopt the prewarmed run identity so the uploads belong to this run."""
     if _VALIDATION_UPLOAD_PREWARM is not None:
         return _VALIDATION_UPLOAD_PREWARM.stamp
     return datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
-
 
 def _upload_validation_inputs(run_id: str) -> dict[str, str]:
     """Validation inputs for one run: the in-flight transfer when it matches.
@@ -3398,6 +3322,7 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
         prewarm, _VALIDATION_UPLOAD_PREWARM = _VALIDATION_UPLOAD_PREWARM, None
         if prewarm.stamp == run_id:
             print(
+                _stamp(),
                 "[upload] joining the validation upload started before the VM "
                 "setup",
                 flush=True,
@@ -3410,12 +3335,14 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
                 return prewarm.join()
             except Exception as exc:
                 print(
+                    _stamp(),
                     f"[upload] concurrent validation upload failed ({exc!r}); "
                     "uploading serially instead",
                     flush=True,
                 )
         else:
             print(
+                _stamp(),
                 f"[upload] concurrent upload belongs to run {prewarm.stamp}, not "
                 f"{run_id}; uploading serially",
                 flush=True,
@@ -3428,12 +3355,12 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
             prewarm.thread.join(timeout=_PREWARM_RETIRE_SECONDS)
             if prewarm.thread.is_alive():
                 print(
+                    _stamp(),
                     "[upload] mismatched concurrent upload is still running; "
                     "continuing with the serial upload",
                     flush=True,
                 )
     return _perform_validation_upload(run_id)
-
 
 def _perform_validation_upload(run_id: str) -> dict[str, str]:
     """Transfer the validated component source, training listings, and holdout.
@@ -3468,6 +3395,7 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
         if source_key in remote_by_source:
             remotes[key] = remote_by_source[source_key]
             print(
+                _stamp(),
                 f"[upload] validation {key}={source} reusing "
                 f"{remote_by_source[source_key]}",
                 flush=True,
@@ -3478,20 +3406,20 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
             remote_by_source[source_key] = checkout_copy
             remotes[key] = checkout_copy
             print(
+                _stamp(),
                 f"[upload] validation {key}={source} reused the verified VM "
                 f"checkout copy {checkout_copy} (sha256 matches; not uploaded)",
                 flush=True,
             )
             continue
         remote = f"{remote_dir}/{key}_{source.name}"
-        print(f"[upload] validation {key}={source} -> {remote}", flush=True)
+        print(_stamp(), f"[upload] validation {key}={source} -> {remote}", flush=True)
         _upload_with_retries(
             source, remote, timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS
         )
         remote_by_source[source_key] = remote
         remotes[key] = remote
     return remotes
-
 
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
@@ -3629,6 +3557,7 @@ if run_completion:
 print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
 """
     print(
+        _stamp(),
         "[run] starting one trainer as a detached remote stage; polling its durable log ...",
         flush=True,
     )
@@ -3654,12 +3583,12 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
             syncer.stop()
     download_verified_training_results(remote_base, 1, smoke=smoke)
     print(
+        _stamp(),
         f"[train] single worker completed; results downloaded "
         f"({_format_bytes(syncer.synced_bytes() if syncer is not None else 0)} arrived during the run)",
         flush=True,
     )
     return remote_base, 1
-
 
 def run_hpo(
     mode: str | None = None,
@@ -3675,6 +3604,7 @@ def run_hpo(
     if persistence not in {"local", "none"}:
         raise ValueError("Colab HPO supports local/none persistence only")
     print(
+        _stamp(),
         f"[run] round-robin HPO (mode={mode}, model_workers={_HPO_WORKERS}, "
         f"trial_jobs={trial_jobs}, resume={resume}, persistence={persistence}) ..."
     )
@@ -3813,9 +3743,8 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
     local_root = TRAINING_RESULTS / "hpo_runs"
     with tar_archive(local_archive) as bundle:
         bundle.extractall(local_root, filter='data')
-    print(f"[hpo-archive] preserved -> {local_root / run_id}", flush=True)
+    print(_stamp(), f"[hpo-archive] preserved -> {local_root / run_id}", flush=True)
     return run_id
-
 
 def _bundle_delivery_local(run_id: str) -> Path:
     """Local delivery root for one bundle lane delivery archive.
@@ -3833,7 +3762,6 @@ def _bundle_delivery_local(run_id: str) -> Path:
     from cli.colab_lane import ColabCPULane
 
     return ColabCPULane().delivery_root(run_id)
-
 
 def run_bundle(dataset_csv: Path | None = None) -> None:
     """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
@@ -3872,6 +3800,7 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
         raise FileNotFoundError(f"bundle raw export not found: {source}")
     run_id = datetime.now(timezone.utc).strftime("bundle_%m%dT%H%M%S%fZ")
     print(
+        _stamp(),
         f"[bundle] uploading raw export {source} -> {REMOTE_ROOT}/dataset.csv ...",
         flush=True,
     )
@@ -3881,8 +3810,7 @@ import glob, os, subprocess, sys
 rc = subprocess.run(
     [sys.executable, "-m", "training.prepare_all"],
     cwd={REMOTE_ROOT!r},
-    env={{**os.environ, "WANDB_MODE": "disabled",
-          "ER_PACKAGE_SKIP_ABLATION": "1"}},
+    env={{**os.environ, "WANDB_MODE": "disabled"}},
 ).returncode
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
@@ -3923,14 +3851,14 @@ print("[bundle] delivery archive ready", flush=True)
         run_id=delivery_dir.name,
     )
     print(
+        _stamp(),
         f"[bundle] delivered -> {delivery_dir / 'bundle_delivery.tar.zst'}",
         flush=True,
     )
 
-
 def run_sims() -> None:
     """Run the configured zero-shot embedding model lane on the VM."""
-    print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
+    print(_stamp(), f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
     run_id = datetime.now(timezone.utc).strftime("zero_shot_%m%dT%H%M%S%fZ")
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, subprocess, sys
@@ -3944,9 +3872,8 @@ if rc != 0:
     raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
     run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims")
-    print("[sims] remote zero-shot completed; downloading verified results ...", flush=True)
+    print(_stamp(), "[sims] remote zero-shot completed; downloading verified results ...", flush=True)
     download_results(skip_checkpoints=True, require_manifests=True)
-
 
 def run_mixed(
     frac: float,
@@ -4115,6 +4042,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers={mixed_workers}) as pool:
 print(json.dumps({{"base": str(base), "completed": completed}}), flush=True)
 """
     print(
+        _stamp(),
         f"[run] mixed lane: {_MIXED_TRAIN_WORKERS} masked trainer + "
         f"{_MIXED_SIMS_WORKERS} zero-shot worker on {model_key} ...",
         flush=True,
@@ -4127,9 +4055,8 @@ print(json.dumps({{"base": str(base), "completed": completed}}), flush=True)
         training_output=True,
     )
     download_verified_training_results(remote_base, mixed_workers)
-    print("[mixed] both workers completed; results downloaded", flush=True)
+    print(_stamp(), "[mixed] both workers completed; results downloaded", flush=True)
     return remote_base, 2
-
 
 def _list_remote(pattern_dir: str, *, max_depth: int | None = None) -> list[str]:
     """List remote files via a stdin-exec (same channel the lanes use).
@@ -4170,7 +4097,6 @@ def _list_remote(pattern_dir: str, *, max_depth: int | None = None) -> list[str]
             return _json.loads(line[len("@@FILES@@"):])
     raise SystemExit(f"remote listing returned no marker; out={out[-500:]}")
 
-
 def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
     """Pull and validate the completion records produced by remote stages.
 
@@ -4182,7 +4108,7 @@ def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
     remote_dir = f"{REMOTE_ROOT}/results/manifests"
     names = _list_remote(remote_dir)
     if not names and not required:
-        print("[download] no stage manifests (frozen CSV lane)")
+        print(_stamp(), "[download] no stage manifests (frozen CSV lane)")
         return []
     if not names:
         raise RuntimeError(
@@ -4202,7 +4128,7 @@ def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
         if rel.parent != Path(".") or remote.suffix != ".json":
             raise RuntimeError(f"unexpected remote manifest path: {name}")
         local = local_dir / rel
-        print(f"[download] manifest {rel}")
+        print(_stamp(), f"[download] manifest {rel}")
         colab("download", "-s", SESSION, name, str(local), timeout=600)
         try:
             manifest = StageManifest.model_validate_json(
@@ -4218,7 +4144,6 @@ def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
         manifests.append(manifest)
     return manifests
 
-
 def _local_path_for_remote(remote_path: str) -> Path:
     """Map an absolute path in the mirrored remote repo back to this repo."""
     try:
@@ -4228,7 +4153,6 @@ def _local_path_for_remote(remote_path: str) -> Path:
             f"manifest output is outside remote project root: {remote_path}"
         ) from exc
     return TRAIN_ROOT / rel
-
 
 def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
     """Fail if a manifest-listed expected output is absent or byte-different."""
@@ -4257,7 +4181,6 @@ def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
             + "\n  - ".join(problems)
         )
 
-
 def download_results(
     skip_checkpoints: bool = True, *, require_manifests: bool = False
 ) -> list[StageManifest]:
@@ -4276,7 +4199,7 @@ def download_results(
             continue
         local = RESULTS / rel
         local.parent.mkdir(parents=True, exist_ok=True)
-        print(f"[download] {rel}")
+        print(_stamp(), f"[download] {rel}")
         # RULING 2026-09-10 (silent-degradation audit): LOUD-RAISE.
         # This runs after the lane and before stop() destroys the VM: a
         # swallowed failure here is a silent data drop — main() would
@@ -4289,6 +4212,7 @@ def download_results(
             colab("download", "-s", SESSION, name, str(local), timeout=600)
         except subprocess.CalledProcessError:
             print(
+                _stamp(),
                 f"[error] results download failed for {rel} — local copy "
                 f"at {local} is absent/partial; refusing to continue "
                 f"because teardown would delete the only remote copy "
@@ -4298,7 +4222,6 @@ def download_results(
             raise
     _verify_manifest_downloads(manifests)
     return manifests
-
 
 def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
     """Pull the trained checkpoints (model weights) back.
@@ -4311,13 +4234,13 @@ def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
     # same hash gate as ordinary results instead of becoming a blind spot.
     if manifests is None:
         manifests = _download_remote_manifests(required=False)
-    print("[download] checkpoints ...")
+    print(_stamp(), "[download] checkpoints ...")
     files = _list_remote(f"{REMOTE_ROOT}/results/_checkpoints")
     for name in files:
         rel = Path(name).relative_to(f"{REMOTE_ROOT}/results")
         local = RESULTS / rel
         local.parent.mkdir(parents=True, exist_ok=True)
-        print(f"[download] {rel}")
+        print(_stamp(), f"[download] {rel}")
         # RULING 2026-09-10 (silent-degradation audit): LOUD-RAISE.
         # The trained model weights ARE the deliverable of --what train
         # (results CSVs alone don't carry it, see docstring); a swallowed
@@ -4328,6 +4251,7 @@ def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
             colab("download", "-s", SESSION, name, str(local), timeout=1200)
         except subprocess.CalledProcessError:
             print(
+                _stamp(),
                 f"[error] checkpoint download failed for {rel} — the "
                 f"trained weights were NOT pulled local; continuing would "
                 f"let stop() destroy the only copy. Re-run the lane or "
@@ -4338,7 +4262,6 @@ def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
             raise
     _verify_manifest_downloads(manifests)
 
-
 def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     """Ask a verified launcher owner to exit after its VM is stopped.
 
@@ -4348,11 +4271,12 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     """
     lock_path = _colab_launch_lock_path()
     if not _colab_launch_lock_is_held(lock_path):
-        print("[stop] local launcher lock is already released")
+        print(_stamp(), "[stop] local launcher lock is already released")
         return
     owner = _read_colab_launch_owner(lock_path)
     if owner is None:
         print(
+            _stamp(),
             f"[warn] local launcher lock remains held but has no readable owner metadata: {lock_path}",
             file=sys.stderr,
         )
@@ -4361,6 +4285,7 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     expected_start = owner.get("pid_start_ticks")
     if not isinstance(pid, int) or not isinstance(expected_start, int):
         print(
+            _stamp(),
             "[warn] local launcher lock remains held by a legacy or unverifiable owner; "
             f"metadata={owner}. It cannot be signalled safely.",
             file=sys.stderr,
@@ -4369,41 +4294,43 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     actual_start = _process_start_ticks(pid)
     if actual_start != expected_start:
         print(
+            _stamp(),
             "[warn] local launcher lock remains held, but its recorded owner no longer "
             f"matches pid={pid}; refusing to signal a potentially reused PID.",
             file=sys.stderr,
         )
         return
     if pid == os.getpid():
-        print("[stop] current launcher owns the local session lock")
+        print(_stamp(), "[stop] current launcher owns the local session lock")
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        print(f"[stop] recorded launcher pid={pid} has already exited")
+        print(_stamp(), f"[stop] recorded launcher pid={pid} has already exited")
     except PermissionError:
         print(
+            _stamp(),
             f"[warn] local launcher pid={pid} owns the lock but cannot be signalled",
             file=sys.stderr,
         )
         return
     else:
-        print(f"[stop] requested shutdown from local launcher pid={pid}")
+        print(_stamp(), f"[stop] requested shutdown from local launcher pid={pid}")
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if not _colab_launch_lock_is_held(lock_path):
-            print("[stop] local launcher lock released")
+            print(_stamp(), "[stop] local launcher lock released")
             return
         time.sleep(0.2)
     print(
+        _stamp(),
         f"[warn] local launcher lock is still held after {timeout_seconds:g}s: {lock_path}",
         file=sys.stderr,
     )
 
-
 def stop(*, stop_local_owner: bool = False) -> bool:
     confirmed = False
-    print(f"[stop] tearing down '{SESSION}'")
+    print(_stamp(), f"[stop] tearing down '{SESSION}'")
     # RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
     # stop() runs in main()'s finally — if the lane itself raised, the
     # lane's exception is the root cause and must stay the error the
@@ -4416,6 +4343,7 @@ def stop(*, stop_local_owner: bool = False) -> bool:
         result = colab("stop", "-s", SESSION, check=False, timeout=30)
         if result.returncode:
             print(
+                _stamp(),
                 f"[warn] VM release command returned rc={result.returncode}; "
                 f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}",
                 file=sys.stderr,
@@ -4423,21 +4351,24 @@ def stop(*, stop_local_owner: bool = False) -> bool:
         status = colab("sessions", check=False, timeout=30)
         if SESSION in (status.stdout or ""):
             print(
+                _stamp(),
                 f"[warn] teardown verification still lists '{SESSION}'; "
                 "the VM may still be live and consuming quota.",
                 file=sys.stderr,
             )
         elif status.returncode == 0:
             confirmed = True
-            print("[stop] teardown verified: session is no longer listed")
+            print(_stamp(), "[stop] teardown verified: session is no longer listed")
         else:
             print(
+                _stamp(),
                 f"[warn] could not verify teardown; sessions command returned "
                 f"rc={status.returncode}: {status.stderr[-1000:]!r}",
                 file=sys.stderr,
             )
     except (subprocess.SubprocessError, OSError) as exc:
         print(
+            _stamp(),
             f"[warn] VM release request failed — the VM '{SESSION}' may "
             f"STILL BE LIVE and burning Colab GPU quota until it times "
             f"out or is reaped. After handling the failure above, reclaim "
@@ -4447,15 +4378,93 @@ def stop(*, stop_local_owner: bool = False) -> bool:
         )
     if stop_local_owner:
         stop_local_launch_owner()
-    print("[stop] VM release requested")
+    print(_stamp(), "[stop] VM release requested")
     return confirmed
 
+
+# Self-watch moved to cli.colab_self_watch (phase-1 split of colab.py);
+# re-exported so the legacy `from cli import colab` surface and its
+# monkeypatch needles are unchanged.
+from cli.colab_self_watch import (  # noqa: E402,F401
+    _SELF_WATCH_BUDGET_SECONDS,
+    _SELF_WATCH_POLL_SECONDS,
+    _SELF_WATCH_TRANSCRIPT_MAX_BYTES,
+    _self_watch_delivery_state,
+    _self_watch_root,
+    _session_listed,
+    _write_self_watch_receipt,
+    self_watch,
+    spawn_self_watch,
+)
+def _suite_matrix_flip_path(suite_config: Path) -> Path:
+    """The scratch cuda clone path for `results/model_tracks/<suite>__gpu/`."""
+    matrix = canonical_suite_matrix()
+    family = (suite_config.parent.name
+              if suite_config.name == 'suite.yaml' else suite_config.stem)
+    return RESULTS / matrix.device_flip.tracks_dir / f'{family}{matrix.device_flip.suffix}' / suite_config.name
+
+def _suite_device_flip(suite_config: Path, suite) -> Path:
+    """Baked matrix default: a non-CPU cuda request against a tracked
+    device-cpu suite immediately generates the scratch cuda variant
+    (only the yamls; every data binding stays under data/). The tracks
+    gate then validates the clone like any other suite config."""
+    pattern = canonical_suite_matrix().device_flip
+    source_text = suite_config.read_text(encoding='utf-8')
+    flipped, flips = re.subn(r'(?m)^(\s*device:\s*)cpu\s*$', r'\1cuda', source_text, count=1)
+    if not flips:
+        raise ValueError(
+            'suite device is cpu but the suite yaml carries no device line: '+str(suite_config))
+    flip_path = _suite_matrix_flip_path(suite_config)
+    flip_path.parent.mkdir(parents=True, exist_ok=True)
+    setup_dir = (TRAIN_ROOT / suite.setup_dir).resolve()
+    layout = training_cfg().preparation.graph_setup
+    for name in (layout.track_config('gnn_only'), layout.track_config('hybrid'), layout.text_config):
+        companion, target = setup_dir / name, flip_path.parent / name
+        if companion.is_file():
+            shutil.copy2(companion, target)
+        elif target.exists():
+            target.unlink()
+    flip_path.write_text(flipped, encoding='utf-8')
+    return flip_path
+
+def _suite_freshness_gate(suite) -> None:
+    """Baked freshness gate: fail loud when the setup dir carries a
+    freshness.json whose hashes no longer match the current files;
+    absent, one log line and proceed (the manifest writer is a
+    prep-stage follow-up, docs/colab-lane.md)."""
+    from pydantic import ValidationError
+    from core.schemas import SuiteFreshnessManifest
+    manifest_path = (TRAIN_ROOT / suite.setup_dir).resolve() / 'freshness.json'
+    if not manifest_path.is_file():
+        print(_stamp(), '[suite-freshness] manifest absent for '
+              f'{suite.setup_dir}; freshness gate skipped '
+              '(writer is a prep-stage follow-up)', flush=True)
+        return
+    try:
+        manifest = SuiteFreshnessManifest.model_validate_json(
+            manifest_path.read_text(encoding='utf-8'))
+    except ValidationError as exc:
+        raise ValueError(f'suite freshness manifest is malformed: {manifest_path}') from exc
+    current = SuiteFreshnessManifest.current_hashes(manifest_path.parent)
+    drift = [key for key, value in current.items()
+             if getattr(manifest, key) != value]
+    if drift:
+        raise ValueError(
+            'suite freshness manifest is stale for '
+            f'{manifest_path.parent.name}/freshness.json: '
+            f'{"; ".join(f"{key} manifest={getattr(manifest, key)[:16]} current={current[key][:16]}"
+                         for key in drift)}'
+            f' (manifest timestamp: {manifest.timestamp}); the artifacts changed '
+            'after the manifest was written — re-run the prep stage or delete '
+            'the manifest once the rebuild is knowingly verified')
+    print(_stamp(), f'[suite-freshness] manifest verified for {suite.setup_dir} '
+          f'(written: {manifest.timestamp})', flush=True)
 
 def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", default="tracks",
-                    choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "bundle", "stop"],
+                    choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "bundle", "stop", "self-watch"],
                     help="what to run on the VM (default: tracks)")
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
@@ -4563,9 +4572,30 @@ def main() -> None:
         "--train-only", action="store_true",
         help="train and collect artifacts without post-training validation inference",
     )
+    ap.add_argument(
+        "--self-watch-what", default=None,
+        help="the lane a spawned detached self-watch is watching (internal)",
+    )
+    ap.add_argument(
+        "--self-watch-run", default=None,
+        help="the run identity a detached self-watch watches (internal)",
+    )
     args = ap.parse_args()
     if args.what == "hpo" and args.hpo_persistence not in {"local", "none"}:
         raise ValueError("Colab HPO supports local/none persistence only")
+    # The detached self-watch child enters here: before any gate could
+    # otherwise refuse it.  It provisions nothing; it only proves delivery
+    # and release.  Both fed args are set by spawn_self_watch which keeps
+    # the baked-in default arg-free for operators.
+    if args.what == "self-watch":
+        if args.self_watch_run is None:
+            raise SystemExit("--self-watch-run is required for --what self-watch")
+        plan = self_watch(
+            what=args.self_watch_what or "unspecified",
+            run_id=args.self_watch_run,
+        )
+        print(_stamp(), f"[self-watch] receipt released: {plan['receipt']}")
+        return
 
     suite_archive = None
     suite_run_tag = None
@@ -4582,6 +4612,7 @@ def main() -> None:
         from model_tracks.package import package as suite_package
         suite_config = args.tracks_config or TRAIN_ROOT/'config/model_tracks.yaml'
         suite = load_suite(suite_config)
+        _suite_freshness_gate(suite)
         if args.preflight_only:
             if args.prepared_input_package is not None:
                 from model_tracks.package import verify_current
@@ -4591,7 +4622,16 @@ def main() -> None:
             print(json.dumps(checks,indent=2))
             return
         if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
-            raise ValueError('suite device and --gpu must agree')
+            if (args.gpu.upper() != 'CPU' and suite.device == 'cpu'
+                    and os.environ.get(canonical_suite_matrix().device_flip.opt_out_env) != '1'):
+                matrix = canonical_suite_matrix()
+                suite_config = _suite_device_flip(suite_config, suite)
+                suite = load_suite(suite_config)
+                print(_stamp(), '[suite-matrix] baked device flip -> '
+                      f'{suite_config} (opt out with '
+                      f'{matrix.device_flip.opt_out_env}=1)', flush=True)
+            else:
+                raise ValueError('suite device and --gpu must agree')
         suite_run_tag = args.resume_run or _lane_run_stamp()
         suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.{suite.input_archive_format}'
         if args.resume_run:
@@ -4659,30 +4699,35 @@ def main() -> None:
 
     if args.what == "train":
         print(
+            _stamp(),
             f"[workers] lane=train trainers={args.workers} "
             "result_transport=direct",
             flush=True,
         )
     elif args.what == "dual-train":
         print(
+            _stamp(),
             f"[workers] lane=dual-train matcher_loss={args.loss} ann_loss=mnrl "
             "result_transport=direct",
             flush=True,
         )
     elif args.what == "smoke":
         print(
+            _stamp(),
             f"[workers] lane=smoke trainers={_SMOKE_WORKERS} "
             "result_transport=direct",
             flush=True,
         )
     elif args.what == "hpo":
         print(
+            _stamp(),
             f"[workers] lane=hpo model_workers={_HPO_WORKERS} "
             f"trial_jobs={args.hpo_jobs} result_transport=direct",
             flush=True,
         )
     elif args.what == "mixed":
         print(
+            _stamp(),
             f"[workers] lane=mixed train_workers={_MIXED_TRAIN_WORKERS} "
             f"zero_shot_workers={_MIXED_SIMS_WORKERS} "
             "result_transport=direct",
@@ -4769,6 +4814,19 @@ def main() -> None:
                 run_data_prep()
             elif args.what != "smoke" and not prepared_train_runtime:
                 verify_training_inputs()
+            # Default self-watch spawn point (owner order 2026-10-07): the
+            # gates ran pre-provisioning and the first healthy provisioning
+            # stream has finished, so this executed run now carries its own
+            # detached release+delivery guarantee.  Never spawned on plan
+            # paths (they returned above) or on an explicit --keep-alive
+            # retention request (the watcher must never keep a VM alive, and
+            # must never override the operator's own retention choice).
+            if not args.keep_alive:
+                print(
+                    _stamp(),
+                    f"[self-watch] {spawn_self_watch(what=args.what, run_id=_lane_run_stamp())}",
+                    flush=True,
+                )
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
         # for a lane that only needs the configured zero-shot scoring.
@@ -4874,11 +4932,12 @@ def main() -> None:
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
             )
         if local_hpo_run is not None:
-            print("[hpo] publishing snapshots on local CPU ...", flush=True)
+            print(_stamp(), "[hpo] publishing snapshots on local CPU ...", flush=True)
             publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
         completed = True
     except BaseException:
         print(
+            _stamp(),
             "[launcher] traceback before teardown; result transfer is incomplete:",
             flush=True,
         )
@@ -4891,7 +4950,7 @@ def main() -> None:
         if not args.keep_alive:
             stop()
         else:
-            print("\n[info] --keep-alive specified. VM is still running.")
+            print(_stamp(), "\n[info] --keep-alive specified. VM is still running.")
         # A lane that failed before its run_train call would otherwise leave
         # the concurrent bundle build writing into a closing log file.
         drain_local_bundle_prewarm()
@@ -4902,15 +4961,15 @@ def main() -> None:
         # reported a traceback above, so [done] stays a success signal.
         if completed:
             print(
+                _stamp(),
                 "\n[done] compressed results downloaded and completed locally"
                 if args.what == "tracks" else "\n[done] artifacts downloaded locally",
                 flush=True,
             )
         else:
-            print("\n[failed] launch did not complete successfully", flush=True)
+            print(_stamp(), "\n[failed] launch did not complete successfully", flush=True)
         close_live_log()
         release_colab_launch_lock(launch_lock)
-
 
 if __name__ == "__main__":
     main()
