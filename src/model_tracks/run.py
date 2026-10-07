@@ -112,7 +112,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     events.emit('data_gate', 'starting')
     gate = validate_data(config, allow_gpu_pending=True,
                          suite_inputs=None if gpu_only else inputs)
-    events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
+    events.emit('data_gate', 'passed',
+                tracks={name: census.model_dump(mode='json')
+                        for name, census in gate.tracks.items()},
+                attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track

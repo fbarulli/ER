@@ -38,6 +38,46 @@ class KaggleKernels:
                              f"{sorted(undeclared)}; regenerate the template")
 
     @staticmethod
+    def _attachment_gate(script: str, metadata: dict[str, Any]) -> None:
+        """Staging-time wiring gate: a script that reads the /kaggle/input
+        mount must have its datasets attached in the metadata.
+
+        The laya session died exactly so (FileNotFoundError at session time):
+        its staged metadata carried dataset_sources: [] while the script read
+        /kaggle/input at runtime — staging succeeded, the session did not.
+        The gate refuses to stage a kernel whose rendered script reads the
+        input mount (a Load of the INPUTS template constant or a string
+        literal naming /kaggle/input) while dataset_sources AND
+        kernel_sources are both empty; the spec-driven fix is naming the
+        dataset slug in config and re-staging, never a silent attach-nothing
+        push. String constants excluded: the serialized LANE JSON rides in
+        every script and itself embeds remote.input_dir — it is configured
+        data, not a reader.
+        """
+        import ast
+        reads_input_mount = False
+        for expr in ast.walk(ast.parse(script)):
+            if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load) \
+                    and expr.id == "INPUTS":
+                reads_input_mount = True
+                break
+            if (isinstance(expr, ast.Constant) and isinstance(expr.value, str)
+                    and "/kaggle/input" in expr.value
+                    and not expr.value.lstrip().startswith("{")):
+                reads_input_mount = True
+                break
+        attached = (metadata.get("dataset_sources")
+                    or metadata.get("kernel_sources"))
+        if reads_input_mount and not attached:
+            raise RuntimeError(
+                "staged kernel reads /kaggle/input but attaches no dataset "
+                f"(dataset_sources={metadata.get('dataset_sources')}, "
+                f"kernel_sources={metadata.get('kernel_sources')}); set the "
+                "dataset/kernel slug in config (spec-driven SSOT) and "
+                "re-stage — a session with nothing attached dies on the "
+                "first input read")
+
+    @staticmethod
     def stage_bundle_kernel(*, revision: str | None = None,
                             cohort: str | None = None) -> dict[str, Any]:
         """Stage the CPU bundle-generation kernel: metadata + script + receipt.
@@ -89,6 +129,7 @@ class KaggleKernels:
         script = lane.KernelTemplates.render_runtime(script, spec)
         script = lane.KernelLifecycle.wrap_script(script)
         lane._kernel_script_gate(script)
+        lane._attachment_gate(script, metadata)
         (stage / spec.files.code_files["bundle"]).write_text(script, encoding="utf-8")
         receipt = {
             "kernel": slug,
@@ -225,6 +266,7 @@ class KaggleKernels:
         script = lane.KernelTemplates.render_runtime(script, spec)
         script = lane.KernelLifecycle.wrap_script(script)
         lane._kernel_script_gate(script)
+        lane._attachment_gate(script, metadata)
         (stage / code_file).write_text(script, encoding="utf-8")
         receipt = {
             "kernel": resolved_slug,
