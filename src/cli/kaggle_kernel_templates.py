@@ -131,8 +131,7 @@ if COHORT != LANE["default_cohort"]:
     print(f"[bundle-cpu] cohort remap: {COHORT_DATASET} -> dataset.csv", flush=True)
 sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
 env = {**os.environ, "PYTHONPATH": str(root / LANE["files"]["source_dir"]), "PYTHONUNBUFFERED": "1",
-       "ER_COHORT_TAG": COHORT if COHORT != LANE["default_cohort"] else "",
-       "ER_PACKAGE_SKIP_ABLATION": "1"}
+       "ER_COHORT_TAG": COHORT if COHORT != LANE["default_cohort"] else ""}
 sh([sys.executable, "-u", "-m", "training.prepare_all",
     "--tracks-config", LANE["files"]["prep_suite_config"]], cwd=root, env=env)
 runs = sorted((root / LANE["paths"]["results_dir"] / LANE["files"]["prep_dir"]).glob("*/" + LANE["files"]["bundle_archive"]),

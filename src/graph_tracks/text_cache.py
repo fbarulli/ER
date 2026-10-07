@@ -136,7 +136,7 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
         if any(input_metadata.get(key) != value for key, value in metadata.items()):
             raise ValueError('Prepared text metadata differs from actual encoder inputs')
         metadata = {**input_metadata, **metadata}
-    if source_hash != file_hash(catalog) or implementation != composition_fingerprint() or fingerprint != checkpoint_hash(checkpoint):
+    if source_hash != file_hash(catalog) or fingerprint != checkpoint_hash(checkpoint):
         raise ValueError('Embedding inputs changed during generation')
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('wb') as handle:

@@ -10,9 +10,10 @@ loud rebuild failure.
 
 TIER 1(e) rides along: prepared_bundle_drift_strict (required field of the
 training config, config/training.yaml declares it; env
-PREPARED_BUNDLE_DRIFT_STRICT wins) turns the loader's dead-knob drift
-WARNING into a hard failure. The switch is env-driven here so both
-polarities are exercised regardless of the shipped config value.
+PREPARED_BUNDLE_DRIFT_STRICT wins) is a retired, inert policy record —
+owner order 2026-10-07 retired the drift checks, so the loader records
+masking/easy provenance but never compares it: a drifted bundle loads
+with no warning and no hard failure under either polarity.
 """
 
 from __future__ import annotations
@@ -207,7 +208,7 @@ class DietGateWiringTest(unittest.TestCase):
 
 
 class PreparedBundleDriftStrictTest(unittest.TestCase):
-    """TIER 1(e): env/config switch, default FALSE, TRUE hard-fails."""
+    """TIER 1(e): retired policy record; drifted bundles load unconditionally."""
 
     def setUp(self) -> None:
         os.environ.pop("PREPARED_BUNDLE_DRIFT_STRICT", None)
@@ -228,11 +229,11 @@ class PreparedBundleDriftStrictTest(unittest.TestCase):
     def _load_drifted(self, path: Path, *, lenient: bool) -> tuple[object, str]:
         """A bundle recorded under a drifted masking config.
 
-        The drift signal rides the data config the loader compares against
-        (load_config); the strict switch itself is driven through the
-        documented winning env knob, because its config value lives in the
-        training SSOT (training_cfg().prepared_bundle_drift_strict), not in
-        the data config this helper mocks."""
+        The drift signal rides the data config the loader used to compare
+        against (load_config); the retired strict switch is still driven
+        through the documented winning env knob, because its config value
+        lives in the training SSOT (training_cfg().prepared_bundle_drift_strict),
+        not in the data config this helper mocks."""
         real_config = core_common.load_config()
         drifted = copy.deepcopy(real_config)
         drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
@@ -264,20 +265,20 @@ class PreparedBundleDriftStrictTest(unittest.TestCase):
         os.environ["PREPARED_BUNDLE_DRIFT_STRICT"] = "0"
         self.assertFalse(prepared_bundle_drift_strict())
 
-    def test_lenient_default_keeps_a_stale_bundle_loadable(self) -> None:
+    def test_drifted_bundle_loads_without_drift_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = self._stale_bundle(tmp)
             result, warning = self._load_drifted(path, lenient=True)
         self.assertIsNotNone(result)
-        self.assertIn("bundle-drift", warning)
+        self.assertNotIn("bundle-drift", warning)
 
-    def test_strict_flip_hard_fails_the_same_bundle(self) -> None:
+    def test_strict_flip_no_longer_fails_the_same_bundle(self) -> None:
         os.environ["PREPARED_BUNDLE_DRIFT_STRICT"] = "1"
         with tempfile.TemporaryDirectory() as tmp:
             path = self._stale_bundle(tmp)
             result, strict_error = self._load_drifted(path, lenient=False)
-        self.assertIsNone(result)
-        self.assertIn("bundle-drift", strict_error)
+        self.assertIsNotNone(result)
+        self.assertNotIn("bundle-drift", strict_error)
 
 
 if __name__ == "__main__":

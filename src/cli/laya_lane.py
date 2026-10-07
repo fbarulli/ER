@@ -48,6 +48,109 @@ DECISION_KERNEL_CODE_FILE = "laya_decision.py"
 EVAL_KERNEL_CODE_FILE = "laya_evals.py"
 COLAB_NOTEBOOK_NAME = "laya_decision_colab.py"
 QUESTION_SCHEMA_FILE = "laya.question.json"
+# The kernel's inputs do NOT travel with `kaggle kernels push`: they are
+# the er-laya-requests dataset (spec.dataset_slug), staged as its own
+# payload dir (moved on --execute, mirroring the kernels-push path).
+DATASET_PAYLOAD_DIR = "dataset_payload"
+DATASET_METADATA_FILE = "dataset-metadata.json"
+DATASET_CSV_NAME = "dataset.csv"  # DECISION_CSV resolves THIS name
+
+PUBLISHED_RUNTIME_FILES = (
+    'artifacts/evidence/attribute_universe_census.json', 'artifacts/evidence/semantics/family_registry.json', 'artifacts/evidence/semantics/tau_sweep.json', 'artifacts/evidence/semantics/value_universe.json',
+    'artifacts/models/all-MiniLM-L6-v2/1_Pooling/config.json', 'artifacts/models/all-MiniLM-L6-v2/README.md', 'artifacts/models/all-MiniLM-L6-v2/config.json', 'artifacts/models/all-MiniLM-L6-v2/config_sentence_transformers.json',
+    'artifacts/models/all-MiniLM-L6-v2/data_config.json', 'artifacts/models/all-MiniLM-L6-v2/model.safetensors', 'artifacts/models/all-MiniLM-L6-v2/modules.json', 'artifacts/models/all-MiniLM-L6-v2/sentence_bert_config.json',
+    'artifacts/models/all-MiniLM-L6-v2/special_tokens_map.json', 'artifacts/models/all-MiniLM-L6-v2/tokenizer.json', 'artifacts/models/all-MiniLM-L6-v2/tokenizer_config.json', 'artifacts/models/all-MiniLM-L6-v2/train_script.py',
+    'artifacts/models/all-MiniLM-L6-v2/vocab.txt', 'artifacts/wheels/hnswlib-0.8.0-cp313-cp313-linux_x86_64.whl', 'colab_backend.py', 'config/attribute_ablation.yaml',
+    'config/graph_tracks_gnn.yaml', 'config/graph_tracks_hybrid.yaml', 'config/identity_dimensions.yaml', 'config/identity_reviews.json',
+    'config/laya.question.json', 'config/model_tracks.yaml', 'config/paths.yaml', 'config/text_track.yaml',
+    'config/training.yaml', 'config/training_ANN.yaml', 'config/vocabulary.json', 'data/canonical_records.csv',
+    'data/dataset_deduped.csv', 'data/final_validation.csv', 'data/gate_results.csv', 'data/labeled_pairs.csv',
+    'data/number_tokens_reference.csv', 'data/prepared/full/worker_1_baseline.pkl.gz', 'data/prepared/full/worker_1_baseline.pkl.gz.json', 'data/prepared/smoke_200/gnn_only.yaml',
+    'data/prepared/smoke_200/hybrid.yaml', 'data/prepared/smoke_200/prepared/graph_plan.json', 'data/prepared/smoke_200/prepared/input_manifest.json', 'data/prepared/smoke_200/prepared/listings.json',
+    'data/prepared/smoke_200/prepared/report_attributes.json', 'data/prepared/smoke_200/setup_manifest.json', 'data/prepared/smoke_200/shared_training_data.json', 'data/prepared/smoke_200/suite.yaml',
+    'data/prepared/smoke_200/text.yaml', 'data/prepared/smoke_200/text_export_request.json', 'data/prepared/smoke_200/text_prepared.pkl.gz', 'data/prepared/smoke_200/text_prepared.pkl.gz.json',
+    'data/prepared/smoke_200/text_training_binding.json', 'data/prepared/smoke_200__clean_shared_inputs/listings.json', 'data/prepared/smoke_200__clean_shared_inputs/report_attributes.json', 'data/prepared/smoke_500/gnn_only.yaml',
+    'data/prepared/smoke_500/hybrid.yaml', 'data/prepared/smoke_500/prepared/input_manifest.json', 'data/prepared/smoke_500/prepared/listings.json', 'data/prepared/smoke_500/prepared/report_attributes.json',
+    'data/prepared/smoke_500/setup_manifest.json', 'data/prepared/smoke_500/suite.yaml', 'data/prepared/smoke_500/text_prepared.pkl.gz', 'data/prepared/smoke_500/text_prepared.pkl.gz.json',
+    'data/sku_to_rep.csv', 'dataset.csv', 'pyproject.toml', 'requirements.txt',
+    'requirements/graph_tracks.txt', 'scripts/__init__.py', 'scripts/analyze_brand_matching.py', 'scripts/analyze_human_review_features.py',
+    'scripts/analyze_incorrect_predictions.py', 'scripts/analyze_model_input.py', 'scripts/apply_bundle_scope_holds.py', 'scripts/apply_identity_review_exclusions.py',
+    'scripts/apply_reading_verdicts.py', 'scripts/attribute_capture_audit.py', 'scripts/attribute_probes.py', 'scripts/attribute_universe_census.py',
+    'scripts/audit_added_sugar.py', 'scripts/audit_attribute_readings.py', 'scripts/audit_feature_capture.py', 'scripts/audit_gtin_discovery_followup.py',
+    'scripts/audit_identity_context.py', 'scripts/audit_identity_dimensions.py', 'scripts/audit_local_identity_evidence.py', 'scripts/audit_resume_state.py',
+    'scripts/augment_catalog.py', 'scripts/benchmarks/graph_pooling_cpu.py', 'scripts/brand_differentiation_audit.py', 'scripts/build_attribute_semantics.py',
+    'scripts/build_field_slice.py', 'scripts/build_gtin_less_linkage.py', 'scripts/build_stratified_holdout.py', 'scripts/build_validation_slice_sample.py',
+    'scripts/census_bundle_scope.py', 'scripts/check_proceed_precision.py', 'scripts/colab_tailscale_userspace.sh', 'scripts/collapse_probe.py',
+    'scripts/compare_item_pair_sets.py', 'scripts/compute_strata.py', 'scripts/count_evidence.py', 'scripts/dedupe_invalid_gtin_groups.py',
+    'scripts/dedupe_predicate_scorecard.py', 'scripts/diet_manifest.py', 'scripts/encode_prepared_embeddings.py', 'scripts/evaluate_gate_logic.py',
+    'scripts/evaluate_jev_identity_fixes.py', 'scripts/export_atlas_embeddings.py', 'scripts/fallback_adjudication.py', 'scripts/feed_reliability.py',
+    'scripts/finalize_full_evidence_rebuild.py', 'scripts/flip_validity_audit.py', 'scripts/format_submission.py', 'scripts/fresh_feature_gate_report.py',
+    'scripts/install_hpo_connectivity_deps.sh', 'scripts/investigate_identity_residuals.py', 'scripts/kaggle_auth_sync.py', 'scripts/mask_sensitivity_probe.py',
+    'scripts/material_carbonation_verdicts.py', 'scripts/measure_gate_regex_fixes.py', 'scripts/measure_pair_difficulty.py', 'scripts/minimal_flip_slice.py',
+    'scripts/negative_local_checks.py', 'scripts/negative_missing_probe.py', 'scripts/negative_supply_discriminator.py', 'scripts/permutation_census.py',
+    'scripts/profile_colab_setup.py', 'scripts/pseudo_gtin_census.py', 'scripts/raw_tcp_listener.sh', 'scripts/rebuild_balanced_augmentation.py',
+    'scripts/rebuild_training_handoff.py', 'scripts/regex_capture_review.py', 'scripts/regex_miss_evidence.py', 'scripts/regex_miss_review.py',
+    'scripts/regex_residual_audit.py', 'scripts/render_gtin_repair_results.py', 'scripts/render_identity_fixes.py', 'scripts/repair_augmented_features.py',
+    'scripts/repair_reviewed_catalog.py', 'scripts/replay_identity_residuals.py', 'scripts/report_jev_rebuild.py', 'scripts/review_source_consistency.py',
+    'scripts/run_colab_ablation.py', 'scripts/run_colab_bundle.sh', 'scripts/run_colab_embeddings.py', 'scripts/run_colab_smoke.sh',
+    'scripts/run_full_training.sh', 'scripts/run_raw_tcp_bridge_probe.py', 'scripts/sample_dataset_10k.py', 'scripts/seed_brand_aliases.py',
+    'scripts/show_model_input_comparison.py', 'scripts/sid_graph_eval.py', 'scripts/sid_hybrid_eval.py', 'scripts/sid_phase0_report.py',
+    'scripts/slice_scale_ladder.py', 'scripts/smoke_graph_tracks.py', 'scripts/triage_remaining_gtin_flavors.py', 'scripts/untrusted_resid_remeasure.py',
+    'scripts/validate_postgres_optuna_bridge.py', 'scripts/verdict_biggest_merges.py', 'scripts/verify_suite_archive.py', 'src/__init__.py',
+    'src/cli/__init__.py', 'src/cli/colab.py', 'src/cli/colab_bundle.py', 'src/cli/colab_cli_entry.py',
+    'src/cli/colab_data_bundle_prep.py', 'src/cli/colab_lane.py', 'src/cli/colab_retention.py', 'src/cli/colab_self_watch.py',
+    'src/cli/kaggle_chain.py', 'src/cli/kaggle_cli.py', 'src/cli/kaggle_datasets.py', 'src/cli/kaggle_kernel_templates.py',
+    'src/cli/kaggle_kernels.py', 'src/cli/kaggle_lane.py', 'src/cli/kaggle_lifecycle.py', 'src/cli/kaggle_monitor.py',
+    'src/cli/kaggle_outputs.py', 'src/cli/kaggle_runtime.py', 'src/cli/laya_lane.py', 'src/cli/log_capture.py',
+    'src/core/__init__.py', 'src/core/ann_config.py', 'src/core/archive_reader.py', 'src/core/attribute_conflicts.py',
+    'src/core/attribute_decision.py', 'src/core/attribute_universe.py', 'src/core/attribute_vocabulary.py', 'src/core/audit_guard.py',
+    'src/core/audit_json.py', 'src/core/blocking.py', 'src/core/bootstrap_ci.py', 'src/core/columns.py',
+    'src/core/common.py', 'src/core/coverage_contracts.py', 'src/core/critical_attributes.py', 'src/core/date_evidence.py',
+    'src/core/declared_identity.py', 'src/core/deduplication.py', 'src/core/disjoint_sets.py', 'src/core/encoding_inputs.py',
+    'src/core/execution_policy.py', 'src/core/gpu_execution.py', 'src/core/graph_diagnostics.py', 'src/core/gtin.py',
+    'src/core/hard_negatives.py', 'src/core/identity_policy.py', 'src/core/manifest.py', 'src/core/model_input.py',
+    'src/core/nlp.py', 'src/core/pair_policy.py', 'src/core/performance.py', 'src/core/portable_archive.py',
+    'src/core/product_context.py', 'src/core/product_dimensions.py', 'src/core/product_selection.py', 'src/core/progress.py',
+    'src/core/project_root.py', 'src/core/ranking_metrics.py', 'src/core/record_linkage.py', 'src/core/runtime_inputs.py',
+    'src/core/schemas.py', 'src/core/sku_identity.py', 'src/core/step_trace.py', 'src/core/structured_features.py',
+    'src/core/sweetener_values.py', 'src/core/text.py', 'src/core/timing.py', 'src/core/tracing.py',
+    'src/core/training_profiler.py', 'src/core/unit_canonicalization.py', 'src/core/url_evidence.py', 'src/core/volume_verified.py',
+    'src/core/wandb_ctx.py', 'src/core/worker_telemetry.py', 'src/graph_tracks/README.md', 'src/graph_tracks/__init__.py',
+    'src/graph_tracks/artifacts.py', 'src/graph_tracks/benchmark.py', 'src/graph_tracks/bundle.py', 'src/graph_tracks/config.py',
+    'src/graph_tracks/data.py', 'src/graph_tracks/dvc.py', 'src/graph_tracks/infer.py', 'src/graph_tracks/model.py',
+    'src/graph_tracks/pooling.py', 'src/graph_tracks/preflight.py', 'src/graph_tracks/prepare.py', 'src/graph_tracks/prepared_inputs.py',
+    'src/graph_tracks/report.py', 'src/graph_tracks/report_attributes.py', 'src/graph_tracks/report_manifest.py', 'src/graph_tracks/report_slices.py',
+    'src/graph_tracks/setup.py', 'src/graph_tracks/text_cache.py', 'src/graph_tracks/tracking.py', 'src/graph_tracks/train.py',
+    'src/graph_tracks/worker_package.py', 'src/model_tracks/__init__.py', 'src/model_tracks/ablation.py', 'src/model_tracks/ablation_cohort.py',
+    'src/model_tracks/ablation_inputs.py', 'src/model_tracks/ablation_retrieval.py', 'src/model_tracks/archive_verification.py', 'src/model_tracks/baseline_ablation.py',
+    'src/model_tracks/baseline_export.py', 'src/model_tracks/colab.py', 'src/model_tracks/config.py', 'src/model_tracks/data_gate.py',
+    'src/model_tracks/embedding_forward.py', 'src/model_tracks/embedding_staging.py', 'src/model_tracks/incremental.py', 'src/model_tracks/live_logs.py',
+    'src/model_tracks/local_complete.py', 'src/model_tracks/package.py', 'src/model_tracks/parallel.py', 'src/model_tracks/portable_layout.py',
+    'src/model_tracks/post_training_ablation.py', 'src/model_tracks/preflight.py', 'src/model_tracks/publish.py', 'src/model_tracks/resource_profile.py',
+    'src/model_tracks/resume.py', 'src/model_tracks/run.py', 'src/model_tracks/run_history.py', 'src/model_tracks/run_retention.py',
+    'src/model_tracks/shared_graph_data.py', 'src/model_tracks/smoke_inputs.py', 'src/model_tracks/snapshot_completion.py', 'src/model_tracks/staged_ablation.py',
+    'src/model_tracks/telemetry.py', 'src/model_tracks/text_export.py', 'src/model_tracks/text_report.py', 'src/model_tracks/training_data.py',
+    'src/model_tracks/worker.py', 'src/ner/__init__.py', 'src/ner/colab_ner.py', 'src/ner/config_loader.py',
+    'src/ner/ner.py', 'src/ner/ner_product_attributes.py', 'src/pipeline.py', 'src/predict_items.py',
+    'src/training/__init__.py', 'src/training/ann_refresh.py', 'src/training/artifact_store.py', 'src/training/attestation.py',
+    'src/training/attribute_agreement_audit.py', 'src/training/attribute_separation.py', 'src/training/attrition.py', 'src/training/audit_identity_retention.py',
+    'src/training/balanced_augmentation.py', 'src/training/base_data.py', 'src/training/blocking_audit.py', 'src/training/build_ann_index.py',
+    'src/training/build_final_validation.py', 'src/training/build_reference.py', 'src/training/build_second04_pairs.py', 'src/training/build_title_attribute_evidence.py',
+    'src/training/cluster_quality_plot.py', 'src/training/complete_colab_worker.py', 'src/training/composition_plot.py', 'src/training/data_prep.py',
+    'src/training/data_quality_audit.py', 'src/training/dedupe.py', 'src/training/difficulty.py', 'src/training/dvc_store.py',
+    'src/training/evaluate_models.py', 'src/training/folds.py', 'src/training/gate_replay.py', 'src/training/generate_rand_stratum_sweep.py',
+    'src/training/generate_rand_truth.py', 'src/training/generate_training_report.py', 'src/training/handoff.py', 'src/training/hnsw_index.py',
+    'src/training/hpo.py', 'src/training/hpo_champions.py', 'src/training/hpo_control_plane.py', 'src/training/hpo_fencing.py',
+    'src/training/hpo_metrics.py', 'src/training/hpo_persistence.py', 'src/training/labeled_pairs.py', 'src/training/losses.py',
+    'src/training/masking.py', 'src/training/negative_supply.py', 'src/training/package_gate_impact_audit.py', 'src/training/plots.py',
+    'src/training/preparation_run.py', 'src/training/prepare_all.py', 'src/training/prepare_all_trace.py', 'src/training/prepare_embeddings.py',
+    'src/training/prepare_tokens.py', 'src/training/prepared_bundle.py', 'src/training/prioritize_false_merge_components.py', 'src/training/rand_matching.py',
+    'src/training/report_plots.py', 'src/training/report_rows.py', 'src/training/rerank.py', 'src/training/robust_validation.py',
+    'src/training/run_plan.py', 'src/training/sample_balanced_pairs.py', 'src/training/sampler.py', 'src/training/selftest.py',
+    'src/training/semantic_ids.py', 'src/training/sid_graph.py', 'src/training/sid_hybrid.py', 'src/training/strip_audit.py',
+    'src/training/token_inputs.py', 'src/training/train.py', 'src/training/train_prepared.py', 'src/training/training.py',
+    'src/training/uniformity.py', 'src/training/validation_inference.py', 'src/training/zero_shot_sims.py',
+)
 
 # Per decision kind: the required header columns, the state column the
 # decision state is built from, and what the run decides. THE CSV BINDING
@@ -170,6 +273,49 @@ def _measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:
             "sha256": sha256_file(path), "bytes": path.stat().st_size}
 
 
+# The accuracy/F1 metric contract a harvest agent needs when a decision
+# CSV carries ground-truth labels (owner order 2026-10-07: "add accuracy
+# + f1 ... give it all the pairs we know are the same"): the EXPECTED
+# row count + label distribution computed from the csv itself + the gold
+# columns the harvest reads — so the harvest computes accuracy/F1 against
+# these WITHOUT re-deriving the expectation.
+_METRIC_EXPECTATION_KEYS = ("expected_rows", "expected_label_distribution",
+                            "metric_expectation")
+
+
+def _metric_expectation(path: Path, columns: list[str]) -> dict[str, Any]:
+    """Expected-metric contract fields for a labeled decision CSV.
+
+    Computes `expected_rows` + `expected_label_distribution` from the
+    csv's own `true_label` column (stdlib read; a csv without the column
+    returns {} — the contract only ever attaches to labeled decisions).
+    Fail-loud: a `true_label` column carrying values outside {0, 1}
+    raises before any receipt lands.
+    """
+    if "true_label" not in columns:
+        return {}
+    import csv as _csv
+    from collections import Counter
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        rows = _csv.DictReader(handle)
+        labels = Counter(row["true_label"] for row in rows)
+    unknown = sorted(set(labels) - {"0", "1"})
+    if unknown:
+        raise ValueError(
+            f"decision input {path.name} carries true_label values "
+            f"outside {{0, 1}}: {unknown}")
+    return {
+        "expected_rows": sum(labels.values()),
+        "expected_label_distribution": {
+            label: labels[label] for label in sorted(labels)},
+        "metric_expectation": {
+            "accuracy_gold": "label",
+            "f1_gold": "identity_claim-vs-true_label",
+        },
+    }
+
+
 def stage_decision_input(kind: str, *, decision_kind: str,
                          override: Path | None = None) -> dict[str, Any]:
     """Stage ONE decision CSV under results/laya_lane/<kind>/<decision>/.
@@ -197,6 +343,7 @@ def stage_decision_input(kind: str, *, decision_kind: str,
         "rows": census["rows"], "columns": census["columns"],
         "sha256": census["sha256"], "bytes": census["bytes"],
         "description": entry["description"],
+        **_metric_expectation(source, census["columns"]),
     }
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     _log_lane(f"staged decision input [{kind}/{decision_kind}] "
@@ -238,6 +385,40 @@ def stage_question_schema(kind: str, *,
     return receipt
 
 
+# The laya payloads ride the ATTACHED er-laya-requests dataset, never a
+# repo clone: the shipped core.runtime_inputs.checkout_preflight_script
+# emits `_runtime_root = Path(root)` for clone lanes and a laya payload
+# defines no root (NameError at line 36 killed the first remote boot).
+# This dedicated template instead verifies THE ATTACHED INPUTS: files
+# land under /kaggle/input/<slug>/ and resolve_input rglob's by name.
+# REPOSITORY/BRANCH/REVISION/_runtime_files stay assigned at top level
+# so the laya push gate still literal-evals them (_staged_laya_push_
+# preflight — the push gate lives in this lane; the shared clone-lane
+# staged_kernel_preflight checked the git tree for the attached-inputs
+# inventory, which never matches a dataset-carried payload).
+LAYA_RUNTIME_PREFLIGHT = '''\
+_runtime_files = ("@DECISION_CSV@", @QUESTION_SCHEMA_FILE@)
+INPUT_ROOT = Path("/kaggle/input")
+
+
+def laya_runtime_preflight():
+    """Verify the ATTACHED dataset inputs (the er-laya-requests dataset
+    mounts under /kaggle/input/<slug>/ and resolve_input searches INPUTS
+    recursively by name); fail loud before pip touches anything."""
+    missing = [name for name in _runtime_files
+               if not any(INPUT_ROOT.rglob(name))]
+    if missing:
+        raise FileNotFoundError(
+            "Runtime preflight missing attached inputs: "
+            + ", ".join(missing))
+    print("[runtime-preflight] verified %d required files"
+          % len(_runtime_files), flush=True)
+
+
+laya_runtime_preflight()
+'''
+
+
 # ── kernel / notebook payload composition ──────────────────────────────────
 def _kernel_script_gate(script: str) -> None:
     """Staging-time AST gate (kaggle_lane._kernel_script_gate mirror):
@@ -255,6 +436,47 @@ def _kernel_script_gate(script: str) -> None:
     if undeclared:
         raise ValueError(f"staged kernel uses undeclared constants: "
                          f"{sorted(undeclared)}; regenerate the template")
+
+
+def _module_scope_gate(script: str) -> None:
+    """Post-substitution module-scope AST scan (regression pin for the
+    BUG-1 NameError class: a template substitution emitting an undefined
+    TOP-LEVEL load — e.g. `_runtime_root = Path(root)` — can never stage
+    again). Every name Loaded at module scope (compound statements
+    recurse; function/class bodies are their own scopes and skipped) must
+    be a builtin, an import binding, a def/class name, or a bound target.
+    Raise loud (never a silent payload) BEFORE the atomic writes.
+    """
+    import ast
+    import builtins
+
+    compile(script, "<laya-payload>", "exec")
+    tree = ast.parse(script)
+    bound = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if isinstance(node, ast.Import):
+                    bound.add(alias.asname or alias.name.split(".")[0])
+                elif alias.name != "*":
+                    bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+    loaded = {node.id
+              for stmt in tree.body
+              if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                       ast.ClassDef))
+              for node in ast.walk(stmt)
+              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+              and not (node.id.startswith("__") and node.id.endswith("__"))}
+    undeclared = sorted(loaded - bound)
+    if undeclared:
+        raise ValueError(f"staged kernel loads undefined top-level names: "
+                         f"{undeclared}; a NameError-class payload must "
+                         "never stage again")
 
 
 def _template(script: str, values: dict[str, str]) -> str:
@@ -310,6 +532,11 @@ STATE_COLUMN = "@STATE_COLUMN@"
 BATCH_SIZE = @BATCH_SIZE@
 MIN_CONFIDENCE = @MIN_CONFIDENCE@
 QUESTION_SCHEMA_FILE = @QUESTION_SCHEMA_FILE@
+
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+@RUNTIME_PREFLIGHT@
 
 WORKING = Path("/kaggle/working")
 INPUTS = Path("/kaggle/input")
@@ -435,6 +662,11 @@ RUN_TAG = "@RUN_TAG@"
 DECISION_CSV = "@DECISION_CSV@"
 QUESTION_SCHEMA_FILE = @QUESTION_SCHEMA_FILE@
 
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+@RUNTIME_PREFLIGHT@
+
 WORKING = Path("/kaggle/working")
 INPUTS = Path("/kaggle/input")
 
@@ -531,8 +763,114 @@ if __name__ == "__main__":
 '''
 
 
+def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
+                          question_source: Path,
+                          decision_source: Path) -> dict[str, Any]:
+    """Stage the DATASET payload for spec.dataset_slug (dry-safe).
+
+    Builds results/laya_lane/kaggle/<decision>/dataset_payload/: the
+    kaggle `dataset-metadata.json` (title/id/licenses per the kaggle-lane
+    payload shape) + copies of the staged laya.question.json and the
+    staged decision CSV RENAMED to dataset.csv (the DECISION_CSV name the
+    kernel resolves via INPUTS.rglob once the dataset attaches).
+    """
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.dataset_slug is unset; name the input dataset "
+            "(owner/slug) before staging")
+    stage = staging_dir() / "kaggle" / decision_kind / DATASET_PAYLOAD_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    metadata = {"title": "er laya requests", "id": dataset_slug,
+                "licenses": [{"name": "other"}]}
+    atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+    shutil.copy2(question_source, stage / QUESTION_SCHEMA_FILE)
+    shutil.copy2(decision_source, stage / DATASET_CSV_NAME)
+    payload_files = (QUESTION_SCHEMA_FILE, DATASET_CSV_NAME)
+    receipt = {
+        "dataset": dataset_slug,
+        "payload": str(stage),
+        "metadata": metadata,
+        "files": {name: sha256_file(stage / name) for name in payload_files},
+    }
+    atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
+    _log_lane(f"staged dataset payload [{decision_kind}] {dataset_slug} "
+              f"files={list(payload_files)} -> {stage}")
+    return receipt
+
+
+def publish_laya_dataset(decision_kind: str, *, run_tag: str,
+                         execute: bool) -> dict[str, Any]:
+    """`--execute`-gated create-or-version of the laya inputs dataset.
+
+    The staged play_500.csv + laya.question.json do NOT travel with
+    `kaggle kernels push`: the kernel attaches spec.dataset_slug
+    (fbarulli/er-laya-requests), so the dataset must exist remotely
+    BEFORE the push. Dry run: returns the plan, never spawns a kaggle
+    subprocess. Executed: datasets create when the dataset does not
+    exist remotely, else datasets version (-r --dir-mode zip -m
+    "laya inputs <tag>"); the helpers are IMPORTED from the kaggle lane
+    (cli.kaggle_datasets / cli.kaggle_lane), never copied. The dataset
+    version is recorded in the decision receipt.
+    """
+    payload = staging_dir() / "kaggle" / decision_kind / DATASET_PAYLOAD_DIR
+    metadata_file = payload / DATASET_METADATA_FILE
+    plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
+                            "payload": str(payload)}
+    if not execute:
+        plan["note"] = ("the dataset attach rides --execute only "
+                        "(mirroring the kernels-push gate)")
+        _log_lane(f"dry-run: dataset payload for {decision_kind} would "
+                  f"publish to the remote surface at {payload}")
+        return plan
+    if not metadata_file.is_file():
+        raise RuntimeError(
+            "--activate gate: no staged dataset payload at "
+            f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
+    slug = _spec().dataset_slug
+    plan["slug"] = slug
+    if not slug:
+        raise RuntimeError(
+            "config laya.dataset_slug is unset; name the input dataset "
+            "(owner/slug) before an executed attach")
+    from cli import kaggle_lane as lane
+    from cli.kaggle_datasets import KaggleDatasets
+
+    executable = lane._require_kaggle_executable(
+        lane._spec().kaggle_executable)
+    current = KaggleDatasets._dataset_current_version(slug)
+    version = current.get("dataset_version")
+    if version:
+        plan["action"] = "version"
+        # `-r` and `--dir-mode` are one argparse option: `-r --dir-mode
+        # zip` fails with "argument -r/--dir-mode: expected one
+        # argument" (fail-loud met live on the version path).
+        command = [executable, "datasets", "version", "-r", "zip",
+                   "-m", f"laya inputs {run_tag}",
+                   "-p", str(payload)]
+    else:
+        plan["action"] = "create"
+        command = [executable, "datasets", "create", "-p", str(payload)]
+    plan["command"] = command
+    _, _ = lane._run_kaggle(command)
+    plan["returncode"] = 0
+    refreshed = KaggleDatasets._dataset_current_version(slug)
+    plan["dataset_version"] = refreshed.get("dataset_version") or version
+    plan["published"] = True
+    receipt_path = staging_dir() / "kaggle" / decision_kind \
+        / f"{decision_kind}.receipt.json"
+    if receipt_path.is_file():
+        body = json.loads(receipt_path.read_text(encoding="utf-8"))
+        body["dataset"].update({"action": plan["action"],
+                                "version": plan["dataset_version"]})
+        atomic_write_json(body, receipt_path)
+    _log_lane(f"published dataset {slug} | action={plan['action']} "
+              f"version={plan['dataset_version']} rc=0")
+    return plan
+
+
 def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
-                          run_tag: str | None = None) -> dict[str, Any]:
+                          run_tag: str | None = None,
+                          input_override: Path | None = None) -> dict[str, Any]:
     """Stage the kaggle decision kernel payload (dry-safe).
 
     Writes under results/laya_lane/kaggle/<decision_kind>/:
@@ -556,9 +894,30 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         raise RuntimeError(
             "config laya.export_dataset_slug is unset; name the target "
             "kernel (owner/slug) before staging")
+    dataset_slug = spec.dataset_slug
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.dataset_slug is unset; the kernel inputs travel "
+            "as that dataset (owner/slug) — the staged play_500.csv + "
+            "laya.question.json do NOT ride `kaggle kernels push`; "
+            "name it before staging")
+    # ── the published-tip invariant ('origin/<branch> == HEAD'): the pin
+    # resolves BEFORE any payload write; a pin that misses the fetched
+    # branch tip never stages (the 84ce2d0-vs-02dec14 staged-race class).
+    repository = training_cfg().kaggle.repository
+    branch = training_cfg().kaggle.branch
+    revision = revision or _git_revision()
+    from core import runtime_inputs
+    tip = runtime_inputs.require_published_tip_match(
+        revision, repository, branch)
     question = stage_question_schema("kaggle")
     input_receipt = stage_decision_input("kaggle",
-                                         decision_kind=decision_kind)
+                                         decision_kind=decision_kind,
+                                         override=input_override)
+    dataset_receipt = stage_dataset_payload(
+        decision_kind, dataset_slug=dataset_slug,
+        question_source=Path(question["staged"]),
+        decision_source=Path(input_receipt["staged"]))
     stage = staging_dir() / "kaggle" / decision_kind
     stage.mkdir(parents=True, exist_ok=True)
     code_file = (DECISION_KERNEL_CODE_FILE if decision_kind != "laya-cli-eval"
@@ -576,25 +935,39 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         # single T4: the payload never requests the double accelerator;
         # the script itself pins CUDA_VISIBLE_DEVICES=0.
         "enable_internet": True,
-        "dataset_sources": [],
+        # THE INPUTS TRAVEL AS THE DATASET: kernels push does NOT ship
+        # the co-located csv/schema files, so resolve_input would
+        # FileNotFoundError once boot passes — attach the dataset slug.
+        "dataset_sources": [dataset_slug],
         "kernel_sources": [],
         "competition_sources": [],
         "is_private": True,
     }
     entry = DECISION_BINDINGS[decision_kind]
     staged_csv = input_receipt["staged"]
-    script = _template(template, {
+    values = {
         "LAYA_PACKAGE": spec.laya_package,
         "CHECKPOINT_HUB": spec.checkpoint_hub,
         "DECISION_KIND": decision_kind,
         "RUN_TAG": tag,
-        "DECISION_CSV": Path(staged_csv).name,
+        "DECISION_CSV": DATASET_CSV_NAME,
         "STATE_COLUMN": entry["state_column"],
         "BATCH_SIZE": str(spec.laya_decision_batch_size),
         "MIN_CONFIDENCE": repr(spec.min_router_confidence),
         "QUESTION_SCHEMA_FILE": repr(QUESTION_SCHEMA_FILE),
-    })
+        "REPOSITORY": repository,
+        "BRANCH": branch,
+        "REVISION": revision,
+    }
+    # two-pass substitution (a nested value's @tokens@ are never
+    # re-scanned once it is inserted): the preflight bakes its own
+    # literal tuple FIRST, then drops into the script — the push gate
+    # (_staged_laya_push_preflight) literal-evals `_runtime_files`.
+    preflight = _template(LAYA_RUNTIME_PREFLIGHT, values)
+    script = _template(template, {**values,
+                                  "RUNTIME_PREFLIGHT": preflight})
     _kernel_script_gate(script)
+    _module_scope_gate(script)
     atomic_write_json(metadata, stage / "kernel-metadata.json")
     (stage / code_file).write_text(script, encoding="utf-8")
     receipt = {
@@ -608,6 +981,9 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "question_sha256": question["sha256"],
         "decision_input": staged_csv,
         "decision_sha256": input_receipt["sha256"],
+        "dataset": {"slug": dataset_slug,
+                    "payload": dataset_receipt["payload"],
+                    "files": dataset_receipt["files"]},
         "checkpoint_hub": spec.checkpoint_hub,
         "batch_size": spec.laya_decision_batch_size,
         "min_confidence": spec.min_router_confidence,
@@ -616,7 +992,16 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "evals_enabled": bool(spec.laya_evals_enabled),
         "calibration": bool(spec.calibration),
         "onnx": bool(spec.onnx),
+        "published_pin": {"repository": repository, "branch": branch,
+                          "revision": revision},
+        "published_tip": tip,
     }
+    # the labeled decision csv's metric contract rides the staged receipt
+    # (expected rows + label distribution + the gold columns) so the
+    # harvest computes accuracy/F1 without re-deriving the expectation
+    receipt.update({key: input_receipt[key]
+                    for key in _METRIC_EXPECTATION_KEYS
+                    if key in input_receipt})
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     # The decision csv is already co-located in the payload dir (the
     # stage-decision-input destination IS staging/<kind>/<decision>/);
@@ -663,6 +1048,7 @@ def stage_colab_notebook(*, decision_kind: str,
         "STATE_COLUMN": entry["state_column"],
     })
     _kernel_script_gate(script)
+    _module_scope_gate(script)
     notebook = stage / COLAB_NOTEBOOK_NAME
     notebook.write_text(script, encoding="utf-8")
     receipt = {
@@ -684,6 +1070,42 @@ def stage_colab_notebook(*, decision_kind: str,
     return receipt
 
 
+def _staged_laya_push_preflight(stage_dir: Path) -> None:
+    """Laya push gate (the clone-lane staged_kernel_preflight shape, with
+    the laya payload semantics): the ATTACHED-inputs inventory
+    (`_runtime_files`) rides the er-laya-requests DATASET, never the git
+    checkout — so the inventory is verified against the STAGED
+    dataset_payload, and remote_revision_preflight (a core helper, never
+    edited here) checks only the publish pin with an empty inventory."""
+    import ast
+    import json
+
+    from core.runtime_inputs import remote_revision_preflight
+
+    metadata = json.loads((stage_dir / "kernel-metadata.json").read_text())
+    script = (stage_dir / metadata['code_file']).read_text()
+    values = {}
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                        'REPOSITORY', 'BRANCH', 'REVISION', '_runtime_files'}:
+                    values[target.id] = ast.literal_eval(node.value)
+    required = {'REPOSITORY', 'BRANCH', 'REVISION', '_runtime_files'}
+    if required - values.keys():
+        raise ValueError(
+            'Staged kernel lacks runtime preflight inventory; regenerate it')
+    payload = stage_dir / "dataset_payload"
+    missing = [name for name in values['_runtime_files']
+               if not (payload / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Staged dataset payload {payload} is missing attached inputs: "
+            + ", ".join(missing) + "; stage the payload first")
+    remote_revision_preflight(values['REPOSITORY'], values['BRANCH'], (),
+                              revision=values['REVISION'])
+
+
 # ── the executed ops (fail-loud, --execute gated) ─────────────────────────
 def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
                        activate: bool = True) -> dict[str, Any]:
@@ -691,8 +1113,9 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
 
     Dry run: returns the plan + argv, never spawns the kaggle subprocess.
     Executed: requires the staged metadata file (--activate gate), runs
-    the preflight (staged_kernel_preflight), pushes, and embeds the CLI's
-    own output in the raised RuntimeError on a failing returncode.
+    the laya push preflight (_staged_laya_push_preflight), pushes, and
+    embeds the CLI's own output in the raised RuntimeError on a failing
+    returncode.
     """
     argv = [sys.executable, "-m", "kaggle", "kernels", "push",
             "-p", str(stage_dir)]
@@ -707,9 +1130,7 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
             "--activate gate: no staged kernel at "
             f"{stage_dir} (kernel-metadata.json is missing); stage first "
             "(--what stage-kernel)")
-    from core.runtime_inputs import staged_kernel_preflight
-
-    staged_kernel_preflight(Path(stage_dir))
+    _staged_laya_push_preflight(Path(stage_dir))
     result = subprocess.run(argv, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
     output = result.stdout or ""
@@ -787,10 +1208,12 @@ class LayaLane:
         self.kind = kind
         self._spec = _spec()
 
-    def stage(self, decision_kind: str) -> dict[str, Any]:
+    def stage(self, decision_kind: str, *,
+              input_override: Path | None = None) -> dict[str, Any]:
         """Stage the payload (offline, dry-safe)."""
         if self.kind == "kaggle":
-            return stage_decision_kernel(decision_kind=decision_kind)
+            return stage_decision_kernel(decision_kind=decision_kind,
+                                         input_override=input_override)
         return stage_colab_notebook(decision_kind=decision_kind)
 
     def push(self, stage_dir: Path, *, execute: bool = False,
@@ -808,7 +1231,7 @@ class LayaLane:
         if args.kind != self.kind:
             raise ValueError(f"--kind {args.kind!r} does not match the "
                              f"lane kind {self.kind!r}")
-        return self.stage(args.decision)
+        return self.stage(args.decision, input_override=args.decision_input)
 
 
 # ── main ───────────────────────────────────────────────────────────────────
@@ -821,14 +1244,26 @@ def main() -> None:
     parser.add_argument("--execute", action="store_true",
                         help="make the remote call (kaggle kernels push); "
                              "the default is an offline dry-run")
+    parser.add_argument("--decision-input", type=Path, default=None,
+                        help="alternate decision source CSV on this box "
+                             "(forwarded as the staging override; "
+                             "kaggle staging path)")
     args = parser.parse_args()
     lane = LayaLane(args.kind)
-    receipt = lane.stage(args.decision)
+    receipt = lane.stage(args.decision, input_override=args.decision_input)
     print(_stamp(), f"[laya-lane] staged {args.kind}/{args.decision} payload: "
           f"{json.dumps(receipt, indent=2)}", flush=True)
     if args.execute and args.kind == "kaggle":
-        plan = lane.push(Path(receipt["staged"]), execute=True)
-        print(json.dumps(plan, indent=2), flush=True)
+        stage_dir = Path(receipt["staged"])
+        # the inputs travel as the dataset BEFORE the push (the kernel
+        # metadata attaches spec.dataset_slug; a missing/drifting dataset
+        # would FileNotFoundError resolve_input once boot passes)
+        dataset_plan = publish_laya_dataset(args.decision,
+                                            run_tag=receipt["run_tag"],
+                                            execute=True)
+        print(json.dumps(dataset_plan, indent=2), flush=True)
+        push_plan = lane.push(stage_dir, execute=True)
+        print(json.dumps(push_plan, indent=2), flush=True)
     elif args.execute:
         _log_lane("colab payloads are a delivery contract only; nothing "
                   "to --execute")

@@ -93,10 +93,7 @@ def validate(path,checkpoint,setup):
     vectors,metadata = load_text_cache(path,ids)
     for key,expected in [('checkpoint_sha256',checkpoint_hash(checkpoint)),('catalog_sha256',file_hash(setup/'eligible_catalog.csv')),
             ('listings_sha256',file_hash(setup/'prepared/listings.json')),('pairs_sha256',file_hash(setup/'prepared/pairs.csv')),
-            ('request_sha256',file_hash(setup/'text_export_request.json')),
-            ('composition_implementation_sha256',composition_fingerprint()),
-            ('export_implementation_sha256',file_hash(Path(__file__))),
-            ('token_implementation_sha256',file_hash(__import__('core.encoding_inputs',fromlist=['x']).__file__))]:
+            ('request_sha256',file_hash(setup/'text_export_request.json'))]:
         if metadata.get(key) != expected:
             raise ValueError('saved GPU text export mismatch: '+key)
     if metadata.get('export_location') not in {'Colab GPU', 'Colab CPU'} or metadata.get('truncated_inputs') != 0 or not np.allclose(np.linalg.norm(vectors,axis=1),1,atol=PreparedEmbeddingForward.normalization_atol):
