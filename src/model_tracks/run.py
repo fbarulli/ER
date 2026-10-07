@@ -63,6 +63,12 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         raise ValueError('invalid run tag')
     cfg = load_config(config)
     gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
+    # Structured training timings default into the run's output dir (owner
+    # order 2026-10-07): the [timing] lines also stream, but timings.json/log
+    # land under output/ so the result archive carries them back. An explicit
+    # ER_TIMING_OUT/ER_TIMING_LOG (e.g. scripts/training_profile.py) still wins.
+    os.environ.setdefault('ER_TIMING_OUT', str(output / 'logs' / 'timings.json'))
+    os.environ.setdefault('ER_TIMING_LOG', str(output / 'logs' / 'timings.log'))
     if cfg.dvc_enabled and not gpu_only and not os.environ.get('DVC_API_KEY'):
         raise RuntimeError('DVC_API_KEY is required before training a publishing suite')
     events.emit('preflight', 'starting')

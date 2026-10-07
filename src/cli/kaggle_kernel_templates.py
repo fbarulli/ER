@@ -301,6 +301,11 @@ if not package_manifest.is_file():
 
 output = root / LANE["paths"]["results_dir"] / LANE["files"]["training_dir"] / RUN_TAG
 env["ER_GPU_TRAINING_ONLY"] = "1"
+# Structured training timings ride the result archive (owner order
+# 2026-10-07): the same [timing] lines stream live, but timings.json/log are
+# also written under output/ so stage_result_archive carries them back.
+env["ER_TIMING_OUT"] = str(output / "logs" / "timings.json")
+env["ER_TIMING_LOG"] = str(output / "logs" / "timings.log")
 sh([sys.executable, "-m", "model_tracks.run",
     "--config", SUITE_CONFIG,
     "--output", str(output), "--run-tag", RUN_TAG], cwd=root, env=env)
