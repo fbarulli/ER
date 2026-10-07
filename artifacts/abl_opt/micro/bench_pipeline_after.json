@@ -1,14 +1,24 @@
 {
   "label": "after",
-  "rows": 2000,
-  "calls": 26000,
-  "seconds": 1.713,
+  "rows": 1500,
+  "calls": 19500,
+  "seconds": 2.521,
   "samples": [
-    1.744,
-    1.729,
-    1.697,
-    1.694
+    2.4,
+    2.643
   ],
-  "per_call_us": 65.883,
-  "digest": "9acd0c8a4074865307f09a19880c5d14482749fbc39d58a638db74ab1ea088b7"
+  "per_call_us": 129.307,
+  "digest": "54633adb4b7579f23c65f7130c7246c8135105508ef1ba7c9a13dcb8ac14f4cc",
+  "extract_all_seconds": 8.023,
+  "extract_all_us_per_row": 5348.36,
+  "extract_all_samples": [
+    8.229,
+    7.816
+  ],
+  "extract_all_digest": "0e8d283d0ccca10b685a1c4adf8bb6817ef13be710fc7fcf318120dd8c15d8a1",
+  "loadavg": [
+    7.32,
+    8.25,
+    7.17
+  ]
 }
