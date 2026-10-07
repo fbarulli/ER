@@ -58,8 +58,9 @@ def _slice_groups(request, plan):
     """Group pair rows by the configured slice axes, pair order preserved."""
     axes = request['settings']['slice_columns']
     for n,pair in _LOG.progress(enumerate(request['pairs']),desc='ablation_slice_groups',unit='pair',total=len(request['pairs'])):
-        key = digest({axis:pair.get(axis) for axis in axes})
-        group = plan['slice_groups'].setdefault(key,{'values':{axis:pair.get(axis) for axis in axes},'pair_indices':[]})
+        values = {axis:pair.get(axis) for axis in axes}
+        key = digest(values)
+        group = plan['slice_groups'].setdefault(key,{'values':values,'pair_indices':[]})
         group['pair_indices'].append(n)
 
 
