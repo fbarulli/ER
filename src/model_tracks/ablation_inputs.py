@@ -32,12 +32,14 @@ from graph_tracks.prepared_inputs import save_batch, load_batch
 _LOG = RunLogger(__name__)
 
 
+@timed
 def _pair_indices(request, arrays):
     """Endpoint index array over the frozen identity order."""
     lookup = {key:n for n,key in enumerate(request['ids'])}
     arrays['pair_indices'] = np.asarray([[lookup[p['sku_id1']],lookup[p['sku_id2']]] for p in request['pairs']],dtype=np.int64)
 
 
+@timed
 def _open_plan(request, arrays):
     """Open the plan skeleton from the frozen pair endpoints."""
     # Candidate order and endpoint indices are frozen before vectors exist.
@@ -48,12 +50,14 @@ def _open_plan(request, arrays):
     return plan
 
 
+@timed
 def _frozen_pairs(request, arrays):
     """Freeze candidate order/endpoint indices and open the plan skeleton."""
     _pair_indices(request,arrays)
     return _open_plan(request,arrays)
 
 
+@timed
 def _slice_groups(request, plan):
     """Group pair rows by the configured slice axes, pair order preserved."""
     axes = request['settings']['slice_columns']
@@ -64,6 +68,7 @@ def _slice_groups(request, plan):
         group['pair_indices'].append(n)
 
 
+@timed
 def _token_batches(request, arrays, batch_size, plan, *, token_cache=None):
     """Frozen native tokenization for text/hybrid tracks (no encoding)."""
     if request['track'] != 'gnn_only':
@@ -72,6 +77,7 @@ def _token_batches(request, arrays, batch_size, plan, *, token_cache=None):
         plan.update(prepare_tokens(resolve(checkpoint),request['texts'],arrays,batch_size=batch_size,cache=token_cache))
 
 
+@timed
 def _graph_payload(request):
     """Load the graph checkpoint, rejecting schema and split-context drift."""
     payload = torch.load(resolve(request['checkpoint']),map_location='cpu',weights_only=False)
@@ -82,6 +88,7 @@ def _graph_payload(request):
     return payload
 
 
+@timed
 def _hybrid_metadata(request,payload):
     """Hybrid's text checkpoint sha and model composition must match training."""
     if request['track'] == 'hybrid':
@@ -90,6 +97,7 @@ def _hybrid_metadata(request,payload):
             raise ValueError('hybrid text checkpoint/composition differs from training')
 
 
+@timed
 def _support_batch(plan,arrays,payload):
     """Tensorize the frozen support topology under the checkpoint vocabulary."""
     vocabulary = payload['vocabulary']
@@ -98,6 +106,7 @@ def _support_batch(plan,arrays,payload):
     return vocabulary
 
 
+@timed
 def _graph_topology(request,arrays,plan):
     """The graph track's payload plus its tensorized support (text: noops)."""
     payload = None
@@ -109,12 +118,14 @@ def _graph_topology(request,arrays,plan):
     return payload,vocabulary
 
 
+@timed
 def _candidate_tensors(request, arrays, plan):
     """Freeze candidate text indices and ids into the arrays/plan pair."""
     arrays['candidate_text_indices'] = np.asarray(request['candidate_text_indices'],dtype=np.int64)
     plan['candidate_ids'] = request['candidate_ids']
 
 
+@timed
 def _candidate_batches(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Tensorize the out-of-support candidate records when supplied."""
     if request.get('candidate_ids'):
@@ -128,6 +139,7 @@ def _candidate_batches(request, arrays, plan, *, payload, vocabulary, batch_size
                 plan['candidate_batches'].append(prefix)
 
 
+@timed
 def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,batch_size):
     """Save the record set's graph tensor batches once; keep their prefixes."""
     prefixes = []
@@ -138,6 +150,7 @@ def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,bat
     plan['graph_batches'][graph_key] = prefixes
 
 
+@timed
 def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Deduped inference jobs; graph batches saved once per record set."""
     job_lookup = {}
@@ -155,6 +168,7 @@ def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
         plan['variant_jobs'].append(job_lookup[key])
 
 
+@timed
 def _freeze_arrays(arrays, output):
     """Exclusive-create the compressed tensor file next to its consumers."""
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -162,6 +176,7 @@ def _freeze_arrays(arrays, output):
         np.savez_compressed(handle,**arrays)
 
 
+@timed
 def _publish(arrays, output, plan):
     """Write the compressed tensor file, hash it and report the plan census."""
     _freeze_arrays(arrays,output)
