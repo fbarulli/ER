@@ -156,7 +156,7 @@ def build_saved_text_cache():
     from core.model_input import model_input_composition
     work = ABL / 'cache_staging'
     config = CONFIG
-    print('[ablbms] one-time full CPU encode for seeded cache (a few minutes).', flush=True)
+    print('[ablbm] one-time full CPU encode for seeded cache (a few minutes).', flush=True)
     request_path = prepare(CATALOG, PAIRS, CHECKPOINT, config=config)
     request = json.loads(request_path.read_text())
     out = work / 'vectors.npz'
