@@ -87,7 +87,7 @@ def _field_tokens(attribute: object, key: str) -> frozenset[str]:
 def _caffeine_positive(values: frozenset[str]) -> bool:
     """True when a caffeine band's lower bound is > 0 ("0-15 mg" is trace)."""
     for value in values:
-        match = re.match(r"\s*(\d+)", value)
+        match = _CAFFEINE_POSITIVE_RE.match(value)
         if match and int(match.group(1)) > 0:
             return True
     return False
@@ -157,8 +157,8 @@ def extract_made_from_tokens(*values: object) -> frozenset[str]:
     text = normalized_attribute_text(*values)
     found = {token for token in text.split() if token in MADE_FROM_LEXICON}
     found.update(
-        phrase for phrase in MADE_FROM_PHRASES
-        if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text)
+        phrase for phrase, pattern in _MADE_FROM_PATTERNS
+        if pattern.search(text)
     )
     return frozenset(found)
 
@@ -186,7 +186,7 @@ def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
     found: set[str] = set()
     for value in values:
         for field in DECLARED_FLAVOR_FIELD_RE.finditer(str(value or "")):
-            for part in re.split(r"[,/;&]", field.group(1)):
+            for part in _DECLARED_FLAVOR_SPLIT_RE.split(field.group(1)):
                 candidate = normalized_attribute_text(part)
                 if candidate in DECLARED_FLAVOR_LEXICON:
                     found.add(candidate)
@@ -223,6 +223,41 @@ SUGAR_CLAIM_RE = re.compile(
 _SODA_DRY_PRODUCT_RE = re.compile(
     r"\b(?:syrup|concentrate|cordial|drink mix|powder)\b"
 )
+# Precompiled once at import: extract_critical_claims runs these on every one
+# of its ~65k calls per 10k cohort.  Passing the pattern string to re.search
+# re-enters the module-level _compile cache lookup for each call; holding the
+# Pattern here removes that per-call overhead without changing a single match.
+_CAFFEINE_POSITIVE_RE = re.compile(r"\s*(\d+)")
+_MADE_FROM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (phrase, re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"))
+    for phrase in MADE_FROM_PHRASES
+)
+_DECLARED_FLAVOR_SPLIT_RE = re.compile(r"[,/;&]")
+_DIET_RE = re.compile(r"\bdiet\b")
+_NON_CARBONATED_RE = re.compile(
+    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b"
+)
+_NON_CARBONATED_STRIP_RE = re.compile(
+    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b"
+)
+_BAKING_SODA_RE = re.compile(r"\b(?:baking|washing) soda\b")
+_STILL_RE = re.compile(r"\bstill\b")
+_CARBONATED_RE = re.compile(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b")
+_SODA_RE = re.compile(r"\bsoda\b")
+_EFFERVESCENT_RE = re.compile(r"\beffervescent\b")
+_EFFERVESCENT_TABLET_RE = re.compile(
+    r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b"
+)
+_NO_PULP_RE = re.compile(r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b")
+_WITH_PULP_RE = re.compile(
+    r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
+    r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b"
+)
+_JUICE_RE = re.compile(r"\bjuice\b")
+_WITH_BITS_RE = re.compile(r"\bwith bits\b")
+_NO_BITS_RE = re.compile(r"\b(?:no bits|without bits)\b")
+_SMOOTH_JUICE_RE = re.compile(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b")
+_ORGANIC_RE = re.compile(r"\b(?:organic|luomu)\b")
 
 
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
@@ -244,20 +279,16 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
         sweetener.add("no_added_sugar")
     if sugar:
         sweetener.add("sugar")
-    if re.search(r"\bdiet\b", text):
+    if _DIET_RE.search(text):
         sweetener.add("diet")
 
     # Remove explicit negative phrases before looking for positive
     # carbonation so "non-carbonated" cannot emit both states.
-    non_carbonated = bool(
-        re.search(r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b", text)
-    )
-    carbonation_text = re.sub(
-        r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b", " ", text
-    )
-    carbonation_text = re.sub(r"\b(?:baking|washing) soda\b", " ", carbonation_text)
+    non_carbonated = bool(_NON_CARBONATED_RE.search(text))
+    carbonation_text = _NON_CARBONATED_STRIP_RE.sub(" ", text)
+    carbonation_text = _BAKING_SODA_RE.sub(" ", carbonation_text)
     carbonation: set[str] = set()
-    if non_carbonated or re.search(r"\bstill\b", text):
+    if non_carbonated or _STILL_RE.search(text):
         carbonation.add("still")
     # NOTE (audit 2026-09-28): only the unambiguous "soda pop" is an
     # unconditional carbonation claim. Bare "soda" fires only for
@@ -265,16 +296,16 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # still-declared drinks (282 titles, e.g. Sunny Delight) are excluded.
     # "still" in the set already covers the non-carbonated branch, since
     # that branch always records still.
-    if re.search(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b", carbonation_text):
+    if _CARBONATED_RE.search(carbonation_text):
         carbonation.add("carbonated")
     if (
-        re.search(r"\bsoda\b", carbonation_text)
+        _SODA_RE.search(carbonation_text)
         and "still" not in carbonation
         and not _SODA_DRY_PRODUCT_RE.search(carbonation_text)
     ):
         carbonation.add("carbonated")
-    if re.search(r"\beffervescent\b", carbonation_text) and not re.search(
-        r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", carbonation_text
+    if _EFFERVESCENT_RE.search(carbonation_text) and not _EFFERVESCENT_TABLET_RE.search(
+        carbonation_text
     ):
         carbonation.add("carbonated")
 
@@ -290,25 +321,14 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # (16/1l/100/750) and by "free" (65), with no enum spellings present, so
     # the branch bought no recall and only risked label inversion. Absence of
     # a recognized phrase now stays unknown instead of inventing a claim.
-    no_pulp = bool(
-        re.search(
-            r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b",
-            text,
-        )
-    )
-    with_pulp = bool(
-        re.search(
-            r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
-            r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b",
-            text,
-        )
-    )
+    no_pulp = bool(_NO_PULP_RE.search(text))
+    with_pulp = bool(_WITH_PULP_RE.search(text))
     # Bits denotes juice pulp only in an explicit juice context. Smooth
     # alone can describe a smoothie or mouthfeel and is not a pulp claim.
-    if re.search(r"\bjuice\b", text):
-        with_pulp |= bool(re.search(r"\bwith bits\b", text))
-        no_pulp |= bool(re.search(r"\b(?:no bits|without bits)\b", text))
-        no_pulp |= bool(re.search(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b", text))
+    if _JUICE_RE.search(text):
+        with_pulp |= bool(_WITH_BITS_RE.search(text))
+        no_pulp |= bool(_NO_BITS_RE.search(text))
+        no_pulp |= bool(_SMOOTH_JUICE_RE.search(text))
     if no_pulp:
         pulp.add("no_pulp")
     if with_pulp:
@@ -321,7 +341,7 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # organic badge and unrelated parts of brand names, too ambiguous to
     # carry a certification claim alone.
     organic: frozenset[str] = (
-        frozenset({"organic"}) if re.search(r"\b(?:organic|luomu)\b", text) else frozenset()
+        frozenset({"organic"}) if _ORGANIC_RE.search(text) else frozenset()
     )
 
     return {
