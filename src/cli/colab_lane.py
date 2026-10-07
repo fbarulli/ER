@@ -82,6 +82,16 @@ from cli.colab_lane_cpu_poll import ColabCPULanePoll
 _LOG = RunLogger(__name__)
 
 
+def cohort_label(dataset_csv: Path) -> str:
+    """Per-VM cohort tag: `full` for the repo-root export, `50pct` for the
+    50% cohort, else the sanitized stem.  The lane SSOT the prep facade
+    delegates to (no facade round-trip)."""
+    name = Path(dataset_csv).name
+    if name == "dataset.csv":
+        return "full"
+    if "50pct" in name:
+        return "50pct"
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name.rsplit(".", 1)[0])
 
 
 class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision, ColabLaneBase):
@@ -92,9 +102,7 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
     @timed
     def cohort_label(self, dataset_csv: Path) -> str:
         """Per-VM cohort tag: `full`, `50pct`, else the sanitized stem."""
-        from cli.colab_data_bundle_prep import cohort_label as facade_label
-
-        return facade_label(dataset_csv)
+        return cohort_label(dataset_csv)
 
     @timed
     def plan(self, dataset_csv: Path | None = None, *, resume_state: Path | None = None,

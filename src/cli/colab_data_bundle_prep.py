@@ -41,14 +41,12 @@ import argparse
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
-import time
-from contextlib import contextmanager
 from pathlib import Path
 
 from core.common import F, training_cfg
 
 import cli.colab as colab
-from cli.colab_lane import ColabCPULane, MAX_PARALLEL_PREP_SESSIONS as MAX_PARALLEL_SESSIONS
+from cli.colab_lane import ColabCPULane, cohort_label as _canonical_cohort_label
 
 _LANES: dict[str, ColabCPULane] = {}
 
@@ -58,9 +56,6 @@ def lane() -> ColabCPULane:
     if "prep" not in _LANES:
         _LANES["prep"] = ColabCPULane()
     return _LANES["prep"]
-
-
-_MAX_PARALLEL_SESSIONS = MAX_PARALLEL_SESSIONS
 
 
 def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
@@ -78,24 +73,8 @@ def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
 
 def cohort_label(dataset_csv: Path) -> str:
     """Per-VM cohort tag: `full` for the repo-root export, `50pct` for the
-    50% cohort, else the sanitized stem."""
-    name = Path(dataset_csv).name
-    if name == "dataset.csv":
-        return "full"
-    if "50pct" in name:
-        return "50pct"
-    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name.rsplit(".", 1)[0])
-
-
-def _export_digest(dataset_csv: Path) -> str:
-    return lane().export_digest(dataset_csv)
-
-
-@contextmanager
-def _dual_transcript_streaming():
-    """Forward every streamed chunk to BOTH transcripts for this lane."""
-    with lane().dual_transcript_streaming(colab):
-        yield
+    50% cohort, else the sanitized stem (SSOT: cli.colab_lane)."""
+    return _canonical_cohort_label(dataset_csv)
 
 
 def run_cpu_bundle_prep(dataset_csv: Path | None = None) -> None:

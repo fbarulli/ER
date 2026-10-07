@@ -45,14 +45,6 @@ def lane() -> ColabCPULane:
     return _LANES["default"]
 
 
-def _lane() -> ColabCPULane:
-    return lane()
-
-
-def _poll_prepare_log(deadline_seconds: int) -> None:
-    lane().poll_prepare_log(deadline_seconds)
-
-
 def _provision(dataset_csv: Path | None = None) -> None:
     lane().provision(dataset_csv)
 
