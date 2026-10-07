@@ -5,6 +5,21 @@ The relation/numeric schema is derived from the shared extractor contract
 (core.sku_identity.graph_schema) rather than a hand-maintained subset,
 so it stays aligned with the data the text track trains on. Splits are
 supplied by the caller, never randomly generated here.
+
+RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
+-------------------------------------------------------------------------
+- :class:`FileDigest` — the one hash surface (:func:`file_hash`), including
+  directory digests via the text-cache checkpoint hash.
+- :class:`ListingValidator` — the per-listing schema checks
+  (:func:`load_records` stays the public face).
+- :class:`Vocabulary` — the train-split-only categorical vocabulary
+  (:func:`fit_vocabulary`).
+- :class:`GraphBatch` — the batch payload (unchanged dataclass).
+- :class:`BatchTensorizer` — records -> dense numeric rows + per-relation
+  membership edges (:func:`tensorize` stays the public face).
+- :class:`TextCache` — the checkpoint-native embedding cache contract
+  (:func:`load_text_cache`).
+- :func:`census` — the representation-policy census.
 """
 from __future__ import annotations
 
@@ -28,55 +43,102 @@ RELATIONS, NUMERIC = graph_schema()
 SPLITS = {"train", "dev", "test"}
 
 
+class FileDigest:
+    """The one hash surface of the graph inputs."""
+
+    @staticmethod
+    def of(path: Path | str) -> str:
+        path = Path(path)
+        if path.is_dir():
+            from graph_tracks.text_cache import checkpoint_hash
+            return checkpoint_hash(path)
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def file_hash(path: Path | str) -> str:
-    path = Path(path)
-    if path.is_dir():
-        from graph_tracks.text_cache import checkpoint_hash
-        return checkpoint_hash(path)
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return FileDigest.of(path)
 
 
-def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
-    raw = json.loads(path.read_text())
-    if raw.get("schema") != "er-graph-listings-v1":
-        raise ValueError("expected schema er-graph-listings-v1")
-    records = raw["listings"]
-    if not records:
-        raise ValueError("empty listings")
-    ids = []
-    for record in records:
-        if set(record) != {"sku_id", "split", "attribute", "numeric"}:
+class ListingValidator:
+    """The listing-JSON contract, one record at a time."""
+
+    SCHEMA = "er-graph-listings-v1"
+    KEYS = {"sku_id", "split", "attribute", "numeric"}
+
+    def __init__(self, *, require_training: bool):
+        self._require_training = require_training
+
+    def allowed_splits(self) -> set[str]:
+        return SPLITS if self._require_training else SPLITS | {"inference"}
+
+    def check_frame(self, raw: dict) -> list[dict]:
+        if raw.get("schema") != self.SCHEMA:
+            raise ValueError("expected schema er-graph-listings-v1")
+        records = raw["listings"]
+        if not records:
+            raise ValueError("empty listings")
+        ids: list[str] = []
+        for record in records:
+            self.check_record(record)
+            ids.append(record["sku_id"])
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate sku_id")
+        if self._require_training and not any(r["split"] == "train" for r in records):
+            raise ValueError("at least one training listing is required")
+        return records
+
+    def check_record(self, record: dict) -> None:
+        if set(record) != self.KEYS:
             raise ValueError("listing keys must be sku_id, split, attributes, numeric")
         if not isinstance(record["sku_id"], str) or not record["sku_id"]:
             raise ValueError("sku_id must be a nonempty string")
-        ids.append(record["sku_id"])
-        allowed_splits = SPLITS if require_training else SPLITS | {"inference"}
-        if record["split"] not in allowed_splits:
-            raise ValueError("split must be train/dev/test (inference is allowed for encoding only)")
+        if record["split"] not in self.allowed_splits():
+            raise ValueError(
+                "split must be train/dev/test (inference is allowed for encoding only)"
+            )
         if set(record["attribute"]) - set(RELATIONS):
             raise ValueError("unsupported attribute relation")
         if set(record["numeric"]) - set(NUMERIC):
             raise ValueError("unsupported numeric feature")
-        for values in record["attribute"].values():
-            if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
-                raise ValueError("attributes must contain lists of nonempty strings")
-        for values in record["numeric"].values():
-            if not isinstance(values, list) or any(
-                isinstance(v, bool) or not isinstance(v, (int, float))
-                or not np.isfinite(v) or v < 0 for v in values
-            ):
-                raise ValueError("numeric fields must be lists of finite nonnegative numbers")
-    if len(set(ids)) != len(ids):
-        raise ValueError("duplicate sku_id")
-    if require_training and not any(r["split"] == "train" for r in records):
-        raise ValueError("at least one training listing is required")
-    return records
+        self._check_values(record["attribute"], str_kind=True)
+        self._check_values(record["numeric"], str_kind=False)
+
+    @staticmethod
+    def _check_values(values_by_field: dict, *, str_kind: bool) -> None:
+        for values in values_by_field.values():
+            if not isinstance(values, list):
+                raise ValueError(
+                    "attributes must contain lists of nonempty strings"
+                    if str_kind else
+                    "numeric fields must be lists of finite nonnegative numbers"
+                )
+            for value in values:
+                if str_kind:
+                    if not isinstance(value, str) or not value:
+                        raise ValueError("attributes must contain lists of nonempty strings")
+                elif (isinstance(value, bool) or not isinstance(value, (int, float))
+                      or not np.isfinite(value) or value < 0):
+                    raise ValueError("numeric fields must be lists of finite nonnegative numbers")
+
+
+def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
+    """Load + validate the listing JSON (contract on :class:`ListingValidator`)."""
+    raw = json.loads(path.read_text())
+    return ListingValidator(require_training=require_training).check_frame(raw)
+
+
+class Vocabulary:
+    """Train-split-only categorical vocabulary (missing/unseen share token 0)."""
+
+    @staticmethod
+    def fit(records: list[dict]) -> dict[str, list[str]]:
+        return {relation: sorted({v for r in records if r["split"] == "train"
+                                 for v in r["attribute"].get(relation, [])})
+                for relation in RELATIONS}
 
 
 def fit_vocabulary(records: list[dict]) -> dict[str, list[str]]:
-    return {relation: sorted({v for r in records if r["split"] == "train"
-                             for v in r["attribute"].get(relation, [])})
-            for relation in RELATIONS}
+    return Vocabulary.fit(records)
 
 
 @dataclass
@@ -88,59 +150,104 @@ class GraphBatch:
         default_factory=dict, init=False, repr=False)
 
 
+class BatchTensorizer:
+    """Records -> dense rows + per-relation membership edges.
+
+    Dense row: per numeric field, log1p min/max and presence; interior values
+    omitted. Edges: deduplicated sorted value indices; missing and unseen
+    values use the feature encoder's unknown token, but NEVER share graph
+    context through an unknown-value hub.
+    """
+
+    def __init__(self, vocabulary: dict[str, list[str]]):
+        self._vocabulary = vocabulary
+
+    @staticmethod
+    def dense_numbers(records: list[dict]) -> torch.Tensor:
+        numbers = []
+        for record in records:
+            row = []
+            for field_name in NUMERIC:
+                values = sorted(set(record["numeric"].get(field_name, [])))
+                row.extend([float(np.log1p(min(values))) if values else 0.,
+                            float(np.log1p(max(values))) if values else 0.,
+                            float(bool(values))])
+            numbers.append(row)
+        return torch.tensor(numbers, dtype=torch.float32)
+
+    def edges(self, records: list[dict]) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+        edges = {}
+        for relation in RELATIONS:
+            lookup = {v: i + 1 for i, v in enumerate(self._vocabulary[relation])}
+            source, target = [], []
+            for i, record in enumerate(records):
+                values = sorted(set(record["attribute"].get(relation, [])))
+                indices = sorted({lookup.get(v, 0) for v in values}) or [0]
+                source.extend([i] * len(indices))
+                target.extend(indices)
+            edges[relation] = (torch.tensor(source, dtype=torch.long),
+                               torch.tensor(target, dtype=torch.long))
+        return edges
+
+    def batch(self, records: list[dict]) -> GraphBatch:
+        return GraphBatch(self.dense_numbers(records), self.edges(records))
+
+
 def tensorize(records: list[dict], vocabulary: dict[str, list[str]], device: str) -> GraphBatch:
-    numbers = []
-    for record in records:
-        row = []
-        for field in NUMERIC:
-            values = sorted(set(record["numeric"].get(field, [])))
-            row.extend([float(np.log1p(min(values))) if values else 0.,
-                        float(np.log1p(max(values))) if values else 0.,
-                        float(bool(values))])
-        numbers.append(row)
-    edges = {}
-    for relation in RELATIONS:
-        lookup = {v: i + 1 for i, v in enumerate(vocabulary[relation])}
-        source, target = [], []
-        for i, record in enumerate(records):
-            values = sorted(set(record["attribute"].get(relation, [])))
-            # Missing and unseen values use the feature encoder's unknown token,
-            # but NEVER share graph context through an unknown-value hub.
-            indices = sorted({lookup.get(v, 0) for v in values}) or [0]
-            source.extend([i] * len(indices))
-            target.extend(indices)
-        edges[relation] = (torch.tensor(source, dtype=torch.long),
-                           torch.tensor(target, dtype=torch.long))
     # Dynamic inference and benchmark batches follow the same CPU-first
     # topology contract as persisted prepared inputs.
     from graph_tracks.pooling import move_batch, prime_batch
-    batch = GraphBatch(torch.tensor(numbers, dtype=torch.float32), edges)
+    batch = BatchTensorizer(vocabulary).batch(records)
     prime_batch(batch, vocabulary)
     return move_batch(batch, device)
 
 
+class TextCache:
+    """The checkpoint-native embedding cache contract.
+
+    Persisted float32 rows, unique nonempty IDs, finite nonzero vectors, and
+    a metadata block that pins ``checkpoint_sha256`` plus the composition —
+    so a cache can never serve embeddings from a different checkpoint
+    silently.
+    """
+
+    def __init__(self, path: Path):
+        with np.load(path, allow_pickle=False) as cache:
+            self._ids = cache["ids"].astype(str).tolist()
+            self._vectors = np.asarray(cache["embeddings"])
+            self._metadata = json.loads(str(cache["metadata"].item()))
+        self._check()
+
+    def _check(self) -> None:
+        if len(set(self._ids)) != len(self._ids):
+            raise ValueError("duplicate IDs in text cache")
+        if (self._vectors.ndim != 2 or self._vectors.shape[0] != len(self._ids)
+                or self._vectors.shape[1] == 0):
+            raise ValueError("invalid text cache dimensions")
+        if self._vectors.dtype != np.float32:
+            raise ValueError('text cache embeddings must persist float32; silent dtype coercion is forbidden')
+        if self._metadata.get('embedding_dtype', 'float32') != 'float32':
+            raise ValueError('text cache embedding dtype attestation mismatch')
+        if not np.isfinite(self._vectors).all() or np.any(np.linalg.norm(self._vectors, axis=1) <= 1e-12):
+            raise ValueError("text cache contains nonfinite or zero vectors")
+        if not self._metadata.get("checkpoint_sha256") or not self._metadata.get("composition"):
+            raise ValueError("text cache must identify checkpoint_sha256 and composition")
+
+    def gather(self, ids: list[str]) -> np.ndarray:
+        lookup = {v: i for i, v in enumerate(self._ids)}
+        missing = set(ids) - set(lookup)
+        if missing:
+            raise ValueError(f"text cache missing {len(missing)} listing IDs")
+        return self._vectors[[lookup[v] for v in ids]]
+
+    @property
+    def metadata(self) -> dict:
+        return self._metadata
+
+
 def load_text_cache(path: Path, ids: list[str]) -> tuple[np.ndarray, dict]:
-    with np.load(path, allow_pickle=False) as cache:
-        cached_ids = cache["ids"].astype(str).tolist()
-        vectors = np.asarray(cache["embeddings"])
-        metadata = json.loads(str(cache["metadata"].item()))
-    if len(set(cached_ids)) != len(cached_ids):
-        raise ValueError("duplicate IDs in text cache")
-    if vectors.ndim != 2 or vectors.shape[0] != len(cached_ids) or vectors.shape[1] == 0:
-        raise ValueError("invalid text cache dimensions")
-    if vectors.dtype != np.float32:
-        raise ValueError('text cache embeddings must persist float32; silent dtype coercion is forbidden')
-    if metadata.get('embedding_dtype', 'float32') != 'float32':
-        raise ValueError('text cache embedding dtype attestation mismatch')
-    if not np.isfinite(vectors).all() or np.any(np.linalg.norm(vectors, axis=1) <= 1e-12):
-        raise ValueError("text cache contains nonfinite or zero vectors")
-    if not metadata.get("checkpoint_sha256") or not metadata.get("composition"):
-        raise ValueError("text cache must identify checkpoint_sha256 and composition")
-    lookup = {v: i for i, v in enumerate(cached_ids)}
-    missing = set(ids) - set(lookup)
-    if missing:
-        raise ValueError(f"text cache missing {len(missing)} listing IDs")
-    return vectors[[lookup[v] for v in ids]], metadata
+    cache = TextCache(path)
+    return cache.gather(ids), cache.metadata
 
 
 def census(records: list[dict], vocabulary: dict[str, list[str]]) -> dict:
@@ -151,8 +258,8 @@ def census(records: list[dict], vocabulary: dict[str, list[str]]) -> dict:
             "unknown_graph_hub": False,
         },
         "numeric_interior_values_omitted": {
-            field: sum(max(0, len(set(r['numeric'].get(field, []))) - 2) for r in records)
-            for field in NUMERIC},
+            field_name: sum(max(0, len(set(r['numeric'].get(field_name, []))) - 2) for r in records)
+            for field_name in NUMERIC},
         "listings": len(records),
         "splits": {s: sum(r["split"] == s for r in records) for s in sorted(SPLITS)},
         "relations": {rel: {
