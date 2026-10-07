@@ -21,8 +21,12 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
+from core.run_log import RunLogger
+from core.step_trace import timed
 from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
+
+_LOG = RunLogger(__name__)
 
 
 def _default_retrieval_ks() -> tuple[int, ...]:
@@ -230,12 +234,30 @@ def validate_sources(request):
         raise ValueError('ablation implementation changed; prepare again locally')
 
 
-def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_checkpoint=None, config=None, checkpoint_role='selected',composer=None,token_cache=None):
-    from core.attribute_universe import attribute_registry
+class _TextPool:
+    """Interned model texts shared by the baseline, variant and candidate phases."""
+
+    def __init__(self):
+        self.texts, self.lookup = [], {}
+
+    def intern(self, text):
+        if text not in self.lookup:
+            self.lookup[text] = len(self.texts)
+            self.texts.append(text)
+        return self.lookup[text]
+
+
+def _compose(row, composer):
     from core.model_input import build_sku_text, model_input_info
     from core.sku_identity import row_identity
-    from core.attribute_conflicts import canonical_attribute_info
-    from core.attribute_decision import engine
+    if row.get('frozen_payload'):
+        return row['frozen_payload']
+    if composer is not None:
+        return composer(row)
+    return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
+
+
+def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
     if track not in {'text', 'gnn_only', 'hybrid'}:
         raise ValueError('unknown track')
@@ -247,6 +269,10 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
                TRAIN_ROOT/'src/graph_tracks/infer.py',TRAIN_ROOT/'src/graph_tracks/pooling.py',
                TRAIN_ROOT/'src/model_tracks/ablation_retrieval.py',TRAIN_ROOT/'src/training/hnsw_index.py']
     sources = {source_name(p): checkpoint_identity(Path(p)) for p in inputs}
+    return cfg, sources
+
+
+def _selected_pairs(pairs, cfg):
     chosen = sample_pairs(pd.read_csv(pairs, dtype=str, keep_default_na=False), cfg)
     # A present-but-empty slice column reads as '' (not None); normalize
     # all-empty axes to None so they are reported in missing_axes and the
@@ -255,20 +281,39 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         if chosen and all(p.get(axis) is None or p.get(axis) == '' for p in chosen):
             for p in chosen:
                 p[axis] = None
+    return chosen
+
+
+def _catalog_rows(catalog):
     from core.text import normalized_attribute_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
-    rows = frame.set_index('sku_id', drop=False).to_dict('index')
-    ids = sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
-    if set(ids)-rows.keys():
-        raise ValueError('pair endpoint absent from catalog')
+    return frame.set_index('sku_id', drop=False).to_dict('index')
+
+
+def _pair_endpoints(chosen):
+    return sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
+
+
+def _attributes(cfg):
+    from core.attribute_universe import attribute_registry
     attributes = cfg.attributes or sorted(attribute_registry())
     if len(set(attributes)) != len(attributes) or set(attributes)-attribute_registry().keys():
         raise ValueError('attributes must be unique registry keys')
+    return attributes
+
+
+def _listing_records(listings, ids, cfg):
     records = {r['sku_id']: r for r in load_records(listings)} if listings else {}
     if listings and any(i not in records or (cfg.coverage != 'all' and records[i]['split'] != cfg.split) for i in ids):
         raise ValueError('graph endpoints must belong to the selected held-out split')
+    return records
+
+
+def _pair_evidence(chosen, rows, cfg):
+    from core.attribute_conflicts import canonical_attribute_info
+    from core.attribute_decision import engine
     for pair in chosen:
         a, b = (rows[pair[k]] for k in ('sku_id1', 'sku_id2'))
         pair['gtin1'], pair['gtin2'] = a.get('gtin'), b.get('gtin')
@@ -278,24 +323,15 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
             pair['evidence_scope'] = 'frozen payload; raw-row evidence unavailable'
         for axis in cfg.slice_columns:
             pair.setdefault(axis, None)
-    texts, lookup = [], {}
-    def intern(text):
-        if text not in lookup:
-            lookup[text] = len(texts)
-            texts.append(text)
-        return lookup[text]
-    def compose(row):
-        if row.get('frozen_payload'):
-            return row['frozen_payload']
-        if composer is not None:
-            return composer(row)
-        return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
-    started = time.monotonic()
+    return chosen
+
+
+def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, listings, composer, started):
     print(f'[ablation/local] composing baseline endpoints={len(ids)} attributes={len(attributes)}',flush=True)
     baseline_text = []
     if track != 'gnn_only':
         for n,i in enumerate(ids):
-            baseline_text.append(intern(compose(rows[i])))
+            baseline_text.append(pool.intern(_compose(rows[i], composer)))
             if (n+1) % 25 == 0 or n+1 == len(ids):
                 print(f'[ablation/local] baseline={n+1}/{len(ids)} elapsed={time.monotonic()-started:.1f}s',flush=True)
     baseline_records = [records[i] for i in ids] if listings else []
@@ -316,7 +352,7 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
                     kept_attribute = ';'.join(kept_parts)
                     changed_row = ({**rows[i], 'attribute': kept_attribute}
                         if not frozen else declaration_removed(rows[i], attribute))
-                    altered_text.append(baseline_text[n] if changed_row == rows[i] else intern(compose(changed_row)))
+                    altered_text.append(baseline_text[n] if changed_row == rows[i] else pool.intern(_compose(changed_row, composer)))
                 else:
                     altered_text.append(baseline_text[n])
         altered_records = [graph_removed(r, cfg.graph_fields.get(attribute, [])) for r in baseline_records]
@@ -328,7 +364,11 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
                           (bool(gr) and gr[n] != baseline_records[n]) for n in range(len(ids)))
             variants.append({'attribute':attribute, 'channel':channel, 'text_indices':ti,
                              'records':gr, 'changed_listings':changed})
-        print(f'[ablation/local] attribute={attr_index}/{len(attributes)} {attribute} unique_texts={len(texts)} elapsed={time.monotonic()-started:.1f}s',flush=True)
+        print(f'[ablation/local] attribute={attr_index}/{len(attributes)} {attribute} unique_texts={len(pool.texts)} elapsed={time.monotonic()-started:.1f}s',flush=True)
+    return baseline_text, variants
+
+
+def _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, listings, composer, started):
     if cfg.retrieval_catalog not in {'full','sampled'}:
         raise ValueError('retrieval_catalog must be full or sampled')
     candidate_ids = sorted(rows) if cfg.retrieval_catalog == 'full' else ids
@@ -337,16 +377,21 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         baseline_lookup = dict(zip(ids,baseline_text))
         last_progress = time.monotonic()
         for n,i in enumerate(candidate_ids,1):
-            candidate_text.append(baseline_lookup[i] if i in baseline_lookup else intern(compose(rows[i])))
+            candidate_text.append(baseline_lookup[i] if i in baseline_lookup else pool.intern(_compose(rows[i], composer)))
             if n == len(candidate_ids) or time.monotonic()-last_progress >= 10:
                 print(f'[ablation/local] candidate texts={n}/{len(candidate_ids)} elapsed={time.monotonic()-started:.1f}s',flush=True)
                 last_progress = time.monotonic()
     candidate_records = [records[i] for i in candidate_ids] if listings else []
-    request = {'schema':'er-attribute-ablation-v2','track':track,'checkpoint_role':checkpoint_role, 'settings':cfg.model_dump(),
+    return candidate_ids, candidate_text, candidate_records
+
+
+def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_checkpoint,
+                      candidate_ids, candidate_text, candidate_records, ids, pool, chosen, variants, attributes):
+    return {'schema':'er-attribute-ablation-v2','track':track,'checkpoint_role':checkpoint_role, 'settings':cfg.model_dump(),
         'sources':sources, 'composition':composition_fingerprint(), 'implementation_sha256':file_hash(Path(__file__)),
         'checkpoint':source_name(checkpoint), 'text_checkpoint':source_name(text_checkpoint) if text_checkpoint else None,
         'candidate_ids':candidate_ids,'candidate_text_indices':candidate_text,'candidate_records':candidate_records,
-        'ids':ids, 'texts':texts, 'pairs':chosen, 'variants':variants,
+        'ids':ids, 'texts':pool.texts, 'pairs':chosen, 'variants':variants,
         'cohort_sha256':digest(chosen),
         'coverage':{'mode':cfg.coverage, 'pair_rows':len(chosen),
             'by_scope':pd.Series([p.get('evaluation_scope', p['split']) for p in chosen]).value_counts().to_dict(),
@@ -356,6 +401,9 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         'intervention':'declared attribute removed; title/brand and training graph context fixed',
         'retrieval_scope':f'fixed {cfg.retrieval_catalog} catalog; query-only interventions; incomplete known-positive truth',
         'missing_axes':[a for a in cfg.slice_columns if all(p.get(a) is None or p.get(a) == '' for p in chosen)]}
+
+
+def _persist_prepared(request, cfg, token_cache):
     from model_tracks.ablation_inputs import prepare_inputs
     resolve(cfg.output_dir).mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(dir=resolve(cfg.output_dir)) as tmp:
@@ -374,7 +422,33 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         if path.exists() and json.loads(path.read_text()) != request:
             raise ValueError('existing request differs')
         write(path,request)
-    print(f'[ablation/local] pairs={len(chosen)} endpoints={len(ids)} unique_texts={len(texts)} '
+    return path
+
+
+@timed
+def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_checkpoint=None, config=None, checkpoint_role='selected',composer=None,token_cache=None):
+    with _LOG.section('ablation.prepare.sources'):
+        cfg, sources = _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config)
+    with _LOG.section('ablation.prepare.cohort'):
+        chosen = _selected_pairs(pairs, cfg)
+        rows = _catalog_rows(catalog)
+        ids = _pair_endpoints(chosen)
+        if set(ids)-rows.keys():
+            raise ValueError('pair endpoint absent from catalog')
+        attributes = _attributes(cfg)
+        records = _listing_records(listings, ids, cfg)
+        _pair_evidence(chosen, rows, cfg)
+    pool = _TextPool()
+    started = time.monotonic()
+    with _LOG.section('ablation.prepare.baseline_variants'):
+        baseline_text, variants = _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, listings, composer, started)
+    with _LOG.section('ablation.prepare.candidates'):
+        candidate_ids, candidate_text, candidate_records = _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, listings, composer, started)
+    with _LOG.section('ablation.prepare.persist'):
+        request = _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_checkpoint,
+                                    candidate_ids, candidate_text, candidate_records, ids, pool, chosen, variants, attributes)
+        path = _persist_prepared(request, cfg, token_cache)
+    print(f'[ablation/local] pairs={len(chosen)} endpoints={len(ids)} unique_texts={len(pool.texts)} '
           f'variants={len(variants)-1} changed={sum(v["changed_listings"] > 0 for v in variants[1:])}', flush=True)
     return path
 
@@ -389,77 +463,74 @@ def load_prepared(request_path, request):
     return np.load(path,allow_pickle=False)
 
 
-@scoped_request
-def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
-    """Colab inference only; all interventions and texts arrive prepared."""
-    import torch
+def _validated_device(device):
     from model_tracks.embedding_forward import validate_embedding_device
-    device = validate_embedding_device(device)
-    if output.exists():
-        raise FileExistsError(output)
-    request = json.loads(request_path.read_text())
-    # Sources are relocated by the launcher but expected hashes stay frozen.
-    validate_sources(request)
-    from model_tracks.ablation_inputs import load_batch
+    return validate_embedding_device(device)
+
+
+def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
+    import torch
     from core.encoding_inputs import tokenization_policy, load_token_features
-    arrays = load_prepared(request_path,request)
-    plan = request['prepared_inputs']
-    track = request['track']
-    text_vectors = None
-    if track != 'gnn_only':
-        from sentence_transformers import SentenceTransformer
-        checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
-        model = text_model
-        expected_checkpoint = checkpoint_identity(resolve(checkpoint))
-        if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
-            raise ValueError('shared text model checkpoint differs from frozen request')
-        if model is not None and model.device.type != device:
-            raise ValueError('shared text model device differs from frozen request')
-        if model is None:
-            model = SentenceTransformer(str(resolve(checkpoint)),device=device,local_files_only=True)
-        model.eval()
-        if tokenization_policy(model) != plan['tokenization']:
-            raise ValueError('worker tokenizer/checkpoint policy differs from local preparation')
-        covered = np.zeros(len(request['texts']),dtype=bool)
-        seeded = None
-        if saved_text is not None:
-            from graph_tracks.data import load_text_cache
-            from graph_tracks.text_cache import texts_hash
-            from core.model_input import model_input_composition
-            with np.load(saved_text,allow_pickle=False) as cache:
-                saved_ids = cache['ids'].astype(str).tolist()
-            candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
-            mapping = dict(zip(request['candidate_ids'],request['candidate_text_indices']))
-            if set(saved_ids) != set(mapping):
-                raise ValueError('baseline text export catalog differs from prepared ablation')
-            if metadata.get('checkpoint_sha256') != expected_checkpoint or metadata.get('tokenization') != plan['tokenization'] or metadata.get('composition') != model_input_composition().model_dump(mode='json') or metadata.get('text_sha256') != texts_hash([request['texts'][mapping[key]] for key in saved_ids]):
-                raise ValueError('baseline text export differs from prepared native text/checkpoint')
-            seeded = np.empty((len(request['texts']),candidates.shape[-1]),dtype=np.float32)
-            for row,index in enumerate(request['candidate_text_indices']):
-                if covered[index] and not np.allclose(seeded[index],candidates[row],atol=1e-5):
-                    raise ValueError('identical baseline texts have inconsistent exported vectors')
-                seeded[index] = candidates[row]
-                covered[index] = True
-        chunks = []
-        with torch.no_grad():
-            for n,batch in enumerate(plan['token_batches'],1):
-                features = load_token_features(arrays,batch,device)
-                selected = np.flatnonzero(~covered[batch['start']:batch['start']+batch['count']])
-                if not len(selected):
-                    continue
-                features = {key:value[torch.as_tensor(selected,device=device)] if isinstance(value,torch.Tensor) and value.ndim and len(value)==batch['count'] else value for key,value in features.items()}
-                vectors = model(features)['sentence_embedding']
-                vectors = torch.nn.functional.normalize(vectors,p=2,dim=1).cpu().numpy().astype(np.float32)
-                if seeded is None:
-                    seeded = np.empty((len(request['texts']),vectors.shape[-1]),dtype=np.float32)
-                positions = batch['start']+selected
-                seeded[positions] = vectors
-                covered[positions] = True
-                print(f'[ablation/gpu] changed native texts={len(selected)} batch={n}/{len(plan["token_batches"])}; truncated=0',flush=True)
-        if not covered.all():
-            raise ValueError('prepared ablation text vectors miss native inputs')
-        text_vectors = seeded
-        del model
+    if track == 'gnn_only':
+        return None
+    from sentence_transformers import SentenceTransformer
+    checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
+    model = text_model
+    expected_checkpoint = checkpoint_identity(resolve(checkpoint))
+    if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
+        raise ValueError('shared text model checkpoint differs from frozen request')
+    if model is not None and model.device.type != device:
+        raise ValueError('shared text model device differs from frozen request')
+    if model is None:
+        model = SentenceTransformer(str(resolve(checkpoint)),device=device,local_files_only=True)
+    model.eval()
+    if tokenization_policy(model) != plan['tokenization']:
+        raise ValueError('worker tokenizer/checkpoint policy differs from local preparation')
+    covered = np.zeros(len(request['texts']),dtype=bool)
+    seeded = None
+    if saved_text is not None:
+        from graph_tracks.data import load_text_cache
+        from graph_tracks.text_cache import texts_hash
+        from core.model_input import model_input_composition
+        with np.load(saved_text,allow_pickle=False) as cache:
+            saved_ids = cache['ids'].astype(str).tolist()
+        candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
+        mapping = dict(zip(request['candidate_ids'],request['candidate_text_indices']))
+        if set(saved_ids) != set(mapping):
+            raise ValueError('baseline text export catalog differs from prepared ablation')
+        if metadata.get('checkpoint_sha256') != expected_checkpoint or metadata.get('tokenization') != plan['tokenization'] or metadata.get('composition') != model_input_composition().model_dump(mode='json') or metadata.get('text_sha256') != texts_hash([request['texts'][mapping[key]] for key in saved_ids]):
+            raise ValueError('baseline text export differs from prepared native text/checkpoint')
+        seeded = np.empty((len(request['texts']),candidates.shape[-1]),dtype=np.float32)
+        for row,index in enumerate(request['candidate_text_indices']):
+            if covered[index] and not np.allclose(seeded[index],candidates[row],atol=1e-5):
+                raise ValueError('identical baseline texts have inconsistent exported vectors')
+            seeded[index] = candidates[row]
+            covered[index] = True
+    chunks = []
+    with torch.no_grad():
+        for n,batch in enumerate(plan['token_batches'],1):
+            features = load_token_features(arrays,batch,device)
+            selected = np.flatnonzero(~covered[batch['start']:batch['start']+batch['count']])
+            if not len(selected):
+                continue
+            features = {key:value[torch.as_tensor(selected,device=device)] if isinstance(value,torch.Tensor) and value.ndim and len(value)==batch['count'] else value for key,value in features.items()}
+            vectors = model(features)['sentence_embedding']
+            vectors = torch.nn.functional.normalize(vectors,p=2,dim=1).cpu().numpy().astype(np.float32)
+            if seeded is None:
+                seeded = np.empty((len(request['texts']),vectors.shape[-1]),dtype=np.float32)
+            positions = batch['start']+selected
+            seeded[positions] = vectors
+            covered[positions] = True
+            print(f'[ablation/gpu] changed native texts={len(selected)} batch={n}/{len(plan["token_batches"])}; truncated=0',flush=True)
+    if not covered.all():
+        raise ValueError('prepared ablation text vectors miss native inputs')
+    text_vectors = seeded
+    del model
+    return text_vectors
+
+
+def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
+    from model_tracks.ablation_inputs import load_batch
     encoder = None
     graph_batches = {}
     if track != 'text':
@@ -475,6 +546,11 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
             raise ValueError('prepared vocabulary differs from checkpoint')
         graph_batches = {key:[load_batch(arrays,prefix,device,vocabulary) for prefix in prefixes]
                          for key,prefixes in plan['graph_batches'].items()}
+    return encoder, graph_batches
+
+
+def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
+    from model_tracks.ablation_inputs import load_batch
     candidate_vectors = saved_candidates
     if candidate_vectors is not None and (candidate_vectors.dtype != np.float32 or candidate_vectors.shape[0] != len(request['candidate_ids']) or not np.isfinite(candidate_vectors).all() or not np.allclose(np.linalg.norm(candidate_vectors,axis=1),1,atol=1e-4)):
         raise ValueError('saved graph candidate vector contract mismatch')
@@ -482,6 +558,11 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         candidate_text = text_vectors[arrays['candidate_text_indices']] if text_vectors is not None else None
         candidate_vectors = candidate_text if encoder is None else encoder.encode_prepared(
             [load_batch(arrays,prefix,device,plan['vocabulary']) for prefix in plan['candidate_batches']],candidate_text)
+    return candidate_vectors
+
+
+def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
+    import torch
     indices = arrays['pair_indices']
     results = []
     for n,job in enumerate(plan['jobs'],1):
@@ -503,6 +584,10 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         print(f'[ablation/{device}] prepared inference job={n}/{len(plan["jobs"])}',flush=True)
     vectors = [results[job][0] for job in plan['variant_jobs']]
     scores = [results[job][1] for job in plan['variant_jobs']]
+    return vectors, scores
+
+
+def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('xb') as handle:
@@ -512,63 +597,102 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
     output.with_suffix('.sha256').write_text(file_hash(output))
 
 
+@timed
+@scoped_request
+def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
+    """Colab inference only; all interventions and texts arrive prepared."""
+    import torch
+    device = _validated_device(device)
+    if output.exists():
+        raise FileExistsError(output)
+    request = json.loads(request_path.read_text())
+    # Sources are relocated by the launcher but expected hashes stay frozen.
+    validate_sources(request)
+    from model_tracks.ablation_inputs import load_batch
+    from core.encoding_inputs import tokenization_policy, load_token_features
+    arrays = load_prepared(request_path,request)
+    plan = request['prepared_inputs']
+    track = request['track']
+    with _LOG.section('ablation.encode.text_vectors'):
+        text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+    with _LOG.section('ablation.encode.graph_encoder'):
+        encoder, graph_batches = _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
+    with _LOG.section('ablation.encode.candidates'):
+        candidate_vectors = _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates)
+    with _LOG.section('ablation.encode.jobs'):
+        vectors, scores = _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates)
+    with _LOG.section('ablation.encode.persist'):
+        _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
+
+
+def _threshold_from_csv(path, value, track, checkpoint):
+    frame = pd.read_csv(path)
+    values = frame['threshold'].tolist() if 'threshold' in frame else []
+    if 'threshold' in frame:
+        hits = frame[frame['threshold'].apply(
+            lambda x: isinstance(x,(int,float)) and np.isfinite(x) and float(x) == value)]
+        for column,key in (('model','track'),('checkpoint','checkpoint')):
+            if column in frame:
+                found = sorted({str(v) for v in hits[column].tolist() if isinstance(v,str) and v})
+                if len(found) > 1:
+                    raise ValueError(f'threshold source attests conflicting {column} values')
+                if found:
+                    if key == 'track':
+                        track = found[0]
+                    else:
+                        checkpoint = found[0]
+    return values, track, checkpoint
+
+
+def _threshold_from_json(path, value):
+    document = json.loads(path.read_text())
+    claimed_sha256 = None
+    track = None
+    checkpoint = None
+    if isinstance(document,dict):
+        claimed_sha256 = document.get('checkpoint_sha256') or document.get('vectors_metadata',{}).get('checkpoint_sha256')
+    values = []
+    attested = {'track':set(), 'checkpoint':set()}
+    def walk(obj):
+        if isinstance(obj, dict):
+            if isinstance(obj.get('threshold'),(int,float)) and np.isfinite(obj['threshold']):
+                values.append(obj['threshold'])
+                for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
+                    witness = obj.get(column)
+                    if isinstance(witness,str) and witness:
+                        attested[key].add(witness)
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                walk(v)
+    walk(document)
+    # manifests pin identity at the top level while thresholds nest in summaries
+    for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
+        witness = document.get(column) if isinstance(document,dict) else None
+        if isinstance(witness,str) and witness:
+            attested[key].add(witness)
+    for key,seen in attested.items():
+        if len(seen) > 1:
+            raise ValueError(f'threshold source attests conflicting {key} values')
+        if seen:
+            if key == 'track':
+                track = next(iter(seen))
+            else:
+                checkpoint = next(iter(seen))
+    return values, track, checkpoint, claimed_sha256
+
+
 def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
         raise ValueError('threshold source must be an existing saved report')
     before = file_hash(path)
-    track = None
-    checkpoint = None
-    claimed_sha256 = None
     if path.suffix == '.csv':
-        frame = pd.read_csv(path)
-        values = frame['threshold'].tolist() if 'threshold' in frame else []
-        if 'threshold' in frame:
-            hits = frame[frame['threshold'].apply(
-                lambda x: isinstance(x,(int,float)) and np.isfinite(x) and float(x) == value)]
-            for column,key in (('model','track'),('checkpoint','checkpoint')):
-                if column in frame:
-                    found = sorted({str(v) for v in hits[column].tolist() if isinstance(v,str) and v})
-                    if len(found) > 1:
-                        raise ValueError(f'threshold source attests conflicting {column} values')
-                    if found:
-                        if key == 'track':
-                            track = found[0]
-                        else:
-                            checkpoint = found[0]
+        values, track, checkpoint = _threshold_from_csv(path, value, None, None)
+        claimed_sha256 = None
     else:
-        document = json.loads(path.read_text())
-        if isinstance(document,dict):
-            claimed_sha256 = document.get('checkpoint_sha256') or document.get('vectors_metadata',{}).get('checkpoint_sha256')
-        values = []
-        attested = {'track':set(), 'checkpoint':set()}
-        def walk(obj):
-            if isinstance(obj, dict):
-                if isinstance(obj.get('threshold'),(int,float)) and np.isfinite(obj['threshold']):
-                    values.append(obj['threshold'])
-                    for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
-                        witness = obj.get(column)
-                        if isinstance(witness,str) and witness:
-                            attested[key].add(witness)
-                for v in obj.values():
-                    walk(v)
-            elif isinstance(obj, list):
-                for v in obj:
-                    walk(v)
-        walk(document)
-        # manifests pin identity at the top level while thresholds nest in summaries
-        for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
-            witness = document.get(column) if isinstance(document,dict) else None
-            if isinstance(witness,str) and witness:
-                attested[key].add(witness)
-        for key,seen in attested.items():
-            if len(seen) > 1:
-                raise ValueError(f'threshold source attests conflicting {key} values')
-            if seen:
-                if key == 'track':
-                    track = next(iter(seen))
-                else:
-                    checkpoint = next(iter(seen))
+        values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
     if not any(isinstance(x, (int,float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
     if before != file_hash(path):
@@ -629,31 +753,11 @@ def validate_vectors(request_path, result):
     return request,vectors,scores,candidates
 
 
-@scoped_request
-def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
-    """Paired local comparisons at a supplied, already selected threshold."""
-    if not np.isfinite(threshold) or not threshold_source:
-        raise ValueError('frozen threshold and its source are required')
-    threshold_provenance = frozen_threshold(threshold_source, threshold)
-    request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
-    threshold_binding = verify_threshold_binding(request,threshold_provenance)
-    nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
-    cfg = Settings.model_validate(request['settings'])
-    if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
-        raise ValueError('retrieval ks must be positive')
-    id_lookup = {i:n for n,i in enumerate(request['ids'])}
-    from model_tracks.ablation_retrieval import RetrievalComparison
-    candidate_ids = request.get('candidate_ids',request['ids'])
-    if request.get('candidate_ids') and candidate_vectors is None:
-        raise ValueError('full catalog candidate vectors missing')
-    candidates = vectors[0] if candidate_vectors is None else candidate_vectors
-    retrieval = RetrievalComparison(candidate_ids,candidates,request,request_path,cfg)
+@timed
+def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
+    rows = []
     def ranks(vec):
         return retrieval.ranks(vec)
-    baseline_ranks = ranks(vectors[0])
-    ann_baseline = retrieval.ann_hits(vectors[0])
-    comparison_cache = {hashlib.sha256(vectors[0].tobytes()).hexdigest():(baseline_ranks,ann_baseline)}
-    rows = []
     for n, variant in enumerate(request['variants'][1:], 1):
         if not variant['changed_listings'] and (not np.array_equal(vectors[n],vectors[0]) or not np.array_equal(scores[n],scores[0])):
             raise ValueError('no-op ablation changed model output')
@@ -683,8 +787,11 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
                 'ann_baseline_hits':ann_baseline[p], 'ann_ablated_hits':ann_ablated[p],
                 'known_positive_recall_change':{str(k):[(int(rank[p][e]<=k)-int(baseline_ranks[p][e]<=k))
                     if pair['label']=='1' else None for e in (0,1)] for k in cfg.retrieval_ks}})
-    retrieval.close()
-    output = {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
+    return rows
+
+
+def _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids):
+    return {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
         'request_path':source_name(request_path), 'request_sha256':file_hash(request_path),
         'result_path':source_name(result),'result_sha256':file_hash(result),
         'sources':request['sources'],'composition':request['composition'],
@@ -694,6 +801,38 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         'missing_axes':request['missing_axes'], 'retrieval_catalog_count':len(candidate_ids),
         'cohort_sha256':request.get('cohort_sha256'), 'coverage':request.get('coverage'),
         'retrieval_intervention':'query only; fixed candidates', 'rows':rows}
+
+
+@timed
+@scoped_request
+def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
+    """Paired local comparisons at a supplied, already selected threshold."""
+    if not np.isfinite(threshold) or not threshold_source:
+        raise ValueError('frozen threshold and its source are required')
+    threshold_provenance = frozen_threshold(threshold_source, threshold)
+    request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
+    threshold_binding = verify_threshold_binding(request,threshold_provenance)
+    nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
+    cfg = Settings.model_validate(request['settings'])
+    with _LOG.section('ablation.report.comparison'):
+        if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
+            raise ValueError('retrieval ks must be positive')
+        id_lookup = {i:n for n,i in enumerate(request['ids'])}
+        from model_tracks.ablation_retrieval import RetrievalComparison
+        candidate_ids = request.get('candidate_ids',request['ids'])
+        if request.get('candidate_ids') and candidate_vectors is None:
+            raise ValueError('full catalog candidate vectors missing')
+        candidates = vectors[0] if candidate_vectors is None else candidate_vectors
+        retrieval = RetrievalComparison(candidate_ids,candidates,request,request_path,cfg)
+        def ranks(vec):
+            return retrieval.ranks(vec)
+        baseline_ranks = ranks(vectors[0])
+        ann_baseline = retrieval.ann_hits(vectors[0])
+        comparison_cache = {hashlib.sha256(vectors[0].tobytes()).hexdigest():(baseline_ranks,ann_baseline)}
+        rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
+                                baseline_ranks, ann_baseline, comparison_cache)
+        retrieval.close()
+    output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
     validate_sources(request)
     if frozen_threshold(threshold_source, threshold) != threshold_provenance:
         raise ValueError('threshold report changed during comparison')
@@ -716,7 +855,7 @@ def save_report(request_path, output, *, config=None):
     return path
 
 
-def main():
+def _cli_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     prep = sub.add_parser('prepare')
@@ -734,6 +873,13 @@ def main():
     post.add_argument('--threshold',type=float,required=True)
     post.add_argument('--threshold-source',required=True)
     post.add_argument('--config',type=Path)
+    return parser
+
+
+@timed
+def main():
+    RunLogger.configure_console()
+    parser = _cli_parser()
     args = vars(parser.parse_args())
     action = args.pop('action')
     if action == 'prepare':
