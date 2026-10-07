@@ -1,0 +1,19 @@
+{
+  "label": "before",
+  "rows": 1000,
+  "reps": 2,
+  "row_identity_seconds": 4.652,
+  "row_identity_us_per_call": 4652.34,
+  "row_identity_samples": [
+    4.926,
+    4.379
+  ],
+  "row_identity_digest": "03b44512f85c6832c90e6c0c744f9751c50a0a8484c6fec3c97472e08f301974",
+  "row_dimensions_seconds": 0.305,
+  "row_dimensions_us_per_call": 305.33,
+  "row_dimensions_samples": [
+    0.301,
+    0.31
+  ],
+  "row_dimensions_digest": "0b7d20f082dfcc23fa58ea80d7eab9e80c85c36753dd0c66d73d8eb0f0a18d8d"
+}
