@@ -1,0 +1,37 @@
+{
+  "a": "/tmp/opc/reg2-A-r16/src",
+  "b": "/tmp/opc/ER-reg2-A/src",
+  "best_a": {
+    "attribute_fields": 0.033203,
+    "critical_claims": 0.165192,
+    "identity": 0.353047,
+    "norm_attr_keys": 0.084401,
+    "volume_evidence": 0.081717
+  },
+  "best_b": {
+    "attribute_fields": 0.004671,
+    "critical_claims": 0.16955,
+    "identity": 0.221541,
+    "norm_attr_keys": 0.004679,
+    "volume_evidence": 0.054668
+  },
+  "digests_a": [
+    "12221f19f29747d2345d70024b9d56b2fb678691d6569bad828417d558a87b29"
+  ],
+  "digests_b": [
+    "12221f19f29747d2345d70024b9d56b2fb678691d6569bad828417d558a87b29"
+  ],
+  "reps": 3,
+  "rounds": 3,
+  "tag": "ab",
+  "totals_a": [
+    0.807934,
+    1.002296,
+    0.871331
+  ],
+  "totals_b": [
+    0.549724,
+    0.728967,
+    0.499934
+  ]
+}
