@@ -47,6 +47,24 @@ set-valued agreement semantics (bag equality, evaluation.slice_agreement =
 "set_bag") is decided and recorded in write_manifest's slice-coverage block
 below; the raw-string comparison stays reachable as "scalar" for
 byte-stability audits.
+
+RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
+-------------------------------------------------------------------------
+- :class:`SliceBagTokenizer` — parse one slice column literal into a value
+  multiset (:func:`parse_field_bag` stays its public face).
+- :class:`SliceFieldGrid` — owns SLICE_FIELDS, the frozen per-side canonical
+  values (``_canonical_values``), and set-vs-scalar pair agreement counts.
+- :class:`NegativeFoldPolicy` — the scored half's fold-assignment rule
+  (:func:`negative_pair_fold`), the evidence measurement
+  (:func:`negative_policy_evidence`), and the pinned decision's emit guard.
+- :class:`FoldResolver` — gtin -> fold/component resolution for the census
+  endpoints, with an explicit miss count.
+- :class:`ValidationRowAssembler` — one labeled pair -> one output row.
+- :class:`LeakGuards` — the pre-write leak assertions.
+- :func:`write_manifest` — the manifest emission (kept module-level: it is
+  part of this module's byte-identical byte-for-byte surface and pinned by
+  the pinned-update convention comments).
+- :func:`build` — the stage pipeline that threads these owners together.
 """
 from __future__ import annotations
 
@@ -58,6 +76,8 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import F, RESULTS, SEED, load_dataset_deduped, training_cfg
+from core.manifest import atomic_write_csv
+from core.run_log import RunLogger
 from core.schemas import check_canonical_records_frame, upgrade_canonical_records_frame
 from training.folds import (
     component_ids,
@@ -65,6 +85,8 @@ from training.folds import (
     merged_component_graph,
     normalize_gtin,
 )
+
+_LOG = RunLogger(__name__)
 
 # The six fields P0 keeps as gates. `pulp_set` is deliberately absent: it is
 # populated in 2.3% of canonical records and 0.5% of verified positives, which
@@ -153,393 +175,8 @@ NEGATIVE_FOLD_POLICY_WITHHOLD = "withhold_straddle"
 NEGATIVE_FOLD_POLICY_TRAIN_SIDE = "train_side"
 
 
-def negative_pair_fold(
-    policy: str, fold_a: int, fold_b: int, n_folds: int
-) -> int:
-    """THE scored half's negative fold-assignment rule (single source).
-
-    Positives NEVER route through this: their two endpoints share a fold by
-    graph construction (the leak guarantee below), and re-deriving the pair
-    fold here would silently fork the split. This rule is for MINED
-    NEGATIVES only — similarity links whose endpoints legitimately sit in
-    different folds ("folds.derive_holdout" assigns entities, not pairs).
-
-    ``withhold_straddle`` (A): the pair's fold stays the raw ``fold_a`` on
-    both columns, preserving the legacy semantics — a consumer scores a
-    negative only where ``fold == fold_2`` equals its fold, so a mismatched
-    pair scores nowhere and is reported by ``straddles_fold``/
-    ``endpoint_in_train`` instead.
-
-    ``train_side`` (B): the pair gets one whole fold — the train-side
-    endpoint's fold when either endpoint is a train fold (OUT of the scored
-    half, back in the training population), else the fold of ``fold_a`` as
-    the deterministic boundary tiebreak for the two unseen endpoints (the
-    dev/test straddle that A could never score).
-    """
-    if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
-        return fold_a
-    if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
-        if fold_a < n_folds - 2 or fold_b < n_folds - 2:
-            return min(fold_a, fold_b)
-        return fold_a
-    raise ValueError(
-        f"unknown negative_fold_policy {policy!r}; expected one of "
-        f"({NEGATIVE_FOLD_POLICY_WITHHOLD!r}, {NEGATIVE_FOLD_POLICY_TRAIN_SIDE!r})"
-    )
-
-
-def negative_policy_evidence(
-    frame: pd.DataFrame, min_test_negatives: int, n_folds: int = 4
-) -> dict[str, dict[str, object]]:
-    """Decide-with-numbers: the criteria the policy decision is pinned on.
-
-    Runs BOTH policies over one frame carrying ``fold``/``fold_2``/
-    ``true_label``/``v1_*``/``v2_*`` columns and reports, per policy: scored
-    DEV/TEST negatives, scored DEV/TEST positives, withheld negatives, and
-    thin slice cells (populated (field, value) cells among scored negatives
-    with fewer than ``min_test_negatives`` members — the same thinness
-    contract ``robust_validation`` reuses). Percentages are computed, the
-    winner is the caller's to record — this function does not choose.
-
-    Raises SystemExit when a policy's population is INCONSISTENT with the
-    frame it claims to measure (e.g. positives straddling under B): a
-    criterion computed on a broken population cannot back a decision.
-    """
-    criteria: dict[str, dict[str, object]] = {}
-    for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD, NEGATIVE_FOLD_POLICY_TRAIN_SIDE):
-        pos = frame[frame.true_label == 1]
-        neg = frame[frame.true_label == 0]
-        # A positive's pair-fold is its shared endpoint fold under BOTH
-        # policies (the leak guarantee asserts fold == fold_2 for positives,
-        # so a single column carries it).
-        dev, test = n_folds - 2, n_folds - 1
-        in_dev_pos = pos["fold"].astype(int) == dev
-        in_test_pos = pos["fold"].astype(int) == test
-        f1 = neg["fold"].astype(int)
-        f2 = neg["fold_2"].astype(int)
-        if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
-            # A: legacy — a negative scores only where BOTH endpoint folds
-            # equal the scored fold; a mismatched pair scores nowhere.
-            in_dev_neg = (f1 == dev) & (f2 == dev)
-            in_test_neg = (f1 == test) & (f2 == test)
-        else:
-            # Vectorized negative_pair_fold (the same rule, no row loop):
-            # train-side endpoint present -> min(f1, f2), else fold_a. An
-            # empty negative population yields empty assignments — recorded,
-            # never a crash.
-            import numpy as np
-
-            train_side = (f1 < n_folds - 2) | (f2 < n_folds - 2)
-            assigned = pd.Series(
-                np.where(train_side, np.minimum(f1, f2), f1), index=neg.index
-            )
-            in_dev_neg = assigned == dev
-            in_test_neg = assigned == test
-        scored = {
-            "dev": in_dev_neg, "test": in_test_neg,
-        }
-        # thin-cell criterion requires the frozen slice columns; a frame
-        # without them (synthetic fold-contract tests) records UNavailable —
-        # explicit, never silently claimed as "not thin".
-        has_slices = all(f"v1_{name}" in frame.columns for name, _ in SLICE_FIELDS)
-        thin: dict[str, dict[str, int]] | None = (
-            {} if has_slices else None
-        )
-        populated: dict[str, dict[str, int]] | None = (
-            {} if has_slices else None
-        )
-        for half, mask in scored.items() if has_slices else ():
-            rows = neg.loc[mask]
-            for field, _col in SLICE_FIELDS:
-                bag = Counter(rows[f"v1_{field}"][rows[f"v1_{field}"] != ""])
-                extra = rows[f"v2_{field}"][
-                    (rows[f"v2_{field}"] != "") & (rows[f"v2_{field}"] != rows[f"v1_{field}"])
-                ]
-                bag.update(extra)
-                populated.setdefault(half, {})[field] = len(bag)
-                thin.setdefault(half, {})[field] = sum(
-                    1 for count in bag.values() if count < min_test_negatives
-                )
-        criteria[policy] = {
-            "scored_dev_negatives": int(in_dev_neg.sum()),
-            "scored_test_negatives": int(in_test_neg.sum()),
-            "scored_dev_positives": int(in_dev_pos.sum()),
-            "scored_test_positives": int(in_test_pos.sum()),
-            "negatives_withheld_from_scored_half": int(
-                len(neg) - (in_dev_neg.sum() + in_test_neg.sum())
-            ),
-            "populated_cells": populated,
-            "thin_cells": thin,
-        }
-        pos_straddle = int((pos["fold"] != pos["fold_2"]).sum())
-        if pos_straddle:
-            raise SystemExit(
-                f"{pos_straddle} positives straddle a fold — the policy "
-                "evidence population is corrupt (run the leak guards first)"
-            )
-    return criteria
-
-
-def _canonical_values() -> dict[str, dict[str, str]]:
-    """gtin -> {field: canonical value string} from the frozen canonical records."""
-    canon = pd.read_csv(
-        F["canonical_records"], dtype=str, keep_default_na=False, low_memory=False
-    )
-    # Same read contract as the pipeline lanes: migrate a stale artifact and
-    # validate before slicing — the column check below makes the old
-    # "first column might be the key" fallback unreachable.
-    canon = upgrade_canonical_records_frame(canon)
-    check_canonical_records_frame(canon)
-    canon["_key"] = canon["gtin"].map(normalize_gtin)
-    out: dict[str, dict[str, str]] = {}
-    for _, row in canon.iterrows():
-        key = row["_key"]
-        if not key or key in out:
-            continue
-        out[key] = {name: str(row.get(col, "") or "") for name, col in SLICE_FIELDS}
-    return out
-
-
-def build(
-    output: Path | None = None,
-    *,
-    seed: int = SEED,
-    n_folds: int | None = None,
-) -> pd.DataFrame:
-    """Derive the merged graph, cut the split, and return the validation rows."""
-    df = load_dataset_deduped()
-    from training.base_data import load_base_data
-
-    data = load_base_data(df, payload_variant="full")
-    pos = data["pos"]
-    row_bc = data["row_bc"]
-
-    merged_pos, graph_bc, stats = merged_component_graph(pos, row_bc)
-    split = training_cfg().split
-    n_folds = int(n_folds or split.holdout_component_folds)
-    # Routed through the SINGLE entry point, not `holdout_split`. The selftest
-    # guard bans the primitive outside folds.py precisely so the split the
-    # artifact is cut from cannot be derived by different rules than the split
-    # the model trains under -- which is the defect P0 exists to remove. The
-    # graph is passed in pre-merged because `derive_holdout` rebuilds it (idempotent
-    # here: the validation edges are already unioned, so re-union changes nothing).
-    train_bc, dev_bc, test_bc = derive_holdout(
-        pos, row_bc, dict(split), seed=seed
-    )
-
-    # merged_pos/row_bc: derive_holdout re-derives the same merged graph
-    # internally, so these are the identical objects it split on.
-    comp_of = component_ids(merged_pos, graph_bc)
-    # train = every quarter except the last two; dev/test are the LAST two
-    # quarters, so validation is "neither side is a training gtin".
-    fold_of: dict[str, int] = {}
-    for bc in train_bc:
-        fold_of[bc] = 0
-    for bc in dev_bc:
-        fold_of[bc] = n_folds - 2
-    for bc in test_bc:
-        fold_of[bc] = n_folds - 1
-
-    # A labeled gtin has to be resolved to the spelling the graph actually
-    # uses, and the two are not the same string: the fold sets are keys of the
-    # RAW row_bc, while normalize_gtin left-pads a 13-digit gtin to 14. A
-    # 13-digit gtin therefore misses a raw fold set under a normalized lookup
-    # and is silently dropped -- which is how an earlier run of this script
-    # emitted 3 rows out of 8,889. Try the raw spelling first, then the
-    # normalized one, and COUNT the misses rather than skipping in silence.
-    raw_keys = set(fold_of)
-    norm_keys = {normalize_gtin(b) for b in fold_of}
-
-    def resolve(gtin: str) -> str | None:
-        raw = str(gtin).strip()
-        if raw in raw_keys:
-            return raw
-        normed = normalize_gtin(raw)
-        return normed if normed in raw_keys or normed in norm_keys else None
-
-    from core.progress import tracked
-    labeled = pd.read_csv(
-        F["labeled_pairs"], dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
-    )
-    canon = _canonical_values()
-
-    rows: list[dict[str, object]] = []
-    unresolvable = 0
-    for g1, g2, label in tracked(
-        zip(labeled["gtin1"], labeled["gtin2"], labeled["true_label"]),
-        "final_validation_rows",
-        total=len(labeled),
-    ):
-        k1, k2 = resolve(g1), resolve(g2)
-        if k1 is None or k2 is None:
-            # An endpoint outside the graph entirely: it has no fold, so it
-            # cannot be part of a fold-2+3 population.
-            unresolvable += 1
-            continue
-        if fold_of[k1] < n_folds - 2 and fold_of[k2] < n_folds - 2:
-            continue  # both sides in train -> not validation
-        f1, f2 = fold_of[k1], fold_of[k2]
-        label = int(label)
-        # SCORED-HALF POLICY: applied AFTER the evidence pass (below), on the
-        # assembled frame's NEGATIVE rows only — a positive keeps its shared
-        # endpoint fold (leak guarantee). Evidence must measure the RAW
-        # endpoint folds, not post-policy columns; applying the policy here
-        # would make policy A's evidence read the already-B-shaped frame.
-        c1 = canon.get(normalize_gtin(k1), {})
-        c2 = canon.get(normalize_gtin(k2), {})
-        row: dict[str, object] = {
-            "gtin1": k1,
-            "gtin2": k2,
-            "gtin1_norm": normalize_gtin(k1),
-            "gtin2_norm": normalize_gtin(k2),
-            "true_label": int(label),
-            "fold": f1,
-            "fold_2": f2,
-            "component_id": comp_of.get(k1, -1),
-            "component_id_2": comp_of.get(k2, -2),
-            "straddles_fold": f1 != f2,
-            "endpoint_in_train": min(f1, f2) < n_folds - 2,
-        }
-        for name, _col in SLICE_FIELDS:
-            row[f"v1_{name}"] = c1.get(name, "")
-            row[f"v2_{name}"] = c2.get(name, "")
-        rows.append(row)
-
-    out = pd.DataFrame(rows)
-
-    # ── the leak guarantee, asserted before anything hits disk ──
-    pos_rows = out[out.true_label == 1]
-    straddle = int(pos_rows["straddles_fold"].sum())
-    if straddle:
-        raise SystemExit(
-            f"LEAK: {straddle}/{len(pos_rows)} positives straddle a fold. The "
-            "merged graph was not applied; refusing to write the CSV."
-        )
-    # A positive is one edge, so its two endpoints are linked BY DEFINITION.
-    # If that ever fails, the edge was dropped and the split can leak.
-    if not (pos_rows["component_id"] == pos_rows["component_id_2"]).all():
-        raise SystemExit(
-            "LEAK: positive endpoints in different components — the graph edge "
-            "for that pair was dropped before the union-find ran."
-        )
-
-    stats["pairs_endpoint_unresolvable"] = unresolvable
-    # ── the DECISION re-measured at every emit (fail-loud default guard) ──
-    # config/training.yaml pins "train_side" as the winner of the decision
-    # block above. If a future census change makes the pinned evidence stop
-    # holding (policy B no longer beats A on scored half counts or the
-    # thinness share), refusing to emit here forces the decision to be
-    # REMADE, never silently invalidated while the stale default keeps
-    # switching the artifact's negative assignment.
-    policy_name = str(split.negative_fold_policy)
-    min_test_negatives = int(
-        training_cfg().evaluation.robust_validation.min_test_negatives
-    )
-    evidence = negative_policy_evidence(out, min_test_negatives, n_folds)
-    if policy_name == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
-        was, now = evidence[NEGATIVE_FOLD_POLICY_WITHHOLD], evidence[policy_name]
-        if not (
-            now["scored_test_negatives"] > was["scored_test_negatives"]
-            and now["scored_dev_negatives"] > was["scored_dev_negatives"]
-        ):
-            raise SystemExit(
-                "the pinned scored-half decision no longer holds: policy "
-                f"{policy_name!r} does not score MORE negatives per fold than "
-                f"{NEGATIVE_FOLD_POLICY_WITHHOLD!r} (evidence={evidence}). "
-                "Re-decide, update the config and the DECISION block together "
-                "— do not emit an artifact under a policy its evidence rejects."
-            )
-        for half in ("dev", "test"):
-            thin = now["thin_cells"][half]
-            if thin is None:
-                continue
-            thin_b = sum(now["thin_cells"][half].values())
-            cells_b = sum(now["populated_cells"][half].values())
-            thin_a = sum(was["thin_cells"][half].values())
-            cells_a = sum(was["populated_cells"][half].values())
-            share_b = thin_b / cells_b if cells_b else float("nan")
-            share_a = thin_a / cells_a if cells_a else float("nan")
-            if not share_b <= share_a:
-                raise SystemExit(
-                    "the pinned scored-half decision no longer holds: policy "
-                    f"{policy_name!r} scores MORE thin-heavy negatives (% "
-                    f"cells below min_test_negatives={min_test_negatives}: "
-                    f"{share_b:.4f}) than {NEGATIVE_FOLD_POLICY_WITHHOLD!r} "
-                    f"({share_a:.4f}) on the {half} half (evidence={evidence}). "
-                    "Re-decide, update the config and the DECISION block "
-                    "together — do not emit an artifact under a policy its "
-                    "evidence rejects."
-                )
-    elif policy_name == NEGATIVE_FOLD_POLICY_WITHHOLD:
-        # A's emit guard (added 2026-10-06 — before this branch existed, the
-        # assigned policy was never re-checked at emit and the artifact could
-        # ship under evidence it contradicts): A is clean of trained-on
-        # endpoints by construction (asserted above), so its own-evidence
-        # criterion is that the scored halves are usable at all — both must
-        # score negatives. The thin-cell share against B is RECORDED, not
-        # enforced: the 2026-10-06 census reversed A's 2026-10-01 dev-half
-        # thin advantage (B is disqualified structurally regardless — its
-        # scored negatives carry trained-on endpoints, which negative_policy_
-        # evidence refuses to certify), so thinness is no longer a decision
-        # criterion between the two.
-        now = evidence[policy_name]
-        empty_halves = [
-            half for half in ("dev", "test")
-            if int(now[f"scored_{half}_negatives"]) <= 0
-        ]
-        if empty_halves:
-            raise SystemExit(
-                "the pinned scored-half decision no longer holds: policy "
-                f"{policy_name!r} scores NO negatives on the "
-                f"{', '.join(empty_halves)} half (evidence={evidence}). "
-                "Re-decide, update the config and the DECISION block "
-                "together — do not emit an artifact under a policy its "
-                "evidence rejects."
-            )
-    stats["negative_fold_policy"] = policy_name
-    stats["negative_policy_evidence"] = evidence
-    # ── apply the configured policy on the ASSEMBLED frame's negatives ──
-    # Under A the columns already hold the raw endpoint folds (no change).
-    # Under B BOTH columns carry the pair's whole assigned fold while
-    # `straddles_fold`/`endpoint_in_train` keep reporting the RAW endpoint
-    # truth — a scored-half consumer scores negatives by fold alone and
-    # keeps the leak guarantee's positives untouched.
-    if policy_name != NEGATIVE_FOLD_POLICY_WITHHOLD:
-        neg_mask = (out["true_label"] == 0).to_numpy()
-        assigned = [
-            negative_pair_fold(policy_name, int(f1), int(f2), n_folds)
-            for f1, f2 in zip(out.loc[neg_mask, "fold"], out.loc[neg_mask, "fold_2"])
-        ]
-        out.loc[neg_mask, "fold"] = assigned
-        out.loc[neg_mask, "fold_2"] = assigned
-    # The fold map is the split's COMPLETE accounting, and it is not optional.
-    # The validation CSV holds only the scored half (folds 2+3), so a consumer
-    # holding the full labeled census cannot tell a pair that was correctly
-    # withheld because the model trained on it from a pair that is simply
-    # MISSING. Without the map, a retargeted evaluator has to choose between
-    # scoring trained-on data and hard-failing on rows that are fine — which is
-    # how the old protocol ended up 73.7% contaminated with nothing recorded.
-    fold_map = pd.DataFrame(
-        sorted(
-            ({"gtin": bc, "fold": fold_of[bc], "component_id": comp_of.get(bc, -1)}
-             for bc in fold_of),
-            key=lambda r: (r["fold"], r["gtin"]),
-        )
-    )
-    out_path = Path(output or F["final_validation"])
-    write_manifest(
-        out,
-        stats,
-        path=out_path,
-        seed=seed,
-        fold_map=fold_map,
-        fold_map_path=Path(F["validation_fold_map"]),
-    )
-    return out
-
-
-def parse_field_bag(raw: object) -> Counter:
-    """Slice column -> multiset of extracted values (the set-valued side).
+class SliceBagTokenizer:
+    """Tokenizer for the slice columns' set-valued spelling.
 
     The emitted slice columns carry a canonical list literal ("[lime, lime]",
     "[479.0, 518.0]" — bare tokens, never quoted) or a bare single token.
@@ -548,19 +185,40 @@ def parse_field_bag(raw: object) -> Counter:
     value raises (a silently unreadable slice would downgrade to raw-string
     equality without anyone knowing).
     """
-    text = str(raw).strip()
-    if text.startswith("[") != text.endswith("]"):
-        raise ValueError(f"unbalanced slice list {raw!r}")
-    if text.startswith("[") and text.endswith("]"):
-        content = text[1:-1]
+
+    @staticmethod
+    def _text(raw: object) -> str:
+        return str(raw).strip()
+
+    @classmethod
+    def parse(cls, raw: object) -> Counter:
+        """One slice value -> multiset of extracted tokens (bag identity)."""
+        text = cls._text(raw)
+        if text.startswith("[") != text.endswith("]"):
+            raise ValueError(f"unbalanced slice list {raw!r}")
+        if text.startswith("[") and text.endswith("]"):
+            return cls._tokens(text[1:-1])
+        token = text or None
+        return Counter([token]) if token else Counter()
+
+    @staticmethod
+    def _tokens(content: str) -> Counter:
         tokens = [
             token.strip().strip("'\"")
             for token in content.split(",")
             if token.strip().strip("'\"")
         ]
         return Counter(tokens)
-    token = text or None
-    return Counter([token]) if token else Counter()
+
+
+def parse_field_bag(raw: object) -> Counter:
+    """Slice column -> multiset of extracted values (the set-valued side).
+
+    The spelling contract and the fail-loud rule live on
+    :class:`SliceBagTokenizer`; this wrapper is the module's stable public
+    name for it (pinned by the scored-half decision tests).
+    """
+    return SliceBagTokenizer.parse(raw)
 
 
 def _evaluation_slice_agreement() -> str:
@@ -568,52 +226,114 @@ def _evaluation_slice_agreement() -> str:
     return str(training_cfg().evaluation.slice_agreement)
 
 
-def count_slice_disagreements(a: pd.Series, b: pd.Series, semantics: str) -> int:
-    """THE slice-flag comparison (both semantics implemented, config-chosen).
+class SliceSemantics:
+    """The two implemented pair-agreement semantics for slice flags.
 
     ``scalar``: legacy raw string v1 == v2 per pair (the old behaviour,
     reachable for byte-stability audits). ``set_bag``: BAG equality after
-    parse_field_bag — order/spacing-only spelling differences agree;
+    :func:`parse_field_bag` — order/spacing-only spelling differences agree;
     contents differences never do.
     """
-    if semantics == "scalar":
+
+    @staticmethod
+    def scalar(a: pd.Series, b: pd.Series) -> int:
         return int((a != b).sum())
-    if semantics == "set_bag":
+
+    @staticmethod
+    def set_bag(a: pd.Series, b: pd.Series) -> int:
         return int(
             sum(parse_field_bag(x) != parse_field_bag(y) for x, y in zip(a, b))
         )
-    raise ValueError(
-        f"unknown slice_agreement {semantics!r}; expected one of "
-        "('scalar', 'set_bag')"
-    )
+
+    @classmethod
+    def count(cls, a: pd.Series, b: pd.Series, semantics: str) -> int:
+        if semantics == "scalar":
+            return cls.scalar(a, b)
+        if semantics == "set_bag":
+            return cls.set_bag(a, b)
+        raise ValueError(
+            f"unknown slice_agreement {semantics!r}; expected one of "
+            "('scalar', 'set_bag')"
+        )
 
 
-def write_manifest(
-    frame: pd.DataFrame,
-    stats: dict,
-    *,
-    path: Path,
-    seed: int,
-    fold_map: pd.DataFrame | None = None,
-    fold_map_path: Path | None = None,
-) -> dict:
-    pos = frame[frame.true_label == 1]
-    neg = frame[frame.true_label == 0]
+def count_slice_disagreements(a: pd.Series, b: pd.Series, semantics: str) -> int:
+    """THE slice-flag comparison (both semantics implemented, config-chosen).
 
-    # Per-field measuring power, because "we have 564 positives" is not the
-    # question a gate asks -- "can this field carry a floor" is. `disagree` is
-    # the count of positives whose two endpoints carry different values for
-    # the field: same product, one side's text mentions an extra value. That is
-    # legitimate extractor variance, so it is reported rather than asserted on,
-    # but a gate comparing v1 to v2 needs to know it exists.
-    coverage: dict[str, dict[str, int]] = {}
-    for name, _col in SLICE_FIELDS:
-        a, b = pos[f"v1_{name}"], pos[f"v2_{name}"]
-        if not len(pos):
-            coverage[name] = {"positives": 0, "distinct": 0, "largest_bucket": 0,
-                              "unpopulated": 0, "disagree": 0}
-            continue
-        counts = a[a != ""].value_counts()
+    Dispatches to :class:`SliceSemantics`; kept module-level because
+    ``write_manifest``'s pinned disagreement counters and the synthetic
+    semantics tests call it by this name.
+    """
+    return SliceSemantics.count(a, b, semantics)
+
+
+class SliceFieldGrid:
+    """Owner of the SLICE_FIELDS frozen canonical values and their counts.
+
+    One job: turn ``canonical_records.csv`` (after the pipeline lanes'
+    migration + validation contract) into ``gtin -> {field: value}``, and
+    count pair-level agreement per field under the configured semantics.
+    """
+
+    def __init__(self, fields: tuple[tuple[str, str], ...] = SLICE_FIELDS):
+        self._fields = fields
+        self._values: dict[str, dict[str, str]] | None = None
+
+    # -- frozen canonical values -------------------------------------------
+
+    @property
+    def fields(self) -> tuple[tuple[str, str], ...]:
+        return self._fields
+
+    def freeze(self, canonical: pd.DataFrame) -> dict[str, dict[str, str]]:
+        """Validate + index the canonical frame into per-gtin slice values."""
+        canonical["_key"] = canonical["gtin"].map(normalize_gtin)
+        out: dict[str, dict[str, str]] = {}
+        for _, row in canonical.iterrows():
+            key = row["_key"]
+            if not key or key in out:
+                continue
+            out[key] = {
+                name: str(row.get(col, "") or "")
+                for name, col in self._fields
+            }
+        self._values = out
+        return out
+
+    def load_canonical(self) -> pd.DataFrame:
+        """Read + migrate + validate the frozen canonical records frame."""
+        canon = pd.read_csv(
+            F["canonical_records"], dtype=str, keep_default_na=False, low_memory=False
+        )
+        # Same read contract as the pipeline lanes: migrate a stale artifact
+        # and validate before slicing — the freeze step's column access makes
+        # the old "first column might be the key" fallback unreachable.
+        canon = upgrade_canonical_records_frame(canon)
+        check_canonical_records_frame(canon)
+        return canon
+
+    def canonical_values(self) -> dict[str, dict[str, str]]:
+        """gtin -> {field: canonical value string} from the frozen canonical records."""
+        if self._values is None:
+            self.freeze(self.load_canonical())
+        return self._values
+
+    def values(self, gtin: str) -> dict[str, str]:
+        return self.canonical_values().get(gtin, {})
+
+    # -- manifest coverage counters ----------------------------------------
+
+    def coverage(self, positives: pd.DataFrame) -> dict[str, dict[str, int]]:
+        """Per-field measuring power among the emitted positives.
+
+        "We have 564 positives" is not the question a gate asks — "can this
+        field carry a floor" is. ``disagree`` is the count of positives whose
+        two endpoints carry different values for the field: same product, one
+        side's text mentions an extra value. That is legitimate extractor
+        variance, so it is reported rather than asserted on, but a gate
+        comparing v1 to v2 needs to know it exists.
+        """
+        semantics = _evaluation_slice_agreement()
         # ── DECISION: SLICE-FLAG SET SEMANTICS (owner-posture change
         # 2026-10-01; decided with numbers, not conceded to a gate). The v1_*/
         # v2_* columns are SET-valued extractions per side ("Different
@@ -647,16 +367,546 @@ def write_manifest(
         # would make a disagrees count DROP: the old scalar number must
         # then stay recorded in THIS comment before the new one replaces it
         # (pinned-update convention).
-        disagreement = count_slice_disagreements(
-            a, b, _evaluation_slice_agreement()
+        coverage: dict[str, dict[str, int]] = {}
+        for name, _col in self._fields:
+            if not len(positives):
+                coverage[name] = {"positives": 0, "distinct": 0,
+                                  "largest_bucket": 0, "unpopulated": 0,
+                                  "disagree": 0}
+                continue
+            a, b = positives[f"v1_{name}"], positives[f"v2_{name}"]
+            counts = a[a != ""].value_counts()
+            coverage[name] = {
+                "positives": int(len(positives)),
+                "distinct": int(counts.size),
+                "largest_bucket": int(counts.iloc[0]) if counts.size else 0,
+                "unpopulated": int((a == "").sum()),
+                "disagree": count_slice_disagreements(a, b, semantics),
+            }
+        return coverage
+
+
+def negative_pair_fold(policy: str, fold_a: int, fold_b: int, n_folds: int) -> int:
+    """THE scored half's negative fold-assignment rule (single source).
+
+    Positives NEVER route through this: their two endpoints share a fold by
+    graph construction (the leak guarantee below), and re-deriving the pair
+    fold here would silently fork the split. This rule is for MINED
+    NEGATIVES only — similarity links whose endpoints legitimately sit in
+    different folds ("folds.derive_holdout" assigns entities, not pairs).
+
+    ``withhold_straddle`` (A): the pair's fold stays the raw ``fold_a`` on
+    both columns, preserving the legacy semantics — a consumer scores a
+    negative only where ``fold == fold_2`` equals its fold, so a mismatched
+    pair scores nowhere and is reported by ``straddles_fold``/
+    ``endpoint_in_train`` instead.
+
+    ``train_side`` (B): the pair gets one whole fold — the train-side
+    endpoint's fold when either endpoint is a train fold (OUT of the scored
+    half, back in the training population), else the fold of ``fold_a`` as
+    the deterministic boundary tiebreak for the two unseen endpoints (the
+    dev/test straddle that A could never score).
+    """
+    return NegativeFoldPolicy.rule(policy, fold_a, fold_b, n_folds)
+
+
+class NegativeFoldPolicy:
+    """The scored half's negative fold assignment: rule, evidence, guard.
+
+    (The DECISION block above owns the why and the recorded numbers.) One
+    responsibility surface: turn raw endpoint folds into a scored-half pair
+    fold under the configured policy, MEASURE both policies' evidence, and
+    REFUSE to emit when the pinned policy's evidence no longer holds.
+    """
+
+    # Deterministic assignment boundary for the two unseen endpoints: the
+    # fold of ``fold_a`` (documented on negative_pair_fold).
+    @staticmethod
+    def rule(policy: str, fold_a: int, fold_b: int, n_folds: int) -> int:
+        if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
+            return fold_a
+        if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
+            if fold_a < n_folds - 2 or fold_b < n_folds - 2:
+                return min(fold_a, fold_b)
+            return fold_a
+        raise ValueError(
+            f"unknown negative_fold_policy {policy!r}; expected one of "
+            f"({NEGATIVE_FOLD_POLICY_WITHHOLD!r}, {NEGATIVE_FOLD_POLICY_TRAIN_SIDE!r})"
         )
-        coverage[name] = {
-            "positives": int(len(pos)),
-            "distinct": int(counts.size),
-            "largest_bucket": int(counts.iloc[0]) if counts.size else 0,
-            "unpopulated": int((a == "").sum()),
-            "disagree": disagreement,
+
+    @staticmethod
+    def rule_vectorized(policy: str, fold_a: pd.Series, fold_b: pd.Series,
+                        n_folds: int) -> pd.Series:
+        """The same rule on one negative population, without a row loop."""
+        if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
+            return fold_a
+        if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
+            import numpy as np
+
+            train_endpoints = (fold_a < n_folds - 2) | (fold_b < n_folds - 2)
+            return pd.Series(
+                np.where(train_endpoints, np.minimum(fold_a, fold_b), fold_a),
+                index=fold_a.index,
+            )
+        raise ValueError(
+            f"unknown negative_fold_policy {policy!r}; expected one of "
+            f"({NEGATIVE_FOLD_POLICY_WITHHOLD!r}, {NEGATIVE_FOLD_POLICY_TRAIN_SIDE!r})"
+        )
+
+    # -- evidence ----------------------------------------------------------
+
+    @classmethod
+    def evidence(
+        cls, frame: pd.DataFrame, min_test_negatives: int, n_folds: int = 4
+    ) -> dict[str, dict[str, object]]:
+        """Decide-with-numbers: the criteria the policy decision is pinned on.
+
+        Runs BOTH policies over one frame carrying ``fold``/``fold_2``/
+        ``true_label``/``v1_*``/``v2_*`` columns and reports, per policy: scored
+        DEV/TEST negatives, scored DEV/TEST positives, withheld negatives, and
+        thin slice cells (populated (field, value) cells among scored negatives
+        with fewer than ``min_test_negatives`` members — the same thinness
+        contract ``robust_validation`` reuses). Percentages are computed, the
+        winner is the caller's to record — this function does not choose.
+
+        Raises SystemExit when a policy's population is INCONSISTENT with the
+        frame it claims to measure (e.g. positives straddling under B): a
+        criterion computed on a broken population cannot back a decision.
+        """
+        for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD, NEGATIVE_FOLD_POLICY_TRAIN_SIDE):
+            # A positive's pair-fold is its shared endpoint fold under BOTH
+            # policies (the leak guarantee asserts fold == fold_2 for
+            # positives, so a single column carries it).
+            positive_straddle_count = int(
+                (frame.loc[frame.true_label == 1, "fold"]
+                 != frame.loc[frame.true_label == 1, "fold_2"]).sum()
+            )
+            if positive_straddle_count:
+                raise SystemExit(
+                    f"{positive_straddle_count} positives straddle a fold — the "
+                    "policy evidence population is corrupt (run the leak "
+                    "guards first)"
+                )
+        evidence: dict[str, dict[str, object]] = {}
+        has_slices = all(f"v1_{name}" in frame.columns for name, _col in SLICE_FIELDS)
+        if has_slices:
+            thin_rows = cls._thin_cells(frame, min_test_negatives, n_folds)
+        else:
+            thin_rows = {
+                policy: {} for policy in
+                (NEGATIVE_FOLD_POLICY_WITHHOLD, NEGATIVE_FOLD_POLICY_TRAIN_SIDE)
+            }
+        for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD, NEGATIVE_FOLD_POLICY_TRAIN_SIDE):
+            evidence[policy] = cls._scored_contract(
+                frame, policy, n_folds,
+                thin_rows.get(policy, {}) if has_slices else None,
+            )
+        return evidence
+
+    @staticmethod
+    def scored_masks(
+        policy: str, fold_a: pd.Series, fold_b: pd.Series, n_folds: int
+    ) -> tuple[pd.Series, pd.Series]:
+        """(in_dev, in_test) score masks for one negative population.
+
+        Policy A's raw semantics is NOT "pair fold == scored fold": a
+        mismatching straddler carries ``fold == fold_a`` (its pair fold) yet
+        scores NOWHERE — its two sides are not in the same scored fold. So A's
+        mask is the BOTH-endpoints conjunction, and B's is the assigned pair
+        fold equality (B assigns the whole fold to the pair).
+        """
+        dev, test = n_folds - 2, n_folds - 1
+        f1 = fold_a.astype(int)
+        f2 = fold_b.astype(int)
+        if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
+            # A: legacy — a negative scores only where BOTH endpoint folds
+            # equal the scored fold; a mismatched pair scores nowhere.
+            return (f1 == dev) & (f2 == dev), (f1 == test) & (f2 == test)
+        if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
+            assigned = NegativeFoldPolicy.rule_vectorized(policy, f1, f2, n_folds)
+            return assigned == dev, assigned == test
+        raise ValueError(
+            f"unknown negative_fold_policy {policy!r}; expected one of "
+            f"({NEGATIVE_FOLD_POLICY_WITHHOLD!r}, {NEGATIVE_FOLD_POLICY_TRAIN_SIDE!r})"
+        )
+
+    @classmethod
+    def _scored_contract(
+        cls,
+        frame: pd.DataFrame,
+        policy: str,
+        n_folds: int,
+        thin: dict[str, dict[str, int]] | None,
+    ) -> dict[str, object]:
+        # A positive's pair-fold is its shared endpoint fold under BOTH
+        # policies (the leak guarantee asserts fold == fold_2 for positives,
+        # so a single column carries it).
+        pos = frame[frame.true_label == 1]
+        neg = frame[frame.true_label == 0]
+        dev, test = n_folds - 2, n_folds - 1
+        in_dev_pos = pos["fold"].astype(int) == dev
+        in_test_pos = pos["fold"].astype(int) == test
+        in_dev_neg, in_test_neg = cls.scored_masks(
+            policy, neg["fold"], neg["fold_2"], n_folds
+        )
+        return {
+            "scored_dev_negatives": int(in_dev_neg.sum()),
+            "scored_test_negatives": int(in_test_neg.sum()),
+            "scored_dev_positives": int(in_dev_pos.sum()),
+            "scored_test_positives": int(in_test_pos.sum()),
+            "negatives_withheld_from_scored_half": int(
+                len(neg) - (in_dev_neg.sum() + in_test_neg.sum())
+            ),
+            "populated_cells": {
+                half: dict(thin[half]["populated"]) for half in ("dev", "test")
+            } if thin else None,
+            "thin_cells": {
+                half: dict(thin[half]["thin"]) for half in ("dev", "test")
+            } if thin else None,
         }
+
+    @staticmethod
+    def _thin_cells(
+        frame: pd.DataFrame, min_test_negatives: int, n_folds: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Populated/thin (field, value) cells per scored half, per policy.
+
+        The thin-cell criterion requires the frozen slice columns; a frame
+        without them (synthetic fold-contract tests) records UNavailable —
+        explicit, never silently claimed as "not thin".
+        """
+        results: dict[str, dict[str, dict[str, int]]] = {}
+        neg = frame[frame.true_label == 0]
+        if not len(neg):
+            empty: dict[str, dict[str, int]] = {
+                half: {name: 0 for name, _col in SLICE_FIELDS}
+                for half in ("dev", "test")
+            }
+            return {
+                policy: {"populated": {h: dict(empty[h]) for h in empty},
+                         "thin": {h: dict(empty[h]) for h in empty}}
+                for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD,
+                               NEGATIVE_FOLD_POLICY_TRAIN_SIDE)
+            }
+        f1 = neg["fold"].astype(int)
+        f2 = neg["fold_2"].astype(int)
+        dev, test = n_folds - 2, n_folds - 1
+        for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD,
+                       NEGATIVE_FOLD_POLICY_TRAIN_SIDE):
+            in_dev, in_test = NegativeFoldPolicy.scored_masks(policy, f1, f2, n_folds)
+            policy_result: dict[str, dict[str, int]] = {}
+            for half, mask in (("dev", in_dev), ("test", in_test)):
+                rows = neg.loc[mask.to_numpy()]
+                populated: dict[str, int] = {}
+                thin: dict[str, int] = {}
+                for field, _col in SLICE_FIELDS:
+                    bag = Counter(rows[f"v1_{field}"][rows[f"v1_{field}"] != ""])
+                    extra = rows[f"v2_{field}"][
+                        (rows[f"v2_{field}"] != "")
+                        & (rows[f"v2_{field}"] != rows[f"v1_{field}"])
+                    ]
+                    bag.update(extra)
+                    populated[field] = len(bag)
+                    thin[field] = sum(
+                        1 for count in bag.values()
+                        if count < min_test_negatives
+                    )
+                policy_result[half] = {"populated": populated, "thin": thin}
+            results[policy] = policy_result
+        return results
+
+
+def negative_policy_evidence(
+    frame: pd.DataFrame, min_test_negatives: int, n_folds: int = 4
+) -> dict[str, dict[str, object]]:
+    """Decide-with-numbers evidence surface (see :class:`NegativeFoldPolicy`).
+
+    Public name preserved: the scored-half decision tests and the module's
+    DECISION block both point at this function.
+    """
+    return NegativeFoldPolicy.evidence(frame, min_test_negatives, n_folds)
+
+
+class FoldResolver:
+    """gtin -> (graph key, fold) resolution for the labeled census endpoints.
+
+    A labeled gtin has to be resolved to the spelling the graph actually
+    uses, and the two are not the same string: the fold sets are keys of the
+    RAW row_bc, while normalize_gtin left-pads a 13-digit gtin to 14. A
+    13-digit gtin therefore misses a raw fold set under a normalized lookup
+    and is silently dropped -- which is how an earlier run of this script
+    emitted 3 rows out of 8,889. Try the raw spelling first, then the
+    normalized one, and COUNT the misses rather than skipping in silence.
+    """
+
+    def __init__(self, fold_of: dict[str, int]):
+        self._fold_of = fold_of
+        self._raw_keys = set(fold_of)
+        self._norm_keys = {normalize_gtin(b) for b in fold_of}
+
+    def resolve(self, gtin: object) -> str | None:
+        raw = str(gtin).strip()
+        if raw in self._raw_keys:
+            return raw
+        normed = normalize_gtin(raw)
+        if normed in self._raw_keys or normed in self._norm_keys:
+            return normed
+        return None
+
+    def fold(self, key: str) -> int:
+        return self._fold_of[key]
+
+
+class ValidationRowAssembler:
+    """One labeled pair -> one output-row dict (or None to skip)."""
+
+    def __init__(
+        self,
+        resolver: FoldResolver,
+        comp_of: dict[str, int],
+        slice_values: dict[str, dict[str, str]],
+        n_folds: int,
+    ):
+        self._resolver = resolver
+        self._comp_of = comp_of
+        self._slice_values = slice_values
+        self._n_folds = n_folds
+        self.unresolved = 0
+
+    def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
+        k1 = self._resolver.resolve(g1)
+        k2 = self._resolver.resolve(g2)
+        if k1 is None or k2 is None:
+            # An endpoint outside the graph entirely: it has no fold, so it
+            # cannot be part of a fold-2+3 population.
+            self.unresolved += 1
+            return None
+        f1, f2 = self._resolver.fold(k1), self._resolver.fold(k2)
+        if f1 < self._n_folds - 2 and f2 < self._n_folds - 2:
+            return None  # both sides in train -> not validation
+        row: dict[str, object] = {
+            "gtin1": k1,
+            "gtin2": k2,
+            "gtin1_norm": normalize_gtin(k1),
+            "gtin2_norm": normalize_gtin(k2),
+            "true_label": int(label),
+            "fold": f1,
+            "fold_2": f2,
+            "component_id": self._comp_of.get(k1, -1),
+            "component_id_2": self._comp_of.get(k2, -2),
+            "straddles_fold": f1 != f2,
+            "endpoint_in_train": min(f1, f2) < self._n_folds - 2,
+        }
+        c1 = self._slice_values.get(normalize_gtin(k1), {})
+        c2 = self._slice_values.get(normalize_gtin(k2), {})
+        for name, _col in SLICE_FIELDS:
+            row[f"v1_{name}"] = c1.get(name, "")
+            row[f"v2_{name}"] = c2.get(name, "")
+        return row
+
+    def assemble_all(self, labeled: pd.DataFrame) -> pd.DataFrame:
+        """Run the census through :meth:`assemble` with the pipeline's bar."""
+        rows: list[dict[str, object]] = []
+        columns = (labeled["gtin1"], labeled["gtin2"], labeled["true_label"])
+        triples = zip(
+            columns[0].tolist(), columns[1].tolist(), columns[2].tolist()
+        )
+        triples_list = list(triples)
+        for g1, g2, label in _LOG.progress(
+            triples_list, desc="final_validation_rows", unit="pair"
+        ):
+            row = self.assemble(g1, g2, label)
+            if row is not None:
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+
+class LeakGuards:
+    """The pre-write assertions that the emitted population cannot leak."""
+
+    @staticmethod
+    def assert_no_positive_straddle(frame: pd.DataFrame) -> None:
+        pos_rows = frame[frame.true_label == 1]
+        straddle = int(pos_rows["straddles_fold"].sum())
+        if straddle:
+            raise SystemExit(
+                f"LEAK: {straddle}/{len(pos_rows)} positives straddle a fold. "
+                "The merged graph was not applied; refusing to write the CSV."
+            )
+        # A positive is one edge, so its two endpoints are linked BY DEFINITION.
+        # If that ever fails, the edge was dropped and the split can leak.
+        if not (pos_rows["component_id"] == pos_rows["component_id_2"]).all():
+            raise SystemExit(
+                "LEAK: positive endpoints in different components — the graph "
+                "edge for that pair was dropped before the union-find ran."
+            )
+
+    @staticmethod
+    def assert_pinned_evidence(
+        policy_name: str,
+        evidence: dict[str, dict[str, object]],
+        min_test_negatives: int,
+    ) -> None:
+        """The DECISION's re-measured-at-every-emit fail-loud guard.
+
+        config/training.yaml pins the winning policy. If a future census
+        change makes the pinned evidence stop holding, refusing to emit here
+        forces the decision to be REMADE, never silently invalidated while
+        the stale default keeps switching the artifact's negative
+        assignment.
+        """
+        if policy_name == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
+            was, now = (evidence[NEGATIVE_FOLD_POLICY_WITHHOLD],
+                        evidence[policy_name])
+            if not (
+                now["scored_test_negatives"] > was["scored_test_negatives"]
+                and now["scored_dev_negatives"] > was["scored_dev_negatives"]
+            ):
+                raise SystemExit(
+                    "the pinned scored-half decision no longer holds: policy "
+                    f"{policy_name!r} does not score MORE negatives per fold "
+                    f"than {NEGATIVE_FOLD_POLICY_WITHHOLD!r} "
+                    f"(evidence={evidence}). Re-decide, update the config and "
+                    "the DECISION block together — do not emit an artifact "
+                    "under a policy its evidence rejects."
+                )
+            for half in ("dev", "test"):
+                thin = now["thin_cells"][half]
+                if thin is None:
+                    continue
+                thin_b = sum(now["thin_cells"][half].values())
+                cells_b = sum(now["populated_cells"][half].values())
+                thin_a = sum(was["thin_cells"][half].values())
+                cells_a = sum(was["populated_cells"][half].values())
+                share_b = thin_b / cells_b if cells_b else float("nan")
+                share_a = thin_a / cells_a if cells_a else float("nan")
+                if not share_b <= share_a:
+                    raise SystemExit(
+                        "the pinned scored-half decision no longer holds: "
+                        "policy "
+                        f"{policy_name!r} scores MORE thin-heavy negatives "
+                        f"(% cells below min_test_negatives="
+                        f"{min_test_negatives}: {share_b:.4f}) than "
+                        f"{NEGATIVE_FOLD_POLICY_WITHHOLD!r} ({share_a:.4f}) "
+                        f"on the {half} half (evidence={evidence}). "
+                        "Re-decide, update the config and the DECISION block "
+                        "together — do not emit an artifact under a policy "
+                        "its evidence rejects."
+                    )
+        elif policy_name == NEGATIVE_FOLD_POLICY_WITHHOLD:
+            # A's emit guard (added 2026-10-06 — before this branch existed,
+            # the assigned policy was never re-checked at emit and the
+            # artifact could ship under evidence it contradicts): A is clean
+            # of trained-on endpoints by construction (asserted above), so
+            # its own-evidence criterion is that the scored halves are
+            # usable at all — both must score negatives. The thin-cell share
+            # against B is RECORDED, not enforced: the 2026-10-06 census
+            # reversed A's 2026-10-01 dev-half thin advantage (B is
+            # disqualified structurally regardless — its scored negatives
+            # carry trained-on endpoints, which negative_policy_evidence
+            # refuses to certify), so thinness is no longer a decision
+            # criterion between the two.
+            now = evidence[policy_name]
+            empty_halves = [
+                half for half in ("dev", "test")
+                if int(now[f"scored_{half}_negatives"]) <= 0
+            ]
+            if empty_halves:
+                raise SystemExit(
+                    "the pinned scored-half decision no longer holds: policy "
+                    f"{policy_name!r} scores NO negatives on the "
+                    f"{', '.join(empty_halves)} half (evidence={evidence}). "
+                    "Re-decide, update the config and the DECISION block "
+                    "together — do not emit an artifact under a policy its "
+                    "evidence rejects."
+                )
+
+
+class _ValidationFrame:
+    """Assembled validation population + its failure-mode counters."""
+
+    def __init__(self, frame: pd.DataFrame, stats: dict[str, int]):
+        self.frame = frame
+        self.stats = stats
+
+
+def _apply_negative_fold_policy(
+    out: pd.DataFrame, policy_name: str, n_folds: int
+) -> None:
+    """Apply the configured policy on the ASSEMBLED frame's negatives.
+
+    Under A the columns already hold the raw endpoint folds (no change).
+    Under B BOTH columns carry the pair's whole assigned fold while
+    ``straddles_fold``/``endpoint_in_train`` keep reporting the RAW endpoint
+    truth — a scored-half consumer scores negatives by fold alone and keeps
+    the leak guarantee's positives untouched. Evidence must measure the RAW
+    endpoint folds, not post-policy columns; that is why the policy is
+    applied AFTER the evidence pass.
+    """
+    if policy_name == NEGATIVE_FOLD_POLICY_WITHHOLD:
+        return
+    negative_mask = (out["true_label"] == 0).to_numpy()
+    negatives = out.loc[negative_mask]
+    negative_pair_folds = NegativeFoldPolicy.rule_vectorized(
+        policy_name,
+        negatives["fold"].astype(int),
+        negatives["fold_2"].astype(int),
+        n_folds,
+    )
+    out.loc[negative_mask, "fold"] = negative_pair_folds
+    out.loc[negative_mask, "fold_2"] = negative_pair_folds
+
+
+def _fold_map(fold_of: dict[str, int], comp_of: dict[str, int]) -> pd.DataFrame:
+    """The split's COMPLETE accounting, sorted (fold, gtin).
+
+    The validation CSV holds only the scored half (folds 2+3), so a consumer
+    holding the full labeled census cannot tell a pair that was correctly
+    withheld because the model trained on it from a pair that is simply
+    MISSING. Without the map, a retargeted evaluator has to choose between
+    scoring trained-on data and hard-failing on rows that are fine — which is
+    how the old protocol ended up 73.7% contaminated with nothing recorded.
+    """
+    return pd.DataFrame(
+        sorted(
+            ({"gtin": bc, "fold": fold, "component_id": comp_of.get(bc, -1)}
+             for bc, fold in fold_of.items()),
+            key=lambda r: (r["fold"], r["gtin"]),
+        )
+    )
+
+
+def _resolve_quarter_folds(
+    train_bc: set[str], dev_bc: set[str], test_bc: set[str], n_folds: int
+) -> dict[str, int]:
+    """Map every graph entity to its fold: train=0, dev=n-2, test=n-1.
+
+    train = every quarter except the last two; dev/test are the LAST two
+    quarters, so validation is "neither side is a training gtin".
+    """
+    fold_of: dict[str, int] = {}
+    for bc in train_bc:
+        fold_of[bc] = 0
+    for bc in dev_bc:
+        fold_of[bc] = n_folds - 2
+    for bc in test_bc:
+        fold_of[bc] = n_folds - 1
+    return fold_of
+
+
+def write_manifest(
+    frame: pd.DataFrame,
+    stats: dict,
+    *,
+    path: Path,
+    seed: int,
+    fold_map: pd.DataFrame | None = None,
+    fold_map_path: Path | None = None,
+) -> dict:
+    pos = frame[frame.true_label == 1]
+    neg = frame[frame.true_label == 0]
+    grid = SliceFieldGrid()
+    coverage = grid.coverage(pos)
 
     manifest = {
         "stage": "final_validation",
@@ -687,10 +937,12 @@ def write_manifest(
         "slice_coverage": coverage,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(path, index=False)
+    # Atomic publish: the manifest keys fuel resume; a truncated frame or a
+    # truncated fold map must never be observable in place of a full one.
+    atomic_write_csv(frame, path, index=False)
     if fold_map is not None and fold_map_path is not None:
         fold_map_path.parent.mkdir(parents=True, exist_ok=True)
-        fold_map.to_csv(fold_map_path, index=False)
+        atomic_write_csv(fold_map, fold_map_path, index=False)
         manifest["fold_map"] = str(fold_map_path)
         manifest["fold_map_rows"] = int(len(fold_map))
         manifest["fold_map_fold_counts"] = {
@@ -702,7 +954,77 @@ def write_manifest(
     return manifest
 
 
+def build(
+    output: Path | None = None,
+    *,
+    seed: int = SEED,
+    n_folds: int | None = None,
+) -> pd.DataFrame:
+    """Derive the merged graph, cut the split, and return the validation rows."""
+    df = load_dataset_deduped()
+    from training.base_data import load_base_data
+
+    data = load_base_data(df, payload_variant="full")
+    pos = data["pos"]
+    row_bc = data["row_bc"]
+
+    merged_pos, graph_bc, stats = merged_component_graph(pos, row_bc)
+    split = training_cfg().split
+    n_folds = int(n_folds or split.holdout_component_folds)
+    # Routed through the SINGLE entry point, not `holdout_split`. The selftest
+    # guard bans the primitive outside folds.py precisely so the split the
+    # artifact is cut from cannot be derived by different rules than the split
+    # the model trains under -- which is the defect P0 exists to remove. The
+    # graph is passed in pre-merged because `derive_holdout` rebuilds it (idempotent
+    # here: the validation edges are already unioned, so re-union changes nothing).
+    train_bc, dev_bc, test_bc = derive_holdout(
+        pos, row_bc, dict(split), seed=seed
+    )
+
+    # merged_pos/row_bc: derive_holdout re-derives the same merged graph
+    # internally, so these are the identical objects it split on.
+    comp_of = component_ids(merged_pos, graph_bc)
+    fold_of = _resolve_quarter_folds(train_bc, dev_bc, test_bc, n_folds)
+    resolver = FoldResolver(fold_of)
+
+    labeled = pd.read_csv(
+        Path(F["labeled_pairs"]), dtype={"gtin1": str, "gtin2": str},
+        keep_default_na=False,
+    )
+    slice_values = SliceFieldGrid().canonical_values()
+    assembler = ValidationRowAssembler(resolver, comp_of, slice_values, n_folds)
+    with _LOG.section("final_validation.assemble_rows"):
+        out = assembler.assemble_all(labeled)
+    stats["pairs_endpoint_unresolvable"] = assembler.unresolved
+
+    # ── the leak guarantee, asserted before anything hits disk ──
+    LeakGuards.assert_no_positive_straddle(out)
+    # ── the DECISION re-measured at every emit (fail-loud default guard) ──
+    policy_name = str(split.negative_fold_policy)
+    min_test_negatives = int(
+        training_cfg().evaluation.robust_validation.min_test_negatives
+    )
+    with _LOG.section("final_validation.policy_evidence"):
+        evidence = negative_policy_evidence(out, min_test_negatives, n_folds)
+    LeakGuards.assert_pinned_evidence(policy_name, evidence, min_test_negatives)
+    stats["negative_fold_policy"] = policy_name
+    stats["negative_policy_evidence"] = evidence
+    with _LOG.section("final_validation.apply_policy"):
+        _apply_negative_fold_policy(out, policy_name, n_folds)
+    with _LOG.section("final_validation.write"):
+        write_manifest(
+            out,
+            stats,
+            path=Path(output or F["final_validation"]),
+            seed=seed,
+            fold_map=_fold_map(fold_of, comp_of),
+            fold_map_path=Path(F["validation_fold_map"]),
+        )
+    return out
+
+
 def main() -> None:
+    RunLogger.configure_console()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--output", default=None)
     ap.add_argument("--seed", type=int, default=SEED)
@@ -716,6 +1038,7 @@ def main() -> None:
         f"positives straddling: {int(pos.straddles_fold.sum())}"
     )
     print(f"[final_validation] wrote {F['final_validation']}")
+
 
 if __name__ == "__main__":
     main()
