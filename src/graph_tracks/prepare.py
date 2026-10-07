@@ -20,6 +20,7 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
 from __future__ import annotations
 import argparse
 import json
+import os
 from pathlib import Path
 import pandas as pd
 
@@ -57,26 +58,91 @@ class ListingSplits:
 
 
 class ListingScraper:
-    """Catalog rows -> graph listings + report-attribute rows (shared extractor)."""
+    """Catalog rows -> graph listings + report-attribute rows (shared extractor).
+
+    The scrape is a pure per-row map (row_identity reads the row dict +
+    config constants only), so the map is computed fork-parallel over the
+    CPU budget and consumed ORDERED: child results arrive in catalog order,
+    which keeps listings.json byte-identical to the serial scrape.
+    """
+
+    # Below this population the pool's fork + IPC overhead exceeds the
+    # serial scrape cost; stay serial.
+    PARALLEL_MINIMUM = 256
 
     def __init__(self, splits: ListingSplits):
         self._splits = splits
 
     def scrape(self, frame: pd.DataFrame) -> tuple[list[dict], list[dict]]:
+        from core.sku_identity import row_identity  # bind pre-fork imports
+        from graph_tracks.report_attributes import identity_attributes
+        payloads = [
+            (row.to_dict(), self._splits.split_of(row.sku_id))
+            for _, row in frame.iterrows()
+        ]
+        if (os.cpu_count() or 1) > 1 and len(payloads) >= self.PARALLEL_MINIMUM:
+            return self._parallel(payloads)
+        return self._serial(payloads)
+
+    def _serial(self, payloads: list[tuple[dict, str]]) -> tuple[list[dict], list[dict]]:
         from core.sku_identity import row_identity
         from graph_tracks.report_attributes import identity_attributes
-        records: list[dict] = []
-        report_rows: list[dict] = []
-        for _, row in _LOG.progress(
-            frame.iterrows(), desc="listing_identity_scrape", unit="listing",
-            total=len(frame),
+        records, report_rows = [], []
+        for payload, split in _LOG.progress(
+            payloads, desc="listing_identity_scrape", unit="listing",
+            total=len(payloads),
         ):
-            identity = row_identity(row)
-            report_rows.append({'sku_id': row.sku_id,
+            identity = row_identity(payload)
+            records.append({'sku_id': payload['sku_id'], 'split': split,
+                            'attribute': {key: sorted(getattr(identity, key)) for key in RELATIONS},
+                            'numeric': {key: sorted(getattr(identity, key)) for key in NUMERIC}})
+            report_rows.append({'sku_id': payload['sku_id'],
                                 'attribute': identity_attributes(identity)})
-            records.append(self._splits.listing_record(
-                row.sku_id, identity, RELATIONS, NUMERIC))
         return records, report_rows
+
+    def _parallel(self, payloads: list[tuple[dict, str]]) -> tuple[list[dict], list[dict]]:
+        import multiprocessing
+        pool = multiprocessing.get_context('fork').Pool(
+            os.cpu_count(), initializer=_warm_worker
+        )
+        try:
+            results = list(pool.imap(_scrape_row, payloads, chunksize=32))
+        finally:
+            pool.close()
+            pool.join()
+        consumed = []
+        for record, report_row in _LOG.progress(
+            results, desc="listing_identity_scrape", unit="listing", total=len(results)
+        ):
+            consumed.append((record, report_row))
+        records = [record for record, _ in consumed]
+        report_rows = [report_row for _, report_row in consumed]
+        return records, report_rows
+
+
+def _warm_worker() -> None:
+    """Bind the fork child's lazily-loaded config caches once, pre-scan."""
+    try:
+        from core.sku_identity import flavor_vocabulary  # noqa: F401
+        from core.identity_policy import review_policy
+        review_policy()
+    except Exception:
+        pass
+
+
+def _scrape_row(scraped: tuple[dict, str]) -> tuple[dict, dict]:
+    """One ordered fork-worker unit: identity -> (record, report row)."""
+    from core.sku_identity import row_identity
+    from graph_tracks.report_attributes import identity_attributes
+    from graph_tracks.data import RELATIONS, NUMERIC
+    payload, split = scraped
+    identity = row_identity(payload)
+    return (
+        {'sku_id': payload['sku_id'], 'split': split,
+         'attribute': {key: sorted(getattr(identity, key)) for key in RELATIONS},
+         'numeric': {key: sorted(getattr(identity, key)) for key in NUMERIC}},
+        {'sku_id': payload['sku_id'], 'attribute': identity_attributes(identity)},
+    )
 
 
 class PairSourceBinding:
