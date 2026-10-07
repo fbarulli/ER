@@ -21,7 +21,9 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
+from core.model_input import build_sku_text, model_input_info
 from core.run_log import RunLogger
+from core.sku_identity import row_identity
 from core.step_trace import timed
 from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
@@ -268,8 +270,6 @@ class _TextPool:
 
 
 def _compose(row, composer):
-    from core.model_input import build_sku_text, model_input_info
-    from core.sku_identity import row_identity
     if row.get('frozen_payload'):
         return row['frozen_payload']
     if composer is not None:
