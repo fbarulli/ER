@@ -703,6 +703,52 @@ class _CheckpointPublisher:
             )
 
     @staticmethod
+    def _model_files(checkpoint: Path) -> list[str]:
+        """The serialized weight files of this checkpoint (safetensors first)."""
+        model_files = sorted(
+            path.name
+            for path in checkpoint.glob("model.safetensors*")
+            if path.is_file()
+        )
+        if not model_files:
+            model_files = sorted(
+                path.name
+                for path in checkpoint.glob("pytorch_model*.bin*")
+                if path.is_file()
+            )
+        return model_files
+
+    @staticmethod
+    def _token_id_snapshot(tokenizer, auto_model, token_names) -> dict:
+        """The three tokenizer/model/generation token-ID blocks of the manifest."""
+        return {
+            "tokenizer_token_ids": {
+                name: getattr(tokenizer, name, None) for name in token_names
+            },
+            "model_config_token_ids": {
+                name: getattr(auto_model.config, name, None) for name in token_names
+            },
+            "generation_config_token_ids": {
+                name: getattr(getattr(auto_model, "generation_config", None), name, None)
+                for name in token_names
+            },
+        }
+
+    @staticmethod
+    def _resume_block() -> dict:
+        """The fixed native-HF resume component map manifest field."""
+        return {
+            "native_hf_resume": {
+                "trainer_state": "trainer_state.json",
+                "trainer_control": "trainer_state.json:control",
+                "training_args": "training_args.bin",
+                "optimizer": "optimizer.pt",
+                "scheduler": "scheduler.pt",
+                "rng": "rng_state.pth",
+            }
+        }
+
+    @staticmethod
     def _write_checkpoint_manifest(
         checkpoint: Path,
         *,
@@ -724,17 +770,6 @@ class _CheckpointPublisher:
         tokenizer = getattr(model, "tokenizer", None)
         auto_model = model[0].auto_model
         token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
-        model_files = sorted(
-            path.name
-            for path in checkpoint.glob("model.safetensors*")
-            if path.is_file()
-        )
-        if not model_files:
-            model_files = sorted(
-                path.name
-                for path in checkpoint.glob("pytorch_model*.bin*")
-                if path.is_file()
-            )
         manifest = {
             "format": "euromonitor-hf-resume-v1",
             "epoch": epoch,
@@ -749,7 +784,7 @@ class _CheckpointPublisher:
             # They remain in their native HF files so model/optimizer tensors are
             # not serialized a second time into a multi-GB sidecar.
             "files": {
-                "model_state_dict": model_files,
+                "model_state_dict": _CheckpointPublisher._model_files(checkpoint),
                 "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
                 "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
                 "scaler_state_dict": "scaler.pt" if scaler is not None else None,
@@ -757,24 +792,8 @@ class _CheckpointPublisher:
                 "trainer_state": "trainer_state.json",
                 "training_args": "training_args.bin",
             },
-            "tokenizer_token_ids": {
-                name: getattr(tokenizer, name, None) for name in token_names
-            },
-            "model_config_token_ids": {
-                name: getattr(auto_model.config, name, None) for name in token_names
-            },
-            "generation_config_token_ids": {
-                name: getattr(getattr(auto_model, "generation_config", None), name, None)
-                for name in token_names
-            },
-            "native_hf_resume": {
-                "trainer_state": "trainer_state.json",
-                "trainer_control": "trainer_state.json:control",
-                "training_args": "training_args.bin",
-                "optimizer": "optimizer.pt",
-                "scheduler": "scheduler.pt",
-                "rng": "rng_state.pth",
-            },
+            **_CheckpointPublisher._token_id_snapshot(tokenizer, auto_model, token_names),
+            **_CheckpointPublisher._resume_block(),
         }
         with trace_step('training.write_checkpoint_manifest'):
             (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
