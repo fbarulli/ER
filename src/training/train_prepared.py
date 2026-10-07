@@ -1,12 +1,3 @@
-"""Trainer for a bundle prepared on the local machine.
-
-This entrypoint deliberately has no dataset, pair-building, masking,
-country-padding, or calibration-input generation path. Those inputs are
-validated in the local prepared bundle before this process starts.
-"""
-
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -26,6 +17,7 @@ from core.common import (
     runtime,
     set_determinism,
 )
+from core.run_log import RunLogger
 from core.timing import emit_timing
 from core.wandb_ctx import WandbCtx
 from training.attestation import (
@@ -36,6 +28,98 @@ from training.attestation import (
 )
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 from training.prepared_bundle import load_prepared_bundle, prepared_holdout
+
+
+def _parse_args() -> argparse.Namespace:
+    cfg = load_config()
+    tr = cfg["training"]
+    split = cfg["split"]
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--bundle", type=Path, required=True)
+    ap.add_argument('--shared-training-data', type=Path)
+    ap.add_argument('--training-binding', type=Path)
+    ap.add_argument('--allow-unshared-supervision', action='store_true',
+                    help='train without the shared supervision binding (recorded, off by default)')
+
+_LOG = RunLogger(__name__)
+
+
+class PreparedContractGuard:
+    """CLI/bundle/config agreement checks for one prepared training run.
+
+    SR check methods; every message is the original ValueError text. The
+    guardrail profile check runs BEFORE the bundle loads (fail fast on a
+    collect-time override), the per-bundle ones after.
+    """
+
+    @staticmethod
+    def guardrail_profile_configured(args: argparse.Namespace, cfg: dict) -> None:
+        cfg_profile = str(cfg["collapse_guardrail"]["profile"])
+        if (
+            args.collapse_guardrail_profile is not None
+            and args.collapse_guardrail_profile != cfg_profile
+        ):
+            raise ValueError(
+                "prepared training uses the configured collapse guardrail profile; "
+                f"CLI profile={args.collapse_guardrail_profile!r} differs from "
+                f"active profile={cfg_profile!r}. "
+                "Set the profile in config/training.yaml before preparing and launching."
+            )
+
+    @staticmethod
+    def shared_supervision_supplied(args: argparse.Namespace) -> None:
+        shared_path = getattr(args, 'shared_training_data', None)
+        binding_path = getattr(args, 'training_binding', None)
+        if bool(shared_path) != bool(binding_path):
+            raise ValueError('shared training data and track binding must be supplied together')
+        if not shared_path and not args.allow_unshared_supervision:
+            # The suite always supplies the binding (model_tracks.worker). Training
+            # without it means the supervision is not the shared population, which
+            # is a deliberate, recorded decision — never a default. Checked before
+            # any other bundle interpretation so the contract fails fast.
+            raise ValueError(
+                'prepared training requires --shared-training-data with '
+                '--training-binding so the supervision is the shared population; '
+                'pass --allow-unshared-supervision to train without it on purpose')
+
+    @staticmethod
+    def bundle_agrees(args: argparse.Namespace, manifest) -> None:
+        if args.payload != manifest.payload_variant:
+            raise ValueError(
+                f"bundle payload={manifest.payload_variant!r} but CLI payload={args.payload!r}"
+            )
+        if args.masking_profile and args.masking_profile != manifest.masking_profile:
+            raise ValueError(
+                f"bundle masking profile={manifest.masking_profile!r} "
+                f"but CLI profile={args.masking_profile!r}"
+            )
+
+
+class FrozenInputMaterializer:
+    """Materialize each frozen-input copy into RESULTS/_prepared_inputs.
+
+    Each prepared worker owns its frozen-input copy. F is a process-local
+    mapping, so downstream split/calibration readers use this copy without
+    modifying checkout inputs shared with graph/hybrid workers. The print
+    lines are the original bytes.
+    """
+
+    _FROZEN_INPUTS = {
+        "labeled_pairs": "labeled_pairs_csv",
+        "canonical_records": "canonical_records_csv",
+        "gate_results": "gate_results_csv",
+    }
+
+    def materialize(self, bundle: dict) -> None:
+        for file_key, bundle_key in self._FROZEN_INPUTS.items():
+            destination = RESULTS / "_prepared_inputs" / Path(F[file_key]).name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(bundle[bundle_key])
+            F[file_key] = destination
+            _LOG.info(
+                f"[prepared-bundle] materialized {file_key}={destination} "
+                f"bytes={len(bundle[bundle_key]):,}",
+            )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -72,6 +156,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _attestation_gate(args: argparse.Namespace, bundle_path: Path) -> TrainingAttestation | None:
+    """The handoff attestation, when supplied (fail-closed on any mismatch)."""
     raw = getattr(args, "attestation", None) or os.environ.get("ER_TRAINING_ATTESTATION")
     if not raw:
         return None
@@ -83,6 +168,62 @@ def _attestation_gate(args: argparse.Namespace, bundle_path: Path) -> TrainingAt
     return attestation
 
 
+def _bind_shared_training_data(shared_path: Path, binding_path: Path, bundle: dict) -> None:
+    """Validate the shared supervision binding against THIS bundle (print bytes kept)."""
+    from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
+
+    shared = SharedTrainingData.model_validate_json(shared_path.read_text())
+    binding = TrackTrainingBinding.model_validate_json(binding_path.read_text())
+    if binding.track != 'text' or from_bundle(bundle).fingerprint != shared.fingerprint:
+        raise ValueError('text frozen objective differs from shared training data')
+    binding.validate_data(shared)
+    _LOG.info(
+        f'[shared-training/text] examples={len(shared.examples)} endpoints={len(shared.endpoints)} '
+        f'sha256={shared.fingerprint}',
+    )
+
+
+class FoldMetricsWriter:
+    """Per-fold metric rows + the annotated fold-metrics CSV (prints kept)."""
+
+    def __init__(self, model_id: str, manifest, args: argparse.Namespace) -> None:
+        self._model_id = model_id
+        self._manifest = manifest
+        self._args = args
+
+    def annotate(self, rows: list[dict]) -> tuple[list[dict], Path]:
+        out = RESULTS / f"train_{Path(str(self._model_id)).name}_holdout_{self._manifest.payload_variant}_fold_metrics.csv"
+        rows_out = []
+        for row in rows:
+            row_out = dict(row)
+            row_out.update(
+                {
+                    "model": self._model_id,
+                    "payload": self._manifest.payload_variant,
+                    "train_frac": self._args.train_frac,
+                    "prepared_bundle": str(self._args.bundle),
+                    "prepared_bundle_sha256": self._manifest.sha256,
+                }
+            )
+            rows_out.append(row_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows_out).to_csv(out, index=False)
+        return rows_out, out
+
+    def report(self, rows_out: list[dict], out: Path) -> None:
+        ok = [row for row in rows_out if row.get("status") == "ok"]
+        _LOG.info(
+            f"[prepared-bundle] complete folds_ok={len(ok)}/{len(rows_out)} "
+            f"metrics={out}",
+        )
+        print(json.dumps({"bundle": self._manifest.model_dump(), "metrics": str(out)}, indent=2))
+        if len(ok) != len(rows_out):
+            raise SystemExit(
+                f"prepared training failed: successful_folds={len(ok)}/{len(rows_out)}\n"
+                + '\n'.join(str(row.get('traceback', row)) for row in rows_out if row.get('status') != 'ok')
+            )
+
+
 def main() -> None:
     args = _parse_args()
     run_name = str(args.run_tag)
@@ -91,23 +232,14 @@ def main() -> None:
     # are collected by the launcher either way.
     with WandbCtx(run_name) as wandb_ctx:
         if not wandb_ctx.enabled:
-            print("[wandb] disabled; continuing with Colab result collection", flush=True)
+            _LOG.info("[wandb] disabled; continuing with Colab result collection")
         _main(args, wandb_ctx)
 
 
 def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     set_determinism(SEED)
     cfg = load_config()
-    if (
-        args.collapse_guardrail_profile is not None
-        and args.collapse_guardrail_profile != str(cfg["collapse_guardrail"]["profile"])
-    ):
-        raise ValueError(
-            "prepared training uses the configured collapse guardrail profile; "
-            f"CLI profile={args.collapse_guardrail_profile!r} differs from "
-            f"active profile={cfg['collapse_guardrail']['profile']!r}. "
-            "Set the profile in config/training.yaml before preparing and launching."
-        )
+    PreparedContractGuard.guardrail_profile_configured(args, cfg)
     attestation = _attestation_gate(args, args.bundle)
     # Check-free path: the attestation (bundle sha256 + boundary report) owns
     # verification, so the load must not re-force the full digest/array
@@ -115,28 +247,8 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     # loader's own gate decision applies, unchanged.
     manifest, bundle = load_prepared_bundle(
         args.bundle, verify_inputs=False) if attestation else load_prepared_bundle(args.bundle)
-    shared_path = getattr(args, 'shared_training_data', None)
-    binding_path = getattr(args, 'training_binding', None)
-    if bool(shared_path) != bool(binding_path):
-        raise ValueError('shared training data and track binding must be supplied together')
-    if not shared_path and not args.allow_unshared_supervision:
-        # The suite always supplies the binding (model_tracks.worker). Training
-        # without it means the supervision is not the shared population, which
-        # is a deliberate, recorded decision — never a default. Checked before
-        # any other bundle interpretation so the contract fails fast.
-        raise ValueError(
-            'prepared training requires --shared-training-data with '
-            '--training-binding so the supervision is the shared population; '
-            'pass --allow-unshared-supervision to train without it on purpose')
-    if args.payload != manifest.payload_variant:
-        raise ValueError(
-            f"bundle payload={manifest.payload_variant!r} but CLI payload={args.payload!r}"
-        )
-    if args.masking_profile and args.masking_profile != manifest.masking_profile:
-        raise ValueError(
-            f"bundle masking profile={manifest.masking_profile!r} "
-            f"but CLI profile={args.masking_profile!r}"
-        )
+    PreparedContractGuard.shared_supervision_supplied(args)
+    PreparedContractGuard.bundle_agrees(args, manifest)
     model_id = resolve_model(args.model)
     if "training_tokens" not in bundle:
         raise ValueError("prepared bundle lacks local training tokens; rebuild locally before GPU training")
@@ -157,24 +269,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     train_neg_sources = np.asarray(bundle["train_neg_sources"], dtype=object)
     mask_audit = list(bundle["mask_audit"])
     hard_negative_mask_audit = list(bundle["hard_negative_mask_audit"])
-    frozen_inputs = {
-        "labeled_pairs": "labeled_pairs_csv",
-        "canonical_records": "canonical_records_csv",
-        "gate_results": "gate_results_csv",
-    }
-    for file_key, bundle_key in frozen_inputs.items():
-        # Each prepared worker owns its frozen-input copy. F is a process-local
-        # mapping, so downstream split/calibration readers use this copy without
-        # modifying checkout inputs shared with graph/hybrid workers.
-        destination = RESULTS / "_prepared_inputs" / Path(F[file_key]).name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(bundle[bundle_key])
-        F[file_key] = destination
-        print(
-            f"[prepared-bundle] materialized {file_key}={destination} "
-            f"bytes={len(bundle[bundle_key]):,}",
-            flush=True,
-        )
+    FrozenInputMaterializer().materialize(bundle)
 
     if args.split != "holdout":
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")
@@ -194,27 +289,18 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             f"[timing] training.run_plan data_digest_revalidation: "
             f"{time.perf_counter() - _run_plan_started:.3f}s"
         )
-    if shared_path:
-        from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
-        shared = SharedTrainingData.model_validate_json(shared_path.read_text())
-        binding = TrackTrainingBinding.model_validate_json(binding_path.read_text())
-        if binding.track != 'text' or from_bundle(bundle).fingerprint != shared.fingerprint:
-            raise ValueError('text frozen objective differs from shared training data')
-        binding.validate_data(shared)
-        print(f'[shared-training/text] examples={len(shared.examples)} endpoints={len(shared.endpoints)} '
-              f'sha256={shared.fingerprint}', flush=True)
+    if getattr(args, 'shared_training_data', None):
+        _bind_shared_training_data(args.shared_training_data, args.training_binding, bundle)
     train_bc, dev_bc, test_bc = (plan["holdout"][key] for key in ("train", "dev", "test"))
-    print(
+    _LOG.info(
         f"[prepared-bundle] loaded {args.bundle} "
         f"sha256={manifest.sha256} profile={manifest.masking_profile} "
         f"rows={manifest.n_df:,} payload={manifest.n_payload:,}",
-        flush=True,
     )
-    print(
+    _LOG.info(
         f"[prepared-bundle] holdout train={len(train_bc):,} "
         f"dev={len(dev_bc):,} test={len(test_bc):,}; "
         "remote data preparation=disabled",
-        flush=True,
     )
 
     from training.run_plan import training_config
@@ -262,34 +348,8 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         skip_test_eval=not args.report_test,
         wandb_ctx=wandb_ctx,
     )
-    out = RESULTS / f"train_{Path(str(model_id)).name}_holdout_{manifest.payload_variant}_fold_metrics.csv"
-    rows_out = []
-    for row in rows:
-        row_out = dict(row)
-        row_out.update(
-            {
-                "model": model_id,
-                "payload": manifest.payload_variant,
-                "train_frac": args.train_frac,
-                "prepared_bundle": str(args.bundle),
-                "prepared_bundle_sha256": manifest.sha256,
-            }
-        )
-        rows_out.append(row_out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows_out).to_csv(out, index=False)
-    ok = [row for row in rows_out if row.get("status") == "ok"]
-    print(
-        f"[prepared-bundle] complete folds_ok={len(ok)}/{len(rows_out)} "
-        f"metrics={out}",
-        flush=True,
-    )
-    print(json.dumps({"bundle": manifest.model_dump(), "metrics": str(out)}, indent=2))
-    if len(ok) != len(rows_out):
-        raise SystemExit(
-            f"prepared training failed: successful_folds={len(ok)}/{len(rows_out)}\n"
-            + '\n'.join(str(row.get('traceback', row)) for row in rows_out if row.get('status') != 'ok')
-        )
+    rows_out, out = FoldMetricsWriter(model_id, manifest, args).annotate(rows)
+    FoldMetricsWriter(model_id, manifest, args).report(rows_out, out)
 
 
 if __name__ == "__main__":
