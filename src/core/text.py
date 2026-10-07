@@ -55,24 +55,21 @@ _CASEFOLD_CHARS = 0
 _STRIP_TABLE: dict | None = None
 
 
-def _strip_table() -> dict:
-    """code point -> None for every combining mark (built once, then cached)."""
-    global _STRIP_TABLE
-    if _STRIP_TABLE is None:
-        _STRIP_TABLE = {codepoint: None for codepoint in range(0x110000)
-                        if unicodedata.combining(chr(codepoint))}
-    return _STRIP_TABLE
-
-
 def unicode_casefold(value: object) -> str:
     """Shared case/accent folding; punctuation and negation remain intact."""
-    global _CASEFOLD_CHARS
+    global _CASEFOLD_CHARS, _STRIP_TABLE
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
-    if _CASEFOLD_CHARS > _STRIP_TABLE_THRESHOLD:
-        return text.translate(_strip_table())
-    _CASEFOLD_CHARS += len(text)
-    combining = unicodedata.combining
-    return "".join([char for char in text if not combining(char)])
+    table = _STRIP_TABLE
+    if table is None:
+        if _CASEFOLD_CHARS > _STRIP_TABLE_THRESHOLD:
+            table = _STRIP_TABLE = {
+                codepoint: None for codepoint in range(0x110000)
+                if unicodedata.combining(chr(codepoint))}
+        else:
+            _CASEFOLD_CHARS += len(text)
+            combining = unicodedata.combining
+            return "".join([char for char in text if not combining(char)])
+    return text.translate(table)
 
 
 def normalize_text(text: str) -> str:
@@ -151,6 +148,9 @@ _NUMBER_PART = (
     r"|(?<![0-9])\.\d+)"
 )
 
+_UNIT_SPEC = None
+
+
 def _unit_spec() -> "UnitsSpec":
     """The config-owned unit taxonomy (config/paths.yaml `units`).
 
@@ -165,10 +165,22 @@ def _unit_spec() -> "UnitsSpec":
     below are DERIVED views of one source, resolved through module
     __getattr__ by the SAME names as before, so every existing reader keeps
     working (same lazy pattern as core.url_evidence's _spec()).
-    """
-    from core.common import data_cfg
 
-    return data_cfg().units
+    PERF r16: `core.common.data_cfg()` returns the module-level validated
+    singleton `_DATA_CFG` read once at import, so re-resolving it through a
+    function-level import on every call only bought a sys.modules lookup and a
+    module-attribute hop per call — and every volume candidate paid it. The
+    import stays lazy (core.text must not import core.common at module scope:
+    core.common imports core.text, so that would be a cycle); only the result
+    is now remembered.
+    """
+    global _UNIT_SPEC
+    spec = _UNIT_SPEC
+    if spec is None:
+        from core.common import data_cfg
+
+        spec = _UNIT_SPEC = data_cfg().units
+    return spec
 
 
 @lru_cache(maxsize=1)
@@ -484,8 +496,14 @@ class _VolumeEvidenceReader:
 
     def plausible(self, glued: bool, value: float, parsed_unit: str) -> bool:
         """Digits glued to a preceding letter are CODE ARTIFACTS above the
-        configured bulk ceiling; plausible glued sizes stay candidates."""
-        return not (glued and value * _volume_views()[0][parsed_unit] > _unit_spec().glued_code_max_ml)
+        configured bulk ceiling; plausible glued sizes stay candidates.
+
+        PERF r16: reads the bulk ceiling from the already-materialized view
+        tuple (index 6 is `spec.glued_code_max_ml`, the same attribute) instead
+        of re-entering the config resolver once per candidate.
+        """
+        return not (glued and value * _volume_views()[0][parsed_unit]
+                    > _volume_views()[6])
 
     def read(self) -> list[dict]:
         """The guarded candidate loop (statements verbatim)."""
@@ -539,14 +557,20 @@ def extract_volume_match(text: str) -> tuple:
     return None, None, False, ''
 
 
+@lru_cache(maxsize=1)
 def _volume_spelling_index() -> dict:
     """post-norm_unit spelling -> the config entry declaring it.
 
     ONE index for one table: the parse capture keys both _TO_ML (float) and
     this attribution index off the very same spellings, so a config edit
     cannot update one half and strand the other.
+
+    PERF r16: pure function of the config singleton, so it is built once.
+    `pipeline.extract_volume_from_title` calls `_volume_entry` for EVERY title
+    that mentions a volume, and each call used to rebuild this dict over the
+    whole unit taxonomy (18,386 rebuilds / 0.689 s in the 10k-cohort profile).
     """
-    index = {}
+    index: dict = {}
     for entry in _unit_spec().volume:
         for spelling in entry.spellings:
             index.setdefault(spelling.lower(), []).append(entry)

@@ -106,6 +106,18 @@ def build_benches(rows: list[dict]) -> dict:
             out.append(extract_volume_match(imgs[index]))
         return out
 
+    def bench_volume_adapter():
+        # pipeline.extract_volume_from_title — title, url and image per row
+        # (pipeline.py:1023-1036). This is the path that reaches
+        # core.text._volume_entry -> _volume_spelling_index.
+        from pipeline import extract_volume_from_title
+        out = []
+        for index in range(len(rows)):
+            out.append(extract_volume_from_title(titles[index]))
+            out.append(extract_volume_from_title(urls[index]))
+            out.append(extract_volume_from_title(imgs[index]))
+        return out
+
     def bench_pack_counts():
         out = []
         for index in range(len(rows)):
@@ -196,6 +208,7 @@ def build_benches(rows: list[dict]) -> dict:
     return {
         'volume_evidence': bench_volume_evidence,
         'volume_match': bench_volume_match,
+        'volume_adapter': bench_volume_adapter,
         'pack_counts': bench_pack_counts,
         'attribute_fields': bench_attribute_fields,
         'norm_attr_keys': bench_norm_attr_keys,
