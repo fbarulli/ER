@@ -571,8 +571,9 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
 
     kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    # One roof (owner order 2026-10-07): stream captures live at logs/kaggle/.
-    destination = tmp_path / "logs" / "kaggle" / "er-train-gpu.stream.log"
+    # One roof (owner order 2026-10-07): every transcript landmark lands on
+    # the single logs/kaggle/lane.log (files.stream_log default).
+    destination = tmp_path / "logs" / "kaggle" / "lane.log"
     content = destination.read_text().splitlines()
     assert content == ["+ git clone", "[timing] mark 1s", "phase complete"], \
         "decoded data payloads must be written as plain lines"
@@ -604,8 +605,9 @@ def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkey
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
 
     kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    # One roof: stream transcripts append to logs/kaggle/lane.log (files.stream_log).
     content = (tmp_path / "logs" / "kaggle"
-               / "er-train-gpu.stream.log").read_text().splitlines()
+               / "lane.log").read_text().splitlines()
     # every \r frame is its own grep-able line, and the last bar stays tagged
     # at the end of its chunk so the log tail shows the training tqdm strip
     assert content == ["12%", "35%", "60%", "[tqdm] 60%", "[timing] done"]
@@ -808,3 +810,112 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
         "the train stage must attach the fresh published version"
     assert json.loads((tmp_path / "kaggle_stage" / "chain.receipt.json")
                       .read_text())["steps"]["train"]["stage"]["revision"] == "abc123def"
+
+
+def _fake_sdk_cancel(monkeypatch, cancels):
+    import types
+    import kagglesdk.kaggle_client
+
+    class FakeKernelsApi:
+        def cancel_kernel_session(self, request):
+            cancels.append(request.kernel_session_id)
+            return types.SimpleNamespace()
+
+    client = types.SimpleNamespace(kernels=types.SimpleNamespace(
+        kernels_api_client=FakeKernelsApi()))
+    monkeypatch.setattr(kagglesdk.kaggle_client, "KaggleClient", lambda env: client)
+
+
+def test_stop_kernel_sdk_cancel_reaches_terminal_stopped(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    session_file = tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("123456\n")
+    cancels = []
+    _fake_sdk_cancel(monkeypatch, cancels)
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "error",
+                                          "raw": "KernelWorkerStatus.ERROR"})
+    plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
+    assert cancels == [123456], "the recorded session id must drive the SDK cancel"
+    assert plan["cancel_method"] == "sdk_cancel_kernel_session"
+    assert plan["verdict"] == "stopped"
+    assert plan["terminal_state"] == "error"
+    assert plan["stopped"] is True
+
+
+def test_stop_kernel_verify_window_expires_reports_still_running(tmp_path, monkeypatch):
+    import types
+    import cli.kaggle_kernels
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    session_file = tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("987654")
+    cancels = []
+    _fake_sdk_cancel(monkeypatch, cancels)
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "running", "raw": "RUNNING"})
+    ticks = iter([0.0, 10.0, 10_000.0])
+    sleeps = []
+    fake_time = types.SimpleNamespace(monotonic=lambda: next(ticks),
+                                      sleep=lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(cli.kaggle_kernels, "time", fake_time)
+    with pytest.raises(RuntimeError, match="stop did not reach a terminal state"):
+        kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
+    assert cancels == [987654]
+    assert sleeps == [15.0], "verify polls run logs_poll_seconds apart"
+
+
+def test_stop_kernel_sdk_failure_falls_back_to_stub_push(tmp_path, monkeypatch):
+    import types
+    import kagglesdk.kaggle_client
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    session_file = tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("555000")
+    monkeypatch.setattr(kagglesdk.kaggle_client, "KaggleClient",
+                        lambda env: (_ for _ in ()).throw(
+                            ConnectionError("proxy down")))
+    pushes = []
+
+    def fake_run(command, **kwargs):
+        pushes.append(list(command))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle", fake_run)
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "error", "raw": "ERROR"})
+    plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
+    assert plan["cancel_method"] == "version_replace"
+    assert "proxy down" in plan["cancel_error"], "SDK failure is recorded, not hidden"
+    assert plan["verdict"] == "stopped" and plan["stopped"] is True
+    assert any("kernels" in parts and "push" in parts and "-p" in parts
+               for parts in pushes), "fallback must still replace the version"
+
+
+def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    cancels = []
+    _fake_sdk_cancel(monkeypatch, cancels)
+    pushes = []
+
+    def fake_run(command, **kwargs):
+        pushes.append(list(command))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle", fake_run)
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
+    plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
+    assert cancels == [], "no recorded session id -> no SDK cancel attempt"
+    assert plan["cancel_method"] == "version_replace"
+    assert plan["verdict"] == "stopped" and plan["stopped"] is True
+    assert plan["terminal_state"] == "complete"
+    assert any("kernels" in parts and "push" in parts for parts in pushes), \
+        "the stub replace must still be pushed"

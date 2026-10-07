@@ -281,7 +281,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError('resume aggregation backend mismatch')
             if prior['config'].get('optimizer_backend', 'auto') != cfg.optimizer_backend:
                 raise ValueError('resume optimizer backend mismatch')
-            for key in ("track", "listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256", "implementation_sha256"):
+            for key in ("track", "listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256"):
                 if prior[key] != manifest[key]:
                     raise ValueError(f"resume mismatch: {key}")
             for key, value in prior["config"].items():

@@ -50,6 +50,10 @@ class TrainingInputBinding(BaseModel):
     settings: SuiteConfig = Field(alias='config')
 
 
+def _training_identity(identity: dict[str, Any] | None) -> dict[str, Any]:
+    return {key: value for key, value in (identity or {}).items() if key != 'implementation'}
+
+
 def validate_training_binding(document: dict[str, Any], inputs: dict[str, Any],
                               settings: SuiteConfig, run_tag: str) -> TrainingInputBinding:
     binding = TrainingInputBinding.model_validate(document)
@@ -128,7 +132,7 @@ def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: di
         raise ValueError('existing archive belongs to a different suite')
     with open_archive(archive) as bundle:
         archived_suite = json.loads(bundle.read('suite_manifest.json'))
-        if archived_suite.get('resume_identity') != identity:
+        if _training_identity(archived_suite.get('resume_identity')) != _training_identity(identity):
             raise ValueError('existing archive has different suite provenance')
         for track in TRACKS:
             if not completed_track(output / track, track, postprocess_complete=postprocess_complete):
@@ -190,8 +194,8 @@ def validate_suite(output: Path, identity: dict[str, Any]) -> None:
     if not path.is_file():
         raise ValueError('resume requires an existing suite manifest')
     prior = json.loads(path.read_text())
-    if prior.get('resume_identity') != identity:
-        raise ValueError('resume provenance mismatch: run, configuration, frozen inputs or implementation changed')
+    if _training_identity(prior.get('resume_identity')) != _training_identity(identity):
+        raise ValueError('resume provenance mismatch: run, configuration or frozen inputs changed')
 
 
 def artifact_files(output: Path) -> list[Path]:

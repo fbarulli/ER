@@ -77,9 +77,9 @@ class PreparedBundleManifest(BaseModel):
     # Diet/augmentation provenance: the resolved masking profile and the
     # easy-negative quota the bundle was built under. config/ can drift
     # after a build (ratio_to_hard moves the diet verdict without touching
-    # a byte), so the manifest pins what was true at build time and the
-    # loader rejects drift in strict mode. Older headers without provenance
-    # require regeneration in strict mode.
+    # a byte), so the manifest pins what was true at build time. The pins
+    # are records, never compared (owner order 2026-10-07); the diet gate
+    # recomputes its own verdict from the selected pairs.
     masking_config: dict = Field(default_factory=dict)
     easy_config: dict = Field(default_factory=dict)
     # Ratio contracts (audit 2026-09-28): the train-time arithmetic the
@@ -836,8 +836,7 @@ def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBun
     _timed_lineage_validations(data)
     BundleReader.validate_manifest_counts(path, manifest, data)
     BundleReader.validate_identity_fields(path, manifest, data)
-    BundleDriftPolicy.check_provenance_drift(path, manifest)
-    BundleDriftPolicy.check_legacy_ratio_note(path, manifest)
     PreparationStore.cache(path, manifest, data)
     _LOG.info(f'[bundle] loaded {path} sha256={manifest.sha256}')
+    # BundleDriftPolicy checks retired (owner order 2026-10-07: no drift enforcement in the lane; prepared_bundle_drift_strict is config-inert).
     return manifest, data
