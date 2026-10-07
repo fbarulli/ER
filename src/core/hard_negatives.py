@@ -1515,6 +1515,60 @@ def pairs_in_set(
     )
 
 
+class TripletBuilder:
+    """Build (anchor, positive, hard-negative) triples for TripletLoss.
+
+    SR phases: _resolve_config (seed/max_triples SSOT), _negative_partner_map
+    (both-directions index), sample (the capped draw). Statements verbatim.
+    """
+
+    def __init__(self, train_pos: np.ndarray, hard_train: np.ndarray,
+                 payload: list[str], *, seed: int | None, max_triples: int | None) -> None:
+        self._train_pos = train_pos
+        self._hard_train = hard_train
+        self._payload = payload
+        self._seed_arg = seed
+        self._max_triples_arg = max_triples
+
+    def _resolve_config(self) -> None:
+        from core.common import SEED, runtime
+
+        self._seed = SEED if self._seed_arg is None else self._seed_arg
+        self._max_triples = (
+            int(runtime("max_triples")) if self._max_triples_arg is None
+            else self._max_triples_arg
+        )
+
+    def _negative_partner_map(self, hard_train: np.ndarray) -> dict[int, list[int]]:
+        hn_map: dict[int, list[int]] = defaultdict(list)
+        for a, b in hard_train:
+            # Index BOTH directions: mined pairs are unordered (a<b at build), so a
+            # one-directional map silently discards any hard negative whose anchor
+            # happens to be the second element of the mined pair.
+            hn_map[int(a)].append(int(b))
+            hn_map[int(b)].append(int(a))
+        return hn_map
+
+    def sample(self, hn_map: dict[int, list[int]]):
+        from sentence_transformers import InputExample
+
+        rng = np.random.default_rng(self._seed)
+        triples: list = []
+        for a, b in self._train_pos:
+            partners = hn_map.get(int(a)) or hn_map.get(int(b))
+            if not partners:
+                continue
+            c = int(partners[rng.integers(len(partners))])
+            triples.append(InputExample(texts=[self._payload[a], self._payload[b], self._payload[c]]))
+            if len(triples) >= self._max_triples:
+                break
+        return triples
+
+    def build(self) -> list:
+        self._resolve_config()
+        return self.sample(self._negative_partner_map(self._hard_train))
+
+
 def build_triplets(
     train_pos: np.ndarray,
     hard_train: np.ndarray,
@@ -1523,7 +1577,8 @@ def build_triplets(
     seed: int | None = None,
     max_triples: int | None = None,
 ) -> list:
-    """Build (anchor, positive, hard-negative) triples for TripletLoss.
+    """Build (anchor, positive, hard-negative) triples for TripletLoss —
+    see :class:`TripletBuilder`.
 
     Each hard-negative partner is drawn from the anchor's mined hard negatives
     (falling back to the positive partner's). Capped at max_triples so the
@@ -1535,36 +1590,83 @@ def build_triplets(
     explicit values still win (training.py passes per-fold seed offsets).
     No inline literals in this signature.
     """
-    from core.common import SEED, runtime
-
-    if seed is None:
-        seed = SEED
-    if max_triples is None:
-        max_triples = int(runtime("max_triples"))
-
-    from sentence_transformers import InputExample
-
-    hn_map: dict[int, list[int]] = defaultdict(list)
-    for a, b in hard_train:
-        # Index BOTH directions: mined pairs are unordered (a<b at build), so a
-        # one-directional map silently discards any hard negative whose anchor
-        # happens to be the second element of the mined pair.
-        hn_map[int(a)].append(int(b))
-        hn_map[int(b)].append(int(a))
-
-    rng = np.random.default_rng(seed)
-    triples: list[InputExample] = []
-    for a, b in train_pos:
-        partners = hn_map.get(int(a)) or hn_map.get(int(b))
-        if not partners:
-            continue
-        c = int(partners[rng.integers(len(partners))])
-        triples.append(InputExample(texts=[payload[a], payload[b], payload[c]]))
-        if len(triples) >= max_triples:
-            break
-    return triples
+    return TripletBuilder(train_pos, hard_train, payload, seed=seed, max_triples=max_triples).build()
 
 
+class AnnBandSelector:
+    """Select the ANN band using the explicitly configured mode.
+
+    SR phases: _validate_mode (the required SSOT mode), _empty_stats,
+    _quantiles, select (the fixed/adaptive_quantile/intersection branch).
+    There is intentionally no implicit fallback.
+    """
+
+    MODES = {"fixed", "adaptive_quantile", "intersection"}
+
+    def __init__(self, scores: np.ndarray, configured_band: tuple[float, float],
+                 score_quantiles: tuple[float, float], band_mode: str) -> None:
+        self._scores = np.asarray(scores, dtype=float)
+        self._lo, self._hi = (float(x) for x in configured_band)
+        self._qlo, self._qhi = (float(x) for x in score_quantiles)
+        self._band_mode = band_mode
+
+    def _validate_mode(self) -> None:
+        if self._band_mode not in self.MODES:
+            raise ValueError(
+                "mining.ann.band_mode must be one of fixed, adaptive_quantile, "
+                f"intersection; got {self._band_mode!r}"
+            )
+
+    def _empty_stats(self) -> dict[str, float]:
+        return {
+            "candidate_count": 0.0,
+            "candidate_min": float("nan"),
+            "candidate_max": float("nan"),
+            "candidate_median": float("nan"),
+            "band_overlap_pct": 0.0,
+            "band_lo": self._lo,
+            "band_hi": self._hi,
+            "band_mode": self._band_mode,
+        }
+
+    def select(self) -> tuple[float, float, dict[str, object]]:
+        if self._scores.size == 0:
+            return self._lo, self._hi, self._empty_stats()
+        q_values = np.quantile(self._scores, [self._qlo, self._qhi])
+        overlap = (self._scores >= self._lo) & (self._scores <= self._hi)
+        if self._band_mode == "fixed":
+            band_lo, band_hi = self._lo, self._hi
+        elif self._band_mode == "adaptive_quantile":
+            band_lo, band_hi = (float(q_values[0]), float(q_values[1]))
+        else:
+            band_lo = max(self._lo, float(q_values[0]))
+            band_hi = min(self._hi, float(q_values[1]))
+        return float(band_lo), float(band_hi), {
+            "candidate_count": float(self._scores.size),
+            "candidate_min": float(np.min(self._scores)),
+            "candidate_max": float(np.max(self._scores)),
+            "candidate_median": float(np.median(self._scores)),
+            "band_overlap_pct": float(np.mean(overlap)),
+            "band_lo": float(band_lo),
+            "band_hi": float(band_hi),
+            "band_mode": self._band_mode,
+        }
+
+
+def calibrated_ann_band(
+    scores: np.ndarray,
+    configured_band: tuple[float, float],
+    score_quantiles: tuple[float, float],
+    band_mode: str,
+) -> tuple[float, float, dict[str, object]]:
+    """Select the ANN band using the explicitly configured mode.
+
+    There is intentionally no implicit fallback. ``fixed`` uses the literal
+    configured band, ``adaptive_quantile`` uses the configured score
+    quantiles, and ``intersection`` uses only their overlap (which may be
+    empty). The mode is required from the config SSOT by every caller.
+    """
+    return AnnBandSelector(scores, configured_band, score_quantiles, band_mode).select()
 class _AnnHardNegativeMiner:
     """One ANN hard-negative mining pass (macro-blocked cosine ANN).
 
