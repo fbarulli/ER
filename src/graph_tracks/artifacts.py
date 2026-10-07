@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from core.portable_archive import Digest
+from core.step_trace import timed
 from graph_tracks.data import file_hash
 
 class GraphExportManifest(BaseModel):
@@ -35,22 +36,34 @@ class GraphForwardManifest(GraphExportManifest):
 
 
 TRACKS = {'gnn_only', 'hybrid'}
+_NAME_TRACKS = TRACKS | {'text'}
+
+
+def _validate_name_track(track: str) -> None:
+    """Reject any track outside the set of nameable artifact tracks."""
+    if track not in _NAME_TRACKS:
+        raise ValueError(f'unknown graph track: {track}')
 
 
 def name(track: str, stem: str) -> str:
-    if track not in TRACKS | {'text'}:
-        raise ValueError(f'unknown graph track: {track}')
+    _validate_name_track(track)
     return f'{track}__{stem}'
 
 
+def _verified_track(checkpoint: Path, track: str) -> str:
+    """Accept `checkpoint` as `track`'s model file, or raise with the reason."""
+    marker = checkpoint.parent / name(track, 'checkpoint_manifest.json')
+    if not marker.is_file():
+        raise ValueError('checkpoint missing completion marker')
+    metadata = json.loads(marker.read_text())
+    if metadata.get('track') != track or metadata.get('files', {}).get(checkpoint.name) != file_hash(checkpoint):
+        raise ValueError('checkpoint track/hash mismatch')
+    return track
+
+
+@timed
 def checkpoint_track(checkpoint: Path) -> str:
     for track in TRACKS:
         if checkpoint.name == name(track, 'graph_model.pt'):
-            marker = checkpoint.parent / name(track, 'checkpoint_manifest.json')
-            if not marker.is_file():
-                raise ValueError('checkpoint missing completion marker')
-            metadata = json.loads(marker.read_text())
-            if metadata.get('track') != track or metadata.get('files', {}).get(checkpoint.name) != file_hash(checkpoint):
-                raise ValueError('checkpoint track/hash mismatch')
-            return track
+            return _verified_track(checkpoint, track)
     raise ValueError('checkpoint filename must identify its graph track')
