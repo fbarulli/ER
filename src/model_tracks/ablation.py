@@ -468,77 +468,69 @@ def _validated_device(device):
     return validate_embedding_device(device)
 
 
-@timed
-@scoped_request
-def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
-    """Colab inference only; all interventions and texts arrive prepared."""
+def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
     import torch
-    device = _validated_device(device)
-    if output.exists():
-        raise FileExistsError(output)
-    request = json.loads(request_path.read_text())
-    # Sources are relocated by the launcher but expected hashes stay frozen.
-    validate_sources(request)
-    from model_tracks.ablation_inputs import load_batch
     from core.encoding_inputs import tokenization_policy, load_token_features
-    arrays = load_prepared(request_path,request)
-    plan = request['prepared_inputs']
-    track = request['track']
-    text_vectors = None
-    if track != 'gnn_only':
-        from sentence_transformers import SentenceTransformer
-        checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
-        model = text_model
-        expected_checkpoint = checkpoint_identity(resolve(checkpoint))
-        if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
-            raise ValueError('shared text model checkpoint differs from frozen request')
-        if model is not None and model.device.type != device:
-            raise ValueError('shared text model device differs from frozen request')
-        if model is None:
-            model = SentenceTransformer(str(resolve(checkpoint)),device=device,local_files_only=True)
-        model.eval()
-        if tokenization_policy(model) != plan['tokenization']:
-            raise ValueError('worker tokenizer/checkpoint policy differs from local preparation')
-        covered = np.zeros(len(request['texts']),dtype=bool)
-        seeded = None
-        if saved_text is not None:
-            from graph_tracks.data import load_text_cache
-            from graph_tracks.text_cache import texts_hash
-            from core.model_input import model_input_composition
-            with np.load(saved_text,allow_pickle=False) as cache:
-                saved_ids = cache['ids'].astype(str).tolist()
-            candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
-            mapping = dict(zip(request['candidate_ids'],request['candidate_text_indices']))
-            if set(saved_ids) != set(mapping):
-                raise ValueError('baseline text export catalog differs from prepared ablation')
-            if metadata.get('checkpoint_sha256') != expected_checkpoint or metadata.get('tokenization') != plan['tokenization'] or metadata.get('composition') != model_input_composition().model_dump(mode='json') or metadata.get('text_sha256') != texts_hash([request['texts'][mapping[key]] for key in saved_ids]):
-                raise ValueError('baseline text export differs from prepared native text/checkpoint')
-            seeded = np.empty((len(request['texts']),candidates.shape[-1]),dtype=np.float32)
-            for row,index in enumerate(request['candidate_text_indices']):
-                if covered[index] and not np.allclose(seeded[index],candidates[row],atol=1e-5):
-                    raise ValueError('identical baseline texts have inconsistent exported vectors')
-                seeded[index] = candidates[row]
-                covered[index] = True
-        chunks = []
-        with torch.no_grad():
-            for n,batch in enumerate(plan['token_batches'],1):
-                features = load_token_features(arrays,batch,device)
-                selected = np.flatnonzero(~covered[batch['start']:batch['start']+batch['count']])
-                if not len(selected):
-                    continue
-                features = {key:value[torch.as_tensor(selected,device=device)] if isinstance(value,torch.Tensor) and value.ndim and len(value)==batch['count'] else value for key,value in features.items()}
-                vectors = model(features)['sentence_embedding']
-                vectors = torch.nn.functional.normalize(vectors,p=2,dim=1).cpu().numpy().astype(np.float32)
-                if seeded is None:
-                    seeded = np.empty((len(request['texts']),vectors.shape[-1]),dtype=np.float32)
-                positions = batch['start']+selected
-                seeded[positions] = vectors
-                covered[positions] = True
-                print(f'[ablation/gpu] changed native texts={len(selected)} batch={n}/{len(plan["token_batches"])}; truncated=0',flush=True)
-        if not covered.all():
-            raise ValueError('prepared ablation text vectors miss native inputs')
-        text_vectors = seeded
-        del model
+    if track == 'gnn_only':
+        return None
+    from sentence_transformers import SentenceTransformer
+    checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
+    model = text_model
+    expected_checkpoint = checkpoint_identity(resolve(checkpoint))
+    if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
+        raise ValueError('shared text model checkpoint differs from frozen request')
+    if model is not None and model.device.type != device:
+        raise ValueError('shared text model device differs from frozen request')
+    if model is None:
+        model = SentenceTransformer(str(resolve(checkpoint)),device=device,local_files_only=True)
+    model.eval()
+    if tokenization_policy(model) != plan['tokenization']:
+        raise ValueError('worker tokenizer/checkpoint policy differs from local preparation')
+    covered = np.zeros(len(request['texts']),dtype=bool)
+    seeded = None
+    if saved_text is not None:
+        from graph_tracks.data import load_text_cache
+        from graph_tracks.text_cache import texts_hash
+        from core.model_input import model_input_composition
+        with np.load(saved_text,allow_pickle=False) as cache:
+            saved_ids = cache['ids'].astype(str).tolist()
+        candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
+        mapping = dict(zip(request['candidate_ids'],request['candidate_text_indices']))
+        if set(saved_ids) != set(mapping):
+            raise ValueError('baseline text export catalog differs from prepared ablation')
+        if metadata.get('checkpoint_sha256') != expected_checkpoint or metadata.get('tokenization') != plan['tokenization'] or metadata.get('composition') != model_input_composition().model_dump(mode='json') or metadata.get('text_sha256') != texts_hash([request['texts'][mapping[key]] for key in saved_ids]):
+            raise ValueError('baseline text export differs from prepared native text/checkpoint')
+        seeded = np.empty((len(request['texts']),candidates.shape[-1]),dtype=np.float32)
+        for row,index in enumerate(request['candidate_text_indices']):
+            if covered[index] and not np.allclose(seeded[index],candidates[row],atol=1e-5):
+                raise ValueError('identical baseline texts have inconsistent exported vectors')
+            seeded[index] = candidates[row]
+            covered[index] = True
+    chunks = []
+    with torch.no_grad():
+        for n,batch in enumerate(plan['token_batches'],1):
+            features = load_token_features(arrays,batch,device)
+            selected = np.flatnonzero(~covered[batch['start']:batch['start']+batch['count']])
+            if not len(selected):
+                continue
+            features = {key:value[torch.as_tensor(selected,device=device)] if isinstance(value,torch.Tensor) and value.ndim and len(value)==batch['count'] else value for key,value in features.items()}
+            vectors = model(features)['sentence_embedding']
+            vectors = torch.nn.functional.normalize(vectors,p=2,dim=1).cpu().numpy().astype(np.float32)
+            if seeded is None:
+                seeded = np.empty((len(request['texts']),vectors.shape[-1]),dtype=np.float32)
+            positions = batch['start']+selected
+            seeded[positions] = vectors
+            covered[positions] = True
+            print(f'[ablation/gpu] changed native texts={len(selected)} batch={n}/{len(plan["token_batches"])}; truncated=0',flush=True)
+    if not covered.all():
+        raise ValueError('prepared ablation text vectors miss native inputs')
+    text_vectors = seeded
+    del model
+    return text_vectors
+
+
+def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
+    from model_tracks.ablation_inputs import load_batch
     encoder = None
     graph_batches = {}
     if track != 'text':
@@ -554,6 +546,11 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
             raise ValueError('prepared vocabulary differs from checkpoint')
         graph_batches = {key:[load_batch(arrays,prefix,device,vocabulary) for prefix in prefixes]
                          for key,prefixes in plan['graph_batches'].items()}
+    return encoder, graph_batches
+
+
+def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
+    from model_tracks.ablation_inputs import load_batch
     candidate_vectors = saved_candidates
     if candidate_vectors is not None and (candidate_vectors.dtype != np.float32 or candidate_vectors.shape[0] != len(request['candidate_ids']) or not np.isfinite(candidate_vectors).all() or not np.allclose(np.linalg.norm(candidate_vectors,axis=1),1,atol=1e-4)):
         raise ValueError('saved graph candidate vector contract mismatch')
@@ -561,6 +558,11 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         candidate_text = text_vectors[arrays['candidate_text_indices']] if text_vectors is not None else None
         candidate_vectors = candidate_text if encoder is None else encoder.encode_prepared(
             [load_batch(arrays,prefix,device,plan['vocabulary']) for prefix in plan['candidate_batches']],candidate_text)
+    return candidate_vectors
+
+
+def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
+    import torch
     indices = arrays['pair_indices']
     results = []
     for n,job in enumerate(plan['jobs'],1):
@@ -582,6 +584,10 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         print(f'[ablation/{device}] prepared inference job={n}/{len(plan["jobs"])}',flush=True)
     vectors = [results[job][0] for job in plan['variant_jobs']]
     scores = [results[job][1] for job in plan['variant_jobs']]
+    return vectors, scores
+
+
+def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('xb') as handle:
@@ -589,6 +595,34 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
                             request_sha256=file_hash(request_path),embedding_dtype='float32',
                             **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
     output.with_suffix('.sha256').write_text(file_hash(output))
+
+
+@timed
+@scoped_request
+def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
+    """Colab inference only; all interventions and texts arrive prepared."""
+    import torch
+    device = _validated_device(device)
+    if output.exists():
+        raise FileExistsError(output)
+    request = json.loads(request_path.read_text())
+    # Sources are relocated by the launcher but expected hashes stay frozen.
+    validate_sources(request)
+    from model_tracks.ablation_inputs import load_batch
+    from core.encoding_inputs import tokenization_policy, load_token_features
+    arrays = load_prepared(request_path,request)
+    plan = request['prepared_inputs']
+    track = request['track']
+    with _LOG.section('ablation.encode.text_vectors'):
+        text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+    with _LOG.section('ablation.encode.graph_encoder'):
+        encoder, graph_batches = _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
+    with _LOG.section('ablation.encode.candidates'):
+        candidate_vectors = _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates)
+    with _LOG.section('ablation.encode.jobs'):
+        vectors, scores = _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates)
+    with _LOG.section('ablation.encode.persist'):
+        _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
 
 
 def frozen_threshold(source, value):
