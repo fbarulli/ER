@@ -26,8 +26,10 @@ and is validated by ``core.schemas.TrainingSpec.ModelInputSpec``:
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 
 import pandas as pd  # frame access in build_sku_texts (consolidated loop)
 
@@ -134,6 +136,30 @@ def _structured_text_enabled() -> bool:
     return bool(cfg["enabled"]) and bool(cfg["append_to_text"])
 
 
+@lru_cache(maxsize=65536)
+def _normalized_stream(text: str) -> str:
+    """The percent-protected, normalized, underscore-split stream (memo).
+
+    OPTIMIZATION (redundant-across-rows): identical brand strings recur on
+    thousands of listing rows (and the same title+attributes on the 4.7
+    same-canonical listings). The stream is a pure function of the input
+    string ONLY — the schema strip runs on top, live (see _normalized_tokens),
+    so audit-time _MODEL_STOP changes are always honored.
+    """
+    from pipeline import normalize_text
+
+    protected = _PERCENT_RANGE_RE.sub(
+        lambda m: f" pct{m.group(1)}to{m.group(2)} ", text
+    )
+    protected = _PERCENT_RE.sub(lambda m: f" pct{m.group(1)} ", protected)
+    return " ".join(
+        part
+        for token in normalize_text(protected).split()
+        for part in token.split("_")
+        if part
+    )
+
+
 def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
     """One normalizer for BOTH lanes.
 
@@ -153,15 +179,8 @@ def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
     for it is recorded in MODEL_INPUT_FIX_REPORT.md section 24 as input to that
     deliberate decision rather than being applied ahead of it.
     """
-    from pipeline import MINIMAL_STOPWORDS, normalize_text, strip_schema_words
+    from pipeline import MINIMAL_STOPWORDS, strip_schema_words
 
-    # normalize_text preserves [a-z0-9.], so a decimal such as 5.5% survives as
-    # ONE token. Never use "_" here: the compound splitter below would cut the
-    # value in half.
-    protected = _PERCENT_RANGE_RE.sub(
-        lambda m: f" pct{m.group(1)}to{m.group(2)} ", str(text)
-    )
-    protected = _PERCENT_RE.sub(lambda m: f" pct{m.group(1)} ", protected)
     # Diacritics are deliberately NOT folded here (owner ruling — see the
     # docstring). normalize_text turns every non-ASCII letter into a word
     # break, so an accented brand arrives split: "Brämhults" -> "br mhults"
@@ -171,13 +190,10 @@ def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
     # outright different brands — so this is a retrieval problem, not a
     # composition one, and brand-string normalisation is owned by the
     # dedicated brand-analysis work (commit 38358bf reverted the interim fix).
-    split = " ".join(
-        part
-        for token in normalize_text(protected).split()
-        for part in token.split("_")
-        if part
-    )
+    split = _normalized_stream(str(text))
     if drop_schema_words:
+        # Live read: strip_schema_words is the audit-pinned seam — never
+        # memoized, so _MODEL_STOP changes are always honored here.
         split = strip_schema_words(split)
     return [t for t in split.split() if len(t) > 1 and t not in MINIMAL_STOPWORDS]
 
@@ -398,6 +414,110 @@ def build_sku_text(
     return _legacy_sku_text(row, info)
 
 
+class _RowProxy:
+    """A Mapping-backed row object exposing the Series access surface
+    (`name in row.index`, `row[name]`) so a worker task's row can be a plain
+    dict — same returns as the frame's own row Series for these readers."""
+
+    __slots__ = ('_record', 'index')
+
+    def __init__(self, record: dict) -> None:
+        self._record = record
+        self.index = record.keys()
+
+    def __getitem__(self, name):
+        return self._record[name]
+
+
+_SKU_STATE: dict[str, object] = {'records': None, 'structured': True}
+
+
+def sku_row_payload(record: dict) -> tuple[dict[str, set], str]:
+    """One row's payload from its plain record dict (pure, worker-reusable)."""
+    from core.structured_features import sku_info as sku_structured_info
+
+    row = _RowProxy(record)
+    info = model_input_info(sku_structured_info(
+        row_metadata_text(row, "sku_name_eng"),
+        row_metadata_text(row, *alias_names("attribute")),
+        row_metadata_text(row, *alias_names("description_short_eng")),
+    ))
+    return info, build_sku_text(row, info)
+
+
+def sku_row_task(idx: int) -> tuple[dict[str, set], str]:
+    """One row's payload from the fork-inherited record table (worker entry).
+
+    The parent ships ONE int per row; the record table is inherited through
+    fork COW and memoized in the worker on its first task (never re-shipped)."""
+    records = _SKU_STATE['records']
+    if records is None:  # pragma: no cover — fork COW inheritance publishes them
+        raise RuntimeError('sku pool worker started without the inherited record table')
+    return sku_row_payload(records[idx])
+
+
+class SkuTextPool:
+    """Fork-parallel builder of one frame's sku payload (texts + infos).
+
+    One SR owner of the worker lifecycle, mirroring pipeline.CanonicalCardPool:
+    each task is a pure function of ONE row record (a plain dict from the
+    frame's columns), fork-inherited module state supplies the config-driven
+    extractors, and pool.map yields results in submission order — so both
+    the infos and the texts are byte-identical to the sequential composition,
+    whichever path the row count selects.
+
+    Phase map:
+      bind           — publish the variant frame's row records (fork COW)
+      row_task       — one row: structured info + encoder text, ordered
+      build          — sequential below the threshold (small frames/ tests),
+                       fork-parallel across cores otherwise
+    """
+
+    _INLINE_THRESHOLD = 4096
+    _CHUNKSIZE = 64
+
+    def __init__(self) -> None:
+        self._rows: list[dict] = []
+        self._structured_enabled = True
+
+    def bind(self, rows: list[dict], *, structured_enabled: bool) -> None:
+        self._rows = rows
+        self._structured_enabled = structured_enabled
+
+
+    def build(self, frame, *, structured_enabled: bool) -> tuple[list[str], list[dict[str, set]]]:
+        rows: list[dict] = frame.to_dict("records")
+        _SKU_STATE['records'] = rows
+        _SKU_STATE['structured'] = structured_enabled
+        if len(rows) < self._INLINE_THRESHOLD:
+            replies = [
+                sku_row_payload(row)
+                for row in _LOG.progress(rows, desc='sku-structured', unit='row')
+            ]
+            return [text for _info, text in replies], [info for info, _text in replies]
+        _LOG.info(
+            f"payload: fork-parallel sku-text compose over {len(rows):,} rows"
+        )
+        import concurrent.futures
+        from multiprocessing import get_context
+        infos, texts = [], []
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max(2, os.cpu_count() - 1), mp_context=get_context('fork'),
+        ) as pool:
+            bar = _LOG.bar(total=len(rows), desc='sku-text-pool', unit='row')
+            try:
+                for info, text in pool.map(sku_row_task, range(len(rows)), chunksize=self._CHUNKSIZE):
+                    infos.append(info)
+                    texts.append(text)
+                    bar.update()
+            finally:
+                bar.close()
+        return texts, infos
+
+
+_SKU_TEXT_POOL = SkuTextPool()
+
+
 class SkuPayloadComposer:
     """One frame's per-row payload composition (the SSOT loop).
 
@@ -500,11 +620,13 @@ class SkuPayloadComposer:
     # ── orchestration ───────────────────────────────────────────────────────
 
     def compose(self) -> tuple[list[str], list[dict[str, set]]]:
-        """(texts, infos): text + numeric channel built once, never disagreeing."""
-        title, attrs, descriptions = self.resolve_columns()
-        infos = self.structured_infos(title, attrs, descriptions)
-        texts = self.encode_texts(infos)
-        return texts, infos
+        """(texts, infos): text + numeric channel built once, never disagreeing.
+
+        Fork-parallel when the frame is worth a pool: the per-row
+        composition is a pure function of the row record, so the pool's
+        results are the sequential bytes with N-fold wall-clock.
+        """
+        return _SKU_TEXT_POOL.build(self._frame, structured_enabled=self._structured_enabled)
 
 
 def build_sku_texts(
