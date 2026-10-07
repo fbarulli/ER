@@ -54,6 +54,12 @@ class LayaSpec(BaseModel):
     # precedent).
     dataset_slug: str | None = "fbarulli/er-laya-requests"
     export_dataset_slug: str | None = "fbarulli/er-laya-decisions"
+    # The fine-tune corpus (data/laya/{train,dev,test}.jsonl + receipt.json,
+    # scripts/laya_build_dataset.py) travels as its OWN kaggle dataset and the
+    # trained checkpoint is its own kernel — distinct slugs from the decision
+    # payloads so a dataset version never drops the decision inputs.
+    finetune_dataset_slug: str | None = "fbarulli/er-laya-train"
+    finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
     run_tag_prefix: str = "laya_"
     # SINGLE T4 per owner ruling; the meta never requests 2xT4.
     gpu: Literal["T4"] = "T4"

@@ -39,7 +39,7 @@ from core.manifest import atomic_write_json, sha256_file
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
-GPU_KINDS = ("attribute", "identity", "laya-cli-eval")
+GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune")
 LANE_LOG_NAME = "lane.log"
 # One fresh lane.log per run: first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
@@ -57,6 +57,32 @@ QUESTION_SCHEMA_FILE = "laya.question.json"
 DATASET_PAYLOAD_DIR = "dataset_payload"
 DATASET_METADATA_FILE = "dataset-metadata.json"
 DATASET_CSV_NAME = "dataset.csv"  # DECISION_CSV resolves THIS name
+
+# ── fine-tune kind (owner: "lets run laya") ────────────────────────────────
+# The JSONL corpus built by scripts/laya_build_dataset.py (data/laya/
+# {train,dev,test}.jsonl + receipt.json) travels as its OWN kaggle dataset
+# (spec.finetune_dataset_slug), distinct from the decision payloads'
+# er-laya-requests dataset: a corpus version must never drop the decision
+# inputs (and vice versa). The kernel wraps the REAL `laya-train` CLI on a
+# single T4 and tars the checkpoint back.
+FINETUNE_DECISION = "finetune"
+FINETUNE_CODE_FILE = "laya_finetune.py"
+FINETUNE_CORPUS_DIR = "data/laya"
+FINETUNE_CORPUS_FILES = ("train.jsonl", "dev.jsonl", "test.jsonl")
+FINETUNE_CORPUS_RECEIPT = "receipt.json"
+# `pip install laya`; pin laya>=0.3.29 (the version the flags were verified
+# against: /tmp/opc/laya_pkg329/bin/laya-train --help).
+FINETUNE_LAYA_PACKAGE = "laya>=0.3.29"
+# The completed-research recipe (single T4), baked verbatim into the script.
+FINETUNE_RECIPE: dict[str, Any] = {
+    "epochs": 8,
+    "micro_batch": 8,
+    "grad_accum": 8,
+    "encoder_lr": 2.5e-5,
+    "head_lr": 1e-4,
+    "loss": "soft-ce",
+    "seed": 1729,
+}
 
 PUBLISHED_RUNTIME_FILES = (
     'artifacts/evidence/attribute_universe_census.json', 'artifacts/evidence/semantics/family_registry.json', 'artifacts/evidence/semantics/tau_sweep.json', 'artifacts/evidence/semantics/value_universe.json',
@@ -185,6 +211,16 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
         "description": ("the laya-evals harness score over the same "
                         "identity decision samples, verifying the shared "
                         "transport + recall identity"),
+    },
+    "finetune": {
+        # Not a per-row decision CSV: the corpus row keys are the contract
+        # (the JSONL the laya trainer consumes). Kept in the same registry so
+        # `--decision finetune` rides the lane's existing binding surface.
+        "wanted_columns": ("state", "questions", "expected"),
+        "state_column": "state",
+        "description": ("fine-tune the convaiinnovations/laya checkpoint on "
+                        "the verified-label JSONL corpus (state + identity "
+                        "cases) via the real laya-train CLI on a single T4"),
     },
 }
 
@@ -414,6 +450,34 @@ def laya_runtime_preflight():
     """Verify the ATTACHED dataset inputs (the er-laya-requests dataset
     mounts under /kaggle/input/<slug>/ and resolve_input searches INPUTS
     recursively by name); fail loud before pip touches anything."""
+    missing = [name for name in _runtime_files
+               if not any(INPUT_ROOT.rglob(name))]
+    if missing:
+        raise FileNotFoundError(
+            "Runtime preflight missing attached inputs: "
+            + ", ".join(missing))
+    print("[runtime-preflight] verified %d required files"
+          % len(_runtime_files), flush=True)
+
+
+laya_runtime_preflight()
+'''
+
+
+# The fine-tune corpus travels as its own attached dataset: this preflight
+# verifies THE ATTACHED INPUTS (train/dev/test JSONL land under
+# /kaggle/input/<slug>/ and rglob finds them by name). It bakes the same
+# REPOSITORY/BRANCH/REVISION/_runtime_files inventory the lane push gate
+# literal-evals.
+FINETUNE_RUNTIME_PREFLIGHT = '''\
+_runtime_files = ("@TRAIN_JSONL@", "@DEV_JSONL@", "@TEST_JSONL@")
+INPUT_ROOT = Path("/kaggle/input")
+
+
+def laya_runtime_preflight():
+    """Verify the ATTACHED corpus inputs (the finetune dataset mounts under
+    /kaggle/input/<slug>/ and rglob searches recursively by name); fail
+    loud before pip touches anything."""
     missing = [name for name in _runtime_files
                if not any(INPUT_ROOT.rglob(name))]
     if missing:
@@ -772,6 +836,146 @@ if __name__ == "__main__":
 '''
 
 
+FINETUNE_KERNEL_SCRIPT = '''\
+"""ER laya fine-tune on a Kaggle GPU session (cli.laya_lane).
+
+Single T4 per owner ruling (2xT4 -> 1xT4; never requests the double
+accelerator): pins one CUDA device, installs laya over pip (pinned
+`laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test +
+receipt, the staged data/laya payload dataset), runs the REAL
+`laya-train` CLI, and writes the checkpoint + a receipt into
+/kaggle/working for hash-verified fetch-back.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+LAYA_PACKAGE = "@LAYA_PACKAGE@"
+BASE_MODEL = "@BASE_MODEL@"
+RUN_TAG = "@RUN_TAG@"
+TRAIN_JSONL = "@TRAIN_JSONL@"
+DEV_JSONL = "@DEV_JSONL@"
+TEST_JSONL = "@TEST_JSONL@"
+EPOCHS = @EPOCHS@
+MICRO_BATCH = @MICRO_BATCH@
+GRAD_ACCUM = @GRAD_ACCUM@
+ENCODER_LR = @ENCODER_LR@
+HEAD_LR = @HEAD_LR@
+LOSS = "@LOSS@"
+SEED = @SEED@
+
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+@RUNTIME_PREFLIGHT@
+
+WORKING = Path("/kaggle/working")
+INPUTS = Path("/kaggle/input")
+
+
+def log(line):
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print("[laya-lane " + stamp + "] " + line, flush=True)
+
+
+def pip_install_laya():
+    """laya installs over pip, pinned; torch is already on the session."""
+    command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
+               LAYA_PACKAGE]
+    print("+ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def pick_device():
+    """SINGLE T4 ruling: pin the FIRST cuda device only (never 2xT4)."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    import torch
+    if not torch.cuda.is_available():
+        raise SystemExit("cuda unavailable: the session is not a T4")
+    log("device pinned: " + torch.cuda.get_device_name(0)
+        + " (single GPU, never a second one)")
+    return "cuda"
+
+
+def resolve_input(name):
+    for candidate in sorted(INPUTS.rglob(name)):
+        return candidate
+    raise FileNotFoundError(
+        "attached inputs carried no " + name + " (expected the staged "
+        "laya finetune dataset)")
+
+
+def laya_train_argv(arguments):
+    """The real `laya-train` console script; module fallback if PATH is bare."""
+    executable = shutil.which("laya-train")
+    if executable:
+        return [executable, *arguments]
+    return [sys.executable, "-m", "laya.train_cli", *arguments]
+
+
+def sha256_of(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main():
+    pip_install_laya()
+    device = pick_device()
+    train = resolve_input(TRAIN_JSONL)
+    dev = resolve_input(DEV_JSONL)
+    test = resolve_input(TEST_JSONL)
+    log("corpus: " + train.name + " + " + dev.name + " (+ " + test.name + ")")
+    WORKING.mkdir(parents=True, exist_ok=True)
+    out_dir = WORKING / "checkpoint"
+    command = laya_train_argv([
+        "--data", str(train), "--eval", str(dev), "--base", BASE_MODEL,
+        "--out", str(out_dir), "--loss", LOSS, "--epochs", str(EPOCHS),
+        "--micro-batch", str(MICRO_BATCH), "--grad-accum", str(GRAD_ACCUM),
+        "--encoder-lr", str(ENCODER_LR), "--head-lr", str(HEAD_LR),
+        "--device", device, "--seed", str(SEED)])
+    print("+ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+    receipt = {
+        "gpu_kind": "finetune",
+        "gpu": "T4 (single)",
+        "run_tag": RUN_TAG,
+        "laya_package": LAYA_PACKAGE,
+        "base_model": BASE_MODEL,
+        "command": command,
+        "recipe": {
+            "epochs": EPOCHS, "micro_batch": MICRO_BATCH,
+            "grad_accum": GRAD_ACCUM, "encoder_lr": ENCODER_LR,
+            "head_lr": HEAD_LR, "loss": LOSS, "seed": SEED,
+        },
+        "output_dir": str(out_dir),
+        "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
+                          DEV_JSONL: sha256_of(dev),
+                          TEST_JSONL: sha256_of(test)},
+    }
+    report = out_dir / "train_report.json"
+    if report.is_file():
+        receipt["train_report"] = json.loads(report.read_text())
+    (WORKING / "laya_finetune.receipt.json").write_text(
+        json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz") as tar:
+        for item in sorted(WORKING.iterdir()):
+            if item.name != "laya_finetune.tar.gz":
+                tar.add(item, arcname=item.name)
+    log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
 def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
                           question_source: Path,
                           decision_source: Path) -> dict[str, Any]:
@@ -894,6 +1098,11 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
     if decision_kind not in DECISION_BINDINGS:
         raise ValueError(f"unknown decision kind: {decision_kind!r}; "
                          f"expected {list(DECISION_BINDINGS)}")
+    if decision_kind == FINETUNE_DECISION:
+        # The fine-tune kind is corpus-driven (JSONL dataset), not a
+        # per-row decision CSV: it has its own staging surface, reached
+        # through the same `--decision` dispatch.
+        return stage_finetune_kernel(revision=revision, run_tag=run_tag)
     if spec.laya_decision_epochs <= 0:
         raise RuntimeError(
             "config laya.laya_decision_epochs <= 0: the decision lane is "
@@ -1018,6 +1227,158 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
     shutil.copy2(question["staged"], stage / QUESTION_SCHEMA_FILE)
     _log_lane(f"staged kaggle kernel [{decision_kind}] ({spec.gpu}) "
               f"run_tag={tag} -> {stage}")
+    return receipt
+
+
+def stage_finetune_dataset_payload(*, dataset_slug: str,
+                                   corpus_dir: Path) -> dict[str, Any]:
+    """Stage the fine-tune CORPUS as a kaggle dataset payload (dry-safe).
+
+    Builds results/laya_lane/kaggle/finetune/dataset_payload/: the kaggle
+    `dataset-metadata.json` + the three split JSONL + the builder receipt.
+    Distinct from the decision datasets (spec.dataset_slug) so a corpus
+    version never drops the decision inputs (and vice versa).
+    """
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.finetune_dataset_slug is unset; name the corpus "
+            "dataset (owner/slug) before staging")
+    corpus_dir = Path(corpus_dir)
+    stage = staging_dir() / "kaggle" / FINETUNE_DECISION / DATASET_PAYLOAD_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    metadata = {"title": "er laya train", "id": dataset_slug,
+                "licenses": [{"name": "other"}]}
+    atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+    files = list(FINETUNE_CORPUS_FILES) + [FINETUNE_CORPUS_RECEIPT]
+    for name in files:
+        source = corpus_dir / name
+        if not source.is_file():
+            raise FileNotFoundError(
+                f"fine-tune corpus file not found: {source} (build it with "
+                "scripts/laya_build_dataset.py)")
+        shutil.copy2(source, stage / name)
+    receipt = {
+        "dataset": dataset_slug,
+        "payload": str(stage),
+        "metadata": metadata,
+        "files": {name: sha256_file(stage / name) for name in files},
+    }
+    atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
+    _log_lane(f"staged finetune dataset payload {dataset_slug} "
+              f"files={files} -> {stage}")
+    return receipt
+
+
+def stage_finetune_kernel(*, revision: str | None = None,
+                          run_tag: str | None = None) -> dict[str, Any]:
+    """Stage the kaggle fine-tune kernel payload (dry-safe).
+
+    Writes under results/laya_lane/kaggle/finetune/:
+      kernel-metadata.json + laya_finetune.py + finetune.receipt.json
+      (+ the staged corpus dataset payload).
+    Fail-loud preconditions (no silent skip):
+      * spec.laya_decision_epochs > 0 (0 = disabled, nothing may stage);
+      * spec.finetune_kernel_slug + spec.finetune_dataset_slug set;
+      * the corpus JSONL + receipt stage from data/laya (spec constant).
+    """
+    spec = _spec()
+    if spec.laya_decision_epochs <= 0:
+        raise RuntimeError(
+            "config laya.laya_decision_epochs <= 0: the laya lane is "
+            "disabled (no payload may stage a GPU session)")
+    slug = spec.finetune_kernel_slug
+    if not slug:
+        raise RuntimeError(
+            "config laya.finetune_kernel_slug is unset; name the target "
+            "kernel (owner/slug) before staging")
+    dataset_slug = spec.finetune_dataset_slug
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.finetune_dataset_slug is unset; the corpus travels "
+            "as that dataset (owner/slug) — name it before staging")
+    # The published-tip invariant ('origin/<branch> == HEAD') resolves
+    # BEFORE any payload write, exactly like stage_decision_kernel.
+    repository = training_cfg().kaggle.repository
+    branch = training_cfg().kaggle.branch
+    revision = revision or _git_revision()
+    from core import runtime_inputs
+    tip = runtime_inputs.require_published_tip_match(
+        revision, repository, branch)
+    dataset_receipt = stage_finetune_dataset_payload(
+        dataset_slug=dataset_slug,
+        corpus_dir=TRAIN_ROOT / FINETUNE_CORPUS_DIR)
+    stage = staging_dir() / "kaggle" / FINETUNE_DECISION
+    stage.mkdir(parents=True, exist_ok=True)
+    tag = run_tag or spec.run_tag_prefix + decision_tag()
+    metadata: dict[str, Any] = {
+        "id": slug,
+        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
+        "code_file": FINETUNE_CODE_FILE,
+        "language": "python",
+        "kernel_type": "script",
+        "enable_gpu": True,
+        # single T4: the payload never requests the double accelerator;
+        # the script itself pins CUDA_VISIBLE_DEVICES=0.
+        "enable_internet": True,
+        # THE CORPUS TRAVELS AS THE DATASET: kernels push does NOT ship the
+        # co-located JSONL files, so resolve_input would FileNotFoundError
+        # once boot passes — attach the finetune dataset slug.
+        "dataset_sources": [dataset_slug],
+        "kernel_sources": [],
+        "competition_sources": [],
+        "is_private": True,
+    }
+    recipe = FINETUNE_RECIPE
+    values = {
+        "LAYA_PACKAGE": FINETUNE_LAYA_PACKAGE,
+        "BASE_MODEL": spec.checkpoint_hub,
+        "RUN_TAG": tag,
+        "TRAIN_JSONL": FINETUNE_CORPUS_FILES[0],
+        "DEV_JSONL": FINETUNE_CORPUS_FILES[1],
+        "TEST_JSONL": FINETUNE_CORPUS_FILES[2],
+        "EPOCHS": str(recipe["epochs"]),
+        "MICRO_BATCH": str(recipe["micro_batch"]),
+        "GRAD_ACCUM": str(recipe["grad_accum"]),
+        "ENCODER_LR": repr(recipe["encoder_lr"]),
+        "HEAD_LR": repr(recipe["head_lr"]),
+        "LOSS": recipe["loss"],
+        "SEED": str(recipe["seed"]),
+        "REPOSITORY": repository,
+        "BRANCH": branch,
+        "REVISION": revision,
+    }
+    # two-pass substitution (a nested value's @tokens@ are never re-scanned
+    # once it is inserted): the preflight bakes its own literal tuple FIRST,
+    # then drops into the script — the push gate
+    # (_staged_laya_push_preflight) literal-evals `_runtime_files`.
+    preflight = _template(FINETUNE_RUNTIME_PREFLIGHT, values)
+    script = _template(FINETUNE_KERNEL_SCRIPT, {**values,
+                                                "RUNTIME_PREFLIGHT": preflight})
+    _kernel_script_gate(script)
+    _module_scope_gate(script)
+    atomic_write_json(metadata, stage / "kernel-metadata.json")
+    (stage / FINETUNE_CODE_FILE).write_text(script, encoding="utf-8")
+    receipt = {
+        "kernel": slug,
+        "kind": FINETUNE_DECISION,
+        "gpu": "T4 (single)",
+        "run_tag": tag,
+        "staged": str(stage),
+        "code_file": FINETUNE_CODE_FILE,
+        "dataset": {"slug": dataset_slug,
+                    "payload": dataset_receipt["payload"],
+                    "files": dataset_receipt["files"]},
+        "laya_package": FINETUNE_LAYA_PACKAGE,
+        "base_model": spec.checkpoint_hub,
+        "recipe": recipe,
+        "corpus_dir": str(TRAIN_ROOT / FINETUNE_CORPUS_DIR),
+        "published_pin": {"repository": repository, "branch": branch,
+                          "revision": revision},
+        "published_tip": tip,
+    }
+    atomic_write_json(receipt, stage / f"{FINETUNE_DECISION}.receipt.json")
+    _log_lane(f"staged kaggle finetune kernel ({spec.gpu}) run_tag={tag} "
+              f"-> {stage}")
     return receipt
 
 
