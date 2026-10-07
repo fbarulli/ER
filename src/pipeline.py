@@ -2722,6 +2722,57 @@ def _source_rows_for(frame: pd.DataFrame) -> str:
     return json.dumps(entries, sort_keys=True)
 
 
+class GtinGroupAssembler:
+    """Box the raw export into one payload row per GS1-valid gtin.
+
+    Single responsibility: turn the post-guard frame into
+    (grouped frame, rows-by-gtin zip source). The grouped frame feeds the
+    canonical card pool; the rows-by-gtin dict feeds the IDF indexes. The
+    output columns and ordering are byte-identical to the pre-refactor
+    vectorized re-implementation (gtin-sorted keys via groupby's sorted
+    .indices, first-occurrence tie-break for the dominant brand).
+    """
+
+    _COLUMNS = ("sku_name_eng", "attribute", "description_short_eng", "sku_url",
+                "image_url", "breadcrumbs_eng", "category", "country", "retailer",
+                "brand")
+
+    def assemble(self, df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+        columns = self._COLUMNS
+        group_indices = df_full.groupby("gtin").indices
+        member_frames = {gtin: df_full.iloc[indices] for gtin, indices
+                         in _LOG.progress(sorted(group_indices.items()),
+                                          desc='gtin_groups', unit='gtin')}
+        frame_rows = []
+        rows_by_gtin: dict[str, list[tuple[str, str]]] = {}
+        for gtin, member in _LOG.progress(member_frames.items(), desc='assemble_groups',
+                                          unit='gtin'):
+            columns_of = {column: list(member[column]) for column in columns}
+            group_rows = list(zip(columns_of["sku_name_eng"],
+                                  columns_of["attribute"], strict=True))
+            rows_by_gtin[gtin] = group_rows
+            frame_rows.append({
+                "gtin": gtin,
+                "rows": group_rows,
+                "descriptions": columns_of["description_short_eng"],
+                "urls": columns_of["sku_url"],
+                "image_urls": columns_of["image_url"],
+                "breadcrumbs_engs": columns_of["breadcrumbs_eng"],
+                "categories": columns_of["category"],
+                "countries": columns_of["country"],
+                "retailers": columns_of["retailer"],
+                "brand": _dominant_brand(columns_of["brand"]),
+                "description_evidence": _source_evidence_values(columns_of["description_short_eng"]),
+                "breadcrumb_evidence": _source_evidence_values(columns_of["breadcrumbs_eng"]),
+                "source_rows": _source_rows_for(member),
+            })
+        grouped = pd.DataFrame(frame_rows)
+        return grouped, rows_by_gtin
+
+
+_GROUP_ASSEMBLER = GtinGroupAssembler()
+
+
 def _assemble_gtin_groups(df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Vectorized re-implementation of the groupby.agg boxing block.
 
@@ -2729,37 +2780,7 @@ def _assemble_gtin_groups(df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     sorted .indices), no per-group function dispatch from pandas internals.
     Returns (grouped frame, rows-by-gtin zip source).
     """
-    from tqdm import tqdm
-    columns = ("sku_name_eng", "attribute", "description_short_eng", "sku_url",
-               "image_url", "breadcrumbs_eng", "category", "country", "retailer",
-               "brand")
-    group_indices = df_full.groupby("gtin").indices
-    member_frames = {gtin: df_full.iloc[indices] for gtin, indices
-                     in _LOG.progress(sorted(group_indices.items()),
-                                      desc='gtin_groups', unit='gtin')}
-    grouped_rows, frame_rows = {}, []
-    for gtin, member in _LOG.progress(member_frames.items(), desc='assemble_groups',
-                                      unit='gtin'):
-        columns_of = {column: list(member[column]) for column in columns}
-        grouped_rows[gtin] = list(zip(columns_of["sku_name_eng"],
-                                      columns_of["attribute"], strict=True))
-        frame_rows.append({
-            "gtin": gtin,
-            "rows": grouped_rows[gtin],
-            "descriptions": columns_of["description_short_eng"],
-            "urls": columns_of["sku_url"],
-            "image_urls": columns_of["image_url"],
-            "breadcrumbs_engs": columns_of["breadcrumbs_eng"],
-            "categories": columns_of["category"],
-            "countries": columns_of["country"],
-            "retailers": columns_of["retailer"],
-            "brand": _dominant_brand(columns_of["brand"]),
-            "description_evidence": _source_evidence_values(columns_of["description_short_eng"]),
-            "breadcrumb_evidence": _source_evidence_values(columns_of["breadcrumbs_eng"]),
-            "source_rows": _source_rows_for(member),
-        })
-    grouped = pd.DataFrame(frame_rows)
-    return grouped, grouped_rows
+    return _GROUP_ASSEMBLER.assemble(df_full)
 
 
 def _source_evidence_values(values: list) -> list[str]:
@@ -2773,32 +2794,89 @@ def _dominant_brand(values: list) -> str:
     return Counter(values).most_common(1)[0][0]
 
 
-_CANONICAL_WORKER_STATE: dict[str, object] = {}
+class CanonicalCardPool:
+    """Build every per-GTIN canonical record: inline or fork-parallel.
+
+    One owner of the worker-pool lifecycle. The per-run IDF state is published
+    to the pool (fork COW share); each task computes ONE canonical record from
+    its pre-assembled group payload only, so the split is deterministic either
+    way — pool.map yields results in submission order, and every task is a
+    pure function of payload + inherited IDF maps.
+    """
+
+    _INLINE_TASK_THRESHOLD = 256
+    _CHUNKSIZE = 16
+
+    def __init__(self) -> None:
+        self._state: dict[str, object] = {}
+
+    def bind(self, global_idf: 'NgramIDF',
+             brand_idf_map: dict[str, 'NgramIDF']) -> None:
+        """Publish the per-run IDF state to the worker pool (fork COW share)."""
+        self._state.clear()
+        self._state['global_idf'] = global_idf
+        self._state['brand_idf_map'] = brand_idf_map
+
+    def record_for_task(self, task: tuple) -> dict:
+        """One canonical record, computed from pre-assembled group payload only."""
+        gtin, brand, rows, descriptions, urls, image_urls, breadcrumbs_engs, \
+            categories, description_evidence, breadcrumb_evidence, source_rows = task
+        record = generate_canonical(
+            gtin, brand, rows,
+            self._state['global_idf'],
+            self._state['brand_idf_map'][brand.lower().strip()],
+            descriptions=descriptions, urls=urls, image_urls=image_urls,
+            breadcrumbs_engs=breadcrumbs_engs, categories=categories,
+        )
+        record['description_evidence'] = description_evidence
+        record['breadcrumb_evidence'] = breadcrumb_evidence
+        record['source_rows'] = source_rows
+        return record
+
+    def build(self, grouped: pd.DataFrame, global_idf: 'NgramIDF',
+              brand_idf_map: dict[str, 'NgramIDF']) -> pd.DataFrame:
+        self.bind(global_idf, brand_idf_map)
+        tasks = list(
+            (row.gtin, row.brand, row.rows, row.descriptions, row.urls,
+             row.image_urls, row.breadcrumbs_engs, row.categories,
+             row.description_evidence, row.breadcrumb_evidence, row.source_rows)
+            for row in grouped.itertuples(index=False)
+        )
+        if len(tasks) < self._INLINE_TASK_THRESHOLD:
+            records = [
+                self.record_for_task(task)
+                for task in _LOG.progress(tasks, desc='cards_inline', unit='gtin')
+            ]
+            return pd.DataFrame(records)
+        _LOG.info(f"canon: fork-parallel canonical build over {len(tasks):,} gtins")
+        import concurrent.futures
+        from multiprocessing import get_context
+        records: list[dict] = []
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max(2, os.cpu_count() - 1), mp_context=get_context('fork'),
+        ) as pool:
+            bar = _LOG.bar(total=len(tasks), desc='canonical_cards', unit='gtin')
+            try:
+                for record in pool.map(self.record_for_task, tasks, chunksize=self._CHUNKSIZE):
+                    records.append(record)
+                    bar.update()
+            finally:
+                bar.close()
+        return pd.DataFrame(records)
+
+
+_CARD_POOL = CanonicalCardPool()
 
 
 def _canonical_worker_state_bind(global_idf: 'NgramIDF',
                                  brand_idf_map: dict[str, 'NgramIDF']) -> None:
     """Publish the per-run IDF state to the worker pool (fork COW share)."""
-    _CANONICAL_WORKER_STATE.clear()
-    _CANONICAL_WORKER_STATE['global_idf'] = global_idf
-    _CANONICAL_WORKER_STATE['brand_idf_map'] = brand_idf_map
+    _CARD_POOL.bind(global_idf, brand_idf_map)
 
 
 def _canonical_record_task(task: tuple) -> dict:
     """One canonical record, computed from pre-assembled group payload only."""
-    gtin, brand, rows, descriptions, urls, image_urls, breadcrumbs_engs, \
-        categories, description_evidence, breadcrumb_evidence, source_rows = task
-    record = generate_canonical(
-        gtin, brand, rows,
-        _CANONICAL_WORKER_STATE['global_idf'],
-        _CANONICAL_WORKER_STATE['brand_idf_map'][brand.lower().strip()],
-        descriptions=descriptions, urls=urls, image_urls=image_urls,
-        breadcrumbs_engs=breadcrumbs_engs, categories=categories,
-    )
-    record['description_evidence'] = description_evidence
-    record['breadcrumb_evidence'] = breadcrumb_evidence
-    record['source_rows'] = source_rows
-    return record
+    return _CARD_POOL.record_for_task(task)
 
 
 def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',
@@ -2808,34 +2886,7 @@ def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',
     Deterministic either way: imap yields results in submission order, and
     every task is a pure function of its payload + fork-inherited IDF maps.
     """
-    tasks = list(
-        (row.gtin, row.brand, row.rows, row.descriptions, row.urls,
-         row.image_urls, row.breadcrumbs_engs, row.categories,
-         row.description_evidence, row.breadcrumb_evidence, row.source_rows)
-        for row in grouped.itertuples(index=False)
-    )
-    _canonical_worker_state_bind(global_idf, brand_idf_map)
-    threshold = 256
-    if len(tasks) < threshold:
-        records = [
-            _canonical_record_task(task)
-            for task in _LOG.progress(tasks, desc='cards_inline', unit='gtin')
-        ]
-        return pd.DataFrame(records)
-    import concurrent.futures
-    from multiprocessing import get_context
-    records: list[dict] = []
-    with concurrent.futures.ProcessPoolExecutor(
-        max_workers=max(2, os.cpu_count() - 1), mp_context=get_context('fork'),
-    ) as pool:
-        bar = _LOG.bar(total=len(tasks), desc='canonical_cards', unit='gtin')
-        try:
-            for record in pool.map(_canonical_record_task, tasks, chunksize=16):
-                records.append(record)
-                bar.update()
-        finally:
-            bar.close()
-    return pd.DataFrame(records)
+    return _CARD_POOL.build(grouped, global_idf, brand_idf_map)
 
 
 def run_within_brand_pipeline(
