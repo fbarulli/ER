@@ -31,7 +31,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     setup = json.loads((root / 'setup_manifest.json').read_text())
     is_smoke = setup.get('smoke', False)
     source_hash = file_hash(Path(F['dataset_deduped']))
-    if setup.get('source_catalog_sha256') != source_hash:
+    if not is_smoke and setup.get('source_catalog_sha256') != source_hash:
         raise ValueError('graph setup is stale: source catalog; rebuild locally before launch')
     labels_hash = file_hash(Path(F['labeled_pairs']))
     if not is_smoke and setup.get('labeled_pairs_sha256') != labels_hash:
