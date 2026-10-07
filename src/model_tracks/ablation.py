@@ -137,6 +137,10 @@ def source_name(path):
 
 
 def checkpoint_identity(path):
+    path = Path(path)
+    sidecar = Path(str(path)+'.sha256')
+    if sidecar.is_file():
+        return sidecar.read_text().strip()
     return checkpoint_hash(path) if path.is_dir() else file_hash(path)
 
 
