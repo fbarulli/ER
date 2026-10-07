@@ -90,8 +90,6 @@ def main() -> None:
     # remain runnable with the signed-in Colab account alone: its artifacts
     # are collected by the launcher either way.
     with WandbCtx(run_name) as wandb_ctx:
-        if not wandb_ctx.enabled:
-            print("[wandb] disabled; continuing with Colab result collection", flush=True)
         _main(args, wandb_ctx)
 
 

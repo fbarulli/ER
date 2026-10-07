@@ -10,18 +10,24 @@ from core.common import training_cfg
 
 
 class WandbCtx:
-    """One run when WANDB_API_KEY exists; explicit local-only otherwise."""
+    """One run: cloud telemetry is always on. A missing key fails loud —
+    no silent local-only degradation (owner order 2026-10-07 'bake wandb in,
+    always on'; training/prepared tracking.wandb.mode owns the dashboard lane,
+    never this class)."""
 
     def __init__(self, name: str):
         spec = training_cfg().tracking.wandb
-        self.enabled = bool(os.environ.get("WANDB_API_KEY")) and spec.mode != "disabled"
+        enabled = bool(os.environ.get("WANDB_API_KEY")) and spec.mode != "disabled"
         self._run = None
         self._name, self._project, self._mode = name, spec.project, spec.mode
+        if not enabled:
+            raise RuntimeError(
+                '[wandb] WANDB_API_KEY absent while tracking.wandb.mode='
+                + str(spec.mode)
+                + ' — the cloud mirror is always on; export '
+                  'WANDB_API_KEY (or drop it in .env) before training')
 
     def __enter__(self):
-        if not self.enabled:
-            print("[wandb] disabled: WANDB_API_KEY absent; local run artifacts remain available", flush=True)
-            return self
         import wandb
         run_name = os.environ.get("WANDB_RUN_NAME", self._name)
         # Disable W&B's broad host sampler. Training emits the deliberately

@@ -13,6 +13,13 @@ class KaggleKernels:
     """Kernel staging, launch, status, and explicit session release."""
 
     @staticmethod
+    def _bake_wandb_key_missing() -> str:
+        raise RuntimeError(
+            'wandb is always on (owner order 2026-10-07): kernel staging '
+            'requires WANDB_API_KEY in the environment or .env; refusing to '
+            'bake a silent local-only train run')
+
+    @staticmethod
     def _kernel_script_gate(script: str) -> None:
         """Staging-time AST gate: never push an unparseable kernel or one that
         references an undeclared template constant (the v4 NameError class)."""
@@ -211,7 +218,9 @@ class KaggleKernels:
                   .replace("@SUITE_CONFIG@", spec.train_suite_config)
                   .replace("@BUNDLE_KERNEL_SLUG@", bundle_slug)
                   .replace("@CHECKPOINT@", resolved_checkpoint)
-                  .replace("@WANDB_API_KEY@", os.environ.get("WANDB_API_KEY") or lane._env_dot_value("WANDB_API_KEY") or ""))
+        .replace("@WANDB_API_KEY@", os.environ.get("WANDB_API_KEY")
+                 or lane._env_dot_value("WANDB_API_KEY")
+                 or self._bake_wandb_key_missing()))
         lane.atomic_write_json(metadata, stage / lane._spec().files.kernel_metadata)
         script = lane.KernelTemplates.render_runtime(script, spec)
         script = lane.KernelLifecycle.wrap_script(script)
