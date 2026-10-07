@@ -27,17 +27,29 @@ _LOG = RunLogger(__name__)
 def _freeze_suite(setup,config,bundle):
     """Resolve ablation settings, gate the cohort and freeze the template root."""
     cfg = settings(config)
+    cohort = _cohort_gate(setup,cfg,bundle)
+    frozen_config = _freeze_config(setup,cfg)
+    return cohort,frozen_config
+
+
+def _cohort_gate(setup,cfg,bundle):
+    """The exhaustive-coverage cohort, or None; loud when 'all' lacks a bundle."""
     cohort = None
     if cfg.coverage == 'all':
         if bundle is None:
             raise ValueError('exhaustive ablation requires the prepared training bundle')
         from model_tracks.ablation_cohort import prepare_cohort
         cohort = prepare_cohort(setup, bundle)
+    return cohort
+
+
+def _freeze_config(setup,cfg):
+    """Point the settings at the template root and write the frozen yaml."""
     cfg.output_dir = str(setup/'ablation_templates')
     frozen_config = setup/'ablation_settings.yaml'
     write_config = __import__('yaml').safe_dump(cfg.model_dump())
     frozen_config.write_text(write_config)
-    return cfg,cohort
+    return frozen_config
 
 
 def _frozen_support(setup):
@@ -51,8 +63,8 @@ def _frozen_support(setup):
     return support,vocabulary
 
 
-def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None):
-    """One track's template tensors, prepare() request and portable anchors."""
+def _template_checkpoint(setup,baseline,track,vocabulary,support):
+    """The text baseline checkpoint, or the other tracks' template tensor file."""
     from core.model_input import model_input_composition
     checkpoint = baseline
     if track != 'text':
@@ -61,17 +73,31 @@ def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,suppo
             'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
             'vocabulary':vocabulary,'support_records':support}
         torch.save(payload,checkpoint)
+    return checkpoint
+
+
+def _track_request(setup,checkpoint,track,*,cohort,frozen_config,composer=None,token_cache=None):
+    """prepare() the track's tokens/tensors and read back its emitted request."""
     path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
         cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
         listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
         text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
         composer=composer,token_cache=token_cache)
     request = json.loads(path.read_text())
+    return path,request
+
+
+def _track_cohort(track,request,common_cohort):
+    """Freeze the suite cohort on the text track; every other must match it."""
     if track == 'text':
-        common_cohort = (request['cohort_sha256'], request['coverage'])
-    elif (request['cohort_sha256'], request['coverage']) != common_cohort:
+        return (request['cohort_sha256'], request['coverage'])
+    if (request['cohort_sha256'], request['coverage']) != common_cohort:
         raise ValueError('all models must ablate exactly the same cohort and attributes')
-    request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
+    return common_cohort
+
+
+def _anchor_request(setup,request):
+    """Anchor prepared sources and shared inputs to the portable package."""
     # Anchor prepared sources to the package setup; checkpoint binding later
     # introduces a suite-relative selected weight, preserving frozen inputs.
     def anchor(name):
@@ -84,10 +110,26 @@ def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,suppo
     request['text_checkpoint'] = anchor(request['text_checkpoint']) if request['text_checkpoint'] else None
     from model_tracks.package import package_member
     request['portable_setup'] = package_member('suite_package_shared')
+
+
+def _copy_template(setup,track,path,request):
+    """Materialize the fixed template folder: tensors copy + frozen request."""
     target = setup/'ablation_templates'/track
     target.mkdir(parents=True,exist_ok=True)
     shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')
     write(target/'request.json',request)
+    return target
+
+
+def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None):
+    """One track's template: checkpoint, prepared request, anchors, folder copy."""
+    checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
+    path,request = _track_request(setup,checkpoint,track,cohort=cohort,
+        frozen_config=frozen_config,composer=composer,token_cache=token_cache)
+    common_cohort = _track_cohort(track,request,common_cohort)
+    request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
+    _anchor_request(setup,request)
+    _copy_template(setup,track,path,request)
     timing.mark(track + '_tokens_tensors_and_request')
     return common_cohort
 
@@ -108,7 +150,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     from core.timing import Timing
     timing = Timing('model_tracks.ablation_prepare')
     with _LOG.section('ablation_suite.freeze'):
-        cfg,cohort = _freeze_suite(setup,config,bundle)
+        cohort,frozen_config = _freeze_suite(setup,config,bundle)
     with _LOG.section('ablation_suite.support_vocabulary'):
         support,vocabulary = _frozen_support(setup)
     timing.mark('load_support_and_vocabulary')
@@ -118,7 +160,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
         for track in _LOG.progress(tracks,desc='ablation_templates',unit='track',total=len(tracks)):
             _LOG.info('ablation template building track=' + track)
             common_cohort = _track_template(setup,baseline,track,cohort=cohort,
-                frozen_config=setup/'ablation_settings.yaml',vocabulary=vocabulary,
+                frozen_config=frozen_config,vocabulary=vocabulary,
                 support=support,common_cohort=common_cohort,timing=timing,
                 composer=composer,token_cache=token_cache)
     with _LOG.section('ablation_suite.cleanup_staging'):
