@@ -625,63 +625,74 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
 
 
+def _threshold_from_csv(path, value, track, checkpoint):
+    frame = pd.read_csv(path)
+    values = frame['threshold'].tolist() if 'threshold' in frame else []
+    if 'threshold' in frame:
+        hits = frame[frame['threshold'].apply(
+            lambda x: isinstance(x,(int,float)) and np.isfinite(x) and float(x) == value)]
+        for column,key in (('model','track'),('checkpoint','checkpoint')):
+            if column in frame:
+                found = sorted({str(v) for v in hits[column].tolist() if isinstance(v,str) and v})
+                if len(found) > 1:
+                    raise ValueError(f'threshold source attests conflicting {column} values')
+                if found:
+                    if key == 'track':
+                        track = found[0]
+                    else:
+                        checkpoint = found[0]
+    return values, track, checkpoint
+
+
+def _threshold_from_json(path, value):
+    document = json.loads(path.read_text())
+    claimed_sha256 = None
+    track = None
+    checkpoint = None
+    if isinstance(document,dict):
+        claimed_sha256 = document.get('checkpoint_sha256') or document.get('vectors_metadata',{}).get('checkpoint_sha256')
+    values = []
+    attested = {'track':set(), 'checkpoint':set()}
+    def walk(obj):
+        if isinstance(obj, dict):
+            if isinstance(obj.get('threshold'),(int,float)) and np.isfinite(obj['threshold']):
+                values.append(obj['threshold'])
+                for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
+                    witness = obj.get(column)
+                    if isinstance(witness,str) and witness:
+                        attested[key].add(witness)
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                walk(v)
+    walk(document)
+    # manifests pin identity at the top level while thresholds nest in summaries
+    for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
+        witness = document.get(column) if isinstance(document,dict) else None
+        if isinstance(witness,str) and witness:
+            attested[key].add(witness)
+    for key,seen in attested.items():
+        if len(seen) > 1:
+            raise ValueError(f'threshold source attests conflicting {key} values')
+        if seen:
+            if key == 'track':
+                track = next(iter(seen))
+            else:
+                checkpoint = next(iter(seen))
+    return values, track, checkpoint, claimed_sha256
+
+
 def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
         raise ValueError('threshold source must be an existing saved report')
     before = file_hash(path)
-    track = None
-    checkpoint = None
-    claimed_sha256 = None
     if path.suffix == '.csv':
-        frame = pd.read_csv(path)
-        values = frame['threshold'].tolist() if 'threshold' in frame else []
-        if 'threshold' in frame:
-            hits = frame[frame['threshold'].apply(
-                lambda x: isinstance(x,(int,float)) and np.isfinite(x) and float(x) == value)]
-            for column,key in (('model','track'),('checkpoint','checkpoint')):
-                if column in frame:
-                    found = sorted({str(v) for v in hits[column].tolist() if isinstance(v,str) and v})
-                    if len(found) > 1:
-                        raise ValueError(f'threshold source attests conflicting {column} values')
-                    if found:
-                        if key == 'track':
-                            track = found[0]
-                        else:
-                            checkpoint = found[0]
+        values, track, checkpoint = _threshold_from_csv(path, value, None, None)
+        claimed_sha256 = None
     else:
-        document = json.loads(path.read_text())
-        if isinstance(document,dict):
-            claimed_sha256 = document.get('checkpoint_sha256') or document.get('vectors_metadata',{}).get('checkpoint_sha256')
-        values = []
-        attested = {'track':set(), 'checkpoint':set()}
-        def walk(obj):
-            if isinstance(obj, dict):
-                if isinstance(obj.get('threshold'),(int,float)) and np.isfinite(obj['threshold']):
-                    values.append(obj['threshold'])
-                    for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
-                        witness = obj.get(column)
-                        if isinstance(witness,str) and witness:
-                            attested[key].add(witness)
-                for v in obj.values():
-                    walk(v)
-            elif isinstance(obj, list):
-                for v in obj:
-                    walk(v)
-        walk(document)
-        # manifests pin identity at the top level while thresholds nest in summaries
-        for column,key in (('model','track'),('track','track'),('checkpoint','checkpoint')):
-            witness = document.get(column) if isinstance(document,dict) else None
-            if isinstance(witness,str) and witness:
-                attested[key].add(witness)
-        for key,seen in attested.items():
-            if len(seen) > 1:
-                raise ValueError(f'threshold source attests conflicting {key} values')
-            if seen:
-                if key == 'track':
-                    track = next(iter(seen))
-                else:
-                    checkpoint = next(iter(seen))
+        values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
     if not any(isinstance(x, (int,float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
     if before != file_hash(path):
