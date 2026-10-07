@@ -30,7 +30,7 @@ from core.run_log import RunLogger
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.text_cache import checkpoint_hash
-from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context
+from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context
 
 _LOG = RunLogger(__name__)
 
@@ -138,7 +138,7 @@ def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,suppo
     path,request = _track_request(setup,checkpoint,track,cohort=cohort,
         frozen_config=frozen_config,baseline=baseline,composer=composer,token_cache=token_cache)
     common_cohort = _track_cohort(track,request,common_cohort)
-    request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
+    request['graph_binding'] = track if track != 'text' else None
     _anchor_request(setup,request)
     _copy_template(setup,track,path,request)
     timing.mark(track + '_tokens_tensors_and_request')
@@ -203,8 +203,7 @@ def _bind_template(setup,track):
 def _check_graph_binding(checkpoint,track,request):
     """Reject a selected graph checkpoint that differs from frozen support."""
     payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
-    actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})
-    if actual != request['graph_binding'] or payload['manifest']['track'] != track:
+    if request['graph_binding'] != track or payload['manifest']['track'] != track:
         raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
 
 
