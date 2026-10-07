@@ -69,14 +69,12 @@ def test_cuda_job_refuses_cpu_fallback(tmp_path, monkeypatch):
         job.prepare(tmp_path, tmp_path)
 
 
-@pytest.mark.parametrize('change', ['texts', 'implementation', 'manifest', 'listings'])
+@pytest.mark.parametrize('change', ['texts', 'manifest', 'listings'])
 def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     if change == 'texts':
         monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['changed', 'text b']))
-    elif change == 'implementation':
-        monkeypatch.setattr(job, 'composition_fingerprint', lambda: 'changed-parser-code')
     elif change == 'manifest':
         manifest = setup / 'prepared/input_manifest.json'
         manifest.write_text(manifest.read_text() + '\n')
@@ -84,6 +82,15 @@ def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
         (setup / 'prepared/listings.json').write_text('[]')
     with pytest.raises(ValueError, match='stale'):
         job.prepare(setup, checkpoint, device='cpu')
+
+
+def test_reuse_accepts_changed_composition_implementation(tmp_path, monkeypatch):
+    # owner order 2026-10-07: the composition_implementation_sha256 field stays
+    # recorded, but is never compared; fingerprint drift must not block reuse.
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    job.prepare(setup, checkpoint, device='cpu')
+    monkeypatch.setattr(job, 'composition_fingerprint', lambda: 'changed-parser-code')
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
 
 
 def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):

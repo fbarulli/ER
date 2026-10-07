@@ -94,7 +94,6 @@ def validate(path,checkpoint,setup):
     for key,expected in [('checkpoint_sha256',checkpoint_hash(checkpoint)),('catalog_sha256',file_hash(setup/'eligible_catalog.csv')),
             ('listings_sha256',file_hash(setup/'prepared/listings.json')),('pairs_sha256',file_hash(setup/'prepared/pairs.csv')),
             ('request_sha256',file_hash(setup/'text_export_request.json')),
-            ('composition_implementation_sha256',composition_fingerprint()),
             ('export_implementation_sha256',file_hash(Path(__file__))),
             ('token_implementation_sha256',file_hash(__import__('core.encoding_inputs',fromlist=['x']).__file__))]:
         if metadata.get(key) != expected:
