@@ -3876,6 +3876,906 @@ def run_within_brand_pipeline(
 # ============================================================================
 # PAIRS
 # ============================================================================
+class _PairBundleBuilder:
+    """Own one stage-2 build: deduped dataset + gate CSVs -> TrainingData.
+
+    Every phase below is a single responsibility and runs in ONE fixed order
+    inside build(); the statements are the pre-refactor body verbatim, so the
+    printed stage lines, the trace rows, the timing marks (config_and_trace /
+    read_gate_results / sku_texts / canonical_payload / pairs_and_similarity /
+    representative_row / pairs_and_mining) and the validated bundle survive
+    untouched.
+
+    Phase map:
+      prepare_stage_frame   — reviewed-row exclusion + the stage's column
+                              contract row
+      open_config           — payload thresholds, structured-feature policy
+      load_artifacts        — canonical map + gate_results read
+      materialize_sku_payload — the variant frame through core.model_input
+      materialize_canonical_payload — canonical texts + token budget +
+                              structured features
+      positives_stage       — row -> canonical pairs (empty-text guarded)
+      representative_rows   — longest-title row per GTIN
+      baseline_negatives    — gate hard_no band, both directions
+      mined_lanes           — targeted-attribute + cross-brand miners
+      finalize_bundle       — stats, TrainingData validation, the whole
+                              consolidated trace close
+    """
+
+    def __init__(self, df: pd.DataFrame, payload_variant: str = "full") -> None:
+        self._df = df
+        self._payload_variant = payload_variant
+        self.df = None
+        self.cfg: dict = {}
+        self.structured_cfg: dict = {}
+        self.structured_enabled = False
+        self.thr_pos = 0.0
+        self.thr_neg = 0.0
+        self.timing = None
+        self.canon_map: dict[str, str] = {}
+        self.gates: pd.DataFrame | None = None
+        self.bc = None
+        self.title = None
+        self.attrs = None
+        self.sku_texts: list[str] = []
+        self.sku_structured: list[dict] = []
+        self.payload: list[str] = []
+        self.row_bc: list[str] = []
+        self.canon_gtins: list[str] = []
+        self.gtin_to_canon_idx: dict[str, int] = {}
+        self.canonical_records: pd.DataFrame | None = None
+        self.canonical_record_map: dict[str, dict] = {}
+        self.canon_structured: list[dict] = []
+        self.canon_texts: list[str] = []
+        self.structured_features: list[list[float]] = []
+        self.empty_sku: set[int] = set()
+        self.empty_canon_idx: set[int] = set()
+        self.cand_pos: list[tuple[int, int]] = []
+        self.pos = np.empty((0, 2), dtype=int)
+        self.gtin_to_row: dict[str, int] = {}
+        self.hard_no_band = None
+        self.same_canonical = None
+        self.neg_mask = None
+        self.neg_gates = None
+        self.proceeded = None
+        self.fell_back = None
+        self.fwd = np.empty((0, 2), dtype=int)
+        self.rev = np.empty((0, 2), dtype=int)
+        self.a = self.b = self.ca = self.cb = None
+        self.neg = np.empty((0, 2), dtype=int)
+        self.targeted_cfg: dict = {}
+        self.mining_funnel = None
+        self.targeted_attribute_neg = np.empty((0, 2), dtype=int)
+        self.targeted_attribute_scores = np.empty((0,), dtype=float)
+        self.cross_cfg: dict = {}
+        self.cross_brand_funnel = None
+        self.cross_brand_neg = np.empty((0, 2), dtype=int)
+        self.cross_brand_scores = np.empty((0,), dtype=float)
+
+    # ── phase: stage frame ─────────────────────────────────────────────────
+
+    def prepare_stage_frame(self) -> None:
+        from core.identity_policy import exclude_reviewed_rows
+        from core.tracing import TraceRun
+
+        self.df = exclude_reviewed_rows(self._df).reset_index(drop=True)
+        print(
+            f"[payload-stage] building variant={self._payload_variant} rows={len(self.df):,}",
+            flush=True,
+        )
+        # ── CONSOLIDATED TRACE: stage 2 writer ────────────────────────
+        # Created here so the column contract of the frame THIS stage received is
+        # the first row of the stage — see run_within_brand_pipeline for the other
+        # half of the two-stage handoff.
+        self._trace = TraceRun("pairs")
+        self._trace.add_column_contract(
+            self.df,
+            contract="canonical dataset (core.common.load_dataset_deduped)",
+            required=CANONICAL_DATASET_REQUIRED_COLUMNS,
+            note=(
+                "stage 1 (run_within_brand_pipeline) loads the RAW export "
+                "separately — both stages now share one column vocabulary "
+                "(c698200) and are joined by canonical_records.csv + "
+                "gate_results.csv, never by passing this frame between them"
+            ),
+        )
+        # ── config + thresholds ──
+        self.cfg = load_config()
+        self.structured_cfg = self.cfg["training"]["structured_features"]
+        self.structured_enabled = bool(self.structured_cfg["enabled"])
+        # The encoder text this stage materializes is an INPUT CONTRACT for every
+        # downstream artifact (embeddings, ANN index, checkpoints, reports), so the
+        # active composition is recorded on the run before any text is built — a
+        # reader can then tell which composition produced what, after the fact.
+        from core.model_input import model_input_composition
+        self._trace.add(
+            "payload",
+            "model_input_composition",
+            detail=model_input_composition().model_dump(),
+        )
+        self.thr_pos = float(self.cfg["pairs"]["proceed_sim_threshold"])
+        self.thr_neg = float(self.cfg["pairs"]["hardneg_sim_threshold"])
+        from core.timing import Timing as _Timing
+        self.timing = _Timing("pipeline.build_training_data")
+        self.timing.mark("config_and_trace")
+
+    # ── phase: artifacts ───────────────────────────────────────────────────
+
+    def load_artifacts(self) -> None:
+        """The canonical map + the gate_results frame."""
+        self.canon_map = load_canonical_map()
+        self.gates = pd.read_csv(
+            RESULTS / F["gate_results"],
+            dtype={"gtin1": str, "gtin2": str},
+            keep_default_na=False,
+        )
+        self.timing.mark("read_gate_results")
+        self.bc = self.df["gtin"].fillna("").astype(str).str.strip()
+        self.title = self.df["sku_name_eng"].fillna("")
+        self.attrs = self.df["attribute"].fillna("")
+
+    # ── phase: sku payload ─────────────────────────────────────────────────
+
+    def materialize_sku_payload(self) -> None:
+        """Variant frame -> core.model_input sku texts (+ structured sku info)."""
+        from core.model_input import build_sku_texts
+
+        # ── clean sku text per row (variant: full = title+attr, title_only) ──
+        # schema words (type/content/material/...) die on the MODEL side only —
+        # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip).
+        # Both variants go through core.model_input, the shared builder.
+        # The per-row composition loop is the SSOT core.model_input.build_sku_texts
+        # (was inlined here and in predict_items / rand_matching / record_linkage).
+        if self._payload_variant == "full":
+            model_frame = self.df
+        elif self._payload_variant == "title_only":
+            model_frame = self.df.copy()
+            # The descriptor columns blanked for the title-only variant come from
+            # the config column contract (core.columns.COLUMN_ALIASES carries the
+            # raw-export aliases, e.g. "attr" for "attribute") — not a hand-typed
+            # tuple that drifts from paths.yaml.
+            for column in ("attribute", "description_short_eng",
+                           *COLUMN_ALIASES.get("attribute", ())):
+                if column in model_frame.columns:
+                    model_frame[column] = ""
+        else:
+            raise SystemExit(f"unknown payload variant: {self._payload_variant}")
+        self.sku_texts, self.sku_structured = build_sku_texts(
+            model_frame, structured_enabled=self.structured_enabled
+        )
+        self.timing.mark("sku_texts")
+
+    # ── phase: canonical payload ───────────────────────────────────────────
+
+    def materialize_canonical_payload(self) -> None:
+        """Canonical texts (sorted-gtin order) + budget + structured features."""
+        from core.model_input import (
+            build_canonical_text,
+            model_input_info,
+            token_budget_report,
+        )
+        from core.structured_features import (
+            canonical_info as canonical_structured_info,
+            vector as structured_vector,
+        )
+
+        # ── payload: sku rows + canonical entries (in sorted-gtin order) ──
+        self.payload = list(self.sku_texts)
+        self.row_bc = [str(x) for x in self.bc]
+        self.canon_gtins = sorted(self.canon_map)
+        canon_start = len(self.payload)
+        self.gtin_to_canon_idx = {g: canon_start + i for i, g in enumerate(self.canon_gtins)}
+        # MODEL payload: schema-free canonical variant plus normalized structured
+        # volume/pack/package-type tokens. The gate's CSV keeps the original values and schema
+        # labels for decisions; the model receives the stable normalized tokens
+        # explicitly so those attributes are no longer discarded.
+        self.canonical_records = pd.read_csv(
+            RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
+        )
+        # Same read contract as the other canonical lanes: migrate a stale
+        # artifact (core.schemas.upgrade_canonical_records_frame) and validate it
+        # before building the payload — a malformed file fails here, loudly.
+        self.canonical_records = upgrade_canonical_records_frame(self.canonical_records)
+        check_canonical_records_frame(self.canonical_records)
+        self.canonical_record_map = {
+            str(row["gtin"]): row.to_dict()
+            for _, row in _LOG.progress(
+                self.canonical_records.iterrows(),
+                total=len(self.canonical_records),
+                unit="record",
+                desc="canon-records",
+            )
+        }
+        self.canon_structured = [
+            model_input_info(canonical_structured_info(self.canonical_record_map.get(g, {})))
+            if self.structured_enabled
+            else {"volume": set(), "pack": set(), "package_type": set()}
+            for g in _LOG.progress(
+                self.canon_gtins,
+                total=len(self.canon_gtins),
+                unit="canon",
+                desc="canon-info",
+            )
+        ]
+        self.canon_texts = [
+            build_canonical_text(self.canonical_record_map.get(g, {}), info)
+            for g, info in _LOG.progress(
+                zip(self.canon_gtins, self.canon_structured, strict=True),
+                total=len(self.canon_gtins),
+                unit="canon",
+                desc="canon-text",
+            )
+        ]
+        self.payload.extend(self.canon_texts)
+        self.timing.mark("canonical_payload")
+
+        self._token_budget_row()
+        self._structured_features()
+
+    def _token_budget_row(self) -> None:
+        """Measure the assembled payload; record the budget on the trace."""
+        # The structured tail is appended LAST, so at max_seq_length it is the
+        # first thing truncated. Measure the assembled payload and record it, so a
+        # dropped field group is a named number in the run trace rather than an
+        # invisible shortening. Reuses the tracing SSOT and the config SSOT.
+        from transformers import AutoTokenizer
+
+        from core.common import resolve_model, runtime
+        from core.model_input import token_budget_report
+
+        budget = token_budget_report(
+            self.payload,
+            tokenizer=AutoTokenizer.from_pretrained(
+                str(resolve_model(str(runtime("base_model"))))
+            ),
+            max_seq_length=int(runtime("max_seq_length")),
+        )
+        self._trace.add("payload", "token_budget", detail=budget.model_dump())
+        if budget.n_field_groups_dropped:
+            print(
+                f"    [token-budget] WARNING: {budget.n_over_budget:,}/"
+                f"{budget.n_records:,} payload records exceed max_seq_length="
+                f"{budget.max_seq_length}; dropped field groups: "
+                f"{budget.dropped_groups}",
+                flush=True,
+            )
+        self.row_bc.extend(self.canon_gtins)
+        print(
+            f"[payload-stage] materialized sku_payload={len(self.sku_texts):,} "
+            f"canonical_payload={len(self.canon_texts):,}",
+            flush=True,
+        )
+
+    def _structured_features(self) -> None:
+        """Normalized numeric features for every payload entry."""
+        from core.structured_features import vector as structured_vector
+
+        structured_infos = self.sku_structured + self.canon_structured
+        self.structured_features = [
+            structured_vector(
+                info,
+                volume_scale_ml=float(self.structured_cfg["volume_scale_ml"]),
+                pack_scale=float(self.structured_cfg["pack_scale"]),
+                max_set_size=int(self.structured_cfg["max_set_size"]),
+            )
+            for info in structured_infos
+        ]
+
+    # ── phase: positives ───────────────────────────────────────────────────
+
+    def positives_stage(self) -> None:
+        """Row -> canonical positive pairs, empty-text guarded."""
+        # ── empty-text guard (stage-3 soft stop) ──────────────────────────
+        # Low-signal rows ("Single 2 Liter Bottle", "water 1.5 lt pack of 6")
+        # strip to "". An empty string must not train as a positive — it pulls
+        # a garbage vector onto its canonical. Counted in stats (lane doctrine:
+        # nothing drops silently). Negatives keep empty texts: a weak
+        # in-batch negative is harmless, a positive is not.
+        self.empty_sku = {i for i, s in enumerate(self.sku_texts) if not s}
+        self.empty_canon_idx = {
+            self.gtin_to_canon_idx[g] for g, s in zip(self.canon_gtins, self.canon_texts, strict=True) if not s
+        }
+
+        # ── positives: every row whose gtin has a canonical ──
+        self.cand_pos = [
+            (i, self.gtin_to_canon_idx[g]) for i, g in enumerate(self.bc) if g in self.gtin_to_canon_idx
+        ]
+        pos_pairs = [
+            (i, j)
+            for i, j in self.cand_pos
+            if i not in self.empty_sku and j not in self.empty_canon_idx
+        ]
+        self.pos = np.array(pos_pairs, dtype=int).reshape(-1, 2)
+        self.timing.mark("pairs_and_similarity")
+
+    # ── phase: representative rows ─────────────────────────────────────────
+
+    def representative_rows(self) -> None:
+        """Longest-title row per GTIN (length rank, index tie-break)."""
+        # ── representative row per GTIN (longest title — most signal) ──
+        # UNEXPECTED-BEHAVIOR FIX: the old code sorted titles
+        # lexicographically DESCENDING and called it "longest" — a short
+        # z-titled row won over a long a-titled one. Rank by title LENGTH;
+        # ties break by row index (stable, reproducible).
+        t_len = self.title.astype(str).str.len().to_numpy()
+        order = np.lexsort((np.arange(len(t_len)), -t_len))
+        seen: set[str] = set()
+        self.gtin_to_row = {}
+        bc_arr = self.bc.to_numpy() if hasattr(self.bc, "to_numpy") else list(self.bc)
+        for i in _LOG.progress(
+            order,
+            total=len(order),
+            unit="row",
+            desc="canon-row",
+        ):
+            g = bc_arr[i]
+            if g and g not in seen:
+                seen.add(g)
+                self.gtin_to_row[g] = i
+        self.timing.mark("representative_row")
+
+    # ── phase: baseline negatives ──────────────────────────────────────────
+
+    def baseline_negatives(self) -> None:
+        """Gate hard_no band -> index-resolved negative pairs, both directions."""
+        # ── negatives: gate hard-no pairs (both directions) ──
+        # A hard_no gate decision is not sufficient for training: separate GTINs
+        # can still resolve to the same canonical item.  Those rows are true
+        # matches and must never be emitted as label-0 pairs.
+        gate_canon1 = self.gates["gtin1"].map(self.canon_map)
+        gate_canon2 = self.gates["gtin2"].map(self.canon_map)
+        self.same_canonical = (
+            gate_canon1.notna()
+            & gate_canon2.notna()
+            & gate_canon1.eq(gate_canon2)
+        )
+        self.hard_no_band = (self.gates["gate_decision"] == "hard_no") & (
+            self.gates["similarity"] >= self.thr_neg
+        )
+        self.neg_mask = self.hard_no_band & ~self.same_canonical
+        self.neg_gates = self.gates[self.neg_mask]
+        # The other two gate outcomes, kept as masks so the label-destiny census
+        # below accounts for EVERY candidate pair rather than only the negatives.
+        self.proceeded = self.gates["gate_decision"] == "proceed"
+        self.fell_back = self.gates["gate_decision"] == "fallback"
+        self.a = self.neg_gates["gtin1"].map(self.gtin_to_row)
+        self.b = self.neg_gates["gtin2"].map(self.gtin_to_row)
+        self.ca = self.neg_gates["gtin2"].map(self.gtin_to_canon_idx)
+        self.cb = self.neg_gates["gtin1"].map(self.gtin_to_canon_idx)
+        ok1 = self.a.notna() & self.ca.notna()
+        ok2 = self.b.notna() & self.cb.notna()
+        self.fwd = np.stack([self.a[ok1].astype(int), self.ca[ok1].astype(int)], axis=1)
+        self.rev = np.stack([self.b[ok2].astype(int), self.cb[ok2].astype(int)], axis=1)
+        self.neg = np.vstack([self.fwd, self.rev]) if len(self.fwd) or len(self.rev) else np.empty((0, 2), dtype=int)
+
+    # ── phase: mined lanes ─────────────────────────────────────────────────
+
+    def mined_lanes(self) -> None:
+        """Targeted-attribute + cross-brand hard-negative miners (their own
+        funnels stay the attrition authority)."""
+        self._targeted_attribute_lane()
+        self._cross_brand_lane()
+
+    def _targeted_attribute_lane(self) -> None:
+        from core.hard_negatives import (
+            MiningFunnel,
+            mine_targeted_attribute_negatives,
+        )
+
+        self.targeted_cfg = self.cfg["mining"]["attribute_conflict"]
+        self.mining_funnel = (
+            MiningFunnel() if bool(self.targeted_cfg["same_product_name"]) else None
+        )
+        self.targeted_attribute_neg, self.targeted_attribute_scores = (
+            mine_targeted_attribute_negatives(
+                self.df,
+                self.gates,
+                self.canonical_records,
+                self.gtin_to_row,
+                self.gtin_to_canon_idx,
+                existing=self.neg,
+                n_target=int(self.targeted_cfg["target"]),
+                min_similarity=float(self.targeted_cfg["min_similarity"]),
+                # Same volume tolerance the training-label gate uses, so a pair the
+                # gate calls compatible can never be mined here as a conflict.
+                # BOTH cuts: the relative-only cut rejected small-volume pairs the
+                # gate accepts, which would mine a true match as a hard negative.
+                volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+                volume_absolute_tolerance_ml=float(
+                    training_cfg().gate.vol_abs_tolerance
+                ),
+                # Same canonical-identity rule the baseline negative lane already
+                # applies: a same-canonical pair is a true match, not a label-0 row.
+                canonical_map=self.canon_map,
+                funnel=self.mining_funnel,
+            )
+            if bool(self.targeted_cfg["same_product_name"])
+            else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
+        )
+
+    def _cross_brand_lane(self) -> None:
+        from core.hard_negatives import (
+            CrossBrandMiningFunnel,
+            mine_cross_brand_negatives,
+        )
+
+        self.cross_cfg = self.cfg["mining"]["cross_brand"]
+        self.cross_brand_funnel = (
+            CrossBrandMiningFunnel() if bool(self.cross_cfg["enabled"]) else None
+        )
+        self.cross_brand_neg, self.cross_brand_scores = (
+            mine_cross_brand_negatives(
+                self.df,
+                self.canonical_records,
+                self.gtin_to_row,
+                self.gtin_to_canon_idx,
+                existing=self.neg,
+                n_target=int(self.cross_cfg["target"]),
+                require_agreement=tuple(str(d) for d in self.cross_cfg["require_agreement"]),
+                min_similarity=float(self.cross_cfg["min_similarity"]),
+                max_per_canonical=int(self.cross_cfg["max_per_canonical"]),
+                max_per_brand=int(self.cross_cfg["max_per_brand"]),
+                # Same volume tolerance the training-label gate uses, so a pair the
+                # gate calls compatible can never be mined here as a conflict.
+                # BOTH cuts (see the targeted lane above).
+                volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+                volume_absolute_tolerance_ml=float(
+                    training_cfg().gate.vol_abs_tolerance
+                ),
+                funnel=self.cross_brand_funnel,
+            )
+            if bool(self.cross_cfg["enabled"])
+            else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
+        )
+
+    # ── phase: final bundle + trace close ──────────────────────────────────
+
+    def finalize_bundle(self) -> dict:
+        """Stats + prints + validated TrainingData + the consolidated trace."""
+        n_forward_source_unresolved = int(self.a.isna().sum())
+        n_forward_target_unresolved = int(self.ca.isna().sum())
+        n_reverse_source_unresolved = int(self.b.isna().sum())
+        n_reverse_target_unresolved = int(self.cb.isna().sum())
+        n_resolution_dropped = int(len(self.neg_gates) * 2 - len(self.neg))
+        stats = {
+            "n_rows": len(self.df),
+            "n_sku_with_canonical": len(self.cand_pos),
+            "n_pos_empty_dropped": len(self.cand_pos) - len(self.pos),
+            "n_empty_sku_texts": len(self.empty_sku),
+            "n_empty_canon_texts": len(self.empty_canon_idx),
+            "n_canonicals": len(self.canon_gtins),
+            "n_pos_gate_rows": int(
+                (
+                    (self.gates["gate_decision"] == "proceed") & (self.gates["similarity"] >= self.thr_pos)
+                ).sum()
+            ),
+            "n_neg_same_canonical_dropped": int((self.hard_no_band & self.same_canonical).sum()),
+            "n_neg_hard_no_band": int(self.hard_no_band.sum()),
+            "n_neg_gate_rows": int(self.neg_mask.sum()),
+            "n_neg_resolved": len(self.neg),
+            "n_neg_forward_resolved": int(len(self.fwd)),
+            "n_neg_reverse_resolved": int(len(self.rev)),
+            "n_neg_forward_source_unresolved": n_forward_source_unresolved,
+            "n_neg_forward_target_unresolved": n_forward_target_unresolved,
+            "n_neg_reverse_source_unresolved": n_reverse_source_unresolved,
+            "n_neg_reverse_target_unresolved": n_reverse_target_unresolved,
+            "n_neg_resolution_dropped": n_resolution_dropped,
+            "n_neg_dropped": n_resolution_dropped,
+            "n_targeted_attribute_candidates": int(len(self.targeted_attribute_scores)),
+            "n_targeted_attribute_resolved": int(len(self.targeted_attribute_neg)),
+            # Candidates ENTERING the cross-brand funnel (the pairs its
+            # require_agreement blocking generated) and the pair rows it emitted.
+            # The two differ by the funnel's own attrition, which the trace
+            # records step by step.
+            "n_cross_brand_candidates": int(
+                self.cross_brand_funnel.candidates_in_blocks
+                if self.cross_brand_funnel is not None
+                else 0
+            ),
+            "n_cross_brand_resolved": int(len(self.cross_brand_neg)),
+        }
+        print(
+            f"[payload-stage] pairs resolved positives={len(self.pos):,} "
+            f"hard_negatives={len(self.neg):,} unresolved_or_dropped={n_resolution_dropped:,}",
+            flush=True,
+        )
+        print(
+            f"[targeted-attribute-negatives] {len(self.targeted_attribute_neg):,} "
+            f"same-brand/name explicit-conflict pairs with gate similarity "
+            f"> {float(self.targeted_cfg['min_similarity']):.2f}",
+            flush=True,
+        )
+        if self.cross_brand_funnel is not None:
+            _cb = self.cross_brand_funnel
+            print(
+                f"[cross-brand-negatives] {len(self.cross_brand_neg):,} label-0 pair rows "
+                f"from {_cb.accepted_candidates:,} candidates "
+                f"({_cb.candidates_in_blocks:,} generated -> "
+                f"{_cb.passed_candidates:,} survived every filter; "
+                f"target {int(self.cross_cfg['target']):,}, "
+                f"reached={_cb.emitted_pairs >= int(self.cross_cfg['target']) > 0})",
+                flush=True,
+            )
+        else:
+            print(
+                "[cross-brand-negatives] disabled by mining.cross_brand.enabled",
+                flush=True,
+            )
+        self._validated_bundle(stats)
+        self._trace_close()
+        return self._bundle_dump
+
+    def _validated_bundle(self, stats: dict) -> None:
+        """Payload-dump rows + the boundary TrainingData validation."""
+        # ── EXACT MODEL PAYLOAD DUMP (owner directive 2026-09-07) ──────
+        # Every pair the model trains on, with the LITERAL texts it ingests.
+        # The rows are recorded in the ONE consolidated trace (core.tracing) below,
+        # replacing the former per-stage payload_pairs.csv.
+        _rows = []
+        for i, j in self.pos:
+            _rows.append(
+                {
+                    "kind": "pos",
+                    "payload_idx_a": int(i),
+                    "payload_idx_b": int(j),
+                    "gtin_a": self.row_bc[i],
+                    "gtin_b": self.row_bc[j],
+                    "text_a": self.payload[i],
+                    "text_b": self.payload[j],
+                }
+            )
+        for i, j in self.neg:
+            _rows.append(
+                {
+                    "kind": "neg_hard",
+                    "payload_idx_a": int(i),
+                    "payload_idx_b": int(j),
+                    "gtin_a": self.row_bc[i],
+                    "gtin_b": self.row_bc[j],
+                    "text_a": self.payload[i],
+                    "text_b": self.payload[j],
+                }
+            )
+        for i, j in self.targeted_attribute_neg:
+            _rows.append(
+                {
+                    "kind": "neg_targeted_attribute",
+                    "payload_idx_a": int(i),
+                    "payload_idx_b": int(j),
+                    "gtin_a": self.row_bc[i],
+                    "gtin_b": self.row_bc[j],
+                    "text_a": self.payload[i],
+                    "text_b": self.payload[j],
+                }
+            )
+        for i, j in self.cross_brand_neg:
+            _rows.append(
+                {
+                    "kind": "neg_cross_brand",
+                    "payload_idx_a": int(i),
+                    "payload_idx_b": int(j),
+                    "gtin_a": self.row_bc[i],
+                    "gtin_b": self.row_bc[j],
+                    "text_a": self.payload[i],
+                    "text_b": self.payload[j],
+                }
+            )
+        self._rows = _rows
+        self._kinds = {
+            "pos": int(len(self.pos)),
+            "neg_hard": int(len(self.neg)),
+            "neg_targeted_attribute": int(len(self.targeted_attribute_neg)),
+            "neg_cross_brand": int(len(self.cross_brand_neg)),
+        }
+        # BOUNDARY CONTRACT (lib.schemas.TrainingData): payload/row_bc locked,
+        # every pos/neg index in range, gtin_to_row targets valid — the bundle
+        # crosses into src/training/train + src/training/training; a shape break must die
+        # HERE with a named field, not as an IndexError in a fold.
+        from core.schemas import TrainingData as _TrainingData
+
+        _bundle = _TrainingData(
+            payload=self.payload,
+            structured_features=self.structured_features,
+            row_bc=np.array(self.row_bc),
+            pos=self.pos,
+            neg=self.neg,
+            targeted_attribute_neg=self.targeted_attribute_neg,
+            cross_brand_neg=self.cross_brand_neg,
+            gtin_to_row=self.gtin_to_row,
+            stats=stats,
+        )
+        self._bundle = _bundle
+        # ── CONSOLIDATED TRACE: pairs + mining funnel ──────────────────────
+        # The former per-stage files (negative_resolution_manifest.csv,
+        # payload_pairs.csv) folded into the ONE trace (core.tracing). Stage 2
+        # commits onto stage 1's rows for the same run, so the file reads as one
+        # continuous flow. This block used to sit AFTER `return _bundle.model_dump()`
+        # and was therefore dead: stage 2 ran, printed its counts, and wrote nothing
+        # to the trace. The bundle is validated first (fail fast on a shape break),
+        # then every step is recorded, then the bundle is returned.
+        self._bundle_dump = _bundle.model_dump()
+
+    def _trace_close(self) -> None:
+        """Label-destiny census, funnel audits, payload census, entity samples."""
+        trace = self._trace
+        # EVERY candidate pair gets exactly one label destiny. Summing these group
+        # rows reproduces len(gates) exactly, which is the pair-side accounting
+        # identity: no gate pair is unaccounted for, and each row states in words
+        # why that population did or did not become a training label.
+        n_gates = int(len(self.gates))
+        label_buckets = [
+            (
+                "proceed_not_a_training_pair",
+                int(self.proceeded.sum()),
+                "gate says same product: a PROCEED pair yields no label here — "
+                "positives come from the row→canonical relation, not the pair",
+                {"gate_decision": "proceed"},
+            ),
+            (
+                "fallback_unresolved",
+                int(self.fell_back.sum()),
+                "gate could not resolve the pair: neither a verified match nor a "
+                "hard no, so neither mining lane may use it",
+                {"gate_decision": "fallback"},
+            ),
+            (
+                "negative_hard",
+                int(self.neg_mask.sum()),
+                "hard_no inside the mining similarity band and NOT same-canonical: "
+                "emitted as a label-0 pair in both directions",
+                {
+                    "gate_decision": "hard_no",
+                    "similarity_threshold": float(self.thr_neg),
+                    "directions_per_pair": 2,
+                },
+            ),
+            (
+                "true_match_same_canonical_excluded",
+                int((self.hard_no_band & self.same_canonical).sum()),
+                "hard_no in band but both gtins share one canonical record: a true "
+                "match, so label 0 would be wrong",
+                {"gate_decision": "hard_no"},
+            ),
+            (
+                "hard_no_below_similarity_floor",
+                int(((self.gates["gate_decision"] == "hard_no") & ~self.hard_no_band).sum()),
+                "hard_no below the mining similarity floor: a valid hard no that "
+                "this lane's negative mining does not reach",
+                {"gate_decision": "hard_no", "similarity_threshold": float(self.thr_neg)},
+            ),
+        ]
+        for bucket, population, why, extra in label_buckets:
+            trace.add(
+                "labels",
+                f"destiny_{bucket}",
+                scope="group",
+                in_count=n_gates,
+                out_count=population,
+                reason=why,
+                detail={"population": population, **extra},
+                source="gate_results.csv",
+            )
+        trace.add(
+            "labels",
+            "every_pair_accounted",
+            in_count=n_gates,
+            out_count=int(sum(population for _, population, _, _ in label_buckets)),
+            reason="every candidate pair carries exactly one label destiny",
+            detail={
+                "gate_pairs": n_gates,
+                "destinies": {
+                    bucket: population for bucket, population, _, _ in label_buckets
+                },
+            },
+            source="gate_results.csv",
+        )
+        trace.add(
+            "positives",
+            "sku_to_canonical",
+            scope="group",
+            in_count=int(len(self.cand_pos)),
+            out_count=int(len(self.pos)),
+            reason="a row with a resolvable canonical and non-empty model text is a positive",
+            detail={
+                "rows": int(len(self.df)),
+                "sku_with_canonical": int(len(self.cand_pos)),
+                "dropped_empty_sku_text": int(len(self.empty_sku)),
+                "dropped_empty_canon_text": int(len(self.empty_canon_idx)),
+                "canonicals": int(len(self.canon_gtins)),
+                "gate_proceed_rows": int(
+                    (
+                        (self.gates["gate_decision"] == "proceed")
+                        & (self.gates["similarity"] >= self.thr_pos)
+                    ).sum()
+                ),
+            },
+            source="canonical_records.csv",
+        )
+        trace.add(
+            "negatives",
+            "gate_hard_no_band",
+            scope="group",
+            in_count=n_gates,
+            out_count=int(len(self.neg_gates)),
+            reason=(
+                "hard_no with similarity >= the mining threshold; same-canonical "
+                "pairs are true matches and are excluded here"
+            ),
+            detail={
+                "hard_no_and_in_band": int(self.hard_no_band.sum()),
+                "dropped_same_canonical": int((self.hard_no_band & self.same_canonical).sum()),
+                "similarity_threshold": float(self.thr_neg),
+                "both_directions": int(len(self.neg_gates) * 2),
+            },
+            source="gate_results.csv",
+        )
+        trace.add(
+            "negatives",
+            "index_resolution",
+            scope="group",
+            in_count=int(len(self.neg_gates) * 2),
+            out_count=int(len(self.neg)),
+            reason="both endpoints must resolve to a payload row index",
+            detail={
+                "forward_resolved": int(len(self.fwd)),
+                "reverse_resolved": int(len(self.rev)),
+                "forward_source_unresolved": int(self.a.isna().sum()),
+                "forward_target_unresolved": int(self.ca.isna().sum()),
+                "reverse_source_unresolved": int(self.b.isna().sum()),
+                "reverse_target_unresolved": int(self.cb.isna().sum()),
+            },
+            source="model payload index maps (rows + canonicals)",
+        )
+        self._funnel_rows(trace)
+        trace.add(
+            "payload",
+            "materialized",
+            in_count=int(len(self.df)),
+            out_count=int(len(self.payload)),
+            reason="every source row plus one canonical per GTIN",
+            detail={
+                "sku_payload": int(len(self.df)),
+                "canonical_payload": int(len(self.canon_gtins)),
+                "structured_feature_dim": int(len(self.structured_features[0])),
+                "structured_encode": bool(self.structured_cfg.get("enabled", True)),
+            },
+            source="canonical_records.csv",
+        )
+        trace.add(
+            "payload",
+            "pair_census",
+            scope="group",
+            in_count=int(
+                len(self.pos) + len(self.neg) + len(self.targeted_attribute_neg) + len(self.cross_brand_neg)
+            ),
+            out_count=int(len(self._rows)),
+            reason="final label populations handed to training",
+            detail={
+                "pos": int(len(self.pos)),
+                "neg_hard": int(len(self.neg)),
+                "neg_targeted_attribute": int(len(self.targeted_attribute_neg)),
+                "neg_cross_brand": int(len(self.cross_brand_neg)),
+                "text_columns": ["text_a", "text_b"],
+            },
+            source="model payload",
+        )
+        self._pair_payload_entities(trace)
+        trace.write()
+        print(
+            f"[trace] pairs steps written -> {trace_path()} | {self._kinds}",
+            flush=True,
+        )
+        self.timing.mark("pairs_and_mining")
+        self.timing.dump_if_requested()
+
+    def _funnel_rows(self, trace) -> None:
+        """One row per real filter, from the miner's OWN funnel accounting."""
+        # ONE row per real filter, taken from the miner's OWN funnel accounting.
+        # The previous single row restated "gate rows above the similarity floor"
+        # as the input and claimed the filters generically, which hid that ~39,896
+        # candidates die at the name filter and made the lane's ceiling
+        # unanswerable from the trace. The miner stays the label authority; this
+        # only records what it did.
+        if self.mining_funnel is not None:
+            for _step, _in, _out, _why in self.mining_funnel.stages():
+                trace.add(
+                    "mining",
+                    f"targeted_attribute_funnel.{_step}",
+                    in_count=int(_in),
+                    out_count=int(_out),
+                    reason=_why,
+                    detail={
+                        "gate_similarity_floor": float(self.targeted_cfg["min_similarity"]),
+                        "volume_tolerance": float(training_cfg().gate.vol_tolerance),
+                        "target": int(self.targeted_cfg["target"]),
+                        "funnel": self.mining_funnel.to_dict(),
+                    },
+                    source="gate_results.csv",
+                )
+        else:
+            trace.add(
+                "mining",
+                "targeted_attribute_funnel.disabled",
+                in_count=0,
+                out_count=0,
+                reason="mining.attribute_conflict.same_product_name is false",
+                detail={"target": int(self.targeted_cfg["target"])},
+                source="config/training.yaml",
+            )
+        # The cross-brand lane's own funnel, in the same shape as the targeted one:
+        # its generation step (blocking census) then every filter's attrition. A
+        # lane whose population is generated rather than handed in cannot be
+        # audited from its output count alone, so the census is the trace's job.
+        if self.cross_brand_funnel is not None:
+            for _step, _in, _out, _why in self.cross_brand_funnel.stages():
+                trace.add(
+                    "mining",
+                    f"cross_brand_funnel.{_step}",
+                    in_count=int(_in),
+                    out_count=int(_out),
+                    reason=_why,
+                    detail={
+                        "target": int(self.cross_cfg["target"]),
+                        "min_similarity": float(self.cross_cfg["min_similarity"]),
+                        "require_agreement": list(self.cross_cfg["require_agreement"]),
+                        "volume_tolerance": float(training_cfg().gate.vol_tolerance),
+                        "funnel": self.cross_brand_funnel.to_dict(),
+                    },
+                    source="canonical_records.csv + gate_results.csv",
+                )
+        else:
+            trace.add(
+                "mining",
+                "cross_brand_funnel.disabled",
+                in_count=0,
+                out_count=0,
+                reason="mining.cross_brand.enabled is false",
+                detail={"target": int(self.cross_cfg["target"])},
+                source="config/training.yaml",
+            )
+
+    def _pair_payload_entities(self, trace) -> None:
+        """Bounded per-pair readback with the LITERAL model texts."""
+        # Bounded per-pair readback with the LITERAL model texts, so the trace is
+        # a sample of the training input rather than only a count of it. Bucketed
+        # by label kind, so the three label populations above and the sampled rows
+        # below join on the same label.
+        trace.add_entities(
+            "pair_payload",
+            self._rows,
+            key_of=lambda r: f"{r['kind']}|{r['gtin_a']}|{r['gtin_b']}",
+            reason_of=lambda r: r["kind"],
+            detail_of=lambda r: json.dumps(
+                {
+                    "payload_idx_a": r["payload_idx_a"],
+                    "payload_idx_b": r["payload_idx_b"],
+                    "gtin_a": r["gtin_a"],
+                    "gtin_b": r["gtin_b"],
+                    "text_a": r["text_a"],
+                    "text_b": r["text_b"],
+                },
+                sort_keys=True,
+            ),
+            source="model payload",
+            per_reason=ENTITY_PER_REASON,
+            total_cap=ENTITY_TOTAL_CAP,
+        )
+
+    # ── orchestration ──────────────────────────────────────────────────────
+
+    def build(self) -> dict:
+        """Run the load-bearing phase order; return the validated bundle dump."""
+        self.prepare_stage_frame()
+        self.load_artifacts()
+        self.materialize_sku_payload()
+        self.materialize_canonical_payload()
+        self.positives_stage()
+        self.representative_rows()
+        self.baseline_negatives()
+        self.mined_lanes()
+        return self.finalize_bundle()
+
+
 def build_training_data(
     df: pd.DataFrame,
     *,
@@ -3893,768 +4793,5 @@ def build_training_data(
                   every gate hard-no pair with similarity >= threshold
         stats   : dict — counts (nothing dropped silently)
     """
-    from core.identity_policy import exclude_reviewed_rows
-    df = exclude_reviewed_rows(df).reset_index(drop=True)
-    print(
-        f"[payload-stage] building variant={payload_variant} rows={len(df):,}",
-        flush=True,
-    )
-    # ── CONSOLIDATED TRACE: stage 2 writer ────────────────────────────────
-    # Created here so the column contract of the frame THIS stage received is
-    # the first row of the stage — see run_within_brand_pipeline for the other
-    # half of the two-stage handoff.
-    from core.tracing import TraceRun
-
-    trace = TraceRun("pairs")
-    trace.add_column_contract(
-        df,
-        contract="canonical dataset (core.common.load_dataset_deduped)",
-        required=CANONICAL_DATASET_REQUIRED_COLUMNS,
-        note=(
-            "stage 1 (run_within_brand_pipeline) loads the RAW export "
-            "separately — both stages now share one column vocabulary "
-            "(c698200) and are joined by canonical_records.csv + "
-            "gate_results.csv, never by passing this frame between them"
-        ),
-    )
-    cfg = load_config()
-    structured_cfg = cfg["training"]["structured_features"]
-    structured_enabled = bool(structured_cfg["enabled"])
-    from core.model_input import (
-        build_canonical_text,
-        build_sku_texts,
-        model_input_info,
-        model_input_composition,
-        token_budget_report,
-    )
-    from core.structured_features import (
-        canonical_info as canonical_structured_info,
-        vector as structured_vector,
-    )
-
-    # The encoder text this stage materializes is an INPUT CONTRACT for every
-    # downstream artifact (embeddings, ANN index, checkpoints, reports), so the
-    # active composition is recorded on the run before any text is built — a
-    # reader can then tell which composition produced what, after the fact.
-    trace.add(
-        "payload",
-        "model_input_composition",
-        detail=model_input_composition().model_dump(),
-    )
-    thr_pos = float(cfg["pairs"]["proceed_sim_threshold"])
-    thr_neg = float(cfg["pairs"]["hardneg_sim_threshold"])
-
-    from tqdm import tqdm
-
-    from core.timing import Timing
-
-    timing = Timing("pipeline.build_training_data")
-    timing.mark("config_and_trace")
-
-    canon_map = load_canonical_map()
-    gates = pd.read_csv(
-        RESULTS / F["gate_results"],
-        dtype={"gtin1": str, "gtin2": str},
-        keep_default_na=False,
-    )
-    timing.mark("read_gate_results")
-
-    bc = df["gtin"].fillna("").astype(str).str.strip()
-    title = df["sku_name_eng"].fillna("")
-    attrs = df["attribute"].fillna("")
-
-    # ── clean sku text per row (variant: full = title+attr, title_only) ──
-    # schema words (type/content/material/...) die on the MODEL side only —
-    # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip).
-    # Both variants go through core.model_input, the shared builder.
-    # The per-row composition loop is the SSOT core.model_input.build_sku_texts
-    # (was inlined here and in predict_items / rand_matching / record_linkage).
-    if payload_variant == "full":
-        model_frame = df
-    elif payload_variant == "title_only":
-        model_frame = df.copy()
-        # The descriptor columns blanked for the title-only variant come from
-        # the config column contract (core.columns.COLUMN_ALIASES carries the
-        # raw-export aliases, e.g. "attr" for "attribute") — not a hand-typed
-        # tuple that drifts from paths.yaml.
-        for column in ("attribute", "description_short_eng",
-                       *COLUMN_ALIASES.get("attribute", ())):
-            if column in model_frame.columns:
-                model_frame[column] = ""
-    else:
-        raise SystemExit(f"unknown payload variant: {payload_variant}")
-    sku_texts, sku_structured = build_sku_texts(
-        model_frame, structured_enabled=structured_enabled
-    )
-    timing.mark("sku_texts")
-
-    # ── payload: sku rows + canonical entries (in sorted-gtin order) ──
-    payload = list(sku_texts)
-    row_bc = [str(x) for x in bc]
-    canon_gtins = sorted(canon_map)
-    canon_start = len(payload)
-    gtin_to_canon_idx = {g: canon_start + i for i, g in enumerate(canon_gtins)}
-    # MODEL payload: schema-free canonical variant plus normalized structured
-    # volume/pack/package-type tokens. The gate's CSV keeps the original values and schema
-    # labels for decisions; the model receives the stable normalized tokens
-    # explicitly so those attributes are no longer discarded.
-    canonical_records = pd.read_csv(
-        RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
-    )
-    # Same read contract as the other canonical lanes: migrate a stale
-    # artifact (core.schemas.upgrade_canonical_records_frame) and validate it
-    # before building the payload — a malformed file fails here, loudly.
-    canonical_records = upgrade_canonical_records_frame(canonical_records)
-    check_canonical_records_frame(canonical_records)
-    canonical_record_map = {
-        str(row["gtin"]): row.to_dict()
-        for _, row in tqdm(
-            canonical_records.iterrows(),
-            total=len(canonical_records),
-            unit="record",
-            desc="canon-records",
-            disable=None,
-        )
-    }
-    canon_structured = [
-        model_input_info(canonical_structured_info(canonical_record_map.get(g, {})))
-        if structured_enabled
-        else {"volume": set(), "pack": set(), "package_type": set()}
-        for g in tqdm(
-            canon_gtins,
-            total=len(canon_gtins),
-            unit="canon",
-            desc="canon-info",
-            disable=None,
-        )
-    ]
-    canon_texts = [
-        build_canonical_text(canonical_record_map.get(g, {}), info)
-        for g, info in tqdm(
-            zip(canon_gtins, canon_structured, strict=True),
-            total=len(canon_gtins),
-            unit="canon",
-            desc="canon-text",
-            disable=None,
-        )
-    ]
-    payload.extend(canon_texts)
-    timing.mark("canonical_payload")
-
-    # The structured tail is appended LAST, so at max_seq_length it is the
-    # first thing truncated. Measure the assembled payload and record it, so a
-    # dropped field group is a named number in the run trace rather than an
-    # invisible shortening. Reuses the tracing SSOT and the config SSOT.
-    from transformers import AutoTokenizer
-
-    from core.common import resolve_model, runtime
-
-    budget = token_budget_report(
-        payload,
-        tokenizer=AutoTokenizer.from_pretrained(
-            str(resolve_model(str(runtime("base_model"))))
-        ),
-        max_seq_length=int(runtime("max_seq_length")),
-    )
-    trace.add("payload", "token_budget", detail=budget.model_dump())
-    if budget.n_field_groups_dropped:
-        print(
-            f"    [token-budget] WARNING: {budget.n_over_budget:,}/"
-            f"{budget.n_records:,} payload records exceed max_seq_length="
-            f"{budget.max_seq_length}; dropped field groups: "
-            f"{budget.dropped_groups}",
-            flush=True,
-        )
-    row_bc.extend(canon_gtins)
-    print(
-        f"[payload-stage] materialized sku_payload={len(sku_texts):,} "
-        f"canonical_payload={len(canon_texts):,}",
-        flush=True,
-    )
-    structured_infos = sku_structured + canon_structured
-    structured_features = [
-        structured_vector(
-            info,
-            volume_scale_ml=float(structured_cfg["volume_scale_ml"]),
-            pack_scale=float(structured_cfg["pack_scale"]),
-            max_set_size=int(structured_cfg["max_set_size"]),
-        )
-        for info in structured_infos
-    ]
-
-    # ── empty-text guard (stage-3 soft stop) ──────────────────────────
-    # Low-signal rows ("Single 2 Liter Bottle", "water 1.5 lt pack of 6")
-    # strip to "". An empty string must not train as a positive — it pulls
-    # a garbage vector onto its canonical. Counted in stats (lane doctrine:
-    # nothing drops silently). Negatives keep empty texts: a weak
-    # in-batch negative is harmless, a positive is not.
-    empty_sku = {i for i, s in enumerate(sku_texts) if not s}
-    empty_canon_idx = {
-        gtin_to_canon_idx[g] for g, s in zip(canon_gtins, canon_texts, strict=True) if not s
-    }
-
-    # ── positives: every row whose gtin has a canonical ──
-    cand_pos = [
-        (i, gtin_to_canon_idx[g]) for i, g in enumerate(bc) if g in gtin_to_canon_idx
-    ]
-    pos_pairs = [
-        (i, j)
-        for i, j in cand_pos
-        if i not in empty_sku and j not in empty_canon_idx
-    ]
-    pos = np.array(pos_pairs, dtype=int).reshape(-1, 2)
-    timing.mark("pairs_and_similarity")
-
-    # ── representative row per GTIN (longest title — most signal) ──
-    # UNEXPECTED-BEHAVIOR FIX: the old code sorted titles
-    # lexicographically DESCENDING and called it "longest" — a short
-    # z-titled row won over a long a-titled one. Rank by title LENGTH;
-    # ties break by row index (stable, reproducible).
-    t_len = title.astype(str).str.len().to_numpy()
-    order = np.lexsort((np.arange(len(t_len)), -t_len))
-    seen: set[str] = set()
-    gtin_to_row: dict[str, int] = {}
-    bc_arr = bc.to_numpy() if hasattr(bc, "to_numpy") else list(bc)
-    for i in tqdm(
-        order,
-        total=len(order),
-        unit="row",
-        desc="canon-row",
-        disable=None,
-    ):
-        g = bc_arr[i]
-        if g and g not in seen:
-            seen.add(g)
-            gtin_to_row[g] = i
-    timing.mark("representative_row")
-
-    # ── negatives: gate hard-no pairs (both directions) ──
-    # A hard_no gate decision is not sufficient for training: separate GTINs
-    # can still resolve to the same canonical item.  Those rows are true
-    # matches and must never be emitted as label-0 pairs.
-    gate_canon1 = gates["gtin1"].map(canon_map)
-    gate_canon2 = gates["gtin2"].map(canon_map)
-    same_canonical = (
-        gate_canon1.notna()
-        & gate_canon2.notna()
-        & gate_canon1.eq(gate_canon2)
-    )
-    hard_no_band = (gates["gate_decision"] == "hard_no") & (
-        gates["similarity"] >= thr_neg
-    )
-    neg_mask = hard_no_band & ~same_canonical
-    neg_gates = gates[neg_mask]
-    # The other two gate outcomes, kept as masks so the label-destiny census
-    # below accounts for EVERY candidate pair rather than only the negatives.
-    proceeded = gates["gate_decision"] == "proceed"
-    fell_back = gates["gate_decision"] == "fallback"
-    a = neg_gates["gtin1"].map(gtin_to_row)
-    b = neg_gates["gtin2"].map(gtin_to_row)
-    ca = neg_gates["gtin2"].map(gtin_to_canon_idx)
-    cb = neg_gates["gtin1"].map(gtin_to_canon_idx)
-    ok1 = a.notna() & ca.notna()
-    ok2 = b.notna() & cb.notna()
-    fwd = np.stack([a[ok1].astype(int), ca[ok1].astype(int)], axis=1)
-    rev = np.stack([b[ok2].astype(int), cb[ok2].astype(int)], axis=1)
-    neg = np.vstack([fwd, rev]) if len(fwd) or len(rev) else np.empty((0, 2), dtype=int)
-
-    # Targeted critical-attribute candidates lower the similarity floor from
-    # the generic gate-negative threshold while retaining the same brand/name
-    # and explicit-conflict requirements. They remain a separate population
-    # so training can enable/disable them through the mining profile and keep
-    # source provenance intact.
-    # The funnel is the miner's OWN attrition accounting, so the trace records
-    # why each candidate died rather than restating a similarity threshold. The
-    # miner stays the single source of truth for every filter it applies.
-    from core.hard_negatives import (
-        MiningFunnel,
-        mine_targeted_attribute_negatives,
-    )
-
-    targeted_cfg = cfg["mining"]["attribute_conflict"]
-    mining_funnel = (
-        MiningFunnel() if bool(targeted_cfg["same_product_name"]) else None
-    )
-    targeted_attribute_neg, targeted_attribute_scores = (
-        mine_targeted_attribute_negatives(
-            df,
-            gates,
-            canonical_records,
-            gtin_to_row,
-            gtin_to_canon_idx,
-            existing=neg,
-            n_target=int(targeted_cfg["target"]),
-            min_similarity=float(targeted_cfg["min_similarity"]),
-            # Same volume tolerance the training-label gate uses, so a pair the
-            # gate calls compatible can never be mined here as a conflict.
-            # BOTH cuts: the relative-only cut rejected small-volume pairs the
-            # gate accepts, which would mine a true match as a hard negative.
-            volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
-            volume_absolute_tolerance_ml=float(
-                training_cfg().gate.vol_abs_tolerance
-            ),
-            # Same canonical-identity rule the baseline negative lane already
-            # applies: a same-canonical pair is a true match, not a label-0 row.
-            canonical_map=canon_map,
-            funnel=mining_funnel,
-        )
-        if bool(targeted_cfg["same_product_name"])
-        else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
-    )
-
-    # ── CROSS-BRAND HARD NEGATIVES (the brand-separation lever, §15) ──────
-    # The gate's candidate space is brand-blocked upstream ("Brand blocking"),
-    # so brand is constant across every labelled pair and the encoder can only
-    # learn that brand is noise (measured separation 0.000 vs volume +0.837).
-    # This lane mines the mirror population — brands DIFFER, every other
-    # critical attribute agrees — and stays a separate population so training
-    # can enable/disable it through the mining profile while provenance
-    # survives. The funnel is the miner's OWN accounting: it reports candidate
-    # GENERATION (blocking census) and then every filter's attrition.
-    from core.hard_negatives import (
-        CrossBrandMiningFunnel,
-        mine_cross_brand_negatives,
-    )
-
-    cross_cfg = cfg["mining"]["cross_brand"]
-    cross_brand_funnel = (
-        CrossBrandMiningFunnel() if bool(cross_cfg["enabled"]) else None
-    )
-    cross_brand_neg, cross_brand_scores = (
-        mine_cross_brand_negatives(
-            df,
-            canonical_records,
-            gtin_to_row,
-            gtin_to_canon_idx,
-            existing=neg,
-            n_target=int(cross_cfg["target"]),
-            require_agreement=tuple(str(d) for d in cross_cfg["require_agreement"]),
-            min_similarity=float(cross_cfg["min_similarity"]),
-            max_per_canonical=int(cross_cfg["max_per_canonical"]),
-            max_per_brand=int(cross_cfg["max_per_brand"]),
-            # Same volume tolerance the training-label gate uses, so a pair the
-            # gate calls compatible can never be mined here as a conflict.
-            # BOTH cuts (see the targeted lane above).
-            volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
-            volume_absolute_tolerance_ml=float(
-                training_cfg().gate.vol_abs_tolerance
-            ),
-            funnel=cross_brand_funnel,
-        )
-        if bool(cross_cfg["enabled"])
-        else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
-    )
-
-    n_forward_source_unresolved = int(a.isna().sum())
-    n_forward_target_unresolved = int(ca.isna().sum())
-    n_reverse_source_unresolved = int(b.isna().sum())
-    n_reverse_target_unresolved = int(cb.isna().sum())
-    n_resolution_dropped = int(len(neg_gates) * 2 - len(neg))
-    stats = {
-        "n_rows": len(df),
-        "n_sku_with_canonical": len(cand_pos),
-        "n_pos_empty_dropped": len(cand_pos) - len(pos_pairs),
-        "n_empty_sku_texts": len(empty_sku),
-        "n_empty_canon_texts": len(empty_canon_idx),
-        "n_canonicals": len(canon_gtins),
-        "n_pos_gate_rows": int(
-            (
-                (gates["gate_decision"] == "proceed") & (gates["similarity"] >= thr_pos)
-            ).sum()
-        ),
-        "n_neg_same_canonical_dropped": int((hard_no_band & same_canonical).sum()),
-        "n_neg_hard_no_band": int(hard_no_band.sum()),
-        "n_neg_gate_rows": int(neg_mask.sum()),
-        "n_neg_resolved": len(neg),
-        "n_neg_forward_resolved": int(len(fwd)),
-        "n_neg_reverse_resolved": int(len(rev)),
-        "n_neg_forward_source_unresolved": n_forward_source_unresolved,
-        "n_neg_forward_target_unresolved": n_forward_target_unresolved,
-        "n_neg_reverse_source_unresolved": n_reverse_source_unresolved,
-        "n_neg_reverse_target_unresolved": n_reverse_target_unresolved,
-        "n_neg_resolution_dropped": n_resolution_dropped,
-        "n_neg_dropped": n_resolution_dropped,
-        "n_targeted_attribute_candidates": int(len(targeted_attribute_scores)),
-        "n_targeted_attribute_resolved": int(len(targeted_attribute_neg)),
-        # Candidates ENTERING the cross-brand funnel (the pairs its
-        # require_agreement blocking generated) and the pair rows it emitted.
-        # The two differ by the funnel's own attrition, which the trace
-        # records step by step.
-        "n_cross_brand_candidates": int(
-            cross_brand_funnel.candidates_in_blocks
-            if cross_brand_funnel is not None
-            else 0
-        ),
-        "n_cross_brand_resolved": int(len(cross_brand_neg)),
-    }
-    print(
-        f"[payload-stage] pairs resolved positives={len(pos):,} "
-        f"hard_negatives={len(neg):,} unresolved_or_dropped={n_resolution_dropped:,}",
-        flush=True,
-    )
-    print(
-        f"[targeted-attribute-negatives] {len(targeted_attribute_neg):,} "
-        f"same-brand/name explicit-conflict pairs with gate similarity "
-        f"> {float(targeted_cfg['min_similarity']):.2f}",
-        flush=True,
-    )
-    if cross_brand_funnel is not None:
-        _cb = cross_brand_funnel
-        print(
-            f"[cross-brand-negatives] {len(cross_brand_neg):,} label-0 pair rows "
-            f"from {_cb.accepted_candidates:,} candidates "
-            f"({_cb.candidates_in_blocks:,} generated -> "
-            f"{_cb.passed_candidates:,} survived every filter; "
-            f"target {int(cross_cfg['target']):,}, "
-            f"reached={_cb.emitted_pairs >= int(cross_cfg['target']) > 0})",
-            flush=True,
-        )
-    else:
-        print(
-            "[cross-brand-negatives] disabled by mining.cross_brand.enabled",
-            flush=True,
-        )
-    # ── EXACT MODEL PAYLOAD DUMP (owner directive 2026-09-07) ──────────
-    # Every pair the model trains on, with the LITERAL texts it ingests.
-    # The rows are recorded in the ONE consolidated trace (core.tracing) below,
-    # replacing the former per-stage payload_pairs.csv.
-    _rows = []
-    for i, j in pos:
-        _rows.append(
-            {
-                "kind": "pos",
-                "payload_idx_a": int(i),
-                "payload_idx_b": int(j),
-                "gtin_a": row_bc[i],
-                "gtin_b": row_bc[j],
-                "text_a": payload[i],
-                "text_b": payload[j],
-            }
-        )
-    for i, j in neg:
-        _rows.append(
-            {
-                "kind": "neg_hard",
-                "payload_idx_a": int(i),
-                "payload_idx_b": int(j),
-                "gtin_a": row_bc[i],
-                "gtin_b": row_bc[j],
-                "text_a": payload[i],
-                "text_b": payload[j],
-            }
-        )
-    for i, j in targeted_attribute_neg:
-        _rows.append(
-            {
-                "kind": "neg_targeted_attribute",
-                "payload_idx_a": int(i),
-                "payload_idx_b": int(j),
-                "gtin_a": row_bc[i],
-                "gtin_b": row_bc[j],
-                "text_a": payload[i],
-                "text_b": payload[j],
-            }
-        )
-    for i, j in cross_brand_neg:
-        _rows.append(
-            {
-                "kind": "neg_cross_brand",
-                "payload_idx_a": int(i),
-                "payload_idx_b": int(j),
-                "gtin_a": row_bc[i],
-                "gtin_b": row_bc[j],
-                "text_a": payload[i],
-                "text_b": payload[j],
-            }
-        )
-    _kinds = {
-        "pos": int(len(pos)),
-        "neg_hard": int(len(neg)),
-        "neg_targeted_attribute": int(len(targeted_attribute_neg)),
-        "neg_cross_brand": int(len(cross_brand_neg)),
-    }
-    # BOUNDARY CONTRACT (lib.schemas.TrainingData): payload/row_bc locked,
-    # every pos/neg index in range, gtin_to_row targets valid — the bundle
-    # crosses into src/training/train + src/training/training; a shape break must die
-    # HERE with a named field, not as an IndexError in a fold.
-    from core.schemas import TrainingData as _TrainingData
-
-    _bundle = _TrainingData(
-        payload=payload,
-        structured_features=structured_features,
-        row_bc=np.array(row_bc),
-        pos=pos,
-        neg=neg,
-        targeted_attribute_neg=targeted_attribute_neg,
-        cross_brand_neg=cross_brand_neg,
-        gtin_to_row=gtin_to_row,
-        stats=stats,
-    )
-    # ── CONSOLIDATED TRACE: pairs + mining funnel ──────────────────────────
-    # The former per-stage files (negative_resolution_manifest.csv,
-    # payload_pairs.csv) folded into the ONE trace (core.tracing). Stage 2
-    # commits onto stage 1's rows for the same run, so the file reads as one
-    # continuous flow. This block used to sit AFTER `return _bundle.model_dump()`
-    # and was therefore dead: stage 2 ran, printed its counts, and wrote nothing
-    # to the trace. The bundle is validated first (fail fast on a shape break),
-    # then every step is recorded, then the bundle is returned.
-    _kinds_row = _bundle.model_dump()
-
-    # EVERY candidate pair gets exactly one label destiny. Summing these group
-    # rows reproduces len(gates) exactly, which is the pair-side accounting
-    # identity: no gate pair is unaccounted for, and each row states in words
-    # why that population did or did not become a training label.
-    n_gates = int(len(gates))
-    label_buckets = [
-        (
-            "proceed_not_a_training_pair",
-            int(proceeded.sum()),
-            "gate says same product: a PROCEED pair yields no label here — "
-            "positives come from the row→canonical relation, not the pair",
-            {"gate_decision": "proceed"},
-        ),
-        (
-            "fallback_unresolved",
-            int(fell_back.sum()),
-            "gate could not resolve the pair: neither a verified match nor a "
-            "hard no, so neither mining lane may use it",
-            {"gate_decision": "fallback"},
-        ),
-        (
-            "negative_hard",
-            int(neg_mask.sum()),
-            "hard_no inside the mining similarity band and NOT same-canonical: "
-            "emitted as a label-0 pair in both directions",
-            {
-                "gate_decision": "hard_no",
-                "similarity_threshold": float(thr_neg),
-                "directions_per_pair": 2,
-            },
-        ),
-        (
-            "true_match_same_canonical_excluded",
-            int((hard_no_band & same_canonical).sum()),
-            "hard_no in band but both gtins share one canonical record: a true "
-            "match, so label 0 would be wrong",
-            {"gate_decision": "hard_no"},
-        ),
-        (
-            "hard_no_below_similarity_floor",
-            int(((gates["gate_decision"] == "hard_no") & ~hard_no_band).sum()),
-            "hard_no below the mining similarity floor: a valid hard no that "
-            "this lane's negative mining does not reach",
-            {"gate_decision": "hard_no", "similarity_threshold": float(thr_neg)},
-        ),
-    ]
-    for bucket, population, why, extra in label_buckets:
-        trace.add(
-            "labels",
-            f"destiny_{bucket}",
-            scope="group",
-            in_count=n_gates,
-            out_count=population,
-            reason=why,
-            detail={"population": population, **extra},
-            source="gate_results.csv",
-        )
-    trace.add(
-        "labels",
-        "every_pair_accounted",
-        in_count=n_gates,
-        out_count=int(sum(population for _, population, _, _ in label_buckets)),
-        reason="every candidate pair carries exactly one label destiny",
-        detail={
-            "gate_pairs": n_gates,
-            "destinies": {
-                bucket: population for bucket, population, _, _ in label_buckets
-            },
-        },
-        source="gate_results.csv",
-    )
-    trace.add(
-        "positives",
-        "sku_to_canonical",
-        scope="group",
-        in_count=int(len(cand_pos)),
-        out_count=int(len(pos)),
-        reason="a row with a resolvable canonical and non-empty model text is a positive",
-        detail={
-            "rows": int(len(df)),
-            "sku_with_canonical": int(len(cand_pos)),
-            "dropped_empty_sku_text": int(len(empty_sku)),
-            "dropped_empty_canon_text": int(len(empty_canon_idx)),
-            "canonicals": int(len(canon_gtins)),
-            "gate_proceed_rows": int(
-                (
-                    (gates["gate_decision"] == "proceed")
-                    & (gates["similarity"] >= thr_pos)
-                ).sum()
-            ),
-        },
-        source="canonical_records.csv",
-    )
-    trace.add(
-        "negatives",
-        "gate_hard_no_band",
-        scope="group",
-        in_count=n_gates,
-        out_count=int(len(neg_gates)),
-        reason=(
-            "hard_no with similarity >= the mining threshold; same-canonical "
-            "pairs are true matches and are excluded here"
-        ),
-        detail={
-            "hard_no_and_in_band": int(hard_no_band.sum()),
-            "dropped_same_canonical": int((hard_no_band & same_canonical).sum()),
-            "similarity_threshold": float(thr_neg),
-            "both_directions": int(len(neg_gates) * 2),
-        },
-        source="gate_results.csv",
-    )
-    trace.add(
-        "negatives",
-        "index_resolution",
-        scope="group",
-        in_count=int(len(neg_gates) * 2),
-        out_count=int(len(neg)),
-        reason="both endpoints must resolve to a payload row index",
-        detail={
-            "forward_resolved": int(len(fwd)),
-            "reverse_resolved": int(len(rev)),
-            "forward_source_unresolved": n_forward_source_unresolved,
-            "forward_target_unresolved": n_forward_target_unresolved,
-            "reverse_source_unresolved": n_reverse_source_unresolved,
-            "reverse_target_unresolved": n_reverse_target_unresolved,
-        },
-        source="model payload index maps (rows + canonicals)",
-    )
-    # ONE row per real filter, taken from the miner's OWN funnel accounting.
-    # The previous single row restated "gate rows above the similarity floor"
-    # as the input and claimed the filters generically, which hid that ~39,896
-    # candidates die at the name filter and made the lane's ceiling
-    # unanswerable from the trace. The miner stays the label authority; this
-    # only records what it did.
-    if mining_funnel is not None:
-        for _step, _in, _out, _why in mining_funnel.stages():
-            trace.add(
-                "mining",
-                f"targeted_attribute_funnel.{_step}",
-                in_count=int(_in),
-                out_count=int(_out),
-                reason=_why,
-                detail={
-                    "gate_similarity_floor": float(targeted_cfg["min_similarity"]),
-                    "volume_tolerance": float(training_cfg().gate.vol_tolerance),
-                    "target": int(targeted_cfg["target"]),
-                    "funnel": mining_funnel.to_dict(),
-                },
-                source="gate_results.csv",
-            )
-    else:
-        trace.add(
-            "mining",
-            "targeted_attribute_funnel.disabled",
-            in_count=0,
-            out_count=0,
-            reason="mining.attribute_conflict.same_product_name is false",
-            detail={"target": int(targeted_cfg["target"])},
-            source="config/training.yaml",
-        )
-    # The cross-brand lane's own funnel, in the same shape as the targeted one:
-    # its generation step (blocking census) then every filter's attrition. A
-    # lane whose population is generated rather than handed in cannot be
-    # audited from its output count alone, so the census is the trace's job.
-    if cross_brand_funnel is not None:
-        for _step, _in, _out, _why in cross_brand_funnel.stages():
-            trace.add(
-                "mining",
-                f"cross_brand_funnel.{_step}",
-                in_count=int(_in),
-                out_count=int(_out),
-                reason=_why,
-                detail={
-                    "target": int(cross_cfg["target"]),
-                    "min_similarity": float(cross_cfg["min_similarity"]),
-                    "require_agreement": list(cross_cfg["require_agreement"]),
-                    "volume_tolerance": float(training_cfg().gate.vol_tolerance),
-                    "funnel": cross_brand_funnel.to_dict(),
-                },
-                source="canonical_records.csv + gate_results.csv",
-            )
-    else:
-        trace.add(
-            "mining",
-            "cross_brand_funnel.disabled",
-            in_count=0,
-            out_count=0,
-            reason="mining.cross_brand.enabled is false",
-            detail={"target": int(cross_cfg["target"])},
-            source="config/training.yaml",
-        )
-    trace.add(
-        "payload",
-        "materialized",
-        in_count=int(len(df)),
-        out_count=int(len(payload)),
-        reason="every source row plus one canonical per GTIN",
-        detail={
-            "sku_payload": int(len(df)),
-            "canonical_payload": int(len(canon_gtins)),
-            "structured_feature_dim": int(len(structured_features[0])),
-            "structured_encode": bool(structured_cfg.get("enabled", True)),
-        },
-        source="canonical_records.csv",
-    )
-    trace.add(
-        "payload",
-        "pair_census",
-        scope="group",
-        in_count=int(
-            len(pos) + len(neg) + len(targeted_attribute_neg) + len(cross_brand_neg)
-        ),
-        out_count=int(len(_rows)),
-        reason="final label populations handed to training",
-        detail={
-            "pos": int(len(pos)),
-            "neg_hard": int(len(neg)),
-            "neg_targeted_attribute": int(len(targeted_attribute_neg)),
-            "neg_cross_brand": int(len(cross_brand_neg)),
-            "text_columns": ["text_a", "text_b"],
-        },
-        source="model payload",
-    )
-    # Bounded per-pair readback with the LITERAL model texts, so the trace is
-    # a sample of the training input rather than only a count of it. Bucketed
-    # by label kind, so the three label populations above and the sampled rows
-    # below join on the same label.
-    trace.add_entities(
-        "pair_payload",
-        _rows,
-        key_of=lambda r: f"{r['kind']}|{r['gtin_a']}|{r['gtin_b']}",
-        reason_of=lambda r: r["kind"],
-        detail_of=lambda r: json.dumps(
-            {
-                "payload_idx_a": r["payload_idx_a"],
-                "payload_idx_b": r["payload_idx_b"],
-                "gtin_a": r["gtin_a"],
-                "gtin_b": r["gtin_b"],
-                "text_a": r["text_a"],
-                "text_b": r["text_b"],
-            },
-            sort_keys=True,
-        ),
-        source="model payload",
-        per_reason=ENTITY_PER_REASON,
-        total_cap=ENTITY_TOTAL_CAP,
-    )
-    trace.write()
-    print(
-        f"[trace] pairs steps written -> {trace_path()} | {_kinds}",
-        flush=True,
-    )
-    timing.mark("pairs_and_mining")
-    timing.dump_if_requested()
-    # Contract preserved: the caller receives the TrainingData bundle. The
-    # trace stage runs BEFORE this return (it was previously unreachable dead
-    # code placed after it), and the dump is built once and reused.
-    return _kinds_row
+    # Contract preserved: the caller receives the TrainingData bundle.
+    return _PairBundleBuilder(df, payload_variant=payload_variant).build()
