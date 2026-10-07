@@ -156,7 +156,7 @@ def build_saved_text_cache():
     from core.model_input import model_input_composition
     work = ABL / 'cache_staging'
     config = CONFIG
-    print('[ablbms] one-time full CPU encode for seeded cache (a few minutes).', flush=True)
+    print('[ablbm] one-time full CPU encode for seeded cache (a few minutes).', flush=True)
     request_path = prepare(CATALOG, PAIRS, CHECKPOINT, config=config)
     request = json.loads(request_path.read_text())
     out = work / 'vectors.npz'
@@ -231,7 +231,11 @@ def run_round(round_no: int, rebuild_cache=False):
     identity = ensure_inputs(rebuild_cache=rebuild_cache)
     ROUNDS.mkdir(parents=True, exist_ok=True)
     folder = ROUNDS / f'round{round_no}'
-    folder.mkdir(parents=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    for stale in (folder/'vectors.npz', folder/'summary.json', folder/'ranking.csv',
+                  folder/'timings.log', folder/'profile.prof'):
+        if stale.exists():
+            stale.unlink()
     import core.step_trace as step_trace
     os.environ['ER_TIMING_LOG'] = str(folder / 'timings.log')
 
