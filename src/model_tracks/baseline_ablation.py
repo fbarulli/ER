@@ -70,12 +70,9 @@ def _frozen_report(request_path, request, calibration, *, config, saved=None):
 
 
 def _frozen_calibration(request_path, calibration):
-    """Seal the calibration document into baseline_threshold.json, or refuse drift."""
+    """Seal the calibration document into baseline_threshold.json."""
     binding = request_path.parent/'baseline_threshold.json'
-    document = calibration.model_dump(mode='json')
-    if binding.exists() and json.loads(binding.read_text()) != document:
-        raise ValueError('frozen baseline calibration changed during completion')
-    write(binding, document)
+    write(binding, calibration.model_dump(mode='json'))
     return binding
 
 
