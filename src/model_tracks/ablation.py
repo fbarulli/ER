@@ -620,14 +620,15 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
     device = _validated_device(device)
     if output.exists():
         raise FileExistsError(output)
-    request = json.loads(request_path.read_text())
-    # Sources are relocated by the launcher but expected hashes stay frozen.
-    validate_sources(request)
-    from model_tracks.ablation_inputs import load_batch
-    from core.encoding_inputs import tokenization_policy, load_token_features
-    arrays = load_prepared(request_path,request)
-    plan = request['prepared_inputs']
-    track = request['track']
+    with _LOG.section('ablation.encode.load'):
+        request = json.loads(request_path.read_text())
+        # Sources are relocated by the launcher but expected hashes stay frozen.
+        validate_sources(request)
+        from model_tracks.ablation_inputs import load_batch
+        from core.encoding_inputs import tokenization_policy, load_token_features
+        arrays = load_prepared(request_path,request)
+        plan = request['prepared_inputs']
+        track = request['track']
     with _LOG.section('ablation.encode.text_vectors'):
         text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
     with _LOG.section('ablation.encode.graph_encoder'):
@@ -830,13 +831,14 @@ def _report_document(request, request_path, result, cfg, rows, npairs, threshold
 @scoped_request
 def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
     """Paired local comparisons at a supplied, already selected threshold."""
-    if not np.isfinite(threshold) or not threshold_source:
-        raise ValueError('frozen threshold and its source are required')
-    threshold_provenance = frozen_threshold(threshold_source, threshold)
-    request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
-    threshold_binding = verify_threshold_binding(request,threshold_provenance)
-    nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
-    cfg = Settings.model_validate(request['settings'])
+    with _LOG.section('ablation.report.validate'):
+        if not np.isfinite(threshold) or not threshold_source:
+            raise ValueError('frozen threshold and its source are required')
+        threshold_provenance = frozen_threshold(threshold_source, threshold)
+        request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
+        threshold_binding = verify_threshold_binding(request,threshold_provenance)
+        nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
+        cfg = Settings.model_validate(request['settings'])
     with _LOG.section('ablation.report.comparison'):
         if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
             raise ValueError('retrieval ks must be positive')
@@ -855,10 +857,11 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
                                 baseline_ranks, ann_baseline, comparison_cache)
         retrieval.close()
-    output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
-    validate_sources(request)
-    if frozen_threshold(threshold_source, threshold) != threshold_provenance:
-        raise ValueError('threshold report changed during comparison')
+    with _LOG.section('ablation.report.document'):
+        output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
+        validate_sources(request)
+        if frozen_threshold(threshold_source, threshold) != threshold_provenance:
+            raise ValueError('threshold report changed during comparison')
     if not save:
         return output
     return save_report(request_path, output, config=config)
