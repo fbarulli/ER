@@ -43,6 +43,7 @@ from core.text import PACK_RE, extract_volume_evidence, normalize_text
 
 __all__ = ["PATH_SCHEMA_WORDS", "UNITS", "is_evidentiary", "url_text"]
 
+@lru_cache(maxsize=1)
 def _spec():
     """The config-owned vocabulary + thresholds (config/paths.yaml url_evidence).
 
