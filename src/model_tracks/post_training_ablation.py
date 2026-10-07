@@ -93,55 +93,95 @@ def _publish_track(destination, track, archived, publisher):
         publisher(request, vectors, json.loads(saved.read_text()), str(binding))
 
 
+def _calibration_source(destination, track):
+    """The one non-interrupted calibration manifest for a track, or nothing."""
+    import json
+    from graph_tracks.report_manifest import TrackReportManifest
+    request = destination/track/'ablation/request.json'
+    result = request.parent/'vectors.npz'
+    if not request.is_file() or not result.is_file():
+        raise ValueError('suite lacks prepared GPU ablation export: '+track)
+    sources = list((destination/track).rglob('text__completion_manifest.json' if track == 'text' else name(track,'report_manifest.json')))
+    sources = [path for path in sources if not any(part.startswith('interrupted-') or '.interrupted-' in part for part in path.parts)]
+    if len(sources) != 1:
+        raise ValueError('ambiguous baseline calibration manifest: '+track)
+    calibration = TrackReportManifest.model_validate_json(sources[0].read_text())
+    if calibration.track != track:
+        raise ValueError("ablation calibration belongs to a different track")
+    return request, result, sources[0], calibration
+
+
+def _wrote_binding(request, track, calibration, source):
+    """Seal the selected checkpoint identity and frozen threshold into binding."""
+    from graph_tracks.data import file_hash
+    from model_tracks.ablation import request_context
+    binding = request.parent/'baseline_threshold.json'
+    document = json.loads(request.read_text())
+    threshold = calibration.threshold
+    with request_context(request):
+        checkpoint = resolve(document['checkpoint'])
+        selected_identity = checkpoint_identity(checkpoint)
+        calibrated_identity = calibration.checkpoint_sha256
+        if calibrated_identity != selected_identity:
+            raise ValueError('baseline calibration differs from selected ablation checkpoint: '+track)
+        write(binding,{'track':track,'checkpoint_sha256':selected_identity,
+            'threshold':threshold,'calibration':{'threshold':threshold},
+            'source_calibration':source_name(source),
+            'source_calibration_sha256':__import__('graph_tracks.data',fromlist=['file_hash']).file_hash(source),
+            'threshold_source':'saved dev calibration; no refit'})
+    return binding, threshold, document
+
+
+def _trusted_saved_report(result, threshold, binding, previous, validated, document):
+    """True when a prior saved report bytes-identically covers this result.
+
+    Callers then only re-verify the vectors behind the cached report instead
+    of recomputing the threshold-frozen comparison.
+    """
+    from graph_tracks.data import file_hash
+    from model_tracks.ablation import request_context, validate_vectors
+    request = previous.parent/'request.json'
+    trusted = (validated and previous.with_suffix('.sha256').is_file()
+               and previous.with_suffix('.sha256').read_text().strip() == file_hash(previous)
+               and validated.get('request_sha256') == file_hash(request)
+               and validated.get('result_sha256') == file_hash(result)
+               and validated.get('threshold') == threshold
+               and validated.get('threshold_provenance',{}).get('sha256') == file_hash(binding))
+    if not trusted:
+        return False, None
+    with request_context(request):
+        validate_vectors(request,result)
+        attestation = frozen_threshold(str(binding),threshold)
+        if validated.get('threshold_binding') != verify_threshold_binding(document,attestation) or validated.get('threshold_provenance') != attestation:
+            raise ValueError('cached ablation calibration binding differs')
+    return True, validated
+
+
+@timed
 def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> Path:
     """Consume suite GPU exports after shutdown; no provisioning or forwards."""
-    from model_tracks.ablation import request_context, validate_vectors
+    from graph_tracks.data import file_hash
     outputs = {}
-    for track in ('text','gnn_only','hybrid'):
-        request = destination/track/'ablation/request.json'
-        result = request.parent/'vectors.npz'
-        if not request.is_file() or not result.is_file():
-            raise ValueError('suite lacks prepared GPU ablation export: '+track)
-        sources = list((destination/track).rglob('text__completion_manifest.json' if track == 'text' else name(track,'report_manifest.json')))
-        sources = [path for path in sources if not any(part.startswith('interrupted-') or '.interrupted-' in part for part in path.parts)]
-        if len(sources) != 1:
-            raise ValueError('ambiguous baseline calibration manifest: '+track)
-        from graph_tracks.report_manifest import TrackReportManifest
-        calibration = TrackReportManifest.model_validate_json(sources[0].read_text())
-        if calibration.track != track:
-            raise ValueError("ablation calibration belongs to a different track")
-        threshold = calibration.threshold
-        document = json.loads(request.read_text())
-        with request_context(request):
-            checkpoint = resolve(document['checkpoint'])
-            selected_identity = checkpoint_identity(checkpoint)
-            calibrated_identity = calibration.checkpoint_sha256
-            if calibrated_identity != selected_identity:
-                raise ValueError('baseline calibration differs from selected ablation checkpoint: '+track)
-            binding = request.parent/'baseline_threshold.json' 
-            write(binding,{'track':track,'checkpoint_sha256':selected_identity,
-                'threshold':threshold,'calibration':{'threshold':threshold},
-                'source_calibration':source_name(sources[0]),
-                'source_calibration_sha256':__import__('graph_tracks.data',fromlist=['file_hash']).file_hash(sources[0]),
-                'threshold_source':'saved dev calibration; no refit'})
+    for track in _LOG.progress(('text','gnn_only','hybrid'), desc='complete_saved', unit='track'):
+        with _LOG.section('ablation.complete.calibration'):
+            request, result, source, calibration = _calibration_source(destination, track)
+            binding, threshold, document = _wrote_binding(request, track, calibration, source)
+        with _LOG.section('ablation.complete.report'):
             previous = request.parent/'report.json'
-            report_digest = previous.with_suffix('.sha256')
             validated = json.loads(previous.read_text()) if previous.exists() else None
-            from graph_tracks.data import file_hash
-            if validated and report_digest.is_file() and report_digest.read_text().strip() == file_hash(previous) and validated.get('request_sha256') == file_hash(request) and validated.get('result_sha256') == file_hash(result) and validated.get('threshold') == threshold and validated.get('threshold_provenance',{}).get('sha256') == file_hash(binding):
-                validate_vectors(request,result)
-                attestation = frozen_threshold(str(binding),threshold)
-                if validated.get('threshold_binding') != verify_threshold_binding(document,attestation) or validated.get('threshold_provenance') != attestation:
-                    raise ValueError('cached ablation calibration binding differs')
+            trusted, cached = _trusted_saved_report(result, threshold, binding, previous, validated, document)
+            from model_tracks.ablation import save_report
+            if trusted:
+                validated = cached
             else:
                 validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
-        from model_tracks.ablation import save_report
-        save_report(request,validated,config=resolve(suite.ablation_config))
-        previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')
-        outputs[track] = {'request':source_name(request),'status':'verified saved GPU result'}
-        if publisher is not None:
-            artifact = publisher(request,result,validated,str(binding))
-            outputs[track]['artifact'] = source_name(artifact)
+            save_report(request,validated,config=resolve(suite.ablation_config))
+            previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')
+        with _LOG.section('ablation.complete.persist'):
+            outputs[track] = {'request':source_name(request),'status':'verified saved GPU result'}
+            if publisher is not None:
+                artifact = publisher(request,result,validated,str(binding))
+                outputs[track]['artifact'] = source_name(artifact)
     receipt = destination/'post_training_ablation.json'
     write(receipt,{'tracks':outputs,'retraining':False,'gpu_reopened':False})
     return receipt
