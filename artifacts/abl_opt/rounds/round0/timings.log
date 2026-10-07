@@ -1,0 +1,100 @@
+[timing] abl.prepare state=started rss_mb=699.6
+[timing] ablation.prepare state=started rss_mb=699.6
+[timing] ablation.prepare.sources state=started rss_mb=699.6
+[timing] ablation.prepare.sources state=completed elapsed_seconds=0.022 rss_mb=699.6
+[timing] ablation.prepare.cohort state=started rss_mb=699.6
+[timing] ablation.prepare.cohort state=completed elapsed_seconds=27.168 rss_mb=699.6
+[timing] ablation.prepare.baseline_variants state=started rss_mb=699.6
+[timing] ablation.prepare.baseline_variants state=completed elapsed_seconds=22.860 rss_mb=699.6
+[timing] ablation.prepare.candidates state=started rss_mb=699.6
+[timing] ablation.prepare.candidates state=completed elapsed_seconds=143.511 rss_mb=699.6
+[timing] ablation.prepare.persist state=started rss_mb=699.6
+[timing] ablation_inputs.prepare_inputs state=started rss_mb=699.6
+[timing] ablation_inputs.slice_groups state=started rss_mb=699.6
+[timing] ablation_inputs.slice_groups state=completed elapsed_seconds=0.004 rss_mb=699.6
+[timing] ablation_inputs.tokens state=started rss_mb=699.6
+[timing] ablation_inputs.tokens state=completed elapsed_seconds=18.151 rss_mb=1057.4
+[timing] ablation_inputs.graph_topology state=started rss_mb=1057.4
+[timing] ablation_inputs.graph_topology state=completed elapsed_seconds=0.000 rss_mb=1057.4
+[timing] ablation_inputs.candidate_batches state=started rss_mb=1057.4
+[timing] ablation_inputs.candidate_batches state=completed elapsed_seconds=0.000 rss_mb=1057.4
+[timing] ablation_inputs.variant_jobs state=started rss_mb=1057.4
+[timing] ablation_inputs.variant_jobs state=completed elapsed_seconds=0.064 rss_mb=1057.4
+[timing] ablation_inputs.publish state=started rss_mb=1057.4
+[timing] ablation_inputs.publish state=completed elapsed_seconds=0.448 rss_mb=1057.6
+ablation inputs published token_batches=176 jobs=36
+[timing] ablation_inputs.prepare_inputs state=completed elapsed_seconds=18.676 rss_mb=1057.6
+[timing] ablation.prepare.persist state=completed elapsed_seconds=22.288 rss_mb=1070.6
+[timing] ablation.prepare state=completed elapsed_seconds=215.868 rss_mb=1070.6
+[timing] abl.prepare state=completed elapsed_seconds=215.871 rss_mb=1070.6
+[timing] abl.encode state=started rss_mb=1070.6
+[timing] ablation.encode state=started rss_mb=1070.6
+[timing] ablation.encode.text_vectors state=started rss_mb=1070.6
+[timing] ablation.encode.text_vectors state=failed elapsed_seconds=0.384 rss_mb=1086.7
+[traceback] ablation.encode.text_vectors
+Traceback (most recent call last):
+  File "/tmp/opc/ER-opt-D/src/core/step_trace.py", line 103, in trace_step
+    yield
+  File "/tmp/opc/ER-opt-D/src/core/run_log.py", line 81, in section
+    yield
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 617, in encode
+    text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 497, in _prepared_text_vectors
+    candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
+                          ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 255, in load_text_cache
+    cache = TextCache(path)
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 225, in __init__
+    self._check()
+    ~~~~~~~~~~~^^
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 232, in _check
+    raise ValueError("invalid text cache dimensions")
+ValueError: invalid text cache dimensions
+
+[timing] ablation.encode state=failed elapsed_seconds=0.485 rss_mb=1086.7
+[traceback] ablation.encode
+Traceback (most recent call last):
+  File "/tmp/opc/ER-opt-D/src/core/step_trace.py", line 81, in wrapper
+    result = function(*args, **kwargs)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 101, in wrapped
+    return function(request_path,*args,**kwargs)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 617, in encode
+    text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 497, in _prepared_text_vectors
+    candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
+                          ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 255, in load_text_cache
+    cache = TextCache(path)
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 225, in __init__
+    self._check()
+    ~~~~~~~~~~~^^
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 232, in _check
+    raise ValueError("invalid text cache dimensions")
+ValueError: invalid text cache dimensions
+
+[timing] abl.encode state=failed elapsed_seconds=0.487 rss_mb=1086.7
+[traceback] abl.encode
+Traceback (most recent call last):
+  File "/tmp/opc/ER-opt-D/src/core/step_trace.py", line 103, in trace_step
+    yield
+  File "/tmp/opc/ER-opt-D/scripts/ablation_timing.py", line 261, in run_round
+    ablation.encode(request_path, result, device='cpu', saved_text=SAVED_TEXT)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/opc/ER-opt-D/src/core/step_trace.py", line 81, in wrapper
+    result = function(*args, **kwargs)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 101, in wrapped
+    return function(request_path,*args,**kwargs)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 617, in encode
+    text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
+  File "/tmp/opc/ER-opt-D/src/model_tracks/ablation.py", line 497, in _prepared_text_vectors
+    candidates,metadata = load_text_cache(saved_text,request['candidate_ids'])
+                          ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 255, in load_text_cache
+    cache = TextCache(path)
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 225, in __init__
+    self._check()
+    ~~~~~~~~~~~^^
+  File "/tmp/opc/ER-opt-D/src/graph_tracks/data.py", line 232, in _check
+    raise ValueError("invalid text cache dimensions")
+ValueError: invalid text cache dimensions
+
