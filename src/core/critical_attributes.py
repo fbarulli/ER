@@ -57,6 +57,20 @@ FLAVOR_ALIASES: dict[str, str] = {
     str(key): str(value) for key, value in (_VOCAB.get("flavor_aliases") or {}).items()
 }
 FLAVOR_LEXICON: frozenset[str] = frozenset(_VOCAB.get("flavor_lexicon") or ())
+# Precomputed token -> emitted-canonical dispatch table.  Reproduces the exact
+# predicate "FLAVOR_ALIASES.get(token, token) in FLAVOR_LEXICON" (which used to
+# call .get TWICE per whitespace token, ~194k calls per 10k cohort) in a single
+# dict lookup.  A token that is an alias key whose value is NOT in the lexicon
+# is deliberately absent (the alias wins over the raw token), and a lexicon
+# token that is not an alias maps to itself.
+_FLAVOR_TOKEN_MAP: dict[str, str] = {
+    token: canonical
+    for token, canonical in FLAVOR_ALIASES.items()
+    if canonical in FLAVOR_LEXICON
+}
+_FLAVOR_TOKEN_MAP.update(
+    {token: token for token in FLAVOR_LEXICON if token not in FLAVOR_ALIASES}
+)
 # Field-bound: only honored inside an explicit Flavour/Flavor declaration.
 DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset(
     _VOCAB.get("declared_flavor_lexicon") or ()
@@ -175,9 +189,9 @@ def flavor_tokens_from_text(text: str) -> frozenset[str]:
     pay to fold it again — that re-fold was 116k wasted calls over full titles.
     """
     return frozenset(
-        FLAVOR_ALIASES.get(token, token)
+        _FLAVOR_TOKEN_MAP[token]
         for token in text.split()
-        if FLAVOR_ALIASES.get(token, token) in FLAVOR_LEXICON
+        if token in _FLAVOR_TOKEN_MAP
     )
 
 
