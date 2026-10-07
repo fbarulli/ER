@@ -1712,14 +1712,22 @@ class RandMatcher:
                     )
                 )
         candidates = pd.DataFrame(rows)
-        candidate_ids = set(candidates["SKU_ID"]) if not candidates.empty else set()
-        missing_ids = sorted(set(frame["SKU_ID"]) - candidate_ids)
-        if missing_ids:
-            raise RuntimeError(
-                "candidate retrieval dropped SKU_ID values: "
-                f"{missing_ids[:10]}" + (" ..." if len(missing_ids) > 10 else "")
-            )
+        _assert_all_skus_retrieved(frame, candidates)
         return candidates
+
+
+def _assert_all_skus_retrieved(
+    frame: pd.DataFrame,
+    candidates: pd.DataFrame,
+) -> None:
+    """The loud populating guard: every SKU must keep at least one candidate."""
+    candidate_ids = set(candidates["SKU_ID"]) if not candidates.empty else set()
+    missing_ids = sorted(set(frame["SKU_ID"]) - candidate_ids)
+    if missing_ids:
+        raise RuntimeError(
+            "candidate retrieval dropped SKU_ID values: "
+            f"{missing_ids[:10]}" + (" ..." if len(missing_ids) > 10 else "")
+        )
 
 
 def _annotate_candidates(
@@ -2045,13 +2053,13 @@ def _merge_audit_context(
     return diagnostics
 
 
-def _truth_audit_context(
+def _audit_truth_lookup(
     candidates: pd.DataFrame,
     trace: pd.DataFrame,
     predictions: pd.DataFrame,
     truth: pd.DataFrame,
-) -> pd.DataFrame:
-    """Build one labeled audit summary per SKU for trace enrichment."""
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Retrieval/acceptance flags keyed per SKU (verbatim, with guards)."""
     truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
     if truth_frame["SKU_ID"].duplicated().any():
         raise RuntimeError("audit truth contains duplicate SKU_ID values")
@@ -2092,7 +2100,19 @@ def _truth_audit_context(
         .groupby("SKU_ID")["is_true_accepted"]
         .any()
     )
+    return true_item_by_sku, retrieved_by_sku, accepted_by_sku
 
+
+def _truth_audit_context(
+    candidates: pd.DataFrame,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build one labeled audit summary per SKU for trace enrichment."""
+    true_item_by_sku, retrieved_by_sku, accepted_by_sku = _audit_truth_lookup(
+        candidates, trace, predictions, truth
+    )
     summary = predictions[["SKU_ID", "ITEM_ID"]].copy()
     summary["true_item_id"] = summary["SKU_ID"].map(true_item_by_sku)
     summary["true_candidate_retrieved"] = (
@@ -2590,6 +2610,35 @@ def prediction_metrics(
     return metrics
 
 
+def _empty_gtin_metric_row(
+    fold: object,
+    threshold: float,
+    status: str,
+) -> dict[str, float | int | str]:
+    """The zeroed sensitivity row for an empty GTIN stratum (verbatim)."""
+    row = {key: np.nan for key in METRIC_COLUMNS}
+    row.update(
+        {
+            "check_fold": fold,
+            "threshold": float(threshold),
+            "gtin_status": status,
+            "selection_method": "sensitivity",
+            "n": 0,
+            "predicted_group_count": 0,
+            "true_group_count": 0,
+            "expected_group_count": 0,
+            "unmatched_skus": 0,
+            **empty_candidate_graph_diagnostics(),
+            "tp": 0,
+            "tn": 0,
+            "fp": 0,
+            "fn": 0,
+            "pair_count": 0,
+        }
+    )
+    return row
+
+
 def gtin_metrics(
     pred: pd.DataFrame,
     truth: pd.DataFrame,
@@ -2599,6 +2648,7 @@ def gtin_metrics(
     *,
     include_graph_diagnostics: bool = True,
 ) -> list[dict[str, float | int | str]]:
+    """One prediction_metrics row per GTIN stratum plus the ALL row."""
     truth_frame = truth[["SKU_ID", "true_item_id", "gtin_status"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
     truth_frame["SKU_ID"] = truth_frame["SKU_ID"].astype(str)
@@ -2618,27 +2668,7 @@ def gtin_metrics(
     rows = []
     for status, group in groups:
         if group.empty:
-            row = {key: np.nan for key in METRIC_COLUMNS}
-            row.update(
-                {
-                    "check_fold": fold,
-                    "threshold": float(threshold),
-                    "gtin_status": status,
-                    "selection_method": "sensitivity",
-                    "n": 0,
-                    "predicted_group_count": 0,
-                    "true_group_count": 0,
-                    "expected_group_count": 0,
-                    "unmatched_skus": 0,
-                    **empty_candidate_graph_diagnostics(),
-                    "tp": 0,
-                    "tn": 0,
-                    "fp": 0,
-                    "fn": 0,
-                    "pair_count": 0,
-                }
-            )
-            rows.append(row)
+            rows.append(_empty_gtin_metric_row(fold, threshold, status))
             continue
         rows.append(
             {
@@ -2957,6 +2987,56 @@ def _alternative_thresholds(
     }
 
 
+def _sensitivity_sweep_thresholds(
+    thresholds: np.ndarray,
+    alternatives: dict[str, dict[str, float | str]],
+) -> np.ndarray:
+    """Grid plus every reachable alternative threshold, unioned uniquely."""
+    return np.unique(
+        np.concatenate(
+            [
+                np.asarray(thresholds, dtype=float),
+                np.array(
+                    [
+                        float(info["threshold"])
+                        for info in alternatives.values()
+                        if not np.isnan(float(info["threshold"]))
+                    ],
+                    dtype=float,
+                ),
+            ]
+        )
+    )
+
+
+def _empty_sensitivity_row(
+    fold: object,
+    method: str,
+    reason: str,
+) -> dict[str, float | int | str]:
+    """The zeroed row for an unreachable alternative threshold (verbatim)."""
+    row = {key: np.nan for key in METRIC_COLUMNS}
+    row.update(
+        {
+            "check_fold": fold,
+            "threshold": float("nan"),
+            "gtin_status": "ALL",
+            "selection_method": method,
+            "sensitivity_reason": reason,
+            "n": 0,
+            "predicted_group_count": 0,
+            "true_group_count": 0,
+            "unmatched_skus": 0,
+            "tp": 0,
+            "tn": 0,
+            "fp": 0,
+            "fn": 0,
+            "pair_count": 0,
+        }
+    )
+    return row
+
+
 def _fold_sensitivity(
     check_candidates: pd.DataFrame,
     check_truth: pd.DataFrame,
@@ -2966,47 +3046,14 @@ def _fold_sensitivity(
 ) -> list[dict[str, float | int | str]]:
     sweep = _sweep_assignments(
         check_candidates,
-        np.unique(
-            np.concatenate(
-                [
-                    np.asarray(thresholds, dtype=float),
-                    np.array(
-                        [
-                            float(info["threshold"])
-                            for info in alternatives.values()
-                            if not np.isnan(float(info["threshold"]))
-                        ],
-                        dtype=float,
-                    ),
-                ]
-            )
-        ),
+        _sensitivity_sweep_thresholds(thresholds, alternatives),
     )
     rows: list[dict[str, float | int | str]] = []
     for method, info in alternatives.items():
         threshold = float(info["threshold"])
         reason = str(info["reason"])
         if np.isnan(threshold):
-            row = {key: np.nan for key in METRIC_COLUMNS}
-            row.update(
-                {
-                    "check_fold": fold,
-                    "threshold": float("nan"),
-                    "gtin_status": "ALL",
-                    "selection_method": method,
-                    "sensitivity_reason": reason,
-                    "n": 0,
-                    "predicted_group_count": 0,
-                    "true_group_count": 0,
-                    "unmatched_skus": 0,
-                    "tp": 0,
-                    "tn": 0,
-                    "fp": 0,
-                    "fn": 0,
-                    "pair_count": 0,
-                }
-            )
-            rows.append(row)
+            rows.append(_empty_sensitivity_row(fold, method, reason))
             continue
         prediction = sweep[float(threshold)]
         row_data: dict[str, float | int | str] = {
@@ -3978,6 +4025,40 @@ def parse_args() -> argparse.Namespace:
 
 
 @timed
+def _run_output_plan(cfg: dict) -> tuple[Path, np.ndarray]:
+    """The resolved output directory and the configured threshold grid."""
+    output_dir = Path(cfg["output_dir"])
+    if not output_dir.is_absolute():
+        output_dir = TRAIN_ROOT / output_dir
+    output_dir = output_dir.resolve()
+    thresholds = _threshold_grid(
+        float(cfg["threshold_min"]),
+        float(cfg["threshold_max"]),
+        float(cfg["threshold_step"]),
+    )
+    return output_dir, thresholds
+
+
+def _require_run_inputs(
+    checkpoint: Path,
+    calibration_input: Path,
+    holdout_input: Path,
+) -> None:
+    """The three loud raise-sites for missing run inputs (verbatim)."""
+    if not checkpoint.is_dir():
+        raise FileNotFoundError(
+            f"FINETUNED_CHECKPOINT must point to a checkpoint directory: {checkpoint}"
+        )
+    if not calibration_input.is_file():
+        raise FileNotFoundError(
+            f"CALIBRATION_INPUT must point to a calibration CSV: {calibration_input}"
+        )
+    if not holdout_input.is_file():
+        raise FileNotFoundError(
+            f"HOLDOUT_INPUT must point to a frozen holdout CSV: {holdout_input}"
+        )
+
+
 def main() -> None:
     RunLogger.configure_console()
     args = parse_args()
@@ -3992,28 +4073,9 @@ def main() -> None:
     )
 
     cfg = rand_matching_cfg()
-    output_dir = Path(cfg["output_dir"])
-    if not output_dir.is_absolute():
-        output_dir = TRAIN_ROOT / output_dir
-    output_dir = output_dir.resolve()
-    thresholds = _threshold_grid(
-        float(cfg["threshold_min"]),
-        float(cfg["threshold_max"]),
-        float(cfg["threshold_step"]),
-    )
+    output_dir, thresholds = _run_output_plan(cfg)
 
-    if not checkpoint.is_dir():
-        raise FileNotFoundError(
-            f"FINETUNED_CHECKPOINT must point to a checkpoint directory: {checkpoint}"
-        )
-    if not calibration_input.is_file():
-        raise FileNotFoundError(
-            f"CALIBRATION_INPUT must point to a calibration CSV: {calibration_input}"
-        )
-    if not holdout_input.is_file():
-        raise FileNotFoundError(
-            f"HOLDOUT_INPUT must point to a frozen holdout CSV: {holdout_input}"
-        )
+    _require_run_inputs(checkpoint, calibration_input, holdout_input)
     ann_cfg = load_ann_config()
     matcher = RandMatcher(
         checkpoint,
