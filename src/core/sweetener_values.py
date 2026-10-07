@@ -27,6 +27,28 @@ SWEETENING_PATTERNS = {
     "sweetened": re.compile(r"\b(?:lightly\s+)?sweetened\b", re.I),
 }
 
+_SUGAR_KIND_RE = re.compile(r"\b(?:cane|brown|raw) sugar\b")
+_CANE_SUGAR_RE = re.compile(r"\bcane sugar\b")
+_WITH_STEVIA_RE = re.compile(r"\bwith stevia\b(?!\s+free\b)")
+_DECLARED_ITEM_SPLIT = re.compile(r"[,/&]")
+# Hoisted module-level dispatch (see core.critical_attributes): each of these
+# ran on every non-empty text, through re's pattern cache.
+_INGREDIENT_ALTERNATION = "|".join(
+    re.escape(value) for value in sorted(SWEETENER_TYPES, key=len, reverse=True)
+)
+# "Sweetened with X" / "made with X" / "<drink> with X", where X is a declared
+# sweetener and X is not part of an "X free" claim.
+_DECLARED_SWEETENER_PHRASE_RE = re.compile(
+    r"\b(?:sweetened with|made with|(?:drink|soda|beverage|cola|juice|tea|coffee)\s+with)\s+("
+    + _INGREDIENT_ALTERNATION + r")\b(?!\s+free\b)"
+)
+_FREE_INGREDIENT_ALTERNATION = "|".join(
+    re.escape(value) for value in sorted(
+        SWEETENER_TYPES - {"sugar", "cane sugar"}, key=len, reverse=True
+    )
+)
+_INGREDIENT_FREE_RE = re.compile(r"\b(" + _FREE_INGREDIENT_ALTERNATION + r")\s+free\b")
+
 
 def extract_sweetening_status(*values: object) -> set[str]:
     """Return narrowly phrased sweetening states, separate from sugar claims."""
@@ -39,16 +61,11 @@ def title_sweetener_types(title: str) -> set[str]:
     text = normalized_attribute_text(title)
     text = _negated_ingredient_pattern().sub(' ', text)
     found: set[str] = set()
-    if re.search(r"\b(?:cane|brown|raw) sugar\b", text):
-        found.add("cane_sugar" if re.search(r"\bcane sugar\b", text) else "sugar")
-    ingredients = "|".join(re.escape(value) for value in sorted(SWEETENER_TYPES, key=len, reverse=True))
-    for match in re.finditer(
-        r"\b(?:sweetened with|made with|(?:drink|soda|beverage|cola|juice|tea|coffee)\s+with)\s+("
-        + ingredients + r")\b(?!\s+free\b)",
-        text,
-    ):
+    if _SUGAR_KIND_RE.search(text):
+        found.add("cane_sugar" if _CANE_SUGAR_RE.search(text) else "sugar")
+    for match in _DECLARED_SWEETENER_PHRASE_RE.finditer(text):
         found.add(match.group(1).replace(" ", "_"))
-    if re.search(r"\bwith stevia\b(?!\s+free\b)", text):
+    if _WITH_STEVIA_RE.search(text):
         found.add("stevia")
     return found
 
@@ -65,12 +82,8 @@ def negated_sweetener_types(*values: object) -> set[str]:
     found = {match.group(1).replace(' ', '_') for match in _negated_ingredient_pattern().finditer(text)}
     # General sugar-free wording belongs to sugar-status claims. Named
     # ingredient-free wording is explicit ingredient absence.
-    ingredients = "|".join(re.escape(value) for value in sorted(
-        SWEETENER_TYPES - {"sugar", "cane sugar"}, key=len, reverse=True
-    ))
-    found.update(match.group(1).replace(" ", "_") for match in re.finditer(
-        r"\b(" + ingredients + r")\s+free\b", text
-    ))
+    found.update(match.group(1).replace(" ", "_")
+                 for match in _INGREDIENT_FREE_RE.finditer(text))
     return found
 
 
@@ -86,7 +99,7 @@ def declared_sweeteners(attributes: str) -> dict[str, set[str]]:
     for item in ATTRIBUTE_ITEM_RE.finditer(str(attributes or "")):
         if normalized_attribute_text(item.group(1)) != "sweetener":
             continue
-        for part in re.split(r"[,/&]", item.group(2)):
+        for part in _DECLARED_ITEM_SPLIT.split(item.group(2)):
             value = normalized_attribute_text(part)
             if value in SWEETENER_TYPES:
                 types.add(value.replace(" ", "_"))
