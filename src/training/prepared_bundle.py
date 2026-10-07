@@ -107,6 +107,7 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+@timed
 def prepared_bundle_drift_strict() -> bool:
     """Read the declared bundle policy; reject malformed environment overrides."""
     raw = os.environ.get("PREPARED_BUNDLE_DRIFT_STRICT")
