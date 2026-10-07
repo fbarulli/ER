@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 from core.common import TRAIN_ROOT, training_cfg
-from core.manifest import atomic_write_json, sha256_file
+from core.manifest import atomic_write_json, atomic_write_text, sha256_file
 from core.runtime_inputs import checkout_members, checkout_inventory, checkout_preflight_script
 from cli.log_capture import progress_frames_to_lines
 from cli.kaggle_lifecycle import KernelLifecycle
