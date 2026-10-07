@@ -28,6 +28,8 @@ from core.common import DATA_PATH, F, data_cfg, load_dataset
 app.title = 'ER discovery'
 from training_reports import router as training_reports_router
 app.include_router(training_reports_router)
+from model_comparison import router as model_comparison_router
+app.include_router(model_comparison_router)
 from jev_reports import router as jev_reports_router
 app.include_router(jev_reports_router)
 from decision_reports import router as decision_reports_router
@@ -53,7 +55,7 @@ def _chrome():
             + a('/', '← home', strong=True)
             + a('/experiments', 'findings') + a('/gate', 'gate')
             + a('/datagen', 'datagen') + a('/graphs', 'graphs')
-            + a('/training', 'training') + a('/runs', 'runs') + a('/jev', 'JEV audits') + a('/decisions', 'attribute tracking') + '</nav>')
+            + a('/training', 'training') + a('/compare', 'model comparison') + a('/runs', 'runs') + a('/jev', 'JEV audits') + a('/decisions', 'attribute tracking') + '</nav>')
 
 _CHROME = _chrome()
 

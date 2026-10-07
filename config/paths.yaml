@@ -263,6 +263,55 @@ layouts:
     owner: training.sample_balanced_pairs
     template: "balanced_pairs_sample_threshold_sweep.csv"
     fields: {}
+  # ── suite run outputs (one downloaded/produced suite run) ──────────────────
+  # The suite output tree, its sealed archive and the per-track ablation report
+  # were addressed by bare "results/model_tracks/<run_tag>" literals in the
+  # dashboard's comparison surface. Declared here so the address has one owner
+  # and the phone book resolves it (no bare leaves outside this file).
+  suite_outputs:
+    root: results
+    owner: model_tracks.run
+    template: "model_tracks/{run_tag}"
+    fields: {run_tag: str}
+  suite_output_archive:
+    root: results
+    owner: model_tracks.run
+    template: "model_tracks/{run_tag}.{fmt}"
+    fields: {run_tag: str, fmt: str}
+  suite_output_input_archive:
+    root: results
+    owner: model_tracks.package
+    template: "model_tracks/{run_tag}__inputs.{fmt}"
+    fields: {run_tag: str, fmt: str}
+  suite_output_training_archive:
+    root: results
+    owner: model_tracks.run
+    template: "model_tracks/{run_tag}.training.{fmt}"
+    fields: {run_tag: str, fmt: str}
+  # The local completion's restored prepared-input tree: the package members
+  # land under this root so nothing rewrites data/ in place.
+  suite_output_local_inputs:
+    root: results
+    owner: model_tracks.local_complete
+    template: "model_tracks/{run_tag}/local_inputs"
+    fields: {run_tag: str}
+  # One track's frozen-checkpoint ablation report inside a suite run.
+  track_ablation_report:
+    root: results
+    owner: model_tracks.post_training_ablation
+    template: "model_tracks/{run_tag}/{track}/ablation/report.json"
+    fields: {run_tag: str, track: str}
+  track_ablation_vectors:
+    root: results
+    owner: model_tracks.staged_ablation
+    template: "model_tracks/{run_tag}/{track}/ablation/vectors.npz"
+    fields: {run_tag: str, track: str}
+  # The dashboard's rendered side-by-side comparison for one run.
+  model_comparison_plot:
+    root: results
+    owner: dashboard.model_comparison
+    template: "model_tracks/{run_tag}/model_comparison/{name}"
+    fields: {run_tag: str, name: str}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 # SSOT for EVERY column name in the project (owner ruling 2026-10-01).
