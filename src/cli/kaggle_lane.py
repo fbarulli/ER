@@ -1092,6 +1092,30 @@ def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
     return plan
 
 
+def fetch_failed_kernel_log(kind: str) -> dict[str, Any]:
+    """Best-effort pull of a failed session's own log file.
+
+    A failed run produces no result archive, so the contract-verified fetch
+    fail-closes — but the CLI still stages the session log (the only durable
+    copy of the tail, and frequently of the traceback the SSE follower lost).
+    Tolerate the contract failure on purpose and keep whatever landed.
+    """
+    spec = _spec()
+    plan: dict[str, Any] = {"kind": kind, "mode": "executed", "error_log": None}
+    try:
+        fetch_kernel_output(kind=kind, execute=True)
+    except (RuntimeError, FileNotFoundError, OSError) as error:
+        plan["fail_closed"] = str(error)[-800:]
+    stage = staging_dir() / f"{kind}_fetch"
+    if stage.is_dir():
+        for candidate in sorted(stage.rglob("*.log")):
+            destination = staging_dir() / spec.logs_dir / candidate.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, destination)
+            plan["error_log"] = str(destination)
+    return plan
+
+
 def supervise_kernels(*, kinds: Sequence[str], execute: bool,
                       poll_seconds: float | None = None,
                       max_polls: int = 4 * 4320) -> dict[str, Any]:
@@ -1102,9 +1126,10 @@ def supervise_kernels(*, kinds: Sequence[str], execute: bool,
     fetch_kernel_output downloads + hash-verifies + installs it (idempotent
     and fail-closed; re-running after an interruption simply completes the
     job). Polling holds neither a session nor a quota. On a non-complete
-    terminal state the fetch is skipped and the failure is recorded; the
-    aggregate returns only when every kind has been handled. Dry-run prints
-    the plan.
+    terminal state the fetch is skipped, the failure — its retained session
+    log — is recorded, and the session itself is released through a stub
+    version replace (stop_kernel); the aggregate returns only when every
+    kind has been handled. Dry-run prints the plan.
     """
     spec = _spec()
     resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
@@ -1155,9 +1180,26 @@ def supervise_kernels(*, kinds: Sequence[str], execute: bool,
                     plan_setdefault[kind] = fetch_kernel_output(
                         kind=kind, execute=True)
                 else:
+                    diagnostic = (fetch_failed_kernel_log(kind)
+                                  if execute else {})
+                    which = {"bundle": "cpu", "train": "gpu",
+                             "embed": "embed"}[kind]
+                    stopped: dict[str, Any] | None = None
+                    if execute:
+                        try:
+                            stopped = stop_kernel(slug=slugs[kind],
+                                                  which=which, execute=True)
+                        except (RuntimeError, OSError) as error:
+                            stopped = {"mode": "executed", "stopped": False,
+                                       "error": str(error)[-800:]}
                     plan.setdefault("failures", {})[kind] = {
                         "status": status["status"], "raw": status.get("raw", ""),
-                        "note": "supervise: non-complete terminal state; fetch skipped"}
+                        **({"error_log": diagnostic["error_log"]}
+                           if diagnostic.get("error_log") else {}),
+                        **({"stop": stopped} if stopped else {}),
+                        "note": ("supervise: non-complete terminal state; "
+                                 "result archive fail-closed, session log "
+                                 "retained, session released via stub replace")}
         if outstanding:
             time.sleep(resolved_poll)
     plan["status_history"] = history
@@ -1238,6 +1280,8 @@ def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any
     from kagglesdk.common.types.file_download import FileDownload
     from kagglesdk.kernels.types.kernels_api_service import (
         ApiGetKernelSessionLogsStreamRequest)
+    from urllib3.exceptions import ProtocolError
+    import requests
 
     spec = _spec()
     owner, slash, kernel = slug.rpartition("/")
@@ -1250,36 +1294,52 @@ def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any
     session_id: int | None = None
     with destination.open("w", encoding="utf-8") as log_handle:
         client = KaggleClient(env=KaggleEnv.PROD)
-        request = ApiGetKernelSessionLogsStreamRequest()
-        request.user_name = owner
-        request.kernel_slug = kernel
-        response = client.kernels.kernels_api_client.get_kernel_session_logs_stream(
-            request)
-        # FileDownload.prepare_from returns the live streamed requests.Response
-        # (text/event-stream, "data: {stream_name,time,data}" SSE frames).
-        plan["stream_url"] = str(getattr(response, "url", "") or "")
-        # Decode UTF-8 explicitly: iter_lines(decode_unicode=True) would use
-        # requests' latin-1 default and mangle the box-drawing progress bars.
-        for raw in response.iter_lines():
-            if not raw:
-                continue
-            line = raw.decode("utf-8", errors="replace") \
-                if isinstance(raw, bytes) else raw
-            if not line:
-                continue
-            log_handle.write(line + "\n")
-            log_handle.flush()
-            line = line[5:].strip() if line.startswith("data:") else line
+        attempts = 0
+        while True:
             try:
-                payload = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                print(f"[stream {kernel}] {line[:200]}", flush=True)
-                continue
-            if not isinstance(payload, dict):
-                print(f"[stream {kernel}] {line[:200]}", flush=True)
-                continue
-            for chunk in (str(payload.get("data", "")).splitlines() or [""]):
-                print(f"[stream {kernel}] {chunk[:200]}", flush=True)
+                request = ApiGetKernelSessionLogsStreamRequest()
+                request.user_name = owner
+                request.kernel_slug = kernel
+                response = client.kernels.kernels_api_client \
+                    .get_kernel_session_logs_stream(request)
+                # FileDownload.prepare_from returns the live streamed requests.Response
+                # (text/event-stream, "data: {stream_name,time,data}" SSE frames).
+                plan["stream_url"] = str(getattr(response, "url", "") or "")
+                # Decode UTF-8 explicitly: iter_lines(decode_unicode=True) would use
+                # requests' latin-1 default and mangle the box-drawing progress bars.
+                for raw in response.iter_lines():
+                    if not raw:
+                        continue
+                    line = raw.decode("utf-8", errors="replace") \
+                        if isinstance(raw, bytes) else raw
+                    if not line:
+                        continue
+                    log_handle.write(line + "\n")
+                    log_handle.flush()
+                    line = line[5:].strip() if line.startswith("data:") else line
+                    try:
+                        payload = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        print(f"[stream {kernel}] {line[:200]}", flush=True)
+                        continue
+                    if not isinstance(payload, dict):
+                        print(f"[stream {kernel}] {line[:200]}", flush=True)
+                        continue
+                    for chunk in (str(payload.get("data", "")).splitlines() or [""]):
+                        print(f"[stream {kernel}] {chunk[:200]}", flush=True)
+                break
+            except (ProtocolError, requests.exceptions.RequestException) as error:
+                # The midtier SSE proxy drops live connections mid-run; a
+                # replayed stream re-attaches at the session's FIRST line, so
+                # each attempt truncates instead of appending duplicates.
+                attempts += 1
+                if attempts > 5:
+                    raise
+                _log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
+                          f"{type(error).__name__}: {str(error)[:200]}")
+                log_handle.seek(0)
+                log_handle.truncate()
+                time.sleep(5.0 * attempts)
     plan["session_id"] = session_id
     return plan
 

@@ -474,3 +474,106 @@ def test_kernel_status_fail_loud_without_slug(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     with pytest.raises(RuntimeError, match="gpu_kernel_slug is unset"):
         kaggle_lane.kernel_status(which="gpu")
+
+
+def test_fetch_failed_kernel_log_keeps_session_log_despite_contract_fail(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        (stage / "er-train-gpu.log").write_text(
+            "Traceback (most recent call last):")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    plan = kaggle_lane.fetch_failed_kernel_log("train")
+    assert plan["error_log"] is not None
+    kept = Path(plan["error_log"])
+    assert kept.read_text().startswith("Traceback")
+    assert kept.name == "er-train-gpu.log"
+    assert kept.parent == tmp_path / "kaggle_stage" / "logs"
+
+
+def test_supervise_records_kernel_log_on_error(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "error",
+                                          "raw": "KernelWorkerStatus.ERROR"})
+    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
+                        lambda *a, **kw: {"kernel": "owner/er-train-gpu"})
+    monkeypatch.setattr(
+        kaggle_lane, "fetch_failed_kernel_log",
+        lambda kind: {"kind": kind, "mode": "executed",
+                      "error_log": "/tmp/opc/diag.log"})
+    plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
+    failure = plan["failures"]["train"]
+    assert failure["status"] == "error"
+    assert failure["error_log"] == "/tmp/opc/diag.log"
+
+
+def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "error",
+                                          "raw": "KernelWorkerStatus.ERROR"})
+    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
+                        lambda *a, **kw: None)
+    monkeypatch.setattr(kaggle_lane, "fetch_failed_kernel_log",
+                        lambda kind: {"kind": kind, "mode": "executed",
+                                      "error_log": None})
+    pushes = []
+
+    def fake_run(command, **kwargs):
+        pushes.append(list(command))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
+    assert plan["failures"]["train"]["stop"]["stopped"] is True
+    assert any("kernels" in parts and "push" in parts and "-p" in parts
+               for parts in pushes), "session release must replace the version"
+
+
+def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeypatch):
+    import types
+    import requests
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    frames = [
+        'data: {"stream_name":"stdout","time":1,"data":"+ git clone\\n"}',
+        'data: {"stream_name":"stderr","time":2,"data":"[timing] mark 1s\\n"}',
+        'data: {"stream_name":"stdout","time":3,"data":"phase complete\\n"}',
+    ]
+    pulls = []
+
+    class Stream:
+        state = {"dropped": False}
+
+        def iter_lines(self):
+            pulls.append(1)
+            yield frames[0]
+            yield frames[1]
+            if not self.state["dropped"]:
+                self.state["dropped"] = True
+                raise requests.exceptions.ChunkedEncodingError(
+                    "Response ended prematurely")
+            yield frames[2]
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    destination = tmp_path / "kaggle_stage" / "logs" / "er-train-gpu.stream.log"
+    content = destination.read_text().splitlines()
+    assert content == frames, "replayed session must deduplicate, never append"
+    assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
+

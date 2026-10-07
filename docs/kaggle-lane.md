@@ -1,6 +1,8 @@
 # Kaggle lane
 
-Transport + remote-compute lane. The Colab lane is untouched.
+Transport + remote-compute lane. The Colab lanes are consolidated per
+[colab-lane.md](colab-lane.md); this lane (like the owner ruling 8
+precedent) never imports the colab packages.
 Contract + evidence: [kaggle-lane-completion.md](kaggle-lane-completion.md).
 
 ## Ruling (2026-10-06)

@@ -2795,6 +2795,10 @@ class KaggleSpec(BaseModel):
     # Dataset ("owner/slug") carrying the embedding request payload
     # (request.json + prepared_text.npz) the embed kernel attaches.
     embedding_dataset_slug: str | None = None
+    # Dataset ("owner/slug") carrying the verified CPU bundle the train
+    # kernel attaches (kernel-output mounts go stale on stop-stub versions;
+    # a dataset is immutable at fetch time). Cohort implied by the bundle.
+    bundle_dataset_slug: str | None = None
     checkout_paths: tuple[str, ...] = (
         "src", "scripts", "config", "requirements", "artifacts/models",
     )
@@ -4486,3 +4490,22 @@ class StageManifest(BaseModel):
     row_accounting: dict[str, Any]
     environment: dict[str, str]  # git_sha, config_sha256, seed, host
     expected_outputs: list[str]
+
+
+class ColabBundlePlan(BaseModel):
+    """Dry-run plan receipt for the consolidated Colab CPU bundle lane.
+
+    Additive (kaggle-lane convention): `ColabCPULane.plan` prints this
+    receipt without provisioning a VM; no executed path consumes it yet.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    mode: str
+    session: str
+    export: str
+    cohort: str
+    archive: str
+    resume_from: str | None = None
+    resume_run_id: str | None = None

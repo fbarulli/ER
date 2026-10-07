@@ -227,6 +227,8 @@ kaggle:
   # with the embedding request csv) before the embed kernel can push.
   embedding_kernel_slug: "fbarulli/er-embed-gpu"
   embedding_dataset_slug: "fbarulli/er-embed-requests"
+  # Dataset the train kernel attaches (fresh bundle versions upload here).
+  bundle_dataset_slug: "fbarulli/er-10k-bundle"
   checkout_paths: ["src", "scripts", "config", "requirements", "artifacts/models"]
   bundle_requirements: "requirements/graph_tracks.txt"
   # Suite config the train kernel runs (members of the prepared package

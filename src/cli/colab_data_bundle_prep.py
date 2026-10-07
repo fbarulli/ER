@@ -1,42 +1,34 @@
 """CPU data-bundle prep lane (owner structural ruling 8).
 
-Data-bundle production lives in its own lane file, exactly like the existing
-standalone bundle lane (src/cli/colab_bundle.py): src/cli/colab.py is the
-shared colab surface and gains only config-gated thin passthroughs.
-
-This module owns the CPU-prep parity capabilities:
+Data-bundle production is the prep half of the consolidated Colab lane
+(src/cli/colab_lane.py), exactly like the committed-export bundle lane
+(src/cli/colab_bundle.py): cli.colab — the GPU lane — keeps only
+config-gated thin passthroughs and the legacy ``--what bundle`` upload
+lifecycle is never edited (owner ruling 910ee17).  The pinned capabilities:
 
 * launch capability  — the high-RAM machine shape (`colab new --high-mem`)
   for a FRESH CPU allocation, config-owned (colab.high_mem); an
   owner-launched named session is re-verified by the shared primitive
   (cli.colab.ensure_session) and never reallocated; a GPU accelerator is
   never reshaped by this lane.
-* streaming          — the prep cell streams through cli.colab's proven
-  transport with EVERY chunk forwarded to BOTH transcripts (root system
-  log + training.log), the 1e18b36 [worker]-forwarding contract applied to
-  this lane's own subprocess; [done] only on clean completion, [failed]
+* streaming          — EVERY prep chunk reaches BOTH transcripts (root
+  system log + training.log); [done] only on clean completion, [failed]
   otherwise (fail-loud, never retried).
 * tqdm passthrough   — strict fd inheritance in the emitted prepare script
-  (cli.colab.run_bundle, final 902689e state); this lane never captures
-  stderr, so tqdm bars stream live through run_colab_exec_stream's \r
-  handling. tqdm itself lives in the preparation code; nothing here
-  duplicates progress rendering.
+  (902689e final state); this lane never captures stderr. tqdm itself lives
+  in the preparation code; nothing here duplicates progress rendering.
 * cohort tagging     — every lane start prints the cohort tag (50pct/full)
-  plus the export's sha256 prefix, so the two owner sessions (50% cohort VM
-  and full cohort VM) are identifiable in one transcript.
+  plus the export's sha256 prefix.
 * 2-parallel cap     — exactly TWO owner-launched high-RAM CPU prep VMs may
   exist (50pct + full cohorts); the lane never launches, retries, or
   replaces a VM and prints the cap at start.
 
-ISOLATION (owner ruling extension): this file imports ONLY cli.colab's
-committed data-bundle production machinery (run_bundle, the proven exec
-transport, upload/retries, delivery/download, event registry — the
-colab_bundle.py copy-assembly precedent) plus core.common config-path
-primitives; it NEVER imports or modifies GPU-training runtime modules
-(training.train, training.train_prepared, model_tracks.*, worker paths).
-training.prepare_all runs as a REMOTE subprocess on the prep VM's own
-checkout, never in this lane's Python process. Its config is the isolated
-cpu_bundle_prep: block, never a reshaping of the shared colab: section.
+ISOLATION: this facade routes through cli.colab_lane's ColabCPULane, which
+imports ONLY cli.colab's committed data-bundle production machinery plus
+core.common config-path primitives; it never imports GPU-training runtime
+modules (training.train, training.train_prepared, model_tracks.*, worker
+paths). training.prepare_all runs as a REMOTE subprocess on the prep VM's
+own checkout. Its config is the isolated cpu_bundle_prep: block.
 
 The single production entry point is `main` (python -m
 cli.colab_data_bundle_prep); `run_cpu_bundle_prep` is also the target of
@@ -46,30 +38,35 @@ config/training.yaml colab.cpu_data_bundle_lane is true.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from core.common import DATA_PATH, F, TRAIN_ROOT, training_cfg
+from core.common import F, training_cfg
 
 import cli.colab as colab
+from cli.colab_lane import ColabCPULane, MAX_PARALLEL_PREP_SESSIONS as MAX_PARALLEL_SESSIONS
+
+_LANES: dict[str, ColabCPULane] = {}
 
 
-# Owner cap: exactly two concurrent prep VMs, both owner-launched.
-MAX_PARALLEL_SESSIONS = 2
+def lane() -> ColabCPULane:
+    """The module's CPU prep lane instance (same class the bundle lane uses)."""
+    if "prep" not in _LANES:
+        _LANES["prep"] = ColabCPULane()
+    return _LANES["prep"]
+
+
+_MAX_PARALLEL_SESSIONS = MAX_PARALLEL_SESSIONS
 
 
 def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
     """Shape args for the one fresh CPU allocation a lane may make.
 
-    The CLI accepts `--high-mem` (requires the Colab Pro entitlement; L4/TPU
-    runtimes ignore it).  The request is config-owned in the lane's ISOLATED
-    block (config/training.yaml cpu_bundle_prep.high_mem; never the shared
-    colab: section) and applies ONLY to CPU sessions — a GPU accelerator
-    stays governed by its own flags.  When the config does not request it
-    the returned args are empty, so the emitted `colab new` command stays
-    byte-identical to pre-parity behavior.
+    The request is config-owned (training.yaml cpu_bundle_prep.high_mem) and
+    applies ONLY to CPU sessions — a GPU accelerator stays governed by its
+    own flags.  When the config does not request it the emitted `colab new`
+    command stays byte-identical to pre-parity behavior.
     """
     if accelerator or not bool(training_cfg().cpu_bundle_prep.high_mem):
         return ()
@@ -78,8 +75,7 @@ def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
 
 def cohort_label(dataset_csv: Path) -> str:
     """Per-VM cohort tag: `full` for the repo-root export, `50pct` for the
-    50% cohort, else the sanitized stem — printed so the two parallel
-    sessions are identifiable in one transcript."""
+    50% cohort, else the sanitized stem."""
     name = Path(dataset_csv).name
     if name == "dataset.csv":
         return "full"
@@ -89,62 +85,25 @@ def cohort_label(dataset_csv: Path) -> str:
 
 
 def _export_digest(dataset_csv: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(dataset_csv).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return lane().export_digest(dataset_csv)
 
 
 @contextmanager
 def _dual_transcript_streaming():
-    """Forward every streamed chunk to BOTH transcripts for this lane.
-
-    Wraps the shared transport (cli.colab.run_colab_exec_stream) for the
-    duration of one prep run, forcing its existing training_output opt-in —
-    the same forwarding contract the [worker] telemetry uses
-    (1e18b36).  The transport itself is never reimplemented, and when the
-    lane is not entered nothing in cli.colab changes behavior.
-    """
-    original = colab.run_colab_exec_stream
-
-    def dual_transcript(*args, **kwargs):
-        kwargs["training_output"] = True
-        return original(*args, **kwargs)
-
-    colab.run_colab_exec_stream = dual_transcript
-    try:
+    """Forward every streamed chunk to BOTH transcripts for this lane."""
+    with lane().dual_transcript_streaming(colab):
         yield
-    finally:
-        colab.run_colab_exec_stream = original
 
 
 def run_cpu_bundle_prep(dataset_csv: Path | None = None) -> None:
     """One CPU prep run with the parity capabilities layered on top of
     cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle)."""
-    source = Path(dataset_csv) if dataset_csv is not None else Path(DATA_PATH)
-    print(
-        f"[cpu-prep] cohort={cohort_label(source)} dataset={source.name} "
-        f"sha256={_export_digest(source)[:12]} max_parallel_sessions={MAX_PARALLEL_SESSIONS}",
-        flush=True,
-    )
-    with _dual_transcript_streaming():
-        colab.run_bundle(dataset_csv=source)
+    lane().run_cpu_prep(dataset_csv)
 
 
 def _qualify_session_transcripts(session: str) -> None:
-    """Per-session root/training transcript paths for the 2-parallel cap.
-
-    The SSOT maps `colab_system.log`/`training.log` to FIXED repo-root
-    names, so two concurrent prep lanes would truncate each other's
-    records at `start_live_log` time.  The file map is mutated in THIS
-    process only (module state is process-local), so `cli.colab
-    start_live_log` (the untouched shared primitive) resolves the
-    session-qualified names instead: `colab_system_<session>.log` and
-    `training_<session>.log` beside the originals.
-    """
-    F["colab_live_log"] = TRAIN_ROOT / f"colab_system_{session}.log"
-    F["colab_training_log"] = TRAIN_ROOT / f"training_{session}.log"
+    """Per-session root/training transcript paths for the 2-parallel cap."""
+    lane().qualify_session_transcripts(F, session)
 
 
 def main() -> None:
@@ -153,25 +112,20 @@ def main() -> None:
                         help="raw export to prepare (default: config/paths.yaml "
                              "dataset binding, the same default cli.colab uses)")
     args = parser.parse_args()
-    # CPU production lane: the shared surface's accelerator global is set the
-    # same way the standalone bundle lane sets it; the owner launches the
-    # named high-RAM sessions and this lane reuses them by name.
     colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
     session = os.environ.get("EUROMONITOR_COLAB_SESSION", colab.SESSION)
     _qualify_session_transcripts(session)
-    # The shared tee primitive (untouched) installs the dual transcript:
-    # root system log + training.log, both session-qualified, with the
-    # per-lane stdout/stderr traveling to this process's own streams.
     colab.start_live_log()
     try:
-        run_cpu_bundle_prep(args.dataset_csv)
+        run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
+        print("\n[done] cpu prep lane completed and artifacts downloaded locally",
+              flush=True)
     except BaseException:
         print("\n[failed] cpu prep lane did not complete successfully", flush=True)
-        colab.close_live_log()
         raise
-    print("\n[done] cpu prep lane completed and artifacts downloaded locally", flush=True)
-    colab.close_live_log()
+    finally:
+        colab.close_live_log()
 
 
 if __name__ == "__main__":

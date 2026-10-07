@@ -81,6 +81,11 @@ from core.common import (
 )
 from core.manifest import sha256_file
 from core.schemas import ResultBundleManifest, StageManifest
+from cli.colab_lane import (
+    DELIVERY_DATA_MEMBERS,
+    DELIVERY_PREPARED_DIRS,
+    DELIVERY_TRACKED_DIRS,
+)
 
 
 # Smoke and normal training defaults come from the Colab runtime config.
@@ -3825,7 +3830,9 @@ def _bundle_delivery_local(run_id: str) -> Path:
     unaffected: run_retention prunes only track-marker-carrying completed
     runs under TRAINING_RESULTS, and bundle deliveries carry none.
     """
-    return TRAINING_RESULTS / ("colab_bundle_" + run_id)
+    from cli.colab_lane import ColabCPULane
+
+    return ColabCPULane().delivery_root(run_id)
 
 
 def run_bundle(dataset_csv: Path | None = None) -> None:
@@ -3887,16 +3894,14 @@ delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.zst"
 from core.archive_reader import tar_archive
 with tar_archive(delivery, "w") as tar:
     tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
-    for rel in ("data/canonical_records.csv", "data/gate_results.csv",
-                "data/dataset_deduped.csv", "data/labeled_pairs.csv",
-                "data/final_validation.csv", "data/number_tokens_reference.csv"):
+    for rel in {DELIVERY_DATA_MEMBERS!r}:
         if os.path.exists({REMOTE_ROOT!r} + "/" + rel):
             tar.add({REMOTE_ROOT!r} + "/" + rel, arcname=rel)
-    for name in ("track_setup",):
+    for name in {DELIVERY_TRACKED_DIRS!r}:
         member = {REMOTE_ROOT!r} + "/data/" + name
         if os.path.isdir(member):
             tar.add(member, arcname="data/" + name)
-    for name in ("full", "smoke_200"):
+    for name in {DELIVERY_PREPARED_DIRS!r}:
         member = {REMOTE_ROOT!r} + "/data/prepared/" + name
         if os.path.isdir(member):
             tar.add(member, arcname="data/prepared/" + name)
@@ -4624,8 +4629,13 @@ def main() -> None:
                 TRAIN_ROOT / path for path in _COLAB.full_prepared_bundles])
 
     GPU = args.gpu
-    if GPU.upper() != "CPU" and not args.allow_gpu:
-        raise ValueError("GPU launch requires --allow-gpu")
+    # GPU/retention boundary gates (allow-gpu acknowledgement; CPU-only
+    # --keep-alive) have one SSOT: cli.colab_lane.ColabGPULane.
+    from cli.colab_lane import ColabGPULane
+
+    ColabGPULane().enforce_boundary(
+        GPU, allow_gpu=args.allow_gpu, keep_alive=args.keep_alive
+    )
 
     # Two different decisions used to be one, and conflating them stopped every
     # GPU lane from provisioning at all:
@@ -4635,16 +4645,6 @@ def main() -> None:
     #   RETENTION    is whether the VM is still running when the work ends.
     #                That is CPU-only, and a GPU lane never keeps it.
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
-    if args.keep_alive and GPU.upper() != "CPU":
-        # Retention is the operator-facing flag, and it stays refused rather
-        # than downgraded to a warning: a caller who asked to keep a GPU VM
-        # must not be able to mistake a warning for a retained VM, and a
-        # retained GPU VM bills accelerator quota for as long as it lives.
-        raise ValueError(
-            "--keep-alive is CPU-only (a retained GPU VM consumes accelerator "
-            f"quota indefinitely); requested --gpu {GPU}. Use --gpu CPU or drop "
-            "--keep-alive."
-        )
 
     if args.preflight_only:
         if args.what not in {"train", "smoke"}:
