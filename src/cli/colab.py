@@ -97,26 +97,6 @@ from cli.colab_lane import (
     DELIVERY_TRACKED_DIRS,
 )
 from cli.log_capture import logs_root, progress_frames_to_lines
-from cli.colab_runtime import (
-    _BOOTSTRAP,
-    _env_value,
-    _forget_cached_session,
-    _is_keep_alive_daemon,
-    _optuna_env_script,
-    _remote_auth_env_script,
-    _runtime_install_command,
-    _verify_session_handshake,
-    _wandb_env_script,
-    ensure_session,
-    install_deps,
-    keep_alive_daemon_pids,
-    log_gpu_profile,
-    prepare_remote_layout,
-    run_data_prep,
-    stop_keep_alive_daemon,
-    verify_remote_models,
-    verify_training_inputs,
-)  # split phase C
 
 _LOG = RunLogger(__name__)
 
@@ -4531,3 +4511,27 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Session/runtime/environment moved to cli.colab_runtime (split phase C);
+# imported at module end so _timed_colab resolution at decoration time works.
+from cli.colab_runtime import (
+    _BOOTSTRAP,
+    _env_value,
+    _forget_cached_session,
+    _is_keep_alive_daemon,
+    _optuna_env_script,
+    _remote_auth_env_script,
+    _runtime_install_command,
+    _verify_session_handshake,
+    _wandb_env_script,
+    ensure_session,
+    install_deps,
+    keep_alive_daemon_pids,
+    log_gpu_profile,
+    prepare_remote_layout,
+    run_data_prep,
+    stop_keep_alive_daemon,
+    verify_remote_models,
+    verify_training_inputs,
+)  # split phase C
+

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from core.common import TRAIN_ROOT, load_config, resolve_model, training_cfg
+from training.prepare_all_trace import timed
 
 # Byte-equal import-time constant feeding _BOOTSTRAP (config-owned, immutable).
 _REMOTE_ROOT = training_cfg().colab.remote_root
@@ -402,6 +403,7 @@ def _remote_auth_env_script(
             + wandb + (_optuna_env_script() if include_optuna else ""))
 
 @_timed_colab("step")
+@timed
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
 
