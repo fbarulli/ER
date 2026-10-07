@@ -7,6 +7,52 @@ import pytest
 from training import prepare_embeddings as job
 
 
+def _data_parallel_like_stubs():
+    """Fresh stubs: tokenizer + [0].auto_model + config, as _align_model_token_ids reads them."""
+    from types import SimpleNamespace
+
+    class _Inner(list):
+        tokenizer = SimpleNamespace(pad_token_id=0, bos_token_id=1, eos_token_id=2)
+
+    inner = _Inner([SimpleNamespace(
+        auto_model=SimpleNamespace(
+            config=SimpleNamespace(pad_token_id=5, bos_token_id=None, eos_token_id=5),
+            generation_config=SimpleNamespace(pad_token_id=9, bos_token_id=9, eos_token_id=9),
+        )
+    )])
+    wrapped = SimpleNamespace(module=inner)
+    return inner, wrapped
+
+
+def _alignment_state(model):
+    from training.training import _align_model_token_ids
+    _align_model_token_ids(model)
+    auto_model = model[0].auto_model
+    return json.dumps({'config': vars(auto_model.config),
+                       'generation_config': vars(auto_model.generation_config)},
+                      sort_keys=True, default=repr)
+
+
+def test_checkpoint_token_alignment_accepts_data_parallel_wrappers():
+    """GPU v28: on multi-GPU kernels HF wraps the SentenceTransformer in
+    DataParallel, which is not subscriptable and crashed the checkpoint
+    publisher (`'DataParallel' object is not subscriptable`). The duck-typed
+    `.module` unwrap must make alignment succeed on the wrapper and land in
+    exactly the same state as alignment of the bare model."""
+    from training.training import _align_model_token_ids
+
+    bare, wrapped = _data_parallel_like_stubs()
+    _align_model_token_ids(wrapped.module)
+    assert wrapped.module[0].auto_model.config.pad_token_id == 0
+    assert wrapped.module[0].auto_model.config.bos_token_id == 1
+    assert wrapped.module[0].auto_model.config.eos_token_id == 2
+    assert wrapped.module[0].auto_model.generation_config.pad_token_id == 0
+
+    # the unwrapped path must be byte-identical: same end state via the wrapper
+    direct, also_wrapped = _data_parallel_like_stubs()
+    assert _alignment_state(also_wrapped.module) == _alignment_state(direct)
+
+
 def inputs(tmp_path, monkeypatch):
     from core.common import TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
