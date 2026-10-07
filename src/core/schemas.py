@@ -2569,6 +2569,13 @@ class CpuBundlePrepSpec(BaseModel):
     # True = cli.colab's --what bundle dispatch forwards to the lane;
     # False (default) keeps the original direct call, byte-identical.
     lane: bool = False
+    # Committed cohort exports this lane accepts (root-relative, self-describing
+    # filenames). The Colab CPU bundle lane owns this list outright; it no
+    # longer borrows kaggle.export_csvs, so Kaggle config edits cannot change
+    # what Colab bundles.
+    export_csvs: tuple[str, ...] = (
+        "dataset.csv", "dataset_50pct.csv", "dataset_10k.csv",
+    )
 
 
 class ColabSpec(BaseModel):

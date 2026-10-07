@@ -59,8 +59,8 @@ def run_bundle(
     """Prepare on the VM CPU from the cloned cohort export, download the delivery.
 
     The chosen committed export rides the sparse checkout and the remote
-    launcher remaps it onto dataset.csv (the kaggle lane's contract) — this
-    lane uploads no raw export.  With --resume-from/--resume-run-id/
+    launcher remaps it onto dataset.csv — this lane uploads no raw export.
+    With --resume-from/--resume-run-id/
     --resume-state the frozen state tarball is uploaded as
     REMOTE_ROOT/resume_state.tar.zst; the delivery/download flow is unchanged.
     """
@@ -96,8 +96,8 @@ def main() -> None:
     ap.add_argument("--dataset-csv", type=Path, default=TRAIN_ROOT / "dataset.csv",
                     help="committed cohort export the sparse checkout carries and "
                          "the remote launcher remaps onto dataset.csv (default: "
-                         "repo-root dataset.csv; config kaggle.export_csvs entries "
-                         "only — no upload exists on this lane)")
+                         "repo-root dataset.csv; config cpu_bundle_prep.export_csvs "
+                         "entries only — no upload exists on this lane)")
     ap.add_argument("--resume-from", default=None,
                     help="prepare_all --resume-from choice for a frozen run "
                          "(dedupe|validation|full_bundle|suite_inputs; e.g. "
@@ -112,7 +112,7 @@ def main() -> None:
                          "dir itself on the VM")
     ap.add_argument("--preflight-only", action="store_true",
                     help="print the lane plan without contacting Colab "
-                         "(kaggle-lane-style dry run; no default flips)")
+                         "(dry run; no default flips)")
     args = ap.parse_args()
     if args.preflight_only:
         _plan_only(args)

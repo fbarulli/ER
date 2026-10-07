@@ -41,9 +41,9 @@ class ColabCPULaneProvision:
         """The committed config-listed export this lane checks out; fail loud otherwise."""
         chosen = dataset_csv if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
         export = chosen.name
-        if export not in training_cfg().kaggle.export_csvs:
+        if export not in training_cfg().cpu_bundle_prep.export_csvs:
             raise ValueError(
-                "bundle exports must be committed config kaggle.export_csvs "
+                "bundle exports must be committed config cpu_bundle_prep.export_csvs "
                 f"entries (no upload exists on this lane); got {export!r}")
         return export
 
@@ -73,8 +73,7 @@ class ColabCPULaneProvision:
 import json, pathlib, shlex, shutil
 
 # Cohort remap copies the committed export the sparse checkout carries onto
-# dataset.csv — the kaggle lane's proven contract (cli.kaggle_lane). The
-# clone is the only source of bytes this lane consumes.
+# dataset.csv. The clone is the only source of bytes this lane consumes.
 chosen = pathlib.Path(root) / "@COHORT_EXPORT@"
 if not chosen.is_file():
     raise SystemExit("committed cohort export absent from the checkout: @COHORT_EXPORT@")
