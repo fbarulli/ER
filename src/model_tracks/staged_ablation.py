@@ -1,4 +1,16 @@
-"""Two phases: local interventions/tensors, selected-weight binding and GPU forward."""
+"""Two phases: local interventions/tensors, selected-weight binding and GPU forward.
+
+Single-responsibility phases (behaviour pinned, statements split verbatim):
+  - :func:`_freeze_suite`      — settings, cohort gate and frozen template root
+  - :func:`_frozen_support`    — train-population support records and vocabulary
+  - :func:`_track_template`    — one track's tokens/tensors/request emission
+  - :func:`_drop_staging`      — generated content-addressed staging cleanup
+  - :func:`_bind_template`     — the staged setup bound onto a track request
+  - :func:`_check_graph_binding` — selected checkpoint vs frozen support/vocabulary
+  - :func:`_rebind_checkpoint` — selected/baseline checkpoint role resolution
+  - :func:`_bound_folder`      — the bound request and local tensors materialized
+  - :func:`_materialize_vectors` — the ONE device/encode touchpoint of the lane
+"""
 import json
 from pathlib import Path
 import shutil
@@ -8,11 +20,8 @@ from graph_tracks.text_cache import checkpoint_hash
 from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context
 
 
-def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=None):
-    """Fix native tokens and vocabulary/support topology before training exists."""
-    from core.model_input import model_input_composition
-    from core.timing import Timing
-    timing = Timing('model_tracks.ablation_prepare')
+def _freeze_suite(setup,config,bundle):
+    """Resolve ablation settings, gate the cohort and freeze the template root."""
     cfg = settings(config)
     cohort = None
     if cfg.coverage == 'all':
@@ -24,69 +33,108 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     frozen_config = setup/'ablation_settings.yaml'
     write_config = __import__('yaml').safe_dump(cfg.model_dump())
     frozen_config.write_text(write_config)
+    return cfg,cohort
+
+
+def _frozen_support(setup):
+    """The training-population support records and prepared vocabulary."""
     records = load_records(setup/'prepared/listings.json')
     from graph_tracks.prepared_inputs import load_plan
     graph_plan,graph_arrays = load_plan(setup/'prepared/listings.json',setup/'prepared/pairs.csv')
     graph_arrays.close()
     support = [records[n] for n in graph_plan['populations']['train']]
     vocabulary = graph_plan['vocabulary']
-    timing.mark('load_support_and_vocabulary')
-    for track in ('text','gnn_only','hybrid'):
-        checkpoint = baseline
-        if track != 'text':
-            checkpoint = setup/(track+'__ablation_template.pt')
-            payload = {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
-                'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
-                'vocabulary':vocabulary,'support_records':support}
-            torch.save(payload,checkpoint)
-        path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
-            cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
-            listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
-            text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
-            composer=composer,token_cache=token_cache)
-        request = json.loads(path.read_text())
-        if track == 'text':
-            common_cohort = (request['cohort_sha256'], request['coverage'])
-        elif (request['cohort_sha256'], request['coverage']) != common_cohort:
-            raise ValueError('all models must ablate exactly the same cohort and attributes')
-        request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
-        # Anchor prepared sources to the package setup; checkpoint binding later
-        # introduces a suite-relative selected weight, preserving frozen inputs.
-        def anchor(name):
-            source = resolve(name).resolve()
-            if source.is_relative_to(setup.resolve()):
-                return '@setup/'+source.relative_to(setup).as_posix()
-            return name
-        request['sources'] = {anchor(k):v for k,v in request['sources'].items()}
-        request['checkpoint'] = anchor(request['checkpoint'])
-        request['text_checkpoint'] = anchor(request['text_checkpoint']) if request['text_checkpoint'] else None
-        from model_tracks.package import package_member
-        request['portable_setup'] = package_member('suite_package_shared')
-        target = setup/'ablation_templates'/track
-        target.mkdir(parents=True,exist_ok=True)
-        shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')
-        write(target/'request.json',request)
-        timing.mark(track + '_tokens_tensors_and_request')
+    return support,vocabulary
+
+
+def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None):
+    """One track's template tensors, prepare() request and portable anchors."""
+    from core.model_input import model_input_composition
+    checkpoint = baseline
+    if track != 'text':
+        checkpoint = setup/(track+'__ablation_template.pt')
+        payload = {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
+            'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
+            'vocabulary':vocabulary,'support_records':support}
+        torch.save(payload,checkpoint)
+    path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
+        cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
+        listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
+        text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
+        composer=composer,token_cache=token_cache)
+    request = json.loads(path.read_text())
+    if track == 'text':
+        common_cohort = (request['cohort_sha256'], request['coverage'])
+    elif (request['cohort_sha256'], request['coverage']) != common_cohort:
+        raise ValueError('all models must ablate exactly the same cohort and attributes')
+    request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
+    # Anchor prepared sources to the package setup; checkpoint binding later
+    # introduces a suite-relative selected weight, preserving frozen inputs.
+    def anchor(name):
+        source = resolve(name).resolve()
+        if source.is_relative_to(setup.resolve()):
+            return '@setup/'+source.relative_to(setup).as_posix()
+        return name
+    request['sources'] = {anchor(k):v for k,v in request['sources'].items()}
+    request['checkpoint'] = anchor(request['checkpoint'])
+    request['text_checkpoint'] = anchor(request['text_checkpoint']) if request['text_checkpoint'] else None
+    from model_tracks.package import package_member
+    request['portable_setup'] = package_member('suite_package_shared')
+    target = setup/'ablation_templates'/track
+    target.mkdir(parents=True,exist_ok=True)
+    shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')
+    write(target/'request.json',request)
+    timing.mark(track + '_tokens_tensors_and_request')
+    return common_cohort
+
+
+def _drop_staging(setup):
+    """Remove generated content-addressed staging dirs; fixed templates stay."""
     # Generated content-addressed staging directories are temporary; retain one
     # fixed template per track and avoid shipping duplicate tensors.
     for path in (setup/'ablation_templates').iterdir():
         if path.is_dir() and path.name not in {'text','gnn_only','hybrid'}:
             shutil.rmtree(path)
+
+
+def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=None):
+    """Fix native tokens and vocabulary/support topology before training exists."""
+    from core.timing import Timing
+    timing = Timing('model_tracks.ablation_prepare')
+    cfg,cohort = _freeze_suite(setup,config,bundle)
+    support,vocabulary = _frozen_support(setup)
+    timing.mark('load_support_and_vocabulary')
+    common_cohort = None
+    for track in ('text','gnn_only','hybrid'):
+        common_cohort = _track_template(setup,baseline,track,cohort=cohort,
+            frozen_config=setup/'ablation_settings.yaml',vocabulary=vocabulary,
+            support=support,common_cohort=common_cohort,timing=timing,
+            composer=composer,token_cache=token_cache)
+    _drop_staging(setup)
     timing.mark('cleanup_staging')
     return setup/'ablation_templates'
 
 
-def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None,graph_encoder=None):
+def _bind_template(setup,track):
+    """The track's frozen template request, bound to the staged setup root."""
     from core.common import TRAIN_ROOT
     template = setup/'ablation_templates'/track
     request = json.loads((template/'request.json').read_text())
     # Bind the actual staged setup for both direct suites and portable workers.
     request['portable_setup'] = setup.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
-    if track != 'text':
-        payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
-        actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})
-        if actual != request['graph_binding'] or payload['manifest']['track'] != track:
-            raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
+    return template,request
+
+
+def _check_graph_binding(checkpoint,track,request):
+    """Reject a selected graph checkpoint that differs from frozen support."""
+    payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
+    actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})
+    if actual != request['graph_binding'] or payload['manifest']['track'] != track:
+        raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
+
+
+def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
+    """Resolve the selected/baseline checkpoint role onto the request."""
     if checkpoint_role not in {'selected','baseline'}:
         raise ValueError('unknown ablation checkpoint role')
     old_checkpoint = request['checkpoint']
@@ -99,10 +147,19 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
         request['checkpoint'] = selected
         request['sources'][selected] = checkpoint_identity(checkpoint)
     request['checkpoint_role'] = checkpoint_role
+
+
+def _bound_folder(output,template,request):
+    """Materialize the bound request and local tensors into the output folder."""
     folder = output/'ablation';folder.mkdir(parents=True,exist_ok=True)
     shutil.copy2(template/'prepared_inputs.npz',folder/'prepared_inputs.npz')
     path = folder/'request.json'
     write(path,request)
+    return path,folder
+
+
+def _materialize_vectors(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
+    """Reuse validated vectors or encode them (the lane's single device call)."""
     vectors = folder/'vectors.npz'
     if vectors.exists():
         from model_tracks.ablation import validate_vectors
@@ -112,4 +169,14 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
             saved_text = (output/'text__vectors.npz' if track == 'text' else
                           setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
         encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
+
+
+def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None,graph_encoder=None):
+    template,request = _bind_template(setup,track)
+    if track != 'text':
+        _check_graph_binding(checkpoint,track,request)
+    _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role)
+    path,folder = _bound_folder(output,template,request)
+    _materialize_vectors(path,folder,request,output=output,setup=setup,track=track,
+        saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
     return path
