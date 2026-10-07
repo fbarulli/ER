@@ -2997,10 +2997,11 @@ class LayaSpec(BaseModel):
     staging_dir: str = "results/laya_lane"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
-    # Both kaggle dataset slugs ('owner/slug') fail-loud when unset: no
-    # silent default account (kaggle_slug=None sibling precedent).
-    dataset_slug: str | None = None
-    export_dataset_slug: str | None = None
+    # Both kaggle dataset slugs ('owner/slug') are owner-picked
+    # 2026-10-07 (no silent default account; kaggle_slug=None sibling
+    # precedent).
+    dataset_slug: str | None = "fbarulli/er-laya-requests"
+    export_dataset_slug: str | None = "fbarulli/er-laya-decisions"
     run_tag_prefix: str = "laya_"
     # SINGLE T4 per owner ruling; the meta never requests 2xT4.
     gpu: Literal["T4"] = "T4"
