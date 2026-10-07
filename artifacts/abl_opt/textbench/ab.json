@@ -1,43 +1,123 @@
 {
-  "a": "/tmp/opc/reg2-A-r17/src",
+  "a": "/tmp/opc/reg2-A-r18/src",
   "b": "/tmp/opc/ER-reg2-A/src",
   "best_a": {
-    "attribute_fields": 0.004426,
-    "identity": 0.178818,
-    "norm_attr_keys": 0.004262,
-    "pack_counts": 0.009593,
-    "volume_adapter": 0.054413,
-    "volume_evidence": 0.047489,
-    "volume_match": 0.048058
+    "identity": 0.178398,
+    "model_input": 1.121713,
+    "norm_attr_keys": 0.004642,
+    "sku_text": 0.030989,
+    "volume_evidence": 0.045683
   },
   "best_b": {
-    "attribute_fields": 0.0042,
-    "identity": 0.178809,
-    "norm_attr_keys": 0.004324,
-    "pack_counts": 0.009575,
-    "volume_adapter": 0.052576,
-    "volume_evidence": 0.04581,
-    "volume_match": 0.046201
+    "identity": 0.179222,
+    "model_input": 1.111221,
+    "norm_attr_keys": 0.004663,
+    "sku_text": 0.026557,
+    "volume_evidence": 0.045697
   },
   "digests_a": [
-    "065c263f8493983ed22716f8fd5e92310a989bb2fcd718df1a683cc0de0126b7"
+    "62162cb9ee72b548d1b5bc662af39fcc000c3ea17a1e4b52ce2bbdf1ced7f909"
   ],
   "digests_b": [
-    "065c263f8493983ed22716f8fd5e92310a989bb2fcd718df1a683cc0de0126b7"
+    "62162cb9ee72b548d1b5bc662af39fcc000c3ea17a1e4b52ce2bbdf1ced7f909"
   ],
-  "reps": 4,
-  "rounds": 4,
+  "loadavg_per_run": [
+    {
+      "after": [
+        3.05,
+        4.25,
+        4.24
+      ],
+      "before": [
+        2.97,
+        4.28,
+        4.25
+      ],
+      "round": 0,
+      "tree": "a"
+    },
+    {
+      "after": [
+        3.05,
+        4.23,
+        4.23
+      ],
+      "before": [
+        3.05,
+        4.25,
+        4.24
+      ],
+      "round": 0,
+      "tree": "b"
+    },
+    {
+      "after": [
+        3.2,
+        4.22,
+        4.23
+      ],
+      "before": [
+        3.05,
+        4.23,
+        4.23
+      ],
+      "round": 1,
+      "tree": "a"
+    },
+    {
+      "after": [
+        3.17,
+        4.18,
+        4.22
+      ],
+      "before": [
+        3.2,
+        4.22,
+        4.23
+      ],
+      "round": 1,
+      "tree": "b"
+    },
+    {
+      "after": [
+        3.15,
+        4.16,
+        4.21
+      ],
+      "before": [
+        3.17,
+        4.18,
+        4.22
+      ],
+      "round": 2,
+      "tree": "a"
+    },
+    {
+      "after": [
+        3.35,
+        4.17,
+        4.21
+      ],
+      "before": [
+        3.15,
+        4.16,
+        4.21
+      ],
+      "round": 2,
+      "tree": "b"
+    }
+  ],
+  "reps": 3,
+  "rounds": 3,
   "tag": "ab",
   "totals_a": [
-    0.34847,
-    0.348322,
-    0.348808,
-    0.347141
+    1.396679,
+    1.384638,
+    1.381879
   ],
   "totals_b": [
-    0.342709,
-    0.341609,
-    0.342958,
-    0.345836
+    1.36971,
+    1.370698,
+    1.36749
   ]
 }

@@ -31,9 +31,11 @@ def run_tree(src: str, reps: int, only: str | None, out: Path) -> dict:
             '--json', str(out)]
     if only:
         argv += ['--only', only]
+    load_before = os.getloadavg()
     subprocess.run(argv, env=env, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return json.loads(out.read_text())
+    return json.loads(out.read_text()) | {'load_before': load_before,
+                                          'load_after': os.getloadavg()}
 
 
 def main() -> int:
@@ -49,6 +51,7 @@ def main() -> int:
     best: dict[str, dict[str, float]] = {'a': {}, 'b': {}}
     digests: dict[str, set] = {'a': set(), 'b': set()}
     totals: dict[str, list] = {'a': [], 'b': []}
+    loads: list = []
     with tempfile.TemporaryDirectory() as tmp:
         for round_no in range(args.rounds):
             for key, src in (('a', args.a), ('b', args.b)):
@@ -56,12 +59,15 @@ def main() -> int:
                                   Path(tmp) / f'{key}{round_no}.json')
                 digests[key].add(result['digest'])
                 totals[key].append(result['total_best'])
+                loads.append({'round': round_no, 'tree': key,
+                              'before': [round(x, 2) for x in result['load_before']],
+                              'after': [round(x, 2) for x in result['load_after']]})
                 for name, stats in result['benches'].items():
                     previous = best[key].get(name)
                     if previous is None or stats['best'] < previous:
                         best[key][name] = stats['best']
-                print(f'  round {round_no} tree {key}: total_best={result["total_best"]:.4f}',
-                      flush=True)
+                print(f'  round {round_no} tree {key}: total_best={result["total_best"]:.4f} '
+                      f'load={loads[-1]["before"]}->{loads[-1]["after"]}', flush=True)
 
     names = [name for name in best['a']]
     print(f'\n{"bench":20s} {"A (baseline)":>13} {"B (optimized)":>13} {"delta":>9}')
@@ -74,12 +80,16 @@ def main() -> int:
         print(f'{name:20s} {a:13.6f} {b:13.6f} {(b - a) / a * 100:8.1f}%')
     print(f'{"TOTAL":20s} {total_a:13.6f} {total_b:13.6f} '
           f'{(total_b - total_a) / total_a * 100:8.1f}%')
+    print('\nload average (1 min) per run:')
+    for item in loads:
+        print(f'  round {item["round"]} tree {item["tree"]}: {item["before"]} -> {item["after"]}')
     print(f'\ndigest A {sorted(digests["a"])}')
     print(f'digest B {sorted(digests["b"])}')
     print(f"IDENTICAL={digests['a'] == digests['b'] and len(digests['a']) == 1}")
     payload = {'tag': args.tag, 'a': args.a, 'b': args.b, 'rounds': args.rounds,
                'reps': args.reps, 'best_a': best['a'], 'best_b': best['b'],
                'totals_a': totals['a'], 'totals_b': totals['b'],
+               'loadavg_per_run': loads,
                'digests_a': sorted(digests['a']), 'digests_b': sorted(digests['b'])}
     (HERE / f'{args.tag}.json').write_text(json.dumps(payload, indent=2, sort_keys=True))
     return 0

@@ -56,6 +56,12 @@ def load_rows() -> list[dict]:
     return frame.to_dict('records')
 
 
+def row_metadata(row: dict, key: str):
+    """The raw column value for a bench row (mirrors core.common's reader)."""
+    value = row.get(key)
+    return None if value is None or value != value else value
+
+
 def _text(row: dict, key: str) -> str:
     value = row.get(key)
     if value is None or (isinstance(value, float) and value != value):
@@ -187,6 +193,24 @@ def build_benches(rows: list[dict]) -> dict:
             out.append(extract_flavor_tokens(titles[index], attrs[index]))
         return out
 
+    # Built ONCE, at bench-construction time (outside every timed region), so
+    # `sku_text` isolates core/model_input.py from structured_features —
+    # `sku_info` is ~35x heavier and owned by another lane.
+    from core.model_input import _RowProxy, build_sku_text, model_input_info
+    from core.structured_features import sku_info as _sku_info
+    prepared = []
+    for index in range(len(rows)):
+        _row = _RowProxy(rows[index])
+        _info = model_input_info(_sku_info(
+            row_metadata(rows[index], 'sku_name_eng'),
+            row_metadata(rows[index], 'attribute'),
+            row_metadata(rows[index], 'description_short_eng')))
+        prepared.append((_row, _info))
+
+    def bench_sku_text():
+        # The per-row encoder text ONLY (core.model_input's own entry point).
+        return [build_sku_text(row, info) for row, info in prepared]
+
     def bench_model_input():
         from core.model_input import build_sku_texts
         from core.structured_features import sku_info
@@ -218,6 +242,7 @@ def build_benches(rows: list[dict]) -> dict:
         'identity': bench_identity,
         'critical_claims': bench_critical_claims,
         'sku_info': bench_sku_info,
+        'sku_text': bench_sku_text,
         'model_input': bench_model_input,
     }
 
