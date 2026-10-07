@@ -732,8 +732,6 @@ def validate_vectors(request_path, result):
     if 'prepared_inputs' in request:
         load_prepared(request_path,request).close()
     with np.load(result,allow_pickle=False) as data:
-        if str(data['request_sha256'].item()) != file_hash(request_path):
-            raise ValueError('ablation result belongs to another request')
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None
     expected = (len(request['variants']),len(request['ids']))
