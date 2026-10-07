@@ -4118,6 +4118,136 @@ def run_within_brand_pipeline(
 # ============================================================================
 # PAIRS
 # ============================================================================
+class SkuTextBuilder:
+    """One payload variant's sku texts + structured info (SSOT loop owner).
+
+    SR phases: variant_frame (full = the deduped frame itself, title_only =
+    descriptor columns blanked through the config column contract), then the
+    documented core.model_input composition (itself the SkuPayloadComposer).
+    """
+
+    def __init__(self, df: pd.DataFrame, payload_variant: str,
+                 *, structured_enabled: bool, timing=None) -> None:
+        self._df = df
+        self._variant = str(payload_variant)
+        self._structured_enabled = structured_enabled
+        self._timing = timing
+
+    def variant_frame(self) -> pd.DataFrame:
+        """The frame whose columns the text lane may consume."""
+        # ── clean sku text per row (variant: full = title+attr, title_only) ──
+        # schema words (type/content/material/...) die on the MODEL side only —
+        # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip).
+        # Both variants go through core.model_input, the shared builder.
+        # The per-row composition loop is the SSOT core.model_input.build_sku_texts
+        # (was inlined here and in predict_items / rand_matching / record_linkage).
+        if self._variant == "full":
+            return self._df
+        if self._variant == "title_only":
+            model_frame = self._df.copy()
+            # The descriptor columns blanked for the title-only variant come from
+            # the config column contract (core.columns.COLUMN_ALIASES carries the
+            # raw-export aliases, e.g. "attr" for "attribute") — not a hand-typed
+            # tuple that drifts from paths.yaml.
+            for column in ("attribute", "description_short_eng",
+                           *COLUMN_ALIASES.get("attribute", ())):
+                if column in model_frame.columns:
+                    model_frame[column] = ""
+            return model_frame
+        raise SystemExit(f"unknown payload variant: {self._variant}")
+
+    def build(self) -> tuple[list[str], list[dict[str, set]]]:
+        from core.model_input import build_sku_texts
+
+        texts, infos = build_sku_texts(
+            self.variant_frame(), structured_enabled=self._structured_enabled
+        )
+        if self._timing is not None:
+            self._timing.mark("sku_texts")
+        return texts, infos
+
+
+class CanonicalPayloadBuilder:
+    """One run's canonical payload population (record map + structured info
+    + model texts), in sorted-gtin order.
+
+    SR phases: read_records (migrate+validate the artifact frame, build the
+    gtin->record map), structured_infos, encode_texts (the documented
+    build_canonical_text per canonical). The bars keep their labels.
+    """
+
+    def __init__(self, *, structured_enabled: bool) -> None:
+        self._structured_enabled = structured_enabled
+
+    def read_records(self) -> tuple[pd.DataFrame, dict[str, dict]]:
+        # MODEL payload: schema-free canonical variant plus normalized structured
+        # volume/pack/package-type tokens. The gate's CSV keeps the original values and schema
+        # labels for decisions; the model receives the stable normalized tokens
+        # explicitly so those attributes are no longer discarded.
+        canonical_records = pd.read_csv(
+            RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
+        )
+        # Same read contract as the other canonical lanes: migrate a stale
+        # artifact (core.schemas.upgrade_canonical_records_frame) and validate it
+        # before building the payload — a malformed file fails here, loudly.
+        canonical_records = upgrade_canonical_records_frame(canonical_records)
+        check_canonical_records_frame(canonical_records)
+        # One row-listing pass replaces per-row Series construction (iterrows
+        # builds a Series + index per row): record_map values keep their
+        # (column -> value) dict shape, unchanged for every reader.
+        record_map = {
+            str(record["gtin"]): record
+            for record in _LOG.progress(
+                canonical_records.to_dict("records"),
+                total=len(canonical_records),
+                unit="record",
+                desc="canon-records",
+            )
+        }
+        return canonical_records, record_map
+
+    def structured_infos(self, canonical_gtins: list[str],
+                         record_map: dict[str, dict]) -> list[dict[str, set]]:
+        from core.model_input import model_input_info
+        from core.structured_features import (
+            canonical_info as canonical_structured_info,
+        )
+
+        empty = {"volume": set(), "pack": set(), "package_type": set()}
+        return [
+            model_input_info(canonical_structured_info(record_map.get(g, {})))
+            if self._structured_enabled
+            else dict(empty)
+            for g in _LOG.progress(
+                canonical_gtins,
+                total=len(canonical_gtins),
+                unit="canon",
+                desc="canon-info",
+            )
+        ]
+
+    def encode_texts(self, canonical_gtins: list[str],
+                     record_map: dict[str, dict],
+                     infos: list[dict[str, set]]) -> list[str]:
+        from core.model_input import build_canonical_text
+
+        return [
+            build_canonical_text(record_map.get(g, {}), info)
+            for g, info in _LOG.progress(
+                zip(canonical_gtins, infos, strict=True),
+                total=len(canonical_gtins),
+                unit="canon",
+                desc="canon-text",
+            )
+        ]
+
+    def build(self, canonical_gtins: list[str]) -> tuple[pd.DataFrame, dict[str, dict], list[dict[str, set]], list[str]]:
+        records, record_map = self.read_records()
+        infos = self.structured_infos(canonical_gtins, record_map)
+        texts = self.encode_texts(canonical_gtins, record_map, infos)
+        return records, record_map, infos, texts
+
+
 class _PairBundleBuilder:
     """Own one stage-2 build: deduped dataset + gate CSVs -> TrainingData.
 
@@ -4260,94 +4390,23 @@ class _PairBundleBuilder:
 
     def materialize_sku_payload(self) -> None:
         """Variant frame -> core.model_input sku texts (+ structured sku info)."""
-        from core.model_input import build_sku_texts
-
-        # ── clean sku text per row (variant: full = title+attr, title_only) ──
-        # schema words (type/content/material/...) die on the MODEL side only —
-        # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip).
-        # Both variants go through core.model_input, the shared builder.
-        # The per-row composition loop is the SSOT core.model_input.build_sku_texts
-        # (was inlined here and in predict_items / rand_matching / record_linkage).
-        if self._payload_variant == "full":
-            model_frame = self.df
-        elif self._payload_variant == "title_only":
-            model_frame = self.df.copy()
-            # The descriptor columns blanked for the title-only variant come from
-            # the config column contract (core.columns.COLUMN_ALIASES carries the
-            # raw-export aliases, e.g. "attr" for "attribute") — not a hand-typed
-            # tuple that drifts from paths.yaml.
-            for column in ("attribute", "description_short_eng",
-                           *COLUMN_ALIASES.get("attribute", ())):
-                if column in model_frame.columns:
-                    model_frame[column] = ""
-        else:
-            raise SystemExit(f"unknown payload variant: {self._payload_variant}")
-        self.sku_texts, self.sku_structured = build_sku_texts(
-            model_frame, structured_enabled=self.structured_enabled
-        )
-        self.timing.mark("sku_texts")
+        self.sku_texts, self.sku_structured = SkuTextBuilder(
+            self.df, self._payload_variant,
+            structured_enabled=self.structured_enabled, timing=self.timing,
+        ).build()
 
     # ── phase: canonical payload ───────────────────────────────────────────
 
     def materialize_canonical_payload(self) -> None:
         """Canonical texts (sorted-gtin order) + budget + structured features."""
-        from core.model_input import (
-            build_canonical_text,
-            model_input_info,
-            token_budget_report,
-        )
-        from core.structured_features import (
-            canonical_info as canonical_structured_info,
-            vector as structured_vector,
-        )
-
         # ── payload: sku rows + canonical entries (in sorted-gtin order) ──
         self.payload = list(self.sku_texts)
         self.row_bc = [str(x) for x in self.bc]
         self.canon_gtins = sorted(self.canon_map)
         canon_start = len(self.payload)
         self.gtin_to_canon_idx = {g: canon_start + i for i, g in enumerate(self.canon_gtins)}
-        # MODEL payload: schema-free canonical variant plus normalized structured
-        # volume/pack/package-type tokens. The gate's CSV keeps the original values and schema
-        # labels for decisions; the model receives the stable normalized tokens
-        # explicitly so those attributes are no longer discarded.
-        self.canonical_records = pd.read_csv(
-            RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
-        )
-        # Same read contract as the other canonical lanes: migrate a stale
-        # artifact (core.schemas.upgrade_canonical_records_frame) and validate it
-        # before building the payload — a malformed file fails here, loudly.
-        self.canonical_records = upgrade_canonical_records_frame(self.canonical_records)
-        check_canonical_records_frame(self.canonical_records)
-        self.canonical_record_map = {
-            str(row["gtin"]): row.to_dict()
-            for _, row in _LOG.progress(
-                self.canonical_records.iterrows(),
-                total=len(self.canonical_records),
-                unit="record",
-                desc="canon-records",
-            )
-        }
-        self.canon_structured = [
-            model_input_info(canonical_structured_info(self.canonical_record_map.get(g, {})))
-            if self.structured_enabled
-            else {"volume": set(), "pack": set(), "package_type": set()}
-            for g in _LOG.progress(
-                self.canon_gtins,
-                total=len(self.canon_gtins),
-                unit="canon",
-                desc="canon-info",
-            )
-        ]
-        self.canon_texts = [
-            build_canonical_text(self.canonical_record_map.get(g, {}), info)
-            for g, info in _LOG.progress(
-                zip(self.canon_gtins, self.canon_structured, strict=True),
-                total=len(self.canon_gtins),
-                unit="canon",
-                desc="canon-text",
-            )
-        ]
+        builder = CanonicalPayloadBuilder(structured_enabled=self.structured_enabled)
+        self.canonical_records, self.canonical_record_map, self.canon_structured,             self.canon_texts = builder.build(self.canon_gtins)
         self.payload.extend(self.canon_texts)
         self.timing.mark("canonical_payload")
 
