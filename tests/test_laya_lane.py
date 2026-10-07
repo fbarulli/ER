@@ -71,11 +71,23 @@ def _dataset_fixture(tmp_path, monkeypatch, *, rows=2):
 REVISION_PIN = "abc123def"
 
 
-def _hermetic_staging(monkeypatch):
+def _hermetic_staging(monkeypatch, *, origin_tip: str = REVISION_PIN):
     """Kernel staging pins the worktree HEAD into the payload constants;
     these pins only need the payload contracts, so the fake closes
-    that door (kaggle test file precedent)."""
+    that door (kaggle test file precedent). The staged-pin guard
+    (runtime_inputs.require_published_tip_match) rides the same fake:
+    `git fetch origin` is rc=0 and `git rev-parse origin/<branch>`
+    prints the origin tip (default: the pin matches REVISION_PIN)."""
     monkeypatch.setattr(laya_lane, "_git_revision", lambda: REVISION_PIN)
+    import subprocess
+
+    def fake_run(args, **kwargs):
+        if "rev-parse" in args:
+            return subprocess.CompletedProcess(args, 0, stdout=origin_tip,
+                                               stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
 
 # ── SSOT/additive contract ─────────────────────────────────────────────────
@@ -292,6 +304,35 @@ def test_stage_decision_kernel_fails_loud_without_dataset_slug(
         laya_lane.stage_decision_kernel(decision_kind="attribute")
 
 
+def test_stage_decision_kernel_refuses_stale_published_tip(
+        tmp_path, monkeypatch):
+    """The staged-race guard: local HEAD must BE the fetched origin
+    tip before any payload writes; the 84ce2d0-vs-02dec14 pin may
+    never stage again."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch, origin_tip="fed321cba9" + "0" * 35)
+    with pytest.raises(RuntimeError, match="origin/kaggle-lane tip"):
+        laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert not (stage / "kernel-metadata.json").exists()
+    assert not (stage / "laya.question.json").exists()
+
+
+def test_stage_kaggle_payload_contract_receipts_published_tip(
+        tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    # the sibling published_tip records the verified origin tip; the
+    # pin itself still names HEAD
+    assert receipt["published_tip"] == REVISION_PIN
+    assert receipt["published_pin"]["revision"] == REVISION_PIN
+
+
 def test_dataset_payload_contract(tmp_path, monkeypatch):
     """The DATASET payload the inputs travel with (BUG 2 fix): metadata
     shape (kaggle-lane payload shape) + the renamed csv + schema copies."""
@@ -424,6 +465,7 @@ def test_stage_identity_csv_header_contract_fails_loud(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     # the identity binding wants the frozen P0 columns; a dataset.csv
     # forged onto the F binding raises the header mismatch
     import core.common as core_common

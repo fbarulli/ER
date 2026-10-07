@@ -322,9 +322,23 @@ def test_credentials_require_configured_username(tmp_path, monkeypatch):
         kaggle_lane.write_credentials(execute=False)
 
 
+def _fake_published_tip(monkeypatch, tip: str):
+    """Offline fake for the staged-pin guard: `git fetch origin` is a
+    no-op rc=0; `git rev-parse origin/<branch>` prints the fake tip."""
+    def fake_run(command, **kwargs):
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, stdout=tip,
+                                               stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
 def test_stage_bundle_kernel_pins_revision_and_metadata(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    _fake_published_tip(monkeypatch, "abc123def")
     receipt = kaggle_lane.stage_bundle_kernel()
     stage = tmp_path / "kaggle_stage" / "bundle_kernel"
     metadata = json.loads((stage / "kernel-metadata.json").read_text())
@@ -339,6 +353,25 @@ def test_stage_bundle_kernel_pins_revision_and_metadata(tmp_path, monkeypatch):
     assert '"src"' in script and "artifacts/models" in script
     assert "all_tracks_inputs.tar.zst" in script
     assert receipt["revision"] == "abc123def" and receipt["gpu"] is False
+    # the published-tip invariant: the receipt records the origin tip the
+    # guard verified against the pin (origin/kaggle-lane == HEAD)
+    assert receipt["published_tip"] == "abc123def"
+
+
+def test_stage_bundle_kernel_refuses_stale_published_tip(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    _fake_published_tip(monkeypatch, "fed321cba9")
+    with pytest.raises(RuntimeError, match="pull or push"):
+        kaggle_lane.stage_bundle_kernel()
+
+
+def test_stage_gpu_kernel_refuses_stale_published_tip(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    _fake_published_tip(monkeypatch, "fed321cba9")
+    with pytest.raises(RuntimeError, match="origin/kaggle-lane"):
+        kaggle_lane.stage_gpu_kernel(kind="train")
 
 
 def test_stage_bundle_kernel_requires_slug(tmp_path, monkeypatch):
@@ -766,6 +799,9 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
 
     def fake_run(command, **kwargs):
         commands.append(list(command))
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123def",
+                                               stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="complete", stderr="")
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
@@ -804,12 +840,28 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
     for step in ("bundle", "train", "embed"):
         assert plan["steps"][step]["stage"]["revision"] == "abc123def"
         assert plan["steps"][step]["fetched_sha256"] == "d" * 64
+    assert plan["published_tip"] == "abc123def"
     train_metadata = json.loads((tmp_path / "kaggle_stage" / "train_kernel"
                                  / "kernel-metadata.json").read_text())
     assert train_metadata["dataset_sources"] == ["owner/er-10k-bundle/12"], \
         "the train stage must attach the fresh published version"
     assert json.loads((tmp_path / "kaggle_stage" / "chain.receipt.json")
                       .read_text())["steps"]["train"]["stage"]["revision"] == "abc123def"
+
+
+def test_chain_refuses_executed_run_on_stale_tip(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch,
+                 gpu_kernel_slug="owner/er-train-gpu",
+                 embedding_kernel_slug="owner/er-embed",
+                 bundle_dataset_slug="owner/er-10k-bundle")
+    _isolate_credentials(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    _fake_published_tip(monkeypatch, "fed321cba9")
+    with pytest.raises(RuntimeError, match="pull or push"):
+        kaggle_lane.run_chain(execute=True)
+    # a refused chain never staged a payload or wrote a receipt
+    assert not list(tmp_path.rglob("kernel-metadata.json"))
 
 
 def _fake_sdk_cancel(monkeypatch, cancels):
