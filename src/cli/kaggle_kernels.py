@@ -97,6 +97,9 @@ class KaggleKernels:
                 "config kaggle.cpu_kernel_slug is unset; name the CPU kernel "
                 "(owner/slug) before staging")
         pinned = revision or lane._git_revision()
+        from core import runtime_inputs
+        tip = runtime_inputs.require_published_tip_match(
+            pinned, spec.repository, spec.branch)
         cohort = cohort or spec.default_cohort
         cohort_dataset = lane.cohort_export_csv(cohort)
         stage = lane.staging_dir() / lane._spec().files.kernel_stage.format(kind="bundle")
@@ -136,6 +139,7 @@ class KaggleKernels:
             "gpu": False,
             "branch": spec.branch,
             "revision": pinned,
+            "published_tip": tip,
             "cohort": cohort,
             "cohort_dataset": cohort_dataset,
             "staged": str(stage),
@@ -207,6 +211,9 @@ class KaggleKernels:
             raise RuntimeError("config kaggle.cpu_kernel_slug is unset; the GPU "
                                "kernel attaches the CPU bundle kernel output")
         pinned = revision or lane._git_revision()
+        from core import runtime_inputs
+        tip = runtime_inputs.require_published_tip_match(
+            pinned, spec.repository, spec.branch)
         tag = run_tag or (spec.run_tag_prefix + time.strftime(spec.limits.run_tag_format, time.gmtime()))
         resolved_checkpoint = checkpoint or spec.checkpoint
         stage = lane.staging_dir() / lane._spec().files.kernel_stage.format(kind=kind)
@@ -274,6 +281,7 @@ class KaggleKernels:
             "gpu": True,
             "branch": spec.branch,
             "revision": pinned,
+            "published_tip": tip,
             "run_tag": tag,
             "bundle_kernel": bundle_slug,
             "bundle_dataset_version": bundle_dataset_version if kind == "train" else None,

@@ -901,6 +901,15 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
             "as that dataset (owner/slug) — the staged play_500.csv + "
             "laya.question.json do NOT ride `kaggle kernels push`; "
             "name it before staging")
+    # ── the published-tip invariant ('origin/<branch> == HEAD'): the pin
+    # resolves BEFORE any payload write; a pin that misses the fetched
+    # branch tip never stages (the 84ce2d0-vs-02dec14 staged-race class).
+    repository = training_cfg().kaggle.repository
+    branch = training_cfg().kaggle.branch
+    revision = revision or _git_revision()
+    from core import runtime_inputs
+    tip = runtime_inputs.require_published_tip_match(
+        revision, repository, branch)
     question = stage_question_schema("kaggle")
     input_receipt = stage_decision_input("kaggle",
                                          decision_kind=decision_kind,
@@ -936,9 +945,6 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
     }
     entry = DECISION_BINDINGS[decision_kind]
     staged_csv = input_receipt["staged"]
-    repository = training_cfg().kaggle.repository
-    branch = training_cfg().kaggle.branch
-    revision = revision or _git_revision()
     values = {
         "LAYA_PACKAGE": spec.laya_package,
         "CHECKPOINT_HUB": spec.checkpoint_hub,
@@ -988,6 +994,7 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "onnx": bool(spec.onnx),
         "published_pin": {"repository": repository, "branch": branch,
                           "revision": revision},
+        "published_tip": tip,
     }
     # the labeled decision csv's metric contract rides the staged receipt
     # (expected rows + label distribution + the gold columns) so the
