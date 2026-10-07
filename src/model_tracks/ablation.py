@@ -29,6 +29,7 @@ from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 _LOG = RunLogger(__name__)
 
 _HASH_MEMO: dict[tuple, str] = {}
+_DIGEST_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False)
 
 
 def file_hash(path):
@@ -147,7 +148,7 @@ def digest(value):
     # cohort_sha256 / content-addressed directory name derived from them — are
     # byte-identical to the previous implementation; only peak memory drops.
     hasher = hashlib.sha256()
-    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
+    for chunk in _DIGEST_ENCODER.iterencode(value):
         hasher.update(chunk.encode())
     return hasher.hexdigest()
 
