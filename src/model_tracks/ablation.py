@@ -757,16 +757,19 @@ def validate_vectors(request_path, result):
 @timed
 def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
     rows = []
+    variants = request['variants']
+    pairs = request['pairs']
+    baseline_variant = variants[0]
     def ranks(vec):
         return retrieval.ranks(vec)
-    for n, variant in enumerate(request['variants'][1:], 1):
+    for n, variant in enumerate(variants[1:], 1):
         if not variant['changed_listings'] and (not np.array_equal(vectors[n],vectors[0]) or not np.array_equal(scores[n],scores[0])):
             raise ValueError('no-op ablation changed model output')
         key = hashlib.sha256(vectors[n].tobytes()).hexdigest()
         if key not in comparison_cache:
             comparison_cache[key] = (ranks(vectors[n]),retrieval.ann_hits(vectors[n]))
         rank,ann_ablated = comparison_cache[key]
-        for p, pair in enumerate(request['pairs']):
+        for p, pair in enumerate(pairs):
             endpoints = [id_lookup[pair[k]] for k in ('sku_id1','sku_id2')]
             # The baseline variant ablates no attribute: carry the pair's
             # full evidence map instead of a meaningless {None: None}
@@ -776,8 +779,8 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
                 evidence = {variant['attribute']:evidence.get(variant['attribute'])}
             rows.append({**pair, 'current_attribute_evidence':evidence,
                 'attribute':variant['attribute'],'channel':variant['channel'],
-                'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != request['variants'][0]['text_indices'][i]) or
-                    (bool(variant.get('records')) and variant['records'][i] != request['variants'][0]['records'][i]) for i in endpoints],
+                'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != baseline_variant['text_indices'][i]) or
+                    (bool(variant.get('records')) and variant['records'][i] != baseline_variant['records'][i]) for i in endpoints],
                 'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[0,p]),
                 'ablated_score':float(scores[n,p]), 'score_delta':float(scores[n,p]-scores[0,p]),
                 'decision_flip':bool((scores[n,p]>=threshold)!=(scores[0,p]>=threshold)),
