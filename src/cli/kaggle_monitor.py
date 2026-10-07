@@ -41,7 +41,7 @@ class KaggleMonitor:
         which = watcher
         log_path = lane.lane_logs_dir() / lane._spec().files.autowatch_log.format(which=which)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("ab") as handle:
+        with log_path.open("wb") as handle:
             handle.write(f"[_spawn_autowatch {time.strftime('%Y-%m-%dT%H:%M:%S')} "
                          f"launching watcher for {which}]\n".encode())
             handle.flush()
