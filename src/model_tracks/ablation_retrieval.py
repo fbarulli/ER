@@ -16,6 +16,12 @@ class RetrievalComparison:
         self.endpoints = [lookup[key] for key in request['ids']]
         query_lookup = {key:n for n,key in enumerate(request['ids'])}
         self.pairs = [(query_lookup[p['sku_id1']],query_lookup[p['sku_id2']]) for p in request['pairs']]
+        self.candidate_order = np.arange(len(vectors))
+        targets = {}
+        for n,(a,b) in enumerate(self.pairs):
+            for side,source,target in ((0,a,b),(1,b,a)):
+                targets.setdefault(source, []).append((n, side, target))
+        self.targets = targets
         self.tmp = tempfile.TemporaryDirectory(dir=request_path.parent)
         from model_tracks.ablation import resolve
         marker = resolve(request['checkpoint']) if request.get('checkpoint') else request_path
@@ -26,12 +32,8 @@ class RetrievalComparison:
     def ranks(self, queries):
         # Only compare queries against candidates; never construct catalog².
         pair_ranks = [[None, None] for _ in self.pairs]
-        targets = {}
-        for n,(a,b) in enumerate(self.pairs):
-            for side,source,target in ((0,a,b),(1,b,a)):
-                targets.setdefault(source, []).append((n, side, target))
-        candidate_order = np.arange(len(self.vectors))
-        for source, requested in targets.items():
+        candidate_order = self.candidate_order
+        for source, requested in self.targets.items():
             scores = queries[source] @ self.vectors.T
             scores[self.endpoints[source]] = -np.inf
             for n, side, target in requested:
