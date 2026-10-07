@@ -9,57 +9,57 @@ deterministic 2000-listing bounded slice. device=cpu forced; encode leg = shared
 
 | leg | phase | A median (s) | B median (s) | delta (A−B, s) | speedup (A/B) |
 | --- | --- | ---: | ---: | ---: | ---: |
-| prepare | freeze_config | 0.0011 | 0.0024 | -0.0013 | 0.46x |
-| prepare | cohort_gate | 0.0000 | 0.0000 | -0.0000 | 0.63x |
-| prepare | support_load | 0.0815 | 0.0764 | +0.0052 | 1.07x |
-| prepare | template_checkpoint | 0.0415 | 0.0406 | +0.0009 | 1.02x |
-| prepare | track_request | 1.5792 | 1.6029 | -0.0237 | 0.99x |
-| prepare | cohort_validate | 0.0000 | 0.0000 | +0.0000 | 1.06x |
-| prepare | request_anchor | 0.0029 | 0.0029 | -0.0000 | 0.99x |
-| prepare | template_folder | 0.0259 | 0.0258 | +0.0001 | 1.01x |
-| prepare | inline_remainder | 0.0717 | 0.0016 | +0.0701 | 45.48x |
-| prepare | cleanup_staging | 0.0008 | 0.0010 | -0.0002 | 0.81x |
-| prepare | prepare_total | 1.8123 | 1.7640 | +0.0483 | 1.03x |
+| prepare | freeze_config | 0.0012 | 0.0032 | -0.0020 | 0.37x |
+| prepare | cohort_gate | 0.0000 | 0.0000 | -0.0000 | 0.72x |
+| prepare | support_load | 0.2220 | 0.1522 | +0.0698 | 1.46x |
+| prepare | template_checkpoint | 0.1858 | 0.1064 | +0.0795 | 1.75x |
+| prepare | track_request | 5.4646 | 3.6042 | +1.8604 | 1.52x |
+| prepare | cohort_validate | 0.0000 | 0.0000 | +0.0000 | 1.10x |
+| prepare | request_anchor | 0.0056 | 0.0051 | +0.0005 | 1.09x |
+| prepare | template_folder | 0.1018 | 0.0577 | +0.0441 | 1.76x |
+| prepare | inline_remainder | 0.2251 | 0.0044 | +0.2207 | 50.95x |
+| prepare | cleanup_staging | 0.0010 | 0.0015 | -0.0005 | 0.66x |
+| prepare | prepare_total | 6.3396 | 4.0388 | +2.3008 | 1.57x |
 | | | | | | |
-| forward | bind_template | 0.0035 | 0.0037 | -0.0002 | 0.95x |
-| forward | graph_binding_check | 0.1047 | 0.0354 | +0.0693 | 2.96x |
-| forward | rebind_checkpoint | 0.0010 | 0.0002 | +0.0008 | 5.35x |
-| forward | bound_folder | 0.0191 | 0.0188 | +0.0004 | 1.02x |
-| forward | reuse_or_encode | 0.0006 | 0.0014 | -0.0007 | 0.47x |
-| forward | encode_vectors | 0.0004 | 0.0005 | -0.0000 | 0.95x |
-| forward | forward_total | 0.2696 | 0.1329 | +0.1367 | 2.03x |
+| forward | bind_template | 0.0066 | 0.0056 | +0.0010 | 1.18x |
+| forward | graph_binding_check | 0.3189 | 0.0910 | +0.2279 | 3.50x |
+| forward | rebind_checkpoint | 0.0010 | 0.0002 | +0.0008 | 5.25x |
+| forward | bound_folder | 0.0563 | 0.0486 | +0.0077 | 1.16x |
+| forward | reuse_or_encode | 0.0007 | 0.0014 | -0.0007 | 0.53x |
+| forward | encode_vectors | 0.0005 | 0.0005 | -0.0000 | 0.93x |
+| forward | forward_total | 0.8460 | 0.3488 | +0.4972 | 2.43x |
 | | | | | | |
-| total | suite (prepare + 3 forwards) | 2.0819 | 1.8968 | +0.1850 | 1.10x |
+| total | suite (prepare + 3 forwards) | 7.1856 | 4.3876 | +2.7980 | 1.64x |
 
-**Verdict (slice_2000): B (candidate) is faster by 9.8% (median of 5 interleaved reps).**
+**Verdict (slice_2000): B (candidate) is faster by 63.8% (median of 5 interleaved reps).**
 
 ## Workload smoke_200
 
 | leg | phase | A median (s) | B median (s) | delta (A−B, s) | speedup (A/B) |
 | --- | --- | ---: | ---: | ---: | ---: |
-| prepare | freeze_config | 0.0011 | 0.0024 | -0.0013 | 0.46x |
-| prepare | cohort_gate | 0.0000 | 0.0000 | -0.0000 | 0.74x |
-| prepare | support_load | 0.0142 | 0.0135 | +0.0007 | 1.05x |
-| prepare | template_checkpoint | 0.0061 | 0.0049 | +0.0012 | 1.24x |
-| prepare | track_request | 1.2158 | 1.2078 | +0.0080 | 1.01x |
-| prepare | cohort_validate | 0.0000 | 0.0000 | +0.0000 | 1.17x |
-| prepare | request_anchor | 0.0028 | 0.0028 | +0.0000 | 1.01x |
-| prepare | template_folder | 0.0244 | 0.0241 | +0.0003 | 1.01x |
-| prepare | inline_remainder | 0.0084 | 0.0015 | +0.0069 | 5.62x |
-| prepare | cleanup_staging | 0.0007 | 0.0008 | -0.0001 | 0.87x |
-| prepare | prepare_total | 1.2779 | 1.2603 | +0.0176 | 1.01x |
+| prepare | freeze_config | 0.0016 | 0.0066 | -0.0050 | 0.24x |
+| prepare | cohort_gate | 0.0000 | 0.0000 | -0.0000 | 0.50x |
+| prepare | support_load | 0.0367 | 0.0476 | -0.0110 | 0.77x |
+| prepare | template_checkpoint | 0.0195 | 0.0184 | +0.0011 | 1.06x |
+| prepare | track_request | 3.7787 | 4.3363 | -0.5576 | 0.87x |
+| prepare | cohort_validate | 0.0000 | 0.0000 | +0.0000 | 1.07x |
+| prepare | request_anchor | 0.0045 | 0.0041 | +0.0004 | 1.10x |
+| prepare | template_folder | 0.0894 | 0.1114 | -0.0220 | 0.80x |
+| prepare | inline_remainder | 0.0246 | 0.0018 | +0.0228 | 13.89x |
+| prepare | cleanup_staging | 0.0008 | 0.0008 | -0.0001 | 0.93x |
+| prepare | prepare_total | 4.0294 | 4.5180 | -0.4886 | 0.89x |
 | | | | | | |
-| forward | bind_template | 0.0034 | 0.0035 | -0.0001 | 0.98x |
-| forward | graph_binding_check | 0.0133 | 0.0058 | +0.0075 | 2.28x |
-| forward | rebind_checkpoint | 0.0005 | 0.0001 | +0.0003 | 3.05x |
-| forward | bound_folder | 0.0183 | 0.0183 | +0.0000 | 1.00x |
-| forward | reuse_or_encode | 0.0007 | 0.0012 | -0.0005 | 0.57x |
-| forward | encode_vectors | 0.0004 | 0.0004 | -0.0000 | 0.93x |
-| forward | forward_total | 0.0846 | 0.0693 | +0.0153 | 1.22x |
+| forward | bind_template | 0.0097 | 0.0040 | +0.0057 | 2.40x |
+| forward | graph_binding_check | 0.0877 | 0.0110 | +0.0768 | 8.00x |
+| forward | rebind_checkpoint | 0.0005 | 0.0002 | +0.0003 | 2.71x |
+| forward | bound_folder | 0.0560 | 0.0533 | +0.0027 | 1.05x |
+| forward | reuse_or_encode | 0.0007 | 0.0015 | -0.0008 | 0.49x |
+| forward | encode_vectors | 0.0005 | 0.0006 | -0.0001 | 0.82x |
+| forward | forward_total | 0.3899 | 0.2391 | +0.1507 | 1.63x |
 | | | | | | |
-| total | suite (prepare + 3 forwards) | 1.3625 | 1.3296 | +0.0329 | 1.02x |
+| total | suite (prepare + 3 forwards) | 4.4193 | 4.7571 | -0.3378 | 0.93x |
 
-**Verdict (smoke_200): B (candidate) is faster by 2.5% (median of 5 interleaved reps).**
+**Verdict (smoke_200): A (incumbent) is faster by 7.6% (median of 5 interleaved reps).**
 
 Notes (delta provenance):
 
