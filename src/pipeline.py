@@ -648,386 +648,535 @@ def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = 
 
     Evidence is drawn from ALL available columns — sku_name_eng, attribute,
     description_short_eng, URL slug, image filename, breadcrumbs_eng, and category —
-    so the gate sees every product-bearing signal before deciding.
+    so the gate sees every product-bearing signal before deciding. The phases
+    run on a ListingCardBuilder; this delegator keeps the documented call.
     """
-    from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types, negated_sweetener_types
-    from core.text import extract_volume_evidence
-    from core.url_evidence import url_text
+    return ListingCardBuilder(
+        sku_name_eng, attribute, description_short_eng,
+        sku_url=sku_url, image_url=image_url,
+        breadcrumbs_eng=breadcrumbs_eng, category=category,
+    ).execute()
 
-    sweeteners = declared_sweeteners(attribute)
-    sweeteners["sweetener_type"].update(title_sweetener_types(sku_name_eng))
-    sweeteners["sweetener_type"].update(title_sweetener_types(description_short_eng))
-    sweeteners["sweetening"].update(extract_sweetening_status(sku_name_eng, attribute, description_short_eng))
-    t = normalize_text(sku_name_eng)
-    # URL tokens: product-bearing prose from the listing slug.
-    # Fed into volume/pack extraction when title/attributes are silent.
-    # url_text is the reader for BOTH URL columns (docstring, url_evidence.py):
-    # image filenames go through the same normalizer — hashes, media dims and
-    # scaffolding fall out; size tokens ("250ml") survive.
-    url_tokens = url_text(sku_url)
-    img_tokens = url_text(image_url)
-    url_norm = normalize_text(url_tokens)
-    img_norm = normalize_text(img_tokens)
-    sweeteners["sweetener_type"].update(title_sweetener_types(url_tokens))
-    sweeteners["sweetener_type"].update(title_sweetener_types(img_tokens))
-    # Category evidence: breadcrumbs_eng and category provide
-    # product-type signals (flavor hints, carbonation clues)
-    # that title/attributes may miss.
-    cat_tokens = normalize_text(breadcrumbs_eng) + " " + normalize_text(category)
-    cat_tokens = cat_tokens.strip()
-    # Critical categorical evidence is parsed once for the canonical, model,
-    # mining, and inference lanes.  Keep the historical scalar flavor as a
-    # deterministic first value for compatibility with existing CSV readers.
-    from core.product_selection import selected_identity_inputs
-    identity_title, identity_attributes, selected_variant = selected_identity_inputs(sku_name_eng, attribute)
-    critical = extract_critical_claims(identity_title, identity_attributes)
-    description_claims = extract_description_claims(description_short_eng)
-    consistency_flags = set(sweeteners["consistency_flags"])
-    negative_ingredients = negated_sweetener_types(sku_name_eng, attribute, description_short_eng, url_tokens, img_tokens)
-    consistency_flags.update(
-        f"sweetener_source_conflict:{ingredient}"
-        for ingredient in negative_ingredients & sweeteners["sweetener_type"]
-    )
-    # Product card evidence ledger: every claim the columns yield, recorded
-    # with its source at the moment of extraction (surface-one-by-one
-    # ruling 2026-10-01). Rides the result dict additively, like
-    # attribute_universe_evidence — schema stays extra="forbid".
-    ledger: list[dict] = []
-    if negative_ingredients:
-        ledger.append({"field": "negated_sweetener_type", "column": "sku_name_eng+attribute+description_short_eng",
-                       "value": sorted(negative_ingredients)})
-    from core.date_evidence import extract_date_evidence
-    date_evidence = [
-        {"column": column, **entry}
-        for column, text in (
-            ("sku_name_eng", sku_name_eng), ("attribute", attribute),
-            ("description_short_eng", description_short_eng), ("breadcrumbs_eng", breadcrumbs_eng),
-            ("category", category),
+
+class ListingCardBuilder:
+    """One listing's extract_all execution, phase by phase.
+
+    Single responsibility per phase; the phases run in ONE fixed order inside
+    execute() so the evidence-ledger append order and the consistency-flag
+    population stay byte-identical to the pre-refactor linear body
+    (the serialized ledger order is part of canonical_records.csv's bytes).
+
+    Phases (order = load-bearing):
+      harvest_consumer_tokens -> url/image/category token lanes
+      harvest_evidence_channels -> critical/description claims, every
+        per-column evidence ledger, cross-source contradiction flags
+      resolve_product_type -> config product-type ladder + category fallback
+      resolve_volume_and_pack -> column precedence chain, corroboration
+        fusion, plausibility bounds
+      assemble_card -> boundary validation (ExtractedAttributes) + additive
+        evidence keys
+    """
+
+    def __init__(self, sku_name_eng, attribute, description_short_eng="",
+                 sku_url="", image_url="", breadcrumbs_eng="", category=""):
+        from core.sweetener_values import declared_sweeteners
+        from core.url_evidence import url_text
+
+        # ── column inputs ──
+        self._sku_name_eng = sku_name_eng
+        self._attribute = attribute
+        self._description_short_eng = description_short_eng
+        self._sku_url = sku_url
+        self._image_url = image_url
+        self._breadcrumbs_eng = breadcrumbs_eng
+        self._category = category
+        self.url_tokens = url_text(sku_url)
+        self.img_tokens = url_text(image_url)
+        # ── shared card state (append order is the byte contract) ──
+        self.ledger: list[dict] = []
+        self.flags: set[str] = set()
+        # ── phase outputs ──
+        self.sweeteners = declared_sweeteners(attribute)
+        self.url_norm = ""
+        self.img_norm = ""
+        self.cat_tokens = ""
+        self.title_norm = ""
+        self.critical = {}
+        self.description_claims = {}
+        self.negative_ingredients: set[str] = set()
+        self.date_evidence = []
+        self.measurement_evidence = []
+        self.pack_evidence = []
+        self.declared_identity = None
+        self.flavor_set: set[str] = set()
+        self.made_from_set: set[str] = set()
+        self.ptype = ""
+        self.subtype = ""
+        # volume + pack resolution chain
+        self.title_vol = {}
+        self.pack_title, self.pack_conf_title = (1, 0.0)
+        self.pack_description, self.pack_conf_description = (1, 0.0)
+        self.attr_vol, self.attr_vol_conf, self.attr_pack, self.attr_pack_conf = (0.0, 0.0, 1, 0.0)
+        self.vol_url: dict = {}
+        self.pack_url, self.pack_conf_url = (1, 0.0)
+        self.vol_img: dict = {}
+        self.pack_img, self.pack_conf_img = (1, 0.0)
+        self.title_vol_ml = 0.0
+        self.volume_ml = 0.0
+        self.volume_conf = 0.0
+        self.volume_raw = ""
+        self.volume_status = ""
+        self.pack_qty = 1
+        self.pack_conf = 0.0
+        self.vol_claims: list[tuple[float, float, str]] = []
+        self.pack_claims: list[tuple[float, float, str]] = []
+        self.universe_evidence: dict[str, frozenset[str]] = {}
+        self.package_types: list[str] = []
+        self.packaging_levels: set[str] = set()
+        self.package_materials: list[str] = []
+
+    # ── phase 1: consumer token lanes ──────────────────────────────────────
+
+    def harvest_consumer_tokens(self) -> None:
+        """Sweetener(title/URL/image) union + normalized URL-side tokens."""
+        from core.sweetener_values import (
+            extract_sweetening_status,
+            title_sweetener_types,
         )
-        for entry in extract_date_evidence(str(text or ""))
-    ]
-    for entry in date_evidence:
-        ledger.append({"field": "source_date", "column": entry["column"], "value": entry})
-    measurement_evidence = [
-        {"column": column, **entry}
-        for column, text in (("sku_name_eng", str(sku_name_eng or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
-        for entry in extract_volume_evidence(text)
-    ]
-    for entry in measurement_evidence:
-        ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
-    pack_evidence = [
-        {"column": column, **entry}
-        for column, text in (("sku_name_eng", str(sku_name_eng or "")), ("description_short_eng", str(description_short_eng or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
-        for entry in extract_pack_evidence(text)
-    ]
-    if any(entry.get("hierarchy_ambiguous") for entry in pack_evidence):
-        consistency_flags.add("pack_hierarchy_ambiguous")
-    for entry in pack_evidence:
-        ledger.append({"field": "pack_quantity", "column": entry["column"], "value": entry})
-    opposing_values = {
-        "carbonation": (("carbonated", "still"),),
-        "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
-        "pulp": (("with_pulp", "no_pulp"),),
-        "organic": (("organic", "not_organic"),),
-    }
-    for dimension in ("carbonation", "sweetener", "pulp", "organic"):
-        base = set(critical[dimension])
-        described = set(description_claims[dimension])
-        if not base:
-            critical[dimension] = frozenset(described)
-        elif described:
-            inconsistent = any(
-                (left in base and right in described) or (right in base and left in described)
-                for left, right in opposing_values[dimension]
+        from core.text import normalize_text
+
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self._sku_name_eng))
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self._description_short_eng))
+        self.sweeteners["sweetening"].update(extract_sweetening_status(
+            self._sku_name_eng, self._attribute, self._description_short_eng
+        ))
+        self.title_norm = normalize_text(self._sku_name_eng)
+        # URL tokens: product-bearing prose from the listing slug.
+        # Fed into volume/pack extraction when title/attributes are silent.
+        # url_text is the reader for BOTH URL columns (docstring, url_evidence.py):
+        # image filenames go through the same normalizer — hashes, media dims and
+        # scaffolding fall out; size tokens ("250ml") survive.
+        self.url_norm = normalize_text(self.url_tokens)
+        self.img_norm = normalize_text(self.img_tokens)
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self.url_tokens))
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self.img_tokens))
+        # Category evidence: breadcrumbs_eng and category provide
+        # product-type signals (flavor hints, carbonation clues)
+        # that title/attributes may miss.
+        cat_tokens = normalize_text(self._breadcrumbs_eng) + " " + normalize_text(self._category)
+        self.cat_tokens = cat_tokens.strip()
+
+    # ── phase 2: evidence channels ─────────────────────────────────────────
+
+    def harvest_evidence_channels(self) -> None:
+        """Critical claims + every per-column ledger entry + contradiction flags.
+
+        The statements here run in exactly the original order: the ledger is
+        serialized later and its order is data, not decoration.
+        """
+        from core.date_evidence import extract_date_evidence
+        from core.product_selection import selected_identity_inputs
+        from core.sweetener_values import negated_sweetener_types
+        from core.text import extract_volume_evidence
+
+        identity_title, identity_attributes, _selected_variant = selected_identity_inputs(
+            self._sku_name_eng, self._attribute)
+        self.critical = extract_critical_claims(identity_title, identity_attributes)
+        self.description_claims = extract_description_claims(self._description_short_eng)
+        self.flags.update(self.sweeteners["consistency_flags"])
+        self.negative_ingredients = negated_sweetener_types(
+            self._sku_name_eng, self._attribute, self._description_short_eng,
+            self.url_tokens, self.img_tokens,
+        )
+        self.flags.update(
+            f"sweetener_source_conflict:{ingredient}"
+            for ingredient in self.negative_ingredients & self.sweeteners["sweetener_type"]
+        )
+        # Product card evidence ledger: every claim the columns yield, recorded
+        # with its source at the moment of extraction (surface-one-by-one
+        # ruling 2026-10-01). Rides the result dict additively, like
+        # attribute_universe_evidence — schema stays extra="forbid".
+        if self.negative_ingredients:
+            self.ledger.append({"field": "negated_sweetener_type", "column": "sku_name_eng+attribute+description_short_eng",
+                                "value": sorted(self.negative_ingredients)})
+        self.date_evidence = [
+            {"column": column, **entry}
+            for column, text in (
+                ("sku_name_eng", self._sku_name_eng), ("attribute", self._attribute),
+                ("description_short_eng", self._description_short_eng), ("breadcrumbs_eng", self._breadcrumbs_eng),
+                ("category", self._category),
             )
-            if inconsistent:
-                consistency_flags.add(f"description_conflict:{dimension}")
+            for entry in extract_date_evidence(str(text or ""))
+        ]
+        for entry in self.date_evidence:
+            self.ledger.append({"field": "source_date", "column": entry["column"], "value": entry})
+        self.measurement_evidence = [
+            {"column": column, **entry}
+            for column, text in (("sku_name_eng", str(self._sku_name_eng or "")), ("sku_url", self.url_tokens), ("image_url", self.img_tokens))
+            for entry in extract_volume_evidence(text)
+        ]
+        for entry in self.measurement_evidence:
+            self.ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
+        self.pack_evidence = [
+            {"column": column, **entry}
+            for column, text in (("sku_name_eng", str(self._sku_name_eng or "")), ("description_short_eng", str(self._description_short_eng or "")), ("sku_url", self.url_tokens), ("image_url", self.img_tokens))
+            for entry in extract_pack_evidence(text)
+        ]
+        if any(entry.get("hierarchy_ambiguous") for entry in self.pack_evidence):
+            self.flags.add("pack_hierarchy_ambiguous")
+        for entry in self.pack_evidence:
+            self.ledger.append({"field": "pack_quantity", "column": entry["column"], "value": entry})
+        self._merge_description_claims()
+        # "Made From" base ingredients, title+attribute aware (the declared field
+        # alone misses a title that names the ingredient, e.g. "ginger-turmeric"
+        # with `Made From: lemon, ginger`). Vocabulary is config-owned.
+        self.made_from_set = set(extract_made_from_tokens(self._sku_name_eng, self._attribute))
+        if self.made_from_set:
+            self.ledger.append({"field": "made_from", "column": "title+attributes",
+                                "value": sorted(self.made_from_set)})
+        # Source contradictions / implausible declarations (measured 2026-10-03):
+        # the extractor is faithful, so these flag SOURCE defects for review.
+        self.flags.update(
+            source_consistency_flags(self._attribute, self._sku_name_eng,
+                                     self.sweeteners["sweetener_type"])
+        )
+        # Categories classify products; they do not declare a SKU's flavor.
+        # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
+        # invented identity agreement between distinct variants.
+        from core.declared_identity import listing_identity
+        self.declared_identity = listing_identity(self._sku_name_eng, self._attribute, self._description_short_eng)
+        if self.declared_identity:
+            self.ledger.append({"field": "declared_identity", "column": "sku_name_eng+attribute+description_short_eng",
+                                "value": self.declared_identity})
+
+    def _merge_description_claims(self) -> None:
+        """Fold description-only claims into the critical sets, contradiction-
+        aware (exact original semantics and flag vocabulary)."""
+        opposing_values = {
+            "carbonation": (("carbonated", "still"),),
+            "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
+            "pulp": (("with_pulp", "no_pulp"),),
+            "organic": (("organic", "not_organic"),),
+        }
+        for dimension in ("carbonation", "sweetener", "pulp", "organic"):
+            base = set(self.critical[dimension])
+            described = set(self.description_claims[dimension])
+            if not base:
+                self.critical[dimension] = frozenset(described)
+            elif described:
+                inconsistent = any(
+                    (left in base and right in described) or (right in base and left in described)
+                    for left, right in opposing_values[dimension]
+                )
+                if inconsistent:
+                    self.flags.add(f"description_conflict:{dimension}")
+                else:
+                    self.critical[dimension] = frozenset(base | described)
+        if {"unsweetened", "sweetened"} <= self.sweeteners["sweetening"]:
+            self.flags.add("sweetening_status_conflict")
+        if "no_added_sugar" in self.critical["sweetener"] and "cane_sugar" in self.sweeteners["sweetener_type"]:
+            self.flags.add("no_added_sugar_with_cane_sugar")
+        self.flavor_set = set(self.critical["flavor"])
+        if self.flavor_set:
+            self.ledger.append({"field": "flavor", "column": "title+attributes",
+                                "value": sorted(self.flavor_set)})
+
+    # ── phase 3: product type ──────────────────────────────────────────────
+
+    def resolve_product_type(self) -> None:
+        """Scalar flavor digest, per-dimension ledgers, then the config
+        product-type ladder on the title with the category fallback."""
+        # Scalar flavor digest (deterministic first value) preserves the
+        # historical CSV contract for the downstream readers.
+        self._flavor_hint = sorted(self.flavor_set)[0] if self.flavor_set else ""
+        for dimension in ("carbonation", "sweetener", "pulp", "organic"):
+            if self.critical[dimension]:
+                self.ledger.append({"field": dimension, "column": "title+attributes",
+                                    "value": sorted(self.critical[dimension])})
+            if self.description_claims[dimension]:
+                self.ledger.append({"field": dimension, "column": "description_short_eng",
+                                    "value": sorted(self.description_claims[dimension])})
+        # Product type + subtype: config SSOT (config/paths.yaml product_types),
+        # read once. Title first, then the category-lane fallback; the subtype
+        # (latte, kombucha, ale...) is the finer axis the differentiation lane
+        # consumes and is recorded per column like every claim.
+        self.ptype, self.subtype = _product_type_matcher().match(self.title_norm)
+        if self.ptype:
+            self.ledger.append({"field": "type", "column": "sku_name_eng", "value": self.ptype})
+        if self.subtype:
+            self.ledger.append({"field": "subtype", "column": "sku_name_eng", "value": self.subtype})
+        # Fallback: category tokens may carry the product type
+        # when the title is too generic (e.g. "Product" with no type word).
+        if not self.ptype and self.cat_tokens:
+            cat_ptype, cat_subtype = _product_type_matcher().match(self.cat_tokens)
+            if cat_ptype:
+                self.ptype = cat_ptype
+                self.subtype = self.subtype or cat_subtype
+                self.ledger.append({"field": "type", "column": "category", "value": cat_ptype})
+                if cat_subtype:
+                    self.ledger.append({"field": "subtype", "column": "category", "value": cat_subtype})
+
+    # ── phase 4: volume + pack resolution ──────────────────────────────────
+
+    def resolve_volume_and_pack(self) -> None:
+        """Column precedence chain, corroboration fusion, plausibility bounds.
+
+        Winner chain: attribute over title unless they disagree by a large
+        factor; URL and image URL lanes follow. Confidence is then fused INDEPENDENTLY
+        of the winner (the card's confidence is a property of the CLAIM —
+        agreeing readers pool upward, disagreeing readers cap at the weakest).
+        """
+        # Volume and pack from title
+        self.title_vol = extract_volume_from_title(self._sku_name_eng)
+        self.pack_title, self.pack_conf_title = extract_pack_from_title(self._sku_name_eng)
+        self.pack_description, self.pack_conf_description = extract_pack_from_title(self._description_short_eng)
+
+        # Attribute parsing
+        self.attr_vol, self.attr_vol_conf, self.attr_pack, self.attr_pack_conf = parse_attribute_volume_pack(
+            self._attribute
+        )
+
+        # URL evidence: product tokens from the listing slug.
+        # Used when title/attributes are silent on volume/pack.
+        self.vol_url = extract_volume_from_title(self.url_norm)
+        self.pack_url, self.pack_conf_url = extract_pack_from_title(self.url_norm)
+        self.vol_img = extract_volume_from_title(self.img_norm)
+        self.pack_img, self.pack_conf_img = extract_pack_from_title(self.img_norm)
+
+        # Combine: prefer attribute if present, but default to title when
+        # the two disagree by 10x+ (title misparses "0, 33l" as 33000ml
+        # vs attribute 330ml — the title is the correct unit here).
+        self.title_vol_ml = float(self.title_vol["volume_ml"] or 0.0)
+        if self.attr_vol > 0:
+            self.ledger.append({"field": "volume_ml", "column": "attribute",
+                                "value": self.attr_vol, "confidence": self.attr_vol_conf})
+        if self.title_vol_ml > 0:
+            self.ledger.append({"field": "volume_ml", "column": "sku_name_eng", "value": self.title_vol_ml,
+                                "confidence": self.title_vol["confidence"]})
+        if self.vol_url["volume_ml"] > 0:
+            self.ledger.append({"field": "volume_ml", "column": "sku_url",
+                                "value": self.vol_url["volume_ml"], "confidence": self.vol_url["confidence"]})
+        if self.vol_img["volume_ml"] > 0:
+            self.ledger.append({"field": "volume_ml", "column": "image_url",
+                                "value": self.vol_img["volume_ml"], "confidence": self.vol_img["confidence"]})
+        if self.attr_pack > 1 or self.attr_pack_conf > 0:
+            self.ledger.append({"field": "pack_qty", "column": "attribute",
+                                "value": self.attr_pack, "confidence": self.attr_pack_conf})
+        if self.pack_title > 1 or self.pack_conf_title > 0:
+            self.ledger.append({"field": "pack_qty", "column": "sku_name_eng",
+                                "value": self.pack_title, "confidence": self.pack_conf_title})
+        if self.pack_conf_description > 0:
+            self.ledger.append({"field": "pack_qty", "column": "description_short_eng",
+                                "value": self.pack_description, "confidence": self.pack_conf_description})
+        if self.pack_url > 1 or self.pack_conf_url > 0:
+            self.ledger.append({"field": "pack_qty", "column": "sku_url",
+                                "value": self.pack_url, "confidence": self.pack_conf_url})
+        if self.pack_img > 1 or self.pack_conf_img > 0:
+            self.ledger.append({"field": "pack_qty", "column": "image_url",
+                                "value": self.pack_img, "confidence": self.pack_conf_img})
+        self._volume_precedence_chain()
+        self._pack_precedence_chain()
+        self._fuse_and_bound()
+
+    def _volume_precedence_chain(self) -> None:
+        """The documented volume winner chain (attr/title/url/img)."""
+        if self.attr_vol > 0 and self.title_vol_ml > 0:
+            ratio = max(self.attr_vol, self.title_vol_ml) / min(self.attr_vol, self.title_vol_ml)
+            if ratio >= data_cfg().extraction.title_attribute_override_ratio:
+                self.volume_ml = self.title_vol_ml
+                self.volume_conf = self.title_vol["confidence"]
+                self.volume_raw = self.title_vol["raw_match"]
+                self.volume_status = self.title_vol["parse_status"]
+                self.flags.add("volume_inconsistency")
             else:
-                critical[dimension] = frozenset(base | described)
-    if {"unsweetened", "sweetened"} <= sweeteners["sweetening"]:
-        consistency_flags.add("sweetening_status_conflict")
-    if "no_added_sugar" in critical["sweetener"] and "cane_sugar" in sweeteners["sweetener_type"]:
-        consistency_flags.add("no_added_sugar_with_cane_sugar")
-    flavor_set = set(critical["flavor"])
-    if flavor_set:
-        ledger.append({"field": "flavor", "column": "title+attributes",
-                       "value": sorted(flavor_set)})
-    # "Made From" base ingredients, title+attribute aware (the declared field
-    # alone misses a title that names the ingredient, e.g. "ginger-turmeric"
-    # with `Made From: lemon, ginger`). Vocabulary is config-owned.
-    made_from_set = set(extract_made_from_tokens(sku_name_eng, attribute))
-    if made_from_set:
-        ledger.append({"field": "made_from", "column": "title+attributes",
-                       "value": sorted(made_from_set)})
-    # Source contradictions / implausible declarations (measured 2026-10-03):
-    # the extractor is faithful, so these flag SOURCE defects for review.
-    consistency_flags.update(
-        source_consistency_flags(attribute, sku_name_eng, sweeteners["sweetener_type"])
-    )
-    # Categories classify products; they do not declare a SKU's flavor.
-    # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
-    # invented identity agreement between distinct variants.
-    from core.declared_identity import listing_identity
-    identity = listing_identity(sku_name_eng, attribute, description_short_eng)
-    if identity:
-        ledger.append({"field": "declared_identity", "column": "sku_name_eng+attribute+description_short_eng",
-                       "value": identity})
-    flavor = sorted(flavor_set)[0] if flavor_set else ""
-    for dimension in ("carbonation", "sweetener", "pulp", "organic"):
-        if critical[dimension]:
-            ledger.append({"field": dimension, "column": "title+attributes",
-                           "value": sorted(critical[dimension])})
-        if description_claims[dimension]:
-            ledger.append({"field": dimension, "column": "description_short_eng",
-                           "value": sorted(description_claims[dimension])})
-    # Product type + subtype: config SSOT (config/paths.yaml product_types),
-    # read once. Title first, then the category-lane fallback; the subtype
-    # (latte, kombucha, ale...) is the finer axis the differentiation lane
-    # consumes and is recorded per column like every claim.
-    ptype, subtype = _product_type_matcher().match(t)
-    if ptype:
-        ledger.append({"field": "type", "column": "sku_name_eng", "value": ptype})
-    if subtype:
-        ledger.append({"field": "subtype", "column": "sku_name_eng", "value": subtype})
-    # Fallback: category tokens may carry the product type
-    # when the title is too generic (e.g. "Product" with no type word).
-    if not ptype and cat_tokens:
-        cat_ptype, cat_subtype = _product_type_matcher().match(cat_tokens)
-        if cat_ptype:
-            ptype = cat_ptype
-            subtype = subtype or cat_subtype
-            ledger.append({"field": "type", "column": "category", "value": cat_ptype})
-            if cat_subtype:
-                ledger.append({"field": "subtype", "column": "category", "value": cat_subtype})
-
-    # Volume and pack from title
-    vol_title = extract_volume_from_title(sku_name_eng)
-    pack_title, pack_conf_title = extract_pack_from_title(sku_name_eng)
-    pack_description, pack_conf_description = extract_pack_from_title(description_short_eng)
-
-    # Attribute parsing
-    attr_vol, attr_vol_conf, attr_pack, attr_pack_conf = parse_attribute_volume_pack(
-        attribute
-    )
-
-    # URL evidence: product tokens from the listing slug.
-    # Used when title/attributes are silent on volume/pack.
-    vol_url = extract_volume_from_title(url_norm)
-    pack_url, pack_conf_url = extract_pack_from_title(url_norm)
-    vol_img = extract_volume_from_title(img_norm)
-    pack_img, pack_conf_img = extract_pack_from_title(img_norm)
-
-    # Combine: prefer attribute if present, but default to title when
-    # the two disagree by 10x+ (title misparses "0, 33l" as 33000ml
-    # vs attribute 330ml — the title is the correct unit here).
-    title_vol = float(vol_title["volume_ml"] or 0.0)
-    if attr_vol > 0:
-        ledger.append({"field": "volume_ml", "column": "attribute",
-                       "value": attr_vol, "confidence": attr_vol_conf})
-    if title_vol > 0:
-        ledger.append({"field": "volume_ml", "column": "sku_name_eng", "value": title_vol,
-                       "confidence": vol_title["confidence"]})
-    if vol_url["volume_ml"] > 0:
-        ledger.append({"field": "volume_ml", "column": "sku_url",
-                       "value": vol_url["volume_ml"], "confidence": vol_url["confidence"]})
-    if vol_img["volume_ml"] > 0:
-        ledger.append({"field": "volume_ml", "column": "image_url",
-                       "value": vol_img["volume_ml"], "confidence": vol_img["confidence"]})
-    if attr_pack > 1 or attr_pack_conf > 0:
-        ledger.append({"field": "pack_qty", "column": "attribute",
-                       "value": attr_pack, "confidence": attr_pack_conf})
-    if pack_title > 1 or pack_conf_title > 0:
-        ledger.append({"field": "pack_qty", "column": "sku_name_eng",
-                       "value": pack_title, "confidence": pack_conf_title})
-    if pack_conf_description > 0:
-        ledger.append({"field": "pack_qty", "column": "description_short_eng",
-                       "value": pack_description, "confidence": pack_conf_description})
-    if pack_url > 1 or pack_conf_url > 0:
-        ledger.append({"field": "pack_qty", "column": "sku_url",
-                       "value": pack_url, "confidence": pack_conf_url})
-    if pack_img > 1 or pack_conf_img > 0:
-        ledger.append({"field": "pack_qty", "column": "image_url",
-                       "value": pack_img, "confidence": pack_conf_img})
-    if attr_vol > 0 and title_vol > 0:
-        ratio = max(attr_vol, title_vol) / min(attr_vol, title_vol)
-        if ratio >= data_cfg().extraction.title_attribute_override_ratio:
-            volume_ml = title_vol
-            volume_conf = vol_title["confidence"]
-            volume_raw = vol_title["raw_match"]
-            volume_status = vol_title["parse_status"]
-            consistency_flags.add("volume_inconsistency")
+                self.volume_ml = self.attr_vol
+                self.volume_conf = self.attr_vol_conf
+                self.volume_raw = f"attribute: {self.attr_vol}"
+                self.volume_status = "attribute_volume"
+        elif self.attr_vol > 0:
+            self.volume_ml = self.attr_vol
+            self.volume_conf = self.attr_vol_conf
+            self.volume_raw = f"attribute: {self.attr_vol}"
+            self.volume_status = "attribute_volume"
+        elif self.title_vol_ml > 0:
+            self.volume_ml = self.title_vol_ml
+            self.volume_conf = self.title_vol["confidence"]
+            self.volume_raw = self.title_vol["raw_match"]
+            self.volume_status = self.title_vol["parse_status"]
+        elif self.vol_url["volume_ml"] > 0:
+            self.volume_ml = self.vol_url["volume_ml"]
+            self.volume_conf = self.vol_url["confidence"]
+            self.volume_raw = self.vol_url["raw_match"]
+            self.volume_status = self.vol_url["parse_status"]
+            self.flags.add("volume_from_url")
+        elif self.vol_img["volume_ml"] > 0:
+            self.volume_ml = self.vol_img["volume_ml"]
+            self.volume_conf = self.vol_img["confidence"]
+            self.volume_raw = self.vol_img["raw_match"]
+            self.volume_status = self.vol_img["parse_status"]
+            self.flags.add("volume_from_image_url")
         else:
-            volume_ml = attr_vol
-            volume_conf = attr_vol_conf
-            volume_raw = f"attribute: {attr_vol}"
-            volume_status = "attribute_volume"
-    elif attr_vol > 0:
-        volume_ml = attr_vol
-        volume_conf = attr_vol_conf
-        volume_raw = f"attribute: {attr_vol}"
-        volume_status = "attribute_volume"
-    elif title_vol > 0:
-        volume_ml = title_vol
-        volume_conf = vol_title["confidence"]
-        volume_raw = vol_title["raw_match"]
-        volume_status = vol_title["parse_status"]
-    elif vol_url["volume_ml"] > 0:
-        volume_ml = vol_url["volume_ml"]
-        volume_conf = vol_url["confidence"]
-        volume_raw = vol_url["raw_match"]
-        volume_status = vol_url["parse_status"]
-        consistency_flags.add("volume_from_url")
-    elif vol_img["volume_ml"] > 0:
-        volume_ml = vol_img["volume_ml"]
-        volume_conf = vol_img["confidence"]
-        volume_raw = vol_img["raw_match"]
-        volume_status = vol_img["parse_status"]
-        consistency_flags.add("volume_from_image_url")
-    else:
-        volume_ml = vol_title["volume_ml"]
-        volume_conf = vol_title["confidence"]
-        volume_raw = vol_title["raw_match"]
-        volume_status = vol_title["parse_status"]
-    # Pack qty resolved early for ambiguous_volume check
-    if attr_pack > 1 or attr_pack_conf > 0:
-        pack_qty = attr_pack
-        pack_conf = attr_pack_conf
-    elif pack_conf_title > 0:
-        # Slugs can be truncated ("16-9-Count") or omit separators. Keep
-        # their disagreement in the ledger, but don't overwrite an explicit
-        # title count with URL/image-derived numbers.
-        pack_qty = pack_title
-        pack_conf = pack_conf_title
-    elif pack_url > 1 or pack_conf_url > 0:
-        pack_qty = pack_url
-        pack_conf = pack_conf_url
-    elif pack_img > 1 or pack_conf_img > 0:
-        pack_qty = pack_img
-        pack_conf = pack_conf_img
-    else:
-        pack_qty = pack_description
-        pack_conf = pack_conf_description
-    # CORROBORATION FUSION (2026-10-01 ruling): the card's confidence is a
-    # property of the CLAIM, not of the winning column — agreeing
-    # independent readers pool upward, disagreeing readers cap the card at
-    # the weaker one. The winner chain above decides VALUE + precedence;
-    # this only changes confidence.
-    vol_claims = [
-        (value, conf, column)
-        for value, conf, column in (
-            (attr_vol, attr_vol_conf, "attribute"),
-            (title_vol, vol_title["confidence"], "sku_name_eng"),
-            (vol_url["volume_ml"], vol_url["confidence"], "sku_url"),
-            (vol_img["volume_ml"], vol_img["confidence"], "image_url"),
+            self.volume_ml = self.title_vol["volume_ml"]
+            self.volume_conf = self.title_vol["confidence"]
+            self.volume_raw = self.title_vol["raw_match"]
+            self.volume_status = self.title_vol["parse_status"]
+
+    def _pack_precedence_chain(self) -> None:
+        """Pack qty resolved early for ambiguous_volume check. Slugs can be
+        truncated ("16-9-Count") or omit separators: keep their disagreement
+        in the ledger, but don't overwrite an explicit title count with
+        URL/image-derived numbers."""
+        if self.attr_pack > 1 or self.attr_pack_conf > 0:
+            self.pack_qty = self.attr_pack
+            self.pack_conf = self.attr_pack_conf
+        elif self.pack_conf_title > 0:
+            self.pack_qty = self.pack_title
+            self.pack_conf = self.pack_conf_title
+        elif self.pack_url > 1 or self.pack_conf_url > 0:
+            self.pack_qty = self.pack_url
+            self.pack_conf = self.pack_conf_url
+        elif self.pack_img > 1 or self.pack_conf_img > 0:
+            self.pack_qty = self.pack_img
+            self.pack_conf = self.pack_conf_img
+        else:
+            self.pack_qty = self.pack_description
+            self.pack_conf = self.pack_conf_description
+
+    def _fuse_and_bound(self) -> None:
+        """Corroboration fusion + source-disagreement flags + plausibility bounds."""
+        # CORROBORATION FUSION (2026-10-01 ruling): the card's confidence is a
+        # property of the CLAIM, not of the winning column — agreeing
+        # independent readers pool upward, disagreeing readers cap the card at
+        # the weaker one. The winner chain above decides VALUE + precedence;
+        # this only changes confidence.
+        self.vol_claims = [
+            (value, conf, column)
+            for value, conf, column in (
+                (self.attr_vol, self.attr_vol_conf, "attribute"),
+                (self.title_vol_ml, self.title_vol["confidence"], "sku_name_eng"),
+                (self.vol_url["volume_ml"], self.vol_url["confidence"], "sku_url"),
+                (self.vol_img["volume_ml"], self.vol_img["confidence"], "image_url"),
+            )
+            if value > 0 and conf > 0
+        ]
+        self.pack_claims = [
+            (value, conf, column)
+            for value, conf, column in (
+                (self.attr_pack, self.attr_pack_conf, "attribute"),
+                (self.pack_title, self.pack_conf_title, "sku_name_eng"),
+                (self.pack_description, self.pack_conf_description, "description_short_eng"),
+                (self.pack_url, self.pack_conf_url, "sku_url"),
+                (self.pack_img, self.pack_conf_img, "image_url"),
+            )
+            if value > 0 and conf > 0
+        ]
+        self.volume_conf = fuse_confidence(self.vol_claims)
+        self.pack_conf = fuse_confidence(self.pack_claims)
+        gate_cfg = training_cfg().gate
+        if self.vol_claims and any(
+            not volumes_compatible({left[0]}, {right[0]},
+                                   volume_relative_tolerance=float(gate_cfg.vol_tolerance),
+                                   volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
+            for index, left in enumerate(self.vol_claims) for right in self.vol_claims[index + 1:]
+        ):
+            self.flags.add("volume_sources_disagree")
+        if self.pack_claims and len({value for value, _, _ in self.pack_claims}) > 1:
+            self.flags.add("pack_sources_disagree")
+        # Bounds apply to the selected physical-package size. A count of packages
+        # does not make an implausible per-package size legitimate; named bulk
+        # containers use the separately configured ceiling.
+        extraction_policy = data_cfg().extraction
+        bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
+        bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{self._sku_name_eng} {self._attribute}", re.I))
+        volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
+        if self.volume_ml > 0 and not extraction_policy.volume_min_ml <= self.volume_ml <= volume_max:
+            self.flags.add("ambiguous_volume")
+
+    # ── phase 5: card assembly ─────────────────────────────────────────────
+
+    def assemble_card(self) -> dict:
+        """Boundary validation + additive evidence keys (exact original order)."""
+        # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
+        # input to BOTH the canonical build and the gate — validate the shape
+        # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
+        # the transform, not downstream in the gate's comparisons.
+        title_attributes = extract_title_attributes(self._sku_name_eng)
+        package_types = title_attributes["package_types"]
+        if not package_types:
+            package_types = parse_attribute_details(self._attribute).get("attribute_package_types", [])
+        # Title-only, and deliberately so: the raw `attributes` field carries no
+        # packaging-level key at all (measured 2026-09-30 — `attributes` holds
+        # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
+        # title is the only place this claim exists.
+        packaging_levels = extract_packaging_level(self._sku_name_eng)
+        # Structured evidence section (census script): pack material type is the
+        # measured 9.64% within-GTIN conflict band, so the attribute cell is now
+        # an ELIGIBLE material source: the title NER scrape keeps its exact
+        # convention (list order and values byte-unchanged) and the
+        # attribute-only values are appended, sorted, after it. Title-scraped
+        # values win duplicates by construction; a set union in
+        # generate_canonical package_material_set is what the gate and the
+        # structured channel actually read, so no material evidence is lost —
+        # only where the model VISIBLY can see it: "paper / carton" is
+        # byte-identical to the census value kept here (raw lower tokens, same
+        # semantics the census measured). Juice content bands live in the
+        # evidence section (numeric 27-band vocabulary, attribute_universe SSOT
+        # canon); the remaining three high-yield keys have no set field —
+        # captured for census→wiring parity, deliberately not wired.
+        self.universe_evidence = capture_universe_attributes(self._attribute)
+        title_materials = title_attributes["package_materials"]
+        material_seen = {value.casefold() for value in title_materials}
+        package_materials = list(title_materials) + sorted(
+            value
+            for value in self.universe_evidence["pack material type"]
+            if value.casefold() not in material_seen
         )
-        if value > 0 and conf > 0
-    ]
-    pack_claims = [
-        (value, conf, column)
-        for value, conf, column in (
-            (attr_pack, attr_pack_conf, "attribute"),
-            (pack_title, pack_conf_title, "sku_name_eng"),
-            (pack_description, pack_conf_description, "description_short_eng"),
-            (pack_url, pack_conf_url, "sku_url"),
-            (pack_img, pack_conf_img, "image_url"),
-        )
-        if value > 0 and conf > 0
-    ]
-    volume_conf = fuse_confidence(vol_claims)
-    pack_conf = fuse_confidence(pack_claims)
-    gate_cfg = training_cfg().gate
-    if vol_claims and any(
-        not volumes_compatible({left[0]}, {right[0]},
-                               volume_relative_tolerance=float(gate_cfg.vol_tolerance),
-                               volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
-        for index, left in enumerate(vol_claims) for right in vol_claims[index + 1:]
-    ):
-        consistency_flags.add("volume_sources_disagree")
-    if pack_claims and len({value for value, _, _ in pack_claims}) > 1:
-        consistency_flags.add("pack_sources_disagree")
-    # Bounds apply to the selected physical-package size. A count of packages
-    # does not make an implausible per-package size legitimate; named bulk
-    # containers use the separately configured ceiling.
-    extraction_policy = data_cfg().extraction
-    bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
-    bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{sku_name_eng} {attribute}", re.I))
-    volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
-    if volume_ml > 0 and not extraction_policy.volume_min_ml <= volume_ml <= volume_max:
-        consistency_flags.add("ambiguous_volume")
+        result = ExtractedAttributes(
+            flavor=self._flavor_hint,
+            type=self.ptype,
+            volume_ml=self.volume_ml,
+            volume_confidence=self.volume_conf,
+            volume_raw=self.volume_raw,
+            volume_status=self.volume_status,
+            pack_qty=self.pack_qty,
+            pack_confidence=self.pack_conf,
+            package_types=package_types,
+            package_materials=package_materials,
+            packaging_levels=packaging_levels,
+            flavor_set=self.flavor_set,
+            made_from_set=self.made_from_set,
+            carbonation_set=set(self.critical["carbonation"]),
+            sweetener_set=set(self.critical["sweetener"]),
+            sweetener_type_set=self.sweeteners["sweetener_type"],
+            sweetening_set=self.sweeteners["sweetening"],
+            attribute_consistency_flags=self.flags,
+            pulp_set=set(self.critical["pulp"]),
+            organic_set=set(self.critical["organic"]),
+        ).model_dump()
+        # The extract dict is a plain dict after the boundary validation, so the
+        # evidence section rides ADDITIVELY beside the model dump. Old consumers
+        # iterate the named fields, the model channel reads the two wired keys,
+        # the census parity test reads the whole section. Sorted lists, never
+        # sets — byte-determinism (PYTHONHASHSEED) is the contract here too.
+        result["attribute_universe_evidence"] = {
+            key: sorted(values) for key, values in self.universe_evidence.items() if values
+        }
+        result["evidence_ledger"] = self.ledger
+        result["date_evidence"] = self.date_evidence
+        result["measurement_evidence"] = self.measurement_evidence
+        result["pack_evidence"] = self.pack_evidence
+        result["negated_sweetener_type_set"] = sorted(self.negative_ingredients)
+        return result
 
-    # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
-    # input to BOTH the canonical build and the gate — validate the shape
-    # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
-    # the transform, not downstream in the gate's comparisons.
-    title_attributes = extract_title_attributes(sku_name_eng)
-    package_types = title_attributes["package_types"]
-    if not package_types:
-        package_types = parse_attribute_details(attribute).get("attribute_package_types", [])
-    # Title-only, and deliberately so: the raw `attributes` field carries no
-    # packaging-level key at all (measured 2026-09-30 — `attributes` holds
-    # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
-    # title is the only place this claim exists.
-    packaging_levels = extract_packaging_level(sku_name_eng)
-    # Structured evidence section (census script): pack material type is the
-    # measured 9.64% within-GTIN conflict band, so the attribute cell is now
-    # an ELIGIBLE material source: the title NER scrape keeps its exact
-    # convention (list order and values byte-unchanged) and the
-    # attribute-only values are appended, sorted, after it. Title-scraped
-    # values win duplicates by construction; a set union in
-    # generate_canonical package_material_set is what the gate and the
-    # structured channel actually read, so no material evidence is lost —
-    # only where the model VISIBLY can see it: "paper / carton" is
-    # byte-identical to the census value kept here (raw lower tokens, same
-    # semantics the census measured). Juice content bands live in the
-    # evidence section (numeric 27-band vocabulary, attribute_universe SSOT
-    # canon); the remaining three high-yield keys have no set field —
-    # captured for census→wiring parity, deliberately not wired.
-    universe_evidence = capture_universe_attributes(attribute)
-    title_materials = title_attributes["package_materials"]
-    material_seen = {value.casefold() for value in title_materials}
-    package_materials = list(title_materials) + sorted(
-        value
-        for value in universe_evidence["pack material type"]
-        if value.casefold() not in material_seen
-    )
-    result = ExtractedAttributes(
-        flavor=flavor,
-        type=ptype,
-        volume_ml=volume_ml,
-        volume_confidence=volume_conf,
-        volume_raw=volume_raw,
-        volume_status=volume_status,
-        pack_qty=pack_qty,
-        pack_confidence=pack_conf,
-        package_types=package_types,
-        package_materials=package_materials,
-        packaging_levels=packaging_levels,
-        flavor_set=flavor_set,
-        made_from_set=made_from_set,
-        carbonation_set=set(critical["carbonation"]),
-        sweetener_set=set(critical["sweetener"]),
-        sweetener_type_set=sweeteners["sweetener_type"],
-        sweetening_set=sweeteners["sweetening"],
-        attribute_consistency_flags=consistency_flags,
-        pulp_set=set(critical["pulp"]),
-        organic_set=set(critical["organic"]),
-    ).model_dump()
-    # The extract dict is a plain dict after the boundary validation, so the
-    # evidence section rides ADDITIVELY beside the model dump. Old consumers
-    # iterate the named fields, the model channel reads the two wired keys,
-    # the census parity test reads the whole section. Sorted lists, never
-    # sets — byte-determinism (PYTHONHASHSEED) is the contract here too.
-    result["attribute_universe_evidence"] = {
-        key: sorted(values) for key, values in universe_evidence.items() if values
-    }
-    result["evidence_ledger"] = ledger
-    result["date_evidence"] = date_evidence
-    result["measurement_evidence"] = measurement_evidence
-    result["pack_evidence"] = pack_evidence
-    result["negated_sweetener_type_set"] = sorted(negative_ingredients)
-    return result
+    # ── orchestration ──────────────────────────────────────────────────────
 
-
+    def execute(self) -> dict:
+        """Run the load-bearing phase order, then assemble the card."""
+        self.harvest_consumer_tokens()
+        self.harvest_evidence_channels()
+        self.resolve_product_type()
+        self.resolve_volume_and_pack()
+        return self.assemble_card()
 # ============================================================================
 # CARD SURFACE
 # ============================================================================
