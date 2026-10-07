@@ -218,8 +218,16 @@ def _reconstruct_slug_decimals(slug: str) -> str:
     out.append(slug[cursor:])
     return ''.join(out)
 _VOWELS = frozenset("aeiou")
+# Precomputed once: the unit table is fixed at import, so re-sorting it on
+# every _has_unit_suffix call (162k calls in the 10k cohort) is pure waste.
+# Order is length-descending so "ml" is tried before "l"; same-length units are
+# mutually exclusive suffices, so their internal order never affects output.
+_UNITS_BY_LEN: tuple[str, ...] = tuple(sorted(UNITS, key=len, reverse=True))
+_NUMBER_TOKEN_RE = re.compile(r'\d+(?:\.\d+)?')
+_HEAD_NUMBER_RE = re.compile(r'(?:\d+(?:\.\d+)?|\.\d+)')
 
 
+@lru_cache(maxsize=8)
 def _short_code_pattern(letters: int) -> re.Pattern:
     """Retailer media codes: a short run of letters welded to digits ("k6rmm",
     "ab12"). Built from the configured letter budget instead of a literal, so
@@ -261,7 +269,7 @@ def _is_noise(token: str) -> bool:
         return False
     if token in PATH_SCHEMA_WORDS:
         return True
-    if re.fullmatch(r'\d+(?:\.\d+)?', token) or _IMAGE_DIM.match(token):
+    if _NUMBER_TOKEN_RE.fullmatch(token) or _IMAGE_DIM.match(token):
         return True
     # UNIT CHECK FIRST. Order matters and the first attempt got it wrong:
     # "250ml" is 5 characters and contains no vowel, so the no-vowel rule ate
@@ -302,14 +310,14 @@ def _has_unit_suffix(token: str, spec) -> bool:
     slugs — and those are precisely the size tokens the pack gate reads, so
     losing them silently removed pack evidence rather than noise.
     """
-    for unit in sorted(UNITS, key=len, reverse=True):
+    for unit in _UNITS_BY_LEN:
         if not token.endswith(unit):
             continue
         head = token[: -len(unit)]
         if not head:
             # the unit itself: kept by the UNITS check in _is_noise
             return True
-        if re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', head):
+        if _HEAD_NUMBER_RE.fullmatch(head):
             return True
         # pack notation: every "x"-separated part must itself be a size
         # token — integer, decimal, or unit-bearing. Decimal heads are
@@ -319,7 +327,7 @@ def _has_unit_suffix(token: str, spec) -> bool:
         parts = head.split("x")
         if len(parts) > 1 and all(
             part.isdigit()
-            or re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', part) is not None
+            or _HEAD_NUMBER_RE.fullmatch(part) is not None
             or _has_unit_suffix(part, spec)
             for part in parts
         ):
