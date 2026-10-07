@@ -68,6 +68,20 @@ def _dataset_fixture(tmp_path, monkeypatch, *, rows=2):
     monkeypatch.setitem(core_common.F, "final_validation", final_validation)
 
 
+REVISION_PIN = "abc123def"
+
+
+def _hermetic_staging(monkeypatch):
+    """Kernel staging inventories the REAL repo checkout + pins the worktree
+    HEAD; these pins only need the payload contracts, so the fakes close
+    that door (kaggle test file precedent)."""
+    def members(extra=(), lane="bundle"):
+        return tuple(sorted(extra))
+
+    monkeypatch.setattr(laya_lane, "_git_revision", lambda: REVISION_PIN)
+    monkeypatch.setattr(laya_lane, "checkout_inventory", members)
+
+
 # ── SSOT/additive contract ─────────────────────────────────────────────────
 def test_laya_spec_additive_and_yaml_unchanged():
     cfg_spec = common.training_cfg().laya
@@ -172,6 +186,7 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
     assert receipt["kernel"] == "fbarulli/er-laya-decision"
     assert receipt["kind"] == "attribute"
@@ -205,12 +220,29 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     assert "BATCH_SIZE = 8" in script
     # the run tag is embedded for the receipt read-back
     assert receipt["run_tag"] in script
+    # the runtime preflight inventory bake: the staged payload carries the
+    # publish pin constants + the checkout preflight block (kaggle-lane
+    # sibling shape; the push gate reads these constants)
+    assert 'REPOSITORY = "https://github.com/fbarulli/ER.git"' in script
+    assert 'BRANCH = "kaggle-lane"' in script
+    assert f'REVISION = "{REVISION_PIN}"' in script
+    assert "_runtime_root = Path(root)" in script
+    assert "_runtime_files = (" in script
+    assert "[runtime-preflight] verified %d required files" in script
+    # the receipt publishes the pin so the orchestrator knows the
+    # publish-tip expectation
+    assert receipt["published_pin"] == {
+        "repository": "https://github.com/fbarulli/ER.git",
+        "branch": "kaggle-lane",
+        "revision": REVISION_PIN,
+    }
 
 
 def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="identity")
     assert receipt["kind"] == "identity"
     assert (Path(receipt["staged"]) / "laya_decision.py").is_file()
@@ -222,6 +254,16 @@ def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     assert eval_receipt["kernel"] == "fbarulli/er-laya-eval"
     assert eval_receipt["code_file"] == "laya_evals.py"
     assert (Path(eval_receipt["staged"]) / "laya_evals.py").is_file()
+    # the eval kernel carries the same preflight inventory bake
+    eval_script = (Path(eval_receipt["staged"])
+                   / "laya_evals.py").read_text()
+    assert 'REPOSITORY = "https://github.com/fbarulli/ER.git"' in eval_script
+    assert "_runtime_files = (" in eval_script
+    assert eval_receipt["published_pin"] == {
+        "repository": "https://github.com/fbarulli/ER.git",
+        "branch": "kaggle-lane",
+        "revision": REVISION_PIN,
+    }
     # the eval harness is unlatched by config default; the receipt records
     # what toggle state the kernel actually holds
     assert eval_receipt["evals_enabled"] is False
@@ -340,7 +382,34 @@ def test_stage_receipts_layout_is_per_op(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="identity")
     stage = Path(receipt["staged"])
     relative = stage.relative_to(tmp_path).as_posix()
     assert relative == "results/laya_lane/kaggle/identity"
+
+
+def test_decision_input_flag_forwards_override(tmp_path, monkeypatch):
+    """--decision-input drives the stage_decision_input override (kaggle)."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    alternate = tmp_path / "alternate.csv"
+    alternate.write_text(
+        "sku_id,sku_name_eng,attribute\nSKU0,Name 0 500 ml,Vol: 500\n",
+        encoding="utf-8")
+    argv = ["laya", "--kind", "kaggle", "--decision", "attribute",
+            "--decision-input", str(alternate)]
+    monkeypatch.setattr("sys.argv", argv)
+    laya_lane.main()
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert (stage / "alternate.csv").is_file()
+    receipt = json.loads((stage / "attribute.receipt.json").read_text())
+    # the kernel receipt carries the override (the decision-input receipt
+    # of the same name is superseded by the kernel receipt co-located there)
+    import hashlib
+
+    assert receipt["decision_input"].endswith("alternate.csv")
+    assert receipt["decision_sha256"] == hashlib.sha256(
+        alternate.read_bytes()).hexdigest()
