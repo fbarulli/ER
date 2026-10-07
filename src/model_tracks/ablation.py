@@ -337,6 +337,7 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
     variants = [{'attribute':None, 'channel':'baseline', 'text_indices':baseline_text,
                  'records':baseline_records, 'changed_listings':0}]
     endpoint_surfaces = {i: _field_surfaces(rows[i].get('attribute', '')) for i in ids}
+    endpoint_parts = {i: str(rows[i].get('attribute', '')).split(';') for i in ids}
     for attr_index, attribute in enumerate(attributes,1):
         altered_text = []
         if baseline_text:
@@ -345,7 +346,7 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
                 frozen = rows[i].get('frozen_payload')
                 if attribute in row_surfaces or frozen:
                     kept_parts = [
-                        part for part in str(rows[i].get('attribute', '')).split(';')
+                        part for part in endpoint_parts[i]
                         if part not in row_surfaces.get(attribute, ())
                     ]
                     kept_attribute = ';'.join(kept_parts)
