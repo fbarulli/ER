@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.run_log import RunLogger
 from core.step_trace import timed
 from graph_tracks.data import file_hash, load_records, load_text_cache
-from model_tracks.ablation import checkpoint_identity, report, request_context, write
+from model_tracks.ablation import report, request_context, write
 
 _LOG = RunLogger(__name__)
 
@@ -89,7 +89,6 @@ def _persist_baseline(request_path, result):
 def complete(output: Path, setup: Path, *, config: Path | None = None):
     """Fit the untrained baseline threshold on dev; consume saved ablation only."""
     with _LOG.section('ablation.baseline.load'):
-        from model_tracks.ablation import resolve
         request_path = output/'ablation/request.json'
         request = json.loads(request_path.read_text())
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
@@ -100,7 +99,7 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
         labels, scores = _dev_scores(pairs_path, records, vectors)
     with _LOG.section('ablation.baseline.calibration'):
         with request_context(request_path):
-            checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
+            checkpoint_sha256 = request['sources'][request['checkpoint']]
             calibration = _calibrated_calibration(checkpoint_sha256, metadata, labels, scores)
             binding = _frozen_calibration(request_path, calibration)
             result = _frozen_report(request_path, request, calibration, config=config, saved=binding)
