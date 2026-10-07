@@ -26,10 +26,14 @@ import json
 from pathlib import Path
 import shutil
 import torch
+import yaml
 from core.run_log import RunLogger
+from core.timing import Timing
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
-from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context
+from graph_tracks.prepared_inputs import load_plan
+from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context, validate_vectors
+from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
 
@@ -57,7 +61,7 @@ def _freeze_config(setup,cfg):
     """Point the settings at the template root and write the frozen yaml."""
     cfg.output_dir = str(setup/'ablation_templates')
     frozen_config = setup/'ablation_settings.yaml'
-    write_config = __import__('yaml').safe_dump(cfg.model_dump())
+    write_config = yaml.safe_dump(cfg.model_dump())
     frozen_config.write_text(write_config)
     return frozen_config
 
@@ -65,7 +69,6 @@ def _freeze_config(setup,cfg):
 def _frozen_support(setup):
     """The training-population support records and prepared vocabulary."""
     records = load_records(setup/'prepared/listings.json')
-    from graph_tracks.prepared_inputs import load_plan
     graph_plan,graph_arrays = load_plan(setup/'prepared/listings.json',setup/'prepared/pairs.csv')
     graph_arrays.close()
     support = [records[n] for n in graph_plan['populations']['train']]
@@ -117,7 +120,6 @@ def _anchor_request(setup,request):
     request['sources'] = {anchor(k):v for k,v in request['sources'].items()}
     request['checkpoint'] = anchor(request['checkpoint'])
     request['text_checkpoint'] = anchor(request['text_checkpoint']) if request['text_checkpoint'] else None
-    from model_tracks.package import package_member
     request['portable_setup'] = package_member('suite_package_shared')
 
 
@@ -156,7 +158,6 @@ def _drop_staging(setup):
 @timed
 def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=None):
     """Fix native tokens and vocabulary/support topology before training exists."""
-    from core.timing import Timing
     timing = Timing('model_tracks.ablation_prepare')
     with _LOG.section('ablation_suite.freeze'):
         cohort,frozen_config = _freeze_suite(setup,config,bundle)
@@ -187,7 +188,6 @@ def _read_template(setup,track):
 def _bind_staged_setup(setup,request):
     """Point the template request's shared inputs at the staged setup root."""
     from core.common import TRAIN_ROOT
-    # Bind the actual staged setup for both direct suites and portable workers.
     request['portable_setup'] = setup.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
 
 
@@ -250,7 +250,6 @@ def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_mo
     """Validated existing vectors win; otherwise the device owner encodes."""
     vectors = folder/'vectors.npz'
     if vectors.exists():
-        from model_tracks.ablation import validate_vectors
         validate_vectors(path,vectors)
     else:
         saved_text = _saved_text_default(request,output=output,setup=setup,
