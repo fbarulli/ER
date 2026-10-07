@@ -199,13 +199,28 @@ def _prepare_graph_inputs(setup):
         prepare_training(setup/'prepared/listings.json',setup/'prepared/pairs.csv',batch_size=sizes.pop())
 
 
+def _streamed_json_digest(value) -> str:
+    """STREAMED, never materialized content digest for composition keys.
+
+    `json.dumps` builds the whole document as one contiguous string before
+    hashing; the packaging pass composes thousands of rows while the token
+    cache is still resident, so `JSONEncoder.iterencode` is used with the
+    SAME kwargs the emitted bytes always had — every content-addressed
+    name derived from this digest is byte-identical to the shared
+    encoder's output; only peak memory drops.
+    """
+    hasher = hashlib.sha256()
+    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
+        hasher.update(chunk.encode())
+    return hasher.hexdigest()
+
+
 def _make_composer():
     """Build deterministic endpoint text with a bounded LRU cache."""
     from model_tracks.training_data import frozen_endpoint_text
     from core.model_input import model_input_composition,build_sku_text,model_input_info
     from core.sku_identity import row_identity
     from graph_tracks.text_cache import composition_fingerprint
-    from model_tracks.ablation import digest
     import pandas as pd
     from core.common import training_cfg
     limits = training_cfg().packaging
@@ -227,7 +242,7 @@ def _make_composer():
                                           column_present='frozen_payload' in row)
             if frozen is not None:
                 return frozen
-            key = digest({'row':row,'composition':composition_contract})
+            key = _streamed_json_digest({'row':row,'composition':composition_contract})
             if key in composed:
                 composed.move_to_end(key)
                 return composed[key]
@@ -254,13 +269,6 @@ def _prepare_exports(cfg, setup, bundle):
     token_cache = {}
     with trace_step('package.text_export'):
         prepare_text_export(setup,Path(resolve_model(cfg.text_model)),batch_size=runtime('batch_size_embed'),composer=compose,token_cache=token_cache)
-    with trace_step('package.ablation_suite'):
-        # ER_PACKAGE_SKIP_ABLATION=1 moves ablation staging off the CPU bundle
-        # (owner 2026-10-06: GPU sessions stage and forward ablation; the CPU
-        # bundle ships no ablation templates). Unset = unchanged everywhere.
-        if cfg.post_training_ablation and os.environ.get('ER_PACKAGE_SKIP_ABLATION') != '1':
-            from model_tracks.staged_ablation import prepare_suite
-            prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
     with trace_step('package.baseline_export'):
         from model_tracks.baseline_export import prepare as prepare_baseline
         prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)
@@ -337,13 +345,13 @@ def _collect_package_sources(cfg, setup: Path, bundle_path: Path) -> dict[str, P
 
 
 def _collect_clean_backup_files(setup: Path, files: dict) -> None:
-    """Ship the unprojected clean gates backup whenever it exists.
+    """Ship the unprojected clean-gates backup whenever it exists.
 
-    Ablation cohort staging (GPU suite) rebuilds from the UNPROJECTED clean
-    gates; the projected setup overrides them, so the immutable clean backup
-    ships whenever it exists (ER_PACKAGE_SKIP_ABLATION leaves the bundle
-    without ablation templates, but the clean backup is still prepared by
-    the suite_inputs projection in shared_graph_data).
+    The CPU bundle carries the unprojected clean-gates input set for
+    downstream workers: the projected setup overrides plain gates, so the
+    immutable clean backup ships by NAME WHICHEVER lane consumes it (the
+    suite_inputs projection in shared_graph_data prepares it; the CPU
+    package forwards it unprojected).
     """
     clean_backup = setup.parent / (setup.name + '__clean_shared_inputs')
     if not clean_backup.is_dir():
@@ -393,8 +401,8 @@ def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
     """Shared population + graph inputs + exports, then the package preflight.
 
     Release order is deliberate: the bundle ref leaves after exports (the
-    ablation cohort is the last consumer), and the token cache materializes
-    the native model the preflight validates.
+    downstream GPU workers are the last consumers), and the token cache
+    materializes the native model the preflight validates.
     """
     _prepare_shared_population(setup, bundle)
     gc.collect()

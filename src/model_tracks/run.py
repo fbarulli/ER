@@ -102,8 +102,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         events.emit('baseline_embedding','completed',device=cfg.device)
         if cfg.post_training_ablation:
             from model_tracks.baseline_ablation import forward as forward_baseline_ablation
-            # GPU sessions stage the ablation suite themselves when the CPU
-            # bundle shipped without templates (ER_PACKAGE_SKIP_ABLATION).
+            # GPU sessions stage the GPU-side suite themselves; bundle
+            # templates are complete for this lane.
             template = setup/'ablation_templates'/'text'/'request.json'
             if not template.is_file():
                 events.emit('ablation_staging','started',device=cfg.device)
