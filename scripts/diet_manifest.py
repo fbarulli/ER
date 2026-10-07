@@ -174,67 +174,205 @@ def mnrl_presentation_counts(data: dict) -> list[dict]:
             for fold, triples, source in objectives]
 
 
-def main(argv: list[str], *, prepared=None) -> int:
-    if len(argv) != 2:
-        print(f"usage: {Path(argv[0]).name} BUNDLE_PATH", file=sys.stderr)
-        return 2
-    manifest, data = prepared if prepared is not None else load_prepared_bundle(Path(argv[1]))
-    masking = masking_cfg(manifest.masking_profile)
-    diet_min_neg_aug_frac = float(masking["diet_min_neg_aug_frac"])
-    diet_max_pos_neg_view_ratio = float(masking["diet_max_pos_neg_view_ratio"])
-    mask_hard_negatives = bool(masking["mask_hard_negatives"])
-    hard_negative_frac = float(masking["hard_negative_frac"])
+class DietInputs:
+    """One gate run's resolved thresholds + bundle arrays (read-only)."""
 
-    pos = data["pos"]
-    neg = data["neg"]
-    train_neg = data["train_neg"]
-    mask_audit = list(data.get("mask_audit", []))
-    neg_audit = [row for row in data.get("hard_negative_mask_audit", [])
-                 if str(row.get("population", "hard_negative")) == "hard_negative"]
+    def __init__(self, *, manifest, data, diet_min_neg_aug_frac,
+                 diet_max_pos_neg_view_ratio, mask_hard_negatives,
+                 hard_negative_frac, pos, neg, train_neg, mask_audit,
+                 neg_audit, loss) -> None:
+        self.manifest = manifest
+        self.data = data
+        self.diet_min_neg_aug_frac = diet_min_neg_aug_frac
+        self.diet_max_pos_neg_view_ratio = diet_max_pos_neg_view_ratio
+        self.mask_hard_negatives = mask_hard_negatives
+        self.hard_negative_frac = hard_negative_frac
+        self.pos = pos
+        self.neg = neg
+        self.train_neg = train_neg
+        self.mask_audit = mask_audit
+        self.neg_audit = neg_audit
+        self.loss = loss
 
-    pos_views = int(len(pos))
-    neg_views = int(len(train_neg))
-    training_cfg = load_config()["training"]
-    loss = str(training_cfg["loss"])
-    selected_neg = {tuple(map(int, pair)) for pair in train_neg}
-    retained_neg_audit = [
-        row for row in neg_audit
-        if (int(row["copy_payload_idx"]), int(row["pair_payload_idx"])) in selected_neg
-    ]
-    # MNRL trains a swap hard-negative copy only when TIER 1(a) minted it a
-    # compatible counterpart positive; count those, exclude the rest.
-    neg_aug_views = effective_neg_aug_views(
-        retained_neg_audit, loss=loss, pos=pos
-    )
-    # MNRL masked positives with no source negative never train; report real
-    # survival on the positive side too (dead copies excluded from pos_views).
-    surviving_pos_views, dead_masked_pos = effective_pos_views(
-        pos_views, mask_audit, train_neg, loss=loss
-    )
-    easy_cfg = load_config()["training"]["random_easy_negatives"]
-    easy_enabled = bool(easy_cfg["enabled"])
-    easy_ratio = float(easy_cfg["ratio_to_hard"])
-    # Dynamic masking rewrites selected negative presentations IN PLACE
-    # (training.py _dynamic_mask_negative_transform — "no static negative
-    # copies are added"), so it adds NO views for ANY loss and the old
-    # +hard_negative_frac projection double-counted phantom views,
-    # biasing neg_aug_frac low and the pos/neg ratio low. Presentations
-    # are the bundle's own view counts.
-    projected_neg_views = neg_views
-    projected_neg_presentations = project_train_time_neg_views(
-        projected_neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
-    )
-    pos_base = pos_views - len(mask_audit)
-    neg_base = int(len(neg)) - len(neg_audit)
-    if pos_base < 0 or neg_base < 0:
-        print(
-            "DIET FAIL: audit rows exceed pair rows "
-            f"(pos {pos_views}/{len(mask_audit)}, neg {len(neg)}/{len(neg_audit)})",
-            flush=True,
+
+class DietViews:
+    """One gate run's view census (mutated by the MNRL accounting phase)."""
+
+    def __init__(self, *, pos_views, neg_views, retained_neg_audit,
+                 neg_aug_views, surviving_pos_views, dead_masked_pos,
+                 easy_enabled, easy_ratio, projected_neg_views,
+                 projected_neg_presentations) -> None:
+        self.pos_views = pos_views
+        self.neg_views = neg_views
+        self.retained_neg_audit = retained_neg_audit
+        self.neg_aug_views = neg_aug_views
+        self.surviving_pos_views = surviving_pos_views
+        self.dead_masked_pos = dead_masked_pos
+        self.easy_enabled = easy_enabled
+        self.easy_ratio = easy_ratio
+        self.projected_neg_views = projected_neg_views
+        self.projected_neg_presentations = projected_neg_presentations
+        self.pos_base = 0
+        self.neg_base = 0
+
+
+class DietBaseCensus:
+    """The audit-vs-pair sanity outcome for one bundle."""
+
+    def __init__(self, *, pos_base, neg_base, exceeds_pairs) -> None:
+        self.pos_base = pos_base
+        self.neg_base = neg_base
+        self.exceeds_pairs = exceeds_pairs
+
+
+class DietMNRLOutcome:
+    """MNRL fold presentation counts (empty outside the MNRL loss)."""
+
+    def __init__(self, *, actual_folds, invalid_frozen=False, exception=None) -> None:
+        self.actual_folds = actual_folds
+        self.invalid_frozen = invalid_frozen
+        self.exception = exception
+
+
+class DietGate:
+    """One bundle's diet gate run: inputs -> verdict (exit code).
+
+    Phases below are single responsibilities, running in ONE fixed order
+    inside run(); every print stays byte-identical to the pre-refactor main.
+
+    Phase map:
+      read_inputs       — masking thresholds + the bundle's pair/audit arrays
+      view_counts       — base/retained views, MNRL survival, easy projection
+      base_census       — audit-vs-pair sanity (the DIET FAIL guard)
+      population_table  — the views table + MNRL survival note
+      mnrl_accounting   — frozen/production triple presentations
+      verdict           — threshold fractions/ratios, failures, exit code
+    """
+
+    EXIT_USAGE = 2
+    EXIT_FAIL = 2
+    EXIT_THRESHOLD_MISS = 3  # Valid inputs, but the presentation diet misses its thresholds.
+    EXIT_PASS = 0
+
+    def __init__(self, argv, *, prepared=None) -> None:
+        self._argv = argv
+        self._prepared = prepared
+
+    def run(self) -> int:
+        inputs = self.read_inputs()
+        if len(self._argv) != 2 or inputs is None:
+            print(f"usage: {Path(self._argv[0]).name} BUNDLE_PATH", file=sys.stderr)
+            return self.EXIT_USAGE
+        views = self.view_counts(inputs)
+        base = self.base_census(inputs, views)
+        if base.exceeds_pairs:
+            print(
+                "DIET FAIL: audit rows exceed pair rows "
+                f"(pos {views.pos_views}/{len(inputs.mask_audit)}, neg {len(inputs.neg)}/{len(inputs.neg_audit)})",
+                flush=True,
+            )
+            return self.EXIT_FAIL
+        self.population_table(inputs, views)
+        verdict = self.mnrl_accounting(inputs, views)
+        if verdict.invalid_frozen:
+            print(f"DIET FAIL: invalid frozen MNRL objective: {verdict.exception}", flush=True)
+            return self.EXIT_FAIL
+        return self.verdict(inputs, views, verdict)
+
+    # ── phase: inputs ──────────────────────────────────────────────────────
+
+    def read_inputs(self) -> "DietInputs | None":
+        """Usage contract + every masking threshold + the bundle arrays."""
+        if len(self._argv) != 2:
+            return None
+        manifest, data = self._prepared if self._prepared is not None else load_prepared_bundle(Path(self._argv[1]))
+        masking = masking_cfg(manifest.masking_profile)
+        return DietInputs(
+            manifest=manifest,
+            data=data,
+            diet_min_neg_aug_frac=float(masking["diet_min_neg_aug_frac"]),
+            diet_max_pos_neg_view_ratio=float(masking["diet_max_pos_neg_view_ratio"]),
+            mask_hard_negatives=bool(masking["mask_hard_negatives"]),
+            hard_negative_frac=float(masking["hard_negative_frac"]),
+            pos=data["pos"],
+            neg=data["neg"],
+            train_neg=data["train_neg"],
+            mask_audit=list(data.get("mask_audit", [])),
+            neg_audit=[
+                row for row in data.get("hard_negative_mask_audit", [])
+                if str(row.get("population", "hard_negative")) == "hard_negative"
+            ],
+            loss=str(load_config()["training"]["loss"]),
         )
-        return 2
 
-    def _count(rows: list[dict], population: str) -> dict[str, int]:
+    # ── phase: view counts ─────────────────────────────────────────────────
+
+    def view_counts(self, inputs: "DietInputs") -> "DietViews":
+        """Base/retained views, MNRL survival, and the easy-negative projection."""
+        pos = inputs.pos
+        neg = inputs.neg
+        train_neg = inputs.train_neg
+        mask_audit = inputs.mask_audit
+        neg_audit = inputs.neg_audit
+        loss = inputs.loss
+
+        pos_views = int(len(pos))
+        neg_views = int(len(train_neg))
+        selected_neg = {tuple(map(int, pair)) for pair in train_neg}
+        retained_neg_audit = [
+            row for row in neg_audit
+            if (int(row["copy_payload_idx"]), int(row["pair_payload_idx"])) in selected_neg
+        ]
+        # MNRL trains a swap hard-negative copy only when TIER 1(a) minted it a
+        # compatible counterpart positive; count those, exclude the rest.
+        neg_aug_views = effective_neg_aug_views(
+            retained_neg_audit, loss=loss, pos=pos
+        )
+        # MNRL masked positives with no source negative never train; report real
+        # survival on the positive side too (dead copies excluded from pos_views).
+        surviving_pos_views, dead_masked_pos = effective_pos_views(
+            pos_views, mask_audit, train_neg, loss=loss
+        )
+        easy_cfg = load_config()["training"]["random_easy_negatives"]
+        easy_enabled = bool(easy_cfg["enabled"])
+        easy_ratio = float(easy_cfg["ratio_to_hard"])
+        # Dynamic masking rewrites selected negative presentations IN PLACE
+        # (training.py _dynamic_mask_negative_transform — "no static negative
+        # copies are added"), so it adds NO views for ANY loss and the old
+        # +hard_negative_frac projection double-counted phantom views,
+        # biasing neg_aug_frac low and the pos/neg ratio low. Presentations
+        # are the bundle's own view counts.
+        projected_neg_views = neg_views
+        projected_neg_presentations = project_train_time_neg_views(
+            projected_neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
+        )
+        return DietViews(
+            pos_views=pos_views,
+            neg_views=neg_views,
+            retained_neg_audit=retained_neg_audit,
+            neg_aug_views=neg_aug_views,
+            surviving_pos_views=surviving_pos_views,
+            dead_masked_pos=dead_masked_pos,
+            easy_enabled=easy_enabled,
+            easy_ratio=easy_ratio,
+            projected_neg_views=projected_neg_views,
+            projected_neg_presentations=projected_neg_presentations,
+        )
+
+    # ── phase: base census ─────────────────────────────────────────────────
+
+    def base_census(self, inputs: "DietInputs", views: "DietViews") -> "DietBaseCensus":
+        """Audit-vs-pair sanity: base rows can never go negative."""
+        pos_base = views.pos_views - len(inputs.mask_audit)
+        neg_base = int(len(inputs.neg)) - len(inputs.neg_audit)
+        views.pos_base = pos_base
+        views.neg_base = neg_base
+        return DietBaseCensus(pos_base=pos_base, neg_base=neg_base,
+                              exceeds_pairs=pos_base < 0 or neg_base < 0)
+
+    @staticmethod
+    def _mode_counts(rows: list[dict], population: str) -> dict[str, int]:
+        """Mode census of one audit population (alphabetical on print)."""
         counts: dict[str, int] = {}
         for row in rows:
             if str(row.get("population", population)) != population:
@@ -242,98 +380,127 @@ def main(argv: list[str], *, prepared=None) -> int:
             counts[_mode(row)] = counts.get(_mode(row), 0) + 1
         return counts
 
-    pos_modes = _count(mask_audit, "positive")
-    neg_modes = _count(neg_audit, "hard_negative")
+    def population_table(self, inputs: "DietInputs", views: "DietViews") -> None:
+        """The views table + the MNRL survival note (print order pinned)."""
+        loss = inputs.loss
+        mask_audit = inputs.mask_audit
+        neg_audit = inputs.neg_audit
+        pos_base, neg_base = views.pos_base, views.neg_base
 
-    print(f"[diet] bundle={argv[1]} profile={manifest.masking_profile}", flush=True)
-    print("population     target_mode   views", flush=True)
-    print(f"positive       base          {pos_base:,}", flush=True)
-    for mode in sorted(pos_modes):
-        print(f"positive       {mode:<11} {pos_modes[mode]:,}", flush=True)
-    print(f"hard_negative  base          {neg_base:,}", flush=True)
-    for mode in sorted(neg_modes):
-        print(f"hard_negative  {mode:<11} {neg_modes[mode]:,}", flush=True)
-    print(
-        f"presentations  projected    {projected_neg_presentations:,} "
-        f"(pos_views={surviving_pos_views:,}, neg_views={projected_neg_views:,})",
-        flush=True,
-    )
-    if dead_masked_pos:
+        pos_modes = self._mode_counts(mask_audit, "positive")
+        neg_modes = self._mode_counts(neg_audit, "hard_negative")
+
+        print(f"[diet] bundle={self._argv[1]} profile={inputs.manifest.masking_profile}", flush=True)
+        print("population     target_mode   views", flush=True)
+        print(f"positive       base          {pos_base:,}", flush=True)
+        for mode in sorted(pos_modes):
+            print(f"positive       {mode:<11} {pos_modes[mode]:,}", flush=True)
+        print(f"hard_negative  base          {neg_base:,}", flush=True)
+        for mode in sorted(neg_modes):
+            print(f"hard_negative  {mode:<11} {neg_modes[mode]:,}", flush=True)
         print(
-            f"[diet] MNRL survival: {dead_masked_pos:,} masked-positive copies "
-            "have no source negative in the training pool and never train "
-            "(excluded from pos_views)",
+            f"presentations  projected    {views.projected_neg_presentations:,} "
+            f"(pos_views={views.surviving_pos_views:,}, neg_views={views.projected_neg_views:,})",
             flush=True,
         )
+        if views.dead_masked_pos:
+            print(
+                f"[diet] MNRL survival: {views.dead_masked_pos:,} masked-positive copies "
+                "have no source negative in the training pool and never train "
+                "(excluded from pos_views)",
+                flush=True,
+            )
 
-    actual_folds = []
-    if loss == "mnrl":
+    # ── phase: MNRL accounting ─────────────────────────────────────────────
+
+    def mnrl_accounting(self, inputs: "DietInputs", views: "DietViews") -> "DietMNRLOutcome":
+        """Actual triple presentations when the loss is MNRL (frozen first)."""
+        loss = inputs.loss
+        if loss != "mnrl":
+            return DietMNRLOutcome(actual_folds=[])
         try:
-            actual_folds = mnrl_presentation_counts(data)
+            actual_folds = mnrl_presentation_counts(inputs.data)
         except (KeyError, ValueError) as exc:
-            print(f"DIET FAIL: invalid frozen MNRL objective: {exc}", flush=True)
-            return 2
+            return DietMNRLOutcome(actual_folds=[], invalid_frozen=True, exception=exc)
         for counts in actual_folds:
             print(f"[diet] MNRL fold={counts['fold']} source={counts['source']} "
                   f"actual_triples={counts['presentations']:,} "
                   f"negative_augmented={counts['negative_augmented']:,}", flush=True)
-        surviving_pos_views = projected_neg_views = projected_neg_presentations = sum(
+        views.surviving_pos_views = views.projected_neg_views = views.projected_neg_presentations = sum(
             counts["presentations"] for counts in actual_folds)
-        neg_aug_views = sum(counts["negative_augmented"] for counts in actual_folds)
-    failures: list[str] = []
-    for counts in actual_folds:
-        total = counts["presentations"]
-        if not total or counts["negative_augmented"] / total < diet_min_neg_aug_frac:
-            failures.append(f"MNRL fold {counts['fold']} augmented-negative presentations "
-                            f"{counts['negative_augmented']}/{total} below "
-                            f"diet_min_neg_aug_frac={diet_min_neg_aug_frac}")
-    neg_aug_frac = (
-        neg_aug_views / projected_neg_presentations if projected_neg_presentations else float("nan")
-    )
-    pos_neg_ratio = (
-        surviving_pos_views / projected_neg_views if projected_neg_views else float("nan")
-    )
-    effective_ratio = (
-        surviving_pos_views / projected_neg_views if projected_neg_views else float("nan")
-    )
-    neg_ok = projected_neg_presentations > 0 and neg_aug_frac >= diet_min_neg_aug_frac
-    ratio_ok = projected_neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
-    print(
-        f"[diet] neg_aug_views={neg_aug_views:,} / neg_presentations={projected_neg_presentations:,} "
-        f"= {neg_aug_frac:.4f} >= diet_min_neg_aug_frac={diet_min_neg_aug_frac:.4f} "
-        f"{'OK' if neg_ok else 'FAIL'}",
-        flush=True,
-    )
-    print(
-        f"[diet] bundle-only pos_views={pos_views:,} "
-        f"/ neg_views={neg_views:,} = {pos_views / neg_views if neg_views else float('nan'):.4f} (informational)",
-        flush=True,
-    )
-    print(
-        f"[diet] projected_neg_views={projected_neg_views:,} "
-        f"(easy quota x{easy_ratio:g}, enabled={easy_enabled}, loss={loss}; "
-        f"dynamic mask frac={hard_negative_frac:g}, enabled={mask_hard_negatives} "
-        "(in-place replacement — adds no views); "
-        "easy-projection is an upper bound, not guaranteed)",
-        flush=True,
-    )
-    if not neg_ok:
-        failures.append(
-            f"neg_aug_frac {neg_aug_frac:.4f} < "
-            f"diet_min_neg_aug_frac {diet_min_neg_aug_frac:.4f}"
+        views.neg_aug_views = sum(counts["negative_augmented"] for counts in actual_folds)
+        return DietMNRLOutcome(actual_folds=actual_folds)
+
+    # ── phase: verdict ─────────────────────────────────────────────────────
+
+    def verdict(self, inputs: "DietInputs", views: "DietViews",
+                outcome: "DietMNRLOutcome") -> int:
+        """Threshold fractions/ratios + failures + the exit code (statements
+        are the original sequence, division-by-zero and float semantics
+        included)."""
+        failures: list[str] = []
+        for counts in outcome.actual_folds:
+            total = counts["presentations"]
+            if not total or counts["negative_augmented"] / total < inputs.diet_min_neg_aug_frac:
+                failures.append(f"MNRL fold {counts['fold']} augmented-negative presentations "
+                                f"{counts['negative_augmented']}/{total} below "
+                                f"diet_min_neg_aug_frac={inputs.diet_min_neg_aug_frac}")
+        neg_aug_frac = (
+            views.neg_aug_views / views.projected_neg_presentations
+            if views.projected_neg_presentations else float("nan")
         )
-    if not ratio_ok:
-        failures.append(
-            f"actual pos_neg_view_ratio {effective_ratio:.4f} > "
-            f"diet_max_pos_neg_view_ratio {diet_max_pos_neg_view_ratio:.4f} "
-            f"(bundle-only {pos_neg_ratio:.4f})"
+        pos_neg_ratio = (
+            views.surviving_pos_views / views.projected_neg_views
+            if views.projected_neg_views else float("nan")
         )
-    if failures:
-        for failure in failures:
-            print(f"DIET FAIL: {failure}", flush=True)
-        return 3  # Valid inputs, but the presentation diet misses its thresholds.
-    print("DIET PASS", flush=True)
-    return 0
+        effective_ratio = (
+            views.surviving_pos_views / views.projected_neg_views
+            if views.projected_neg_views else float("nan")
+        )
+        neg_ok = views.projected_neg_presentations > 0 and neg_aug_frac >= inputs.diet_min_neg_aug_frac
+        ratio_ok = views.projected_neg_views > 0 and effective_ratio <= inputs.diet_max_pos_neg_view_ratio
+        print(
+            f"[diet] neg_aug_views={views.neg_aug_views:,} / neg_presentations={views.projected_neg_presentations:,} "
+            f"= {neg_aug_frac:.4f} >= diet_min_neg_aug_frac={inputs.diet_min_neg_aug_frac:.4f} "
+            f"{'OK' if neg_ok else 'FAIL'}",
+            flush=True,
+        )
+        print(
+            f"[diet] bundle-only pos_views={views.pos_views:,} "
+            f"/ neg_views={views.neg_views:,} = {views.pos_views / views.neg_views if views.neg_views else float('nan'):.4f} (informational)",
+            flush=True,
+        )
+        print(
+            f"[diet] projected_neg_views={views.projected_neg_views:,} "
+            f"(easy quota x{views.easy_ratio:g}, enabled={views.easy_enabled}, loss={inputs.loss}; "
+            f"dynamic mask frac={inputs.hard_negative_frac:g}, enabled={inputs.mask_hard_negatives} "
+            "(in-place replacement — adds no views); "
+            "easy-projection is an upper bound, not guaranteed)",
+            flush=True,
+        )
+        if not neg_ok:
+            failures.append(
+                f"neg_aug_frac {neg_aug_frac:.4f} < "
+                f"diet_min_neg_aug_frac {inputs.diet_min_neg_aug_frac:.4f}"
+            )
+        if not ratio_ok:
+            failures.append(
+                f"actual pos_neg_view_ratio {effective_ratio:.4f} > "
+                f"diet_max_pos_neg_view_ratio {inputs.diet_max_pos_neg_view_ratio:.4f} "
+                f"(bundle-only {pos_neg_ratio:.4f})"
+            )
+        if failures:
+            for failure in failures:
+                print(f"DIET FAIL: {failure}", flush=True)
+            return DietGate.EXIT_THRESHOLD_MISS  # Valid inputs, but the presentation diet misses its thresholds.
+        print("DIET PASS", flush=True)
+        return DietGate.EXIT_PASS
+
+
+def main(argv: list[str], *, prepared=None) -> int:
+    return DietGate(argv, prepared=prepared).run()
+def main(argv: list[str], *, prepared=None) -> int:
+    return DietGate(argv, prepared=prepared).run()
 
 
 if __name__ == "__main__":
