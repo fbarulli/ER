@@ -1026,16 +1026,10 @@ class _PopulationBuilders:
         sampling with replacement replenishes it. The returned integer is the
         unique candidate count before replenishment, useful for telemetry.
         """
-        hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
-        hard_sources = np.asarray(hard_sources, dtype=object)
-        if len(hard_sources) != len(hard_pairs):
-            raise ValueError("hard negative/source lengths differ")
-        ratio_to_hard = float(ratio_to_hard)
-        if ratio_to_hard < 0:
-            raise ValueError("random/easy to hard ratio must be non-negative")
-        if int(candidate_pool_size) < 1:
-            raise ValueError("random/easy candidate pool size must be positive")
-        target = int(np.ceil(len(hard_pairs) * ratio_to_hard))
+        cls = _PopulationBuilders
+        hard_pairs, hard_sources, target = cls._mix_inputs(
+            hard_pairs, hard_sources, ratio_to_hard, candidate_pool_size
+        )
         if not enabled or target == 0:
             return hard_pairs, hard_sources, 0
 
@@ -1048,32 +1042,16 @@ class _PopulationBuilders:
         )
         if not len(candidates):
             return hard_pairs, hard_sources, 0
-        if not pairs_in_set(candidates, row_bc, train_gtins).all():
-            raise RuntimeError("random/easy training negatives crossed the train split")
+        cls._assert_still_inside_train_split(candidates, row_bc, train_gtins)
 
-        normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
-        unique_candidates = np.asarray(
-            [
-                pair
-                for pair in np.unique(np.sort(candidates, axis=1), axis=0)
-                if tuple(pair) not in normalized_hard
-            ],
-            dtype=int,
-        ).reshape(-1, 2)
+        unique_candidates = cls._unique_easy_candidates(candidates, hard_pairs)
         if not len(unique_candidates):
             print(
                 "[random-easy] WARNING: candidate pool only duplicated hard negatives",
                 flush=True,
             )
             return hard_pairs, hard_sources, 0
-        rng = np.random.default_rng(seed + 1)
-        chosen = unique_candidates[
-            rng.choice(
-                len(unique_candidates),
-                size=target,
-                replace=len(unique_candidates) < target,
-            )
-        ]
+        chosen = cls._replenish(rng_seed=seed, unique_candidates=unique_candidates, target=target)
         mixed_pairs = np.vstack([hard_pairs, chosen])
         mixed_sources = np.concatenate(
             [hard_sources, np.full(target, "random_easy", dtype=object)]
@@ -1081,31 +1059,62 @@ class _PopulationBuilders:
         return mixed_pairs, mixed_sources, len(unique_candidates)
 
     @staticmethod
-    def _mnrl_training_triples_with_populations(
-        train_pos: np.ndarray,
-        train_neg: np.ndarray,
-        *,
-        mask_audit: list[dict] | None,
-        hard_negative_mask_audit: list[dict] | None,
-    ) -> list[tuple[tuple[int, int, int], str]]:
-        """Join explicit negatives to positives without losing augmented anchors.
+    def _mix_inputs(hard_pairs, hard_sources, ratio_to_hard, candidate_pool_size):
+        """Coerce + validate the mix inputs; return the easy-diversity target."""
+        hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
+        hard_sources = np.asarray(hard_sources, dtype=object)
+        if len(hard_sources) != len(hard_pairs):
+            raise ValueError("hard negative/source lengths differ")
+        ratio_to_hard = float(ratio_to_hard)
+        if ratio_to_hard < 0:
+            raise ValueError("random/easy to hard ratio must be non-negative")
+        if int(candidate_pool_size) < 1:
+            raise ValueError("random/easy candidate pool size must be positive")
+        return hard_pairs, hard_sources, int(np.ceil(len(hard_pairs) * ratio_to_hard))
 
-        Masked/swapped copies have new payload indices; audit rows identify the
-        original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
-        one of their source's explicit negatives, if available. Never infer a
-        positive or negative from a gtin alone: that can silently mislabel.
+    @staticmethod
+    def _assert_still_inside_train_split(candidates, row_bc, train_gtins) -> None:
+        """The mixed population may never cross the train component boundary."""
+        if not pairs_in_set(candidates, row_bc, train_gtins).all():
+            raise RuntimeError("random/easy training negatives crossed the train split")
 
-        Each triple is paired with its training population so train-time
-        per-subset loss monitoring can attribute loss to the population that
-        generated the negative pressure:
-          * ``base``   — ordinary source-anchored triples (no augmentation copy)
-          * ``masked`` — triples anchored on a masked/swap hard-negative copy
-          * ``twin``   — counterfactual twin negatives trained against their source
-        """
+    @staticmethod
+    def _unique_easy_candidates(candidates: np.ndarray, hard_pairs: np.ndarray) -> np.ndarray:
+        """Deduplicated candidate rows minus the ones already hard negatives."""
+        normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
+        return np.asarray(
+            [
+                pair
+                for pair in np.unique(np.sort(candidates, axis=1), axis=0)
+                if tuple(pair) not in normalized_hard
+            ],
+            dtype=int,
+        ).reshape(-1, 2)
+
+    @staticmethod
+    def _replenish(*, rng_seed: int, unique_candidates: np.ndarray, target: int) -> np.ndarray:
+        """Deterministic (with-replacement) sampling up to the ratio target."""
+        rng = np.random.default_rng(rng_seed + 1)
+        return unique_candidates[
+            rng.choice(
+                len(unique_candidates),
+                size=target,
+                replace=len(unique_candidates) < target,
+            )
+        ]
+
+    @staticmethod
+    @staticmethod
+    def _positives_by_anchor(train_pos: np.ndarray) -> dict[int, set[int]]:
+        """Anchor -> its explicit positive endpoints."""
         positives_by_anchor: dict[int, set[int]] = {}
         for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
             positives_by_anchor.setdefault(int(anchor), set()).add(int(positive))
+        return positives_by_anchor
 
+    @staticmethod
+    def _copy_lineage_maps(hard_negative_mask_audit: list[dict] | None):
+        """The copy->original-anchor and copy->mode maps; conflicting lineage dies."""
         original_by_copy_pair: dict[tuple[int, int], int] = {}
         mode_by_copy_pair: dict[tuple[int, int], str] = {}
         for audit in hard_negative_mask_audit or []:
@@ -1115,19 +1124,39 @@ class _PopulationBuilders:
                 raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
             original_by_copy_pair[key] = original
             mode_by_copy_pair[key] = str(audit.get("target_mode", ""))
+        return original_by_copy_pair, mode_by_copy_pair
 
+    @staticmethod
+    def _negatives_by_anchor(
+        train_neg: np.ndarray,
+        selected_edges: set,
+        hard_negative_mask_audit: list[dict] | None,
+        positives_by_anchor: dict[int, set[int]],
+    ) -> dict[int, list[int]]:
+        """Anchor -> explicit negative endpoints, plus the counterfactual twin addendum."""
         negatives_by_anchor: dict[int, list[int]] = {}
         for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
             negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
-        selected_edges = set(map(tuple,np.asarray(train_neg,dtype=int).reshape(-1,2).tolist()))
         for audit in hard_negative_mask_audit or []:
             if audit.get('target_mode') == 'counterfactual':
                 source, pair, copy = (int(audit[key]) for key in ('anchor_payload_idx','pair_payload_idx','copy_payload_idx'))
                 if (copy,pair) in selected_edges and pair in positives_by_anchor.get(source,set()):
                     negatives_by_anchor.setdefault(source,[]).append(copy)
+        return negatives_by_anchor
 
-        triples: list[tuple[tuple[int, int, int], str]] = []
-        seen: set[tuple[int, int, int]] = set()
+    @staticmethod
+    def _base_mnrl_candidates(
+        train_neg: np.ndarray,
+        positives_by_anchor: dict[int, set[int]],
+        original_by_copy_pair: dict[tuple[int, int], int],
+        mode_by_copy_pair: dict[tuple[int, int], str],
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Source-anchored triples for every train negative with a positive.
+
+        Counterfactual twin rows are skipped here (source-anchored branches
+        below); swap_values replays the transplant onto the source positive
+        and registers the result against the COPY anchor."""
+        candidates: list[tuple[tuple[int, int, int], str]] = []
         for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
             anchor_i, negative_i = int(anchor), int(negative)
             mode = mode_by_copy_pair.get((anchor_i, negative_i))
@@ -1152,17 +1181,29 @@ class _PopulationBuilders:
             if positive_i is None or positive_i == negative_i:
                 continue
             triple = (anchor_i, positive_i, negative_i)
-            if triple not in seen:
-                seen.add(triple)
-                # A hard-negative copy anchor means the triple's negative is a
-                # masked/swap augmentation; otherwise it is an organic base triple.
-                population = (
-                    "masked"
-                    if (anchor_i, negative_i) in original_by_copy_pair
-                    else "base"
-                )
-                triples.append((triple, population))
+            # A hard-negative copy anchor means the triple's negative is a
+            # masked/swap augmentation; otherwise it is an organic base triple.
+            population = (
+                "masked"
+                if (anchor_i, negative_i) in original_by_copy_pair
+                else "base"
+            )
+            candidates.append((triple, population))
+        return candidates
 
+    @staticmethod
+    def _masked_counterpart_candidates(
+        mask_audit: list[dict] | None,
+        train_pos: np.ndarray,
+        negatives_by_anchor: dict[int, list[int]],
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Triples anchored on a masked-copy anchor with its own positive.
+
+        Symmetric value swaps append a counterpart copy alongside the anchor
+        copy: the copy's positive side is that counterpart copy, not the
+        original pair side (older audits fall back to the original pair
+        side). Fold membership is checked on both edges independently."""
+        candidates: list[tuple[tuple[int, int, int], str]] = []
         train_positive_pairs = {
             (int(anchor), int(positive))
             for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2)
@@ -1170,10 +1211,6 @@ class _PopulationBuilders:
         for audit in mask_audit or []:
             source_i = int(audit["anchor_payload_idx"])
             copy_i = int(audit["copy_payload_idx"])
-            # Symmetric value swaps append a counterpart copy alongside the
-            # anchor copy: the copy's positive side is that counterpart copy,
-            # not the original pair side. Older audits lack the key and fall
-            # back to the original pair side.
             source_positive_i = int(audit["pair_payload_idx"])
             positive_i = int(
                 audit.get("copy_pair_payload_idx")
@@ -1197,19 +1234,26 @@ class _PopulationBuilders:
             )
             if negative_i is None:
                 continue
-            triple = (copy_i, positive_i, negative_i)
-            if triple not in seen:
-                seen.add(triple)
-                triples.append((triple, "masked"))
-        # Counterfactual twins never survive the main loop above: a twin row is
-        # (copy, pair-side) with label 0, and its source's positive IS the pair
-        # side, so positive_i == negative_i skips it — silently dropping every
-        # twin from training (they would linger in eval/diet only). Twins train
-        # as explicit negatives of their own source: (source, pair-side, copy),
-        # i.e. "the original matches its canonical better than its one-flip
-        # twin". That is the counterfactual pressure; without this branch the
-        # twin lane mints evaluation rows that never see a gradient.
-        selected_negative_pairs = selected_edges
+            candidates.append(((copy_i, positive_i, negative_i), "masked"))
+        return candidates
+
+    @staticmethod
+    def _twin_candidates(
+        selected_negative_pairs: set,
+        positives_by_anchor: dict[int, set[int]],
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Counterfactual twin triples: source trains against its own flip.
+
+        Twins never survive _base_mnrl_candidates: a twin row is (copy,
+        pair-side) with label 0, and its source's positive IS the pair side,
+        so positive_i == negative_i skips it — silently dropping every twin
+        from training (they would linger in eval/diet only). Twins train as
+        explicit negatives of their own source: (source, pair-side, copy),
+        i.e. "the original matches its canonical better than its one-flip
+        twin". That is the counterfactual pressure; without this branch the
+        twin lane mints evaluation rows that never see a gradient."""
+        candidates: list[tuple[tuple[int, int, int], str]] = []
         for audit in hard_negative_mask_audit or []:
             if audit.get("target_mode") != "counterfactual":
                 continue
@@ -1226,16 +1270,67 @@ class _PopulationBuilders:
                 # Compare a canonical-derived twin to its clean canonical parent.
                 # The listing remains the licensed positive, while vendor wording
                 # cannot dilute the minimal attribute distinction on the negative.
-                triple = (pair_i, source_i, copy_i)
-                if triple not in seen:
-                    seen.add(triple)
-                    triples.append((triple, 'twin'))
+                candidates.append(((pair_i, source_i, copy_i), 'twin'))
                 continue
             for positive_i in sorted(positives_by_anchor.get(source_i, set())):
-                triple = (source_i, positive_i, copy_i)
-                if triple not in seen:
-                    seen.add(triple)
-                    triples.append((triple, "twin"))
+                candidates.append(((source_i, positive_i, copy_i), "twin"))
+        return candidates
+
+    @staticmethod
+    def _mnrl_training_triples_with_populations(
+        train_pos: np.ndarray,
+        train_neg: np.ndarray,
+        *,
+        mask_audit: list[dict] | None,
+        hard_negative_mask_audit: list[dict] | None,
+    ) -> list[tuple[tuple[int, int, int], str]]:
+        """Join explicit negatives to positives without losing augmented anchors.
+
+        Masked/swapped copies have new payload indices; audit rows identify the
+        original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
+        one of their source's explicit negatives, if available. Never infer a
+        positive or negative from a gtin alone: that can silently mislabel.
+
+        Each triple is paired with its training population so train-time
+        per-subset loss monitoring can attribute loss to the population that
+        generated the negative pressure:
+          * ``base``   — ordinary source-anchored triples (no augmentation copy)
+          * ``masked`` — triples anchored on a masked/swap hard-negative copy
+          * ``twin``   — counterfactual twin negatives trained against their source
+
+        Invariant: the four generators emit candidates in EXACTLY the old
+        in-loop order; the single dedup pass below reproduces the old
+        `if triple not in seen` behavior row-for-row (seen was only updated
+        on append, and no candidate generation depended on it).
+        """
+        cls = _PopulationBuilders
+        positives_by_anchor = cls._positives_by_anchor(train_pos)
+        original_by_copy_pair, mode_by_copy_pair = cls._copy_lineage_maps(
+            hard_negative_mask_audit
+        )
+        selected_edges = set(
+            map(tuple, np.asarray(train_neg, dtype=int).reshape(-1, 2).tolist())
+        )
+        negatives_by_anchor = cls._negatives_by_anchor(
+            train_neg, selected_edges, hard_negative_mask_audit, positives_by_anchor
+        )
+        candidates = [
+            *cls._base_mnrl_candidates(
+                train_neg, positives_by_anchor, original_by_copy_pair, mode_by_copy_pair
+            ),
+            *cls._masked_counterpart_candidates(
+                mask_audit, train_pos, negatives_by_anchor
+            ),
+            *cls._twin_candidates(
+                selected_edges, positives_by_anchor, hard_negative_mask_audit
+            ),
+        ]
+        triples: list[tuple[tuple[int, int, int], str]] = []
+        seen: set[tuple[int, int, int]] = set()
+        for candidate in candidates:
+            if candidate[0] not in seen:
+                seen.add(candidate[0])
+                triples.append(candidate)
         return triples
 
     @staticmethod
