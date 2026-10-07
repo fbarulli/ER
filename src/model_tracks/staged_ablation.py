@@ -26,12 +26,14 @@ import json
 from pathlib import Path
 import shutil
 import torch
+from core.model_input import model_input_composition
 from core.run_log import RunLogger
 from core.timing import Timing
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.text_cache import checkpoint_hash
-from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context
+from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors
+from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
 
@@ -79,7 +81,6 @@ def _frozen_support(setup):
 
 def _template_checkpoint(setup,baseline,track,vocabulary,support):
     """The text baseline checkpoint, or the other tracks' template tensor file."""
-    from core.model_input import model_input_composition
     checkpoint = baseline
     if track != 'text':
         checkpoint = setup/(track+'__ablation_template.pt')
@@ -122,7 +123,6 @@ def _anchor_request(setup,request):
     request['sources'] = {anchor(k):v for k,v in request['sources'].items()}
     request['checkpoint'] = anchor(request['checkpoint'])
     request['text_checkpoint'] = anchor(request['text_checkpoint']) if request['text_checkpoint'] else None
-    from model_tracks.package import package_member
     request['portable_setup'] = package_member('suite_package_shared')
 
 
@@ -259,7 +259,6 @@ def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_mo
     """Validated existing vectors win; otherwise the device owner encodes."""
     vectors = folder/'vectors.npz'
     if vectors.exists():
-        from model_tracks.ablation import validate_vectors
         validate_vectors(path,vectors)
     else:
         saved_text = _saved_text_default(request,output=output,setup=setup,
