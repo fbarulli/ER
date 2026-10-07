@@ -55,26 +55,43 @@ def _token_batches(request, arrays, batch_size, plan, *, token_cache=None):
         plan.update(prepare_tokens(resolve(checkpoint),request['texts'],arrays,batch_size=batch_size,cache=token_cache))
 
 
-def _graph_topology(request, arrays, plan):
-    """Validate the graph checkpoint and batch the frozen support topology."""
+def _graph_payload(request):
+    """Load the graph checkpoint, rejecting schema and split-context drift."""
+    from model_tracks.ablation import resolve
+    payload = torch.load(resolve(request['checkpoint']),map_location='cpu',weights_only=False)
+    if payload.get('schema') != 'er-graph-checkpoint-v1' or payload['manifest']['track'] != request['track']:
+        raise ValueError('graph checkpoint schema/track mismatch')
+    if any(r['split'] != 'train' for r in payload['support_records']):
+        raise ValueError('graph context must contain training listings only')
+    return payload
+
+
+def _hybrid_metadata(request,payload):
+    """Hybrid's text checkpoint sha and model composition must match training."""
+    if request['track'] == 'hybrid':
+        from model_tracks.ablation import checkpoint_identity, resolve
+        from core.model_input import model_input_composition
+        metadata = payload['manifest']['text_metadata']
+        if metadata['checkpoint_sha256'] != checkpoint_identity(resolve(request['text_checkpoint'])) or metadata['composition'] != model_input_composition().model_dump(mode='json'):
+            raise ValueError('hybrid text checkpoint/composition differs from training')
+
+
+def _support_batch(plan,arrays,payload):
+    """Tensorize the frozen support topology under the checkpoint vocabulary."""
+    vocabulary = payload['vocabulary']
+    plan['vocabulary'] = vocabulary
+    save_batch(arrays,'support',tensorize(payload['support_records'],vocabulary,'cpu'),vocabulary)
+    return vocabulary
+
+
+def _graph_topology(request,arrays,plan):
+    """The graph track's payload plus its tensorized support (text: noops)."""
     payload = None
     vocabulary = None
     if request['track'] != 'text':
-        from model_tracks.ablation import resolve
-        payload = torch.load(resolve(request['checkpoint']),map_location='cpu',weights_only=False)
-        if payload.get('schema') != 'er-graph-checkpoint-v1' or payload['manifest']['track'] != request['track']:
-            raise ValueError('graph checkpoint schema/track mismatch')
-        if any(r['split'] != 'train' for r in payload['support_records']):
-            raise ValueError('graph context must contain training listings only')
-        if request['track'] == 'hybrid':
-            from model_tracks.ablation import checkpoint_identity
-            from core.model_input import model_input_composition
-            metadata = payload['manifest']['text_metadata']
-            if metadata['checkpoint_sha256'] != checkpoint_identity(resolve(request['text_checkpoint'])) or metadata['composition'] != model_input_composition().model_dump(mode='json'):
-                raise ValueError('hybrid text checkpoint/composition differs from training')
-        vocabulary = payload['vocabulary']
-        plan['vocabulary'] = vocabulary
-        save_batch(arrays,'support',tensorize(payload['support_records'],vocabulary,'cpu'),vocabulary)
+        payload = _graph_payload(request)
+        _hybrid_metadata(request,payload)
+        vocabulary = _support_batch(plan,arrays,payload)
     return payload,vocabulary
 
 
