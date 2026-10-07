@@ -849,35 +849,49 @@ class NegativeSupply(BaseModel):
             self._prepare()
             anchors = np.flatnonzero(self.anchor_mask.to_numpy())
             if len(anchors) == 0:
-                self.candidates = pd.DataFrame()
-                self.funnel["block"] = {"anchors": 0, "candidates": 0}
-                return self.candidates
-            pool_texts = self._texts.iloc[anchors].tolist()
+                return self._block_empty_pool()
             gtins = self._anchors.gtins[anchors]
             vectorizer = TfidfVectorizer(sublinear_tf=True)
-            matrix = vectorizer.fit_transform(pool_texts)
+            matrix = vectorizer.fit_transform(self._texts.iloc[anchors].tolist())
             self._freeze_block_blocker(vectorizer, matrix, anchors)
-            rows: list[tuple[int, int, float]] = []
-            chunk_rows = self.spec.blocker.chunk_rows
-            chunk_starts = range(0, len(anchors), chunk_rows)
-            total_chunks = max(1, -(-len(anchors) // chunk_rows))
-            for start in _LOG.progress(
-                chunk_starts, desc="block_chunks", unit="chunk",
-                total=total_chunks,
-            ):
-                chunk = (matrix[start:start + chunk_rows] @ matrix.T).toarray()
-                chunk = chunk.astype(np.float32)
-                _suppress_same_gtin(chunk, gtins, start)
-                rows.extend(self._top_candidates(chunk, gtins, start, anchors,
-                                                 len(anchors)))
+            rows = self._chunked_top_candidates(matrix, gtins, anchors)
             self.candidates = _CandidateIndex(rows).frame
-            self.funnel["block"] = {
-                "anchors": int(len(anchors)),
-                "candidates": len(self.candidates),
-                "min_score": self.spec.blocker.min_score,
-                "top_k": self.spec.blocker.top_k,
-            }
+            self.funnel["block"] = self._block_funnel(len(anchors))
             return self.candidates
+
+    def _block_empty_pool(self) -> pd.DataFrame:
+        """The empty block result: no candidates and a zeroed funnel entry."""
+        self.candidates = pd.DataFrame()
+        self.funnel["block"] = {"anchors": 0, "candidates": 0}
+        return self.candidates
+
+    def _block_funnel(self, anchors: int) -> dict:
+        """The blocking stage's funnel entry over one anchor count."""
+        return {
+            "anchors": int(anchors),
+            "candidates": len(self.candidates),
+            "min_score": self.spec.blocker.min_score,
+            "top_k": self.spec.blocker.top_k,
+        }
+
+    def _chunked_top_candidates(
+        self, matrix: "np.ndarray", gtins: "np.ndarray", anchors: "np.ndarray"
+    ) -> list[tuple[int, int, float]]:
+        """Anchor rows per matrix chunk (memory bound): cosine, exclusion, top-k."""
+        rows: list[tuple[int, int, float]] = []
+        chunk_rows = self.spec.blocker.chunk_rows
+        chunk_starts = range(0, len(anchors), chunk_rows)
+        total_chunks = max(1, -(-len(anchors) // chunk_rows))
+        for start in _LOG.progress(
+            chunk_starts, desc="block_chunks", unit="chunk",
+            total=total_chunks,
+        ):
+            chunk = (matrix[start:start + chunk_rows] @ matrix.T).toarray()
+            chunk = chunk.astype(np.float32)
+            _suppress_same_gtin(chunk, gtins, start)
+            rows.extend(self._top_candidates(chunk, gtins, start, anchors,
+                                             len(anchors)))
+        return rows
 
     def _freeze_block_blocker(self, vectorizer, matrix, anchors: "np.ndarray") -> None:
         """Keep the blocker frozen for minted-arm scoring parity."""
@@ -968,23 +982,24 @@ class NegativeSupply(BaseModel):
         census = {
             "no_canonical_record": 0, "diff_count_1": 0, "diff_count_other": 0,
         }
-        candidates = list(self.candidates.itertuples(index=False))
-        for candidate in _LOG.progress(
-            candidates, desc="mine_real_partners", unit="candidate",
-            total=len(candidates),
-        ):
-            left_gtin = self._anchors.row_gtin(candidate.anchor_row)
-            right_gtin = self._anchors.row_gtin(candidate.candidate_row)
-            if not self._canonical_index.has_record(left_gtin) \
-                    or not self._canonical_index.has_record(right_gtin):
-                census["no_canonical_record"] += 1
-                continue
-            diffs = self._candidate_diff(left_gtin, right_gtin)
-            if self._single_whitelisted_diff(diffs):
-                census["diff_count_1"] += 1
-                rows.append(self._real_partner_row(candidate, diffs))
-            else:
-                census["diff_count_other"] += 1
+        with _LOG.section("negative_supply.mine_real_partners"):
+            candidates = list(self.candidates.itertuples(index=False))
+            for candidate in _LOG.progress(
+                candidates, desc="mine_real_partners", unit="candidate",
+                total=len(candidates),
+            ):
+                left_gtin = self._anchors.row_gtin(candidate.anchor_row)
+                right_gtin = self._anchors.row_gtin(candidate.candidate_row)
+                if not self._canonical_index.has_record(left_gtin) \
+                        or not self._canonical_index.has_record(right_gtin):
+                    census["no_canonical_record"] += 1
+                    continue
+                diffs = self._candidate_diff(left_gtin, right_gtin)
+                if self._single_whitelisted_diff(diffs):
+                    census["diff_count_1"] += 1
+                    rows.append(self._real_partner_row(candidate, diffs))
+                else:
+                    census["diff_count_other"] += 1
         rows.sort(key=lambda pair: (pair.anchor_row, pair.partner_row))
         self.funnel["mine_real"] = {**census, "real_partners": len(rows)}
         return rows
@@ -1072,10 +1087,17 @@ class NegativeSupply(BaseModel):
         if len(rows) >= self.spec.mint.max_minted:
             skipped["target_cap"] += 1
             return None
-        attempted = _ordered_moves(moves, self.spec.mint.prefer, sequence)
-        landed = self._try_moves(anchor, attempted, skipped)
+        landed = self._try_moves(
+            anchor, _ordered_moves(moves, self.spec.mint.prefer, sequence), skipped
+        )
         if landed is None:
             return None
+        return self._minted_row(anchor, anchor_gtins, landed)
+
+    def _minted_row(
+        self, anchor: int, anchor_gtins: "np.ndarray", landed: tuple
+    ) -> PairRow:
+        """The minted synthetic row over one landed token move."""
         new_text, dimension, moved_from, moved_to = landed
         return PairRow(
             anchor_row=anchor,
