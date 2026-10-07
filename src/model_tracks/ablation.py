@@ -28,12 +28,39 @@ from core.run_log import RunLogger
 from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
-from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
+from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 from model_tracks.embedding_forward import validate_embedding_device
+from training.masking import field_of
 
 _LOG = RunLogger(__name__)
+
+_HASH_MEMO: dict[tuple, str] = {}
+
+
+def file_hash(path):
+    path = Path(path)
+    if path.is_dir():
+        return _raw_file_hash(path)
+    try:
+        info = path.stat()
+    except OSError:
+        return _raw_file_hash(path)
+    signature = (str(path.resolve()), info.st_mtime_ns, info.st_size)
+    memoized = _HASH_MEMO.get(signature)
+    if memoized is not None:
+        return memoized
+    result = _raw_file_hash(path)
+    if len(_HASH_MEMO) > 256:
+        _HASH_MEMO.clear()
+    _HASH_MEMO[signature] = result
+    return result
+
+
+def _raw_identity(path):
+    path = Path(path)
+    return checkpoint_hash(path) if path.is_dir() else _raw_file_hash(path)
 
 
 def _default_retrieval_ks() -> tuple[int, ...]:
@@ -173,7 +200,6 @@ def _field_surfaces(text: str) -> dict[str, set[str]]:
 
 
 def declaration_removed(row, attribute):
-    from training.masking import field_of
     result = dict(row)
     if result.get('frozen_payload'):
         fields = {'volume': {'volume'}, 'count per unit': {'pack'},
@@ -235,7 +261,7 @@ def validate_sources(request):
         if path.endswith('.py'):
             continue
         source = resolve(path)
-        if not source.exists() or checkpoint_identity(source) != expected:
+        if not source.exists() or _raw_identity(source) != expected:
             raise ValueError(f'ablation source changed: {path}')
 
 
@@ -472,7 +498,7 @@ def load_prepared(request_path, request):
     if request.get('schema') != 'er-attribute-ablation-v2' or not plan:
         raise ValueError('locally prepared model inputs required; prepare again')
     path = request_path.parent/'prepared_inputs.npz'
-    if file_hash(path) != plan['sha256']:
+    if _raw_file_hash(path) != plan['sha256']:
         raise ValueError('prepared input checksum mismatch')
     return np.load(path,allow_pickle=False)
 
@@ -702,7 +728,7 @@ def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
         raise ValueError('threshold source must be an existing saved report')
-    before = file_hash(path)
+    before = _raw_file_hash(path)
     if path.suffix == '.csv':
         values, track, checkpoint = _threshold_from_csv(path, value, None, None)
         claimed_sha256 = None
@@ -710,7 +736,7 @@ def frozen_threshold(source, value):
         values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
     if not any(isinstance(x, (int,float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
-    if before != file_hash(path):
+    if before != _raw_file_hash(path):
         raise ValueError('threshold report changed while reading')
     return {'path':source_name(path),'sha256':before,'selection':'saved baseline; never refitted during ablation',
             'track':track, 'checkpoint':checkpoint, 'checkpoint_sha256':claimed_sha256}
@@ -751,7 +777,7 @@ def validate_vectors(request_path, result):
     if 'prepared_inputs' in request:
         load_prepared(request_path,request).close()
     with np.load(result,allow_pickle=False) as data:
-        if str(data['request_sha256'].item()) != file_hash(request_path):
+        if str(data['request_sha256'].item()) != _raw_file_hash(request_path):
             raise ValueError('ablation result belongs to another request')
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None

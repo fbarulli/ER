@@ -40,6 +40,8 @@ from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
 
+_BINDING_UNSET = object()
+
 
 @timed
 def _freeze_suite(setup,config,bundle):
@@ -146,17 +148,21 @@ def _copy_template(setup,track,path,request):
 
 
 @timed
-def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None):
+def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None,graph_binding=_BINDING_UNSET):
     """One track's template: checkpoint, prepared request, anchors, folder copy."""
     with _LOG.section('ablation_template.checkpoint'):
         checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
-    path,request = _track_request(setup,checkpoint,track,cohort=cohort,
-        frozen_config=frozen_config,baseline=baseline,composer=composer,token_cache=token_cache)
-    common_cohort = _track_cohort(track,request,common_cohort)
-    request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
-    with _LOG.section('ablation_template.anchors'):
+    with _LOG.section('ablation_template.prepared_request'):
+        path,request = _track_request(setup,checkpoint,track,cohort=cohort,
+            frozen_config=frozen_config,baseline=baseline,composer=composer,token_cache=token_cache)
+    with _LOG.section('ablation_template.cohort_validate'):
+        common_cohort = _track_cohort(track,request,common_cohort)
+    with _LOG.section('ablation_template.graph_binding'):
+        if graph_binding is _BINDING_UNSET and track != 'text':
+            graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
+        request['graph_binding'] = graph_binding if track != 'text' else None
+    with _LOG.section('ablation_template.anchor_and_copy'):
         _anchor_request(setup,request)
-    with _LOG.section('ablation_template.folder'):
         _copy_template(setup,track,path,request)
     timing.mark(track + '_tokens_tensors_and_request')
     return common_cohort
@@ -185,12 +191,13 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     with _LOG.section('ablation_suite.track_templates'):
         common_cohort = None
         tracks = ('text','gnn_only','hybrid')
+        graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
         for track in _LOG.progress(tracks,desc='ablation_templates',unit='track',total=len(tracks)):
             _LOG.info('ablation template building track=' + track)
             common_cohort = _track_template(setup,baseline,track,cohort=cohort,
                 frozen_config=frozen_config,vocabulary=vocabulary,
                 support=support,common_cohort=common_cohort,timing=timing,
-                composer=composer,token_cache=token_cache)
+                composer=composer,token_cache=token_cache,graph_binding=graph_binding)
     with _LOG.section('ablation_suite.cleanup_staging'):
         _drop_staging(setup)
     timing.mark('cleanup_staging')
