@@ -23,10 +23,31 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
 from core.run_log import RunLogger
 from core.step_trace import timed
-from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
+from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 
 _LOG = RunLogger(__name__)
+
+_HASH_MEMO: dict[tuple, str] = {}
+
+
+def file_hash(path):
+    path = Path(path)
+    if path.is_dir():
+        return _raw_file_hash(path)
+    try:
+        info = path.stat()
+    except OSError:
+        return _raw_file_hash(path)
+    signature = (str(path.resolve()), info.st_mtime_ns, info.st_size)
+    memoized = _HASH_MEMO.get(signature)
+    if memoized is not None:
+        return memoized
+    result = _raw_file_hash(path)
+    if len(_HASH_MEMO) > 256:
+        _HASH_MEMO.clear()
+    _HASH_MEMO[signature] = result
+    return result
 
 
 def _default_retrieval_ks() -> tuple[int, ...]:
@@ -685,7 +706,7 @@ def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
         raise ValueError('threshold source must be an existing saved report')
-    before = file_hash(path)
+    before = _raw_file_hash(path)
     if path.suffix == '.csv':
         values, track, checkpoint = _threshold_from_csv(path, value, None, None)
         claimed_sha256 = None
@@ -693,7 +714,7 @@ def frozen_threshold(source, value):
         values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
     if not any(isinstance(x, (int,float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
-    if before != file_hash(path):
+    if before != _raw_file_hash(path):
         raise ValueError('threshold report changed while reading')
     return {'path':source_name(path),'sha256':before,'selection':'saved baseline; never refitted during ablation',
             'track':track, 'checkpoint':checkpoint, 'checkpoint_sha256':claimed_sha256}
