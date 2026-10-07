@@ -648,386 +648,535 @@ def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = 
 
     Evidence is drawn from ALL available columns — sku_name_eng, attribute,
     description_short_eng, URL slug, image filename, breadcrumbs_eng, and category —
-    so the gate sees every product-bearing signal before deciding.
+    so the gate sees every product-bearing signal before deciding. The phases
+    run on a ListingCardBuilder; this delegator keeps the documented call.
     """
-    from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types, negated_sweetener_types
-    from core.text import extract_volume_evidence
-    from core.url_evidence import url_text
+    return ListingCardBuilder(
+        sku_name_eng, attribute, description_short_eng,
+        sku_url=sku_url, image_url=image_url,
+        breadcrumbs_eng=breadcrumbs_eng, category=category,
+    ).execute()
 
-    sweeteners = declared_sweeteners(attribute)
-    sweeteners["sweetener_type"].update(title_sweetener_types(sku_name_eng))
-    sweeteners["sweetener_type"].update(title_sweetener_types(description_short_eng))
-    sweeteners["sweetening"].update(extract_sweetening_status(sku_name_eng, attribute, description_short_eng))
-    t = normalize_text(sku_name_eng)
-    # URL tokens: product-bearing prose from the listing slug.
-    # Fed into volume/pack extraction when title/attributes are silent.
-    # url_text is the reader for BOTH URL columns (docstring, url_evidence.py):
-    # image filenames go through the same normalizer — hashes, media dims and
-    # scaffolding fall out; size tokens ("250ml") survive.
-    url_tokens = url_text(sku_url)
-    img_tokens = url_text(image_url)
-    url_norm = normalize_text(url_tokens)
-    img_norm = normalize_text(img_tokens)
-    sweeteners["sweetener_type"].update(title_sweetener_types(url_tokens))
-    sweeteners["sweetener_type"].update(title_sweetener_types(img_tokens))
-    # Category evidence: breadcrumbs_eng and category provide
-    # product-type signals (flavor hints, carbonation clues)
-    # that title/attributes may miss.
-    cat_tokens = normalize_text(breadcrumbs_eng) + " " + normalize_text(category)
-    cat_tokens = cat_tokens.strip()
-    # Critical categorical evidence is parsed once for the canonical, model,
-    # mining, and inference lanes.  Keep the historical scalar flavor as a
-    # deterministic first value for compatibility with existing CSV readers.
-    from core.product_selection import selected_identity_inputs
-    identity_title, identity_attributes, selected_variant = selected_identity_inputs(sku_name_eng, attribute)
-    critical = extract_critical_claims(identity_title, identity_attributes)
-    description_claims = extract_description_claims(description_short_eng)
-    consistency_flags = set(sweeteners["consistency_flags"])
-    negative_ingredients = negated_sweetener_types(sku_name_eng, attribute, description_short_eng, url_tokens, img_tokens)
-    consistency_flags.update(
-        f"sweetener_source_conflict:{ingredient}"
-        for ingredient in negative_ingredients & sweeteners["sweetener_type"]
-    )
-    # Product card evidence ledger: every claim the columns yield, recorded
-    # with its source at the moment of extraction (surface-one-by-one
-    # ruling 2026-10-01). Rides the result dict additively, like
-    # attribute_universe_evidence — schema stays extra="forbid".
-    ledger: list[dict] = []
-    if negative_ingredients:
-        ledger.append({"field": "negated_sweetener_type", "column": "sku_name_eng+attribute+description_short_eng",
-                       "value": sorted(negative_ingredients)})
-    from core.date_evidence import extract_date_evidence
-    date_evidence = [
-        {"column": column, **entry}
-        for column, text in (
-            ("sku_name_eng", sku_name_eng), ("attribute", attribute),
-            ("description_short_eng", description_short_eng), ("breadcrumbs_eng", breadcrumbs_eng),
-            ("category", category),
+
+class ListingCardBuilder:
+    """One listing's extract_all execution, phase by phase.
+
+    Single responsibility per phase; the phases run in ONE fixed order inside
+    execute() so the evidence-ledger append order and the consistency-flag
+    population stay byte-identical to the pre-refactor linear body
+    (the serialized ledger order is part of canonical_records.csv's bytes).
+
+    Phases (order = load-bearing):
+      harvest_consumer_tokens -> url/image/category token lanes
+      harvest_evidence_channels -> critical/description claims, every
+        per-column evidence ledger, cross-source contradiction flags
+      resolve_product_type -> config product-type ladder + category fallback
+      resolve_volume_and_pack -> column precedence chain, corroboration
+        fusion, plausibility bounds
+      assemble_card -> boundary validation (ExtractedAttributes) + additive
+        evidence keys
+    """
+
+    def __init__(self, sku_name_eng, attribute, description_short_eng="",
+                 sku_url="", image_url="", breadcrumbs_eng="", category=""):
+        from core.sweetener_values import declared_sweeteners
+        from core.url_evidence import url_text
+
+        # ── column inputs ──
+        self._sku_name_eng = sku_name_eng
+        self._attribute = attribute
+        self._description_short_eng = description_short_eng
+        self._sku_url = sku_url
+        self._image_url = image_url
+        self._breadcrumbs_eng = breadcrumbs_eng
+        self._category = category
+        self.url_tokens = url_text(sku_url)
+        self.img_tokens = url_text(image_url)
+        # ── shared card state (append order is the byte contract) ──
+        self.ledger: list[dict] = []
+        self.flags: set[str] = set()
+        # ── phase outputs ──
+        self.sweeteners = declared_sweeteners(attribute)
+        self.url_norm = ""
+        self.img_norm = ""
+        self.cat_tokens = ""
+        self.title_norm = ""
+        self.critical = {}
+        self.description_claims = {}
+        self.negative_ingredients: set[str] = set()
+        self.date_evidence = []
+        self.measurement_evidence = []
+        self.pack_evidence = []
+        self.declared_identity = None
+        self.flavor_set: set[str] = set()
+        self.made_from_set: set[str] = set()
+        self.ptype = ""
+        self.subtype = ""
+        # volume + pack resolution chain
+        self.title_vol = {}
+        self.pack_title, self.pack_conf_title = (1, 0.0)
+        self.pack_description, self.pack_conf_description = (1, 0.0)
+        self.attr_vol, self.attr_vol_conf, self.attr_pack, self.attr_pack_conf = (0.0, 0.0, 1, 0.0)
+        self.vol_url: dict = {}
+        self.pack_url, self.pack_conf_url = (1, 0.0)
+        self.vol_img: dict = {}
+        self.pack_img, self.pack_conf_img = (1, 0.0)
+        self.title_vol_ml = 0.0
+        self.volume_ml = 0.0
+        self.volume_conf = 0.0
+        self.volume_raw = ""
+        self.volume_status = ""
+        self.pack_qty = 1
+        self.pack_conf = 0.0
+        self.vol_claims: list[tuple[float, float, str]] = []
+        self.pack_claims: list[tuple[float, float, str]] = []
+        self.universe_evidence: dict[str, frozenset[str]] = {}
+        self.package_types: list[str] = []
+        self.packaging_levels: set[str] = set()
+        self.package_materials: list[str] = []
+
+    # ── phase 1: consumer token lanes ──────────────────────────────────────
+
+    def harvest_consumer_tokens(self) -> None:
+        """Sweetener(title/URL/image) union + normalized URL-side tokens."""
+        from core.sweetener_values import (
+            extract_sweetening_status,
+            title_sweetener_types,
         )
-        for entry in extract_date_evidence(str(text or ""))
-    ]
-    for entry in date_evidence:
-        ledger.append({"field": "source_date", "column": entry["column"], "value": entry})
-    measurement_evidence = [
-        {"column": column, **entry}
-        for column, text in (("sku_name_eng", str(sku_name_eng or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
-        for entry in extract_volume_evidence(text)
-    ]
-    for entry in measurement_evidence:
-        ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
-    pack_evidence = [
-        {"column": column, **entry}
-        for column, text in (("sku_name_eng", str(sku_name_eng or "")), ("description_short_eng", str(description_short_eng or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
-        for entry in extract_pack_evidence(text)
-    ]
-    if any(entry.get("hierarchy_ambiguous") for entry in pack_evidence):
-        consistency_flags.add("pack_hierarchy_ambiguous")
-    for entry in pack_evidence:
-        ledger.append({"field": "pack_quantity", "column": entry["column"], "value": entry})
-    opposing_values = {
-        "carbonation": (("carbonated", "still"),),
-        "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
-        "pulp": (("with_pulp", "no_pulp"),),
-        "organic": (("organic", "not_organic"),),
-    }
-    for dimension in ("carbonation", "sweetener", "pulp", "organic"):
-        base = set(critical[dimension])
-        described = set(description_claims[dimension])
-        if not base:
-            critical[dimension] = frozenset(described)
-        elif described:
-            inconsistent = any(
-                (left in base and right in described) or (right in base and left in described)
-                for left, right in opposing_values[dimension]
+        from core.text import normalize_text
+
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self._sku_name_eng))
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self._description_short_eng))
+        self.sweeteners["sweetening"].update(extract_sweetening_status(
+            self._sku_name_eng, self._attribute, self._description_short_eng
+        ))
+        self.title_norm = normalize_text(self._sku_name_eng)
+        # URL tokens: product-bearing prose from the listing slug.
+        # Fed into volume/pack extraction when title/attributes are silent.
+        # url_text is the reader for BOTH URL columns (docstring, url_evidence.py):
+        # image filenames go through the same normalizer — hashes, media dims and
+        # scaffolding fall out; size tokens ("250ml") survive.
+        self.url_norm = normalize_text(self.url_tokens)
+        self.img_norm = normalize_text(self.img_tokens)
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self.url_tokens))
+        self.sweeteners["sweetener_type"].update(title_sweetener_types(self.img_tokens))
+        # Category evidence: breadcrumbs_eng and category provide
+        # product-type signals (flavor hints, carbonation clues)
+        # that title/attributes may miss.
+        cat_tokens = normalize_text(self._breadcrumbs_eng) + " " + normalize_text(self._category)
+        self.cat_tokens = cat_tokens.strip()
+
+    # ── phase 2: evidence channels ─────────────────────────────────────────
+
+    def harvest_evidence_channels(self) -> None:
+        """Critical claims + every per-column ledger entry + contradiction flags.
+
+        The statements here run in exactly the original order: the ledger is
+        serialized later and its order is data, not decoration.
+        """
+        from core.date_evidence import extract_date_evidence
+        from core.product_selection import selected_identity_inputs
+        from core.sweetener_values import negated_sweetener_types
+        from core.text import extract_volume_evidence
+
+        identity_title, identity_attributes, _selected_variant = selected_identity_inputs(
+            self._sku_name_eng, self._attribute)
+        self.critical = extract_critical_claims(identity_title, identity_attributes)
+        self.description_claims = extract_description_claims(self._description_short_eng)
+        self.flags.update(self.sweeteners["consistency_flags"])
+        self.negative_ingredients = negated_sweetener_types(
+            self._sku_name_eng, self._attribute, self._description_short_eng,
+            self.url_tokens, self.img_tokens,
+        )
+        self.flags.update(
+            f"sweetener_source_conflict:{ingredient}"
+            for ingredient in self.negative_ingredients & self.sweeteners["sweetener_type"]
+        )
+        # Product card evidence ledger: every claim the columns yield, recorded
+        # with its source at the moment of extraction (surface-one-by-one
+        # ruling 2026-10-01). Rides the result dict additively, like
+        # attribute_universe_evidence — schema stays extra="forbid".
+        if self.negative_ingredients:
+            self.ledger.append({"field": "negated_sweetener_type", "column": "sku_name_eng+attribute+description_short_eng",
+                                "value": sorted(self.negative_ingredients)})
+        self.date_evidence = [
+            {"column": column, **entry}
+            for column, text in (
+                ("sku_name_eng", self._sku_name_eng), ("attribute", self._attribute),
+                ("description_short_eng", self._description_short_eng), ("breadcrumbs_eng", self._breadcrumbs_eng),
+                ("category", self._category),
             )
-            if inconsistent:
-                consistency_flags.add(f"description_conflict:{dimension}")
+            for entry in extract_date_evidence(str(text or ""))
+        ]
+        for entry in self.date_evidence:
+            self.ledger.append({"field": "source_date", "column": entry["column"], "value": entry})
+        self.measurement_evidence = [
+            {"column": column, **entry}
+            for column, text in (("sku_name_eng", str(self._sku_name_eng or "")), ("sku_url", self.url_tokens), ("image_url", self.img_tokens))
+            for entry in extract_volume_evidence(text)
+        ]
+        for entry in self.measurement_evidence:
+            self.ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
+        self.pack_evidence = [
+            {"column": column, **entry}
+            for column, text in (("sku_name_eng", str(self._sku_name_eng or "")), ("description_short_eng", str(self._description_short_eng or "")), ("sku_url", self.url_tokens), ("image_url", self.img_tokens))
+            for entry in extract_pack_evidence(text)
+        ]
+        if any(entry.get("hierarchy_ambiguous") for entry in self.pack_evidence):
+            self.flags.add("pack_hierarchy_ambiguous")
+        for entry in self.pack_evidence:
+            self.ledger.append({"field": "pack_quantity", "column": entry["column"], "value": entry})
+        self._merge_description_claims()
+        # "Made From" base ingredients, title+attribute aware (the declared field
+        # alone misses a title that names the ingredient, e.g. "ginger-turmeric"
+        # with `Made From: lemon, ginger`). Vocabulary is config-owned.
+        self.made_from_set = set(extract_made_from_tokens(self._sku_name_eng, self._attribute))
+        if self.made_from_set:
+            self.ledger.append({"field": "made_from", "column": "title+attributes",
+                                "value": sorted(self.made_from_set)})
+        # Source contradictions / implausible declarations (measured 2026-10-03):
+        # the extractor is faithful, so these flag SOURCE defects for review.
+        self.flags.update(
+            source_consistency_flags(self._attribute, self._sku_name_eng,
+                                     self.sweeteners["sweetener_type"])
+        )
+        # Categories classify products; they do not declare a SKU's flavor.
+        # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
+        # invented identity agreement between distinct variants.
+        from core.declared_identity import listing_identity
+        self.declared_identity = listing_identity(self._sku_name_eng, self._attribute, self._description_short_eng)
+        if self.declared_identity:
+            self.ledger.append({"field": "declared_identity", "column": "sku_name_eng+attribute+description_short_eng",
+                                "value": self.declared_identity})
+
+    def _merge_description_claims(self) -> None:
+        """Fold description-only claims into the critical sets, contradiction-
+        aware (exact original semantics and flag vocabulary)."""
+        opposing_values = {
+            "carbonation": (("carbonated", "still"),),
+            "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
+            "pulp": (("with_pulp", "no_pulp"),),
+            "organic": (("organic", "not_organic"),),
+        }
+        for dimension in ("carbonation", "sweetener", "pulp", "organic"):
+            base = set(self.critical[dimension])
+            described = set(self.description_claims[dimension])
+            if not base:
+                self.critical[dimension] = frozenset(described)
+            elif described:
+                inconsistent = any(
+                    (left in base and right in described) or (right in base and left in described)
+                    for left, right in opposing_values[dimension]
+                )
+                if inconsistent:
+                    self.flags.add(f"description_conflict:{dimension}")
+                else:
+                    self.critical[dimension] = frozenset(base | described)
+        if {"unsweetened", "sweetened"} <= self.sweeteners["sweetening"]:
+            self.flags.add("sweetening_status_conflict")
+        if "no_added_sugar" in self.critical["sweetener"] and "cane_sugar" in self.sweeteners["sweetener_type"]:
+            self.flags.add("no_added_sugar_with_cane_sugar")
+        self.flavor_set = set(self.critical["flavor"])
+        if self.flavor_set:
+            self.ledger.append({"field": "flavor", "column": "title+attributes",
+                                "value": sorted(self.flavor_set)})
+
+    # ── phase 3: product type ──────────────────────────────────────────────
+
+    def resolve_product_type(self) -> None:
+        """Scalar flavor digest, per-dimension ledgers, then the config
+        product-type ladder on the title with the category fallback."""
+        # Scalar flavor digest (deterministic first value) preserves the
+        # historical CSV contract for the downstream readers.
+        self._flavor_hint = sorted(self.flavor_set)[0] if self.flavor_set else ""
+        for dimension in ("carbonation", "sweetener", "pulp", "organic"):
+            if self.critical[dimension]:
+                self.ledger.append({"field": dimension, "column": "title+attributes",
+                                    "value": sorted(self.critical[dimension])})
+            if self.description_claims[dimension]:
+                self.ledger.append({"field": dimension, "column": "description_short_eng",
+                                    "value": sorted(self.description_claims[dimension])})
+        # Product type + subtype: config SSOT (config/paths.yaml product_types),
+        # read once. Title first, then the category-lane fallback; the subtype
+        # (latte, kombucha, ale...) is the finer axis the differentiation lane
+        # consumes and is recorded per column like every claim.
+        self.ptype, self.subtype = _product_type_matcher().match(self.title_norm)
+        if self.ptype:
+            self.ledger.append({"field": "type", "column": "sku_name_eng", "value": self.ptype})
+        if self.subtype:
+            self.ledger.append({"field": "subtype", "column": "sku_name_eng", "value": self.subtype})
+        # Fallback: category tokens may carry the product type
+        # when the title is too generic (e.g. "Product" with no type word).
+        if not self.ptype and self.cat_tokens:
+            cat_ptype, cat_subtype = _product_type_matcher().match(self.cat_tokens)
+            if cat_ptype:
+                self.ptype = cat_ptype
+                self.subtype = self.subtype or cat_subtype
+                self.ledger.append({"field": "type", "column": "category", "value": cat_ptype})
+                if cat_subtype:
+                    self.ledger.append({"field": "subtype", "column": "category", "value": cat_subtype})
+
+    # ── phase 4: volume + pack resolution ──────────────────────────────────
+
+    def resolve_volume_and_pack(self) -> None:
+        """Column precedence chain, corroboration fusion, plausibility bounds.
+
+        Winner chain: attribute over title unless they disagree by a large
+        factor; URL and image URL lanes follow. Confidence is then fused INDEPENDENTLY
+        of the winner (the card's confidence is a property of the CLAIM —
+        agreeing readers pool upward, disagreeing readers cap at the weakest).
+        """
+        # Volume and pack from title
+        self.title_vol = extract_volume_from_title(self._sku_name_eng)
+        self.pack_title, self.pack_conf_title = extract_pack_from_title(self._sku_name_eng)
+        self.pack_description, self.pack_conf_description = extract_pack_from_title(self._description_short_eng)
+
+        # Attribute parsing
+        self.attr_vol, self.attr_vol_conf, self.attr_pack, self.attr_pack_conf = parse_attribute_volume_pack(
+            self._attribute
+        )
+
+        # URL evidence: product tokens from the listing slug.
+        # Used when title/attributes are silent on volume/pack.
+        self.vol_url = extract_volume_from_title(self.url_norm)
+        self.pack_url, self.pack_conf_url = extract_pack_from_title(self.url_norm)
+        self.vol_img = extract_volume_from_title(self.img_norm)
+        self.pack_img, self.pack_conf_img = extract_pack_from_title(self.img_norm)
+
+        # Combine: prefer attribute if present, but default to title when
+        # the two disagree by 10x+ (title misparses "0, 33l" as 33000ml
+        # vs attribute 330ml — the title is the correct unit here).
+        self.title_vol_ml = float(self.title_vol["volume_ml"] or 0.0)
+        if self.attr_vol > 0:
+            self.ledger.append({"field": "volume_ml", "column": "attribute",
+                                "value": self.attr_vol, "confidence": self.attr_vol_conf})
+        if self.title_vol_ml > 0:
+            self.ledger.append({"field": "volume_ml", "column": "sku_name_eng", "value": self.title_vol_ml,
+                                "confidence": self.title_vol["confidence"]})
+        if self.vol_url["volume_ml"] > 0:
+            self.ledger.append({"field": "volume_ml", "column": "sku_url",
+                                "value": self.vol_url["volume_ml"], "confidence": self.vol_url["confidence"]})
+        if self.vol_img["volume_ml"] > 0:
+            self.ledger.append({"field": "volume_ml", "column": "image_url",
+                                "value": self.vol_img["volume_ml"], "confidence": self.vol_img["confidence"]})
+        if self.attr_pack > 1 or self.attr_pack_conf > 0:
+            self.ledger.append({"field": "pack_qty", "column": "attribute",
+                                "value": self.attr_pack, "confidence": self.attr_pack_conf})
+        if self.pack_title > 1 or self.pack_conf_title > 0:
+            self.ledger.append({"field": "pack_qty", "column": "sku_name_eng",
+                                "value": self.pack_title, "confidence": self.pack_conf_title})
+        if self.pack_conf_description > 0:
+            self.ledger.append({"field": "pack_qty", "column": "description_short_eng",
+                                "value": self.pack_description, "confidence": self.pack_conf_description})
+        if self.pack_url > 1 or self.pack_conf_url > 0:
+            self.ledger.append({"field": "pack_qty", "column": "sku_url",
+                                "value": self.pack_url, "confidence": self.pack_conf_url})
+        if self.pack_img > 1 or self.pack_conf_img > 0:
+            self.ledger.append({"field": "pack_qty", "column": "image_url",
+                                "value": self.pack_img, "confidence": self.pack_conf_img})
+        self._volume_precedence_chain()
+        self._pack_precedence_chain()
+        self._fuse_and_bound()
+
+    def _volume_precedence_chain(self) -> None:
+        """The documented volume winner chain (attr/title/url/img)."""
+        if self.attr_vol > 0 and self.title_vol_ml > 0:
+            ratio = max(self.attr_vol, self.title_vol_ml) / min(self.attr_vol, self.title_vol_ml)
+            if ratio >= data_cfg().extraction.title_attribute_override_ratio:
+                self.volume_ml = self.title_vol_ml
+                self.volume_conf = self.title_vol["confidence"]
+                self.volume_raw = self.title_vol["raw_match"]
+                self.volume_status = self.title_vol["parse_status"]
+                self.flags.add("volume_inconsistency")
             else:
-                critical[dimension] = frozenset(base | described)
-    if {"unsweetened", "sweetened"} <= sweeteners["sweetening"]:
-        consistency_flags.add("sweetening_status_conflict")
-    if "no_added_sugar" in critical["sweetener"] and "cane_sugar" in sweeteners["sweetener_type"]:
-        consistency_flags.add("no_added_sugar_with_cane_sugar")
-    flavor_set = set(critical["flavor"])
-    if flavor_set:
-        ledger.append({"field": "flavor", "column": "title+attributes",
-                       "value": sorted(flavor_set)})
-    # "Made From" base ingredients, title+attribute aware (the declared field
-    # alone misses a title that names the ingredient, e.g. "ginger-turmeric"
-    # with `Made From: lemon, ginger`). Vocabulary is config-owned.
-    made_from_set = set(extract_made_from_tokens(sku_name_eng, attribute))
-    if made_from_set:
-        ledger.append({"field": "made_from", "column": "title+attributes",
-                       "value": sorted(made_from_set)})
-    # Source contradictions / implausible declarations (measured 2026-10-03):
-    # the extractor is faithful, so these flag SOURCE defects for review.
-    consistency_flags.update(
-        source_consistency_flags(attribute, sku_name_eng, sweeteners["sweetener_type"])
-    )
-    # Categories classify products; they do not declare a SKU's flavor.
-    # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
-    # invented identity agreement between distinct variants.
-    from core.declared_identity import listing_identity
-    identity = listing_identity(sku_name_eng, attribute, description_short_eng)
-    if identity:
-        ledger.append({"field": "declared_identity", "column": "sku_name_eng+attribute+description_short_eng",
-                       "value": identity})
-    flavor = sorted(flavor_set)[0] if flavor_set else ""
-    for dimension in ("carbonation", "sweetener", "pulp", "organic"):
-        if critical[dimension]:
-            ledger.append({"field": dimension, "column": "title+attributes",
-                           "value": sorted(critical[dimension])})
-        if description_claims[dimension]:
-            ledger.append({"field": dimension, "column": "description_short_eng",
-                           "value": sorted(description_claims[dimension])})
-    # Product type + subtype: config SSOT (config/paths.yaml product_types),
-    # read once. Title first, then the category-lane fallback; the subtype
-    # (latte, kombucha, ale...) is the finer axis the differentiation lane
-    # consumes and is recorded per column like every claim.
-    ptype, subtype = _product_type_matcher().match(t)
-    if ptype:
-        ledger.append({"field": "type", "column": "sku_name_eng", "value": ptype})
-    if subtype:
-        ledger.append({"field": "subtype", "column": "sku_name_eng", "value": subtype})
-    # Fallback: category tokens may carry the product type
-    # when the title is too generic (e.g. "Product" with no type word).
-    if not ptype and cat_tokens:
-        cat_ptype, cat_subtype = _product_type_matcher().match(cat_tokens)
-        if cat_ptype:
-            ptype = cat_ptype
-            subtype = subtype or cat_subtype
-            ledger.append({"field": "type", "column": "category", "value": cat_ptype})
-            if cat_subtype:
-                ledger.append({"field": "subtype", "column": "category", "value": cat_subtype})
-
-    # Volume and pack from title
-    vol_title = extract_volume_from_title(sku_name_eng)
-    pack_title, pack_conf_title = extract_pack_from_title(sku_name_eng)
-    pack_description, pack_conf_description = extract_pack_from_title(description_short_eng)
-
-    # Attribute parsing
-    attr_vol, attr_vol_conf, attr_pack, attr_pack_conf = parse_attribute_volume_pack(
-        attribute
-    )
-
-    # URL evidence: product tokens from the listing slug.
-    # Used when title/attributes are silent on volume/pack.
-    vol_url = extract_volume_from_title(url_norm)
-    pack_url, pack_conf_url = extract_pack_from_title(url_norm)
-    vol_img = extract_volume_from_title(img_norm)
-    pack_img, pack_conf_img = extract_pack_from_title(img_norm)
-
-    # Combine: prefer attribute if present, but default to title when
-    # the two disagree by 10x+ (title misparses "0, 33l" as 33000ml
-    # vs attribute 330ml — the title is the correct unit here).
-    title_vol = float(vol_title["volume_ml"] or 0.0)
-    if attr_vol > 0:
-        ledger.append({"field": "volume_ml", "column": "attribute",
-                       "value": attr_vol, "confidence": attr_vol_conf})
-    if title_vol > 0:
-        ledger.append({"field": "volume_ml", "column": "sku_name_eng", "value": title_vol,
-                       "confidence": vol_title["confidence"]})
-    if vol_url["volume_ml"] > 0:
-        ledger.append({"field": "volume_ml", "column": "sku_url",
-                       "value": vol_url["volume_ml"], "confidence": vol_url["confidence"]})
-    if vol_img["volume_ml"] > 0:
-        ledger.append({"field": "volume_ml", "column": "image_url",
-                       "value": vol_img["volume_ml"], "confidence": vol_img["confidence"]})
-    if attr_pack > 1 or attr_pack_conf > 0:
-        ledger.append({"field": "pack_qty", "column": "attribute",
-                       "value": attr_pack, "confidence": attr_pack_conf})
-    if pack_title > 1 or pack_conf_title > 0:
-        ledger.append({"field": "pack_qty", "column": "sku_name_eng",
-                       "value": pack_title, "confidence": pack_conf_title})
-    if pack_conf_description > 0:
-        ledger.append({"field": "pack_qty", "column": "description_short_eng",
-                       "value": pack_description, "confidence": pack_conf_description})
-    if pack_url > 1 or pack_conf_url > 0:
-        ledger.append({"field": "pack_qty", "column": "sku_url",
-                       "value": pack_url, "confidence": pack_conf_url})
-    if pack_img > 1 or pack_conf_img > 0:
-        ledger.append({"field": "pack_qty", "column": "image_url",
-                       "value": pack_img, "confidence": pack_conf_img})
-    if attr_vol > 0 and title_vol > 0:
-        ratio = max(attr_vol, title_vol) / min(attr_vol, title_vol)
-        if ratio >= data_cfg().extraction.title_attribute_override_ratio:
-            volume_ml = title_vol
-            volume_conf = vol_title["confidence"]
-            volume_raw = vol_title["raw_match"]
-            volume_status = vol_title["parse_status"]
-            consistency_flags.add("volume_inconsistency")
+                self.volume_ml = self.attr_vol
+                self.volume_conf = self.attr_vol_conf
+                self.volume_raw = f"attribute: {self.attr_vol}"
+                self.volume_status = "attribute_volume"
+        elif self.attr_vol > 0:
+            self.volume_ml = self.attr_vol
+            self.volume_conf = self.attr_vol_conf
+            self.volume_raw = f"attribute: {self.attr_vol}"
+            self.volume_status = "attribute_volume"
+        elif self.title_vol_ml > 0:
+            self.volume_ml = self.title_vol_ml
+            self.volume_conf = self.title_vol["confidence"]
+            self.volume_raw = self.title_vol["raw_match"]
+            self.volume_status = self.title_vol["parse_status"]
+        elif self.vol_url["volume_ml"] > 0:
+            self.volume_ml = self.vol_url["volume_ml"]
+            self.volume_conf = self.vol_url["confidence"]
+            self.volume_raw = self.vol_url["raw_match"]
+            self.volume_status = self.vol_url["parse_status"]
+            self.flags.add("volume_from_url")
+        elif self.vol_img["volume_ml"] > 0:
+            self.volume_ml = self.vol_img["volume_ml"]
+            self.volume_conf = self.vol_img["confidence"]
+            self.volume_raw = self.vol_img["raw_match"]
+            self.volume_status = self.vol_img["parse_status"]
+            self.flags.add("volume_from_image_url")
         else:
-            volume_ml = attr_vol
-            volume_conf = attr_vol_conf
-            volume_raw = f"attribute: {attr_vol}"
-            volume_status = "attribute_volume"
-    elif attr_vol > 0:
-        volume_ml = attr_vol
-        volume_conf = attr_vol_conf
-        volume_raw = f"attribute: {attr_vol}"
-        volume_status = "attribute_volume"
-    elif title_vol > 0:
-        volume_ml = title_vol
-        volume_conf = vol_title["confidence"]
-        volume_raw = vol_title["raw_match"]
-        volume_status = vol_title["parse_status"]
-    elif vol_url["volume_ml"] > 0:
-        volume_ml = vol_url["volume_ml"]
-        volume_conf = vol_url["confidence"]
-        volume_raw = vol_url["raw_match"]
-        volume_status = vol_url["parse_status"]
-        consistency_flags.add("volume_from_url")
-    elif vol_img["volume_ml"] > 0:
-        volume_ml = vol_img["volume_ml"]
-        volume_conf = vol_img["confidence"]
-        volume_raw = vol_img["raw_match"]
-        volume_status = vol_img["parse_status"]
-        consistency_flags.add("volume_from_image_url")
-    else:
-        volume_ml = vol_title["volume_ml"]
-        volume_conf = vol_title["confidence"]
-        volume_raw = vol_title["raw_match"]
-        volume_status = vol_title["parse_status"]
-    # Pack qty resolved early for ambiguous_volume check
-    if attr_pack > 1 or attr_pack_conf > 0:
-        pack_qty = attr_pack
-        pack_conf = attr_pack_conf
-    elif pack_conf_title > 0:
-        # Slugs can be truncated ("16-9-Count") or omit separators. Keep
-        # their disagreement in the ledger, but don't overwrite an explicit
-        # title count with URL/image-derived numbers.
-        pack_qty = pack_title
-        pack_conf = pack_conf_title
-    elif pack_url > 1 or pack_conf_url > 0:
-        pack_qty = pack_url
-        pack_conf = pack_conf_url
-    elif pack_img > 1 or pack_conf_img > 0:
-        pack_qty = pack_img
-        pack_conf = pack_conf_img
-    else:
-        pack_qty = pack_description
-        pack_conf = pack_conf_description
-    # CORROBORATION FUSION (2026-10-01 ruling): the card's confidence is a
-    # property of the CLAIM, not of the winning column — agreeing
-    # independent readers pool upward, disagreeing readers cap the card at
-    # the weaker one. The winner chain above decides VALUE + precedence;
-    # this only changes confidence.
-    vol_claims = [
-        (value, conf, column)
-        for value, conf, column in (
-            (attr_vol, attr_vol_conf, "attribute"),
-            (title_vol, vol_title["confidence"], "sku_name_eng"),
-            (vol_url["volume_ml"], vol_url["confidence"], "sku_url"),
-            (vol_img["volume_ml"], vol_img["confidence"], "image_url"),
+            self.volume_ml = self.title_vol["volume_ml"]
+            self.volume_conf = self.title_vol["confidence"]
+            self.volume_raw = self.title_vol["raw_match"]
+            self.volume_status = self.title_vol["parse_status"]
+
+    def _pack_precedence_chain(self) -> None:
+        """Pack qty resolved early for ambiguous_volume check. Slugs can be
+        truncated ("16-9-Count") or omit separators: keep their disagreement
+        in the ledger, but don't overwrite an explicit title count with
+        URL/image-derived numbers."""
+        if self.attr_pack > 1 or self.attr_pack_conf > 0:
+            self.pack_qty = self.attr_pack
+            self.pack_conf = self.attr_pack_conf
+        elif self.pack_conf_title > 0:
+            self.pack_qty = self.pack_title
+            self.pack_conf = self.pack_conf_title
+        elif self.pack_url > 1 or self.pack_conf_url > 0:
+            self.pack_qty = self.pack_url
+            self.pack_conf = self.pack_conf_url
+        elif self.pack_img > 1 or self.pack_conf_img > 0:
+            self.pack_qty = self.pack_img
+            self.pack_conf = self.pack_conf_img
+        else:
+            self.pack_qty = self.pack_description
+            self.pack_conf = self.pack_conf_description
+
+    def _fuse_and_bound(self) -> None:
+        """Corroboration fusion + source-disagreement flags + plausibility bounds."""
+        # CORROBORATION FUSION (2026-10-01 ruling): the card's confidence is a
+        # property of the CLAIM, not of the winning column — agreeing
+        # independent readers pool upward, disagreeing readers cap the card at
+        # the weaker one. The winner chain above decides VALUE + precedence;
+        # this only changes confidence.
+        self.vol_claims = [
+            (value, conf, column)
+            for value, conf, column in (
+                (self.attr_vol, self.attr_vol_conf, "attribute"),
+                (self.title_vol_ml, self.title_vol["confidence"], "sku_name_eng"),
+                (self.vol_url["volume_ml"], self.vol_url["confidence"], "sku_url"),
+                (self.vol_img["volume_ml"], self.vol_img["confidence"], "image_url"),
+            )
+            if value > 0 and conf > 0
+        ]
+        self.pack_claims = [
+            (value, conf, column)
+            for value, conf, column in (
+                (self.attr_pack, self.attr_pack_conf, "attribute"),
+                (self.pack_title, self.pack_conf_title, "sku_name_eng"),
+                (self.pack_description, self.pack_conf_description, "description_short_eng"),
+                (self.pack_url, self.pack_conf_url, "sku_url"),
+                (self.pack_img, self.pack_conf_img, "image_url"),
+            )
+            if value > 0 and conf > 0
+        ]
+        self.volume_conf = fuse_confidence(self.vol_claims)
+        self.pack_conf = fuse_confidence(self.pack_claims)
+        gate_cfg = training_cfg().gate
+        if self.vol_claims and any(
+            not volumes_compatible({left[0]}, {right[0]},
+                                   volume_relative_tolerance=float(gate_cfg.vol_tolerance),
+                                   volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
+            for index, left in enumerate(self.vol_claims) for right in self.vol_claims[index + 1:]
+        ):
+            self.flags.add("volume_sources_disagree")
+        if self.pack_claims and len({value for value, _, _ in self.pack_claims}) > 1:
+            self.flags.add("pack_sources_disagree")
+        # Bounds apply to the selected physical-package size. A count of packages
+        # does not make an implausible per-package size legitimate; named bulk
+        # containers use the separately configured ceiling.
+        extraction_policy = data_cfg().extraction
+        bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
+        bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{self._sku_name_eng} {self._attribute}", re.I))
+        volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
+        if self.volume_ml > 0 and not extraction_policy.volume_min_ml <= self.volume_ml <= volume_max:
+            self.flags.add("ambiguous_volume")
+
+    # ── phase 5: card assembly ─────────────────────────────────────────────
+
+    def assemble_card(self) -> dict:
+        """Boundary validation + additive evidence keys (exact original order)."""
+        # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
+        # input to BOTH the canonical build and the gate — validate the shape
+        # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
+        # the transform, not downstream in the gate's comparisons.
+        title_attributes = extract_title_attributes(self._sku_name_eng)
+        package_types = title_attributes["package_types"]
+        if not package_types:
+            package_types = parse_attribute_details(self._attribute).get("attribute_package_types", [])
+        # Title-only, and deliberately so: the raw `attributes` field carries no
+        # packaging-level key at all (measured 2026-09-30 — `attributes` holds
+        # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
+        # title is the only place this claim exists.
+        packaging_levels = extract_packaging_level(self._sku_name_eng)
+        # Structured evidence section (census script): pack material type is the
+        # measured 9.64% within-GTIN conflict band, so the attribute cell is now
+        # an ELIGIBLE material source: the title NER scrape keeps its exact
+        # convention (list order and values byte-unchanged) and the
+        # attribute-only values are appended, sorted, after it. Title-scraped
+        # values win duplicates by construction; a set union in
+        # generate_canonical package_material_set is what the gate and the
+        # structured channel actually read, so no material evidence is lost —
+        # only where the model VISIBLY can see it: "paper / carton" is
+        # byte-identical to the census value kept here (raw lower tokens, same
+        # semantics the census measured). Juice content bands live in the
+        # evidence section (numeric 27-band vocabulary, attribute_universe SSOT
+        # canon); the remaining three high-yield keys have no set field —
+        # captured for census→wiring parity, deliberately not wired.
+        self.universe_evidence = capture_universe_attributes(self._attribute)
+        title_materials = title_attributes["package_materials"]
+        material_seen = {value.casefold() for value in title_materials}
+        package_materials = list(title_materials) + sorted(
+            value
+            for value in self.universe_evidence["pack material type"]
+            if value.casefold() not in material_seen
         )
-        if value > 0 and conf > 0
-    ]
-    pack_claims = [
-        (value, conf, column)
-        for value, conf, column in (
-            (attr_pack, attr_pack_conf, "attribute"),
-            (pack_title, pack_conf_title, "sku_name_eng"),
-            (pack_description, pack_conf_description, "description_short_eng"),
-            (pack_url, pack_conf_url, "sku_url"),
-            (pack_img, pack_conf_img, "image_url"),
-        )
-        if value > 0 and conf > 0
-    ]
-    volume_conf = fuse_confidence(vol_claims)
-    pack_conf = fuse_confidence(pack_claims)
-    gate_cfg = training_cfg().gate
-    if vol_claims and any(
-        not volumes_compatible({left[0]}, {right[0]},
-                               volume_relative_tolerance=float(gate_cfg.vol_tolerance),
-                               volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
-        for index, left in enumerate(vol_claims) for right in vol_claims[index + 1:]
-    ):
-        consistency_flags.add("volume_sources_disagree")
-    if pack_claims and len({value for value, _, _ in pack_claims}) > 1:
-        consistency_flags.add("pack_sources_disagree")
-    # Bounds apply to the selected physical-package size. A count of packages
-    # does not make an implausible per-package size legitimate; named bulk
-    # containers use the separately configured ceiling.
-    extraction_policy = data_cfg().extraction
-    bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
-    bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{sku_name_eng} {attribute}", re.I))
-    volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
-    if volume_ml > 0 and not extraction_policy.volume_min_ml <= volume_ml <= volume_max:
-        consistency_flags.add("ambiguous_volume")
+        result = ExtractedAttributes(
+            flavor=self._flavor_hint,
+            type=self.ptype,
+            volume_ml=self.volume_ml,
+            volume_confidence=self.volume_conf,
+            volume_raw=self.volume_raw,
+            volume_status=self.volume_status,
+            pack_qty=self.pack_qty,
+            pack_confidence=self.pack_conf,
+            package_types=package_types,
+            package_materials=package_materials,
+            packaging_levels=packaging_levels,
+            flavor_set=self.flavor_set,
+            made_from_set=self.made_from_set,
+            carbonation_set=set(self.critical["carbonation"]),
+            sweetener_set=set(self.critical["sweetener"]),
+            sweetener_type_set=self.sweeteners["sweetener_type"],
+            sweetening_set=self.sweeteners["sweetening"],
+            attribute_consistency_flags=self.flags,
+            pulp_set=set(self.critical["pulp"]),
+            organic_set=set(self.critical["organic"]),
+        ).model_dump()
+        # The extract dict is a plain dict after the boundary validation, so the
+        # evidence section rides ADDITIVELY beside the model dump. Old consumers
+        # iterate the named fields, the model channel reads the two wired keys,
+        # the census parity test reads the whole section. Sorted lists, never
+        # sets — byte-determinism (PYTHONHASHSEED) is the contract here too.
+        result["attribute_universe_evidence"] = {
+            key: sorted(values) for key, values in self.universe_evidence.items() if values
+        }
+        result["evidence_ledger"] = self.ledger
+        result["date_evidence"] = self.date_evidence
+        result["measurement_evidence"] = self.measurement_evidence
+        result["pack_evidence"] = self.pack_evidence
+        result["negated_sweetener_type_set"] = sorted(self.negative_ingredients)
+        return result
 
-    # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
-    # input to BOTH the canonical build and the gate — validate the shape
-    # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
-    # the transform, not downstream in the gate's comparisons.
-    title_attributes = extract_title_attributes(sku_name_eng)
-    package_types = title_attributes["package_types"]
-    if not package_types:
-        package_types = parse_attribute_details(attribute).get("attribute_package_types", [])
-    # Title-only, and deliberately so: the raw `attributes` field carries no
-    # packaging-level key at all (measured 2026-09-30 — `attributes` holds
-    # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
-    # title is the only place this claim exists.
-    packaging_levels = extract_packaging_level(sku_name_eng)
-    # Structured evidence section (census script): pack material type is the
-    # measured 9.64% within-GTIN conflict band, so the attribute cell is now
-    # an ELIGIBLE material source: the title NER scrape keeps its exact
-    # convention (list order and values byte-unchanged) and the
-    # attribute-only values are appended, sorted, after it. Title-scraped
-    # values win duplicates by construction; a set union in
-    # generate_canonical package_material_set is what the gate and the
-    # structured channel actually read, so no material evidence is lost —
-    # only where the model VISIBLY can see it: "paper / carton" is
-    # byte-identical to the census value kept here (raw lower tokens, same
-    # semantics the census measured). Juice content bands live in the
-    # evidence section (numeric 27-band vocabulary, attribute_universe SSOT
-    # canon); the remaining three high-yield keys have no set field —
-    # captured for census→wiring parity, deliberately not wired.
-    universe_evidence = capture_universe_attributes(attribute)
-    title_materials = title_attributes["package_materials"]
-    material_seen = {value.casefold() for value in title_materials}
-    package_materials = list(title_materials) + sorted(
-        value
-        for value in universe_evidence["pack material type"]
-        if value.casefold() not in material_seen
-    )
-    result = ExtractedAttributes(
-        flavor=flavor,
-        type=ptype,
-        volume_ml=volume_ml,
-        volume_confidence=volume_conf,
-        volume_raw=volume_raw,
-        volume_status=volume_status,
-        pack_qty=pack_qty,
-        pack_confidence=pack_conf,
-        package_types=package_types,
-        package_materials=package_materials,
-        packaging_levels=packaging_levels,
-        flavor_set=flavor_set,
-        made_from_set=made_from_set,
-        carbonation_set=set(critical["carbonation"]),
-        sweetener_set=set(critical["sweetener"]),
-        sweetener_type_set=sweeteners["sweetener_type"],
-        sweetening_set=sweeteners["sweetening"],
-        attribute_consistency_flags=consistency_flags,
-        pulp_set=set(critical["pulp"]),
-        organic_set=set(critical["organic"]),
-    ).model_dump()
-    # The extract dict is a plain dict after the boundary validation, so the
-    # evidence section rides ADDITIVELY beside the model dump. Old consumers
-    # iterate the named fields, the model channel reads the two wired keys,
-    # the census parity test reads the whole section. Sorted lists, never
-    # sets — byte-determinism (PYTHONHASHSEED) is the contract here too.
-    result["attribute_universe_evidence"] = {
-        key: sorted(values) for key, values in universe_evidence.items() if values
-    }
-    result["evidence_ledger"] = ledger
-    result["date_evidence"] = date_evidence
-    result["measurement_evidence"] = measurement_evidence
-    result["pack_evidence"] = pack_evidence
-    result["negated_sweetener_type_set"] = sorted(negative_ingredients)
-    return result
+    # ── orchestration ──────────────────────────────────────────────────────
 
-
+    def execute(self) -> dict:
+        """Run the load-bearing phase order, then assemble the card."""
+        self.harvest_consumer_tokens()
+        self.harvest_evidence_channels()
+        self.resolve_product_type()
+        self.resolve_volume_and_pack()
+        return self.assemble_card()
 # ============================================================================
 # CARD SURFACE
 # ============================================================================
@@ -1095,6 +1244,173 @@ def _has_attribute_flag(obj: object, flag: str) -> bool:
     return flag in _attribute_flags(obj)
 
 
+class _GateEvaluator:
+    """Decide whether two record sides' known identity attributes conflict.
+
+    Single responsibility: one pack_gate verdict from the two sides' evidence.
+    The semantic score is accepted for a stable gate-call interface but is
+    deliberately not used: a high semantic score cannot override a known pack,
+    package-type, or volume conflict.
+
+    EVIDENCE TRUST (audit 2026-09-15). A parsed attribute is only comparable
+    when the parser reported enough confidence to be believed. A trust
+    threshold below 1.0-or-None makes the volume/pack comparison evidence-
+    aware: a side below the bar is treated exactly like a missing side, so it
+    stays *unknown* and reaches the confidence/fallback lane instead of being
+    fabricated into a hard rejection.
+
+    PACK SEMANTICS: a canonical keeps EVERY pack count observed across its
+    titles, so a multi-title canonical legitimately holds ``{12, 24}``. A
+    shared count is therefore positive evidence of compatibility and only a
+    genuinely disjoint pair conflicts — the rule the canonical writer
+    documents ("gate logic intersects them").
+    """
+
+    def __init__(
+        self,
+        *,
+        volume_relative_tolerance: float,
+        volume_absolute_tolerance_ml: float,
+        trust_threshold: float | None,
+        check_categorical: bool,
+    ) -> None:
+        self._volume_relative_tolerance = volume_relative_tolerance
+        self._volume_absolute_tolerance_ml = volume_absolute_tolerance_ml
+        self._trust_threshold = trust_threshold
+        self._check_categorical = check_categorical
+        self._veto_dimensions = frozenset(
+            training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+        )
+
+    # -- field readers ------------------------------------------------------
+
+    @staticmethod
+    def _value(obj: object, *names: str):
+        if isinstance(obj, dict):
+            for name in names:
+                if name in obj:
+                    return obj[name]
+        else:
+            for name in names:
+                if hasattr(obj, name):
+                    return getattr(obj, name)
+        return None
+
+    @staticmethod
+    def _set(value: object) -> set:
+        if value is None or value == "":
+            return set()
+        if isinstance(value, (set, frozenset, list, tuple)):
+            return set(value)
+        return {value}
+
+    def _trusted(self, obj: object, *names: str) -> bool:
+        """Whether the named confidence field clears the caller's bar.
+
+        An absent field means the lane never carried a confidence observation;
+        the caller's own confidence lane owns that case, so it is not second
+        guessed here.
+        """
+        dimension = "volume" if "volume_confidence" in names else "pack"
+        if _has_attribute_flag(obj, f"{dimension}_sources_disagree") or (
+            dimension == "pack" and _has_attribute_flag(obj, "pack_hierarchy_ambiguous")
+        ):
+            return False
+        raw = self._value(obj, *names)
+        if raw is None or raw == "":
+            return True
+        if self._trust_threshold is None:
+            return True
+        try:
+            value = float(raw)
+            return math.isfinite(value) and 0.0 <= value <= 1.0 and value >= float(self._trust_threshold)
+        except (TypeError, ValueError):
+            return False
+
+    def _claim_set(self, obj: object, dimension: str) -> set[str]:
+        explicit = self._value(obj, f"{dimension}_set")
+        if explicit:
+            return self._set(explicit)
+        found = extract_critical_claims(str(self._value(obj, "canonical") or ""))[dimension]
+        return set(found)
+
+    # -- conflict tests (one per identity dimension) -------------------------
+
+    def _pack_count_conflict(self, left_pack: set, right_pack: set, sku_a: object, sku_b: object) -> bool:
+        """PACK COUNT: shared evidence agrees; disjoint counts conflict.
+
+        No count on one side is unknown, not an assertion of single-unit
+        packaging. The caller's confidence/review lane owns missing evidence.
+        """
+        return (
+            "pack" in self._veto_dimensions
+            and left_pack
+            and right_pack
+            and not (left_pack & right_pack)
+            and self._trusted(sku_a, "pack_confidence")
+            and self._trusted(sku_b, "pack_confidence")
+        )
+
+    def _package_type_conflict(self, left_type: set, right_type: set) -> bool:
+        """PACKAGE TYPE: disjoint categorical evidence conflicts."""
+        return ("package_type" in self._veto_dimensions
+                and left_type and right_type and not (left_type & right_type))
+
+    def _volume_conflict(self, left_volume: set, right_volume: set, sku_a: object, sku_b: object) -> bool:
+        """VOLUME: both trusted and incompatible under either configured cut."""
+        return (
+            "volume" in self._veto_dimensions
+            and left_volume
+            and right_volume
+            and self._trusted(sku_a, "volume_confidence")
+            and self._trusted(sku_b, "volume_confidence")
+            and not volumes_compatible(
+                left_volume,
+                right_volume,
+                volume_relative_tolerance=self._volume_relative_tolerance,
+                volume_absolute_tolerance_ml=self._volume_absolute_tolerance_ml,
+            )
+        )
+
+    def _categorical_conflict(self, sku_a: object, sku_b: object) -> bool:
+        """Critical categorical dimensions (carbonation/sweetener/pulp)."""
+        for dimension in sorted(self._veto_dimensions & {"carbonation", "sweetener", "pulp"}):
+            if not self._check_categorical:
+                continue
+            left = self._claim_set(sku_a, dimension)
+            right = self._claim_set(sku_b, dimension)
+            if left and right and categorical_conflict(
+                dimension, {dimension: left}, {dimension: right}
+            ):
+                return True
+        return False
+
+    # -- verdict -------------------------------------------------------------
+
+    def skus_compatible(self, sku_a: object, sku_b: object) -> bool:
+        left_pack = self._set(self._value(sku_a, "pack_size", "pack_set", "pack_qty"))
+        right_pack = self._set(self._value(sku_b, "pack_size", "pack_set", "pack_qty"))
+        if self._pack_count_conflict(left_pack, right_pack, sku_a, sku_b):
+            return False
+        left_type = self._set(self._value(sku_a, "package_type", "package_type_set"))
+        right_type = self._set(self._value(sku_b, "package_type", "package_type_set"))
+        if self._package_type_conflict(left_type, right_type):
+            return False
+        left_volume = (
+            set()
+            if _has_attribute_flag(sku_a, "ambiguous_volume")
+            else self._set(self._value(sku_a, "volume", "volume_set", "volume_ml"))
+        )
+        right_volume = (
+            set()
+            if _has_attribute_flag(sku_b, "ambiguous_volume")
+            else self._set(self._value(sku_b, "volume", "volume_set", "volume_ml"))
+        )
+        if self._volume_conflict(left_volume, right_volume, sku_a, sku_b):
+            return False
+        return not self._categorical_conflict(sku_a, sku_b)
+
+
 def pack_gate(
     score: float,
     sku_a: object,
@@ -1109,132 +1425,15 @@ def pack_gate(
 
     ``score`` is accepted for a stable gate-call interface but is deliberately
     not used: a high semantic score cannot override a known pack, package-type,
-    or volume conflict.
-
-    EVIDENCE TRUST (audit 2026-09-15). A parsed attribute is only comparable
-    when the parser reported enough confidence to be believed. Passing
-    ``trust_threshold`` makes the volume/pack comparison evidence-aware: a
-    side below the bar is treated exactly like a missing side, so it stays
-    *unknown* and reaches the confidence/fallback lane instead of being
-    fabricated into a hard rejection. Callers that leave it ``None`` keep the
-    pure structural semantics used by the I/O lanes.
-
-    PACK SEMANTICS: a canonical keeps EVERY pack count observed across its
-    titles, so a multi-title canonical legitimately holds ``{12, 24}``. A
-    shared count is therefore positive evidence of compatibility and only a
-    genuinely disjoint pair conflicts — the rule the canonical writer
-    documents ("gate logic intersects them"). Requiring set equality here
-    would reject a `{12, 24}` canonical against a `{12}` one that shares 12.
+    or volume conflict. The entire verdict is the _GateEvaluator's.
     """
     del score
-    veto_dimensions = frozenset(
-        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
-    )
-
-    def _value(obj: object, *names: str):
-        if isinstance(obj, dict):
-            for name in names:
-                if name in obj:
-                    return obj[name]
-        else:
-            for name in names:
-                if hasattr(obj, name):
-                    return getattr(obj, name)
-        return None
-
-    def _set(value: object) -> set:
-        if value is None or value == "":
-            return set()
-        if isinstance(value, (set, frozenset, list, tuple)):
-            return set(value)
-        return {value}
-
-    def _trusted(obj: object, *names: str) -> bool:
-        """Whether the named confidence field clears the caller's bar.
-
-        An absent field means the lane never carried a confidence observation;
-        the caller's own confidence lane owns that case, so it is not second
-        guessed here.
-        """
-        dimension = "volume" if "volume_confidence" in names else "pack"
-        if _has_attribute_flag(obj, f"{dimension}_sources_disagree") or (
-            dimension == "pack" and _has_attribute_flag(obj, "pack_hierarchy_ambiguous")
-        ):
-            return False
-        raw = _value(obj, *names)
-        if raw is None or raw == "":
-            return True
-        if trust_threshold is None:
-            return True
-        try:
-            value = float(raw)
-            return math.isfinite(value) and 0.0 <= value <= 1.0 and value >= float(trust_threshold)
-        except (TypeError, ValueError):
-            return False
-
-    # PACK COUNT: shared evidence agrees; disjoint counts conflict.
-    left_pack = _set(_value(sku_a, "pack_size", "pack_set", "pack_qty"))
-    right_pack = _set(_value(sku_b, "pack_size", "pack_set", "pack_qty"))
-    if (
-        "pack" in veto_dimensions
-        and left_pack
-        and right_pack
-        and not (left_pack & right_pack)
-        and _trusted(sku_a, "pack_confidence")
-        and _trusted(sku_b, "pack_confidence")
-    ):
-        return False
-    # No count on one side is unknown, not an assertion of single-unit
-    # packaging. The caller's confidence/review lane owns missing evidence.
-
-    # PACKAGE TYPE: disjoint categorical evidence conflicts.
-    left_type = _set(_value(sku_a, "package_type", "package_type_set"))
-    right_type = _set(_value(sku_b, "package_type", "package_type_set"))
-    if "package_type" in veto_dimensions and left_type and right_type and not (left_type & right_type):
-        return False
-
-    left_volume = (
-        set()
-        if _has_attribute_flag(sku_a, "ambiguous_volume")
-        else _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
-    )
-    right_volume = (
-        set()
-        if _has_attribute_flag(sku_b, "ambiguous_volume")
-        else _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
-    )
-    if (
-        "volume" in veto_dimensions
-        and left_volume
-        and right_volume
-        and _trusted(sku_a, "volume_confidence")
-        and _trusted(sku_b, "volume_confidence")
-        and not volumes_compatible(
-            left_volume,
-            right_volume,
-            volume_relative_tolerance=volume_relative_tolerance,
-            volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
-        )
-    ):
-        return False
-
-    def _claim_set(obj: object, dimension: str) -> set[str]:
-        explicit = _value(obj, f"{dimension}_set")
-        if explicit:
-            return _set(explicit)
-        found = extract_critical_claims(str(_value(obj, "canonical") or ""))[dimension]
-        return set(found)
-
-    for dimension in sorted(veto_dimensions & {"carbonation", "sweetener", "pulp"}):
-        if not check_categorical:
-            continue
-        left = _claim_set(sku_a, dimension)
-        right = _claim_set(sku_b, dimension)
-        if left and right and categorical_conflict(
-            dimension, {dimension: left}, {dimension: right}
-        ):
-            return False
-    return True
+    return _GateEvaluator(
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        trust_threshold=trust_threshold,
+        check_categorical=check_categorical,
+    ).skus_compatible(sku_a, sku_b)
 
 
 def attribute_gate_census_column_names(registry=None) -> list[str]:
@@ -1884,327 +2083,446 @@ def generate_canonical(
     countries: list[str] | None = None,
     retailers: list[str] | None = None,
 ) -> dict:  # CanonicalRecord.model_dump() — validated shape, plain dict
-    titles = [sku for sku, attr in rows]
-    attributes = [attr for sku, attr in rows]
-    descriptions = descriptions or [""] * len(rows)
-    urls = urls or [""] * len(rows)
-    image_urls = image_urls or [""] * len(rows)
-    breadcrumbs_engs = breadcrumbs_engs or [""] * len(rows)
-    categories = categories or [""] * len(rows)
-    countries = countries or [""] * len(rows)
-    retailers = retailers or [""] * len(rows)
-    extracted = [
-        extract_all(
-            sku, attr,
-            "" if pd.isna(desc) else str(desc),
-            url, img_url, cat_path, cat,
+    """Compose one GTIN's canonical record — see CanonicalCardComposer.compose."""
+    return CanonicalCardComposer(
+        gtin, brand, rows, global_idf, brand_idf,
+        descriptions=descriptions, urls=urls, image_urls=image_urls,
+        breadcrumbs_engs=breadcrumbs_engs, categories=categories,
+        countries=countries, retailers=retailers,
+    ).compose()
+
+
+class CanonicalCardComposer:
+    """One GTIN's canonical record, phase by phase.
+
+    Single responsibility per phase; compose() runs them in ONE fixed order.
+    Aggregate-set construction, conflict-flag vocabulary, the token-once
+    canonical text discipline, the universe-evidence JSON and the additive
+    persistence keys are byte-identical to the pre-refactor linear body.
+
+    Phases (order = load-bearing):
+      accept_rows -> per-listing extract_all cards
+      aggregate_sets -> every canonical set column + contradiction flags
+      confidences_and_consistency -> mean confidences, mode-share consistency
+      token_once_text -> strict-novelty n-grams + word-once final pass
+      universe_evidence -> census-SSOT parse, one JSON string
+      record -> boundary validation (CanonicalRecord) + additive keys
+    """
+
+    def __init__(self, gtin, brand, rows, global_idf: 'NgramIDF',
+                 brand_idf: 'NgramIDF | None', *, descriptions=None, urls=None,
+                 image_urls=None, breadcrumbs_engs=None, categories=None,
+                 countries=None, retailers=None):
+        self._gtin = gtin
+        self._brand = brand
+        self._rows = rows
+        self._global_idf = global_idf
+        self._brand_idf = brand_idf
+        self._descriptions = descriptions
+        self._urls = urls
+        self._image_urls = image_urls
+        self._breadcrumbs_engs = breadcrumbs_engs
+        self._categories = categories
+        self._countries = countries
+        self._retailers = retailers
+        # phase outputs
+        self.titles: list[str] = []
+        self.attributes: list[str] = []
+        self.extracted: list[dict] = []
+        self.brand_norm = ""
+        self.brand_tokens: set[str] = set()
+        self.mode_flavor = ""
+        self.mode_type = ""
+        self.salient_ngrams: list[str] = []
+        self.raw_salient_ngrams: list[str] = []
+        self.volume_set: set[float] = set()
+        self.pack_set: set[int] = set()
+        self.package_type_set: set[str] = set()
+        self.packaging_level_set: set[str] = set()
+        self.package_material_set: set[str] = set()
+        self.flavor_set: set[str] = set()
+        self.made_from_set: set[str] = set()
+        self.carbonation_set: set[str] = set()
+        self.sweetener_set: set[str] = set()
+        self.sweetener_type_set: set[str] = set()
+        self.sweetening_set: set[str] = set()
+        self.attribute_consistency_flags: set[str] = set()
+        self.pulp_set: set[str] = set()
+        self.organic_set: set[str] = set()
+        self.vol_conf = 0.0
+        self.pack_conf = 0.0
+        self.n_titles = 0
+        self.volume_consistency = 1.0
+        self.pack_consistency = 1.0
+        self.canonical = ""
+        self.kept_ngrams: list[str] = []
+        self.universe_evidence_json = ""
+
+    # ── phase 1: rows ──────────────────────────────────────────────────────
+
+    def accept_rows(self) -> None:
+        """Materialize the per-listing cards (extract_all) in row order."""
+        self.titles = [sku for sku, attr in self._rows]
+        self.attributes = [attr for sku, attr in self._rows]
+        descriptions = self._descriptions or [""] * len(self._rows)
+        urls = self._urls or [""] * len(self._rows)
+        image_urls = self._image_urls or [""] * len(self._rows)
+        breadcrumbs_engs = self._breadcrumbs_engs or [""] * len(self._rows)
+        categories = self._categories or [""] * len(self._rows)
+        countries = self._countries or [""] * len(self._rows)
+        retailers = self._retailers or [""] * len(self._rows)
+        self.extracted = [
+            extract_all(
+                sku, attr,
+                "" if pd.isna(desc) else str(desc),
+                url, img_url, cat_path, cat,
+            )
+            for (sku, attr), desc, url, img_url, cat_path, cat
+            in zip(self._rows, descriptions, urls, image_urls, breadcrumbs_engs, categories, strict=True)
+        ]
+        del countries, retailers
+        self.brand_norm = normalize_text(spell_numeric_brand(self._brand))
+        self.brand_tokens = set(self.brand_norm.split())
+
+    # ── phase 2: sets + flags ──────────────────────────────────────────────
+
+    def aggregate_sets(self) -> None:
+        """Per-GTIN union of every extracted set column + contradiction flags."""
+        flavors = [x["flavor"] for x in self.extracted if x["flavor"]]
+        types = [x["type"] for x in self.extracted if x["type"]]
+        self.mode_flavor = Counter(flavors).most_common(1)[0][0] if flavors else ""
+        self.mode_type = Counter(types).most_common(1)[0][0] if types else ""
+
+        # Get discriminative n‑grams
+        self.salient_ngrams = extract_discriminative_ngrams(
+            self.titles, self.attributes, self.brand_tokens,
+            self._global_idf, self._brand_idf, top_k=5,
         )
-        for (sku, attr), desc, url, img_url, cat_path, cat
-        in zip(rows, descriptions, urls, image_urls, breadcrumbs_engs, categories, strict=True)
-    ]
 
-    brand_norm = normalize_text(spell_numeric_brand(brand))
-    brand_tokens = set(brand_norm.split())
+        # Volume and pack sets
+        self.volume_set = {round(x["volume_ml"], 2) for x in self.extracted if x["volume_ml"] > 0}
+        # A parser-safe quantity of one is not evidence of a single-item pack.
+        # Keep only rows with explicit pack evidence in the canonical attribute
+        # set; otherwise missing pack data becomes a false pack conflict.
+        self.pack_set = {
+            x["pack_qty"] for x in self.extracted if x["pack_confidence"] > 0
+        }
+        self.package_type_set = {value for x in self.extracted for value in x["package_types"]}
+        self.packaging_level_set = {value for x in self.extracted for value in x["packaging_levels"]}
+        self.package_material_set = {value for x in self.extracted for value in x["package_materials"]}
+        self.flavor_set = {value for x in self.extracted for value in x["flavor_set"]}
+        self.made_from_set = {value for x in self.extracted for value in x["made_from_set"]}
+        self.carbonation_set = {value for x in self.extracted for value in x["carbonation_set"]}
+        self.sweetener_set = {value for x in self.extracted for value in x["sweetener_set"]}
+        self.sweetener_type_set = {value for x in self.extracted for value in x["sweetener_type_set"]}
+        self.sweetening_set = {value for x in self.extracted for value in x["sweetening_set"]}
+        self.attribute_consistency_flags = {value for x in self.extracted for value in x["attribute_consistency_flags"]}
+        # Negations can be on a different listing of the same GTIN from the
+        # affirmative ingredient. Preserve that contradiction at aggregation.
+        negative_ingredients = {
+            value for x in self.extracted for value in x.get("negated_sweetener_type_set", ())
+        }
+        self.attribute_consistency_flags.update(
+            f"sweetener_source_conflict:{ingredient}"
+            for ingredient in negative_ingredients & self.sweetener_type_set
+        )
+        self.pulp_set = {value for x in self.extracted for value in x["pulp_set"]}
+        self.organic_set = {value for x in self.extracted for value in x.get("organic_set") or set()}
+        self._contradiction_flags()
 
-    flavors = [x["flavor"] for x in extracted if x["flavor"]]
-    types = [x["type"] for x in extracted if x["type"]]
-    mode_flavor = Counter(flavors).most_common(1)[0][0] if flavors else ""
-    mode_type = Counter(types).most_common(1)[0][0] if types else ""
+    def _contradiction_flags(self) -> None:
+        """Cross-check aggregated sets; the flag vocabulary is unchanged."""
+        for dimension, values, opposites in (
+            ("sweetener", self.sweetener_set, (("sugar", "no_sugar"), ("sugar", "diet"))),
+            ("carbonation", self.carbonation_set, (("still", "carbonated"),)),
+            ("pulp", self.pulp_set, (("no_pulp", "with_pulp"),)),
+            ("organic", self.organic_set, (("organic", "not_organic"),)),
+        ):
+            if any({left, right} <= values for left, right in opposites):
+                self.attribute_consistency_flags.add(f"categorical_source_conflict:{dimension}")
 
-    # Get discriminative n‑grams
-    salient_ngrams = extract_discriminative_ngrams(
-        titles, attributes, brand_tokens, global_idf, brand_idf, top_k=5
-    )
+        gate_cfg = training_cfg().gate
+        observed_volumes = sorted(self.volume_set)
+        if any(not volumes_compatible({left}, {right},
+                                      volume_relative_tolerance=float(gate_cfg.vol_tolerance),
+                                      volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
+               for i, left in enumerate(observed_volumes) for right in observed_volumes[i + 1:]):
+            self.attribute_consistency_flags.add('volume_sources_disagree')
+        if len(self.pack_set) > 1:
+            self.attribute_consistency_flags.add('pack_sources_disagree')
+        if len(self.package_type_set) > 1:
+            self.attribute_consistency_flags.add('categorical_source_conflict:package_type')
+        if len(self.package_material_set) > 1:
+            self.attribute_consistency_flags.add('categorical_source_conflict:pack_material')
 
-    # Volume and pack sets
-    volume_set = {round(x["volume_ml"], 2) for x in extracted if x["volume_ml"] > 0}
-    # A parser-safe quantity of one is not evidence of a single-item pack.
-    # Keep only rows with explicit pack evidence in the canonical attribute
-    # set; otherwise missing pack data becomes a false pack conflict.
-    pack_set = {
-        x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
-    }
-    package_type_set = {value for x in extracted for value in x["package_types"]}
-    packaging_level_set = {value for x in extracted for value in x["packaging_levels"]}
-    package_material_set = {value for x in extracted for value in x["package_materials"]}
-    flavor_set = {value for x in extracted for value in x["flavor_set"]}
-    made_from_set = {value for x in extracted for value in x["made_from_set"]}
-    carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
-    sweetener_set = {value for x in extracted for value in x["sweetener_set"]}
-    sweetener_type_set = {value for x in extracted for value in x["sweetener_type_set"]}
-    sweetening_set = {value for x in extracted for value in x["sweetening_set"]}
-    attribute_consistency_flags = {value for x in extracted for value in x["attribute_consistency_flags"]}
-    # Negations can be on a different listing of the same GTIN from the
-    # affirmative ingredient. Preserve that contradiction at aggregation.
-    negative_ingredients = {
-        value for x in extracted for value in x.get("negated_sweetener_type_set", ())
-    }
-    attribute_consistency_flags.update(
-        f"sweetener_source_conflict:{ingredient}"
-        for ingredient in negative_ingredients & sweetener_type_set
-    )
-    pulp_set = {value for x in extracted for value in x["pulp_set"]}
-    organic_set = {value for x in extracted for value in x.get("organic_set") or set()}
+    # ── phase 3: confidence / consistency ──────────────────────────────────
 
-    for dimension, values, opposites in (
-        ("sweetener", sweetener_set, (("sugar", "no_sugar"), ("sugar", "diet"))),
-        ("carbonation", carbonation_set, (("still", "carbonated"),)),
-        ("pulp", pulp_set, (("no_pulp", "with_pulp"),)),
-        ("organic", organic_set, (("organic", "not_organic"),)),
-    ):
-        if any({left, right} <= values for left, right in opposites):
-            attribute_consistency_flags.add(f"categorical_source_conflict:{dimension}")
+    def confidences_and_consistency(self) -> None:
+        """Mean per-card confidences + mode-share consistency (scale-free)."""
+        vol_confs = [x["volume_confidence"] for x in self.extracted if x["volume_ml"] > 0]
+        pack_confs = [x["pack_confidence"] for x in self.extracted if x["pack_confidence"] > 0]
+        self.vol_conf = sum(vol_confs) / len(vol_confs) if vol_confs else 0.0
+        self.pack_conf = sum(pack_confs) / len(pack_confs) if pack_confs else 0.0
+        self.n_titles = len(self.extracted)
+        # consistency = share of rows agreeing with the MOST COMMON value.
+        # The old formula divided conflicts by ROW COUNT n, so a 41k-row group
+        # with 2,000 distinct volumes scored 0.95 "consistent" — more rows made
+        # contradiction look BETTER. Mode-share is scale-free and monotone.
+        vol_mode = Counter(x["volume_ml"] for x in self.extracted if x["volume_ml"] > 0)
+        pack_mode = Counter(
+            x["pack_qty"] for x in self.extracted if x["pack_confidence"] > 0
+        )
+        # mode share over rows that HAVE a volume (unknown-volume rows don't vote)
+        self.volume_consistency = (
+            (vol_mode.most_common(1)[0][1] / sum(vol_mode.values())) if vol_mode else 1.0
+        )
+        n_known_pack = sum(pack_mode.values())
+        self.pack_consistency = (
+            pack_mode.most_common(1)[0][1] / n_known_pack
+            if n_known_pack
+            else 1.0
+        )
 
-    gate_cfg = training_cfg().gate
-    observed_volumes = sorted(volume_set)
-    if any(not volumes_compatible({left}, {right},
-                                   volume_relative_tolerance=float(gate_cfg.vol_tolerance),
-                                   volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
-           for i, left in enumerate(observed_volumes) for right in observed_volumes[i + 1:]):
-        attribute_consistency_flags.add('volume_sources_disagree')
-    if len(pack_set) > 1:
-        attribute_consistency_flags.add('pack_sources_disagree')
-    if len(package_type_set) > 1:
-        attribute_consistency_flags.add('categorical_source_conflict:package_type')
-    if len(package_material_set) > 1:
-        attribute_consistency_flags.add('categorical_source_conflict:pack_material')
+    # ── phase 4: the canonical text ────────────────────────────────────────
 
-    # Confidence / consistency
-    vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]
-    pack_confs = [x["pack_confidence"] for x in extracted if x["pack_confidence"] > 0]
-    vol_conf = sum(vol_confs) / len(vol_confs) if vol_confs else 0.0
-    pack_conf = sum(pack_confs) / len(pack_confs) if pack_confs else 0.0
-    n = len(extracted)
-    # consistency = share of rows agreeing with the MOST COMMON value.
-    # The old formula divided conflicts by ROW COUNT n, so a 41k-row group
-    # with 2,000 distinct volumes scored 0.95 "consistent" — more rows made
-    # contradiction look BETTER. Mode-share is scale-free and monotone.
-    vol_mode = Counter(x["volume_ml"] for x in extracted if x["volume_ml"] > 0)
-    pack_mode = Counter(
-        x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
-    )
-    # mode share over rows that HAVE a volume (unknown-volume rows don't vote)
-    volume_consistency = (
-        (vol_mode.most_common(1)[0][1] / sum(vol_mode.values())) if vol_mode else 1.0
-    )
-    n_known_pack = sum(pack_mode.values())
-    pack_consistency = (
-        pack_mode.most_common(1)[0][1] / n_known_pack
-        if n_known_pack
-        else 1.0
-    )
-
-    # Build canonical string
-    # TOKEN-ONCE DISCIPLINE (owner directive 2026-09-08): a canonical must
-    # carry each WORD at most once — the concatenation of brand + flavor +
-    # type + salient n-grams used to repeat 'water' up to 5x (unigram from
-    # mode_type AND inside 4 different IDF compounds) in 1,489 canonicals;
-    # pure noise for both Jaccard and the embedding payload. Dedup works
-    # on UNDERSCORE-PARTS across ALL parts: an n-gram compound is dropped
-    # when EVERY word in it already appeared earlier (fully redundant);
-    # a compound carrying at least one new word stays (partial novelty —
-    # dropping only the repeated words would mutate the compound into a
-    # string that no longer corresponds to any real n-gram). First
-    # occurrence wins; deterministic by construction order.
-    parts = [brand_norm]
-    if mode_flavor:
-        parts.append(mode_flavor)
-    if mode_type:
-        parts.append(mode_type)
-    # Explicit categorical fields are spoken before free-form n-grams. This
-    # guarantees that polarity survives canonical generation even when its
-    # source phrase is not among the top TF-IDF n-grams.
-    parts.extend(sorted(carbonation_set))
-    parts.extend(sorted(sweetener_set))
-    parts.extend(sorted(pulp_set))
-    parts.extend(sorted(flavor_set - ({mode_flavor} if mode_flavor else set())))
-    # token-once: filter the salient n-grams against every word already
-    # spoken (brand/flavor/type parts + earlier n-grams). STRICT novelty
-    # (owner directive 2026-09-08: 'we cant have repeated strings'): the
-    # IDF top-5 are a sliding-window ladder (kr_white_grape_flavored,
-    # white_grape_flavored_sparkling, grape_flavored_sparkling_bottled —
-    # one phrase, three compounds, words repeated 3x) — an n-gram is kept
-    # only when EVERY word it carries is new; the highest-IDF member of
-    # each phrase family wins and the ladder's redundant echo dies.
-    spoken: set[str] = set()
-    for p in parts:
-        if p:
-            spoken.update(
-                _fold_concept(w) for t in p.split() for w in t.split("_")
-            )
-    kept_ngrams: list[str] = []
-    for ng in salient_ngrams:
-        # concept-fold each word before novelty: a compound carrying only
-        # folded echoes of already-spoken concepts ('sparkling' after
-        # 'carbonated') is redundant, not new
-        words = [w for w in ng.split("_") if w]
-        folded = [_fold_concept(w) for w in words]
-        if folded and all(f not in spoken for f in folded):
-            kept_ngrams.append("_".join(folded))
-            spoken.update(folded)
-    # fallback: if strict novelty dropped EVERYTHING (top-5 all one family
-    # and mode parts already spoke the words), keep the first n-gram that
-    # carries ANY new word — but contribute ONLY its new words (owner
-    # directive: no repeated strings; 'berry_acai' after mode 'berry'
-    # contributes 'acai', not the echo). If truly nothing is new, keep the
-    # single top n-gram (canonical never ends up bare brand+flavor+type).
-    if not kept_ngrams and salient_ngrams:
-        for ng in salient_ngrams:
-            new_words = [
-                _fold_concept(w)
-                for w in ng.split("_")
-                if w and _fold_concept(w) not in spoken
-            ]
-            if new_words:
-                kept_ngrams = ["_".join(new_words)]
-                spoken.update(new_words)
-                break
-        else:
-            kept_ngrams = [salient_ngrams[0]]
-            spoken.update(
-                w for w in salient_ngrams[0].split("_") if w
-            )
-    # raw list kept for the strip-audit visibility (what token-once removed)
-    raw_salient_ngrams = list(salient_ngrams)
-    salient_ngrams = kept_ngrams
-    parts.extend(salient_ngrams)
-    # FINAL WORD-ONCE PASS (owner directive: 'it should have only a single
-    # instance of each word'): the strict novelty pass runs on COMPOUND
-    # granularity (an n-gram survives or dies whole), so a kept compound
-    # can still repeat a word internally (source text 'Vitamin B12 Vitamin
-    # 6' -> vitamin_b12_vitamin_b6) or against a later keep-token
-    # (sugar_sugar_calories_water then no_sugar). This pass rewrites the
-    # compounds themselves: every compound keeps only its first-seen
-    # CONCEPT-folded words (sparkling==carbonated, minerals==mineral —
-    # SSOT stopwords.json CONCEPT_FOLDS). Keep-tokens are ALWAYS atomic
-    # (no_sugar never folds or fragments). A compound reduced to zero
-    # words drops; unigrams follow the same rule. First occurrence wins;
-    # deterministic.
-    seen_words: set[str] = set()
-    final_tokens: list[str] = []
-    for t in " ".join(parts).split():
-        # keep-tokens are ATOMIC: no_sugar / with_pulp never fold or
-        # fragment — they carry the phrase-variant concept as one unit
-        is_keep = t in KEEP_TOKENS  # atomic — never folded, never split
-        if "_" in t and not is_keep:
-            kept = []
-            for w in t.split("_"):
-                fw = _fold_concept(w)
-                if fw and fw not in seen_words:
-                    seen_words.add(fw)
-                    kept.append(fw)
-            if kept:
-                final_tokens.append("_".join(kept))
-        elif is_keep:
-            if t not in seen_words:
-                # atomic: mark the whole token, not its parts
-                seen_words.add(t)
-                final_tokens.append(t)
-        else:
-            ft = _fold_concept(t)
-            if ft and ft not in seen_words:
-                seen_words.add(ft)
-                final_tokens.append(ft)
-    canonical = " ".join(final_tokens)
-
-    # CANONICAL-SIDE UNIVERSE EVIDENCE (owner ruling 2026-10-01, closes the
-    # wiring-agent's reported gap): canonical_records.csv previously carried
-    # NO universe_evidence column, so the CANONICAL side of the per-pair
-    # attribute census (core.attribute_conflicts.full_dimension_states ->
-    # canonical_attribute_info._universe_evidence_of) could only populate the
-    # critical channels; the SKU side already parses all 37 registered keys
-    # from the raw attribute cell (parse_universe_cell). Parse each of the
-    # GTIN's raw attribute cells with the SAME census SSOT parser
-    # (parse_universe_cell -> AttributeUniverse.parse) and UNION the token
-    # sets per registered key — same key normalization
-    # (core.text.normalized_attribute_text), same token lowercase/strip, same
-    # band canon. Persisted per key as SORTED value lists under ONE
-    # deterministic JSON string (sorted keys), matching the CSV writer's
-    # sorted-set convention: ast.literal_eval round-trips it in
-    # _universe_evidence_of exactly like the other canonical set columns.
-    # Two keys are deliberately NOT persisted:
-    #   * "volume" — the parse emits float ml values; the canonical volume
-    #     channel is volume_set (read directly by _universe_value), so floats
-    #     here would be unused noise in the CSV;
-    #   * "unclassified_keys" — key NAMES, not values; the reader keeps
-    #     registered keys only, and the SKU side owns the unclassified bucket.
-    # Existing columns are untouched (additive column at the frame's end —
-    # CANONICAL_RECORDS_COLUMNS updated deliberately, never silently).
-    canonical_universe_evidence: dict[str, set[str]] = {}
-    from core.attribute_conflicts import parse_universe_cell
-    for attr in attributes:
-        parsed = parse_universe_cell(attr)
-        parsed.pop("unclassified_keys", None)
-        parsed.pop("volume", None)
-        for key, values in parsed.items():
-            if values:
-                canonical_universe_evidence.setdefault(key, set()).update(
-                    str(token) for token in values
+    def token_once_text(self) -> None:
+        """Build the canonical string under the WORD-ONCE discipline (all
+        statements and pass order byte-identical to the original body)."""
+        # Build canonical string
+        # TOKEN-ONCE DISCIPLINE (owner directive 2026-09-08): a canonical must
+        # carry each WORD at most once — the concatenation of brand + flavor +
+        # type + salient n-grams used to repeat 'water' up to 5x (unigram from
+        # mode_type AND inside 4 different IDF compounds) in 1,489 canonicals;
+        # pure noise for both Jaccard and the embedding payload. Dedup works
+        # on UNDERSCORE-PARTS across ALL parts: an n-gram compound is dropped
+        # when EVERY word in it already appeared earlier (fully redundant);
+        # a compound carrying at least one new word stays (partial novelty —
+        # dropping only the repeated words would mutate the compound into a
+        # string that no longer corresponds to any real n-gram). First
+        # occurrence wins; deterministic by construction order.
+        parts = [self.brand_norm]
+        if self.mode_flavor:
+            parts.append(self.mode_flavor)
+        if self.mode_type:
+            parts.append(self.mode_type)
+        # Explicit categorical fields are spoken before free-form n-grams. This
+        # guarantees that polarity survives canonical generation even when its
+        # source phrase is not among the top TF-IDF n-grams.
+        parts.extend(sorted(self.carbonation_set))
+        parts.extend(sorted(self.sweetener_set))
+        parts.extend(sorted(self.pulp_set))
+        parts.extend(sorted(self.flavor_set - ({self.mode_flavor} if self.mode_flavor else set())))
+        # token-once: filter the salient n-grams against every word already
+        # spoken (brand/flavor/type parts + earlier n-grams). STRICT novelty
+        # (owner directive 2026-09-08: 'we cant have repeated strings'): the
+        # IDF top-5 are a sliding-window ladder (kr_white_grape_flavored,
+        # white_grape_flavored_sparkling, grape_flavored_sparkling_bottled —
+        # one phrase, three compounds, words repeated 3x) — an n-gram is kept
+        # only when EVERY word it carries is new; the highest-IDF member of
+        # each phrase family wins and the ladder's redundant echo dies.
+        spoken: set[str] = set()
+        for p in parts:
+            if p:
+                spoken.update(
+                    _fold_concept(w) for t in p.split() for w in t.split("_")
                 )
-    universe_evidence_json = json.dumps(
-        {key: sorted(values) for key, values in sorted(canonical_universe_evidence.items())}
-    )
+        kept_ngrams: list[str] = []
+        for ng in self.salient_ngrams:
+            # concept-fold each word before novelty: a compound carrying only
+            # folded echoes of already-spoken concepts ('sparkling' after
+            # 'carbonated') is redundant, not new
+            words = [w for w in ng.split("_") if w]
+            folded = [_fold_concept(w) for w in words]
+            if folded and all(f not in spoken for f in folded):
+                kept_ngrams.append("_".join(folded))
+                spoken.update(folded)
+        # fallback: if strict novelty dropped EVERYTHING (top-5 all one family
+        # and mode parts already spoke the words), keep the first n-gram that
+        # carries ANY new word — but contribute ONLY its new words (owner
+        # directive: no repeated strings; 'berry_acai' after mode 'berry'
+        # contributes 'acai', not the echo). If truly nothing is new, keep the
+        # single top n-gram (canonical never ends up bare brand+flavor+type).
+        if not kept_ngrams and self.salient_ngrams:
+            for ng in self.salient_ngrams:
+                new_words = [
+                    _fold_concept(w)
+                    for w in ng.split("_")
+                    if w and _fold_concept(w) not in spoken
+                ]
+                if new_words:
+                    kept_ngrams = ["_".join(new_words)]
+                    spoken.update(new_words)
+                    break
+            else:
+                kept_ngrams = [self.salient_ngrams[0]]
+                spoken.update(
+                    w for w in self.salient_ngrams[0].split("_") if w
+                )
+        # raw list kept for the strip-audit visibility (what token-once removed)
+        self.raw_salient_ngrams = list(self.salient_ngrams)
+        self.salient_ngrams = kept_ngrams
+        self.kept_ngrams = kept_ngrams
+        parts.extend(self.salient_ngrams)
+        self._final_word_once_pass(parts)
 
-    # BOUNDARY CONTRACT (lib.schemas): one validated record per canonical.
-    # brand NaN-guard: a group whose brand column is all-NaN would carry a
-    # float NaN into mode_brand (pandas would write ""), which pydantic's
-    # str field would coerce to "nan" — the exact title-poisoning bug class
-    # the lane fixed for titles. Clean it here so the RECORD is honest.
-    brand_clean = brand if isinstance(brand, str) else ""
-    rec = CanonicalRecord(
-        gtin=gtin,
-        canonical=canonical,
-        mode_brand=brand_clean,
-        mode_flavor=mode_flavor,
-        mode_type=mode_type,
-        salient_ngrams=salient_ngrams,
-        dropped_redundant_ngrams=[
-            ng for ng in raw_salient_ngrams if ng not in set(kept_ngrams)
-        ],
-        # NOTE: kept as SETS here — gate logic intersects them (pack_set &
-        # pack_set). data_prep sorts them AT THE CSV WRITE so the display
-        # is deterministic (PYTHONHASHSEED-proof) without touching logic.
-        volume_set=volume_set,
-        pack_set=pack_set,
-        packaging_level_set=packaging_level_set,
-        package_type_set=package_type_set,
-        package_material_set=package_material_set,
-        flavor_set=flavor_set,
-        made_from_set=made_from_set,
-        carbonation_set=carbonation_set,
-        sweetener_set=sweetener_set,
-        sweetener_type_set=sweetener_type_set,
-        sweetening_set=sweetening_set,
-        attribute_consistency_flags=attribute_consistency_flags,
-        pulp_set=pulp_set,
-        organic_set=organic_set,
-        volume_confidence=round(vol_conf, 3),
-        pack_confidence=round(pack_conf, 3),
-        volume_consistency=round(volume_consistency, 3),
-        pack_consistency=round(pack_consistency, 3),
-        n_titles=n,
-    )
-    # Additive persistence key (post-dump, like description_evidence before
-    # it was a model field): the canonical record model stays extra='forbid'
-    # for its gate-facing fields; the universe evidence rides the CSV
-    # contract next to them as the one rendered JSON string.
-    out = rec.model_dump()
-    out["universe_evidence"] = universe_evidence_json
-    # GTIN CARD (evidence ledger, one per listing): every claim any of the
-    # gtin's listing cards recorded, with listing origin kept so the surface
-    # can walk a card listing by listing. Ordered PER ATTRIBUTE — sorted by
-    # (field, source, value) via whole-entry JSON — deterministic across
-    # hash seeds; exact repeats (two listings extracting the identical
-    # claim) collapse via the same serialization.
-    json_entries = [
-        json.dumps({"listing": listing_index, **entry}, sort_keys=True)
-        for listing_index, per_listing in enumerate(extracted)
-        for entry in (per_listing.get("evidence_ledger") or [])
-    ]
-    out["evidence_ledger"] = json.dumps(
-        [json.loads(e) for e in sorted(dict.fromkeys(json_entries))]
-    )
-    return out
+    def _final_word_once_pass(self, parts: list[str]) -> None:
+        """Rewrite compounds under the concept-fold word-once rule."""
+        # FINAL WORD-ONCE PASS (owner directive: 'it should have only a single
+        # instance of each word'): the strict novelty pass runs on COMPOUND
+        # granularity (an n-gram survives or dies whole), so a kept compound
+        # can still repeat a word internally (source text 'Vitamin B12 Vitamin
+        # 6' -> vitamin_b12_vitamin_b6) or against a later keep-token
+        # (sugar_sugar_calories_water then no_sugar). This pass rewrites the
+        # compounds themselves: every compound keeps only its first-seen
+        # CONCEPT-folded words (sparkling==carbonated, minerals==mineral —
+        # SSOT stopwords.json CONCEPT_FOLDS). Keep-tokens are ALWAYS atomic
+        # (no_sugar never folds or fragments). A compound reduced to zero
+        # words drops; unigrams follow the same rule. First occurrence wins;
+        # deterministic.
+        seen_words: set[str] = set()
+        final_tokens: list[str] = []
+        for t in " ".join(parts).split():
+            # keep-tokens are ATOMIC: no_sugar / with_pulp never fold or
+            # fragment — they carry the phrase-variant concept as one unit
+            is_keep = t in KEEP_TOKENS  # atomic — never folded, never split
+            if "_" in t and not is_keep:
+                kept = []
+                for w in t.split("_"):
+                    fw = _fold_concept(w)
+                    if fw and fw not in seen_words:
+                        seen_words.add(fw)
+                        kept.append(fw)
+                if kept:
+                    final_tokens.append("_".join(kept))
+            elif is_keep:
+                if t not in seen_words:
+                    # atomic: mark the whole token, not its parts
+                    seen_words.add(t)
+                    final_tokens.append(t)
+            else:
+                ft = _fold_concept(t)
+                if ft and ft not in seen_words:
+                    seen_words.add(ft)
+                    final_tokens.append(ft)
+        self.canonical = " ".join(final_tokens)
+
+    # ── phase 5: universe evidence ─────────────────────────────────────────
+
+    def universe_evidence(self) -> None:
+        """Parse the GTIN's raw attribute cells with the SAME census SSOT
+        parser and UNION the token sets per registered key."""
+        # CANONICAL-SIDE UNIVERSE EVIDENCE (owner ruling 2026-10-01, closes the
+        # wiring-agent's reported gap): canonical_records.csv previously carried
+        # NO universe_evidence column, so the CANONICAL side of the per-pair
+        # attribute census (core.attribute_conflicts.full_dimension_states ->
+        # canonical_attribute_info._universe_evidence_of) could only populate the
+        # critical channels; the SKU side already parses all 37 registered keys
+        # from the raw attribute cell (parse_universe_cell). Parse each of the
+        # GTIN's raw attribute cells with the SAME census SSOT parser
+        # (parse_universe_cell -> AttributeUniverse.parse) and UNION the token
+        # sets per registered key — same key normalization
+        # (core.text.normalized_attribute_text), same token lowercase/strip, same
+        # band canon. Persisted per key as SORTED value lists under ONE
+        # deterministic JSON string (sorted keys), matching the CSV writer's
+        # sorted-set convention: ast.literal_eval round-trips it in
+        # _universe_evidence_of exactly like the other canonical set columns.
+        # Two keys are deliberately NOT persisted:
+        #   * "volume" — the parse emits float ml values; the canonical volume
+        #     channel is volume_set (read directly by _universe_value), so floats
+        #     here would be unused noise in the CSV;
+        #   * "unclassified_keys" — key NAMES, not values; the reader keeps
+        #     registered keys only, and the SKU side owns the unclassified bucket.
+        # Existing columns are untouched (additive column at the frame's end —
+        # CANONICAL_RECORDS_COLUMNS updated deliberately, never silently).
+        canonical_universe_evidence: dict[str, set[str]] = {}
+        from core.attribute_conflicts import parse_universe_cell
+        for attr in self.attributes:
+            parsed = parse_universe_cell(attr)
+            parsed.pop("unclassified_keys", None)
+            parsed.pop("volume", None)
+            for key, values in parsed.items():
+                if values:
+                    canonical_universe_evidence.setdefault(key, set()).update(
+                        str(token) for token in values
+                    )
+        self.universe_evidence_json = json.dumps(
+            {key: sorted(values) for key, values in sorted(canonical_universe_evidence.items())}
+        )
+
+    # ── phase 6: the validated record ──────────────────────────────────────
+
+    def record(self) -> dict:
+        """One validated CanonicalRecord + the additive persistence keys."""
+        # BOUNDARY CONTRACT (lib.schemas): one validated record per canonical.
+        # brand NaN-guard: a group whose brand column is all-NaN would carry a
+        # float NaN into mode_brand (pandas would write ""), which pydantic's
+        # str field would coerce to "nan" — the exact title-poisoning bug class
+        # the lane fixed for titles. Clean it here so the RECORD is honest.
+        brand_clean = self._brand if isinstance(self._brand, str) else ""
+        rec = CanonicalRecord(
+            gtin=self._gtin,
+            canonical=self.canonical,
+            mode_brand=brand_clean,
+            mode_flavor=self.mode_flavor,
+            mode_type=self.mode_type,
+            salient_ngrams=self.salient_ngrams,
+            dropped_redundant_ngrams=[
+                ng for ng in self.raw_salient_ngrams if ng not in set(self.kept_ngrams)
+            ],
+            # NOTE: kept as SETS here — gate logic intersects them (pack_set &
+            # pack_set). data_prep sorts them AT THE CSV WRITE so the display
+            # is deterministic (PYTHONHASHSEED-proof) without touching logic.
+            volume_set=self.volume_set,
+            pack_set=self.pack_set,
+            packaging_level_set=self.packaging_level_set,
+            package_type_set=self.package_type_set,
+            package_material_set=self.package_material_set,
+            flavor_set=self.flavor_set,
+            made_from_set=self.made_from_set,
+            carbonation_set=self.carbonation_set,
+            sweetener_set=self.sweetener_set,
+            sweetener_type_set=self.sweetener_type_set,
+            sweetening_set=self.sweetening_set,
+            attribute_consistency_flags=self.attribute_consistency_flags,
+            pulp_set=self.pulp_set,
+            organic_set=self.organic_set,
+            volume_confidence=round(self.vol_conf, 3),
+            pack_confidence=round(self.pack_conf, 3),
+            volume_consistency=round(self.volume_consistency, 3),
+            pack_consistency=round(self.pack_consistency, 3),
+            n_titles=self.n_titles,
+        )
+        # Additive persistence key (post-dump, like description_evidence before
+        # it was a model field): the canonical record model stays extra='forbid'
+        # for its gate-facing fields; the universe evidence rides the CSV
+        # contract next to them as the one rendered JSON string.
+        out = rec.model_dump()
+        out["universe_evidence"] = self.universe_evidence_json
+        # GTIN CARD (evidence ledger, one per listing): every claim any of the
+        # gtin's listing cards recorded, with listing origin kept so the surface
+        # can walk a card listing by listing. Ordered PER ATTRIBUTE — sorted by
+        # (field, source, value) via whole-entry JSON — deterministic across
+        # hash seeds; exact repeats (two listings extracting the identical
+        # claim) collapse via the same serialization.
+        json_entries = [
+            json.dumps({"listing": listing_index, **entry}, sort_keys=True)
+            for listing_index, per_listing in enumerate(self.extracted)
+            for entry in (per_listing.get("evidence_ledger") or [])
+        ]
+        out["evidence_ledger"] = json.dumps(
+            [json.loads(e) for e in sorted(dict.fromkeys(json_entries))]
+        )
+        return out
+
+    # ── orchestration ──────────────────────────────────────────────────────
+
+    def compose(self) -> dict:
+        self.accept_rows()
+        self.aggregate_sets()
+        self.confidences_and_consistency()
+        self.token_once_text()
+        self.universe_evidence()
+        return self.record()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2521,42 +2839,144 @@ def token_verdict(tok: str, brand_vocab: set[str]) -> tuple[str, str]:
     return cls, "strip"
 
 
+class NumberTokenAuthority:
+    """The number-token reference: census, verdict map, per-row strip.
+
+    Single responsibility per method: corpus text census (census_corpus),
+    the digit-token reference frame (reference_frame), the cached SSOT read
+    (verdicts), and the model-side strip (strip). The verdict cache and the
+    unseen-token counter stay MODULE-LEVEL on purpose: prepare_all resets
+    them to force a fresh read between stages (pipeline._VERDICTS_CACHE /
+    _VERDICTS_LOADED are the pinned external interface, never copied).
+    """
+
+    def census_corpus(self, df: pd.DataFrame) -> list[str]:
+        """Pre-number-strip sku texts (the census input): the official cleaning
+        WITHOUT the final number-token strip, so every digit token in the corpus
+        appears in the reference."""
+        out = []
+        for t, a in zip(df["sku_name_eng"].fillna(""), df["attribute"].fillna(""), strict=True):
+            text = normalize_text(t) + " " + normalize_text(a or "")
+            text = _VOLUME_PACK_RE.sub(" ", text)
+            toks = [x for x in text.split() if x not in MINIMAL_STOPWORDS and len(x) > 1]
+            out.append(" ".join(toks))
+        return out
+
+    def reference_frame(self, texts: list[str], brand_vocab: set[str]) -> pd.DataFrame:
+        """Census every digit-token in the corpus with its verdict.
+
+        One row per distinct token: token, class, n_occurrences, verdict, rule.
+        """
+        tokens = Counter()
+        for tx in texts:
+            for t in tx.split():
+                if re.search(r"\d", t):
+                    tokens[t] += 1
+        rows = []
+        for tok, n in sorted(tokens.items(), key=lambda x: (-x[1], x[0])):
+            cls, v = token_verdict(tok, brand_vocab)
+            rows.append(
+                {
+                    "token": tok,
+                    "class": cls,
+                    "n_occurrences": n,
+                    "verdict": v,
+                    "rule": v,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def verdicts(self) -> dict[str, str] | None:
+        """token -> verdict map from the reference CSV (None if not built yet).
+
+        Cached at module level: strip_number_tokens calls this once PER TOKEN
+        (up to 41k digit-texts × 2.7ms CSV re-read ≈ 112s of pure re-read per
+        full-corpus pass). One read, memoized for the process lifetime — the
+        CSV is written by src/training/build_reference.py, not mutated mid-run.
+        """
+        global _VERDICTS_CACHE, _VERDICTS_LOADED
+        if _VERDICTS_LOADED:
+            return _VERDICTS_CACHE
+        p = reference_path()
+        if not p.exists():
+            # SSOT missing: SAY IT — the caller falls back to regex rules only
+            # (95.2% coverage comes from the CSV; regex-only is a degradation)
+            print(
+                f"[numbers] reference CSV missing ({p}) — regex-rule fallback only",
+                flush=True,
+            )
+            _VERDICTS_LOADED = True
+            return None
+        df = pd.read_csv(p, dtype={"token": str})
+        # BOUNDARY CONTRACT (lib.schemas): every verdict must be in the
+        # strip/keep_* vocabulary — a typo'd CSV value would silently never
+        # match the startswith("keep") branch in strip_number_tokens.
+        _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"], strict=True)))
+        _VERDICTS_LOADED = True
+        return _VERDICTS_CACHE
+
+    def strip(self, text: str, brand: str = "") -> str:
+        """Remove number tokens from an already-clean sku text.
+
+        `brand` is the ROW's brand string: numeric brand tokens ("28" in
+        "28 Black") survive only when that number appears in this row's own
+        brand; the same number in another row's title (e.g. a 24-pack of a
+        different brand) is stripped. A digit token that IS this row's spelled
+        numeric brand (1724 → seventeen) is replaced by the spelled form.
+        Everything else resolves via the reference CSV (SSOT) with the
+        regex-rule fallback.
+        """
+        global _UNSEEN_TOKEN_TOTAL
+        if not re.search(r"\d", text):
+            return text
+        verdicts = self.verdicts()
+        # brand arrives PRE-SPELLED from clean_sku_text; recover the digit key
+        # (if this row's brand was numeric) so the keep-brand test still matches
+        brand_l = (brand or "").lower()
+        digit_key = next((k for k, w in NUMERIC_BRAND_WORDS.items() if w == brand_l), "")
+        spelled = NUMERIC_BRAND_WORDS.get(digit_key, "")
+        out = []
+        # AUDIT 2026-09-09 (visibility): tokens missing from the reference CSV
+        # fall through to regex rules with an EMPTY brand vocab — correct by
+        # design (the CSV is the SSOT for seen tokens), but the count of
+        # unseen-token resolutions was invisible. Count them per call.
+        n_unseen = 0
+        for t in text.split():
+            if not re.search(r"\d", t):
+                out.append(t)
+                continue
+            v = (verdicts or {}).get(t)
+            if v is None:
+                n_unseen += 1
+                _, v = token_verdict(t, set())
+            if v == "keep_brand":
+                # numeric brand token: keep only if THIS row's brand carries it.
+                # this row's numeric brand (1724/1642) emits its WORD form; other
+                # numeric brands (28 in "28 Black") keep their digit form
+                core = re.sub(r"[^a-z0-9]", "", t.lower())
+                if spelled and core == digit_key:
+                    out.extend(spelled.split())
+                elif core and core in brand_l:
+                    out.append(t)
+            elif v.startswith("keep"):
+                out.append(t)
+        if n_unseen:
+            _UNSEEN_TOKEN_TOTAL += n_unseen
+        return " ".join(out)
+
+
+_NUMBERS = NumberTokenAuthority()
+
+
 def census_texts(df: pd.DataFrame) -> list[str]:
-    """Pre-number-strip sku texts (the census input): the official cleaning
-    WITHOUT the final number-token strip, so every digit token in the corpus
-    appears in the reference."""
-    out = []
-    for t, a in zip(df["sku_name_eng"].fillna(""), df["attribute"].fillna(""), strict=True):
-        text = normalize_text(t) + " " + normalize_text(a or "")
-        text = _VOLUME_PACK_RE.sub(" ", text)
-        toks = [x for x in text.split() if x not in MINIMAL_STOPWORDS and len(x) > 1]
-        out.append(" ".join(toks))
-    return out
+    """Pre-number-strip sku texts (the census input) — see _NUMBERS.census_corpus."""
+    return _NUMBERS.census_corpus(df)
 
 
 def build_reference(texts: list[str], brand_vocab: set[str]) -> pd.DataFrame:
-    """Census every digit-token in the corpus with its verdict.
-
-    One row per distinct token: token, class, n_occurrences, verdict, rule.
-    """
-    tokens = Counter()
-    for tx in texts:
-        for t in tx.split():
-            if re.search(r"\d", t):
-                tokens[t] += 1
-    rows = []
-    for tok, n in sorted(tokens.items(), key=lambda x: (-x[1], x[0])):
-        cls, v = token_verdict(tok, brand_vocab)
-        rows.append(
-            {
-                "token": tok,
-                "class": cls,
-                "n_occurrences": n,
-                "verdict": v,
-                "rule": v,
-            }
-        )
-    return pd.DataFrame(rows)
+    """Census every digit-token in the corpus with its verdict —
+    see _NUMBERS.reference_frame."""
+    return _NUMBERS.reference_frame(texts, brand_vocab)
 
 
 def reference_path() -> Path:
@@ -2573,33 +2993,12 @@ _UNSEEN_TOKEN_TOTAL = 0
 
 
 def load_verdicts() -> dict[str, str] | None:
-    """token -> verdict map from the reference CSV (None if not built yet).
+    """token -> verdict map from the reference CSV — see _NUMBERS.verdicts.
 
-    Cached at module level: strip_number_tokens calls this once PER TOKEN
-    (up to 41k digit-texts × 2.7ms CSV re-read ≈ 112s of pure re-read per
-    full-corpus pass). One read, memoized for the process lifetime — the
-    CSV is written by src/training/build_reference.py, not mutated mid-run.
+    The module-level cache attributes are the pinned external interface
+    (prepare_all resets them to force a per-stage fresh read).
     """
-    global _VERDICTS_CACHE, _VERDICTS_LOADED
-    if _VERDICTS_LOADED:
-        return _VERDICTS_CACHE
-    p = reference_path()
-    if not p.exists():
-        # SSOT missing: SAY IT — the caller falls back to regex rules only
-        # (95.2% coverage comes from the CSV; regex-only is a degradation)
-        print(
-            f"[numbers] reference CSV missing ({p}) — regex-rule fallback only",
-            flush=True,
-        )
-        _VERDICTS_LOADED = True
-        return None
-    df = pd.read_csv(p, dtype={"token": str})
-    # BOUNDARY CONTRACT (lib.schemas): every verdict must be in the
-    # strip/keep_* vocabulary — a typo'd CSV value would silently never
-    # match the startswith("keep") branch in strip_number_tokens.
-    _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"], strict=True)))
-    _VERDICTS_LOADED = True
-    return _VERDICTS_CACHE
+    return _NUMBERS.verdicts()
 
 
 # Pure-numeric BRAND values are year-styled names ("1642", "1724") — the
@@ -2620,53 +3019,8 @@ def spell_numeric_brand(value: str) -> str:
 
 
 def strip_number_tokens(text: str, brand: str = "") -> str:
-    """Remove number tokens from an already-clean sku text.
-
-    `brand` is the ROW's brand string: numeric brand tokens ("28" in
-    "28 Black") survive only when that number appears in this row's own
-    brand; the same number in another row's title (e.g. a 24-pack of a
-    different brand) is stripped. A digit token that IS this row's spelled
-    numeric brand (1724 → seventeen) is replaced by the spelled form.
-    Everything else resolves via the reference CSV (SSOT) with the
-    regex-rule fallback.
-    """
-    if not re.search(r"\d", text):
-        return text
-    verdicts = load_verdicts()
-    # brand arrives PRE-SPELLED from clean_sku_text; recover the digit key
-    # (if this row's brand was numeric) so the keep-brand test still matches
-    brand_l = (brand or "").lower()
-    digit_key = next((k for k, w in NUMERIC_BRAND_WORDS.items() if w == brand_l), "")
-    spelled = NUMERIC_BRAND_WORDS.get(digit_key, "")
-    out = []
-    # AUDIT 2026-09-09 (visibility): tokens missing from the reference CSV
-    # fall through to regex rules with an EMPTY brand vocab — correct by
-    # design (the CSV is the SSOT for seen tokens), but the count of
-    # unseen-token resolutions was invisible. Count them per call.
-    n_unseen = 0
-    for t in text.split():
-        if not re.search(r"\d", t):
-            out.append(t)
-            continue
-        v = (verdicts or {}).get(t)
-        if v is None:
-            n_unseen += 1
-            _, v = token_verdict(t, set())
-        if v == "keep_brand":
-            # numeric brand token: keep only if THIS row's brand carries it.
-            # this row's numeric brand (1724/1642) emits its WORD form; other
-            # numeric brands (28 in "28 Black") keep their digit form
-            core = re.sub(r"[^a-z0-9]", "", t.lower())
-            if spelled and core == digit_key:
-                out.extend(spelled.split())
-            elif core and core in brand_l:
-                out.append(t)
-        elif v.startswith("keep"):
-            out.append(t)
-    if n_unseen:
-        global _UNSEEN_TOKEN_TOTAL
-        _UNSEEN_TOKEN_TOTAL += n_unseen
-    return " ".join(out)
+    """Remove number tokens from an already-clean sku text — see _NUMBERS.strip."""
+    return _NUMBERS.strip(text, brand)
 
 
 # ============================================================================
@@ -2722,6 +3076,57 @@ def _source_rows_for(frame: pd.DataFrame) -> str:
     return json.dumps(entries, sort_keys=True)
 
 
+class GtinGroupAssembler:
+    """Box the raw export into one payload row per GS1-valid gtin.
+
+    Single responsibility: turn the post-guard frame into
+    (grouped frame, rows-by-gtin zip source). The grouped frame feeds the
+    canonical card pool; the rows-by-gtin dict feeds the IDF indexes. The
+    output columns and ordering are byte-identical to the pre-refactor
+    vectorized re-implementation (gtin-sorted keys via groupby's sorted
+    .indices, first-occurrence tie-break for the dominant brand).
+    """
+
+    _COLUMNS = ("sku_name_eng", "attribute", "description_short_eng", "sku_url",
+                "image_url", "breadcrumbs_eng", "category", "country", "retailer",
+                "brand")
+
+    def assemble(self, df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+        columns = self._COLUMNS
+        group_indices = df_full.groupby("gtin").indices
+        member_frames = {gtin: df_full.iloc[indices] for gtin, indices
+                         in _LOG.progress(sorted(group_indices.items()),
+                                          desc='gtin_groups', unit='gtin')}
+        frame_rows = []
+        rows_by_gtin: dict[str, list[tuple[str, str]]] = {}
+        for gtin, member in _LOG.progress(member_frames.items(), desc='assemble_groups',
+                                          unit='gtin'):
+            columns_of = {column: list(member[column]) for column in columns}
+            group_rows = list(zip(columns_of["sku_name_eng"],
+                                  columns_of["attribute"], strict=True))
+            rows_by_gtin[gtin] = group_rows
+            frame_rows.append({
+                "gtin": gtin,
+                "rows": group_rows,
+                "descriptions": columns_of["description_short_eng"],
+                "urls": columns_of["sku_url"],
+                "image_urls": columns_of["image_url"],
+                "breadcrumbs_engs": columns_of["breadcrumbs_eng"],
+                "categories": columns_of["category"],
+                "countries": columns_of["country"],
+                "retailers": columns_of["retailer"],
+                "brand": _dominant_brand(columns_of["brand"]),
+                "description_evidence": _source_evidence_values(columns_of["description_short_eng"]),
+                "breadcrumb_evidence": _source_evidence_values(columns_of["breadcrumbs_eng"]),
+                "source_rows": _source_rows_for(member),
+            })
+        grouped = pd.DataFrame(frame_rows)
+        return grouped, rows_by_gtin
+
+
+_GROUP_ASSEMBLER = GtinGroupAssembler()
+
+
 def _assemble_gtin_groups(df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Vectorized re-implementation of the groupby.agg boxing block.
 
@@ -2729,37 +3134,7 @@ def _assemble_gtin_groups(df_full: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     sorted .indices), no per-group function dispatch from pandas internals.
     Returns (grouped frame, rows-by-gtin zip source).
     """
-    from tqdm import tqdm
-    columns = ("sku_name_eng", "attribute", "description_short_eng", "sku_url",
-               "image_url", "breadcrumbs_eng", "category", "country", "retailer",
-               "brand")
-    group_indices = df_full.groupby("gtin").indices
-    member_frames = {gtin: df_full.iloc[indices] for gtin, indices
-                     in _LOG.progress(sorted(group_indices.items()),
-                                      desc='gtin_groups', unit='gtin')}
-    grouped_rows, frame_rows = {}, []
-    for gtin, member in _LOG.progress(member_frames.items(), desc='assemble_groups',
-                                      unit='gtin'):
-        columns_of = {column: list(member[column]) for column in columns}
-        grouped_rows[gtin] = list(zip(columns_of["sku_name_eng"],
-                                      columns_of["attribute"], strict=True))
-        frame_rows.append({
-            "gtin": gtin,
-            "rows": grouped_rows[gtin],
-            "descriptions": columns_of["description_short_eng"],
-            "urls": columns_of["sku_url"],
-            "image_urls": columns_of["image_url"],
-            "breadcrumbs_engs": columns_of["breadcrumbs_eng"],
-            "categories": columns_of["category"],
-            "countries": columns_of["country"],
-            "retailers": columns_of["retailer"],
-            "brand": _dominant_brand(columns_of["brand"]),
-            "description_evidence": _source_evidence_values(columns_of["description_short_eng"]),
-            "breadcrumb_evidence": _source_evidence_values(columns_of["breadcrumbs_eng"]),
-            "source_rows": _source_rows_for(member),
-        })
-    grouped = pd.DataFrame(frame_rows)
-    return grouped, grouped_rows
+    return _GROUP_ASSEMBLER.assemble(df_full)
 
 
 def _source_evidence_values(values: list) -> list[str]:
@@ -2773,32 +3148,89 @@ def _dominant_brand(values: list) -> str:
     return Counter(values).most_common(1)[0][0]
 
 
-_CANONICAL_WORKER_STATE: dict[str, object] = {}
+class CanonicalCardPool:
+    """Build every per-GTIN canonical record: inline or fork-parallel.
+
+    One owner of the worker-pool lifecycle. The per-run IDF state is published
+    to the pool (fork COW share); each task computes ONE canonical record from
+    its pre-assembled group payload only, so the split is deterministic either
+    way — pool.map yields results in submission order, and every task is a
+    pure function of payload + inherited IDF maps.
+    """
+
+    _INLINE_TASK_THRESHOLD = 256
+    _CHUNKSIZE = 16
+
+    def __init__(self) -> None:
+        self._state: dict[str, object] = {}
+
+    def bind(self, global_idf: 'NgramIDF',
+             brand_idf_map: dict[str, 'NgramIDF']) -> None:
+        """Publish the per-run IDF state to the worker pool (fork COW share)."""
+        self._state.clear()
+        self._state['global_idf'] = global_idf
+        self._state['brand_idf_map'] = brand_idf_map
+
+    def record_for_task(self, task: tuple) -> dict:
+        """One canonical record, computed from pre-assembled group payload only."""
+        gtin, brand, rows, descriptions, urls, image_urls, breadcrumbs_engs, \
+            categories, description_evidence, breadcrumb_evidence, source_rows = task
+        record = generate_canonical(
+            gtin, brand, rows,
+            self._state['global_idf'],
+            self._state['brand_idf_map'][brand.lower().strip()],
+            descriptions=descriptions, urls=urls, image_urls=image_urls,
+            breadcrumbs_engs=breadcrumbs_engs, categories=categories,
+        )
+        record['description_evidence'] = description_evidence
+        record['breadcrumb_evidence'] = breadcrumb_evidence
+        record['source_rows'] = source_rows
+        return record
+
+    def build(self, grouped: pd.DataFrame, global_idf: 'NgramIDF',
+              brand_idf_map: dict[str, 'NgramIDF']) -> pd.DataFrame:
+        self.bind(global_idf, brand_idf_map)
+        tasks = list(
+            (row.gtin, row.brand, row.rows, row.descriptions, row.urls,
+             row.image_urls, row.breadcrumbs_engs, row.categories,
+             row.description_evidence, row.breadcrumb_evidence, row.source_rows)
+            for row in grouped.itertuples(index=False)
+        )
+        if len(tasks) < self._INLINE_TASK_THRESHOLD:
+            records = [
+                self.record_for_task(task)
+                for task in _LOG.progress(tasks, desc='cards_inline', unit='gtin')
+            ]
+            return pd.DataFrame(records)
+        _LOG.info(f"canon: fork-parallel canonical build over {len(tasks):,} gtins")
+        import concurrent.futures
+        from multiprocessing import get_context
+        records: list[dict] = []
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max(2, os.cpu_count() - 1), mp_context=get_context('fork'),
+        ) as pool:
+            bar = _LOG.bar(total=len(tasks), desc='canonical_cards', unit='gtin')
+            try:
+                for record in pool.map(self.record_for_task, tasks, chunksize=self._CHUNKSIZE):
+                    records.append(record)
+                    bar.update()
+            finally:
+                bar.close()
+        return pd.DataFrame(records)
+
+
+_CARD_POOL = CanonicalCardPool()
 
 
 def _canonical_worker_state_bind(global_idf: 'NgramIDF',
                                  brand_idf_map: dict[str, 'NgramIDF']) -> None:
     """Publish the per-run IDF state to the worker pool (fork COW share)."""
-    _CANONICAL_WORKER_STATE.clear()
-    _CANONICAL_WORKER_STATE['global_idf'] = global_idf
-    _CANONICAL_WORKER_STATE['brand_idf_map'] = brand_idf_map
+    _CARD_POOL.bind(global_idf, brand_idf_map)
 
 
 def _canonical_record_task(task: tuple) -> dict:
     """One canonical record, computed from pre-assembled group payload only."""
-    gtin, brand, rows, descriptions, urls, image_urls, breadcrumbs_engs, \
-        categories, description_evidence, breadcrumb_evidence, source_rows = task
-    record = generate_canonical(
-        gtin, brand, rows,
-        _CANONICAL_WORKER_STATE['global_idf'],
-        _CANONICAL_WORKER_STATE['brand_idf_map'][brand.lower().strip()],
-        descriptions=descriptions, urls=urls, image_urls=image_urls,
-        breadcrumbs_engs=breadcrumbs_engs, categories=categories,
-    )
-    record['description_evidence'] = description_evidence
-    record['breadcrumb_evidence'] = breadcrumb_evidence
-    record['source_rows'] = source_rows
-    return record
+    return _CARD_POOL.record_for_task(task)
 
 
 def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',
@@ -2808,214 +3240,236 @@ def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',
     Deterministic either way: imap yields results in submission order, and
     every task is a pure function of its payload + fork-inherited IDF maps.
     """
-    tasks = list(
-        (row.gtin, row.brand, row.rows, row.descriptions, row.urls,
-         row.image_urls, row.breadcrumbs_engs, row.categories,
-         row.description_evidence, row.breadcrumb_evidence, row.source_rows)
-        for row in grouped.itertuples(index=False)
-    )
-    _canonical_worker_state_bind(global_idf, brand_idf_map)
-    threshold = 256
-    if len(tasks) < threshold:
-        records = [
-            _canonical_record_task(task)
-            for task in _LOG.progress(tasks, desc='cards_inline', unit='gtin')
-        ]
-        return pd.DataFrame(records)
-    import concurrent.futures
-    from multiprocessing import get_context
-    records: list[dict] = []
-    with concurrent.futures.ProcessPoolExecutor(
-        max_workers=max(2, os.cpu_count() - 1), mp_context=get_context('fork'),
-    ) as pool:
-        bar = _LOG.bar(total=len(tasks), desc='canonical_cards', unit='gtin')
-        try:
-            for record in pool.map(_canonical_record_task, tasks, chunksize=16):
-                records.append(record)
-                bar.update()
-        finally:
-            bar.close()
-    return pd.DataFrame(records)
+    return _CARD_POOL.build(grouped, global_idf, brand_idf_map)
 
 
-def run_within_brand_pipeline(
-    df_full: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
-    # Preserve the evidence-bearing source fields as canonical-level inputs.
-    #  They remain OUTSIDE the frozen canonical
-    # text until a component-safe ablation establishes their value.
-    for column in (
-        "description_short_eng", "breadcrumbs_eng",
-        "sku_url", "image_url", "category", "country", "retailer",
-    ):
-        if column not in df_full:
-            df_full = df_full.assign(**{column: ""})
+class _PipelineSteering:
+    """Own one stage-1 data-prep steering pass: raw export in, two CSVs out.
 
-    def _source_evidence(values: pd.Series) -> list[str]:
-        """Deterministic, non-empty raw strings for review/feature ablation."""
-        return sorted(
-            {
-                str(value).strip()
-                for value in values
-                if pd.notna(value) and str(value).strip()
-            }
-        )
+    Every phase below is a single responsibility and runs in ONE fixed order
+    inside steer(); the statements are the pre-refactor body verbatim, so the
+    printed guard lines, the trace rows, the timing marks (byte-identical
+    labels: guards_grouping_idf / canonical_cards / pre_gate_census /
+    gate_loop / csv_write) and the CSV bytes all survive untouched.
 
-    # ── CONSOLIDATED TRACE: stage 1 writer ────────────────────────────────
-    # ONE writer for the whole stage, committed once at the end of the
-    # function. The first row records the COLUMN CONTRACT this frame arrived
-    # with, because the frame is loaded separately from the one stage 2 builds
-    # and that handoff used to be invisible until a KeyError fired somewhere
-    # downstream.
-    from core.tracing import TraceRun
+    Phase map:
+      column_backfill      — evidence columns guaranteed on the raw export
+      open_stage           — consolidated trace + Timing("data_prep.pipeline")
+      gtin_guard           — identity links, NaN + GS1-checksum quarantine
+      grouping_and_idf     — gtin boxing, global + per-brand NgramIDF
+      canonical_stage      — the fork-parallel card pool + identity-close &
+                             universe-evidence census trace rows
+      pre_gate_census      — attribute-gate doctrine evidence rows
+      brand_blocking_gate  — same-brand pair space + the scalar gate loop
+      sort_validate_write  — PYTHONHASHSEED-safe display sort, frame
+                             contracts, atomic CSV writes
+      gate_trace_rows      — decision/reason census + bounded pair samples
+    """
 
-    trace = TraceRun("data_prep")
-    trace.add_column_contract(
-        df_full,
-        contract="raw_export (core.common.load_raw_export)",
-        required=RAW_EXPORT_REQUIRED_COLUMNS,
-        note=(
-            "stage 2 (build_training_data) does NOT consume this frame: it "
-            "reloads the deduped dataset through load_dataset_deduped(). Both "
-            "stages use the raw export's column names (c698200), so the two "
-            "contracts are identical by construction — they are separate "
-            "datasets joined at canonical_records.csv + gate_results.csv, not "
-            "separate column vocabularies"
-        ),
-    )
+    def __init__(self, df_full: pd.DataFrame) -> None:
+        self.df_full = df_full
+        self.trace = None
+        self.timing = None
+        self.grouped: pd.DataFrame | None = None
+        self.global_idf: NgramIDF | None = None
+        self.brand_to_gtins: dict[str, list[str]] = {}
+        self.brand_idf_map: dict[str, NgramIDF] = {}
+        self.df_canon: pd.DataFrame | None = None
+        self.candidate_pairs: set[tuple[str, str]] = set()
+        self.gtin_to_canon: dict[str, dict] = {}
+        self.results: list[dict] = []
+        self.gate_vis: list[dict] = []
+        self.results_df: pd.DataFrame | None = None
 
-    from core.timing import Timing
+    # ── phase: columns + trace + timing ────────────────────────────────────
 
-    timing = Timing("data_prep.pipeline")
+    def column_backfill(self) -> None:
+        """Preserve the evidence-bearing source fields as canonical-level
+        inputs. They remain OUTSIDE the frozen canonical text until a
+        component-safe ablation establishes their value."""
+        for column in (
+            "description_short_eng", "breadcrumbs_eng",
+            "sku_url", "image_url", "category", "country", "retailer",
+        ):
+            if column not in self.df_full:
+                self.df_full = self.df_full.assign(**{column: ""})
 
-    # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
-    # share gtin=NaN and used to collapse into ONE canonical record with an
-    # arbitrary mode-brand — poisoning canonical_records.csv AND the global
-    # IDF every other GTIN was scored against. Drop them explicitly.
-    from core.identity_policy import apply_identity_links
-    df_full = apply_identity_links(df_full)
-    n_before = len(df_full)
-    gtin_valid = (
-        df_full["gtin"].notna()
-        & (df_full["gtin"].astype(str).str.strip() != "")
-        & (df_full["gtin"].astype(str).str.lower() != "nan")
-    )
-    # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct gtins
-    # (3,715 rows) FAIL the GS1 check digit — retailer-export noise. An
-    # invalid gtin must not assert product identity: no canonical forms
-    # on it, so no (sku, canonical) positive pairs and no false labels leak
-    # into training/eval. The ROWS survive (corpus unchanged); only the
-    # identity claim dies. Loud per lane doctrine — never silent.
-    from core.gtin import gtin_validity
+    def open_stage(self) -> None:
+        """The consolidated-trace writer + the pipeline Timing instance."""
+        # ── CONSOLIDATED TRACE: stage 1 writer ────────────────────────────
+        # ONE writer for the whole stage, committed once at the end of the
+        # function. The first row records the COLUMN CONTRACT this frame arrived
+        # with, because the frame is loaded separately from the one stage 2 builds
+        # and that handoff used to be invisible until a KeyError fired somewhere
+        # downstream.
+        from core.tracing import TraceRun
 
-    bc_valid = gtin_validity(df_full["gtin"].fillna("").astype(str).str.strip())
-    from core.identity_policy import reviewed_row_mask
-    reviewed = reviewed_row_mask(df_full)
-    bc_valid &= ~reviewed
-    checksum_bad = gtin_valid & ~bc_valid & ~reviewed
-    n_checksum_dropped = int(checksum_bad.sum())
-    df_full = df_full[gtin_valid & bc_valid]
-    if reviewed.any():
-        print(f"[gtin-guard] excluded {int(reviewed.sum()):,} identity-review rows (GLN or unresolved formulation)", flush=True)
-    if n_checksum_dropped:
-        print(
-            f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
-            f"FAILS the GS1 check digit (no canonical/labels form on a "
-            f"gtin that cannot be trusted as identity)",
-            flush=True,
-        )
-    if n_before != len(df_full):
-        print(
-            f"[gtin-guard] total dropped {n_before - len(df_full):,} rows "
-            f"(missing/NaN gtin or failed checksum) — they cannot be "
-            f"grouped by product",
-            flush=True,
-        )
-    # CONSOLIDATED TRACE (§gtin-guard): the guard is where identity dies, so
-    # both populations are recorded with the reason that removed them.
-    trace.add(
-        "gtin_guard",
-        "identity_claims_evaluated",
-        in_count=n_before,
-        out_count=len(df_full),
-        reason="rows keep identity only with a present, GS1-valid gtin",
-        detail={
-            "gtin_missing_or_nan": int((~gtin_valid).sum()),
-            "gs1_checksum_failed": n_checksum_dropped,
-            "identity_review_quarantined": int(reviewed.sum()),
-            "rows_retained": int(len(df_full)),
-        },
-        source="raw export",
-    )
-
-    # Group by GTIN (vectorized index assembly; per-group python lambdas
-    # through .agg are ~3x slower than one pass of dict-of-lists, and every
-    # column below is exactly a per-order-group collection).
-    grouped, rows_by_gtin_source = _assemble_gtin_groups(df_full)
-    rows_by_gtin = dict(zip(grouped["gtin"], grouped["rows"], strict=True))
-    global_idf = NgramIDF(rows_by_gtin)
-
-    # Precompute within-brand IDF per brand
-    brand_to_gtins = defaultdict(list)
-    for gtin, brand in zip(grouped["gtin"], grouped["brand"], strict=True):
-        brand_to_gtins[brand.lower().strip()].append(gtin)
-
-    # For each brand, build an IDF from that brand's GTINs
-    brand_idf_map = {}
-    for brand, gtins in brand_to_gtins.items():
-        brand_rows = {gtin: rows_by_gtin[gtin] for gtin in gtins}
-        brand_idf_map[brand] = NgramIDF(brand_rows)
-
-    timing.mark("guards_grouping_idf")
-
-    # Generate canonical records
-    df_canon = _canonical_records_df(grouped, global_idf, brand_idf_map)
-    timing.mark("canonical_cards")
-
-    # ── CONSOLIDATED TRACE: the row identity closes here ──────────────────
-    # Every GS1-valid row is either promoted to its gtin's canonical record or
-    # collapsed into it (kept and aggregated — a distinct destiny from the
-    # guard's two drop populations). With this row the trace alone closes
-    #   rows_in == canonical_records + collapsed_same_gtin
-    #              + gtin_missing_or_nan + gs1_checksum_failed
-    # which is what core.tracing.accounting() recomputes from the file.
-    trace.add(
-        "canonical",
-        "records_built",
-        in_count=len(df_full),
-        out_count=len(df_canon),
-        reason=(
-            "one canonical record per distinct GS1-valid gtin; the other rows "
-            "collapse into their own gtin's record (kept and aggregated, not "
-            "dropped)"
-        ),
-        detail={
-            "distinct_gtins": int(len(df_canon)),
-            "collapsed_same_gtin": int(len(df_full) - len(df_canon)),
-            "brands": int(grouped["brand"].nunique()) if len(grouped) else 0,
-            "brands_with_pairs": int(
-                sum(1 for gtins in brand_to_gtins.values() if len(gtins) > 1)
+        self.trace = TraceRun("data_prep")
+        self.trace.add_column_contract(
+            self.df_full,
+            contract="raw_export (core.common.load_raw_export)",
+            required=RAW_EXPORT_REQUIRED_COLUMNS,
+            note=(
+                "stage 2 (build_training_data) does NOT consume this frame: it "
+                "reloads the deduped dataset through load_dataset_deduped(). Both "
+                "stages use the raw export's column names (c698200), so the two "
+                "contracts are identical by construction — they are separate "
+                "datasets joined at canonical_records.csv + gate_results.csv, not "
+                "separate column vocabularies"
             ),
-        },
-        source="raw export",
-    )
+        )
 
-    # ── CONSOLIDATED TRACE: canonical-side universe-evidence census ──────
-    # Closure evidence for the wiring gap this column closes: how many
-    # canonicals carry ANY universe evidence, per registered key. Audit
-    # readback only — no decision reads this row.
-    if len(df_canon):
+        from core.timing import Timing
+
+        self.timing = Timing("data_prep.pipeline")
+
+    # ── phase: gtin guard ──────────────────────────────────────────────────
+
+    def gtin_guard(self) -> None:
+        """NaN/invalid identity quarantine + the guard trace row."""
+        # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
+        # share gtin=NaN and used to collapse into ONE canonical record with an
+        # arbitrary mode-brand — poisoning canonical_records.csv AND the global
+        # IDF every other GTIN was scored against. Drop them explicitly.
+        from core.identity_policy import apply_identity_links
+        self.df_full = apply_identity_links(self.df_full)
+        n_before = len(self.df_full)
+        gtin_valid = (
+            self.df_full["gtin"].notna()
+            & (self.df_full["gtin"].astype(str).str.strip() != "")
+            & (self.df_full["gtin"].astype(str).str.lower() != "nan")
+        )
+        # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct gtins
+        # (3,715 rows) FAIL the GS1 check digit — retailer-export noise. An
+        # invalid gtin must not assert product identity: no canonical forms
+        # on it, so no (sku, canonical) positive pairs and no false labels leak
+        # into training/eval. The ROWS survive (corpus unchanged); only the
+        # identity claim dies. Loud per lane doctrine — never silent.
+        from core.gtin import gtin_validity
+
+        bc_valid = gtin_validity(self.df_full["gtin"].fillna("").astype(str).str.strip())
+        from core.identity_policy import reviewed_row_mask
+        reviewed = reviewed_row_mask(self.df_full)
+        bc_valid &= ~reviewed
+        checksum_bad = gtin_valid & ~bc_valid & ~reviewed
+        n_checksum_dropped = int(checksum_bad.sum())
+        self.df_full = self.df_full[gtin_valid & bc_valid]
+        if reviewed.any():
+            print(f"[gtin-guard] excluded {int(reviewed.sum()):,} identity-review rows (GLN or unresolved formulation)", flush=True)
+        if n_checksum_dropped:
+            print(
+                f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
+                f"FAILS the GS1 check digit (no canonical/labels form on a "
+                f"gtin that cannot be trusted as identity)",
+                flush=True,
+            )
+        if n_before != len(self.df_full):
+            print(
+                f"[gtin-guard] total dropped {n_before - len(self.df_full):,} rows "
+                f"(missing/NaN gtin or failed checksum) — they cannot be "
+                f"grouped by product",
+                flush=True,
+            )
+        # CONSOLIDATED TRACE (§gtin-guard): the guard is where identity dies, so
+        # both populations are recorded with the reason that removed them.
+        self.trace.add(
+            "gtin_guard",
+            "identity_claims_evaluated",
+            in_count=n_before,
+            out_count=len(self.df_full),
+            reason="rows keep identity only with a present, GS1-valid gtin",
+            detail={
+                "gtin_missing_or_nan": int((~gtin_valid).sum()),
+                "gs1_checksum_failed": n_checksum_dropped,
+                "identity_review_quarantined": int(reviewed.sum()),
+                "rows_retained": int(len(self.df_full)),
+            },
+            source="raw export",
+        )
+
+    # ── phase: grouping + IDF ──────────────────────────────────────────────
+
+    def grouping_and_idf(self) -> None:
+        """Vectorized gtin boxing + the global and per-brand IDF indexes."""
+        # Group by GTIN (vectorized index assembly; per-group python lambdas
+        # through .agg are ~3x slower than one pass of dict-of-lists, and every
+        # column below is exactly a per-order-group collection).
+        self.grouped, _rows_by_gtin_source = _assemble_gtin_groups(self.df_full)
+        rows_by_gtin = dict(zip(self.grouped["gtin"], self.grouped["rows"], strict=True))
+        self.global_idf = NgramIDF(rows_by_gtin)
+
+        # Precompute within-brand IDF per brand
+        self.brand_to_gtins = defaultdict(list)
+        for gtin, brand in zip(self.grouped["gtin"], self.grouped["brand"], strict=True):
+            self.brand_to_gtins[brand.lower().strip()].append(gtin)
+
+        # For each brand, build an IDF from that brand's GTINs
+        self.brand_idf_map = {}
+        for brand, gtins in self.brand_to_gtins.items():
+            brand_rows = {gtin: rows_by_gtin[gtin] for gtin in gtins}
+            self.brand_idf_map[brand] = NgramIDF(brand_rows)
+
+        self.timing.mark("guards_grouping_idf")
+
+    # ── phase: canonical cards ─────────────────────────────────────────────
+
+    def canonical_stage(self) -> None:
+        """The card pool + the row-identity close and universe census rows."""
+        # Generate canonical records
+        self.df_canon = _canonical_records_df(
+            self.grouped, self.global_idf, self.brand_idf_map
+        )
+        self.timing.mark("canonical_cards")
+
+        # ── CONSOLIDATED TRACE: the row identity closes here ──────────────
+        # Every GS1-valid row is either promoted to its gtin's canonical record or
+        # collapsed into it (kept and aggregated — a distinct destiny from the
+        # guard's two drop populations). With this row the trace alone closes
+        #   rows_in == canonical_records + collapsed_same_gtin
+        #              + gtin_missing_or_nan + gs1_checksum_failed
+        # which is what core.tracing.accounting() recomputes from the file.
+        self.trace.add(
+            "canonical",
+            "records_built",
+            in_count=len(self.df_full),
+            out_count=len(self.df_canon),
+            reason=(
+                "one canonical record per distinct GS1-valid gtin; the other rows "
+                "collapse into their own gtin's record (kept and aggregated, not "
+                "dropped)"
+            ),
+            detail={
+                "distinct_gtins": int(len(self.df_canon)),
+                "collapsed_same_gtin": int(len(self.df_full) - len(self.df_canon)),
+                "brands": int(self.grouped["brand"].nunique()) if len(self.grouped) else 0,
+                "brands_with_pairs": int(
+                    sum(1 for gtins in self.brand_to_gtins.values() if len(gtins) > 1)
+                ),
+            },
+            source="raw export",
+        )
+
+        self._universe_evidence_census()
+
+    def _universe_evidence_census(self) -> None:
+        """Canonical-side universe-evidence census row (audit readback only)."""
+        # ── CONSOLIDATED TRACE: canonical-side universe-evidence census ──
+        # Closure evidence for the wiring gap this column closes: how many
+        # canonicals carry ANY universe evidence, per registered key. Audit
+        # readback only — no decision reads this row.
+        if not len(self.df_canon):
+            return
         from core.attribute_conflicts import _universe_evidence_of
 
-        _evid = [ _universe_evidence_of(row) for row in df_canon.to_dict("records") ]
+        _evid = [ _universe_evidence_of(row) for row in self.df_canon.to_dict("records") ]
         _per_key: Counter[str] = Counter()
         for evidence in _evid:
             for key in evidence:
                 _per_key[key] += 1
-        trace.add(
+        self.trace.add(
             "canonical",
             "universe_evidence_census",
-            in_count=int(len(df_canon)),
+            in_count=int(len(self.df_canon)),
             out_count=int(sum(1 for item in _evid if item)),
             reason="canonicals persisting non-empty universe_evidence (per-key counts in detail)",
             detail={
@@ -3029,81 +3483,95 @@ def run_within_brand_pipeline(
             source="canonical_records.csv (in-memory frame)",
         )
 
-    # ── CONSOLIDATED TRACE: attribute-gate evidence sections (owner ruling
-    # 2026-10-01, "ALL ATTRIBUTES are used to make ALL DECISIONS") ──────────
-    # The registry census (results/attribute_universe_census.json) measured
-    # every raw key; the decision layer (core.attribute_conflicts
-    # full_attribute_evaluation) now evaluates ALL of them per pair with each
-    # field's own measured conflict semantics, while the VETO still votes only
-    # where config permits (vetoes stay absence-blind and config-owned). These
-    # two run-scope rows sit next to the canonical row so the decision
-    # doctrine and its evidence live in one file. The detail builders live at
-    # module scope (attribute_gate_* below) so the contracts are unit-testable
-    # without a full data-prep run. The ledger reads ONLY the census artifact
-    # + the current config (never writes either).
-    from core.attribute_conflicts import veto_eligibility_ledger
+    # ── phase: pre-gate census rows ────────────────────────────────────────
 
-    trace.add(
-        "attribute_gate",
-        "universe_decision_scope",
-        reason="every AttributeUniverse-registered dimension enters pair-level evaluation; absence never vetoes",
-        detail=attribute_gate_universe_scope_detail(),
-        source="core.attribute_universe census artifact",
-    )
-    trace.add(
-        "attribute_gate",
-        "veto_eligibility",
-        reason="per-dimension veto-eligibility ledger: evidence class + CURRENT config state + the exact owner delta",
-        detail={"ledger": veto_eligibility_ledger()},
-        source="core.attribute_universe census + config/training.yaml (both read-only)",
-    )
+    def pre_gate_census(self) -> None:
+        """Attribute-gate doctrine evidence rows (read-only census + config)."""
+        # ── CONSOLIDATED TRACE: attribute-gate evidence sections (owner ruling
+        # 2026-10-01, "ALL ATTRIBUTES are used to make ALL DECISIONS") ──────
+        # The registry census (results/attribute_universe_census.json) measured
+        # every raw key; the decision layer (core.attribute_conflicts
+        # full_attribute_evaluation) now evaluates ALL of them per pair with each
+        # field's own measured conflict semantics, while the VETO still votes only
+        # where config permits (vetoes stay absence-blind and config-owned). These
+        # two run-scope rows sit next to the canonical row so the decision
+        # doctrine and its evidence live in one file. The detail builders live at
+        # module scope (attribute_gate_* below) so the contracts are unit-testable
+        # without a full data-prep run. The ledger reads ONLY the census artifact
+        # + the current config (never writes either).
+        from core.attribute_conflicts import veto_eligibility_ledger
 
-    timing.mark("pre_gate_census")
+        self.trace.add(
+            "attribute_gate",
+            "universe_decision_scope",
+            reason="every AttributeUniverse-registered dimension enters pair-level evaluation; absence never vetoes",
+            detail=attribute_gate_universe_scope_detail(),
+            source="core.attribute_universe census artifact",
+        )
+        self.trace.add(
+            "attribute_gate",
+            "veto_eligibility",
+            reason="per-dimension veto-eligibility ledger: evidence class + CURRENT config state + the exact owner delta",
+            detail={"ledger": veto_eligibility_ledger()},
+            source="core.attribute_universe census + config/training.yaml (both read-only)",
+        )
 
-    # Brand blocking
-    candidate_pairs = set()
-    for brand, gtins in brand_to_gtins.items():
-        if len(gtins) < 2:
-            continue
-        for i in range(len(gtins)):
-            for j in range(i + 1, len(gtins)):
-                candidate_pairs.add((gtins[i], gtins[j]))
+        self.timing.mark("pre_gate_census")
 
-    # Gate and similarity
-    gtin_to_canon = dict(zip(df_canon["gtin"], df_canon.to_dict(orient="records"), strict=True))
-    results = []
-    # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
-    # exactly what it SAW (both sides' volume/pack/flavor + confidences)
-    # next to what it DECIDED — auditable inputs→outputs, rewritten every
-    # run. Since 2026-09-15 these rows land in the ONE consolidated trace
-    # (core.tracing) instead of a per-stage results/logs CSV, so a decision
-    # and its readback are never in two places. Full census, not a sample:
-    # the whole point is no invisibility.
-    from core.attribute_conflicts import (
-        canonical_attribute_info,
-        full_attribute_evaluation,
-    )
+    # ── phase: blocking + gate loop ────────────────────────────────────────
 
-    gate_vis = []
-    from tqdm import tqdm as _tqdm_pairs
-    # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
-    # loop is deliberately kept scalar. "Optimize and vectorize wherever
-    # possible" reaches HOT paths; this is not one — it runs ONCE per
-    # data-prep regeneration (src/training/data_prep.py is the sole caller) and
-    # no training/eval step executes it (they consume the CSVs it writes).
-    # three_way_gate is the label source — every training label flows
-    # through its decision table — so an equivalent-but-restructured
-    # rewrite puts all pinned counts (135,769 / 92,650 / 29,351 / 13,768)
-    # at risk for seconds saved on a one-time run. Two vectorization
-    # attempts were abandoned for exactly this risk/benefit. If this ever
-    # becomes a hot path, vectorize with the equivalence protocol:
-    # pinned counts + diagonal crosstab vs the previous CSV + 0-tolerance
-    # confidence match, revert on ANY divergence.
-    for g1, g2 in _tqdm_pairs(sorted(candidate_pairs), unit="pair", desc="gate", disable=None):
-        a1 = gtin_to_canon[g1]
-        a2 = gtin_to_canon[g2]
-        gate = three_way_gate(a1, a2)
+    def brand_blocking_gate(self) -> None:
+        """Same-brand candidate space + the deliberate scalar gate loop."""
+        # Brand blocking
+        candidate_pairs = set()
+        for brand, gtins in self.brand_to_gtins.items():
+            if len(gtins) < 2:
+                continue
+            for i in range(len(gtins)):
+                for j in range(i + 1, len(gtins)):
+                    candidate_pairs.add((gtins[i], gtins[j]))
+
+        # Gate and similarity
+        self.gtin_to_canon = dict(zip(self.df_canon["gtin"], self.df_canon.to_dict(orient="records"), strict=True))
+        self.results = []
+        self.candidate_pairs = candidate_pairs
+        # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
+        # exactly what it SAW (both sides' volume/pack/flavor + confidences)
+        # next to what it DECIDED — auditable inputs→outputs, rewritten every
+        # run. Since 2026-09-15 these rows land in the ONE consolidated trace
+        # (core.tracing) instead of a per-stage results/logs CSV, so a decision
+        # and its readback are never in two places. Full census, not a sample:
+        # the whole point is no invisibility.
+        from core.attribute_conflicts import (
+            canonical_attribute_info,
+            full_attribute_evaluation,
+        )
+
+        self.gate_vis = []
+        # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
+        # loop is deliberately kept scalar. "Optimize and vectorize wherever
+        # possible" reaches HOT paths; this is not one — it runs ONCE per
+        # data-prep regeneration (src/training/data_prep.py is the sole caller) and
+        # no training/eval step executes it (they consume the CSVs it writes).
+        # three_way_gate is the label source — every training label flows
+        # through its decision table — so an equivalent-but-restructured
+        # rewrite puts all pinned counts (135,769 / 92,650 / 29,351 / 13,768)
+        # at risk for seconds saved on a one-time run. Two vectorization
+        # attempts were abandoned for exactly this risk/benefit. If this ever
+        # becomes a hot path, vectorize with the equivalence protocol:
+        # pinned counts + diagonal crosstab vs the previous CSV + 0-tolerance
+        # confidence match, revert on ANY divergence.
+        for g1, g2 in _LOG.progress(sorted(candidate_pairs), desc="gate", unit="pair"):
+            self._gate_one_pair(g1, g2, canonical_attribute_info, full_attribute_evaluation)
+        self.timing.mark("gate_loop")
+
+    def _gate_one_pair(self, g1: str, g2: str, canonical_attribute_info, full_attribute_evaluation) -> None:
+        """One candidate pair: gate verdict + Jaccard + the visibility row."""
         from core.pair_policy import identity_similarity
+
+        a1 = self.gtin_to_canon[g1]
+        a2 = self.gtin_to_canon[g2]
+        gate = three_way_gate(a1, a2)
         sim = identity_similarity(a1["canonical"], a2["canonical"])
         evaluation = full_attribute_evaluation(
             canonical_attribute_info(a1),
@@ -3119,7 +3587,7 @@ def run_within_brand_pipeline(
                 training_cfg().gate.vol_abs_tolerance
             ),
         )
-        results.append(
+        self.results.append(
             {
                 "gtin1": g1,
                 "gtin2": g2,
@@ -3130,7 +3598,11 @@ def run_within_brand_pipeline(
                 "similarity": sim,
             }
         )
-        gate_vis.append(
+        self._visibility_row(g1, g2, a1, a2, gate, sim, evaluation)
+
+    def _visibility_row(self, g1: str, g2: str, a1: dict, a2: dict, gate: dict, sim: float, evaluation: dict) -> None:
+        """The gate-visibility row the consolidated trace samples from."""
+        self.gate_vis.append(
             {
                 "gtin1": g1,
                 "gtin2": g2,
@@ -3169,108 +3641,133 @@ def run_within_brand_pipeline(
                 ),
             }
         )
-    timing.mark("gate_loop")
-    results_df = pd.DataFrame(results)
 
-    # TRAIN_GPU writes ONLY inside its own tree (lib.common RESULTS —
-    # the repo's results dir must never be touched by the standalone lane).
-    # DETERMINISM: set->display columns render in
-    # PYTHONHASHSEED-random order otherwise; sort the DISPLAY (after all
-    # gate logic consumed the real sets) so the CSV is byte-reproducible.
-    for _col in (
-        "volume_set",
-        "pack_set",
-        "package_type_set",
-        "packaging_level_set",
-        "package_material_set",
-        "flavor_set",
-        "made_from_set",
-        "carbonation_set",
-        "sweetener_set",
-        "sweetener_type_set",
-        "sweetening_set",
-        "attribute_consistency_flags",
-        "pulp_set",
-    ):
-        df_canon[_col] = df_canon[_col].map(lambda s: sorted(s))
-    # Same for the pair ROW ORDER: candidate_pairs is a SET, so iteration
-    # order is process-random. Gate decisions themselves are order-free —
-    # only the CSV row sequence drifted. Sort on the identity columns.
-    results_df = results_df.sort_values(
-        ["gtin1", "gtin2"], kind="stable"
-    ).reset_index(drop=True)
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
-    # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
-    # transform can never land in the CSVs every downstream step reads.
-    require_populated_source_rows(check_canonical_records_frame(df_canon))
-    check_gate_results_frame(results_df)
-    # SILENT_DROPS task 6: every CSV write goes through the atomic
-    # mechanism (tmp sibling + fsync + rename) so an interrupt can never
-    # leave a truncated artifact for downstream steps to read.
-    from core.manifest import atomic_write_csv
+    # ── phase: sort + validate + write ─────────────────────────────────────
 
-    atomic_write_csv(df_canon, RESULTS / F["canonical_records"], index=False)
-    atomic_write_csv(results_df, RESULTS / F["gate_results"], index=False)
-    timing.mark("csv_write")
-    # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────────
-    # One CSV carries the whole story: run-scope funnels (candidate census →
-    # decision census → complete reason census), one exact group row per
-    # (decision, reason) bucket, then a bounded stratified SAMPLE of pairs with
-    # the literal readback. Every pair's decision and reason is counted exactly
-    # in the census rows; the sample exists so the evidence can be eyeballed
-    # without opening gate_results.csv. Replaces the former
-    # results/logs/gate_visibility.csv.
-    gate_frame = (
-        pd.DataFrame(gate_vis).sort_values(["gtin1", "gtin2"], kind="stable")
-        if gate_vis
-        else pd.DataFrame()
-    )
-    vis_counts = (
-        gate_frame["decision"].value_counts().to_dict() if len(gate_frame) else {}
-    )
-    vis_reasons = (
-        gate_frame["reason"].value_counts().to_dict() if len(gate_frame) else {}
-    )
-    trace.add(
-        "gate",
-        "candidates_gated",
-        in_count=len(candidate_pairs),
-        out_count=len(results_df),
-        reason="every same-brand pair receives exactly one decision; none is dropped",
-        detail={"decisions": {str(k): int(v) for k, v in vis_counts.items()}},
-        source="canonical_records.csv (in-memory frame)",
-    )
-    # One group row per decision: its EXACT population plus the complete reason
-    # distribution inside it (count_rows with no limit — the label set is small
-    # and bounded, so "which pairs got which decision and why" is answered here
-    # rather than by opening gate_results.csv).
-    for decision in ("hard_no", "fallback", "proceed"):
-        subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
-        trace.add(
-            "gate",
-            f"decision_{decision}",
-            scope="group",
-            in_count=len(candidate_pairs),
-            out_count=int(len(subset)),
-            reason=f"gate_decision == {decision}",
-            detail={
-                "reasons": count_rows(subset["reason"]) if len(subset) else [],
-                "reason_census": (
-                    count_rows(subset["reason"], limit=None) if len(subset) else []
-                ),
-            },
-            source="gate_results.csv",
+    def sort_validate_write(self) -> None:
+        """Display sort, frame contracts, atomic CSV writes."""
+        self.results_df = pd.DataFrame(self.results)
+
+        # TRAIN_GPU writes ONLY inside its own tree (lib.common RESULTS —
+        # the repo's results dir must never be touched by the standalone lane).
+        # DETERMINISM: set->display columns render in
+        # PYTHONHASHSEED-random order otherwise; sort the DISPLAY (after all
+        # gate logic consumed the real sets) so the CSV is byte-reproducible.
+        for _col in (
+            "volume_set",
+            "pack_set",
+            "package_type_set",
+            "packaging_level_set",
+            "package_material_set",
+            "flavor_set",
+            "made_from_set",
+            "carbonation_set",
+            "sweetener_set",
+            "sweetener_type_set",
+            "sweetening_set",
+            "attribute_consistency_flags",
+            "pulp_set",
+        ):
+            self.df_canon[_col] = self.df_canon[_col].map(lambda s: sorted(s))
+        # Same for the pair ROW ORDER: candidate_pairs is a SET, so iteration
+        # order is process-random. Gate decisions themselves are order-free —
+        # only the CSV row sequence drifted. Sort on the identity columns.
+        self.results_df = self.results_df.sort_values(
+            ["gtin1", "gtin2"], kind="stable"
+        ).reset_index(drop=True)
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
+        # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
+        # transform can never land in the CSVs every downstream step reads.
+        require_populated_source_rows(check_canonical_records_frame(self.df_canon))
+        check_gate_results_frame(self.results_df)
+        # SILENT_DROPS task 6: every CSV write goes through the atomic
+        # mechanism (tmp sibling + fsync + rename) so an interrupt can never
+        # leave a truncated artifact for downstream steps to read.
+        from core.manifest import atomic_write_csv
+
+        atomic_write_csv(self.df_canon, RESULTS / F["canonical_records"], index=False)
+        atomic_write_csv(self.results_df, RESULTS / F["gate_results"], index=False)
+        self.timing.mark("csv_write")
+
+    # ── phase: gate trace census + close ───────────────────────────────────
+
+    def gate_trace_rows(self) -> None:
+        """Decision/reason census rows, bounded pair samples, trace close."""
+        # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────
+        # One CSV carries the whole story: run-scope funnels (candidate census →
+        # decision census → complete reason census), one exact group row per
+        # (decision, reason) bucket, then a bounded stratified SAMPLE of pairs with
+        # the literal readback. Every pair's decision and reason is counted exactly
+        # in the census rows; the sample exists so the evidence can be eyeballed
+        # without opening gate_results.csv. Replaces the former
+        # results/logs/gate_visibility.csv.
+        gate_frame = (
+            pd.DataFrame(self.gate_vis).sort_values(["gtin1", "gtin2"], kind="stable")
+            if self.gate_vis
+            else pd.DataFrame()
         )
-    # FULL-ATTRIBUTES pair census rollup (owner ruling 2026-10-01): a
-    # run-scope row over the whole gated population states exactly how many
-    # pairs carried at least one recorded dimension conflict and which
-    # dimensions are the loud ones — per-pair detail rides the sampled
-    # pair_decision rows (bounded sample, see core.tracing) and this row
-    # carries the exact counts.
-    if len(gate_frame):
+        vis_counts = (
+            gate_frame["decision"].value_counts().to_dict() if len(gate_frame) else {}
+        )
+        vis_reasons = (
+            gate_frame["reason"].value_counts().to_dict() if len(gate_frame) else {}
+        )
+        self.trace.add(
+            "gate",
+            "candidates_gated",
+            in_count=len(self.candidate_pairs),
+            out_count=len(self.results_df),
+            reason="every same-brand pair receives exactly one decision; none is dropped",
+            detail={"decisions": {str(k): int(v) for k, v in vis_counts.items()}},
+            source="canonical_records.csv (in-memory frame)",
+        )
+        self._decision_bucket_rows(gate_frame)
+        self._dimension_rollup_row(gate_frame)
+        self._reason_census_and_samples(gate_frame, vis_reasons)
+        self.trace.write()
+        print(
+            f"[trace] data_prep steps written -> {trace_path()} | "
+            f"gate decisions: {vis_counts}",
+            flush=True,
+        )
+
+    def _decision_bucket_rows(self, gate_frame: pd.DataFrame) -> None:
+        """One group row per decision: exact population + reason distribution."""
+        # One group row per decision: its EXACT population plus the complete reason
+        # distribution inside it (count_rows with no limit — the label set is small
+        # and bounded, so "which pairs got which decision and why" is answered here
+        # rather than by opening gate_results.csv).
+        for decision in ("hard_no", "fallback", "proceed"):
+            subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
+            self.trace.add(
+                "gate",
+                f"decision_{decision}",
+                scope="group",
+                in_count=len(self.candidate_pairs),
+                out_count=int(len(subset)),
+                reason=f"gate_decision == {decision}",
+                detail={
+                    "reasons": count_rows(subset["reason"]) if len(subset) else [],
+                    "reason_census": (
+                        count_rows(subset["reason"], limit=None) if len(subset) else []
+                    ),
+                },
+                source="gate_results.csv",
+            )
+
+    def _dimension_rollup_row(self, gate_frame: pd.DataFrame) -> None:
+        """FULL-ATTRIBUTES pair census rollup over the whole gated population."""
+        # FULL-ATTRIBUTES pair census rollup (owner ruling 2026-10-01): a
+        # run-scope row over the whole gated population states exactly how many
+        # pairs carried at least one recorded dimension conflict and which
+        # dimensions are the loud ones — per-pair detail rides the sampled
+        # pair_decision rows (bounded sample, see core.tracing) and this row
+        # carries the exact counts.
+        if not len(gate_frame):
+            return
         conflicts = gate_frame["dimension_conflicts"].astype(str)
-        trace.add(
+        self.trace.add(
             "attribute_gate",
             "pair_dimension_census",
             scope="group",
@@ -3284,12 +3781,16 @@ def run_within_brand_pipeline(
             },
             source="gate_stage in-memory readback",
         )
-    if len(gate_frame):
+
+    def _reason_census_and_samples(self, gate_frame: pd.DataFrame, vis_reasons: dict) -> None:
+        """Cross-decision reason census + the bounded per-pair readback."""
+        if not len(gate_frame):
+            return
         # Named `reason_census`, NOT `decision_reasons`: every group step
         # starting with "gate.decision_" is a decision bucket and is summed by
         # core.tracing.accounting(), so this cross-decision row must not share
         # that prefix.
-        trace.add(
+        self.trace.add(
             "gate",
             "reason_census",
             scope="group",
@@ -3308,7 +3809,7 @@ def run_within_brand_pipeline(
         # The inputs are JSON so one cell stays machine-readable. Bucketed by
         # (decision :: reason) so the census rows above and the sampled rows
         # below join on the same label.
-        trace.add_entities(
+        self.trace.add_entities(
             "pair_decision",
             list(gate_frame.itertuples(index=False)),
             key_of=lambda r: f"{r.gtin1}|{r.gtin2}",
@@ -3346,15 +3847,30 @@ def run_within_brand_pipeline(
             per_reason=ENTITY_PER_REASON,
             total_cap=ENTITY_TOTAL_CAP,
         )
-    trace.write()
-    print(
-        f"[trace] data_prep steps written -> {trace_path()} | "
-        f"gate decisions: {vis_counts}",
-        flush=True,
-    )
-    timing.dump_if_requested()
 
-    return results_df, df_canon
+    # ── orchestration ──────────────────────────────────────────────────────
+
+    def steer(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Run the load-bearing phase order, return (gate results, canonicals)."""
+        self.column_backfill()
+        self.open_stage()
+        self.gtin_guard()
+        self.grouping_and_idf()
+        self.canonical_stage()
+        self.pre_gate_census()
+        self.brand_blocking_gate()
+        self.sort_validate_write()
+        self.gate_trace_rows()
+        self.timing.dump_if_requested()
+
+        return self.results_df, self.df_canon
+
+
+def run_within_brand_pipeline(
+    df_full: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
+    """Stage 1 of data prep: canonical cards + gate decisions over the RAW export."""
+    return _PipelineSteering(df_full).steer()
 
 
 # ============================================================================
