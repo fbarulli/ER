@@ -1,0 +1,123 @@
+[timing] abl.forward state=started rss_mb=613.8
+[timing] staged_ablation.forward state=started rss_mb=616.9
+[timing] ablation_forward.bind_template state=started rss_mb=616.9
+[timing] ablation_forward.bind_template state=completed elapsed_seconds=0.008 rss_mb=618.3
+[timing] ablation_forward.rebind_checkpoint state=started rss_mb=618.3
+[timing] ablation_forward.rebind_checkpoint state=completed elapsed_seconds=0.123 rss_mb=705.1
+ablation forward bound track=text role=baseline
+[timing] ablation_forward.write_bound_request state=started rss_mb=705.1
+[timing] ablation_forward.write_bound_request state=completed elapsed_seconds=0.319 rss_mb=705.1
+[timing] ablation_forward.vectors state=started rss_mb=705.1
+[timing] ablation.encode state=started rss_mb=705.1
+[timing] ablation.encode.text_vectors state=started rss_mb=705.1
+[timing] ablation.encode.text_vectors state=completed elapsed_seconds=53.739 rss_mb=1259.6
+[timing] ablation.encode.graph_encoder state=started rss_mb=1259.6
+[timing] ablation.encode.graph_encoder state=completed elapsed_seconds=0.000 rss_mb=1259.6
+[timing] ablation.encode.candidates state=started rss_mb=1259.6
+[timing] ablation.encode.candidates state=completed elapsed_seconds=0.001 rss_mb=1259.6
+[timing] ablation.encode.jobs state=started rss_mb=1259.6
+[timing] ablation.encode.jobs state=completed elapsed_seconds=0.011 rss_mb=1259.6
+[timing] ablation.encode.persist state=started rss_mb=1259.6
+[timing] ablation.encode.persist state=completed elapsed_seconds=0.304 rss_mb=1259.6
+[timing] ablation.encode state=completed elapsed_seconds=54.122 rss_mb=1259.6
+[timing] ablation_forward.vectors state=completed elapsed_seconds=54.123 rss_mb=1259.6
+[timing] staged_ablation.forward state=completed elapsed_seconds=54.575 rss_mb=1259.6
+[timing] abl.forward state=completed elapsed_seconds=54.592 rss_mb=1259.6
+[timing] abl.complete state=started rss_mb=1259.6
+[timing] baseline_ablation.complete state=started rss_mb=1259.6
+[timing] ablation.baseline.load state=started rss_mb=1259.6
+[timing] train.load_pairs state=started rss_mb=1259.6
+[timing] train.load_pairs state=completed elapsed_seconds=0.007 rss_mb=1259.6
+[timing] ablation.baseline.load state=completed elapsed_seconds=0.082 rss_mb=1259.6
+[timing] ablation.baseline.calibration state=started rss_mb=1259.6
+[timing] ablation.report state=started rss_mb=1259.6
+[timing] ablation.report.comparison state=started rss_mb=1259.6
+[timing] ablation._comparison_rows state=started rss_mb=1259.6
+[timing] ablation._comparison_rows state=completed elapsed_seconds=0.265 rss_mb=1259.6
+[timing] ablation.report.comparison state=completed elapsed_seconds=0.382 rss_mb=1259.6
+[timing] ablation.report state=completed elapsed_seconds=0.463 rss_mb=1259.6
+[timing] ablation.baseline.calibration state=completed elapsed_seconds=3.125 rss_mb=1259.6
+[timing] baseline_ablation.complete state=completed elapsed_seconds=3.215 rss_mb=1259.6
+[timing] abl.complete state=completed elapsed_seconds=3.215 rss_mb=1259.6
+[timing] abl.forward state=started rss_mb=1259.6
+[timing] staged_ablation.forward state=started rss_mb=1259.6
+[timing] ablation_forward.bind_template state=started rss_mb=1259.6
+[timing] ablation_forward.bind_template state=completed elapsed_seconds=0.012 rss_mb=1259.6
+[timing] ablation_forward.rebind_checkpoint state=started rss_mb=1259.6
+[timing] ablation_forward.rebind_checkpoint state=completed elapsed_seconds=0.001 rss_mb=1259.6
+ablation forward bound track=text role=baseline
+[timing] ablation_forward.write_bound_request state=started rss_mb=1259.6
+[timing] ablation_forward.write_bound_request state=completed elapsed_seconds=0.395 rss_mb=1259.6
+[timing] ablation_forward.vectors state=started rss_mb=1259.6
+[timing] ablation.encode state=started rss_mb=1259.6
+[timing] ablation.encode.text_vectors state=started rss_mb=1259.6
+[timing] ablation.encode.text_vectors state=completed elapsed_seconds=33.973 rss_mb=1314.8
+[timing] ablation.encode.graph_encoder state=started rss_mb=1314.8
+[timing] ablation.encode.graph_encoder state=completed elapsed_seconds=0.000 rss_mb=1314.8
+[timing] ablation.encode.candidates state=started rss_mb=1314.8
+[timing] ablation.encode.candidates state=completed elapsed_seconds=0.001 rss_mb=1314.8
+[timing] ablation.encode.jobs state=started rss_mb=1314.8
+[timing] ablation.encode.jobs state=completed elapsed_seconds=0.018 rss_mb=1314.8
+[timing] ablation.encode.persist state=started rss_mb=1314.8
+[timing] ablation.encode.persist state=completed elapsed_seconds=0.719 rss_mb=1314.8
+[timing] ablation.encode state=completed elapsed_seconds=34.755 rss_mb=1314.8
+[timing] ablation_forward.vectors state=completed elapsed_seconds=34.755 rss_mb=1314.8
+[timing] staged_ablation.forward state=completed elapsed_seconds=35.168 rss_mb=1314.8
+[timing] abl.forward state=completed elapsed_seconds=35.178 rss_mb=1314.8
+[timing] abl.complete state=started rss_mb=1314.8
+[timing] baseline_ablation.complete state=started rss_mb=1314.8
+[timing] ablation.baseline.load state=started rss_mb=1314.8
+[timing] train.load_pairs state=started rss_mb=1314.8
+[timing] train.load_pairs state=completed elapsed_seconds=0.019 rss_mb=1314.8
+[timing] ablation.baseline.load state=completed elapsed_seconds=0.097 rss_mb=1314.8
+[timing] ablation.baseline.calibration state=started rss_mb=1314.8
+[timing] ablation.report state=started rss_mb=1314.8
+[timing] ablation.report.comparison state=started rss_mb=1314.8
+[timing] ablation._comparison_rows state=started rss_mb=1314.8
+[timing] ablation._comparison_rows state=completed elapsed_seconds=0.493 rss_mb=1314.8
+[timing] ablation.report.comparison state=completed elapsed_seconds=0.640 rss_mb=1314.8
+[timing] ablation.report state=completed elapsed_seconds=0.771 rss_mb=1314.8
+[timing] ablation.baseline.calibration state=completed elapsed_seconds=4.269 rss_mb=1314.8
+[timing] baseline_ablation.complete state=completed elapsed_seconds=4.374 rss_mb=1314.8
+[timing] abl.complete state=completed elapsed_seconds=4.377 rss_mb=1314.8
+[timing] abl.forward state=started rss_mb=1314.8
+[timing] staged_ablation.forward state=started rss_mb=1314.8
+[timing] ablation_forward.bind_template state=started rss_mb=1314.8
+[timing] ablation_forward.bind_template state=completed elapsed_seconds=0.008 rss_mb=1314.8
+[timing] ablation_forward.rebind_checkpoint state=started rss_mb=1314.8
+[timing] ablation_forward.rebind_checkpoint state=completed elapsed_seconds=0.001 rss_mb=1314.8
+ablation forward bound track=text role=baseline
+[timing] ablation_forward.write_bound_request state=started rss_mb=1314.8
+[timing] ablation_forward.write_bound_request state=completed elapsed_seconds=0.307 rss_mb=1314.8
+[timing] ablation_forward.vectors state=started rss_mb=1314.8
+[timing] ablation.encode state=started rss_mb=1314.8
+[timing] ablation.encode.text_vectors state=started rss_mb=1314.8
+[timing] ablation.encode.text_vectors state=completed elapsed_seconds=28.108 rss_mb=1314.8
+[timing] ablation.encode.graph_encoder state=started rss_mb=1314.8
+[timing] ablation.encode.graph_encoder state=completed elapsed_seconds=0.000 rss_mb=1314.8
+[timing] ablation.encode.candidates state=started rss_mb=1314.8
+[timing] ablation.encode.candidates state=completed elapsed_seconds=0.001 rss_mb=1314.8
+[timing] ablation.encode.jobs state=started rss_mb=1314.8
+[timing] ablation.encode.jobs state=completed elapsed_seconds=0.020 rss_mb=1314.8
+[timing] ablation.encode.persist state=started rss_mb=1314.8
+[timing] ablation.encode.persist state=completed elapsed_seconds=0.443 rss_mb=1314.8
+[timing] ablation.encode state=completed elapsed_seconds=28.605 rss_mb=1314.8
+[timing] ablation_forward.vectors state=completed elapsed_seconds=28.606 rss_mb=1314.8
+[timing] staged_ablation.forward state=completed elapsed_seconds=28.928 rss_mb=1314.8
+[timing] abl.forward state=completed elapsed_seconds=28.939 rss_mb=1314.8
+[timing] abl.complete state=started rss_mb=1314.8
+[timing] baseline_ablation.complete state=started rss_mb=1314.8
+[timing] ablation.baseline.load state=started rss_mb=1314.8
+[timing] train.load_pairs state=started rss_mb=1314.8
+[timing] train.load_pairs state=completed elapsed_seconds=0.013 rss_mb=1314.8
+[timing] ablation.baseline.load state=completed elapsed_seconds=0.064 rss_mb=1314.8
+[timing] ablation.baseline.calibration state=started rss_mb=1314.8
+[timing] ablation.report state=started rss_mb=1314.8
+[timing] ablation.report.comparison state=started rss_mb=1314.8
+[timing] ablation._comparison_rows state=started rss_mb=1314.8
+[timing] ablation._comparison_rows state=completed elapsed_seconds=0.392 rss_mb=1314.8
+[timing] ablation.report.comparison state=completed elapsed_seconds=0.494 rss_mb=1314.8
+[timing] ablation.report state=completed elapsed_seconds=0.618 rss_mb=1314.8
+[timing] ablation.baseline.calibration state=completed elapsed_seconds=3.383 rss_mb=1314.8
+[timing] baseline_ablation.complete state=completed elapsed_seconds=3.456 rss_mb=1314.8
+[timing] abl.complete state=completed elapsed_seconds=3.457 rss_mb=1314.8

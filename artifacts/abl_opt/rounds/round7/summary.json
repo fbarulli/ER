@@ -1,0 +1,123 @@
+{
+  "fixture": {
+    "suite": "/tmp/opc/ER-opt-E/artifacts/abl_opt/baseline",
+    "checkpoint": "all-MiniLM-L6-v2",
+    "cohort": "smoke_500"
+  },
+  "note": "baseline smoke_500 cohort recorded 2026-10-07: catalog = first 500 reviewed unique-sku_id rows of dataset_10k.csv sorted by sku_id; gtin duplicate-product groups (sorted by gtin), group 0 -> dev with the rest -> train; positive pairs are consecutive gtin matches (label 1), negatives are consecutive sorted neighbors with differing gtins (label 0), 32 per split; sampled sample_pairs=32 split=dev; slice_columns=[]; retrieval_catalog=full; real MiniLM checkpoint",
+  "iterations": 3,
+  "wall_seconds": [
+    38.502,
+    29.155,
+    31.783
+  ],
+  "wall_cold": 38.502,
+  "wall_warm_mean": 30.469,
+  "forward_seconds_logged": null,
+  "complete_seconds_logged": null,
+  "fingerprint_chain": [
+    {
+      "report": "712773a2e3006065758edfbb24a4206fcc662a41a42b8e3d0b3d22bc8ae1110f",
+      "binding": "6d103cc3ba307cdf35eb87d6127bc77ec80320db4da8636c7d004d0a3e822a49",
+      "vectors_npz": {
+        "candidate_vectors": [
+          [
+            500,
+            384
+          ],
+          "float32",
+          "f8c14c0d72b910f6f3069d5756416df94796235df12713eb97cccec966654405"
+        ],
+        "embedding_dtype": "a9d706227706efbc4d5f023e7b5aa9e8f73a8ea5be363a6abdc7f526f01636e1",
+        "request_sha256": "063184df70f2b0867a1c34aa846286f3e76fabbb7e649509ac56c0a08d27f362",
+        "scores": [
+          [
+            112,
+            32
+          ],
+          "float32",
+          "268d67111eb3ab3377cb6bf179fefc1f49845647d85aa82864409d94af32d66e"
+        ],
+        "vectors": [
+          [
+            112,
+            33,
+            384
+          ],
+          "float32",
+          "b0d88610a748b357e6b46e1f779d037a98a61258dfb5961dd2c8425dec6b6665"
+        ]
+      },
+      "request_sha256": "b2b1ad9d489768c5684a9fb5f7220e23ddfdb82a21be496093c9df1d46daeb7c"
+    },
+    {
+      "report": "712773a2e3006065758edfbb24a4206fcc662a41a42b8e3d0b3d22bc8ae1110f",
+      "binding": "6d103cc3ba307cdf35eb87d6127bc77ec80320db4da8636c7d004d0a3e822a49",
+      "vectors_npz": {
+        "candidate_vectors": [
+          [
+            500,
+            384
+          ],
+          "float32",
+          "f8c14c0d72b910f6f3069d5756416df94796235df12713eb97cccec966654405"
+        ],
+        "embedding_dtype": "a9d706227706efbc4d5f023e7b5aa9e8f73a8ea5be363a6abdc7f526f01636e1",
+        "request_sha256": "063184df70f2b0867a1c34aa846286f3e76fabbb7e649509ac56c0a08d27f362",
+        "scores": [
+          [
+            112,
+            32
+          ],
+          "float32",
+          "268d67111eb3ab3377cb6bf179fefc1f49845647d85aa82864409d94af32d66e"
+        ],
+        "vectors": [
+          [
+            112,
+            33,
+            384
+          ],
+          "float32",
+          "b0d88610a748b357e6b46e1f779d037a98a61258dfb5961dd2c8425dec6b6665"
+        ]
+      },
+      "request_sha256": "b2b1ad9d489768c5684a9fb5f7220e23ddfdb82a21be496093c9df1d46daeb7c"
+    },
+    {
+      "report": "712773a2e3006065758edfbb24a4206fcc662a41a42b8e3d0b3d22bc8ae1110f",
+      "binding": "6d103cc3ba307cdf35eb87d6127bc77ec80320db4da8636c7d004d0a3e822a49",
+      "vectors_npz": {
+        "candidate_vectors": [
+          [
+            500,
+            384
+          ],
+          "float32",
+          "f8c14c0d72b910f6f3069d5756416df94796235df12713eb97cccec966654405"
+        ],
+        "embedding_dtype": "a9d706227706efbc4d5f023e7b5aa9e8f73a8ea5be363a6abdc7f526f01636e1",
+        "request_sha256": "063184df70f2b0867a1c34aa846286f3e76fabbb7e649509ac56c0a08d27f362",
+        "scores": [
+          [
+            112,
+            32
+          ],
+          "float32",
+          "268d67111eb3ab3377cb6bf179fefc1f49845647d85aa82864409d94af32d66e"
+        ],
+        "vectors": [
+          [
+            112,
+            33,
+            384
+          ],
+          "float32",
+          "b0d88610a748b357e6b46e1f779d037a98a61258dfb5961dd2c8425dec6b6665"
+        ]
+      },
+      "request_sha256": "b2b1ad9d489768c5684a9fb5f7220e23ddfdb82a21be496093c9df1d46daeb7c"
+    }
+  ],
+  "byte_identical_sequence": true
+}

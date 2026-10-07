@@ -1,0 +1,44 @@
+{
+  "augmentation": "not_applicable: fixed graph pairs; no masking/gendata pipeline",
+  "catalog_sha256": "275d12eefec3184a7c60a0db7efe323a5770b52111017a62526c001c2781ed7a",
+  "excluded_model_inputs": [
+    "gtin",
+    "verified identity edges",
+    "raw text"
+  ],
+  "feature_scope": "derived from core.sku_identity.graph_schema; every extractor descriptor is a model input",
+  "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
+  "identity_extractor": "core.sku_identity.row_identity",
+  "identity_policy_sha256": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
+  "listings_sha256": "e3fa75be5d629029b339dcef7da41898d39cb50432d1514f9a4998f46cb987b6",
+  "numeric": [
+    "volume_ml",
+    "pack"
+  ],
+  "pair_lineage_sha256": null,
+  "pair_trace": {
+    "missing_axes": [
+      "difficulty",
+      "gate_evidence",
+      "gendata",
+      "masking"
+    ],
+    "source_trace_columns": [],
+    "status": "unknown: no source lineage supplied"
+  },
+  "pairs_sha256": "fb10877d0a293677b65bb2ec31c1b3d438e11586f732a45d5ca22635e8348116",
+  "relations": [
+    "brand",
+    "flavor",
+    "carbonation",
+    "sweetener",
+    "sweetener_type",
+    "sweetening",
+    "pulp",
+    "package_type",
+    "package_material"
+  ],
+  "report_attributes_sha256": "ec0b1697494faca7912d994b2a17dd1ec366ca2625208c28ee8cba2964eb3b01",
+  "schema": "er-graph-inputs-v1",
+  "splits_sha256": "4742780b715fbfb54e51b8553e9f5b607ecd5f351a6ecf6a81264994aa504a15"
+}
