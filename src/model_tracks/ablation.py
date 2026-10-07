@@ -312,11 +312,12 @@ def _listing_records(listings, ids, cfg):
 def _pair_evidence(chosen, rows, cfg):
     from core.attribute_conflicts import canonical_attribute_info
     from core.attribute_decision import engine
+    decision = engine()
     for pair in chosen:
         a, b = (rows[pair[k]] for k in ('sku_id1', 'sku_id2'))
         pair['gtin1'], pair['gtin2'] = a.get('gtin'), b.get('gtin')
         pair['current_attribute_evidence'] = ({} if a.get('frozen_payload') or b.get('frozen_payload') else
-            engine().evaluate(canonical_attribute_info(a), canonical_attribute_info(b), left_raw=a, right_raw=b).as_dict())
+            decision.evaluate(canonical_attribute_info(a), canonical_attribute_info(b), left_raw=a, right_raw=b).as_dict())
         if a.get('frozen_payload') or b.get('frozen_payload'):
             pair['evidence_scope'] = 'frozen payload; raw-row evidence unavailable'
         for axis in cfg.slice_columns:
