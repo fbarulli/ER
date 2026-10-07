@@ -1,0 +1,62 @@
+ablation profiling start config=/home/opc/ONE/ER/ablation_profile/config.yaml catalog=eligible_catalog.csv pairs=listing_pairs.csv
+[timing] __main__.run_prepare state=started rss_mb=612.4
+[timing] ablation.prepare state=started rss_mb=612.5
+[timing] ablation.prepare.sources state=started rss_mb=612.5
+[timing] ablation.prepare.sources state=completed elapsed_seconds=0.009 rss_mb=612.6
+[timing] ablation.prepare.cohort state=started rss_mb=612.6
+[timing] ablation.prepare.cohort state=completed elapsed_seconds=2.463 rss_mb=622.3
+[timing] ablation.prepare.baseline_variants state=started rss_mb=622.3
+Composing baseline endpoints=20 attributes=6
+[timing] ablation.prepare.baseline_variants state=completed elapsed_seconds=1.132 rss_mb=623.2
+[timing] ablation.prepare.candidates state=started rss_mb=623.2
+[timing] ablation.prepare.candidates state=completed elapsed_seconds=0.214 rss_mb=623.2
+[timing] ablation.prepare.persist state=started rss_mb=623.2
+[timing] ablation_inputs.prepare_inputs state=started rss_mb=623.7
+[timing] ablation_inputs.slice_groups state=started rss_mb=623.7
+[timing] ablation_inputs.slice_groups state=completed elapsed_seconds=0.009 rss_mb=623.8
+[timing] ablation_inputs.tokens state=started rss_mb=623.8
+[timing] ablation_inputs.tokens state=completed elapsed_seconds=8.482 rss_mb=1033.1
+[timing] ablation_inputs.graph_topology state=started rss_mb=1033.1
+[timing] ablation_inputs.graph_topology state=completed elapsed_seconds=0.000 rss_mb=1033.1
+[timing] ablation_inputs.candidate_batches state=started rss_mb=1033.1
+[timing] ablation_inputs.candidate_batches state=completed elapsed_seconds=0.000 rss_mb=1033.1
+[timing] ablation_inputs.variant_jobs state=started rss_mb=1033.1
+[timing] ablation_inputs.variant_jobs state=completed elapsed_seconds=0.001 rss_mb=1033.1
+[timing] ablation_inputs.publish state=started rss_mb=1033.1
+[timing] ablation_inputs.publish state=completed elapsed_seconds=0.004 rss_mb=1033.1
+ablation inputs published token_batches=2 jobs=7
+[timing] ablation_inputs.prepare_inputs state=completed elapsed_seconds=8.500 rss_mb=1033.1
+[timing] ablation.prepare.persist state=completed elapsed_seconds=8.728 rss_mb=1033.1
+Preparation complete: pairs=10 endpoints=20 unique_texts=85 variants=6 changed=6
+[timing] ablation.prepare state=completed elapsed_seconds=12.549 rss_mb=1033.1
+[timing] __main__.run_prepare state=completed elapsed_seconds=13.369 rss_mb=1033.1
+prepare done request=/home/opc/ONE/ER/ablation_profile/run/4ee359ed604485130a15f68c/request.json
+[timing] __main__.run_encode state=started rss_mb=1033.1
+[timing] ablation.encode state=started rss_mb=1033.1
+[timing] ablation.encode.text_vectors state=started rss_mb=1033.1
+Encoded 64 changed native texts in batch 1
+Encoded 21 changed native texts in batch 2
+[timing] ablation.encode.text_vectors state=completed elapsed_seconds=4.968 rss_mb=1167.8
+[timing] ablation.encode.graph_encoder state=started rss_mb=1167.8
+[timing] ablation.encode.graph_encoder state=completed elapsed_seconds=0.000 rss_mb=1167.8
+[timing] ablation.encode.candidates state=started rss_mb=1167.8
+[timing] ablation.encode.candidates state=completed elapsed_seconds=0.001 rss_mb=1167.8
+[timing] ablation.encode.jobs state=started rss_mb=1167.8
+[timing] ablation.encode.jobs state=completed elapsed_seconds=0.003 rss_mb=1167.8
+[timing] ablation.encode.persist state=started rss_mb=1167.8
+[timing] ablation.encode.persist state=completed elapsed_seconds=0.010 rss_mb=1167.8
+[timing] ablation.encode state=completed elapsed_seconds=4.990 rss_mb=1167.8
+[timing] __main__.run_encode state=completed elapsed_seconds=5.023 rss_mb=1167.8
+encode done result=/home/opc/ONE/ER/ablation_profile/encode_result.npz
+[timing] __main__.run_report state=started rss_mb=1167.8
+[timing] ablation.report state=started rss_mb=1167.8
+[timing] ablation.report.validate state=started rss_mb=1167.8
+[timing] ablation.report.validate state=completed elapsed_seconds=0.008 rss_mb=1167.8
+[timing] ablation.report.comparison state=started rss_mb=1167.8
+[timing] ablation._compute_variant_rows state=started rss_mb=1167.8
+[timing] ablation._compute_variant_rows state=completed elapsed_seconds=0.008 rss_mb=1167.8
+[timing] ablation.report.comparison state=completed elapsed_seconds=0.021 rss_mb=1167.8
+Report saved to /home/opc/ONE/ER/ablation_profile/run_report/report.json with 60 rows (threshold=0.5)
+[timing] ablation.report state=completed elapsed_seconds=0.130 rss_mb=1167.8
+[timing] __main__.run_report state=completed elapsed_seconds=0.148 rss_mb=1167.8
+report done pointer=/home/opc/ONE/ER/ablation_profile/run_report/report.json

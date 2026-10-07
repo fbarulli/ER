@@ -1,0 +1,7 @@
+{
+  "schema": "profiling-frozen-threshold-v1",
+  "threshold": 0.5,
+  "track": "text",
+  "checkpoint": "all-MiniLM-L6-v2",
+  "note": "Profiling fixture. Threshold frozen from config/training.yaml evaluation.report_thresholds[0]=0.50; never fitted."
+}
