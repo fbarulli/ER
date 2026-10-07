@@ -102,6 +102,15 @@ class EncodeRequest:
         return plan['token_batches']
 
 
+def _load_token_features():
+    """Bind the token-feature loader (standalone bundle name or local core)."""
+    try:
+        from encoding_inputs import load_token_features
+    except ImportError:
+        from core.encoding_inputs import load_token_features
+    return load_token_features
+
+
 class BatchEncoder:
     """Prepared token batches -> L2-normalized float32 embedding rows."""
 
@@ -110,13 +119,12 @@ class BatchEncoder:
         self._token_archive = token_archive
         self._device = device
 
+    @timed
     def run(self, token_batches: list):
+        """One timed pass: every prepared batch, then the stacked chunks."""
         import numpy as np
         import torch
-        try:
-            from encoding_inputs import load_token_features
-        except ImportError:
-            from core.encoding_inputs import load_token_features
+        load_token_features = _load_token_features()
         chunks = []
         total = len(token_batches)
         with np.load(self._token_archive, allow_pickle=False) as data, torch.no_grad():
@@ -124,12 +132,18 @@ class BatchEncoder:
                 _LOG.progress(token_batches, desc='prepared_encode_batches',
                               unit='batch', total=total), 1
             ):
-                features = load_token_features(data, batch, self._device)
-                vector = self._model(features)['sentence_embedding']
-                chunks.append(torch.nn.functional.normalize(
-                    vector, p=2, dim=1).cpu().numpy().astype(np.float32))
+                chunks.append(self._encode_batch(data, load_token_features, batch))
                 _LOG.info(f'[embeddings/{self._device}] batch={n}/{total}')
         return np.concatenate(chunks)
+
+    def _encode_batch(self, data, load_token_features, batch):
+        """One prepared batch -> normalized float32 embedding chunk."""
+        import numpy as np
+        import torch
+        features = load_token_features(data, batch, self._device)
+        vector = self._model(features)['sentence_embedding']
+        return torch.nn.functional.normalize(
+            vector, p=2, dim=1).cpu().numpy().astype(np.float32)
 
 
 def _load_tokenization_policy():
