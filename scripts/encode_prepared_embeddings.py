@@ -17,9 +17,15 @@ import json
 from pathlib import Path
 
 try:
+    from contextlib import contextmanager
+
     from core.run_log import RunLogger
+    from training.prepare_all_trace import timed
+
     _LOG = RunLogger('encode_prepared_embeddings')
 except ImportError:  # Colab ships this script standalone; prints stay contract
+    from contextlib import contextmanager
+
     class _Fallback:
         @staticmethod
         def info(message):
@@ -28,6 +34,20 @@ except ImportError:  # Colab ships this script standalone; prints stay contract
         @staticmethod
         def progress(iterable, **kwargs):
             return iterable
+
+        @staticmethod
+        @contextmanager
+        def section(label, **kwargs):
+            yield
+
+    def timed(function=None, **kwargs):
+        if function is not None:
+            return function
+
+        def decorate(candidate):
+            return candidate
+
+        return decorate
 
     _LOG = _Fallback()
 
