@@ -19,6 +19,16 @@ _SHELF_LIFE = re.compile(r"\bshelf\s+life\s*:\s*(\d+)\s*(days?|months?|years?)\b
 # is exactly sound: it only skips scans that provably cannot match, and the
 # surviving _EXPIRY_CUE pass keeps the discovery order the stable sort relies on.
 _HAS_DIGIT = re.compile(r"\d").search
+_HAS_4_DIGITS = re.compile(r"\d{4}").search
+# _EXPIRY_CUE and _SHELF_LIFE are re.IGNORECASE, so their gate runs on a
+# lowercased copy with plain `in` tests. Two measured dead ends first:
+# an re.IGNORECASE regex hint is SLOWER than the pattern it would gate (0.1362s
+# vs 0.1103s over 57,205 texts), and a case-SENSITIVE `in` hint silently missed
+# 7 real matches ("Expiration Date: 1 Year", "Coffee with oat drink. ... Gluten
+# free"). The gate is applied only to ASCII text, where str.lower() reproduces
+# exactly the folding IGNORECASE performs over the letters in these keywords;
+# IGNORECASE additionally folds U+017F, U+0130, U+0131 and U+212A, so anything
+# else falls through to the unchanged scan.
 # Hoisted module-level dispatch: each of these ran once per match (thousands of
 # times), paying `re`'s pattern-cache lookup on every call.
 _DATE_SEPARATOR = re.compile(r"[-/.]")
@@ -67,9 +77,17 @@ def extract_date_evidence(text: object) -> list[dict]:
     occupied = []
     has_digit = _HAS_DIGIT(text) is not None
     # The loop ORDER is unchanged (the result is stable-sorted by start, so
-    # equal-start entries keep discovery order); only the digit-requiring scans
-    # that cannot match are skipped.
+    # equal-start entries keep discovery order); only scans that provably
+    # cannot match are skipped. Every gate below is a necessary condition of
+    # the pattern it guards, never a heuristic.
     if has_digit:
+        # _CALENDAR/_MONTH/_SHORT_YEAR all require one of the three date
+        # separators; _NAMED_CALENDAR requires a four-digit year. Measured on
+        # the 9,739 digit-bearing texts: the separator gate is free (0.0009s)
+        # and prunes 33%, the four-digit gate costs 0.0250s and prunes 84%
+        # (NAMED_CALENDAR alone costs 0.1608s over those texts).
+        has_separator = "-" in text or "/" in text or "." in text
+    if has_digit and has_separator:
         for match in _CALENDAR.finditer(text):
             parts = [part.strip() for part in _DATE_SEPARATOR.split(match.group())]
             a, b, c = map(int, parts)
@@ -125,6 +143,7 @@ def extract_date_evidence(text: object) -> list[dict]:
                           "normalized_candidates": [], "partial_candidates": sorted(partial_dates),
                           "parse_status": status, "gate_use": "stock_review_context"})
             occupied.append(match.span())
+    if has_digit and _HAS_4_DIGITS(text):
         for match in _NAMED_CALENDAR.finditer(text):
             year = int(match.group("year"))
             month = _MONTH_NAMES[match.group("month").lower()]
@@ -143,15 +162,11 @@ def extract_date_evidence(text: object) -> list[dict]:
                           "parse_status": "parsed" if candidates else "invalid",
                           "gate_use": "stock_review_context"})
             occupied.append(match.span())
-    for match in _EXPIRY_CUE.finditer(text):
-        if any(match.end() <= start <= match.end() + 35 for start, end in occupied):
-            continue
-        negated = bool(_NOT_AT_END.search(text[:match.start()]))
-        format_guidance = bool(_FORMAT_GUIDANCE.match(text[match.end():]))
-        found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
-                      "role": "date_format_reference" if negated or format_guidance else "expiry_reference", "precision": "unknown", "normalized_candidates": [],
-                      "parse_status": "reference_only", "gate_use": "stock_review_context"})
-    if has_digit:
+    low = text.lower() if text.isascii() else None
+    if low is None or ("exp" in low or "tht" in low or "bbd" in low or "bbe" in low
+                       or "best" in low or ("use" in low and "by" in low)):
+        _scan_expiry_cue(text, found, occupied)
+    if has_digit and (low is None or "shelf" in low):
         for match in _SHELF_LIFE.finditer(text):
             found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
                           "role": "shelf_life", "precision": "duration", "normalized_candidates": [],
@@ -160,3 +175,14 @@ def extract_date_evidence(text: object) -> list[dict]:
     if not found:
         return []
     return sorted(found, key=_by_start)
+
+
+def _scan_expiry_cue(text: str, found: list, occupied: list) -> None:
+    for match in _EXPIRY_CUE.finditer(text):
+        if any(match.end() <= start <= match.end() + 35 for start, end in occupied):
+            continue
+        negated = bool(_NOT_AT_END.search(text[:match.start()]))
+        format_guidance = bool(_FORMAT_GUIDANCE.match(text[match.end():]))
+        found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
+                      "role": "date_format_reference" if negated or format_guidance else "expiry_reference", "precision": "unknown", "normalized_candidates": [],
+                      "parse_status": "reference_only", "gate_use": "stock_review_context"})
