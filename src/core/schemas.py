@@ -2779,8 +2779,10 @@ class KaggleFilesSpec(BaseModel):
     training_dir: str = 'model_tracks'
     embedding_dir: str = 'embedding_job'
     lane_log: str = 'lane.log'
-    autowatch_log: str = 'autowatch_{which}.log'
-    stream_log: str = '{kernel}.stream.log'
+    # One roof (owner order 2026-10-07): all lane transcript variants append to
+    # the single lane.log — no per-watcher or per-stream sidecar logs.
+    autowatch_log: str = 'lane.log'
+    stream_log: str = 'lane.log'
     autowatch_receipt: str = 'autowatch_{kind}.receipt.json'
     supervise_receipt: str = 'supervise.receipt.json'
     chain_receipt: str = 'chain.receipt.json'
