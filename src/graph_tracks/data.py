@@ -31,7 +31,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from core.run_log import RunLogger
 from core.sku_identity import ProductIdentity, graph_schema
+
+_LOG = RunLogger(__name__)
 
 # DERIVED, never pinned: the graph carries whatever the shared extractor
 # (`core.sku_identity.row_identity`) yields — string descriptor fields are
@@ -78,7 +81,7 @@ class ListingValidator:
         if not records:
             raise ValueError("empty listings")
         ids: list[str] = []
-        for record in records:
+        for record in _LOG.progress(records, desc="listing_contract", unit="listing"):
             self.check_record(record)
             ids.append(record["sku_id"])
         if len(set(ids)) != len(ids):
@@ -165,7 +168,7 @@ class BatchTensorizer:
     @staticmethod
     def dense_numbers(records: list[dict]) -> torch.Tensor:
         numbers = []
-        for record in records:
+        for record in _LOG.progress(records, desc="graph_dense_rows", unit="listing"):
             row = []
             for field_name in NUMERIC:
                 values = sorted(set(record["numeric"].get(field_name, [])))
@@ -180,7 +183,10 @@ class BatchTensorizer:
         for relation in RELATIONS:
             lookup = {v: i + 1 for i, v in enumerate(self._vocabulary[relation])}
             source, target = [], []
-            for i, record in enumerate(records):
+            for i, record in _LOG.progress(
+                enumerate(records), desc=f"graph_edges_{relation}", unit="listing",
+                total=len(records),
+            ):
                 values = sorted(set(record["attribute"].get(relation, [])))
                 indices = sorted({lookup.get(v, 0) for v in values}) or [0]
                 source.extend([i] * len(indices))
