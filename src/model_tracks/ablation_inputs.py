@@ -19,9 +19,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from core.run_log import RunLogger
+from core.model_input import model_input_composition
 from training.prepare_all_trace import timed
 from graph_tracks.data import GraphBatch, RELATIONS, tensorize, file_hash
 from graph_tracks.pooling import topology
+from model_tracks.ablation import checkpoint_identity, digest, resolve
+from model_tracks.text_export import prepare_tokens
 
 
 from graph_tracks.prepared_inputs import save_batch, load_batch
@@ -29,12 +32,14 @@ from graph_tracks.prepared_inputs import save_batch, load_batch
 _LOG = RunLogger(__name__)
 
 
+@timed
 def _pair_indices(request, arrays):
     """Endpoint index array over the frozen identity order."""
     lookup = {key:n for n,key in enumerate(request['ids'])}
     arrays['pair_indices'] = np.asarray([[lookup[p['sku_id1']],lookup[p['sku_id2']]] for p in request['pairs']],dtype=np.int64)
 
 
+@timed
 def _open_plan(request, arrays):
     """Open the plan skeleton from the frozen pair endpoints."""
     # Candidate order and endpoint indices are frozen before vectors exist.
@@ -45,35 +50,36 @@ def _open_plan(request, arrays):
     return plan
 
 
+@timed
 def _frozen_pairs(request, arrays):
     """Freeze candidate order/endpoint indices and open the plan skeleton."""
     _pair_indices(request,arrays)
     return _open_plan(request,arrays)
 
 
+@timed
 def _slice_groups(request, plan):
     """Group pair rows by the configured slice axes, pair order preserved."""
-    from model_tracks.ablation import digest
     axes = request['settings']['slice_columns']
     for n,pair in _LOG.progress(enumerate(request['pairs']),desc='ablation_slice_groups',unit='pair',total=len(request['pairs'])):
-        key = digest({axis:pair.get(axis) for axis in axes})
-        group = plan['slice_groups'].setdefault(key,{'values':{axis:pair.get(axis) for axis in axes},'pair_indices':[]})
+        values = {axis:pair.get(axis) for axis in axes}
+        key = digest(values)
+        group = plan['slice_groups'].setdefault(key,{'values':values,'pair_indices':[]})
         group['pair_indices'].append(n)
 
 
+@timed
 def _token_batches(request, arrays, batch_size, plan, *, token_cache=None):
     """Frozen native tokenization for text/hybrid tracks (no encoding)."""
-    from model_tracks.ablation import resolve
     if request['track'] != 'gnn_only':
         checkpoint = request['checkpoint'] if request['track']=='text' else request['text_checkpoint']
         print('[ablation/local] using frozen native tokenizer; no encoding',flush=True)
-        from model_tracks.text_export import prepare_tokens
         plan.update(prepare_tokens(resolve(checkpoint),request['texts'],arrays,batch_size=batch_size,cache=token_cache))
 
 
+@timed
 def _graph_payload(request):
     """Load the graph checkpoint, rejecting schema and split-context drift."""
-    from model_tracks.ablation import resolve
     payload = torch.load(resolve(request['checkpoint']),map_location='cpu',weights_only=False)
     if payload.get('schema') != 'er-graph-checkpoint-v1' or payload['manifest']['track'] != request['track']:
         raise ValueError('graph checkpoint schema/track mismatch')
@@ -82,12 +88,16 @@ def _graph_payload(request):
     return payload
 
 
+@timed
 def _hybrid_metadata(request,payload):
     """Hybrid's text checkpoint sha and model composition must match training."""
-    if request['track'] == 'hybrid' and payload['manifest']['track'] != request['track']:
-        raise ValueError('hybrid text checkpoint/composition differs from training')
+    if request['track'] == 'hybrid':
+        metadata = payload['manifest']['text_metadata']
+        if metadata['checkpoint_sha256'] != checkpoint_identity(resolve(request['text_checkpoint'])) or metadata['composition'] != model_input_composition().model_dump(mode='json'):
+            raise ValueError('hybrid text checkpoint/composition differs from training')
 
 
+@timed
 def _support_batch(plan,arrays,payload):
     """Tensorize the frozen support topology under the checkpoint vocabulary."""
     vocabulary = payload['vocabulary']
@@ -96,6 +106,7 @@ def _support_batch(plan,arrays,payload):
     return vocabulary
 
 
+@timed
 def _graph_topology(request,arrays,plan):
     """The graph track's payload plus its tensorized support (text: noops)."""
     payload = None
@@ -107,12 +118,14 @@ def _graph_topology(request,arrays,plan):
     return payload,vocabulary
 
 
+@timed
 def _candidate_tensors(request, arrays, plan):
     """Freeze candidate text indices and ids into the arrays/plan pair."""
     arrays['candidate_text_indices'] = np.asarray(request['candidate_text_indices'],dtype=np.int64)
     plan['candidate_ids'] = request['candidate_ids']
 
 
+@timed
 def _candidate_batches(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Tensorize the out-of-support candidate records when supplied."""
     if request.get('candidate_ids'):
@@ -126,6 +139,7 @@ def _candidate_batches(request, arrays, plan, *, payload, vocabulary, batch_size
                 plan['candidate_batches'].append(prefix)
 
 
+@timed
 def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,batch_size):
     """Save the record set's graph tensor batches once; keep their prefixes."""
     prefixes = []
@@ -136,15 +150,19 @@ def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,bat
     plan['graph_batches'][graph_key] = prefixes
 
 
+@timed
 def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Deduped inference jobs; graph batches saved once per record set."""
-    from model_tracks.ablation import digest
     job_lookup = {}
+    record_keys = {}
     for variant in _LOG.progress(request['variants'],desc='ablation_variant_jobs',unit='variant',total=len(request['variants'])):
         key = digest({'text':variant['text_indices'],'graph':variant['records']})
         if key not in job_lookup:
             job_lookup[key] = len(plan['jobs'])
-            graph_key = digest(variant['records'])
+            graph_key = record_keys.get(id(variant['records']))
+            if graph_key is None:
+                graph_key = digest(variant['records'])
+                record_keys[id(variant['records'])] = graph_key
             if payload and graph_key not in plan['graph_batches']:
                 _graph_batch_prefixes(plan,arrays,graph_key,variant['records'],
                     payload=payload,vocabulary=vocabulary,batch_size=batch_size)
@@ -154,6 +172,7 @@ def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
         plan['variant_jobs'].append(job_lookup[key])
 
 
+@timed
 def _freeze_arrays(arrays, output):
     """Exclusive-create the compressed tensor file next to its consumers."""
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -161,6 +180,7 @@ def _freeze_arrays(arrays, output):
         np.savez_compressed(handle,**arrays)
 
 
+@timed
 def _publish(arrays, output, plan):
     """Write the compressed tensor file, hash it and report the plan census."""
     _freeze_arrays(arrays,output)
@@ -172,7 +192,8 @@ def _publish(arrays, output, plan):
 def prepare_inputs(request, output, *, token_cache=None):
     """No model forward here: CPU text tokenization and frozen-vocabulary topology."""
     arrays = {}
-    plan = _frozen_pairs(request,arrays)
+    with _LOG.section('ablation_inputs.frozen_pairs'):
+        plan = _frozen_pairs(request,arrays)
     with _LOG.section('ablation_inputs.slice_groups'):
         _slice_groups(request,plan)
     batch_size = request['settings']['batch_size']
