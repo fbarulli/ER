@@ -1,0 +1,17 @@
+{
+  "phase": "complete_saved (cached-trust path)",
+  "workload": "smoke_200 fixture suite; 3 tracks, 222 report rows each; save_report rewrite + receipt write per rep (fresh-boot state reset)",
+  "reps_wall_seconds": [0.3005, 0.2006, 0.1979, 0.1969, 0.195],
+  "median_wall_seconds": 0.197,
+  "phase_split_seconds": {
+    "calibration_total": 0.112,
+    "report_total": 0.181,
+    "persist_total": 0.001,
+    "_trusted_saved_report_total": 0.026,
+    "_wrote_binding_cold_total": 0.096,
+    "save_report_total": 0.182,
+    "receipt": 0.001
+  },
+  "timings_log_source": "ER_TIMING_LOG run captured in rounds/round0/timings.log (baseline copy from 67d0d42)",
+  "notes": "top offenders on the uncached-gen path: save_report (report.json serializations, 182ms) >> _wrote_binding (checkpoint stat-signature hashing, 96ms cold) > _trusted_saved_report (26ms)"
+}
