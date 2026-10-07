@@ -1095,6 +1095,173 @@ def _has_attribute_flag(obj: object, flag: str) -> bool:
     return flag in _attribute_flags(obj)
 
 
+class _GateEvaluator:
+    """Decide whether two record sides' known identity attributes conflict.
+
+    Single responsibility: one pack_gate verdict from the two sides' evidence.
+    The semantic score is accepted for a stable gate-call interface but is
+    deliberately not used: a high semantic score cannot override a known pack,
+    package-type, or volume conflict.
+
+    EVIDENCE TRUST (audit 2026-09-15). A parsed attribute is only comparable
+    when the parser reported enough confidence to be believed. A trust
+    threshold below 1.0-or-None makes the volume/pack comparison evidence-
+    aware: a side below the bar is treated exactly like a missing side, so it
+    stays *unknown* and reaches the confidence/fallback lane instead of being
+    fabricated into a hard rejection.
+
+    PACK SEMANTICS: a canonical keeps EVERY pack count observed across its
+    titles, so a multi-title canonical legitimately holds ``{12, 24}``. A
+    shared count is therefore positive evidence of compatibility and only a
+    genuinely disjoint pair conflicts — the rule the canonical writer
+    documents ("gate logic intersects them").
+    """
+
+    def __init__(
+        self,
+        *,
+        volume_relative_tolerance: float,
+        volume_absolute_tolerance_ml: float,
+        trust_threshold: float | None,
+        check_categorical: bool,
+    ) -> None:
+        self._volume_relative_tolerance = volume_relative_tolerance
+        self._volume_absolute_tolerance_ml = volume_absolute_tolerance_ml
+        self._trust_threshold = trust_threshold
+        self._check_categorical = check_categorical
+        self._veto_dimensions = frozenset(
+            training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+        )
+
+    # -- field readers ------------------------------------------------------
+
+    @staticmethod
+    def _value(obj: object, *names: str):
+        if isinstance(obj, dict):
+            for name in names:
+                if name in obj:
+                    return obj[name]
+        else:
+            for name in names:
+                if hasattr(obj, name):
+                    return getattr(obj, name)
+        return None
+
+    @staticmethod
+    def _set(value: object) -> set:
+        if value is None or value == "":
+            return set()
+        if isinstance(value, (set, frozenset, list, tuple)):
+            return set(value)
+        return {value}
+
+    def _trusted(self, obj: object, *names: str) -> bool:
+        """Whether the named confidence field clears the caller's bar.
+
+        An absent field means the lane never carried a confidence observation;
+        the caller's own confidence lane owns that case, so it is not second
+        guessed here.
+        """
+        dimension = "volume" if "volume_confidence" in names else "pack"
+        if _has_attribute_flag(obj, f"{dimension}_sources_disagree") or (
+            dimension == "pack" and _has_attribute_flag(obj, "pack_hierarchy_ambiguous")
+        ):
+            return False
+        raw = self._value(obj, *names)
+        if raw is None or raw == "":
+            return True
+        if self._trust_threshold is None:
+            return True
+        try:
+            value = float(raw)
+            return math.isfinite(value) and 0.0 <= value <= 1.0 and value >= float(self._trust_threshold)
+        except (TypeError, ValueError):
+            return False
+
+    def _claim_set(self, obj: object, dimension: str) -> set[str]:
+        explicit = self._value(obj, f"{dimension}_set")
+        if explicit:
+            return self._set(explicit)
+        found = extract_critical_claims(str(self._value(obj, "canonical") or ""))[dimension]
+        return set(found)
+
+    # -- conflict tests (one per identity dimension) -------------------------
+
+    def _pack_count_conflict(self, left_pack: set, right_pack: set, sku_a: object, sku_b: object) -> bool:
+        """PACK COUNT: shared evidence agrees; disjoint counts conflict.
+
+        No count on one side is unknown, not an assertion of single-unit
+        packaging. The caller's confidence/review lane owns missing evidence.
+        """
+        return (
+            "pack" in self._veto_dimensions
+            and left_pack
+            and right_pack
+            and not (left_pack & right_pack)
+            and self._trusted(sku_a, "pack_confidence")
+            and self._trusted(sku_b, "pack_confidence")
+        )
+
+    def _package_type_conflict(self, left_type: set, right_type: set) -> bool:
+        """PACKAGE TYPE: disjoint categorical evidence conflicts."""
+        return ("package_type" in self._veto_dimensions
+                and left_type and right_type and not (left_type & right_type))
+
+    def _volume_conflict(self, left_volume: set, right_volume: set, sku_a: object, sku_b: object) -> bool:
+        """VOLUME: both trusted and incompatible under either configured cut."""
+        return (
+            "volume" in self._veto_dimensions
+            and left_volume
+            and right_volume
+            and self._trusted(sku_a, "volume_confidence")
+            and self._trusted(sku_b, "volume_confidence")
+            and not volumes_compatible(
+                left_volume,
+                right_volume,
+                volume_relative_tolerance=self._volume_relative_tolerance,
+                volume_absolute_tolerance_ml=self._volume_absolute_tolerance_ml,
+            )
+        )
+
+    def _categorical_conflict(self, sku_a: object, sku_b: object) -> bool:
+        """Critical categorical dimensions (carbonation/sweetener/pulp)."""
+        for dimension in sorted(self._veto_dimensions & {"carbonation", "sweetener", "pulp"}):
+            if not self._check_categorical:
+                continue
+            left = self._claim_set(sku_a, dimension)
+            right = self._claim_set(sku_b, dimension)
+            if left and right and categorical_conflict(
+                dimension, {dimension: left}, {dimension: right}
+            ):
+                return True
+        return False
+
+    # -- verdict -------------------------------------------------------------
+
+    def skus_compatible(self, sku_a: object, sku_b: object) -> bool:
+        left_pack = self._set(self._value(sku_a, "pack_size", "pack_set", "pack_qty"))
+        right_pack = self._set(self._value(sku_b, "pack_size", "pack_set", "pack_qty"))
+        if self._pack_count_conflict(left_pack, right_pack, sku_a, sku_b):
+            return False
+        left_type = self._set(self._value(sku_a, "package_type", "package_type_set"))
+        right_type = self._set(self._value(sku_b, "package_type", "package_type_set"))
+        if self._package_type_conflict(left_type, right_type):
+            return False
+        left_volume = (
+            set()
+            if _has_attribute_flag(sku_a, "ambiguous_volume")
+            else self._set(self._value(sku_a, "volume", "volume_set", "volume_ml"))
+        )
+        right_volume = (
+            set()
+            if _has_attribute_flag(sku_b, "ambiguous_volume")
+            else self._set(self._value(sku_b, "volume", "volume_set", "volume_ml"))
+        )
+        if self._volume_conflict(left_volume, right_volume, sku_a, sku_b):
+            return False
+        return not self._categorical_conflict(sku_a, sku_b)
+
+
 def pack_gate(
     score: float,
     sku_a: object,
@@ -1109,132 +1276,15 @@ def pack_gate(
 
     ``score`` is accepted for a stable gate-call interface but is deliberately
     not used: a high semantic score cannot override a known pack, package-type,
-    or volume conflict.
-
-    EVIDENCE TRUST (audit 2026-09-15). A parsed attribute is only comparable
-    when the parser reported enough confidence to be believed. Passing
-    ``trust_threshold`` makes the volume/pack comparison evidence-aware: a
-    side below the bar is treated exactly like a missing side, so it stays
-    *unknown* and reaches the confidence/fallback lane instead of being
-    fabricated into a hard rejection. Callers that leave it ``None`` keep the
-    pure structural semantics used by the I/O lanes.
-
-    PACK SEMANTICS: a canonical keeps EVERY pack count observed across its
-    titles, so a multi-title canonical legitimately holds ``{12, 24}``. A
-    shared count is therefore positive evidence of compatibility and only a
-    genuinely disjoint pair conflicts — the rule the canonical writer
-    documents ("gate logic intersects them"). Requiring set equality here
-    would reject a `{12, 24}` canonical against a `{12}` one that shares 12.
+    or volume conflict. The entire verdict is the _GateEvaluator's.
     """
     del score
-    veto_dimensions = frozenset(
-        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
-    )
-
-    def _value(obj: object, *names: str):
-        if isinstance(obj, dict):
-            for name in names:
-                if name in obj:
-                    return obj[name]
-        else:
-            for name in names:
-                if hasattr(obj, name):
-                    return getattr(obj, name)
-        return None
-
-    def _set(value: object) -> set:
-        if value is None or value == "":
-            return set()
-        if isinstance(value, (set, frozenset, list, tuple)):
-            return set(value)
-        return {value}
-
-    def _trusted(obj: object, *names: str) -> bool:
-        """Whether the named confidence field clears the caller's bar.
-
-        An absent field means the lane never carried a confidence observation;
-        the caller's own confidence lane owns that case, so it is not second
-        guessed here.
-        """
-        dimension = "volume" if "volume_confidence" in names else "pack"
-        if _has_attribute_flag(obj, f"{dimension}_sources_disagree") or (
-            dimension == "pack" and _has_attribute_flag(obj, "pack_hierarchy_ambiguous")
-        ):
-            return False
-        raw = _value(obj, *names)
-        if raw is None or raw == "":
-            return True
-        if trust_threshold is None:
-            return True
-        try:
-            value = float(raw)
-            return math.isfinite(value) and 0.0 <= value <= 1.0 and value >= float(trust_threshold)
-        except (TypeError, ValueError):
-            return False
-
-    # PACK COUNT: shared evidence agrees; disjoint counts conflict.
-    left_pack = _set(_value(sku_a, "pack_size", "pack_set", "pack_qty"))
-    right_pack = _set(_value(sku_b, "pack_size", "pack_set", "pack_qty"))
-    if (
-        "pack" in veto_dimensions
-        and left_pack
-        and right_pack
-        and not (left_pack & right_pack)
-        and _trusted(sku_a, "pack_confidence")
-        and _trusted(sku_b, "pack_confidence")
-    ):
-        return False
-    # No count on one side is unknown, not an assertion of single-unit
-    # packaging. The caller's confidence/review lane owns missing evidence.
-
-    # PACKAGE TYPE: disjoint categorical evidence conflicts.
-    left_type = _set(_value(sku_a, "package_type", "package_type_set"))
-    right_type = _set(_value(sku_b, "package_type", "package_type_set"))
-    if "package_type" in veto_dimensions and left_type and right_type and not (left_type & right_type):
-        return False
-
-    left_volume = (
-        set()
-        if _has_attribute_flag(sku_a, "ambiguous_volume")
-        else _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
-    )
-    right_volume = (
-        set()
-        if _has_attribute_flag(sku_b, "ambiguous_volume")
-        else _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
-    )
-    if (
-        "volume" in veto_dimensions
-        and left_volume
-        and right_volume
-        and _trusted(sku_a, "volume_confidence")
-        and _trusted(sku_b, "volume_confidence")
-        and not volumes_compatible(
-            left_volume,
-            right_volume,
-            volume_relative_tolerance=volume_relative_tolerance,
-            volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
-        )
-    ):
-        return False
-
-    def _claim_set(obj: object, dimension: str) -> set[str]:
-        explicit = _value(obj, f"{dimension}_set")
-        if explicit:
-            return _set(explicit)
-        found = extract_critical_claims(str(_value(obj, "canonical") or ""))[dimension]
-        return set(found)
-
-    for dimension in sorted(veto_dimensions & {"carbonation", "sweetener", "pulp"}):
-        if not check_categorical:
-            continue
-        left = _claim_set(sku_a, dimension)
-        right = _claim_set(sku_b, dimension)
-        if left and right and categorical_conflict(
-            dimension, {dimension: left}, {dimension: right}
-        ):
-            return False
-    return True
+    return _GateEvaluator(
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        trust_threshold=trust_threshold,
+        check_categorical=check_categorical,
+    ).skus_compatible(sku_a, sku_b)
 
 
 def attribute_gate_census_column_names(registry=None) -> list[str]:
