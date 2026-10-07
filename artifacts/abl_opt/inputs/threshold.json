@@ -1,0 +1,1 @@
+{"threshold": 0.35, "note": "inputs recorded 2026-10-07: catalog=dataset_10k.csv (10k real rows); pairs = consecutive sorted-sku_id neighbors over first 500 rows, label=1 iff both share a nonempty brand; split=dev; population=real; coverage=sampled sample_pairs=100; retrieval_catalog=full"}
