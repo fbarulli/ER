@@ -273,6 +273,49 @@ def _measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:
             "sha256": sha256_file(path), "bytes": path.stat().st_size}
 
 
+# The accuracy/F1 metric contract a harvest agent needs when a decision
+# CSV carries ground-truth labels (owner order 2026-10-07: "add accuracy
+# + f1 ... give it all the pairs we know are the same"): the EXPECTED
+# row count + label distribution computed from the csv itself + the gold
+# columns the harvest reads — so the harvest computes accuracy/F1 against
+# these WITHOUT re-deriving the expectation.
+_METRIC_EXPECTATION_KEYS = ("expected_rows", "expected_label_distribution",
+                            "metric_expectation")
+
+
+def _metric_expectation(path: Path, columns: list[str]) -> dict[str, Any]:
+    """Expected-metric contract fields for a labeled decision CSV.
+
+    Computes `expected_rows` + `expected_label_distribution` from the
+    csv's own `true_label` column (stdlib read; a csv without the column
+    returns {} — the contract only ever attaches to labeled decisions).
+    Fail-loud: a `true_label` column carrying values outside {0, 1}
+    raises before any receipt lands.
+    """
+    if "true_label" not in columns:
+        return {}
+    import csv as _csv
+    from collections import Counter
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        rows = _csv.DictReader(handle)
+        labels = Counter(row["true_label"] for row in rows)
+    unknown = sorted(set(labels) - {"0", "1"})
+    if unknown:
+        raise ValueError(
+            f"decision input {path.name} carries true_label values "
+            f"outside {{0, 1}}: {unknown}")
+    return {
+        "expected_rows": sum(labels.values()),
+        "expected_label_distribution": {
+            label: labels[label] for label in sorted(labels)},
+        "metric_expectation": {
+            "accuracy_gold": "label",
+            "f1_gold": "identity_claim-vs-true_label",
+        },
+    }
+
+
 def stage_decision_input(kind: str, *, decision_kind: str,
                          override: Path | None = None) -> dict[str, Any]:
     """Stage ONE decision CSV under results/laya_lane/<kind>/<decision>/.
@@ -300,6 +343,7 @@ def stage_decision_input(kind: str, *, decision_kind: str,
         "rows": census["rows"], "columns": census["columns"],
         "sha256": census["sha256"], "bytes": census["bytes"],
         "description": entry["description"],
+        **_metric_expectation(source, census["columns"]),
     }
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     _log_lane(f"staged decision input [{kind}/{decision_kind}] "
@@ -945,6 +989,12 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "published_pin": {"repository": repository, "branch": branch,
                           "revision": revision},
     }
+    # the labeled decision csv's metric contract rides the staged receipt
+    # (expected rows + label distribution + the gold columns) so the
+    # harvest computes accuracy/F1 without re-deriving the expectation
+    receipt.update({key: input_receipt[key]
+                    for key in _METRIC_EXPECTATION_KEYS
+                    if key in input_receipt})
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     # The decision csv is already co-located in the payload dir (the
     # stage-decision-input destination IS staging/<kind>/<decision>/);
