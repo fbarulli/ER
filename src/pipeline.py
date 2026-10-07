@@ -1494,6 +1494,396 @@ def attribute_gate_universe_scope_detail() -> dict[str, object]:
     }
 
 
+class _ThreeWayGate:
+    """One pair's three_way_gate decision, phase by phase.
+
+    The phases count and order are the ORIGINAL decision table, statement for
+    statement — same decisions, same reasons, same config reads; nothing is
+    reordered (several placements are load-bearing measured history, see the
+    inline comments). This class is the SR split of the former 310-line body;
+    the module-level three_way_gate keeps its documented call.
+
+    Phase map:
+      resolve_thresholds -> config blocks behind every None argument
+      pack_file_vetoes   -> pack_gate + the package_type/material/level hard nos
+      decision_engine    -> census evaluation + claim/engine categorical vetoes
+      fallback_lanes     -> source disagreement / ambiguity / confidence gates
+      overlap_lanes      -> volume + pack overlap hard nos
+      packaging_identity -> one-sided packaging level, consistency, supporting
+                            attributes, mode_flavor, declared identity, policy
+    """
+
+    def __init__(self, attrs1: dict, attrs2: dict, vol_tolerance: float,
+                 raw_conf_threshold: float, consistency_fallback_threshold: float,
+                 vol_abs_tolerance: float) -> None:
+        self.attrs1 = attrs1
+        self.attrs2 = attrs2
+        self.vol_tolerance = vol_tolerance
+        self.raw_conf_threshold = raw_conf_threshold
+        self.consistency_fallback_threshold = consistency_fallback_threshold
+        self.vol_abs_tolerance = vol_abs_tolerance
+
+    @classmethod
+    def from_config(cls, attrs1: dict, attrs2: dict, *,
+                    vol_tolerance: float | None, raw_conf_threshold: float | None,
+                    consistency_fallback_threshold: float | None,
+                    vol_abs_tolerance: float | None) -> "_ThreeWayGate":
+        """NO-FALLBACK SSOT (audit round 2, F01): the decision thresholds live
+        in config/training.yaml `gate:` and are read through training_cfg() —
+        the old signature defaults (0.05/0.85/0.3) were a second declaration
+        the config could not steer. Passing a value explicitly still wins
+        (selftest pins known-good gate behavior with explicit values)."""
+        if (
+            vol_tolerance is None
+            or raw_conf_threshold is None
+            or consistency_fallback_threshold is None
+            or vol_abs_tolerance is None
+        ):
+            _g = training_cfg().gate
+            if vol_tolerance is None:
+                vol_tolerance = float(_g.vol_tolerance)
+            if vol_abs_tolerance is None:
+                vol_abs_tolerance = float(_g.vol_abs_tolerance)
+            if raw_conf_threshold is None:
+                raw_conf_threshold = float(_g.raw_conf_threshold)
+            if consistency_fallback_threshold is None:
+                consistency_fallback_threshold = float(
+                    _g.consistency_fallback_threshold
+                )
+        return cls(attrs1, attrs2, float(vol_tolerance), float(raw_conf_threshold),
+                   float(consistency_fallback_threshold), float(vol_abs_tolerance))
+
+    # -- phase: pack + file vetoes ------------------------------------------
+
+    def pack_file_vetoes(self) -> dict | None:
+        """pack_gate + the package_type/material/level hard no vetoes."""
+        _r = training_cfg().gate.reasons
+        if not pack_gate(
+            0.0,
+            self.attrs1,
+            self.attrs2,
+            volume_relative_tolerance=float(self.vol_tolerance),
+            volume_absolute_tolerance_ml=float(self.vol_abs_tolerance),
+            trust_threshold=float(self.raw_conf_threshold),
+            check_categorical=False,
+        ):
+            return GateResult(
+                decision="hard_no",
+                reason=_r.pack_blocker,
+            ).model_dump()
+        veto_dimensions = self._veto_dimensions
+        for field, dimension, reason in (
+            ("package_type_set", "package_type", _r.package_type_mismatch),
+            ("package_material_set", "pack_material", _r.package_material_mismatch),
+            ("packaging_level_set", None, _r.packaging_level_mismatch),
+        ):
+            if dimension is not None and dimension not in veto_dimensions:
+                continue
+            if dimension is not None and any(_has_attribute_flag(record, f"categorical_source_conflict:{dimension}") for record in (self.attrs1, self.attrs2)):
+                continue
+            left, right = set(self.attrs1.get(field, set())), set(self.attrs2.get(field, set()))
+            if left and right and not (left & right):
+                return GateResult(decision="hard_no", reason=reason).model_dump()
+        return None
+
+    # -- phase: the single decision engine -----------------------------------
+
+    def decision_engine(self) -> dict | None:
+        """The census-engine lane: claim conflicts + engine conflicts."""
+        # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
+        # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
+        # process). The engine evaluates the three critical-categorical channels
+        # with the whole ordered stack (negation hard-veto, alias-folded
+        # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
+        # instead of riding bare inequality, while a negation conflict stays a
+        # definite negative. Unknown stays unknown here; it is not fabricated
+        # into a conflict or an agreement.
+        from core.attribute_conflicts import (
+            CRITICAL_NAME_BY_CENSUS_KEY,
+            canonical_attribute_info,
+        )
+        from core.attribute_decision import AttributeDecisionEngine
+        from core.attribute_universe import attribute_registry
+
+        left_info, right_info = canonical_attribute_info(self.attrs1), canonical_attribute_info(self.attrs2)
+        source_flags = _attribute_flags(self.attrs1) | _attribute_flags(self.attrs2)
+        sweetener_source_conflict = any(
+            flag.startswith("sweetener_source_conflict:") for flag in source_flags
+        )
+        uncertain_categorical_dimensions = {
+            flag.split(":", 1)[1] for flag in source_flags
+            if flag.startswith(("description_conflict:", "categorical_source_conflict:"))
+        }
+        if sweetener_source_conflict or source_flags & {
+            "unsweetened_with_declared_sweetener", "sweetening_status_conflict",
+            "no_added_sugar_with_cane_sugar",
+        }:
+            uncertain_categorical_dimensions.add("sweetener")
+        # Pulp has no registry key; the registry sweetener key owns ingredient
+        # identity, not sugar/no-sugar claims. Preserve these separate explicit
+        # claim predicates and report their actual dimensions.
+        claim_conflicts = sorted(
+            dimension for dimension in (self._veto_dimensions & {"sweetener", "pulp"}) - uncertain_categorical_dimensions
+            if categorical_conflict(dimension, left_info, right_info)
+        )
+        if claim_conflicts:
+            _r = training_cfg().gate.reasons
+            return GateResult(
+                decision="hard_no",
+                reason=f"{_r.categorical_mismatch} " + ",".join(claim_conflicts),
+            ).model_dump()
+        categorical_dimensions = self._veto_dimensions - {
+            "volume", "pack", "package_type", "pack_material"
+        }
+        # Evaluate the complete registry; configured vetoes and review policy
+        # consume this same evidence rather than projecting away attributes.
+        evidence = AttributeDecisionEngine(
+            volume_relative_tolerance=float(self.vol_tolerance),
+            volume_absolute_tolerance_ml=float(self.vol_abs_tolerance),
+        ).evaluate(left_info, right_info, left_raw=self.attrs1, right_raw=self.attrs2)
+        categorical_conflicts = sorted(
+            CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
+            if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in
+            categorical_dimensions - uncertain_categorical_dimensions
+        )
+        uncertain_categorical_dimensions.update(
+            CRITICAL_NAME_BY_CENSUS_KEY.get(key, key)
+            for key, entry in evidence.dimensions.items()
+            if entry.fallback_from in {"source_conflict", "claim_conflict"}
+        )
+        if sweetener_source_conflict:
+            categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
+        if categorical_conflicts:
+            _r = training_cfg().gate.reasons
+            return GateResult(
+                decision="hard_no",
+                reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
+            ).model_dump()
+
+        # carried into the later phases: the fallback gates need the uncertainty
+        # ledger and the summary evidences exactly as evaluated here.
+        self._uncertain_categorical = uncertain_categorical_dimensions
+        self._left_info = left_info
+        self._right_info = right_info
+        self._evidence = evidence
+        self._source_flags = source_flags
+        return None
+
+    # -- phase: fallback lanes ------------------------------------------------
+
+    def primary_fallback_lanes(self) -> dict | None:
+        """Source disagreement + ambiguity + the confidence gates."""
+        _r = training_cfg().gate.reasons
+        if self._uncertain_categorical or self._source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous"}:
+            return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
+
+        if _has_attribute_flag(self.attrs1, "ambiguous_volume") or _has_attribute_flag(
+            self.attrs2, "ambiguous_volume"
+        ):
+            return GateResult(
+                decision="fallback", reason=_r.ambiguous_volume
+            ).model_dump()
+
+        # raw confidence check
+        if (
+            not self.attrs1["volume_set"]
+            or not self.attrs2["volume_set"]
+            or not self._reliable(self.attrs1["volume_confidence"], self.raw_conf_threshold)
+            or not self._reliable(self.attrs2["volume_confidence"], self.raw_conf_threshold)
+        ):
+            return GateResult(
+                decision="fallback", reason=_r.low_volume_confidence
+            ).model_dump()
+        # Pack confidence: skip when both sides have no pack evidence
+        # (single-unit products with no "Count per Unit" in source attributes).
+        # pack_gate already treats low-confidence pack evidence as unknown.
+        if self.attrs1["pack_set"] or self.attrs2["pack_set"]:
+            if (
+                not self.attrs1["pack_set"]
+                or not self.attrs2["pack_set"]
+                or not self._reliable(self.attrs1["pack_confidence"], self.raw_conf_threshold)
+                or not self._reliable(self.attrs2["pack_confidence"], self.raw_conf_threshold)
+            ):
+                return GateResult(
+                    decision="fallback", reason=_r.low_pack_confidence
+                ).model_dump()
+        return None
+
+    # -- phase: overflow lanes -------------------------------------------------
+
+    def overlap_lanes(self) -> dict | None:
+        """Volume-overlap and pack-overlap hard nos (same predicates as every
+        other lane)."""
+        _r = training_cfg().gate.reasons
+        # volume overlap
+        vol_overlap = False
+        for v1 in self.attrs1["volume_set"]:
+            for v2 in self.attrs2["volume_set"]:
+                if v1 == 0 or v2 == 0:
+                    continue
+                # Same predicate as every other lane (SSOT, audit 2026-09-15):
+                # whichever of the two configured cuts is wider applies. The
+                # hand-rolled relative-only ratio this replaces disagreed with
+                # the veto lane at small volumes.
+                if volumes_compatible(
+                    {v1},
+                    {v2},
+                    volume_relative_tolerance=float(self.vol_tolerance),
+                    volume_absolute_tolerance_ml=float(self.vol_abs_tolerance),
+                ):
+                    vol_overlap = True
+                    break
+            if vol_overlap:
+                break
+        if "volume" in self._veto_dimensions and not vol_overlap:
+            return GateResult(decision="hard_no", reason=_r.no_volume_overlap).model_dump()
+
+        # pack overlap: skip when both sides have no pack evidence
+        # (single-unit products with no "Count per Unit" in source).
+        if self.attrs1["pack_set"] or self.attrs2["pack_set"]:
+            pack_overlap = self.attrs1["pack_set"] & self.attrs2["pack_set"]
+            if "pack" in self._veto_dimensions and not pack_overlap:
+                return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
+        return None
+
+    # -- phase: packaging level + identity + review lanes -----------------------
+
+    def identity_review_lanes(self) -> dict | None:
+        """Packaging level, consistency, supporting dims, mode_flavor, declared
+        identity, pair policy. Placement after the categorical conflict check
+        is load-bearing measured history (see the inline comments)."""
+        _r = training_cfg().gate.reasons
+        # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
+        # 13,250 records assert a level, and ZERO pairs have it populated on both
+        # sides), so the both-populated rule above can never fire for it. That is
+        # deliberate, not an oversight: a missing marker is absence of evidence,
+        # not an affirmative "retail" claim, so this CANNOT be a hard_no without
+        # inventing a negative from silence.
+        #
+        # PLACED AFTER the categorical conflict check on purpose (measured
+        # 2026-09-30): an earlier placement downgraded 79 genuine flavour
+        # conflicts from hard_no to fallback, because a one-sided level claim
+        # is WEAKER evidence than a two-sided attribute conflict. A definite
+        # negative must always win over a review flag.
+        #
+        # It still must not be a silent PROCEED. A case listing and a retail pack
+        # are distinct GS1 trade items carrying distinct GTINs, so merging them
+        # trains the linker to violate that. One-sided evidence is exactly what
+        # the fallback bucket is for: a human applies the rule, the model is not
+        # asked to guess. Measured impact: 109 proceed -> fallback, 0 hard_no.
+        _lvl_a, _lvl_b = set(self.attrs1.get("packaging_level_set", set())), set(
+            self.attrs2.get("packaging_level_set", set())
+        )
+        if _lvl_a and not _lvl_b or _lvl_b and not _lvl_a:
+            return GateResult(
+                decision="fallback",
+                reason=_r.packaging_level_review,
+            ).model_dump()
+
+        # consistency check
+        if (
+            not self._reliable(self.attrs1["volume_consistency"], self.consistency_fallback_threshold)
+            or not self._reliable(self.attrs2["volume_consistency"], self.consistency_fallback_threshold)
+            or not self._reliable(self.attrs1["pack_consistency"], self.consistency_fallback_threshold)
+            or not self._reliable(self.attrs2["pack_consistency"], self.consistency_fallback_threshold)
+        ):
+            return GateResult(
+                decision="fallback", reason=_r.low_consistency
+            ).model_dump()
+
+        # Supporting attributes can require review when the critical flavor
+        # evidence is incomplete. They never acquire a hard-veto permission.
+        if not self._left_info.get("flavor_set") or not self._right_info.get("flavor_set"):
+            from core.attribute_conflicts import _universe_value
+            from core.attribute_universe import attribute_registry
+            supporting = training_cfg().rand_matching.targeted_veto_gates.supporting_feature_review_dimensions
+            specs = attribute_registry()
+            differing_support = []
+            for dimension in supporting:
+                spec = specs[dimension]
+                left = set(_universe_value(self._left_info, dimension, spec))
+                right = set(_universe_value(self._right_info, dimension, spec))
+                if left and right and not (left <= right or right <= left):
+                    differing_support.append(dimension)
+            if differing_support:
+                return GateResult(
+                    decision="fallback",
+                    reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
+                ).model_dump()
+
+        # MODE_FLAVOR SURFACE LANE (JEV audit, 2026-10-02): reached only when
+        # no census conflict vetoed the pair. When the canonical mode_flavor
+        # values are both populated and different, this is not a clean
+        # proceed — the mode is the deterministic per-listing consensus and it
+        # disagrees. Measured on the JEV-graded slice: 216/523 falsified
+        # positives carry differing modes (plus 69 with one empty side, not
+        # reachable by this two-sided rule). REVIEW only, never a hard_no: a
+        # mode is weaker evidence than a census conflict, matching the
+        # packaging-level doctrine.
+        mf1 = str(self.attrs1.get("mode_flavor", "") or "").strip().lower()
+        mf2 = str(self.attrs2.get("mode_flavor", "") or "").strip().lower()
+        equal_full_flavor = bool(self._left_info.get("flavor_set")) and self._left_info.get("flavor_set") == self._right_info.get("flavor_set")
+        if mf1 and mf2 and mf1 != mf2 and not equal_full_flavor:
+            return GateResult(
+                decision="fallback",
+                reason=_r.supporting_feature_review + " mode_flavor:" + mf1 + "|" + mf2,
+            ).model_dump()
+
+        # Exact-product approval requires consistency of declared identity, not
+        # merely an absence of conflicts in generic or missing attribute sets.
+        # Review additions/subsets and named distinctions; existing configured
+        # hard vetoes retain precedence above this supplementary review lane.
+        from core.declared_identity import identity_review_dimensions
+        identity_differences = identity_review_dimensions(self.attrs1, self.attrs2)
+        if identity_differences:
+            return GateResult(
+                decision="fallback",
+                reason=_r.declared_identity_review + " " + ",".join(identity_differences),
+            ).model_dump()
+
+        from core.pair_policy import assess_pair
+        policy = assess_pair(self._evidence, self.attrs1, self.attrs2)
+        if policy['review']:
+            return GateResult(
+                decision="fallback",
+                reason=_r.supporting_feature_review + " full_evidence:" + ",".join(policy['review']),
+            ).model_dump()
+
+        return GateResult(
+            decision="proceed", reason=_r.clean_proceed
+        ).model_dump()
+
+    # -- shared helper ---------------------------------------------------------
+
+    @staticmethod
+    def _reliable(value: object, threshold: float) -> bool:
+        """NaN bypasses ordinary less-than checks; invalid evidence is unknown."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(number) and 0.0 <= number <= 1.0 and number >= threshold
+
+    def decide(self) -> dict:
+        """Run the ORIGINAL phase order; the first veto/fallback verdict wins."""
+        self._veto_dimensions = frozenset(
+            training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+        )
+        verdict = self.pack_file_vetoes()
+        if verdict is not None:
+            return verdict
+        verdict = self.decision_engine()
+        if verdict is not None:
+            return verdict
+        verdict = self.primary_fallback_lanes()
+        if verdict is not None:
+            return verdict
+        verdict = self.overlap_lanes()
+        if verdict is not None:
+            return verdict
+        return self.identity_review_lanes()
+
+
 def three_way_gate(
     attrs1: dict,
     attrs2: dict,
@@ -1502,310 +1892,16 @@ def three_way_gate(
     consistency_fallback_threshold: float | None = None,
     vol_abs_tolerance: float | None = None,
 ) -> dict:
-    """Deterministic volume/pack/flavor gate.
-
-    NO-FALLBACK SSOT (audit round 2, F01): the decision thresholds live in
-    config/training.yaml `gate:` and are read through training_cfg() — the
-    old signature defaults (0.05/0.85/0.3) were a second declaration the
-    config could not steer. Passing a value explicitly still wins (selftest
-    pins known-good gate behavior with explicit values).
-
-    VOLUME TOLERANCE (owner ruling 2026-10-01): BOTH cuts are read from the
-    gate block and threaded to every downstream volume comparison — the
-    pack_gate call, the inline overlap loop, the critical-7 evaluation and
-    the decision engine. The block previously carried only the relative cut,
-    so the absolute one stayed at its 0.0 parameter default here while the
-    veto lane applied it; since the relative cut is the stricter of the two
-    at small volumes, the gate and the veto lane then disagreed about the
-    same pair. volumes_compatible applies whichever cut is wider.
-    """
-    if (
-        vol_tolerance is None
-        or raw_conf_threshold is None
-        or consistency_fallback_threshold is None
-        or vol_abs_tolerance is None
-    ):
-        _g = training_cfg().gate
-        if vol_tolerance is None:
-            vol_tolerance = float(_g.vol_tolerance)
-        if vol_abs_tolerance is None:
-            vol_abs_tolerance = float(_g.vol_abs_tolerance)
-        if raw_conf_threshold is None:
-            raw_conf_threshold = float(_g.raw_conf_threshold)
-        if consistency_fallback_threshold is None:
-            consistency_fallback_threshold = float(
-                _g.consistency_fallback_threshold
-            )
-    _r = training_cfg().gate.reasons
-    if not pack_gate(
-        0.0,
-        attrs1,
-        attrs2,
-        volume_relative_tolerance=float(vol_tolerance),
-        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-        trust_threshold=float(raw_conf_threshold),
-        check_categorical=False,
-    ):
-        return GateResult(
-            decision="hard_no",
-            reason=_r.pack_blocker,
-        ).model_dump()
-    veto_dimensions = frozenset(
-        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+    """Deterministic volume/pack/flavor gate — one phase-ordered decision
+    table on _ThreeWayGate (same decisions, same reasons as before)."""
+    gate = _ThreeWayGate.from_config(
+        attrs1, attrs2,
+        vol_tolerance=vol_tolerance,
+        raw_conf_threshold=raw_conf_threshold,
+        consistency_fallback_threshold=consistency_fallback_threshold,
+        vol_abs_tolerance=vol_abs_tolerance,
     )
-    for field, dimension, reason in (
-        ("package_type_set", "package_type", _r.package_type_mismatch),
-        ("package_material_set", "pack_material", _r.package_material_mismatch),
-        ("packaging_level_set", None, _r.packaging_level_mismatch),
-    ):
-        if dimension is not None and dimension not in veto_dimensions:
-            continue
-        if dimension is not None and any(_has_attribute_flag(record, f"categorical_source_conflict:{dimension}") for record in (attrs1, attrs2)):
-            continue
-        left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
-        if left and right and not (left & right):
-            return GateResult(decision="hard_no", reason=reason).model_dump()
-
-
-    # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
-    # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
-    # process). The engine evaluates the three critical-categorical channels
-    # with the whole ordered stack (negation hard-veto, alias-folded
-    # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
-    # instead of riding bare inequality, while a negation conflict stays a
-    # definite negative. Unknown stays unknown here; it is not fabricated
-    # into a conflict or an agreement.
-    from core.attribute_conflicts import (
-        CRITICAL_NAME_BY_CENSUS_KEY,
-        canonical_attribute_info,
-    )
-    from core.attribute_decision import AttributeDecisionEngine
-    from core.attribute_universe import attribute_registry
-
-    left_info, right_info = canonical_attribute_info(attrs1), canonical_attribute_info(attrs2)
-    source_flags = _attribute_flags(attrs1) | _attribute_flags(attrs2)
-    sweetener_source_conflict = any(
-        flag.startswith("sweetener_source_conflict:") for flag in source_flags
-    )
-    uncertain_categorical_dimensions = {
-        flag.split(":", 1)[1] for flag in source_flags
-        if flag.startswith(("description_conflict:", "categorical_source_conflict:"))
-    }
-    if sweetener_source_conflict or source_flags & {
-        "unsweetened_with_declared_sweetener", "sweetening_status_conflict",
-        "no_added_sugar_with_cane_sugar",
-    }:
-        uncertain_categorical_dimensions.add("sweetener")
-    # Pulp has no registry key; the registry sweetener key owns ingredient
-    # identity, not sugar/no-sugar claims. Preserve these separate explicit
-    # claim predicates and report their actual dimensions.
-    claim_conflicts = sorted(
-        dimension for dimension in (veto_dimensions & {"sweetener", "pulp"}) - uncertain_categorical_dimensions
-        if categorical_conflict(dimension, left_info, right_info)
-    )
-    if claim_conflicts:
-        return GateResult(
-            decision="hard_no",
-            reason=f"{_r.categorical_mismatch} " + ",".join(claim_conflicts),
-        ).model_dump()
-    categorical_dimensions = veto_dimensions - {
-        "volume", "pack", "package_type", "pack_material"
-    }
-    # Evaluate the complete registry; configured vetoes and review policy
-    # consume this same evidence rather than projecting away attributes.
-    evidence = AttributeDecisionEngine(
-        volume_relative_tolerance=float(vol_tolerance),
-        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-    ).evaluate(left_info, right_info, left_raw=attrs1, right_raw=attrs2)
-    categorical_conflicts = sorted(
-        CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
-        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in
-        categorical_dimensions - uncertain_categorical_dimensions
-    )
-    uncertain_categorical_dimensions.update(
-        CRITICAL_NAME_BY_CENSUS_KEY.get(key, key)
-        for key, entry in evidence.dimensions.items()
-        if entry.fallback_from in {"source_conflict", "claim_conflict"}
-    )
-    if sweetener_source_conflict:
-        categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
-    if categorical_conflicts:
-        return GateResult(
-            decision="hard_no",
-            reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
-        ).model_dump()
-
-    if uncertain_categorical_dimensions or source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous"}:
-        return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
-
-    if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
-        attrs2, "ambiguous_volume"
-    ):
-        return GateResult(
-            decision="fallback", reason=_r.ambiguous_volume
-        ).model_dump()
-    def _reliable(value: object, threshold: float) -> bool:
-        # NaN bypasses ordinary less-than checks; invalid evidence is unknown.
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return False
-        return math.isfinite(number) and 0.0 <= number <= 1.0 and number >= threshold
-
-    # raw confidence check
-    if (
-        not attrs1["volume_set"]
-        or not attrs2["volume_set"]
-        or not _reliable(attrs1["volume_confidence"], raw_conf_threshold)
-        or not _reliable(attrs2["volume_confidence"], raw_conf_threshold)
-    ):
-        return GateResult(
-            decision="fallback", reason=_r.low_volume_confidence
-        ).model_dump()
-    # Pack confidence: skip when both sides have no pack evidence
-    # (single-unit products with no "Count per Unit" in source attributes).
-    # pack_gate already treats low-confidence pack evidence as unknown.
-    if attrs1["pack_set"] or attrs2["pack_set"]:
-        if (
-            not attrs1["pack_set"]
-            or not attrs2["pack_set"]
-            or not _reliable(attrs1["pack_confidence"], raw_conf_threshold)
-            or not _reliable(attrs2["pack_confidence"], raw_conf_threshold)
-        ):
-            return GateResult(
-                decision="fallback", reason=_r.low_pack_confidence
-            ).model_dump()
-
-    # volume overlap
-    vol_overlap = False
-    for v1 in attrs1["volume_set"]:
-        for v2 in attrs2["volume_set"]:
-            if v1 == 0 or v2 == 0:
-                continue
-            # Same predicate as every other lane (SSOT, audit 2026-09-15):
-            # whichever of the two configured cuts is wider applies. The
-            # hand-rolled relative-only ratio this replaces disagreed with
-            # the veto lane at small volumes.
-            if volumes_compatible(
-                {v1},
-                {v2},
-                volume_relative_tolerance=float(vol_tolerance),
-                volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-            ):
-                vol_overlap = True
-                break
-        if vol_overlap:
-            break
-    if "volume" in veto_dimensions and not vol_overlap:
-        return GateResult(decision="hard_no", reason=_r.no_volume_overlap).model_dump()
-
-    # pack overlap: skip when both sides have no pack evidence
-    # (single-unit products with no "Count per Unit" in source).
-    if attrs1["pack_set"] or attrs2["pack_set"]:
-        pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
-        if "pack" in veto_dimensions and not pack_overlap:
-            return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
-
-    # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
-    # 13,250 records assert a level, and ZERO pairs have it populated on both
-    # sides), so the both-populated rule above can never fire for it. That is
-    # deliberate, not an oversight: a missing marker is absence of evidence,
-    # not an affirmative "retail" claim, so this CANNOT be a hard_no without
-    # inventing a negative from silence.
-    #
-    # PLACED AFTER the categorical conflict check on purpose (measured
-    # 2026-09-30): an earlier placement downgraded 79 genuine flavour
-    # conflicts from hard_no to fallback, because a one-sided level claim
-    # is WEAKER evidence than a two-sided attribute conflict. A definite
-    # negative must always win over a review flag.
-    #
-    # It still must not be a silent PROCEED. A case listing and a retail pack
-    # are distinct GS1 trade items carrying distinct GTINs, so merging them
-    # trains the linker to violate that. One-sided evidence is exactly what
-    # the fallback bucket is for: a human applies the rule, the model is not
-    # asked to guess. Measured impact: 109 proceed -> fallback, 0 hard_no.
-    _lvl_a, _lvl_b = set(attrs1.get("packaging_level_set", set())), set(
-        attrs2.get("packaging_level_set", set())
-    )
-    if _lvl_a and not _lvl_b or _lvl_b and not _lvl_a:
-        return GateResult(
-            decision="fallback",
-            reason=_r.packaging_level_review,
-        ).model_dump()
-
-    # consistency check
-    if (
-        not _reliable(attrs1["volume_consistency"], consistency_fallback_threshold)
-        or not _reliable(attrs2["volume_consistency"], consistency_fallback_threshold)
-        or not _reliable(attrs1["pack_consistency"], consistency_fallback_threshold)
-        or not _reliable(attrs2["pack_consistency"], consistency_fallback_threshold)
-    ):
-        return GateResult(
-            decision="fallback", reason=_r.low_consistency
-        ).model_dump()
-
-    # Supporting attributes can require review when the critical flavor
-    # evidence is incomplete. They never acquire a hard-veto permission.
-    if not left_info.get("flavor_set") or not right_info.get("flavor_set"):
-        from core.attribute_conflicts import _universe_value
-        supporting = training_cfg().rand_matching.targeted_veto_gates.supporting_feature_review_dimensions
-        specs = attribute_registry()
-        differing_support = []
-        for dimension in supporting:
-            spec = specs[dimension]
-            left = set(_universe_value(left_info, dimension, spec))
-            right = set(_universe_value(right_info, dimension, spec))
-            if left and right and not (left <= right or right <= left):
-                differing_support.append(dimension)
-        if differing_support:
-            return GateResult(
-                decision="fallback",
-                reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
-            ).model_dump()
-
-    # MODE_FLAVOR SURFACE LANE (JEV audit, 2026-10-02): reached only when
-    # no census conflict vetoed the pair. When the canonical mode_flavor
-    # values are both populated and different, this is not a clean
-    # proceed — the mode is the deterministic per-listing consensus and it
-    # disagrees. Measured on the JEV-graded slice: 216/523 falsified
-    # positives carry differing modes (plus 69 with one empty side, not
-    # reachable by this two-sided rule). REVIEW only, never a hard_no: a
-    # mode is weaker evidence than a census conflict, matching the
-    # packaging-level doctrine.
-    mf1 = str(attrs1.get("mode_flavor", "") or "").strip().lower()
-    mf2 = str(attrs2.get("mode_flavor", "") or "").strip().lower()
-    equal_full_flavor = bool(left_info.get("flavor_set")) and left_info.get("flavor_set") == right_info.get("flavor_set")
-    if mf1 and mf2 and mf1 != mf2 and not equal_full_flavor:
-        return GateResult(
-            decision="fallback",
-            reason=_r.supporting_feature_review + " mode_flavor:" + mf1 + "|" + mf2,
-        ).model_dump()
-
-    # Exact-product approval requires consistency of declared identity, not
-    # merely an absence of conflicts in generic or missing attribute sets.
-    # Review additions/subsets and named distinctions; existing configured
-    # hard vetoes retain precedence above this supplementary review lane.
-    from core.declared_identity import identity_review_dimensions
-    identity_differences = identity_review_dimensions(attrs1, attrs2)
-    if identity_differences:
-        return GateResult(
-            decision="fallback",
-            reason=_r.declared_identity_review + " " + ",".join(identity_differences),
-        ).model_dump()
-
-    from core.pair_policy import assess_pair
-    policy = assess_pair(evidence, attrs1, attrs2)
-    if policy['review']:
-        return GateResult(
-            decision="fallback",
-            reason=_r.supporting_feature_review + " full_evidence:" + ",".join(policy['review']),
-        ).model_dump()
-
-    return GateResult(
-        decision="proceed", reason=_r.clean_proceed
-    ).model_dump()
-
-
+    return gate.decide()
 # ============================================================================
 # SIMILARITY
 # ============================================================================
