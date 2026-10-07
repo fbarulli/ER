@@ -2180,68 +2180,132 @@ def pair_disagreements(
     remaining error to ranking/assignment. These evidence fields intentionally
     describe the decision that created the predicted grouping, not a
     separately computed SKU-to-SKU similarity that this lane never used.
+
+    One phase-ordered pass on :class:`_PairDisagreementBuilder`: rows are the
+    original nested-call body verbatim (population merge, selected-evidence
+    join, true-candidate evidence map, error census, pair row build), so the
+    exported pair CSV is byte-identical.
     """
-    truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
-    pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
-    for frame in (truth_frame, pred_frame):
-        frame["SKU_ID"] = frame["SKU_ID"].astype(str)
-    if (
-        truth_frame["SKU_ID"].duplicated().any()
-        or pred_frame["SKU_ID"].duplicated().any()
-    ):
-        raise ValueError("pair disagreement inputs must contain one row per SKU_ID")
-    merged = truth_frame.merge(
-        pred_frame, on="SKU_ID", how="inner", validate="one_to_one"
-    )
-    if len(merged) != len(truth_frame) or len(merged) != len(pred_frame):
-        raise ValueError("pair disagreement population mismatch")
-    merged["true_item_id"] = merged["true_item_id"].astype(str)
-    merged["ITEM_ID"] = merged["ITEM_ID"].astype(str)
+    return _PairDisagreementBuilder(pred, truth, trace).build()
 
-    # At most one selected trace record exists per assigned SKU. An unmatched
-    # SKU has no selected candidate and therefore deliberately gets missing
-    # score/gate evidence rather than invented evidence.
-    selected = trace.loc[trace["selected"].astype(bool)].copy()
-    if selected.duplicated("SKU_ID").any():
-        raise RuntimeError("candidate trace has multiple selected rows for a SKU")
-    evidence = selected[["SKU_ID", "score", "attribute_gate"]].copy()
-    evidence["SKU_ID"] = evidence["SKU_ID"].astype(str)
-    evidence = evidence.rename(
-        columns={"score": "selected_score", "attribute_gate": "selected_attribute_gate"}
-    )
-    merged = merged.merge(evidence, on="SKU_ID", how="left", validate="one_to_one")
-    trace_candidates = trace[["SKU_ID", "candidate_gtin"]].copy()
-    trace_candidates["SKU_ID"] = trace_candidates["SKU_ID"].astype(str)
-    trace_candidates["candidate_gtin"] = trace_candidates["candidate_gtin"].astype(str)
-    for column, default in (
-        ("retrieval_source", "unknown"),
-        ("score_pass", False),
-        ("accepted", False),
-    ):
-        trace_candidates[column] = trace[column] if column in trace else default
-    trace_candidates["retrieval_source"] = trace_candidates["retrieval_source"].astype(
-        str
-    )
-    true_candidate_rows = trace_candidates.merge(
-        truth_frame,
-        on="SKU_ID",
-        how="inner",
-        validate="many_to_one",
-    )
-    true_candidate_rows = true_candidate_rows.loc[
-        true_candidate_rows["candidate_gtin"].eq(true_candidate_rows["true_item_id"])
-    ]
-    true_candidate_evidence = {
-        str(sku): {
-            "source": "+".join(sorted(set(rows["retrieval_source"].astype(str)))),
-            "score_pass": bool(rows["score_pass"].astype(bool).any()),
-            "accepted": bool(rows["accepted"].astype(bool).any()),
+
+class _PairDisagreementBuilder:
+    """The one-row-per-disagreeing-SKU-pair audit export.
+
+    SR phases, ONE fixed pass in build(); statements are the original
+    ``pair_disagreements`` body verbatim (merged population, selected-trace
+    evidence, per-SKU true-candidate evidence, pairwise error census, pair
+    row build), so pair-ordering and every row byte stay identical.
+
+    Phase map:
+      population              — merge truth x predictions with both guards
+      selected_evidence       — selected-candidate score/gate join per SKU
+      true_candidate_evidence — retrieval/score/accept evidence per true
+                                candidate, plus the per-SKU endpoint lookup
+      error_count             — pairwise error census over one grouping
+      pair_row                — one disagreement row over an endpoint pair
+      false_merge_rows        — predicted-equal / true-different pairs
+      false_split_rows        — true-equal / predicted-different pairs
+    """
+
+    def __init__(
+        self,
+        pred: pd.DataFrame,
+        truth: pd.DataFrame,
+        trace: pd.DataFrame,
+    ) -> None:
+        self._pred = pred
+        self._truth = truth
+        self._trace = trace
+
+    def population(self) -> None:
+        """One-row-per-SKU merge of truth and predictions (verbatim)."""
+        truth_frame = self._truth[["SKU_ID", "true_item_id"]].copy()
+        pred_frame = self._pred[["SKU_ID", "ITEM_ID"]].copy()
+        for frame in (truth_frame, pred_frame):
+            frame["SKU_ID"] = frame["SKU_ID"].astype(str)
+        if (
+            truth_frame["SKU_ID"].duplicated().any()
+            or pred_frame["SKU_ID"].duplicated().any()
+        ):
+            raise ValueError(
+                "pair disagreement inputs must contain one row per SKU_ID"
+            )
+        merged = truth_frame.merge(
+            pred_frame, on="SKU_ID", how="inner", validate="one_to_one"
+        )
+        if len(merged) != len(truth_frame) or len(merged) != len(pred_frame):
+            raise ValueError("pair disagreement population mismatch")
+        merged["true_item_id"] = merged["true_item_id"].astype(str)
+        merged["ITEM_ID"] = merged["ITEM_ID"].astype(str)
+        self._truth_frame = truth_frame
+        self._merged = merged
+
+    def selected_evidence(self) -> None:
+        """Selected score/attribute-gate evidence per assigned SKU."""
+        # At most one selected trace record exists per assigned SKU. An unmatched
+        # SKU has no selected candidate and therefore deliberately gets missing
+        # score/gate evidence rather than invented evidence.
+        selected = self._trace.loc[self._trace["selected"].astype(bool)].copy()
+        if selected.duplicated("SKU_ID").any():
+            raise RuntimeError(
+                "candidate trace has multiple selected rows for a SKU"
+            )
+        evidence = selected[["SKU_ID", "score", "attribute_gate"]].copy()
+        evidence["SKU_ID"] = evidence["SKU_ID"].astype(str)
+        evidence = evidence.rename(
+            columns={
+                "score": "selected_score",
+                "attribute_gate": "selected_attribute_gate",
+            }
+        )
+        self._merged = self._merged.merge(
+            evidence, on="SKU_ID", how="left", validate="one_to_one"
+        )
+
+    def true_candidate_evidence(self) -> None:
+        """Retrieval/score/accept evidence keyed by SKU (verbatim)."""
+        trace_candidates = self._trace[["SKU_ID", "candidate_gtin"]].copy()
+        trace_candidates["SKU_ID"] = trace_candidates["SKU_ID"].astype(str)
+        trace_candidates["candidate_gtin"] = trace_candidates[
+            "candidate_gtin"
+        ].astype(str)
+        for column, default in (
+            ("retrieval_source", "unknown"),
+            ("score_pass", False),
+            ("accepted", False),
+        ):
+            trace_candidates[column] = (
+                self._trace[column] if column in self._trace else default
+            )
+        trace_candidates["retrieval_source"] = trace_candidates[
+            "retrieval_source"
+        ].astype(
+            str
+        )
+        true_candidate_rows = trace_candidates.merge(
+            self._truth_frame,
+            on="SKU_ID",
+            how="inner",
+            validate="many_to_one",
+        )
+        true_candidate_rows = true_candidate_rows.loc[
+            true_candidate_rows["candidate_gtin"].eq(
+                true_candidate_rows["true_item_id"]
+            )
+        ]
+        self._true_candidate_evidence = {
+            str(sku): {
+                "source": "+".join(sorted(set(rows["retrieval_source"].astype(str)))),
+                "score_pass": bool(rows["score_pass"].astype(bool).any()),
+                "accepted": bool(rows["accepted"].astype(bool).any()),
+            }
+            for sku, rows in true_candidate_rows.groupby("SKU_ID", sort=False)
         }
-        for sku, rows in true_candidate_rows.groupby("SKU_ID", sort=False)
-    }
-    by_sku = merged.set_index("SKU_ID").to_dict("index")
+        self._by_sku = self._merged.set_index("SKU_ID").to_dict("index")
 
-    def error_count(frame: pd.DataFrame, other_column: str) -> int:
+    def error_count(self, frame: pd.DataFrame, other_column: str) -> int:
+        """Pairwise errors one grouping causes inside the population."""
         return int(
             _combination_count(len(frame))
             - sum(
@@ -2250,11 +2314,16 @@ def pair_disagreements(
         )
 
     def pair_row(
+        self,
         sku_a: str,
         sku_b: str,
         disagreement_type: str,
         caused: int,
     ) -> dict[str, object]:
+        """One disagreement row over an unordered SKU endpoint pair."""
+        by_sku = self._by_sku
+        true_candidate_evidence = self._true_candidate_evidence
+        merged = self._merged
         left, right = by_sku[sku_a], by_sku[sku_b]
         scores = [left["selected_score"], right["selected_score"]]
         finite_scores = [float(score) for score in scores if pd.notna(score)]
@@ -2310,34 +2379,45 @@ def pair_disagreements(
             "number_of_pairwise_errors_caused": caused,
         }
 
-    rows: list[dict[str, object]] = []
-    # False merge: same predicted assignment, different true canonical item.
-    for _, predicted_group in merged.groupby("ITEM_ID", sort=False):
-        caused = error_count(predicted_group, "true_item_id")
-        if not caused:
-            continue
-        true_groups = [
-            sorted(group["SKU_ID"].tolist())
-            for _, group in predicted_group.groupby("true_item_id", sort=False)
-        ]
-        for left_group, right_group in combinations(true_groups, 2):
-            for sku_a, sku_b in product(left_group, right_group):
-                rows.append(pair_row(sku_a, sku_b, "false_merge", caused))
+    def false_merge_rows(self, rows: list[dict[str, object]]) -> None:
+        """False merge: same predicted assignment, different true item."""
+        merged = self._merged
+        for _, predicted_group in merged.groupby("ITEM_ID", sort=False):
+            caused = self.error_count(predicted_group, "true_item_id")
+            if not caused:
+                continue
+            true_groups = [
+                sorted(group["SKU_ID"].tolist())
+                for _, group in predicted_group.groupby("true_item_id", sort=False)
+            ]
+            for left_group, right_group in combinations(true_groups, 2):
+                for sku_a, sku_b in product(left_group, right_group):
+                    rows.append(self.pair_row(sku_a, sku_b, "false_merge", caused))
 
-    # False split: same true canonical item, different predicted assignment.
-    for _, true_group in merged.groupby("true_item_id", sort=False):
-        caused = error_count(true_group, "ITEM_ID")
-        if not caused:
-            continue
-        predicted_groups = [
-            sorted(group["SKU_ID"].tolist())
-            for _, group in true_group.groupby("ITEM_ID", sort=False)
-        ]
-        for left_group, right_group in combinations(predicted_groups, 2):
-            for sku_a, sku_b in product(left_group, right_group):
-                rows.append(pair_row(sku_a, sku_b, "false_split", caused))
+    def false_split_rows(self, rows: list[dict[str, object]]) -> None:
+        """False split: same true canonical item, different assignment."""
+        merged = self._merged
+        for _, true_group in merged.groupby("true_item_id", sort=False):
+            caused = self.error_count(true_group, "ITEM_ID")
+            if not caused:
+                continue
+            predicted_groups = [
+                sorted(group["SKU_ID"].tolist())
+                for _, group in true_group.groupby("ITEM_ID", sort=False)
+            ]
+            for left_group, right_group in combinations(predicted_groups, 2):
+                for sku_a, sku_b in product(left_group, right_group):
+                    rows.append(self.pair_row(sku_a, sku_b, "false_split", caused))
 
-    return pd.DataFrame(rows, columns=PAIR_DISAGREEMENT_COLUMNS)
+    def build(self) -> pd.DataFrame:
+        """One fixed pass: population -> evidence -> census rows -> frame."""
+        self.population()
+        self.selected_evidence()
+        self.true_candidate_evidence()
+        rows: list[dict[str, object]] = []
+        self.false_merge_rows(rows)
+        self.false_split_rows(rows)
+        return pd.DataFrame(rows, columns=PAIR_DISAGREEMENT_COLUMNS)
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float:
