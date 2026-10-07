@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import math
 from pathlib import Path
 import numpy as np
 from core.common import SEED, load_config, runtime, resolve_model
@@ -28,6 +29,91 @@ def training_config(*, epochs=None, lr=None):
     }
 
 
+# The anti-collapse path in training.losses / training.training needs exactly
+# these knobs.  `uniformity_regularization.temperature` / `min_batch_size` are
+# consumed by _tracking_contrastive_loss._uniformity_penalty whenever the
+# regularizer is active, and the guardrail thresholds drive
+# training.uniformity.collapse_diagnostics.  This list is deliberately small:
+# unrelated config drift must never be gated (owner order 2026-10-07).
+_COLLAPSE_GUARDRAIL_REQUIRED_KEYS = (
+    'unrelated_pairs', 'seed', 'max_token_frequency',
+    'operating_threshold', 'crossing_rate_ceiling',
+    'median_penalty_start', 'p90_penalty_start', 'cosine_std_floor',
+)
+
+
+def _is_finite_number(value):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(float(value)))
+
+
+def validate_collapse_regulation(config):
+    """Fail loud unless the loss functions can regulate collapse.
+
+    Owner ruling 2026-10-07: the only real test that matters is if the loss
+    functions have all they need to regulate collapse.  We check ONLY the
+    uniformity regularizer and the collapse guardrail; every unrelated config
+    key (laya/kaggle/paths/script lanes) is ignored on purpose, because the
+    plan's data/row identity is already bound by ``data_sha256``.
+    """
+    config = config or {}
+    training = config.get('training') or {}
+    missing: list[str] = []
+
+    uniformity = training.get('uniformity_regularization')
+    if uniformity is None:
+        missing.append('training.uniformity_regularization')
+    else:
+        enabled = uniformity.get('enabled')
+        weight = uniformity.get('weight')
+        if enabled is None:
+            missing.append('training.uniformity_regularization.enabled')
+        regularizer_active = bool(enabled) or (
+            _is_finite_number(weight) and float(weight) > 0
+        )
+        if regularizer_active:
+            if not _is_finite_number(weight) or float(weight) < 0:
+                missing.append('training.uniformity_regularization.weight')
+            temperature = uniformity.get('temperature')
+            if not _is_finite_number(temperature) or float(temperature) <= 0:
+                missing.append('training.uniformity_regularization.temperature')
+            min_batch_size = uniformity.get('min_batch_size')
+            if (not isinstance(min_batch_size, int)
+                    or isinstance(min_batch_size, bool)
+                    or int(min_batch_size) < 2):
+                missing.append(
+                    'training.uniformity_regularization.min_batch_size')
+
+    guardrail = config.get('collapse_guardrail')
+    if guardrail is None:
+        missing.append('collapse_guardrail')
+    else:
+        enabled = guardrail.get('enabled')
+        if enabled is None:
+            missing.append('collapse_guardrail.enabled')
+        if enabled:
+            profile = guardrail.get('profile')
+            profiles = config.get('collapse_guardrail_profiles') or {}
+            if not isinstance(profile, str) or not profile:
+                missing.append('collapse_guardrail.profile')
+            elif profile not in profiles:
+                missing.append(
+                    f'collapse_guardrail.profile (unresolvable: {profile!r} '
+                    f'not in {sorted(profiles)})')
+            for key in _COLLAPSE_GUARDRAIL_REQUIRED_KEYS:
+                if not _is_finite_number(guardrail.get(key)):
+                    missing.append(f'collapse_guardrail.{key}')
+
+    if missing:
+        raise ValueError(
+            'collapse regulation cannot run: the loss functions are missing '
+            'required anti-collapse knob(s): ' + ', '.join(missing)
+            + ' (a plan that cannot regulate collapse is rejected; '
+            'owner order 2026-10-07)'
+        )
+    return config
+
+
 def data_digest(bundle):
     digest = hashlib.sha256()
     for key in ('payload','row_bc','country','mask_audit','hard_negative_mask_audit','holdout_populations'):
@@ -50,7 +136,6 @@ def plan_identity(bundle,*,loss,train_frac,sample,seed=SEED):
     if not 0 < train_frac <= 1:
         raise ValueError('local training plan requires 0 < train_frac <= 1')
     return {'loss':loss,'train_frac':float(train_frac),'sample':bool(sample),'seed':int(seed),
-            'config_sha256':hashlib.sha256(json.dumps(load_config(),sort_keys=True,default=str).encode()).hexdigest(),
             'data_sha256':data_digest(bundle)}
 
 
@@ -73,6 +158,7 @@ def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
             print(f"[prepared-bundle] materialized {key}={destination} "
                   f"bytes={len(bundle[frozen_inputs[key]]):,}", flush=True)
     cfg=load_config();loss=loss or cfg['training']['loss']
+    validate_collapse_regulation(cfg)
     train_bc,dev_bc,test_bc=prepared_holdout(bundle,cfg['split'],seed=seed)
     data=tuple(bundle[key] for key in ('df','payload','structured_features','row_bc','country','pos','hp_pairs','emb0'))
     fixed=prepare_fixed_training_inputs(
@@ -97,18 +183,14 @@ def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
 def validate_run_plan(bundle,plan,*,loss,train_frac,sample,seed=SEED):
     expected=plan_identity(bundle,loss=loss,train_frac=train_frac,sample=sample,seed=seed)
     identity = dict(plan.get('identity') or {})
-    if sample and identity.get('sample') is True:
-        # A lifecycle smoke consumes its frozen objective rows and device
-        # batches. Unrelated current config edits need not invalidate them --
-        # but the relaxation is reported, never silent, so a smoke run is never
-        # mistaken for a config-bound one.
-        print('[run-plan] sample plan: config_sha256 binding RELAXED for a '
-              'lifecycle smoke; frozen objective rows and device batches are '
-              'still verified', flush=True)
-        expected.pop('config_sha256')
-        identity.pop('config_sha256', None)
-    if plan.get('version')!=1 or identity!=expected:
-        raise ValueError('prepared training row plan differs from loss/train_frac/sample/config/seed/data; rebuild locally')
+    # Bind only the identity fields we still own. A frozen plan built before
+    # the whole-config hash was retired still carries a legacy
+    # `config_sha256` key; ignoring it is exactly what lets the existing
+    # bundle validate without a rebuild. `data_sha256` is the real binding.
+    bound = {key: identity.get(key) for key in expected}
+    if plan.get('version')!=1 or bound!=expected:
+        raise ValueError('prepared training row plan differs from loss/train_frac/sample/seed/data; rebuild locally')
+    validate_collapse_regulation(load_config())
     if plan['inputs']['skipped'] or not plan['inputs']['folds']:
         raise ValueError('prepared training row plan has failed/skipped folds')
     return plan
