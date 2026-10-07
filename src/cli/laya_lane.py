@@ -36,7 +36,6 @@ from zoneinfo import ZoneInfo
 
 from core.common import TRAIN_ROOT, training_cfg
 from core.manifest import atomic_write_json, sha256_file
-from core.runtime_inputs import checkout_inventory, checkout_preflight_script
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
@@ -49,6 +48,12 @@ DECISION_KERNEL_CODE_FILE = "laya_decision.py"
 EVAL_KERNEL_CODE_FILE = "laya_evals.py"
 COLAB_NOTEBOOK_NAME = "laya_decision_colab.py"
 QUESTION_SCHEMA_FILE = "laya.question.json"
+# The kernel's inputs do NOT travel with `kaggle kernels push`: they are
+# the er-laya-requests dataset (spec.dataset_slug), staged as its own
+# payload dir (moved on --execute, mirroring the kernels-push path).
+DATASET_PAYLOAD_DIR = "dataset_payload"
+DATASET_METADATA_FILE = "dataset-metadata.json"
+DATASET_CSV_NAME = "dataset.csv"  # DECISION_CSV resolves THIS name
 
 PUBLISHED_RUNTIME_FILES = (
     'artifacts/evidence/attribute_universe_census.json', 'artifacts/evidence/semantics/family_registry.json', 'artifacts/evidence/semantics/tau_sweep.json', 'artifacts/evidence/semantics/value_universe.json',
@@ -336,6 +341,38 @@ def stage_question_schema(kind: str, *,
     return receipt
 
 
+# The laya payloads ride the ATTACHED er-laya-requests dataset, never a
+# repo clone: the shipped core.runtime_inputs.checkout_preflight_script
+# emits `_runtime_root = Path(root)` for clone lanes and a laya payload
+# defines no root (NameError at line 36 killed the first remote boot).
+# This dedicated template instead verifies THE ATTACHED INPUTS: files
+# land under /kaggle/input/<slug>/ and resolve_input rglob's by name.
+# REPOSITORY/BRANCH/REVISION/_runtime_files stay assigned at top level
+# so core.runtime_inputs.staged_kernel_preflight still greps them (the
+# push gate imports that helper — never edited here).
+LAYA_RUNTIME_PREFLIGHT = '''\
+_runtime_files = ("@DECISION_CSV@", @QUESTION_SCHEMA_FILE@)
+INPUT_ROOT = Path("/kaggle/input")
+
+
+def laya_runtime_preflight():
+    """Verify the ATTACHED dataset inputs (the er-laya-requests dataset
+    mounts under /kaggle/input/<slug>/ and resolve_input searches INPUTS
+    recursively by name); fail loud before pip touches anything."""
+    missing = [name for name in _runtime_files
+               if not any(INPUT_ROOT.rglob(name))]
+    if missing:
+        raise FileNotFoundError(
+            "Runtime preflight missing attached inputs: "
+            + ", ".join(missing))
+    print("[runtime-preflight] verified %d required files"
+          % len(_runtime_files), flush=True)
+
+
+laya_runtime_preflight()
+'''
+
+
 # ── kernel / notebook payload composition ──────────────────────────────────
 def _kernel_script_gate(script: str) -> None:
     """Staging-time AST gate (kaggle_lane._kernel_script_gate mirror):
@@ -353,6 +390,47 @@ def _kernel_script_gate(script: str) -> None:
     if undeclared:
         raise ValueError(f"staged kernel uses undeclared constants: "
                          f"{sorted(undeclared)}; regenerate the template")
+
+
+def _module_scope_gate(script: str) -> None:
+    """Post-substitution module-scope AST scan (regression pin for the
+    BUG-1 NameError class: a template substitution emitting an undefined
+    TOP-LEVEL load — e.g. `_runtime_root = Path(root)` — can never stage
+    again). Every name Loaded at module scope (compound statements
+    recurse; function/class bodies are their own scopes and skipped) must
+    be a builtin, an import binding, a def/class name, or a bound target.
+    Raise loud (never a silent payload) BEFORE the atomic writes.
+    """
+    import ast
+    import builtins
+
+    compile(script, "<laya-payload>", "exec")
+    tree = ast.parse(script)
+    bound = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if isinstance(node, ast.Import):
+                    bound.add(alias.asname or alias.name.split(".")[0])
+                elif alias.name != "*":
+                    bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+    loaded = {node.id
+              for stmt in tree.body
+              if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                       ast.ClassDef))
+              for node in ast.walk(stmt)
+              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+              and not (node.id.startswith("__") and node.id.endswith("__"))}
+    undeclared = sorted(loaded - bound)
+    if undeclared:
+        raise ValueError(f"staged kernel loads undefined top-level names: "
+                         f"{undeclared}; a NameError-class payload must "
+                         "never stage again")
 
 
 def _template(script: str, values: dict[str, str]) -> str:
@@ -639,6 +717,109 @@ if __name__ == "__main__":
 '''
 
 
+def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
+                          question_source: Path,
+                          decision_source: Path) -> dict[str, Any]:
+    """Stage the DATASET payload for spec.dataset_slug (dry-safe).
+
+    Builds results/laya_lane/kaggle/<decision>/dataset_payload/: the
+    kaggle `dataset-metadata.json` (title/id/licenses per the kaggle-lane
+    payload shape) + copies of the staged laya.question.json and the
+    staged decision CSV RENAMED to dataset.csv (the DECISION_CSV name the
+    kernel resolves via INPUTS.rglob once the dataset attaches).
+    """
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.dataset_slug is unset; name the input dataset "
+            "(owner/slug) before staging")
+    stage = staging_dir() / "kaggle" / decision_kind / DATASET_PAYLOAD_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    metadata = {"title": "er laya requests", "id": dataset_slug,
+                "licenses": [{"name": "other"}]}
+    atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+    shutil.copy2(question_source, stage / QUESTION_SCHEMA_FILE)
+    shutil.copy2(decision_source, stage / DATASET_CSV_NAME)
+    payload_files = (QUESTION_SCHEMA_FILE, DATASET_CSV_NAME)
+    receipt = {
+        "dataset": dataset_slug,
+        "payload": str(stage),
+        "metadata": metadata,
+        "files": {name: sha256_file(stage / name) for name in payload_files},
+    }
+    atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
+    _log_lane(f"staged dataset payload [{decision_kind}] {dataset_slug} "
+              f"files={list(payload_files)} -> {stage}")
+    return receipt
+
+
+def publish_laya_dataset(decision_kind: str, *, run_tag: str,
+                         execute: bool) -> dict[str, Any]:
+    """`--execute`-gated create-or-version of the laya inputs dataset.
+
+    The staged play_500.csv + laya.question.json do NOT travel with
+    `kaggle kernels push`: the kernel attaches spec.dataset_slug
+    (fbarulli/er-laya-requests), so the dataset must exist remotely
+    BEFORE the push. Dry run: returns the plan, never spawns a kaggle
+    subprocess. Executed: datasets create when the dataset does not
+    exist remotely, else datasets version (-r --dir-mode zip -m
+    "laya inputs <tag>"); the helpers are IMPORTED from the kaggle lane
+    (cli.kaggle_datasets / cli.kaggle_lane), never copied. The dataset
+    version is recorded in the decision receipt.
+    """
+    payload = staging_dir() / "kaggle" / decision_kind / DATASET_PAYLOAD_DIR
+    metadata_file = payload / DATASET_METADATA_FILE
+    plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
+                            "payload": str(payload)}
+    if not execute:
+        plan["note"] = ("the dataset attach rides --execute only "
+                        "(mirroring the kernels-push gate)")
+        _log_lane(f"dry-run: dataset payload for {decision_kind} would "
+                  f"publish to the remote surface at {payload}")
+        return plan
+    if not metadata_file.is_file():
+        raise RuntimeError(
+            "--activate gate: no staged dataset payload at "
+            f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
+    slug = _spec().dataset_slug
+    plan["slug"] = slug
+    if not slug:
+        raise RuntimeError(
+            "config laya.dataset_slug is unset; name the input dataset "
+            "(owner/slug) before an executed attach")
+    from cli import kaggle_lane as lane
+    from cli.kaggle_datasets import KaggleDatasets
+
+    executable = lane._require_kaggle_executable(
+        lane._spec().kaggle_executable)
+    current = KaggleDatasets._dataset_current_version(slug)
+    version = current.get("dataset_version")
+    if version:
+        plan["action"] = "version"
+        command = [executable, "datasets", "version", "-r",
+                   "--dir-mode", "zip",
+                   "-m", f"laya inputs {run_tag}",
+                   "-p", str(payload)]
+    else:
+        plan["action"] = "create"
+        command = [executable, "datasets", "create", "-p", str(payload)]
+    plan["command"] = command
+    _, _ = lane._run_kaggle(command)
+    plan["returncode"] = 0
+    refreshed = KaggleDatasets._dataset_current_version(slug)
+    plan["dataset_version"] = refreshed.get("dataset_version") or version
+    plan["published"] = True
+    receipt_path = staging_dir() / "kaggle" / decision_kind \
+        / f"{decision_kind}.receipt.json"
+    if receipt_path.is_file():
+        body = json.loads(receipt_path.read_text(encoding="utf-8"))
+        body["dataset"].update({"action": plan["action"],
+                                "version": plan["dataset_version"]})
+        atomic_write_json(body, receipt_path)
+    _log_lane(f"published dataset {slug} | action={plan['action']} "
+              f"version={plan['dataset_version']} rc=0")
+    return plan
+
+
 def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
                           run_tag: str | None = None,
                           input_override: Path | None = None) -> dict[str, Any]:
@@ -665,10 +846,21 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         raise RuntimeError(
             "config laya.export_dataset_slug is unset; name the target "
             "kernel (owner/slug) before staging")
+    dataset_slug = spec.dataset_slug
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.dataset_slug is unset; the kernel inputs travel "
+            "as that dataset (owner/slug) — the staged play_500.csv + "
+            "laya.question.json do NOT ride `kaggle kernels push`; "
+            "name it before staging")
     question = stage_question_schema("kaggle")
     input_receipt = stage_decision_input("kaggle",
                                          decision_kind=decision_kind,
                                          override=input_override)
+    dataset_receipt = stage_dataset_payload(
+        decision_kind, dataset_slug=dataset_slug,
+        question_source=Path(question["staged"]),
+        decision_source=Path(input_receipt["staged"]))
     stage = staging_dir() / "kaggle" / decision_kind
     stage.mkdir(parents=True, exist_ok=True)
     code_file = (DECISION_KERNEL_CODE_FILE if decision_kind != "laya-cli-eval"
@@ -686,7 +878,10 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         # single T4: the payload never requests the double accelerator;
         # the script itself pins CUDA_VISIBLE_DEVICES=0.
         "enable_internet": True,
-        "dataset_sources": [],
+        # THE INPUTS TRAVEL AS THE DATASET: kernels push does NOT ship
+        # the co-located csv/schema files, so resolve_input would
+        # FileNotFoundError once boot passes — attach the dataset slug.
+        "dataset_sources": [dataset_slug],
         "kernel_sources": [],
         "competition_sources": [],
         "is_private": True,
@@ -696,13 +891,12 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
     repository = training_cfg().kaggle.repository
     branch = training_cfg().kaggle.branch
     revision = revision or _git_revision()
-    inventory = checkout_inventory(extra=PUBLISHED_RUNTIME_FILES, lane="bundle")
-    script = _template(template, {
+    values = {
         "LAYA_PACKAGE": spec.laya_package,
         "CHECKPOINT_HUB": spec.checkpoint_hub,
         "DECISION_KIND": decision_kind,
         "RUN_TAG": tag,
-        "DECISION_CSV": Path(staged_csv).name,
+        "DECISION_CSV": DATASET_CSV_NAME,
         "STATE_COLUMN": entry["state_column"],
         "BATCH_SIZE": str(spec.laya_decision_batch_size),
         "MIN_CONFIDENCE": repr(spec.min_router_confidence),
@@ -710,9 +904,16 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
-        "RUNTIME_PREFLIGHT": checkout_preflight_script(inventory),
-    })
+    }
+    # two-pass substitution (a nested value's @tokens@ are never
+    # re-scanned once it is inserted): the preflight bakes its own
+    # literal tuple FIRST, then drops into the script — the push gate
+    # (staged_kernel_preflight) literal-evals `_runtime_files`.
+    preflight = _template(LAYA_RUNTIME_PREFLIGHT, values)
+    script = _template(template, {**values,
+                                  "RUNTIME_PREFLIGHT": preflight})
     _kernel_script_gate(script)
+    _module_scope_gate(script)
     atomic_write_json(metadata, stage / "kernel-metadata.json")
     (stage / code_file).write_text(script, encoding="utf-8")
     receipt = {
@@ -726,6 +927,9 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "question_sha256": question["sha256"],
         "decision_input": staged_csv,
         "decision_sha256": input_receipt["sha256"],
+        "dataset": {"slug": dataset_slug,
+                    "payload": dataset_receipt["payload"],
+                    "files": dataset_receipt["files"]},
         "checkpoint_hub": spec.checkpoint_hub,
         "batch_size": spec.laya_decision_batch_size,
         "min_confidence": spec.min_router_confidence,
@@ -783,6 +987,7 @@ def stage_colab_notebook(*, decision_kind: str,
         "STATE_COLUMN": entry["state_column"],
     })
     _kernel_script_gate(script)
+    _module_scope_gate(script)
     notebook = stage / COLAB_NOTEBOOK_NAME
     notebook.write_text(script, encoding="utf-8")
     receipt = {
@@ -953,8 +1158,16 @@ def main() -> None:
     print(_stamp(), f"[laya-lane] staged {args.kind}/{args.decision} payload: "
           f"{json.dumps(receipt, indent=2)}", flush=True)
     if args.execute and args.kind == "kaggle":
-        plan = lane.push(Path(receipt["staged"]), execute=True)
-        print(json.dumps(plan, indent=2), flush=True)
+        stage_dir = Path(receipt["staged"])
+        # the inputs travel as the dataset BEFORE the push (the kernel
+        # metadata attaches spec.dataset_slug; a missing/drifting dataset
+        # would FileNotFoundError resolve_input once boot passes)
+        dataset_plan = publish_laya_dataset(args.decision,
+                                            run_tag=receipt["run_tag"],
+                                            execute=True)
+        print(json.dumps(dataset_plan, indent=2), flush=True)
+        push_plan = lane.push(stage_dir, execute=True)
+        print(json.dumps(push_plan, indent=2), flush=True)
     elif args.execute:
         _log_lane("colab payloads are a delivery contract only; nothing "
                   "to --execute")
