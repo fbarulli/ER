@@ -30,6 +30,14 @@ The fuzzy weighting is block-local IDF over the SSOT word-set Jaccard
 (pipeline.jaccard_similarity's set logic, reweighted) — no duplicate
 similarity definition lives elsewhere.
 
+Class map (one owner per responsibility):
+  - PackSurface     — pack-multiplicity stripping off a normalized title
+  - FinalizedTexts  — the model-input text SSOT adapter
+  - CorpusRarity    — token IDF + per-item uniqueness
+  - BrandBlocks     — block keys for brand/retailer/missing-title markers
+  - AverageLinkage  — cross-retailer link generation + agglomeration (driver)
+
+
 Reusable: the linkage logic (link_gtin_less) is importable so other
 lanes/scripts can consume the same rule without re-implementing it.
 """
@@ -44,8 +52,12 @@ import pandas as pd
 
 from core.columns import alias_names
 from core.gtin import gtin_validity
+from core.run_log import RunLogger
 from core.text import normalize_retailer
 from pipeline import normalize_text
+from core.step_trace import timed
+
+_LOG = RunLogger(__name__)
 
 DEFAULT_JACCARD_THRESHOLD = 0.7
 
@@ -120,10 +132,9 @@ class _UnionFind:
             self._parent[rb] = ra
 
 
-def finalized_texts(
-    df: pd.DataFrame, *, include_attributes: bool = False
-) -> pd.Series:
-    """Finalized model-input text per row via the core.model_input SSOT.
+# ── text SSOT adapter ────────────────────────────────────────────────────────
+class FinalizedTexts:
+    """The finalized model-input text per row via the core.model_input SSOT.
 
     The linkage compares the SAME normalized space the gate and the encoder
     see (build_sku_texts: lowercase tokens, fixed [brand][title][attributes]
@@ -140,36 +151,94 @@ def finalized_texts(
     exact cross-retailer matches (2,376 -> 66). structured_features.enabled
     is read from the config SSOT.
     """
-    from core.common import training_cfg
-    from core.model_input import build_sku_texts
 
-    enabled = bool(training_cfg().training.structured_features.enabled)
-    frame = df
-    if not include_attributes:
-        frame = df.copy()
-        for column in (
-            *alias_names("attribute"),
-            *alias_names("description_short_eng"),
+    @staticmethod
+    def per_row(
+        df: pd.DataFrame, *, include_attributes: bool = False
+    ) -> pd.Series:
+        """The finalized text series over the source frame."""
+        from core.common import training_cfg
+        from core.model_input import build_sku_texts
+
+        enabled = bool(training_cfg().training.structured_features.enabled)
+        frame = df
+        if not include_attributes:
+            frame = df.copy()
+            for column in (
+                *alias_names("attribute"),
+                *alias_names("description_short_eng"),
+            ):
+                if column in frame.columns:
+                    frame[column] = ""
+        texts, _infos = build_sku_texts(frame, structured_enabled=enabled)
+        return pd.Series(texts, index=df.index)
+
+
+def finalized_texts(
+    df: pd.DataFrame, *, include_attributes: bool = False
+) -> pd.Series:
+    """Finalized model-input text per row (see :class:`FinalizedTexts`)."""
+    return FinalizedTexts.per_row(df, include_attributes=include_attributes)
+
+
+# ── corpus IDF + uniqueness ──────────────────────────────────────────────────
+class CorpusRarity:
+    """Token IDF over finalized texts and every row's rarity score."""
+
+    @staticmethod
+    def idf_from_finalized(finalized: pd.Series) -> tuple[dict[str, float], float]:
+        """Token IDF over an ALREADY-finalized text series (pack stripped).
+
+        The rarity substrate for item uniqueness: idf(t) = log(1 + N/df(t)).
+        Returns (idf_map, unseen_token_weight) — the unseen weight is the
+        maximum (log(1+N)), applied to tokens absent from the corpus.
+        """
+        doc_freq: Counter[str] = Counter()
+        for text in _LOG.progress(
+            finalized, desc="corpus_idf", unit="doc", total=len(finalized)
         ):
-            if column in frame.columns:
-                frame[column] = ""
-    texts, _infos = build_sku_texts(frame, structured_enabled=enabled)
-    return pd.Series(texts, index=df.index)
+            doc_freq.update(strip_pack_multiplicity(text).split())
+        n_docs = max(len(finalized), 1)
+        idf = {tok: math.log(1.0 + n_docs / df_t) for tok, df_t in doc_freq.items()}
+        return idf, math.log(1.0 + n_docs)
+
+    @staticmethod
+    def uniqueness_from_tokens(
+        tokens: list[str], idf: dict[str, float], unseen_weight: float
+    ) -> float:
+        """Mean IDF of one item's tokens (0.0 for an empty title)."""
+        if not tokens:
+            return 0.0
+        return sum(idf.get(t, unseen_weight) for t in tokens) / len(tokens)
+
+    @classmethod
+    def uniqueness_map(
+        cls, stripped: pd.Series, idf: dict[str, float], unseen_weight: float
+    ) -> dict[int, float]:
+        """Per-row uniqueness (corpus token-IDF mean) for EVERY row.
+
+        Low uniqueness = generic listing where fuzzy text evidence is weak;
+        high = distinctive listing. A measured feature and diagnostic —
+        never a hard identity rule (two distinct rare products can collide;
+        a generic duplicate across retailers is still a true match).
+        """
+        return {
+            idx: cls.uniqueness_from_tokens(text.split(), idf, unseen_weight)
+            for idx, text in stripped.items()
+        }
+
+    @classmethod
+    def uniqueness_from_finalized(
+        cls, finalized: pd.Series, idf: dict[str, float], unseen_weight: float
+    ) -> dict[int, float]:
+        """Per-row uniqueness from an ALREADY-finalized text Series."""
+        stripped = finalized.map(strip_pack_multiplicity)
+        return cls.uniqueness_map(stripped, idf, unseen_weight)
 
 
 def corpus_idf_from_finalized(finalized: pd.Series) -> tuple[dict[str, float], float]:
-    """Token IDF over an ALREADY-finalized text series (pack tokens stripped).
-
-    The rarity substrate for item uniqueness: idf(t) = log(1 + N/df(t)).
-    Returns (idf_map, unseen_token_weight) — the unseen weight is the
-    maximum (log(1+N)), applied to tokens absent from the corpus.
-    """
-    doc_freq: Counter[str] = Counter()
-    for text in finalized:
-        doc_freq.update(strip_pack_multiplicity(text).split())
-    n_docs = max(len(finalized), 1)
-    idf = {tok: math.log(1.0 + n_docs / df_t) for tok, df_t in doc_freq.items()}
-    return idf, math.log(1.0 + n_docs)
+    """Token IDF over finalized texts (see :class:`CorpusRarity`)."""
+    return CorpusRarity.idf_from_finalized(finalized)
 
 
 def corpus_idf(
@@ -177,7 +246,7 @@ def corpus_idf(
 ) -> tuple[dict[str, float], float]:
     """Corpus-level token IDF over every row's finalized text.
 
-    Pass ``finalized`` (a precomputed _finalized_texts Series) to avoid
+    Pass ``finalized`` (a precomputed finalized_texts Series) to avoid
     rebuilding the per-row model texts a second time within one run.
     """
     if finalized is None:
@@ -189,9 +258,7 @@ def item_uniqueness_from_tokens(
     tokens: list[str], idf: dict[str, float], unseen_weight: float
 ) -> float:
     """Mean IDF of one item's tokens (0.0 for an empty title)."""
-    if not tokens:
-        return 0.0
-    return sum(idf.get(t, unseen_weight) for t in tokens) / len(tokens)
+    return CorpusRarity.uniqueness_from_tokens(tokens, idf, unseen_weight)
 
 
 def item_uniqueness(
@@ -199,90 +266,211 @@ def item_uniqueness(
 ) -> dict[int, float]:
     """Per-row uniqueness score (corpus token-IDF mean) for EVERY row.
 
-    Low uniqueness = generic listing where fuzzy text evidence is weak;
-    high = distinctive listing. A measured feature and diagnostic — never
-    a hard identity rule (two distinct rare products can collide; a
-    generic duplicate across retailers is still a true match).
     Pass ``finalized`` (precomputed finalized_texts) to avoid rebuilding.
     """
     if finalized is None:
         finalized = finalized_texts(df)
     idf, unseen = corpus_idf_from_finalized(finalized)
     stripped = finalized.map(strip_pack_multiplicity)
-    return {
-        idx: item_uniqueness_from_tokens(text.split(), idf, unseen)
-        for idx, text in stripped.items()
-    }
+    return CorpusRarity.uniqueness_map(stripped, idf, unseen)
 
 
 def item_uniqueness_from_finalized(
     finalized: pd.Series, idf: dict[str, float], unseen_weight: float
 ) -> dict[int, float]:
     """Per-row uniqueness from an ALREADY-finalized text Series (no rebuild)."""
-    return {
-        idx: item_uniqueness_from_tokens(
-            strip_pack_multiplicity(text).split(), idf, unseen_weight
-        )
-        for idx, text in finalized.items()
-    }
+    return CorpusRarity.uniqueness_from_finalized(finalized, idf, unseen_weight)
+
+
+# ── brand/retailer blocks ────────────────────────────────────────────────────
+class BrandBlocks:
+    """Blocking keys: brand alias-family folds, retailers, missing titles."""
+
+    @staticmethod
+    def norm(series: pd.Series) -> pd.Series:
+        """Normalized title spellings."""
+        return series.where(series.notna(), "").map(normalize_text)
+
+    @classmethod
+    def family_key(cls, series: pd.Series) -> pd.Series:
+        """Brand cell -> the alias-family block key (empty for a blank cell).
+
+        Blocking keys must be IDENTICAL for alias siblings, and the folded
+        token sets are not: "A SHOC" folds to {a, shoc} while "Accelerator"
+        folds to {accelerator, shoc} — the fold gives the two sides a SHARED
+        token but not an EQUAL set, so groupby would still put them in two
+        blocks. The block key therefore collapses a brand to the
+        alias-family canonicals its fold reaches (config/vocabulary.json
+        "brand_aliases" targets, e.g. `shoc`); a brand no family reaches
+        keeps its full folded spelling, which is the pre-alias block key for
+        every alias-free cell, so plain ("Goat Fuel" vs "Goa Fuel") blocking
+        is unchanged.
+
+        ONE SSOT call (`core.sku_identity.normalize_brand`) plus a blank
+        guard, no new normalization: rows with no brand at all must still
+        stay OUT of every block (the candidates filter empties on `_nb`, and
+        an empty fold must never collapse them into one shared block), so
+        the pre-fold block key keeps its blank sentinel.
+
+        Buffered by the veto-asymmetry doctrine: `normalize_brand` only
+        ADDS the alias target token, and the family keys are the
+        config-reviewed canonicals whose allowed territory the rarity audit
+        measured (scripts/seed_brand_aliases.py). A wider block is a RECALL
+        gain — more candidate pairs — and the link rule (different retailer
+        + IDF-weighted Jaccard + average-linkage) still has to pass;
+        blocking asserts nothing.
+
+        Imported INSIDE the closure: `core.sku_identity` imports this
+        module's ``strip_pack_multiplicity`` at module level, so a
+        module-level import here would make the two modules mutually
+        unimportable no matter which module the entry import reaches first.
+        `sku_identity`'s own import bar (``_gtin_facts``) is a deferral for
+        exactly this shape.
+        """
+        from core.sku_identity import brand_aliases, normalize_brand
+
+        family_tokens = frozenset(brand_aliases().values())
+
+        def _key(value: object) -> str:
+            folded = normalize_brand(value)
+            if not folded:
+                return ""
+            families = folded & family_tokens
+            return " ".join(sorted(families)) if families else " ".join(sorted(folded))
+
+        return series.where(series.notna(), "").map(_key)
+
+    @staticmethod
+    def retailer_key(series: pd.Series) -> pd.Series:
+        """Retailer identity via the normalize_retailer SSOT (accent-fold, not
+        normalize_text's accent-DELETION which splits Voilà -> 'voil')."""
+        return series.where(series.notna(), "").map(normalize_retailer)
 
 
 def _norm(series: pd.Series) -> pd.Series:
-    return series.where(series.notna(), "").map(normalize_text)
+    return BrandBlocks.norm(series)
 
 
 def _brand_family_key(series: pd.Series) -> pd.Series:
-    """Brand cell -> the alias-family block key (empty for a blank cell).
-
-    Blocking keys must be IDENTICAL for alias siblings, and the folded token
-    sets are not: "A SHOC" folds to {a, shoc} while "Accelerator" folds to
-    {accelerator, shoc} — the fold gives the two sides a SHARED token but not
-    an EQUAL set, so groupby would still put them in two blocks. The block
-    key therefore collapses a brand to the alias-family canonicals its fold
-    reaches (config/vocabulary.json "brand_aliases" targets, e.g. `shoc`);
-    a brand no family reaches keeps its full folded spelling, which is the
-    pre-alias block key for every alias-free cell, so plain ("Goat Fuel" vs
-    "Goa Fuel") blocking is unchanged.
-
-    ONE SSOT call (`core.sku_identity.normalize_brand`) plus a blank
-    guard, no new normalization: rows with no brand at all must still stay
-    OUT of every block (the candidates filter empties on `_nb`, and an empty
-    fold must never collapse them into one shared block), so the pre-fold
-    block key keeps its blank sentinel.
-
-    Buffered by the veto-asymmetry doctrine: `normalize_brand` only ADDS the
-    alias target token, and the family keys are the config-reviewed
-    canonicals whose allowed territory the rarity audit measured
-    (scripts/seed_brand_aliases.py). A wider block is a RECALL gain — more
-    candidate pairs — and the link rule (different retailer + IDF-weighted
-    Jaccard + average-linkage) still has to pass; blocking asserts nothing.
-
-    Imported INSIDE the closure: `core.sku_identity` imports this
-    module's ``strip_pack_multiplicity`` at module level, so a module-level
-    import here would make the two modules mutually unimportable no matter
-    which module the entry import reaches first. `sku_identity`'s own
-    import bar (``_gtin_facts``) is a deferral for exactly this shape.
-    """
-    from core.sku_identity import brand_aliases, normalize_brand
-
-    family_tokens = frozenset(brand_aliases().values())
-
-    def _key(value: object) -> str:
-        folded = normalize_brand(value)
-        if not folded:
-            return ""
-        families = folded & family_tokens
-        return " ".join(sorted(families)) if families else " ".join(sorted(folded))
-
-    return series.where(series.notna(), "").map(_key)
+    """Brand cell -> the alias-family block key (see :class:`BrandBlocks`)."""
+    return BrandBlocks.family_key(series)
 
 
 def _norm_retailer(series: pd.Series) -> pd.Series:
-    """Retailer identity via the normalize_retailer SSOT (accent-fold, not
-    normalize_text's accent-DELETION which splits Voilà -> 'voil')."""
-    return series.where(series.notna(), "").map(normalize_retailer)
+    """Retailer identity via the normalize_retailer SSOT."""
+    return BrandBlocks.retailer_key(series)
 
 
+# ── cross-retailer links + average-linkage agglomeration ────────────────────
+class AverageLinkage:
+    """Pair generation over one brand block plus mean-similarity merging.
+
+    A cross-retailer link merges two clusters ONLY when the MEAN weighted
+    similarity over every pair of DISTINCT finalized texts inside the merged
+    cluster holds the threshold. Raw union-find merged on single edges, so
+    one fuzzy link chained distinct flavors (mocha -> shared brand tokens ->
+    latte) into one cluster. Judging distinct titles (one representative per
+    text) stops same-title duplicates from diluting the mean with their 1.0
+    pairs and masking a flavor merge behind them.
+    """
+
+    def __init__(
+        self, uf: _UnionFind, titles: dict[int, str], retailers: dict[int, str],
+        tokens: dict[int, frozenset[str]], idf_block: dict[str, float],
+        jaccard_threshold: float,
+    ) -> None:
+        self._uf = uf
+        self._titles = titles
+        self._retailers = retailers
+        self._tokens = tokens
+        self._idf = idf_block
+        self._threshold = jaccard_threshold
+
+    def weighted_jaccard(self, a: int, b: int) -> float:
+        """IDF-weighted word-set Jaccard of two rows (block-local IDF)."""
+        sa, sb = self._tokens[a], self._tokens[b]
+        if not sa or not sb:
+            return 0.0
+        inter = sum(self._idf.get(t, 0.0) for t in sa & sb)
+        union = sum(self._idf.get(t, 0.0) for t in sa | sb)
+        return inter / union if union else 0.0
+
+    def links(self, indices: list[int]) -> tuple[list[tuple[float, int, int]], Counter]:
+        """Cross-retailer candidate links (exact titles first at 1.0)."""
+        counters = Counter()
+        links: list[tuple[float, int, int]] = []
+        checked = counters["checked_pairs"]
+        for i in range(len(indices)):
+            a = indices[i]
+            for j in range(i + 1, len(indices)):
+                b = indices[j]
+                if self._retailers[a] == self._retailers[b]:
+                    continue  # same-retailer near-dup: not cross-source identity
+                checked += 1
+                if self._titles[a] == self._titles[b]:
+                    counters["exact_pairs"] += 1
+                    links.append((1.0, a, b))
+                    continue
+                sim = self.weighted_jaccard(a, b)
+                if sim >= self._threshold:
+                    counters["fuzzy_pairs"] += 1
+                    links.append((sim, a, b))
+        counters["checked_pairs"] = checked
+        return links, counters
+
+    def _pair_sim(self, x: int, y: int) -> float:
+        return 1.0 if self._titles[x] == self._titles[y] else self.weighted_jaccard(x, y)
+
+    def _mean_rep_sim(self, rep_rows: list[int]) -> float:
+        """Mean pairwise similarity over rows of distinct finalized titles."""
+        total = 0.0
+        for i in range(len(rep_rows)):
+            for j in range(i + 1, len(rep_rows)):
+                total += self._pair_sim(rep_rows[i], rep_rows[j])
+        return total / (len(rep_rows) * (len(rep_rows) - 1) // 2)
+
+    def agglomerate(
+        self, links: list[tuple[float, int, int]], indices: list[int]
+    ) -> int:
+        """Merge links under the mean-similarity budget; rejected merges out."""
+        members: dict[int, list[int]] = {i: [i] for i in indices}
+        rejected = 0
+        for sim, a, b in sorted(links, key=lambda x: -x[0]):
+            ra, rb = self._uf.find(a), self._uf.find(b)
+            if ra == rb:
+                continue
+            merged = members[ra] + members[rb]
+            reps: dict[str, int] = {}
+            for x in merged:
+                reps.setdefault(self._titles[x], x)
+            rep_rows = list(reps.values())
+            internal_after = (
+                self._mean_rep_sim(rep_rows) if len(rep_rows) > 1 else 1.0
+            )
+            if internal_after < self._threshold:
+                rejected += 1
+                continue
+            self._uf.union(ra, rb)
+            root = self._uf.find(ra)
+            other = rb if root == ra else ra
+            members[root] = merged
+            members.pop(other, None)
+        return rejected
+
+    @staticmethod
+    def cluster_ids(uf: _UnionFind, indices: list[int]) -> tuple[dict[int, str], int]:
+        """Stable cluster ids (bl-000001 ...) in first-seen order."""
+        cluster_id: dict[int, str] = {}
+        root_counter: dict[int, int] = {}
+        for idx in indices:
+            root = uf.find(idx)
+            cid = root_counter.setdefault(root, len(root_counter) + 1)
+            cluster_id[idx] = f"bl-{cid:06d}"
+        return cluster_id, len(root_counter)
+
+
+# ── the gtin-less driver ────────────────────────────────────────────────────
+@timed
 def link_gtin_less(
     df: pd.DataFrame,
     *,
@@ -293,14 +481,7 @@ def link_gtin_less(
     retailer_col: str = "retailer",
     finalized: pd.Series | None = None,
 ) -> tuple[dict[int, str], dict]:
-    """Return (row_index -> cluster_id, census) for rows without valid GTINs.
-
-    The returned map is keyed by the ORIGINAL row index so callers can join
-    back onto the source frame. Rows with a checksum-valid gtin are
-    excluded; missing, malformed, and checksum-invalid gtin rows are
-    clustered. Every such row lands in a cluster (single rows form
-    singleton clusters).
-    """
+    """Return (row_index -> cluster_id, census) for rows without valid GTINs."""
     if not 0.0 <= jaccard_threshold <= 1.0:
         raise ValueError("jaccard_threshold must be between 0 and 1")
     missing = [
@@ -310,7 +491,19 @@ def link_gtin_less(
         raise KeyError(f"missing required linkage columns: {', '.join(missing)}")
     if not df.index.is_unique:
         raise ValueError("link_gtin_less requires a unique dataframe index")
+    return _link_gtin_less_frozen(
+        df, jaccard_threshold=jaccard_threshold, title_col=title_col,
+        brand_col=brand_col, gtin_col=gtin_col, retailer_col=retailer_col,
+        finalized=finalized,
+    )
 
+
+def _link_gtin_less_frozen(
+    df: pd.DataFrame, *, jaccard_threshold: float,
+    title_col: str, brand_col: str, gtin_col: str, retailer_col: str,
+    finalized: pd.Series | None,
+) -> tuple[dict[int, str], dict]:
+    """The full linkage pass (validation already satisfied)."""
     gtins = df[gtin_col].fillna("").astype(str).str.strip()
     valid_gtin = gtin_validity(gtins)
     no_bc = df[~valid_gtin].copy()
@@ -321,10 +514,9 @@ def link_gtin_less(
     # product and must never be a similarity signal here.
     if finalized is None:
         finalized = finalized_texts(df)
-    no_bc["_nts"] = finalized.loc[no_bc.index].map(strip_pack_multiplicity)
     # Brand blocks run on the sku_identity SSOT alias-family key (see
-    # `_brand_block_key`), so alias siblings ("A SHOC"/"Accelerator") land in
-    # ONE block and stay reachable for candidate generation.
+    # `BrandBlocks.family_key`), so alias siblings ("A SHOC"/"Accelerator")
+    # land in ONE block and stay reachable for candidate generation.
     no_bc["_nb"] = _brand_family_key(no_bc[brand_col])
     # The MATCH RULE needs the folded brand too (veto-asymmetry consumes the
     # same family key): the finalized text carries each spelling's own RAW
@@ -377,7 +569,9 @@ def link_gtin_less(
         & no_bc["_nr"].ne("")
         & no_bc["_has_title"]
     ]
-    for _nb, g in candidates.groupby("_nb"):
+    for _nb, g in _LOG.progress(
+        candidates.groupby("_nb"), desc="gtin_less_blocks", unit="block"
+    ):
         if len(g) < 2:
             continue
         # Block-level IDF: generic tokens ("water", "ml") dominate word-set
@@ -395,79 +589,16 @@ def link_gtin_less(
         retailers = g["_nr"].to_dict()
         indices = list(g.index)
 
-        def _wj(a: int, b: int) -> float:
-            sa, sb = tokens[a], tokens[b]
-            if not sa or not sb:
-                return 0.0
-            inter = sum(idf_block.get(t, 0.0) for t in sa & sb)
-            union = sum(idf_block.get(t, 0.0) for t in sa | sb)
-            return inter / union if union else 0.0
-
-        links: list[tuple[float, int, int]] = []
-        for i in range(len(indices)):
-            a = indices[i]
-            for j in range(i + 1, len(indices)):
-                b = indices[j]
-                if retailers[a] == retailers[b]:
-                    continue  # same-retailer near-dup: not cross-source identity
-                checked_pairs += 1
-                if titles[a] == titles[b]:
-                    exact_pairs += 1
-                    links.append((1.0, a, b))
-                    continue
-                sim = _wj(a, b)
-                if sim >= jaccard_threshold:
-                    fuzzy_pairs += 1
-                    links.append((sim, a, b))
-
-        # Average-linkage agglomeration over DISTINCT titles (desc
-        # similarity): a cross-retailer link merges two clusters ONLY when
-        # the MEAN weighted similarity over every pair of DISTINCT
-        # finalized texts inside the merged cluster holds the threshold.
-        # Raw union-find merged on single edges, so one fuzzy link chained
-        # distinct flavors (mocha -> shared brand tokens -> latte) into one
-        # cluster. Judging distinct titles (one representative per text)
-        # stops same-title duplicates from diluting the mean with their
-        # 1.0 pairs and masking a flavor merge behind them.
-        members: dict[int, list[int]] = {i: [i] for i in indices}
-
-        def _pair_sim(x: int, y: int) -> float:
-            return 1.0 if titles[x] == titles[y] else _wj(x, y)
-
-        for sim, a, b in sorted(links, key=lambda x: -x[0]):
-            ra, rb = uf.find(a), uf.find(b)
-            if ra == rb:
-                continue
-            merged = members[ra] + members[rb]
-            reps: dict[str, int] = {}
-            for x in merged:
-                reps.setdefault(titles[x], x)
-            rep_rows = list(reps.values())
-            if len(rep_rows) > 1:
-                total = 0.0
-                for i in range(len(rep_rows)):
-                    for j in range(i + 1, len(rep_rows)):
-                        total += _pair_sim(rep_rows[i], rep_rows[j])
-                internal_after = total / (len(rep_rows) * (len(rep_rows) - 1) // 2)
-            else:
-                internal_after = 1.0
-            if internal_after < jaccard_threshold:
-                rejected_merges += 1
-                continue
-            uf.union(ra, rb)
-            root = uf.find(ra)
-            other = rb if root == ra else ra
-            members[root] = merged
-            members.pop(other, None)
+        rule = AverageLinkage(uf, titles, retailers, tokens, idf_block,
+                              jaccard_threshold)
+        links, counters = rule.links(indices)
+        checked_pairs += counters["checked_pairs"]
+        exact_pairs += counters["exact_pairs"]
+        fuzzy_pairs += counters["fuzzy_pairs"]
+        rejected_merges += rule.agglomerate(links, indices)
 
     # Stable cluster ids in deterministic (first-seen) order.
-    cluster_id: dict[int, str] = {}
-    root_counter: dict[int, int] = {}
-    for idx in no_bc.index:
-        root = uf.find(idx)
-        cid = root_counter.setdefault(root, len(root_counter) + 1)
-        cluster_id[idx] = f"bl-{cid:06d}"
-
+    cluster_id, _num_roots = AverageLinkage.cluster_ids(uf, list(no_bc.index))
     clusters: dict[str, list[int]] = defaultdict(list)
     for idx, cid in cluster_id.items():
         clusters[cid].append(idx)
@@ -481,7 +612,9 @@ def link_gtin_less(
     # linkage is candidate generation; flagged clusters route to review, the
     # gate/verifier keeps the final say.
     flagged = 0
-    for cid, rows in clusters.items():
+    for cid, rows in _LOG.progress(
+        clusters.items(), desc="coherence_flags", unit="cluster"
+    ):
         if len(rows) <= 1:
             continue
         texts = [no_bc.at[i, "_nts"] for i in rows]
@@ -537,7 +670,6 @@ def link_gtin_less(
         "exact_title_pairs_linked": int(exact_pairs),
         "fuzzy_title_pairs_linked": int(fuzzy_pairs),
         "jaccard_threshold": float(jaccard_threshold),
-        "idf_weighted": True,
         "idf_weighted": True,
         "avg_linkage_rejected_merges": int(rejected_merges),
         "low_coherence_clusters_flagged": int(flagged),
