@@ -218,6 +218,7 @@ def _reconstruct_slug_decimals(slug: str) -> str:
     out.append(slug[cursor:])
     return ''.join(out)
 _VOWELS = frozenset("aeiou")
+
 # Precomputed once: the unit table is fixed at import, so re-sorting it on
 # every _has_unit_suffix call (162k calls in the 10k cohort) is pure waste.
 # Order is length-descending so "ml" is tried before "l"; same-length units are
@@ -225,6 +226,13 @@ _VOWELS = frozenset("aeiou")
 _UNITS_BY_LEN: tuple[str, ...] = tuple(sorted(UNITS, key=len, reverse=True))
 _NUMBER_TOKEN_RE = re.compile(r'\d+(?:\.\d+)?')
 _HEAD_NUMBER_RE = re.compile(r'(?:\d+(?:\.\d+)?|\.\d+)')
+# url_text's own scratch regexes, hoisted out of the per-row call so the re
+# module's string-pattern cache is never consulted (37k calls in 10k cohort).
+_FLOZ_DASH_RE = re.compile(r'\bfl-oz\b', re.I)
+_NON_WORD_RUNS_RE = re.compile(r"[-_+]+")
+_CASE_OF_RE = re.compile(r'\bcases?\s+of\s+\d+\b', re.I)
+_WS_TOKEN_RE = re.compile(r'\S+')
+_BASENAME_SPLIT_RE = re.compile(r'[-_]')
 
 
 @lru_cache(maxsize=8)
@@ -369,7 +377,7 @@ def url_text(url: object) -> str:
     # before splitting it, so the fragment cannot invent product volume.
     basename = slug.rsplit('/', 1)[-1]
     stem, marker, _transform = basename.partition('._')
-    prefix = re.split(r'[-_]', stem, maxsplit=1)[0].lower()
+    prefix = _BASENAME_SPLIT_RE.split(stem, maxsplit=1)[0].lower()
     spec = _spec()
     if (
         marker and len(stem) >= spec.bare_hash_min_length
@@ -379,24 +387,23 @@ def url_text(url: object) -> str:
     ):
         slug = slug[:-len(basename)]
     slug = _UUID.sub(" ", slug)
-    slug = re.sub(r'\bfl-oz\b', 'fl oz', slug, flags=re.I)
+    slug = _FLOZ_DASH_RE.sub('fl oz', slug)
     slug = _reconstruct_slug_decimals(slug)
-    slug = re.sub(r"[-_+]+", " ", slug)
+    slug = _NON_WORD_RUNS_RE.sub(" ", slug)
     slug = normalize_text(slug)
     # A bare retailer id is noise; a number in an explicit measurement or
     # pack phrase is product evidence. Preserve only recognized spans, using
     # the same grammar as downstream readers (including multiword fl oz).
     quantity_spans = [(entry['start'], entry['end']) for entry in extract_volume_evidence(slug)]
-    quantity_spans.extend(match.span() for match in PACK_RE.finditer(slug))
+    quantity_spans.extend([match.span() for match in PACK_RE.finditer(slug)])
     # Retain the count in "case of 6 33.8 oz". Dropping the 6 previously
     # manufactured "case of 8 oz" after decimal fragments were filtered.
-    quantity_spans.extend(match.span() for match in re.finditer(
-        r'\bcases?\s+of\s+\d+\b', slug, re.I))
+    quantity_spans.extend([match.span() for match in _CASE_OF_RE.finditer(slug)])
     tokens = [
         token
-        for match in re.finditer(r'\S+', slug)
+        for match in _WS_TOKEN_RE.finditer(slug)
         for token in [match.group().rstrip('.')]
-        if (re.fullmatch(r'\d+(?:\.\d+)?', token)
+        if (_NUMBER_TOKEN_RE.fullmatch(token)
             and any(start <= match.start() and match.end() <= end for start, end in quantity_spans))
         or not _is_noise(token)
     ]
