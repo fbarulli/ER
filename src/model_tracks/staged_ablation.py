@@ -27,6 +27,7 @@ from pathlib import Path
 import shutil
 import torch
 from core.run_log import RunLogger
+from core.timing import Timing
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.text_cache import checkpoint_hash
@@ -162,7 +163,6 @@ def _drop_staging(setup):
 @timed
 def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=None):
     """Fix native tokens and vocabulary/support topology before training exists."""
-    from core.timing import Timing
     timing = Timing('model_tracks.ablation_prepare')
     with _LOG.section('ablation_suite.freeze'):
         cohort,frozen_config = _freeze_suite(setup,config,bundle)
