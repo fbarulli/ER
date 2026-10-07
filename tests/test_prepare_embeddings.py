@@ -140,3 +140,37 @@ def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatc
     with pytest.raises(ValueError, match='stale'):
         job.prepare(setup, checkpoint, device='cpu')
     assert not (setup / 'shared_minilm__embeddings.npz').exists()
+
+
+def test_data_gate_census_tracks_are_json_serializable():
+    from model_tracks.data_gate import DataGateResult, TrackInputCensus, census_tracks
+    from model_tracks.telemetry import WorkerEvents
+
+    gate = DataGateResult(suite={'preflight': True},
+                          tracks={'hybrid': TrackInputCensus(
+                              listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
+                              text_dimension=3, device='cuda')},
+                          attestation='a' * 64)
+    payload = census_tracks(gate)
+    events = WorkerEvents(Path('log'), 'suite', 'census-test', filename='census.jsonl')
+    events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)
+    reloaded = json.loads(events.path.read_text())
+    assert reloaded['tracks']['hybrid']['listings'] == 2
+    assert reloaded['tracks']['hybrid']['device'] == 'cuda'
+
+
+def test_data_gate_census_tracks_are_json_serializable(tmp_path):
+    from model_tracks.data_gate import DataGateResult, TrackInputCensus, census_tracks
+    from model_tracks.telemetry import WorkerEvents
+
+    gate = DataGateResult(suite={'preflight': True},
+                          tracks={'hybrid': TrackInputCensus(
+                              listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
+                              text_dimension=3, device='cuda')},
+                          attestation='a' * 64)
+    payload = census_tracks(gate)
+    events = WorkerEvents(tmp_path, 'suite', 'census-test', filename='census.jsonl')
+    events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)
+    reloaded = json.loads((tmp_path / 'census.jsonl').read_text())
+    assert reloaded['tracks']['hybrid']['listings'] == 2
+    assert reloaded['tracks']['hybrid']['device'] == 'cuda'

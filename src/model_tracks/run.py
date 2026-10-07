@@ -109,10 +109,12 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # bytes all three concurrent tracks consume, so the training path spends its
     # time training instead of re-arguing shared immutable inputs.
     from model_tracks.data_gate import validate as validate_data
+    from model_tracks.data_gate import census_tracks as data_gate_census_tracks
     events.emit('data_gate', 'starting')
     gate = validate_data(config, allow_gpu_pending=True,
                          suite_inputs=None if gpu_only else inputs)
-    events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
+    events.emit('data_gate', 'passed', tracks=data_gate_census_tracks(gate),
+                attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
