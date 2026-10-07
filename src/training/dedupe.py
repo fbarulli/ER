@@ -292,6 +292,14 @@ class FrameWorkbook:
         transitive).
         """
         candidates = frame[frame["_ident"].eq("")]
+        # The review only ever runs on multi-row groups: get them with one
+        # keep=False duplicate mask instead of materializing every singleton
+        # group. Row order (and so the first-occurrence group order and the
+        # singletons' silence) is unchanged, so the protected set — and every
+        # decision after it — is the full scan's.
+        candidates = candidates[
+            candidates.duplicated(subset=["retailer", "sku_name_eng"], keep=False)
+        ]
         protected: list = []
         groups = list(candidates.groupby(["retailer", "sku_name_eng"], sort=False))
         for _, group in _LOG.progress(
