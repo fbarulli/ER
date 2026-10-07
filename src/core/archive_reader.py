@@ -97,9 +97,22 @@ class TarReader:
             shutil.copyfileobj(source, output, length=self.settings.copy_buffer_bytes)
         return str(target)
 
-    def extractall(self, destination):
-        for name in self.namelist():
-            self.extract(name, destination)
+    def extractall(self, destination, *, filter=None):
+        """Extract every surviving member through the safe per-member path.
+
+        `filter` mirrors tarfile's extraction-filter protocol: a callable
+        (tarfile.TarInfo) -> member-or-None; a falsy return drops the member.
+        None keeps the unfiltered loop byte-identical. Caller class: the
+        kaggle GPU train kernel's src-exclusion unpack of the verified bundle.
+        """
+        if filter is None:
+            for name in self.namelist():
+                self.extract(name, destination)
+            return
+        for member in self.archive.getmembers():
+            if not filter(member):
+                continue
+            self.extract(member.name, destination)
 
 
 @contextmanager
