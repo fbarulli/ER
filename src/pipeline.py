@@ -2083,327 +2083,446 @@ def generate_canonical(
     countries: list[str] | None = None,
     retailers: list[str] | None = None,
 ) -> dict:  # CanonicalRecord.model_dump() — validated shape, plain dict
-    titles = [sku for sku, attr in rows]
-    attributes = [attr for sku, attr in rows]
-    descriptions = descriptions or [""] * len(rows)
-    urls = urls or [""] * len(rows)
-    image_urls = image_urls or [""] * len(rows)
-    breadcrumbs_engs = breadcrumbs_engs or [""] * len(rows)
-    categories = categories or [""] * len(rows)
-    countries = countries or [""] * len(rows)
-    retailers = retailers or [""] * len(rows)
-    extracted = [
-        extract_all(
-            sku, attr,
-            "" if pd.isna(desc) else str(desc),
-            url, img_url, cat_path, cat,
+    """Compose one GTIN's canonical record — see CanonicalCardComposer.compose."""
+    return CanonicalCardComposer(
+        gtin, brand, rows, global_idf, brand_idf,
+        descriptions=descriptions, urls=urls, image_urls=image_urls,
+        breadcrumbs_engs=breadcrumbs_engs, categories=categories,
+        countries=countries, retailers=retailers,
+    ).compose()
+
+
+class CanonicalCardComposer:
+    """One GTIN's canonical record, phase by phase.
+
+    Single responsibility per phase; compose() runs them in ONE fixed order.
+    Aggregate-set construction, conflict-flag vocabulary, the token-once
+    canonical text discipline, the universe-evidence JSON and the additive
+    persistence keys are byte-identical to the pre-refactor linear body.
+
+    Phases (order = load-bearing):
+      accept_rows -> per-listing extract_all cards
+      aggregate_sets -> every canonical set column + contradiction flags
+      confidences_and_consistency -> mean confidences, mode-share consistency
+      token_once_text -> strict-novelty n-grams + word-once final pass
+      universe_evidence -> census-SSOT parse, one JSON string
+      record -> boundary validation (CanonicalRecord) + additive keys
+    """
+
+    def __init__(self, gtin, brand, rows, global_idf: 'NgramIDF',
+                 brand_idf: 'NgramIDF | None', *, descriptions=None, urls=None,
+                 image_urls=None, breadcrumbs_engs=None, categories=None,
+                 countries=None, retailers=None):
+        self._gtin = gtin
+        self._brand = brand
+        self._rows = rows
+        self._global_idf = global_idf
+        self._brand_idf = brand_idf
+        self._descriptions = descriptions
+        self._urls = urls
+        self._image_urls = image_urls
+        self._breadcrumbs_engs = breadcrumbs_engs
+        self._categories = categories
+        self._countries = countries
+        self._retailers = retailers
+        # phase outputs
+        self.titles: list[str] = []
+        self.attributes: list[str] = []
+        self.extracted: list[dict] = []
+        self.brand_norm = ""
+        self.brand_tokens: set[str] = set()
+        self.mode_flavor = ""
+        self.mode_type = ""
+        self.salient_ngrams: list[str] = []
+        self.raw_salient_ngrams: list[str] = []
+        self.volume_set: set[float] = set()
+        self.pack_set: set[int] = set()
+        self.package_type_set: set[str] = set()
+        self.packaging_level_set: set[str] = set()
+        self.package_material_set: set[str] = set()
+        self.flavor_set: set[str] = set()
+        self.made_from_set: set[str] = set()
+        self.carbonation_set: set[str] = set()
+        self.sweetener_set: set[str] = set()
+        self.sweetener_type_set: set[str] = set()
+        self.sweetening_set: set[str] = set()
+        self.attribute_consistency_flags: set[str] = set()
+        self.pulp_set: set[str] = set()
+        self.organic_set: set[str] = set()
+        self.vol_conf = 0.0
+        self.pack_conf = 0.0
+        self.n_titles = 0
+        self.volume_consistency = 1.0
+        self.pack_consistency = 1.0
+        self.canonical = ""
+        self.kept_ngrams: list[str] = []
+        self.universe_evidence_json = ""
+
+    # ── phase 1: rows ──────────────────────────────────────────────────────
+
+    def accept_rows(self) -> None:
+        """Materialize the per-listing cards (extract_all) in row order."""
+        self.titles = [sku for sku, attr in self._rows]
+        self.attributes = [attr for sku, attr in self._rows]
+        descriptions = self._descriptions or [""] * len(self._rows)
+        urls = self._urls or [""] * len(self._rows)
+        image_urls = self._image_urls or [""] * len(self._rows)
+        breadcrumbs_engs = self._breadcrumbs_engs or [""] * len(self._rows)
+        categories = self._categories or [""] * len(self._rows)
+        countries = self._countries or [""] * len(self._rows)
+        retailers = self._retailers or [""] * len(self._rows)
+        self.extracted = [
+            extract_all(
+                sku, attr,
+                "" if pd.isna(desc) else str(desc),
+                url, img_url, cat_path, cat,
+            )
+            for (sku, attr), desc, url, img_url, cat_path, cat
+            in zip(self._rows, descriptions, urls, image_urls, breadcrumbs_engs, categories, strict=True)
+        ]
+        del countries, retailers
+        self.brand_norm = normalize_text(spell_numeric_brand(self._brand))
+        self.brand_tokens = set(self.brand_norm.split())
+
+    # ── phase 2: sets + flags ──────────────────────────────────────────────
+
+    def aggregate_sets(self) -> None:
+        """Per-GTIN union of every extracted set column + contradiction flags."""
+        flavors = [x["flavor"] for x in self.extracted if x["flavor"]]
+        types = [x["type"] for x in self.extracted if x["type"]]
+        self.mode_flavor = Counter(flavors).most_common(1)[0][0] if flavors else ""
+        self.mode_type = Counter(types).most_common(1)[0][0] if types else ""
+
+        # Get discriminative n‑grams
+        self.salient_ngrams = extract_discriminative_ngrams(
+            self.titles, self.attributes, self.brand_tokens,
+            self._global_idf, self._brand_idf, top_k=5,
         )
-        for (sku, attr), desc, url, img_url, cat_path, cat
-        in zip(rows, descriptions, urls, image_urls, breadcrumbs_engs, categories, strict=True)
-    ]
 
-    brand_norm = normalize_text(spell_numeric_brand(brand))
-    brand_tokens = set(brand_norm.split())
+        # Volume and pack sets
+        self.volume_set = {round(x["volume_ml"], 2) for x in self.extracted if x["volume_ml"] > 0}
+        # A parser-safe quantity of one is not evidence of a single-item pack.
+        # Keep only rows with explicit pack evidence in the canonical attribute
+        # set; otherwise missing pack data becomes a false pack conflict.
+        self.pack_set = {
+            x["pack_qty"] for x in self.extracted if x["pack_confidence"] > 0
+        }
+        self.package_type_set = {value for x in self.extracted for value in x["package_types"]}
+        self.packaging_level_set = {value for x in self.extracted for value in x["packaging_levels"]}
+        self.package_material_set = {value for x in self.extracted for value in x["package_materials"]}
+        self.flavor_set = {value for x in self.extracted for value in x["flavor_set"]}
+        self.made_from_set = {value for x in self.extracted for value in x["made_from_set"]}
+        self.carbonation_set = {value for x in self.extracted for value in x["carbonation_set"]}
+        self.sweetener_set = {value for x in self.extracted for value in x["sweetener_set"]}
+        self.sweetener_type_set = {value for x in self.extracted for value in x["sweetener_type_set"]}
+        self.sweetening_set = {value for x in self.extracted for value in x["sweetening_set"]}
+        self.attribute_consistency_flags = {value for x in self.extracted for value in x["attribute_consistency_flags"]}
+        # Negations can be on a different listing of the same GTIN from the
+        # affirmative ingredient. Preserve that contradiction at aggregation.
+        negative_ingredients = {
+            value for x in self.extracted for value in x.get("negated_sweetener_type_set", ())
+        }
+        self.attribute_consistency_flags.update(
+            f"sweetener_source_conflict:{ingredient}"
+            for ingredient in negative_ingredients & self.sweetener_type_set
+        )
+        self.pulp_set = {value for x in self.extracted for value in x["pulp_set"]}
+        self.organic_set = {value for x in self.extracted for value in x.get("organic_set") or set()}
+        self._contradiction_flags()
 
-    flavors = [x["flavor"] for x in extracted if x["flavor"]]
-    types = [x["type"] for x in extracted if x["type"]]
-    mode_flavor = Counter(flavors).most_common(1)[0][0] if flavors else ""
-    mode_type = Counter(types).most_common(1)[0][0] if types else ""
+    def _contradiction_flags(self) -> None:
+        """Cross-check aggregated sets; the flag vocabulary is unchanged."""
+        for dimension, values, opposites in (
+            ("sweetener", self.sweetener_set, (("sugar", "no_sugar"), ("sugar", "diet"))),
+            ("carbonation", self.carbonation_set, (("still", "carbonated"),)),
+            ("pulp", self.pulp_set, (("no_pulp", "with_pulp"),)),
+            ("organic", self.organic_set, (("organic", "not_organic"),)),
+        ):
+            if any({left, right} <= values for left, right in opposites):
+                self.attribute_consistency_flags.add(f"categorical_source_conflict:{dimension}")
 
-    # Get discriminative n‑grams
-    salient_ngrams = extract_discriminative_ngrams(
-        titles, attributes, brand_tokens, global_idf, brand_idf, top_k=5
-    )
+        gate_cfg = training_cfg().gate
+        observed_volumes = sorted(self.volume_set)
+        if any(not volumes_compatible({left}, {right},
+                                      volume_relative_tolerance=float(gate_cfg.vol_tolerance),
+                                      volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
+               for i, left in enumerate(observed_volumes) for right in observed_volumes[i + 1:]):
+            self.attribute_consistency_flags.add('volume_sources_disagree')
+        if len(self.pack_set) > 1:
+            self.attribute_consistency_flags.add('pack_sources_disagree')
+        if len(self.package_type_set) > 1:
+            self.attribute_consistency_flags.add('categorical_source_conflict:package_type')
+        if len(self.package_material_set) > 1:
+            self.attribute_consistency_flags.add('categorical_source_conflict:pack_material')
 
-    # Volume and pack sets
-    volume_set = {round(x["volume_ml"], 2) for x in extracted if x["volume_ml"] > 0}
-    # A parser-safe quantity of one is not evidence of a single-item pack.
-    # Keep only rows with explicit pack evidence in the canonical attribute
-    # set; otherwise missing pack data becomes a false pack conflict.
-    pack_set = {
-        x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
-    }
-    package_type_set = {value for x in extracted for value in x["package_types"]}
-    packaging_level_set = {value for x in extracted for value in x["packaging_levels"]}
-    package_material_set = {value for x in extracted for value in x["package_materials"]}
-    flavor_set = {value for x in extracted for value in x["flavor_set"]}
-    made_from_set = {value for x in extracted for value in x["made_from_set"]}
-    carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
-    sweetener_set = {value for x in extracted for value in x["sweetener_set"]}
-    sweetener_type_set = {value for x in extracted for value in x["sweetener_type_set"]}
-    sweetening_set = {value for x in extracted for value in x["sweetening_set"]}
-    attribute_consistency_flags = {value for x in extracted for value in x["attribute_consistency_flags"]}
-    # Negations can be on a different listing of the same GTIN from the
-    # affirmative ingredient. Preserve that contradiction at aggregation.
-    negative_ingredients = {
-        value for x in extracted for value in x.get("negated_sweetener_type_set", ())
-    }
-    attribute_consistency_flags.update(
-        f"sweetener_source_conflict:{ingredient}"
-        for ingredient in negative_ingredients & sweetener_type_set
-    )
-    pulp_set = {value for x in extracted for value in x["pulp_set"]}
-    organic_set = {value for x in extracted for value in x.get("organic_set") or set()}
+    # ── phase 3: confidence / consistency ──────────────────────────────────
 
-    for dimension, values, opposites in (
-        ("sweetener", sweetener_set, (("sugar", "no_sugar"), ("sugar", "diet"))),
-        ("carbonation", carbonation_set, (("still", "carbonated"),)),
-        ("pulp", pulp_set, (("no_pulp", "with_pulp"),)),
-        ("organic", organic_set, (("organic", "not_organic"),)),
-    ):
-        if any({left, right} <= values for left, right in opposites):
-            attribute_consistency_flags.add(f"categorical_source_conflict:{dimension}")
+    def confidences_and_consistency(self) -> None:
+        """Mean per-card confidences + mode-share consistency (scale-free)."""
+        vol_confs = [x["volume_confidence"] for x in self.extracted if x["volume_ml"] > 0]
+        pack_confs = [x["pack_confidence"] for x in self.extracted if x["pack_confidence"] > 0]
+        self.vol_conf = sum(vol_confs) / len(vol_confs) if vol_confs else 0.0
+        self.pack_conf = sum(pack_confs) / len(pack_confs) if pack_confs else 0.0
+        self.n_titles = len(self.extracted)
+        # consistency = share of rows agreeing with the MOST COMMON value.
+        # The old formula divided conflicts by ROW COUNT n, so a 41k-row group
+        # with 2,000 distinct volumes scored 0.95 "consistent" — more rows made
+        # contradiction look BETTER. Mode-share is scale-free and monotone.
+        vol_mode = Counter(x["volume_ml"] for x in self.extracted if x["volume_ml"] > 0)
+        pack_mode = Counter(
+            x["pack_qty"] for x in self.extracted if x["pack_confidence"] > 0
+        )
+        # mode share over rows that HAVE a volume (unknown-volume rows don't vote)
+        self.volume_consistency = (
+            (vol_mode.most_common(1)[0][1] / sum(vol_mode.values())) if vol_mode else 1.0
+        )
+        n_known_pack = sum(pack_mode.values())
+        self.pack_consistency = (
+            pack_mode.most_common(1)[0][1] / n_known_pack
+            if n_known_pack
+            else 1.0
+        )
 
-    gate_cfg = training_cfg().gate
-    observed_volumes = sorted(volume_set)
-    if any(not volumes_compatible({left}, {right},
-                                   volume_relative_tolerance=float(gate_cfg.vol_tolerance),
-                                   volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
-           for i, left in enumerate(observed_volumes) for right in observed_volumes[i + 1:]):
-        attribute_consistency_flags.add('volume_sources_disagree')
-    if len(pack_set) > 1:
-        attribute_consistency_flags.add('pack_sources_disagree')
-    if len(package_type_set) > 1:
-        attribute_consistency_flags.add('categorical_source_conflict:package_type')
-    if len(package_material_set) > 1:
-        attribute_consistency_flags.add('categorical_source_conflict:pack_material')
+    # ── phase 4: the canonical text ────────────────────────────────────────
 
-    # Confidence / consistency
-    vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]
-    pack_confs = [x["pack_confidence"] for x in extracted if x["pack_confidence"] > 0]
-    vol_conf = sum(vol_confs) / len(vol_confs) if vol_confs else 0.0
-    pack_conf = sum(pack_confs) / len(pack_confs) if pack_confs else 0.0
-    n = len(extracted)
-    # consistency = share of rows agreeing with the MOST COMMON value.
-    # The old formula divided conflicts by ROW COUNT n, so a 41k-row group
-    # with 2,000 distinct volumes scored 0.95 "consistent" — more rows made
-    # contradiction look BETTER. Mode-share is scale-free and monotone.
-    vol_mode = Counter(x["volume_ml"] for x in extracted if x["volume_ml"] > 0)
-    pack_mode = Counter(
-        x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
-    )
-    # mode share over rows that HAVE a volume (unknown-volume rows don't vote)
-    volume_consistency = (
-        (vol_mode.most_common(1)[0][1] / sum(vol_mode.values())) if vol_mode else 1.0
-    )
-    n_known_pack = sum(pack_mode.values())
-    pack_consistency = (
-        pack_mode.most_common(1)[0][1] / n_known_pack
-        if n_known_pack
-        else 1.0
-    )
-
-    # Build canonical string
-    # TOKEN-ONCE DISCIPLINE (owner directive 2026-09-08): a canonical must
-    # carry each WORD at most once — the concatenation of brand + flavor +
-    # type + salient n-grams used to repeat 'water' up to 5x (unigram from
-    # mode_type AND inside 4 different IDF compounds) in 1,489 canonicals;
-    # pure noise for both Jaccard and the embedding payload. Dedup works
-    # on UNDERSCORE-PARTS across ALL parts: an n-gram compound is dropped
-    # when EVERY word in it already appeared earlier (fully redundant);
-    # a compound carrying at least one new word stays (partial novelty —
-    # dropping only the repeated words would mutate the compound into a
-    # string that no longer corresponds to any real n-gram). First
-    # occurrence wins; deterministic by construction order.
-    parts = [brand_norm]
-    if mode_flavor:
-        parts.append(mode_flavor)
-    if mode_type:
-        parts.append(mode_type)
-    # Explicit categorical fields are spoken before free-form n-grams. This
-    # guarantees that polarity survives canonical generation even when its
-    # source phrase is not among the top TF-IDF n-grams.
-    parts.extend(sorted(carbonation_set))
-    parts.extend(sorted(sweetener_set))
-    parts.extend(sorted(pulp_set))
-    parts.extend(sorted(flavor_set - ({mode_flavor} if mode_flavor else set())))
-    # token-once: filter the salient n-grams against every word already
-    # spoken (brand/flavor/type parts + earlier n-grams). STRICT novelty
-    # (owner directive 2026-09-08: 'we cant have repeated strings'): the
-    # IDF top-5 are a sliding-window ladder (kr_white_grape_flavored,
-    # white_grape_flavored_sparkling, grape_flavored_sparkling_bottled —
-    # one phrase, three compounds, words repeated 3x) — an n-gram is kept
-    # only when EVERY word it carries is new; the highest-IDF member of
-    # each phrase family wins and the ladder's redundant echo dies.
-    spoken: set[str] = set()
-    for p in parts:
-        if p:
-            spoken.update(
-                _fold_concept(w) for t in p.split() for w in t.split("_")
-            )
-    kept_ngrams: list[str] = []
-    for ng in salient_ngrams:
-        # concept-fold each word before novelty: a compound carrying only
-        # folded echoes of already-spoken concepts ('sparkling' after
-        # 'carbonated') is redundant, not new
-        words = [w for w in ng.split("_") if w]
-        folded = [_fold_concept(w) for w in words]
-        if folded and all(f not in spoken for f in folded):
-            kept_ngrams.append("_".join(folded))
-            spoken.update(folded)
-    # fallback: if strict novelty dropped EVERYTHING (top-5 all one family
-    # and mode parts already spoke the words), keep the first n-gram that
-    # carries ANY new word — but contribute ONLY its new words (owner
-    # directive: no repeated strings; 'berry_acai' after mode 'berry'
-    # contributes 'acai', not the echo). If truly nothing is new, keep the
-    # single top n-gram (canonical never ends up bare brand+flavor+type).
-    if not kept_ngrams and salient_ngrams:
-        for ng in salient_ngrams:
-            new_words = [
-                _fold_concept(w)
-                for w in ng.split("_")
-                if w and _fold_concept(w) not in spoken
-            ]
-            if new_words:
-                kept_ngrams = ["_".join(new_words)]
-                spoken.update(new_words)
-                break
-        else:
-            kept_ngrams = [salient_ngrams[0]]
-            spoken.update(
-                w for w in salient_ngrams[0].split("_") if w
-            )
-    # raw list kept for the strip-audit visibility (what token-once removed)
-    raw_salient_ngrams = list(salient_ngrams)
-    salient_ngrams = kept_ngrams
-    parts.extend(salient_ngrams)
-    # FINAL WORD-ONCE PASS (owner directive: 'it should have only a single
-    # instance of each word'): the strict novelty pass runs on COMPOUND
-    # granularity (an n-gram survives or dies whole), so a kept compound
-    # can still repeat a word internally (source text 'Vitamin B12 Vitamin
-    # 6' -> vitamin_b12_vitamin_b6) or against a later keep-token
-    # (sugar_sugar_calories_water then no_sugar). This pass rewrites the
-    # compounds themselves: every compound keeps only its first-seen
-    # CONCEPT-folded words (sparkling==carbonated, minerals==mineral —
-    # SSOT stopwords.json CONCEPT_FOLDS). Keep-tokens are ALWAYS atomic
-    # (no_sugar never folds or fragments). A compound reduced to zero
-    # words drops; unigrams follow the same rule. First occurrence wins;
-    # deterministic.
-    seen_words: set[str] = set()
-    final_tokens: list[str] = []
-    for t in " ".join(parts).split():
-        # keep-tokens are ATOMIC: no_sugar / with_pulp never fold or
-        # fragment — they carry the phrase-variant concept as one unit
-        is_keep = t in KEEP_TOKENS  # atomic — never folded, never split
-        if "_" in t and not is_keep:
-            kept = []
-            for w in t.split("_"):
-                fw = _fold_concept(w)
-                if fw and fw not in seen_words:
-                    seen_words.add(fw)
-                    kept.append(fw)
-            if kept:
-                final_tokens.append("_".join(kept))
-        elif is_keep:
-            if t not in seen_words:
-                # atomic: mark the whole token, not its parts
-                seen_words.add(t)
-                final_tokens.append(t)
-        else:
-            ft = _fold_concept(t)
-            if ft and ft not in seen_words:
-                seen_words.add(ft)
-                final_tokens.append(ft)
-    canonical = " ".join(final_tokens)
-
-    # CANONICAL-SIDE UNIVERSE EVIDENCE (owner ruling 2026-10-01, closes the
-    # wiring-agent's reported gap): canonical_records.csv previously carried
-    # NO universe_evidence column, so the CANONICAL side of the per-pair
-    # attribute census (core.attribute_conflicts.full_dimension_states ->
-    # canonical_attribute_info._universe_evidence_of) could only populate the
-    # critical channels; the SKU side already parses all 37 registered keys
-    # from the raw attribute cell (parse_universe_cell). Parse each of the
-    # GTIN's raw attribute cells with the SAME census SSOT parser
-    # (parse_universe_cell -> AttributeUniverse.parse) and UNION the token
-    # sets per registered key — same key normalization
-    # (core.text.normalized_attribute_text), same token lowercase/strip, same
-    # band canon. Persisted per key as SORTED value lists under ONE
-    # deterministic JSON string (sorted keys), matching the CSV writer's
-    # sorted-set convention: ast.literal_eval round-trips it in
-    # _universe_evidence_of exactly like the other canonical set columns.
-    # Two keys are deliberately NOT persisted:
-    #   * "volume" — the parse emits float ml values; the canonical volume
-    #     channel is volume_set (read directly by _universe_value), so floats
-    #     here would be unused noise in the CSV;
-    #   * "unclassified_keys" — key NAMES, not values; the reader keeps
-    #     registered keys only, and the SKU side owns the unclassified bucket.
-    # Existing columns are untouched (additive column at the frame's end —
-    # CANONICAL_RECORDS_COLUMNS updated deliberately, never silently).
-    canonical_universe_evidence: dict[str, set[str]] = {}
-    from core.attribute_conflicts import parse_universe_cell
-    for attr in attributes:
-        parsed = parse_universe_cell(attr)
-        parsed.pop("unclassified_keys", None)
-        parsed.pop("volume", None)
-        for key, values in parsed.items():
-            if values:
-                canonical_universe_evidence.setdefault(key, set()).update(
-                    str(token) for token in values
+    def token_once_text(self) -> None:
+        """Build the canonical string under the WORD-ONCE discipline (all
+        statements and pass order byte-identical to the original body)."""
+        # Build canonical string
+        # TOKEN-ONCE DISCIPLINE (owner directive 2026-09-08): a canonical must
+        # carry each WORD at most once — the concatenation of brand + flavor +
+        # type + salient n-grams used to repeat 'water' up to 5x (unigram from
+        # mode_type AND inside 4 different IDF compounds) in 1,489 canonicals;
+        # pure noise for both Jaccard and the embedding payload. Dedup works
+        # on UNDERSCORE-PARTS across ALL parts: an n-gram compound is dropped
+        # when EVERY word in it already appeared earlier (fully redundant);
+        # a compound carrying at least one new word stays (partial novelty —
+        # dropping only the repeated words would mutate the compound into a
+        # string that no longer corresponds to any real n-gram). First
+        # occurrence wins; deterministic by construction order.
+        parts = [self.brand_norm]
+        if self.mode_flavor:
+            parts.append(self.mode_flavor)
+        if self.mode_type:
+            parts.append(self.mode_type)
+        # Explicit categorical fields are spoken before free-form n-grams. This
+        # guarantees that polarity survives canonical generation even when its
+        # source phrase is not among the top TF-IDF n-grams.
+        parts.extend(sorted(self.carbonation_set))
+        parts.extend(sorted(self.sweetener_set))
+        parts.extend(sorted(self.pulp_set))
+        parts.extend(sorted(self.flavor_set - ({self.mode_flavor} if self.mode_flavor else set())))
+        # token-once: filter the salient n-grams against every word already
+        # spoken (brand/flavor/type parts + earlier n-grams). STRICT novelty
+        # (owner directive 2026-09-08: 'we cant have repeated strings'): the
+        # IDF top-5 are a sliding-window ladder (kr_white_grape_flavored,
+        # white_grape_flavored_sparkling, grape_flavored_sparkling_bottled —
+        # one phrase, three compounds, words repeated 3x) — an n-gram is kept
+        # only when EVERY word it carries is new; the highest-IDF member of
+        # each phrase family wins and the ladder's redundant echo dies.
+        spoken: set[str] = set()
+        for p in parts:
+            if p:
+                spoken.update(
+                    _fold_concept(w) for t in p.split() for w in t.split("_")
                 )
-    universe_evidence_json = json.dumps(
-        {key: sorted(values) for key, values in sorted(canonical_universe_evidence.items())}
-    )
+        kept_ngrams: list[str] = []
+        for ng in self.salient_ngrams:
+            # concept-fold each word before novelty: a compound carrying only
+            # folded echoes of already-spoken concepts ('sparkling' after
+            # 'carbonated') is redundant, not new
+            words = [w for w in ng.split("_") if w]
+            folded = [_fold_concept(w) for w in words]
+            if folded and all(f not in spoken for f in folded):
+                kept_ngrams.append("_".join(folded))
+                spoken.update(folded)
+        # fallback: if strict novelty dropped EVERYTHING (top-5 all one family
+        # and mode parts already spoke the words), keep the first n-gram that
+        # carries ANY new word — but contribute ONLY its new words (owner
+        # directive: no repeated strings; 'berry_acai' after mode 'berry'
+        # contributes 'acai', not the echo). If truly nothing is new, keep the
+        # single top n-gram (canonical never ends up bare brand+flavor+type).
+        if not kept_ngrams and self.salient_ngrams:
+            for ng in self.salient_ngrams:
+                new_words = [
+                    _fold_concept(w)
+                    for w in ng.split("_")
+                    if w and _fold_concept(w) not in spoken
+                ]
+                if new_words:
+                    kept_ngrams = ["_".join(new_words)]
+                    spoken.update(new_words)
+                    break
+            else:
+                kept_ngrams = [self.salient_ngrams[0]]
+                spoken.update(
+                    w for w in self.salient_ngrams[0].split("_") if w
+                )
+        # raw list kept for the strip-audit visibility (what token-once removed)
+        self.raw_salient_ngrams = list(self.salient_ngrams)
+        self.salient_ngrams = kept_ngrams
+        self.kept_ngrams = kept_ngrams
+        parts.extend(self.salient_ngrams)
+        self._final_word_once_pass(parts)
 
-    # BOUNDARY CONTRACT (lib.schemas): one validated record per canonical.
-    # brand NaN-guard: a group whose brand column is all-NaN would carry a
-    # float NaN into mode_brand (pandas would write ""), which pydantic's
-    # str field would coerce to "nan" — the exact title-poisoning bug class
-    # the lane fixed for titles. Clean it here so the RECORD is honest.
-    brand_clean = brand if isinstance(brand, str) else ""
-    rec = CanonicalRecord(
-        gtin=gtin,
-        canonical=canonical,
-        mode_brand=brand_clean,
-        mode_flavor=mode_flavor,
-        mode_type=mode_type,
-        salient_ngrams=salient_ngrams,
-        dropped_redundant_ngrams=[
-            ng for ng in raw_salient_ngrams if ng not in set(kept_ngrams)
-        ],
-        # NOTE: kept as SETS here — gate logic intersects them (pack_set &
-        # pack_set). data_prep sorts them AT THE CSV WRITE so the display
-        # is deterministic (PYTHONHASHSEED-proof) without touching logic.
-        volume_set=volume_set,
-        pack_set=pack_set,
-        packaging_level_set=packaging_level_set,
-        package_type_set=package_type_set,
-        package_material_set=package_material_set,
-        flavor_set=flavor_set,
-        made_from_set=made_from_set,
-        carbonation_set=carbonation_set,
-        sweetener_set=sweetener_set,
-        sweetener_type_set=sweetener_type_set,
-        sweetening_set=sweetening_set,
-        attribute_consistency_flags=attribute_consistency_flags,
-        pulp_set=pulp_set,
-        organic_set=organic_set,
-        volume_confidence=round(vol_conf, 3),
-        pack_confidence=round(pack_conf, 3),
-        volume_consistency=round(volume_consistency, 3),
-        pack_consistency=round(pack_consistency, 3),
-        n_titles=n,
-    )
-    # Additive persistence key (post-dump, like description_evidence before
-    # it was a model field): the canonical record model stays extra='forbid'
-    # for its gate-facing fields; the universe evidence rides the CSV
-    # contract next to them as the one rendered JSON string.
-    out = rec.model_dump()
-    out["universe_evidence"] = universe_evidence_json
-    # GTIN CARD (evidence ledger, one per listing): every claim any of the
-    # gtin's listing cards recorded, with listing origin kept so the surface
-    # can walk a card listing by listing. Ordered PER ATTRIBUTE — sorted by
-    # (field, source, value) via whole-entry JSON — deterministic across
-    # hash seeds; exact repeats (two listings extracting the identical
-    # claim) collapse via the same serialization.
-    json_entries = [
-        json.dumps({"listing": listing_index, **entry}, sort_keys=True)
-        for listing_index, per_listing in enumerate(extracted)
-        for entry in (per_listing.get("evidence_ledger") or [])
-    ]
-    out["evidence_ledger"] = json.dumps(
-        [json.loads(e) for e in sorted(dict.fromkeys(json_entries))]
-    )
-    return out
+    def _final_word_once_pass(self, parts: list[str]) -> None:
+        """Rewrite compounds under the concept-fold word-once rule."""
+        # FINAL WORD-ONCE PASS (owner directive: 'it should have only a single
+        # instance of each word'): the strict novelty pass runs on COMPOUND
+        # granularity (an n-gram survives or dies whole), so a kept compound
+        # can still repeat a word internally (source text 'Vitamin B12 Vitamin
+        # 6' -> vitamin_b12_vitamin_b6) or against a later keep-token
+        # (sugar_sugar_calories_water then no_sugar). This pass rewrites the
+        # compounds themselves: every compound keeps only its first-seen
+        # CONCEPT-folded words (sparkling==carbonated, minerals==mineral —
+        # SSOT stopwords.json CONCEPT_FOLDS). Keep-tokens are ALWAYS atomic
+        # (no_sugar never folds or fragments). A compound reduced to zero
+        # words drops; unigrams follow the same rule. First occurrence wins;
+        # deterministic.
+        seen_words: set[str] = set()
+        final_tokens: list[str] = []
+        for t in " ".join(parts).split():
+            # keep-tokens are ATOMIC: no_sugar / with_pulp never fold or
+            # fragment — they carry the phrase-variant concept as one unit
+            is_keep = t in KEEP_TOKENS  # atomic — never folded, never split
+            if "_" in t and not is_keep:
+                kept = []
+                for w in t.split("_"):
+                    fw = _fold_concept(w)
+                    if fw and fw not in seen_words:
+                        seen_words.add(fw)
+                        kept.append(fw)
+                if kept:
+                    final_tokens.append("_".join(kept))
+            elif is_keep:
+                if t not in seen_words:
+                    # atomic: mark the whole token, not its parts
+                    seen_words.add(t)
+                    final_tokens.append(t)
+            else:
+                ft = _fold_concept(t)
+                if ft and ft not in seen_words:
+                    seen_words.add(ft)
+                    final_tokens.append(ft)
+        self.canonical = " ".join(final_tokens)
+
+    # ── phase 5: universe evidence ─────────────────────────────────────────
+
+    def universe_evidence(self) -> None:
+        """Parse the GTIN's raw attribute cells with the SAME census SSOT
+        parser and UNION the token sets per registered key."""
+        # CANONICAL-SIDE UNIVERSE EVIDENCE (owner ruling 2026-10-01, closes the
+        # wiring-agent's reported gap): canonical_records.csv previously carried
+        # NO universe_evidence column, so the CANONICAL side of the per-pair
+        # attribute census (core.attribute_conflicts.full_dimension_states ->
+        # canonical_attribute_info._universe_evidence_of) could only populate the
+        # critical channels; the SKU side already parses all 37 registered keys
+        # from the raw attribute cell (parse_universe_cell). Parse each of the
+        # GTIN's raw attribute cells with the SAME census SSOT parser
+        # (parse_universe_cell -> AttributeUniverse.parse) and UNION the token
+        # sets per registered key — same key normalization
+        # (core.text.normalized_attribute_text), same token lowercase/strip, same
+        # band canon. Persisted per key as SORTED value lists under ONE
+        # deterministic JSON string (sorted keys), matching the CSV writer's
+        # sorted-set convention: ast.literal_eval round-trips it in
+        # _universe_evidence_of exactly like the other canonical set columns.
+        # Two keys are deliberately NOT persisted:
+        #   * "volume" — the parse emits float ml values; the canonical volume
+        #     channel is volume_set (read directly by _universe_value), so floats
+        #     here would be unused noise in the CSV;
+        #   * "unclassified_keys" — key NAMES, not values; the reader keeps
+        #     registered keys only, and the SKU side owns the unclassified bucket.
+        # Existing columns are untouched (additive column at the frame's end —
+        # CANONICAL_RECORDS_COLUMNS updated deliberately, never silently).
+        canonical_universe_evidence: dict[str, set[str]] = {}
+        from core.attribute_conflicts import parse_universe_cell
+        for attr in self.attributes:
+            parsed = parse_universe_cell(attr)
+            parsed.pop("unclassified_keys", None)
+            parsed.pop("volume", None)
+            for key, values in parsed.items():
+                if values:
+                    canonical_universe_evidence.setdefault(key, set()).update(
+                        str(token) for token in values
+                    )
+        self.universe_evidence_json = json.dumps(
+            {key: sorted(values) for key, values in sorted(canonical_universe_evidence.items())}
+        )
+
+    # ── phase 6: the validated record ──────────────────────────────────────
+
+    def record(self) -> dict:
+        """One validated CanonicalRecord + the additive persistence keys."""
+        # BOUNDARY CONTRACT (lib.schemas): one validated record per canonical.
+        # brand NaN-guard: a group whose brand column is all-NaN would carry a
+        # float NaN into mode_brand (pandas would write ""), which pydantic's
+        # str field would coerce to "nan" — the exact title-poisoning bug class
+        # the lane fixed for titles. Clean it here so the RECORD is honest.
+        brand_clean = self._brand if isinstance(self._brand, str) else ""
+        rec = CanonicalRecord(
+            gtin=self._gtin,
+            canonical=self.canonical,
+            mode_brand=brand_clean,
+            mode_flavor=self.mode_flavor,
+            mode_type=self.mode_type,
+            salient_ngrams=self.salient_ngrams,
+            dropped_redundant_ngrams=[
+                ng for ng in self.raw_salient_ngrams if ng not in set(self.kept_ngrams)
+            ],
+            # NOTE: kept as SETS here — gate logic intersects them (pack_set &
+            # pack_set). data_prep sorts them AT THE CSV WRITE so the display
+            # is deterministic (PYTHONHASHSEED-proof) without touching logic.
+            volume_set=self.volume_set,
+            pack_set=self.pack_set,
+            packaging_level_set=self.packaging_level_set,
+            package_type_set=self.package_type_set,
+            package_material_set=self.package_material_set,
+            flavor_set=self.flavor_set,
+            made_from_set=self.made_from_set,
+            carbonation_set=self.carbonation_set,
+            sweetener_set=self.sweetener_set,
+            sweetener_type_set=self.sweetener_type_set,
+            sweetening_set=self.sweetening_set,
+            attribute_consistency_flags=self.attribute_consistency_flags,
+            pulp_set=self.pulp_set,
+            organic_set=self.organic_set,
+            volume_confidence=round(self.vol_conf, 3),
+            pack_confidence=round(self.pack_conf, 3),
+            volume_consistency=round(self.volume_consistency, 3),
+            pack_consistency=round(self.pack_consistency, 3),
+            n_titles=self.n_titles,
+        )
+        # Additive persistence key (post-dump, like description_evidence before
+        # it was a model field): the canonical record model stays extra='forbid'
+        # for its gate-facing fields; the universe evidence rides the CSV
+        # contract next to them as the one rendered JSON string.
+        out = rec.model_dump()
+        out["universe_evidence"] = self.universe_evidence_json
+        # GTIN CARD (evidence ledger, one per listing): every claim any of the
+        # gtin's listing cards recorded, with listing origin kept so the surface
+        # can walk a card listing by listing. Ordered PER ATTRIBUTE — sorted by
+        # (field, source, value) via whole-entry JSON — deterministic across
+        # hash seeds; exact repeats (two listings extracting the identical
+        # claim) collapse via the same serialization.
+        json_entries = [
+            json.dumps({"listing": listing_index, **entry}, sort_keys=True)
+            for listing_index, per_listing in enumerate(self.extracted)
+            for entry in (per_listing.get("evidence_ledger") or [])
+        ]
+        out["evidence_ledger"] = json.dumps(
+            [json.loads(e) for e in sorted(dict.fromkeys(json_entries))]
+        )
+        return out
+
+    # ── orchestration ──────────────────────────────────────────────────────
+
+    def compose(self) -> dict:
+        self.accept_rows()
+        self.aggregate_sets()
+        self.confidences_and_consistency()
+        self.token_once_text()
+        self.universe_evidence()
+        return self.record()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
