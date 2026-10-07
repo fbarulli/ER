@@ -72,11 +72,12 @@ def _freeze_config(setup,cfg):
 @timed
 def _frozen_support(setup):
     """The training-population support records and prepared vocabulary."""
-    records = load_records(setup/'prepared/listings.json')
-    graph_plan,graph_arrays = load_plan(setup/'prepared/listings.json',setup/'prepared/pairs.csv')
-    graph_arrays.close()
-    support = [records[n] for n in graph_plan['populations']['train']]
-    vocabulary = graph_plan['vocabulary']
+    with _LOG.section('ablation_support.load'):
+        records = load_records(setup/'prepared/listings.json')
+        graph_plan,graph_arrays = load_plan(setup/'prepared/listings.json',setup/'prepared/pairs.csv')
+        graph_arrays.close()
+        support = [records[n] for n in graph_plan['populations']['train']]
+        vocabulary = graph_plan['vocabulary']
     return support,vocabulary
 
 
@@ -96,12 +97,13 @@ def _template_checkpoint(setup,baseline,track,vocabulary,support):
 @timed
 def _track_request(setup,checkpoint,track,*,cohort,frozen_config,baseline,composer=None,token_cache=None):
     """prepare() the track's tokens/tensors and read back its emitted request."""
-    path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
-        cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
-        listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
-        text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
-        composer=composer,token_cache=token_cache)
-    request = json.loads(path.read_text())
+    with _LOG.section('ablation_template.request'):
+        path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
+            cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
+            listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
+            text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
+            composer=composer,token_cache=token_cache)
+        request = json.loads(path.read_text())
     return path,request
 
 
