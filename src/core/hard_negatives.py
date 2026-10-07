@@ -940,6 +940,20 @@ class _CrossBrandMiner:
 
     def run(self):
         """The original miner body verbatim, as the phase order."""
+        df = self._df
+        canonical_records = self._canonical_records
+        gtin_to_row = self._gtin_to_row
+        gtin_to_canon_idx = self._gtin_to_canon_idx
+        existing = self._existing
+        n_target = self._n_target
+        require_agreement = self._require_agreement
+        min_similarity = self._min_similarity
+        max_per_canonical = self._max_per_canonical
+        max_per_brand = self._max_per_brand
+        volume_relative_tolerance = self._vol_rel
+        volume_absolute_tolerance_ml = self._vol_abs
+        exclude_conflicting = self._exclude_conflicting
+        funnel = self._funnel
         require = tuple(str(dimension) for dimension in require_agreement)
         if not require:
             raise ValueError(
@@ -1476,6 +1490,233 @@ def build_triplets(
     return triples
 
 
+class _AnnHardNegativeMiner:
+    """One ANN hard-negative mining pass (macro-blocked cosine ANN).
+
+    SR phases, ONE fixed order in run(); the statements are the original
+    miner body verbatim (config SSOT reads, chunked block scan, audit trail,
+    hardest-first cap selection), so the returned pairs/scores are
+    byte-identical.
+
+    Phase map:
+      resolve_config — every miner parameter from config/training.yaml when
+                       omitted (target, band, k, chunk size, exclusion)
+      scan_blocks    — per-macro chunked BLAS neighbor scan with the gtin/
+                       brand/checksum guards and the label-error exclusion
+      apply_caps     — dedupe + endpoint diversity caps + target cutoff
+    """
+
+    def __init__(self, df: pd.DataFrame, emb: np.ndarray, *, seed, n_target,
+                 cosine_lo, cosine_hi, exclude_conflicting, k,
+                 max_per_canonical, max_per_brand) -> None:
+        self._df = df
+        self._emb = emb
+        self._seed_arg = seed
+        self._n_target_arg = n_target
+        self._cosine_lo_arg = cosine_lo
+        self._cosine_hi_arg = cosine_hi
+        self._exclude_arg = exclude_conflicting
+        self._k_arg = k
+        self._max_per_canonical_arg = max_per_canonical
+        self._max_per_brand_arg = max_per_brand
+
+    def resolve_config(self) -> None:
+        from core.common import SEED, category_macros, training_cfg
+
+        if self._seed_arg is None:
+            self._seed = SEED
+        else:
+            self._seed = self._seed_arg
+        ann_cfg = training_cfg().mining.ann
+        self._ann_cfg = ann_cfg
+        self._n_target = (
+            int(ann_cfg.target) if self._n_target_arg is None
+            else self._n_target_arg
+        )
+        self._k = int(ann_cfg.k) if self._k_arg is None else self._k_arg
+        self._exclude_conflicting = (
+            bool(ann_cfg.exclude_conflicting) if self._exclude_arg is None
+            else self._exclude_arg
+        )
+        self._max_per_canonical = (
+            int(ann_cfg.max_per_canonical) if self._max_per_canonical_arg is None
+            else self._max_per_canonical_arg
+        )
+        self._max_per_brand = (
+            int(ann_cfg.max_per_brand) if self._max_per_brand_arg is None
+            else self._max_per_brand_arg
+        )
+        if self._cosine_lo_arg is None or self._cosine_hi_arg is None:
+            lo, hi = ann_cfg.band.split("-")
+            self._cosine_lo = float(lo) if self._cosine_lo_arg is None else self._cosine_lo_arg
+            self._cosine_hi = float(hi) if self._cosine_hi_arg is None else self._cosine_hi_arg
+        else:
+            self._cosine_lo = self._cosine_lo_arg
+            self._cosine_hi = self._cosine_hi_arg
+
+    def scan_blocks(self) -> tuple[list, int, int]:
+        """Per-macro chunked scan; returns (found, band_seen, excluded_in_band)."""
+        from core.common import category_macros
+
+        df = self._df
+        emb = self._emb
+        cosine_lo = self._cosine_lo
+        cosine_hi = self._cosine_hi
+        k = self._k
+        ann_cfg = self._ann_cfg
+        excluded = self._excluded
+        gtins = df["gtin"].fillna("").astype(str).to_numpy()
+        brands = df["brand"].fillna("").astype(str).to_numpy()
+        # MACRO_MAP moved to config (SSOT): config/paths.yaml category_macros,
+        # read via lib.common.category_macros() — no module-level copy.
+        macro_map = category_macros()
+        macro = df["category"].fillna("").map(lambda c: macro_map.get(c, "?")).to_numpy()
+        # GTIN trust (owner ruling, see src/core/gtin.py): a checksum-fail gtin
+        # cannot certify "known different" any more than a missing one can —
+        # exclude from the negative population exactly like empty gtins.
+        from core.gtin import gtin_validity
+
+        bc_valid = gtin_validity(df["gtin"].fillna("").astype(str)).to_numpy()
+        found = []
+        n_band_seen = 0  # pairs reaching all filters except exclusion (audit denominator)
+        n_excluded_in_band = 0  # pairs the label-error guard DROPPED (audit trail)
+        for m in np.unique(macro):
+            idx = np.flatnonzero(macro == m)
+            if len(idx) < 2:
+                continue
+            # VECTORIALIZED neighbor search: one BLAS matmul per macro block replaces
+            # sklearn's kneighbors (5x faster, identical top-k neighbor sets —
+            # verified on the deduped corpus: block CONCENTRATES 7,881 rows, top-5
+            # neighbor identities match exactly). Emb rows are L2-normalized so the
+            # dot product IS cosine similarity.
+            #
+            # CHUNKED over block rows (OOM fix, owner audit 2026-09-07): the old
+            # full-grid version materialized N x N arrays (sims + meshgrid + cand
+            # + topk mask ~= 11-16 GB for JUICE's N=18,251) and the kernel OOM-
+            # killed the full-corpus run (rc=137 after the zero-shot encode).
+            # Chunking is candidate-IDENTICAL: np.argpartition(axis=1) is
+            # row-independent, so per-row top-k over a (chunk, N) slice equals
+            # the full matrix's, and the a<b order filter then selects the same
+            # (i, j) pairs the grid's top-k membership mask did. Peak memory per
+            # chunk = chunk x N float64 (~300 MB at chunk=2048, N=18k).
+            k_eff = min(k, len(idx))
+            n = len(idx)
+            # rows of this block, reindexed 0..n-1 (local), global = idx[local]
+            bc_blk = gtins[idx]
+            br_blk = brands[idx]
+            bcv_blk = bc_valid[idx]
+            # Gather once: advanced indexing otherwise copies the entire macro's
+            # embeddings for every query chunk. Row slices below are views.
+            emb_blk = emb[idx]
+            chunk_size = int(ann_cfg.chunk_size)
+            for c0 in range(0, n, chunk_size):
+                c1 = min(c0 + chunk_size, n)
+                sims_chunk = emb_blk[c0:c1] @ emb_blk.T  # (c, n) cosine
+                top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
+                # candidate pairs from top-k membership: (local_i, local_j)
+                li = np.repeat(np.arange(c0, c1), k_eff)
+                lj = top.ravel()
+                # same order filter as the full grid: a < b in LOCAL indices
+                keep = li < lj
+                # flat candidate scores over the SAME (li, lj) arrays — filtered
+                # in lockstep with keep below so index spaces never mix
+                s_flat = sims_chunk[li - c0, lj]
+                keep &= (s_flat >= cosine_lo) & (s_flat <= cosine_hi)  # band
+                bc_a = bc_blk[li[keep]]
+                bc_b = bc_blk[lj[keep]]
+                br_a = br_blk[li[keep]]
+                br_b = br_blk[lj[keep]]
+                # real, distinct, and BOTH trusted (GS1 checksum) — an invalid
+                # gtin has unknown identity, not "known different"
+                valid = (
+                    (bc_a != "")
+                    & (bc_b != "")
+                    & (bc_a != bc_b)
+                    & (br_a != br_b)  # different brand
+                    & bcv_blk[li[keep]]
+                    & bcv_blk[lj[keep]]
+                )
+                sel_local = np.flatnonzero(keep)[valid]
+                li_sel = li[keep][valid]
+                lj_sel = lj[keep][valid]
+                sels = s_flat[keep][valid]
+                ga = idx[li_sel]
+                gb = idx[lj_sel]
+                n_band_seen += len(sel_local)
+                if excluded:
+                    # only check membership for pairs; keep the loop off the hot path
+                    # unless exclusions exist for this block's rows
+                    ex_rows = excluded  # set of (min,max) global pairs
+                    for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
+                        if (min(a_, b_), max(a_, b_)) in ex_rows:
+                            n_excluded_in_band += 1
+                        else:
+                            found.append((a_, b_, s_))
+                else:
+                    for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
+                        found.append((a_, b_, s_))
+        return found, n_band_seen, n_excluded_in_band
+
+    def apply_caps(self, found: list, n_band_seen: int, n_excluded_in_band: int):
+        """Audit line + hardest-first dedupe + endpoint caps + cutoff."""
+        if self._exclude_conflicting:
+            # the exclusion is auditable, never hidden: the count is part of the
+            # return so callers can report (and tests can pin) how many candidate
+            # pairs the label-error guard dropped.
+            print(
+                f"mining audit: {n_band_seen:,} candidate pairs in band, "
+                f"{n_excluded_in_band:,} excluded as conflicting-gtin label errors"
+            )
+
+        found.sort(key=lambda t: -t[2])  # hardest (highest cosine) first
+        seen: set[tuple[int, int]] = set()
+        canonical_counts: dict[str, int] = defaultdict(int)
+        brand_counts: dict[str, int] = defaultdict(int)
+        gtins = self._df["gtin"].fillna("").astype(str).to_numpy()
+        brands = self._df["brand"].fillna("").astype(str).to_numpy()
+        pairs_out: list[tuple[int, int]] = []
+        cos_out: list[float] = []
+        for a, b, s in found:
+            if (a, b) in seen:
+                continue
+            endpoint_gtins = (str(gtins[a]), str(gtins[b]))
+            endpoint_brands = (
+                str(brands[a]).strip().lower(),
+                str(brands[b]).strip().lower(),
+            )
+            if any(
+                value and canonical_counts[value] >= int(self._max_per_canonical)
+                for value in endpoint_gtins
+            ):
+                continue
+            if any(
+                value and brand_counts[value] >= int(self._max_per_brand)
+                for value in endpoint_brands
+            ):
+                continue
+            seen.add((a, b))
+            pairs_out.append((a, b))
+            cos_out.append(s)
+            for value in endpoint_gtins:
+                if value:
+                    canonical_counts[value] += 1
+            for value in endpoint_brands:
+                if value:
+                    brand_counts[value] += 1
+            if len(pairs_out) >= self._n_target:
+                break
+
+        if not pairs_out:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        return np.asarray(pairs_out, dtype=int), np.asarray(cos_out, dtype=float)
+
+    def run(self):
+        self.resolve_config()
+        self._excluded = conflicting_gtin_pairs(self._df) if self._exclude_conflicting else set()
+        found, n_band_seen, n_excluded_in_band = self.scan_blocks()
+        return self.apply_caps(found, n_band_seen, n_excluded_in_band)
+
+
 def mine_hard_negatives(
     df: pd.DataFrame,
     emb: np.ndarray,
@@ -1489,7 +1730,8 @@ def mine_hard_negatives(
     max_per_canonical: int | None = None,
     max_per_brand: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine hard negatives: cross-gtin, different-brand, same-macro, mid-cosine.
+    """Mine hard negatives: cross-gtin, different-brand, same-macro,
+    mid-cosine — one phase-ordered pass on :class:`_AnnHardNegativeMiner`.
 
     Uses cosine ANN within each macro-category block, then filters to the
     confusion band (cosine_lo..cosine_hi) with a DIFFERENT brand (the signature
@@ -1502,166 +1744,11 @@ def mine_hard_negatives(
     under mining.ann. Explicit values still win. Endpoint diversity caps keep
     one canonical or brand cluster from consuming the entire target.
     """
-    from core.common import SEED, category_macros, training_cfg
-
-    if seed is None:
-        seed = SEED
-    ann_cfg = training_cfg().mining.ann
-    if n_target is None:
-        n_target = int(ann_cfg.target)
-    if k is None:
-        k = int(ann_cfg.k)
-    if exclude_conflicting is None:
-        exclude_conflicting = bool(ann_cfg.exclude_conflicting)
-    if max_per_canonical is None:
-        max_per_canonical = int(ann_cfg.max_per_canonical)
-    if max_per_brand is None:
-        max_per_brand = int(ann_cfg.max_per_brand)
-    if cosine_lo is None or cosine_hi is None:
-        lo, hi = ann_cfg.band.split("-")
-        cosine_lo = float(lo) if cosine_lo is None else cosine_lo
-        cosine_hi = float(hi) if cosine_hi is None else cosine_hi
-    gtins = df["gtin"].fillna("").astype(str).to_numpy()
-    brands = df["brand"].fillna("").astype(str).to_numpy()
-    # MACRO_MAP moved to config (SSOT): config/paths.yaml category_macros,
-    # read via lib.common.category_macros() — no module-level copy.
-    macro_map = category_macros()
-    macro = df["category"].fillna("").map(lambda c: macro_map.get(c, "?")).to_numpy()
-    # GTIN trust (owner ruling, see src/core/gtin.py): a checksum-fail gtin
-    # cannot certify "known different" any more than a missing one can —
-    # exclude from the negative population exactly like empty gtins.
-    from core.gtin import gtin_validity
-
-    bc_valid = gtin_validity(df["gtin"].fillna("").astype(str)).to_numpy()
-    excluded = conflicting_gtin_pairs(df) if exclude_conflicting else set()
-
-    found: list[tuple[int, int, float]] = []
-    n_band_seen = 0  # pairs reaching all filters except exclusion (audit denominator)
-    n_excluded_in_band = 0  # pairs the label-error guard DROPPED (audit trail)
-    for m in np.unique(macro):
-        idx = np.flatnonzero(macro == m)
-        if len(idx) < 2:
-            continue
-        # VECTORIALIZED neighbor search: one BLAS matmul per macro block replaces
-        # sklearn's kneighbors (5x faster, identical top-k neighbor sets —
-        # verified on the deduped corpus: block CONCENTRATES 7,881 rows, top-5
-        # neighbor identities match exactly). Emb rows are L2-normalized so the
-        # dot product IS cosine similarity.
-        #
-        # CHUNKED over block rows (OOM fix, owner audit 2026-09-07): the old
-        # full-grid version materialized N x N arrays (sims + meshgrid + cand
-        # + topk mask ~= 11-16 GB for JUICE's N=18,251) and the kernel OOM-
-        # killed the full-corpus run (rc=137 after the zero-shot encode).
-        # Chunking is candidate-IDENTICAL: np.argpartition(axis=1) is
-        # row-independent, so per-row top-k over a (chunk, N) slice equals
-        # the full matrix's, and the a<b order filter then selects the same
-        # (i, j) pairs the grid's top-k membership mask did. Peak memory per
-        # chunk = chunk x N float64 (~300 MB at chunk=2048, N=18k).
-        k_eff = min(k, len(idx))
-        n = len(idx)
-        # rows of this block, reindexed 0..n-1 (local), global = idx[local]
-        bc_blk = gtins[idx]
-        br_blk = brands[idx]
-        bcv_blk = bc_valid[idx]
-        # Gather once: advanced indexing otherwise copies the entire macro's
-        # embeddings for every query chunk. Row slices below are views.
-        emb_blk = emb[idx]
-        chunk_size = int(ann_cfg.chunk_size)
-        for c0 in range(0, n, chunk_size):
-            c1 = min(c0 + chunk_size, n)
-            sims_chunk = emb_blk[c0:c1] @ emb_blk.T  # (c, n) cosine
-            top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
-            # candidate pairs from top-k membership: (local_i, local_j)
-            li = np.repeat(np.arange(c0, c1), k_eff)
-            lj = top.ravel()
-            # same order filter as the full grid: a < b in LOCAL indices
-            keep = li < lj
-            # flat candidate scores over the SAME (li, lj) arrays — filtered
-            # in lockstep with keep below so index spaces never mix
-            s_flat = sims_chunk[li - c0, lj]
-            keep &= (s_flat >= cosine_lo) & (s_flat <= cosine_hi)  # band
-            bc_a = bc_blk[li[keep]]
-            bc_b = bc_blk[lj[keep]]
-            br_a = br_blk[li[keep]]
-            br_b = br_blk[lj[keep]]
-            # real, distinct, and BOTH trusted (GS1 checksum) — an invalid
-            # gtin has unknown identity, not "known different"
-            valid = (
-                (bc_a != "")
-                & (bc_b != "")
-                & (bc_a != bc_b)
-                & (br_a != br_b)  # different brand
-                & bcv_blk[li[keep]]
-                & bcv_blk[lj[keep]]
-            )
-            sel_local = np.flatnonzero(keep)[valid]
-            li_sel = li[keep][valid]
-            lj_sel = lj[keep][valid]
-            sels = s_flat[keep][valid]
-            ga = idx[li_sel]
-            gb = idx[lj_sel]
-            n_band_seen += len(sel_local)
-            if excluded:
-                # only check membership for pairs; keep the loop off the hot path
-                # unless exclusions exist for this block's rows
-                ex_rows = excluded  # set of (min,max) global pairs
-                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
-                    if (min(a_, b_), max(a_, b_)) in ex_rows:
-                        n_excluded_in_band += 1
-                    else:
-                        found.append((a_, b_, s_))
-            else:
-                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
-                    found.append((a_, b_, s_))
-
-    if exclude_conflicting:
-        # the exclusion is auditable, never hidden: the count is part of the
-        # return so callers can report (and tests can pin) how many candidate
-        # pairs the label-error guard dropped.
-        print(
-            f"mining audit: {n_band_seen:,} candidate pairs in band, "
-            f"{n_excluded_in_band:,} excluded as conflicting-gtin label errors"
-        )
-
-    found.sort(key=lambda t: -t[2])  # hardest (highest cosine) first
-    seen: set[tuple[int, int]] = set()
-    canonical_counts: dict[str, int] = defaultdict(int)
-    brand_counts: dict[str, int] = defaultdict(int)
-    pairs_out: list[tuple[int, int]] = []
-    cos_out: list[float] = []
-    for a, b, s in found:
-        if (a, b) in seen:
-            continue
-        endpoint_gtins = (str(gtins[a]), str(gtins[b]))
-        endpoint_brands = (
-            str(brands[a]).strip().lower(),
-            str(brands[b]).strip().lower(),
-        )
-        if any(
-            value and canonical_counts[value] >= int(max_per_canonical)
-            for value in endpoint_gtins
-        ):
-            continue
-        if any(
-            value and brand_counts[value] >= int(max_per_brand)
-            for value in endpoint_brands
-        ):
-            continue
-        seen.add((a, b))
-        pairs_out.append((a, b))
-        cos_out.append(s)
-        for value in endpoint_gtins:
-            if value:
-                canonical_counts[value] += 1
-        for value in endpoint_brands:
-            if value:
-                brand_counts[value] += 1
-        if len(pairs_out) >= n_target:
-            break
-
-    if not pairs_out:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    return np.asarray(pairs_out, dtype=int), np.asarray(cos_out, dtype=float)
+    return _AnnHardNegativeMiner(
+        df, emb, seed=seed, n_target=n_target, cosine_lo=cosine_lo,
+        cosine_hi=cosine_hi, exclude_conflicting=exclude_conflicting, k=k,
+        max_per_canonical=max_per_canonical, max_per_brand=max_per_brand,
+    ).run()
 
 
 def calibrated_ann_band(
