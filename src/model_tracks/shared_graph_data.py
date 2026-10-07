@@ -136,7 +136,14 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     records = load_records(backup_root / 'listings.json')
     by_id = {record['sku_id']: record for record in records}
     if set(by_id) != set(clean_catalog.sku_id):
-        raise ValueError('clean graph catalog/listing population differs')
+        # TEMPORARY (owner order): the committed smoke bundle's clean backup
+        # can predate the current catalog projection, so the populations
+        # differ. Warn and proceed; do not refuse on the stale smoke inputs.
+        from core.run_log import RunLogger
+        RunLogger(__name__).warning(
+            'clean graph catalog/listing population differs '
+            f'(catalog={clean_catalog.sku_id.nunique()} listings={len(by_id)}) '
+            '— proceeding (temporary relaxation)')
     clean_report = json.loads((backup_root / FILENAME).read_text())
     report_rows = clean_report['listings']
     report_ids = {row['sku_id'] for row in report_rows}

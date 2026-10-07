@@ -1,0 +1,72 @@
+{
+  "seed": 1729,
+  "package_state_rule": "package_state=true iff the standardized state carries a measured unit volume (a 'Volume:' field with a finite numeric value) OR an explicit numeric pack count (a numeric value under a pack-quantity key: Pack/Pack Size/Pack Count/Pack Quantity/Packaging/Units/Number of Items, or an 'NxM<unit>' multipack token); a 'Pack Type:' value alone is a package form, not a quantity, and does NOT qualify.",
+  "identity_label_values": {
+    "true": 564,
+    "false": 12
+  },
+  "counts": {
+    "state_cases": 4054,
+    "state_package_state_true": 3555,
+    "state_package_state_false": 499,
+    "state_pack_type_only_no_quantity": 303,
+    "listing_pairs_positive": 564,
+    "listing_pairs_negative": 12,
+    "gate_hard_no_available": 6947,
+    "gate_hard_no_sampled": 552,
+    "gate_fallback_quarantined": 1132,
+    "gate_hard_no_cap": 1000,
+    "identity_positive_total": 564,
+    "identity_negative_total": 564,
+    "dropped_missing": {
+      "hard_no": 0,
+      "fallback": 0,
+      "total": 0
+    }
+  },
+  "gate_reason_sample": {
+    "Critical attribute mismatch: flavor": 138,
+    "Critical attribute mismatch: flavor,sweetener": 5,
+    "Critical attribute mismatch: pulp": 1,
+    "Critical attribute mismatch: sweetener": 16,
+    "Pack blocker: pack size, package type, or volume mismatch": 350,
+    "Package material mismatch": 42
+  },
+  "split_ratios": {
+    "train": 0.5277777777777778,
+    "dev": 0.24305555555555555,
+    "test": 0.22916666666666666
+  },
+  "split_sizes": {
+    "train": 2735,
+    "dev": 1259,
+    "test": 1188
+  },
+  "split_counts": {
+    "train": {
+      "listing_positive": 295,
+      "listing_negative": 9,
+      "gate_negative": 291,
+      "state": 2140
+    },
+    "dev": {
+      "listing_positive": 139,
+      "listing_negative": 1,
+      "gate_negative": 134,
+      "state": 985
+    },
+    "test": {
+      "listing_positive": 130,
+      "listing_negative": 2,
+      "gate_negative": 127,
+      "state": 929
+    }
+  },
+  "question_schema_sha256": "83ca616abccc2f031420181a364def2ad7599e1e10807f418cb0d854189d4514",
+  "sha256": {
+    "train.jsonl": "1702255c078fb4ebf7c456ef7a40b99d0d6939e57068dd1ac9cbb587c07fedd8",
+    "dev.jsonl": "01503ea15cab6f2697beae1549153e86625510c5094b80dea40989f13bc96d25",
+    "test.jsonl": "bbf2e0100d5834c553a494469fbb87d905565e262edbf9367d255f0fccf9022d",
+    "unknown_pairs.csv": "ff1e77d84c8679a7b15c357f73cff2177ec696624b39b48c4a82e6db4ebdf300"
+  }
+}

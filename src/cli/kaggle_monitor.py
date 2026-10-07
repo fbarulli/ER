@@ -41,18 +41,23 @@ class KaggleMonitor:
         which = watcher
         log_path = lane.lane_logs_dir() / lane._spec().files.autowatch_log.format(which=which)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("wb") as handle:
+        # The pusher already opened the run's transcript fresh (its first
+        # _log_lane truncated lane.log); append the launch marker and let the
+        # detached watcher write the transcript itself through _log_lane +
+        # stream_kernel_logs. Its stdout is discarded so no second file handle
+        # competes for the same file (cosmetic echo would otherwise duplicate).
+        with log_path.open("ab") as handle:
             handle.write(f"[_spawn_autowatch {time.strftime('%Y-%m-%dT%H:%M:%S')} "
                          f"launching watcher for {which}]\n".encode())
-            handle.flush()
-            subprocess.Popen(
-                [sys.executable, "-m", "cli.kaggle_lane", "--what", "autowatch",
-                 "--kernel", which, "--execute",
-                 *(["--slug", slug] if slug else [])],
-                cwd=lane.TRAIN_ROOT, stdout=handle, stderr=subprocess.STDOUT,
-                env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [
-                    str(lane.TRAIN_ROOT / lane._spec().files.source_dir), os.environ.get("PYTHONPATH")]))},
-                start_new_session=True)
+        subprocess.Popen(
+            [sys.executable, "-m", "cli.kaggle_lane", "--what", "autowatch",
+             "--kernel", which, "--execute",
+             *(["--slug", slug] if slug else [])],
+            cwd=lane.TRAIN_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+            env={**os.environ, "ER_KAGGLE_LANE_APPEND": "1",
+                 "PYTHONPATH": os.pathsep.join(filter(None, [
+                     str(lane.TRAIN_ROOT / lane._spec().files.source_dir), os.environ.get("PYTHONPATH")]))},
+            start_new_session=True)
         return {"autowatch": "spawned", "kernel": which, "log": str(log_path)}
 
     @staticmethod
@@ -227,9 +232,14 @@ class KaggleMonitor:
         proxy (kagglesdk GET->KERNELS GetKernelSessionLogsStream) exposes the
         run's live stdout/stderr — the tqdm bars included. The proxy URL embeds
         the kernel_session_id, which also feeds the manual kill switch.
-        Writes every decoded data payload post-processed (CR frames -> lines +
-        tagged last bar, cli.log_capture) to log_path (default: logs/kaggle/)
-        and echoes decoded lines to the console."""
+        Appends every decoded data payload post-processed (CR frames -> lines +
+        tagged last bar, cli.log_capture) to log_path (default: the run's
+        logs/kaggle/lane.log) and echoes decoded lines to the console. The run
+        transcript is opened fresh once per run by the pusher's first _log_lane;
+        the follower appends so it never wipes the watcher's status lines. A
+        dropped SSE connection replays from the session's FIRST line, so the
+        follower tracks how many lines it already persisted and skips the
+        replayed prefix instead of truncating the shared transcript."""
         from cli import kaggle_lane as lane
 
         from kagglesdk.kaggle_client import KaggleClient
@@ -248,28 +258,44 @@ class KaggleMonitor:
         destination.parent.mkdir(parents=True, exist_ok=True)
         plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
         session_id: int | None = None
+        persisted_lines = 0
+        attempt_lines = 0
 
-        def append_progress(payload_text: str, raw: str) -> None:
-            """Write one captured chunk as grep-able, post-processed lines.
+        def emit(text: str) -> None:
+            """Append one chunk as logical lines, skipping replayed prefix.
+
+            The midtier SSE proxy replays from the session's first line on a
+            reconnect; persisted_lines counts lines already written so each new
+            attempt drops the prefix instead of duplicating it.
+            """
+            nonlocal persisted_lines, attempt_lines
+            if not text.endswith("\n"):
+                text += "\n"
+            for piece in text.splitlines(keepends=True):
+                if attempt_lines < persisted_lines:
+                    attempt_lines += 1
+                    continue
+                log_handle.write(piece)
+                attempt_lines += 1
+                persisted_lines += 1
+            log_handle.flush()
+
+        def append_progress(payload_text: str | None, raw: str) -> None:
+            """Append one captured chunk as grep-able, post-processed lines.
 
             SSE frames that carry tqdm's \r-separated progress bars are expanded
             at write time (shared helper, cli.log_capture) so the log tail always
             shows the last training bar; non-JSON events are kept verbatim.
             """
             if payload_text is None:
-                log_handle.write(raw + "\n")
+                emit(raw)
                 return
-            # \r-frames need the newline joining to render: end the chunk with
-            # one so repeated writes never run bars together.
-            text = progress_frames_to_lines(payload_text or "")
-            if not text.endswith("\n"):
-                text += "\n"
-            log_handle.write(text)
-            log_handle.flush()
-        with destination.open("w", encoding="utf-8") as log_handle:
+            emit(progress_frames_to_lines(payload_text or ""))
+        with destination.open("a", encoding="utf-8") as log_handle:
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
             while True:
+                attempt_lines = 0
                 try:
                     request = ApiGetKernelSessionLogsStreamRequest()
                     request.user_name = owner
@@ -300,8 +326,7 @@ class KaggleMonitor:
                         if not line:
                             continue
                         if not line.startswith("data:"):
-                            log_handle.write(line + "\n")
-                            log_handle.flush()
+                            emit(line)
                             continue
                         try:
                             payload = json.loads(line[5:].strip())
@@ -321,8 +346,9 @@ class KaggleMonitor:
                     break
                 except (ProtocolError, requests.exceptions.RequestException) as error:
                     # The midtier SSE proxy drops live connections mid-run; a
-                    # replayed stream re-attaches at the session's FIRST line, so
-                    # each attempt truncates instead of appending duplicates.
+                    # replayed stream re-attaches at the session's FIRST line.
+                    # persisted_lines already holds the prefix, so the next
+                    # attempt appends only what emit has not seen.
                     attempts += 1
                     if attempts > lane._spec().limits.stream_retries:
                         # Server-side drops exhaust the cap; visibility only —
@@ -333,11 +359,6 @@ class KaggleMonitor:
                         break
                     lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
                               f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
-                    log_handle.seek(0)
-                    log_handle.truncate()
-                    time.sleep(lane._spec().limits.retry_seconds * attempts)
-                    log_handle.seek(0)
-                    log_handle.truncate()
                     time.sleep(lane._spec().limits.retry_seconds * attempts)
         plan["session_id"] = session_id
         return plan

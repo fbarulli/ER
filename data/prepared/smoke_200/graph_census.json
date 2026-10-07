@@ -1,0 +1,73 @@
+{
+  "listings": 210,
+  "numeric_interior_values_omitted": {
+    "pack": 0,
+    "volume_ml": 0
+  },
+  "relations": {
+    "brand": {
+      "membership_edges": 300,
+      "missing_listings": 8,
+      "train_values": 100,
+      "unseen_values": 63
+    },
+    "carbonation": {
+      "membership_edges": 183,
+      "missing_listings": 27,
+      "train_values": 2,
+      "unseen_values": 0
+    },
+    "flavor": {
+      "membership_edges": 316,
+      "missing_listings": 44,
+      "train_values": 47,
+      "unseen_values": 10
+    },
+    "package_material": {
+      "membership_edges": 63,
+      "missing_listings": 158,
+      "train_values": 5,
+      "unseen_values": 2
+    },
+    "package_type": {
+      "membership_edges": 166,
+      "missing_listings": 52,
+      "train_values": 11,
+      "unseen_values": 0
+    },
+    "pulp": {
+      "membership_edges": 15,
+      "missing_listings": 195,
+      "train_values": 3,
+      "unseen_values": 0
+    },
+    "sweetener": {
+      "membership_edges": 90,
+      "missing_listings": 124,
+      "train_values": 3,
+      "unseen_values": 1
+    },
+    "sweetener_type": {
+      "membership_edges": 143,
+      "missing_listings": 106,
+      "train_values": 9,
+      "unseen_values": 3
+    },
+    "sweetening": {
+      "membership_edges": 34,
+      "missing_listings": 178,
+      "train_values": 3,
+      "unseen_values": 2
+    }
+  },
+  "representation_policy": {
+    "categorical": "train vocabulary; missing and all unseen values share token zero; deduplicated",
+    "numeric": "log1p min/max and presence; interior values omitted",
+    "unknown_graph_hub": false
+  },
+  "splits": {
+    "dev": 50,
+    "test": 45,
+    "train": 115
+  }
+}

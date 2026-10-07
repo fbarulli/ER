@@ -604,12 +604,17 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
 
     kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    # One roof (owner order 2026-10-07): every transcript landmark lands on
-    # the single logs/kaggle/lane.log (files.stream_log default).
+    # One roof (owner order 2026-10-07): every transcript landmark — decoded
+    # stdout AND the watcher's status lines — lands on the single
+    # logs/kaggle/lane.log (files.stream_log default).
     destination = tmp_path / "logs" / "kaggle" / "lane.log"
     content = destination.read_text().splitlines()
-    assert content == ["+ git clone", "[timing] mark 1s", "phase complete"], \
+    assert [line for line in content
+            if line.startswith(("+ git", "[timing]", "phase"))] == \
+        ["+ git clone", "[timing] mark 1s", "phase complete"], \
         "decoded data payloads must be written as plain lines"
+    assert any("reconnect attempt 1" in line for line in content), \
+        "the reconnect status line shares the same transcript"
     assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
 
 
@@ -644,6 +649,40 @@ def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkey
     # every \r frame is its own grep-able line, and the last bar stays tagged
     # at the end of its chunk so the log tail shows the training tqdm strip
     assert content == ["12%", "35%", "60%", "[tqdm] 60%", "[timing] done"]
+
+
+def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatch):
+    """Two consecutive runs overwrite, never append-sprawl (owner order)."""
+    import types
+    import kagglesdk.kaggle_client
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+
+    def run(tag):
+        class Stream:
+            def iter_lines(self):
+                yield (f'data: {{"stream_name":"stdout","time":1,'
+                       f'"data":"{tag} [timing] 1s\\n"}}')
+
+        fake_api = types.SimpleNamespace(
+            get_kernel_session_logs_stream=lambda request: Stream())
+        monkeypatch.setattr(
+            kagglesdk.kaggle_client, "KaggleClient",
+            lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+                kernels_api_client=fake_api)))
+        # Each run is a fresh process: its first _log_lane truncates the file.
+        monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+        kaggle_lane._log_lane(f"{tag} push rc=0")
+        kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+
+    run("first")
+    run("second")
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert "first" not in content, "a new run must overwrite the old transcript"
+    assert "second push rc=0" in content
+    assert "second [timing] 1s" in content
 
 
 def test_lane_logs_dir_is_under_canonical_logs_root(tmp_path, monkeypatch):

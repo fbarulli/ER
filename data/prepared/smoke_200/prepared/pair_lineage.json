@@ -1,0 +1,371 @@
+{
+  "augmentation": "shared frozen text objective; masked, swapped and counterfactual endpoints retained",
+  "listing_pairs_sha256": "42b9dd8acac820abd948b3b7264cd7ab40d1c7f9d7145323b31c399bbaf1e3ea",
+  "pairs": [
+    {
+      "example_id": "0:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "0:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "919472103",
+      "sku_id2": "canonical:2020005054080",
+      "split": "train"
+    },
+    {
+      "example_id": "0:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "0:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "919472103",
+      "sku_id2": "canonical:4779033974218",
+      "split": "train"
+    },
+    {
+      "example_id": "1:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "1:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "641603268",
+      "sku_id2": "canonical:3292482220046",
+      "split": "train"
+    },
+    {
+      "example_id": "1:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "1:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "641603268",
+      "sku_id2": "canonical:3292482520016",
+      "split": "train"
+    },
+    {
+      "example_id": "2:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "2:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "56070791",
+      "sku_id2": "canonical:3600520752778",
+      "split": "train"
+    },
+    {
+      "example_id": "2:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "2:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "56070791",
+      "sku_id2": "canonical:7314720732046",
+      "split": "train"
+    },
+    {
+      "example_id": "3:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "3:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "373448609",
+      "sku_id2": "canonical:3700749300023",
+      "split": "train"
+    },
+    {
+      "example_id": "3:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "3:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "373448609",
+      "sku_id2": "canonical:3700749300115",
+      "split": "train"
+    },
+    {
+      "example_id": "4:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "4:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "1054347099",
+      "sku_id2": "canonical:3292482520016",
+      "split": "train"
+    },
+    {
+      "example_id": "4:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "4:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "1054347099",
+      "sku_id2": "canonical:3292482220046",
+      "split": "train"
+    },
+    {
+      "example_id": "5:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "5:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "1033449824",
+      "sku_id2": "canonical:7314720732046",
+      "split": "train"
+    },
+    {
+      "example_id": "5:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "5:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "1033449824",
+      "sku_id2": "canonical:3600520752778",
+      "split": "train"
+    },
+    {
+      "example_id": "6:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "6:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "373719161",
+      "sku_id2": "canonical:3700749300115",
+      "split": "train"
+    },
+    {
+      "example_id": "6:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "6:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "373719161",
+      "sku_id2": "canonical:3700749300023",
+      "split": "train"
+    },
+    {
+      "example_id": "7:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "7:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "augmentation:13313",
+      "sku_id2": "canonical:3292482220046",
+      "split": "train"
+    },
+    {
+      "example_id": "7:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "7:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "augmentation:13313",
+      "sku_id2": "canonical:3292482520016",
+      "split": "train"
+    },
+    {
+      "example_id": "8:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "8:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3248652710213",
+      "sku_id2": "50518353",
+      "split": "train"
+    },
+    {
+      "example_id": "8:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "8:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3248652710213",
+      "sku_id2": "augmentation:13294",
+      "split": "train"
+    },
+    {
+      "example_id": "9:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "9:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3250392595319",
+      "sku_id2": "145887335",
+      "split": "train"
+    },
+    {
+      "example_id": "9:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "9:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3250392595319",
+      "sku_id2": "augmentation:13295",
+      "split": "train"
+    },
+    {
+      "example_id": "10:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "10:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3450970138567",
+      "sku_id2": "109882955",
+      "split": "train"
+    },
+    {
+      "example_id": "10:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "10:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3450970138567",
+      "sku_id2": "augmentation:13296",
+      "split": "train"
+    },
+    {
+      "example_id": "11:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "11:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:5430004017226",
+      "sku_id2": "1008146381",
+      "split": "train"
+    },
+    {
+      "example_id": "11:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "11:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:5430004017226",
+      "sku_id2": "augmentation:13297",
+      "split": "train"
+    },
+    {
+      "example_id": "12:1",
+      "label": "1",
+      "origins": [
+        {
+          "example_id": "12:1",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3250392595319",
+      "sku_id2": "145887335",
+      "split": "train"
+    },
+    {
+      "example_id": "12:0",
+      "label": "0",
+      "origins": [
+        {
+          "example_id": "12:0",
+          "kind": "shared_frozen_objective",
+          "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c"
+        }
+      ],
+      "sku_id1": "canonical:3250392595319",
+      "sku_id2": "augmentation:13298",
+      "split": "train"
+    }
+  ],
+  "schema": "er-graph-pair-lineage-v1"
+}

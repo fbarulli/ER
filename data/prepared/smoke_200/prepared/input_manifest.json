@@ -1,6 +1,6 @@
 {
-  "augmentation": "not_applicable: fixed graph pairs; no masking/gendata pipeline",
-  "catalog_sha256": "d248d53febe007f1461976aafb58b8706958c62d59212d78c8b1e1a725b29fde",
+  "augmentation": "shared frozen text objective; masked, swapped and counterfactual endpoints retained",
+  "catalog_sha256": "0f379ae237fa964b4211d7e8fd0e18eff5dbfbaa7d51ff50beb524f8a76916c1",
   "excluded_model_inputs": [
     "gtin",
     "verified identity edges",
@@ -10,12 +10,12 @@
   "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
   "identity_extractor": "core.sku_identity.row_identity",
   "identity_policy_sha256": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
-  "listings_sha256": "f2dcba9b8abb4122751537c56c2d2e9bca42721bc3c88135aad14e7ce33fedfe",
+  "listings_sha256": "c8e0a97b3db2334ba40ae4c01b0e3a9fdc6718edb66534dd504b5879e5ea9996",
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pair_lineage_sha256": null,
+  "pair_lineage_sha256": "38b7b5a524ef172c2ca989902fad6c73348d971f61e956653eb642755d0d2dac",
   "pair_trace": {
     "missing_axes": [
       "difficulty",
@@ -26,7 +26,7 @@
     "source_trace_columns": [],
     "status": "unknown: no source lineage supplied"
   },
-  "pairs_sha256": "35beee423ef9230457f128a1cf3703ba605353aae169d9f4fcd476ca0b2404b6",
+  "pairs_sha256": "42b9dd8acac820abd948b3b7264cd7ab40d1c7f9d7145323b31c399bbaf1e3ea",
   "relations": [
     "brand",
     "flavor",
@@ -38,7 +38,9 @@
     "package_type",
     "package_material"
   ],
-  "report_attributes_sha256": "7a84d633b28a8fb61e4e10b467bb73d07bc7be8f3daee31be9762af2b6b8298a",
+  "report_attributes_sha256": "ef4a93884bb80fd9e6852950cfb7152c718c4547d5295792a69820e55ee0a989",
   "schema": "er-graph-inputs-v1",
-  "splits_sha256": "8867036ca638593bad1b9b76e3c9203fa55bc4d444c21f06c6cabc66813dd4f2"
+  "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
+  "shared_training_projection_sha256": "3d173dd5df9e50aae9204c41a994bbed531e4deb6975c5fc03f3a4b276d402c4",
+  "splits_sha256": "3b87920f64af1fb38db05e9949181a39402c09b43130944b970100044789b7bf"
 }

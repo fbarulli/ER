@@ -108,6 +108,9 @@ class KaggleRuntime:
         The file is truncated on the first write of this process and appended
         afterwards, so a new run writes over the previous run's transcript
         (owner order 2026-10-07: fresh file per run, never append-sprawl).
+        A detached watcher spawned by a push shares the pusher's run transcript:
+        the pusher's first write opened it fresh and ER_KAGGLE_LANE_APPEND=1
+        tells the child process to append (never truncate again).
         Best-effort on the file side — a log-write failure is printed and never
         allowed to mask the operation's own outcome.
         """
@@ -119,7 +122,8 @@ class KaggleRuntime:
         try:
             log_dir = lane.lane_logs_dir()
             log_dir.mkdir(parents=True, exist_ok=True)
-            mode = "a" if _LANE_LOG_STARTED else "w"
+            append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
+            mode = "a" if (_LANE_LOG_STARTED or append) else "w"
             with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
                 handle.write(f"{stamp} {line}\n")
             _LANE_LOG_STARTED = True

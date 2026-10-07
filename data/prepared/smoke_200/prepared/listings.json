@@ -6705,6 +6705,380 @@
       },
       "sku_id": "canonical:7314720732046",
       "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "monoprix"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [
+          "with_pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "canonical:3248652710213",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "paquito"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon",
+          "lime"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "with_pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "canonical:3250392595319",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "eco"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "with_pulp"
+        ],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "canonical:3450970138567",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hit",
+          "vit"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "berry",
+          "elderberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": [
+          "low_sugar"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "canonical:5430004017226",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "monoprix"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "fruit",
+          "grapefruit"
+        ],
+        "package_material": [],
+        "package_type": [
+          "carton"
+        ],
+        "pulp": [
+          "no pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "augmentation:13294",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "paquito"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon",
+          "lime"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "no pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "augmentation:13295",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "eco"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "orange"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "no pulp"
+        ],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1500.0
+        ]
+      },
+      "sku_id": "augmentation:13296",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "hit",
+          "vit"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "berry",
+          "elderberry"
+        ],
+        "package_material": [],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [],
+        "sweetener_type": [
+          "sucralose",
+          "sugar"
+        ],
+        "sweetening": [
+          "sweetened"
+        ]
+      },
+      "numeric": {
+        "pack": [
+          12.0
+        ],
+        "volume_ml": [
+          500.0
+        ]
+      },
+      "sku_id": "augmentation:13297",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "paquito"
+        ],
+        "carbonation": [
+          "still"
+        ],
+        "flavor": [
+          "lemon",
+          "lime"
+        ],
+        "package_material": [
+          "plastic"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [
+          "no pulp"
+        ],
+        "sweetener": [],
+        "sweetener_type": [
+          "cane_sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "augmentation:13298",
+      "split": "train"
+    },
+    {
+      "attribute": {
+        "brand": [
+          "la",
+          "mortuacienne"
+        ],
+        "carbonation": [
+          "carbonated"
+        ],
+        "flavor": [
+          "grapefruit"
+        ],
+        "package_material": [
+          "metal"
+        ],
+        "package_type": [
+          "bottle"
+        ],
+        "pulp": [],
+        "sweetener": [
+          "sugar"
+        ],
+        "sweetener_type": [
+          "sugar"
+        ],
+        "sweetening": []
+      },
+      "numeric": {
+        "pack": [
+          1.0
+        ],
+        "volume_ml": [
+          1000.0
+        ]
+      },
+      "sku_id": "augmentation:13313",
+      "split": "train"
     }
   ],
   "schema": "er-graph-listings-v1"

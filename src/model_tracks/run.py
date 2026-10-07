@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 
 from core.archive_reader import archive_sidecar
 from core.run_log import RunLogger
@@ -98,7 +99,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             raise RuntimeError('measured combined worker memory exceeds available GPU memory')
     if gpu_only or cfg.post_training_ablation:
         from model_tracks.baseline_export import forward as forward_baseline
-        from core.common import resolve_model
+        from core.common import TRAIN_ROOT, resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
         with _LOG.section('phase.baseline_embedding', device=cfg.device):
             events.emit('baseline_embedding','started',device=cfg.device)
@@ -234,6 +235,15 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 events.emit('publication', 'skipped', reason='publication disabled in suite config')
         return archive_path
     from core.portable_archive import RESULT_ARCHIVE_EXCLUDED_DIRS
+    # The timing surfaces default into output/logs (bffadd3) and are appended
+    # to by this very collection step, so the archive would hash bytes that
+    # change mid-write ("archive integrity mismatch: logs/timings.log").
+    # Freeze them out of the output tree first; the archived copies stay.
+    for _variable in ('ER_TIMING_OUT', 'ER_TIMING_LOG'):
+        _bound = os.environ.get(_variable)
+        if _bound and Path(_bound).resolve().is_relative_to(output.resolve()):
+            os.environ[_variable] = str(
+                Path(tempfile.gettempdir()) / f'er_frozen_{Path(_bound).name}')
     files = {p.relative_to(output).as_posix(): p for p in output.rglob('*')
              if p.is_file() and not p.is_symlink() and not any(part in
                  RESULT_ARCHIVE_EXCLUDED_DIRS for part in p.relative_to(output).parts)

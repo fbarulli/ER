@@ -221,8 +221,11 @@ kaggle:
     training_dir: model_tracks
     embedding_dir: embedding_job
     lane_log: lane.log
-    autowatch_log: autowatch_{which}.log
-    stream_log: '{kernel}.stream.log'
+    # One roof (owner order 2026-10-07): the watcher and the live SSE stream
+    # both append to the single lane.log — the config mirrors the schema
+    # defaults so the effective contract matches the SSOT (no sidecar logs).
+    autowatch_log: lane.log
+    stream_log: lane.log
     autowatch_receipt: autowatch_{kind}.receipt.json
     supervise_receipt: supervise.receipt.json
     chain_receipt: chain.receipt.json
