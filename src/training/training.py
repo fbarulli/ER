@@ -85,13 +85,8 @@ _CFG_DEEPCOPY_TOTALS: dict[str, float] = {}
 
 @timed
 def _timed_load_config(key: str) -> dict:
-    """Behavior-identical load_config with a measured deepcopy component."""
-    started = time.perf_counter()
-    value = load_config()
-    _CFG_DEEPCOPY_TOTALS[key] = _CFG_DEEPCOPY_TOTALS.get(key, 0.0) + (
-        time.perf_counter() - started
-    )
-    return value
+    """Thin delegate: the measured load_config lives in _LaneContext."""
+    return _LaneContext._load_config_measured(key)
 
 _SSOT_HP = bool(_runtime("hard_positives"))  # no-fallback SSOT
 from core.hard_negatives import mine_hard_negatives, pairs_in_set
@@ -257,11 +252,37 @@ AUG_SOURCE_SUFFIX = "+aug"
 
 
 def _base_population_tag(source: str) -> str:
-    """Strip the static-copy '+aug' suffix minted by train.py's augmentation."""
-    source = str(source)
-    if source.endswith(AUG_SOURCE_SUFFIX):
-        return source[: -len(AUG_SOURCE_SUFFIX)]
-    return source
+    """Thin delegate: ownership lives in _LaneContext."""
+    return _LaneContext._base_population_tag(source)
+
+
+class _LaneContext:
+    """Small SR owner of the lane's context knobs: the '+aug' tag owner
+    (`_base_population_tag`), the deepcopy-measured config loader
+    (`_load_config_measured`, behind the pinned `_timed_load_config`), and
+    the registry-violation signal the coverage audit raises."""
+
+    # Re-exported for the coverage-audit message consumers; the class stays
+    # module-level below (tests import it from training.training).
+    Unregistered = None  # bound after UnregisteredDatapointPopulationError is defined
+
+    @staticmethod
+    def _base_population_tag(source: str) -> str:
+        """Strip the static-copy '+aug' suffix minted by train.py's augmentation."""
+        source = str(source)
+        if source.endswith(AUG_SOURCE_SUFFIX):
+            return source[: -len(AUG_SOURCE_SUFFIX)]
+        return source
+
+    @staticmethod
+    def _load_config_measured(key: str) -> dict:
+        """Behavior-identical load_config with a measured deepcopy component."""
+        started = time.perf_counter()
+        value = load_config()
+        _CFG_DEEPCOPY_TOTALS[key] = _CFG_DEEPCOPY_TOTALS.get(key, 0.0) + (
+            time.perf_counter() - started
+        )
+        return value
 
 
 class UnregisteredDatapointPopulationError(RuntimeError):
@@ -273,6 +294,9 @@ class UnregisteredDatapointPopulationError(RuntimeError):
     (audit A4-2): a tag outside the registry used to be dropped from the
     coverage rows with no warning at all.
     """
+
+# bind the violation signal after its definition (class-body ordering).
+_LaneContext.Unregistered = UnregisteredDatapointPopulationError
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -1358,73 +1382,97 @@ from training.losses import (
 
 @timed
 def _runtime_telemetry() -> dict[str, float | int]:
-    """Cheap process and CUDA facts emitted with each training heartbeat."""
-    telemetry: dict[str, float | int] = {"pid": os.getpid()}
-    try:
-        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
-            if line.startswith("VmRSS:"):
-                telemetry["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
-                break
-    except OSError:
-        pass
-    try:
-        memory = {}
-        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-            key, value = line.split(":", 1)
-            if key in {"MemTotal", "MemAvailable"}:
-                memory[key] = int(value.strip().split()[0])
-        if "MemTotal" in memory and "MemAvailable" in memory:
-            telemetry.update(
-                memory_total_mb=round(memory["MemTotal"] / 1024, 1),
-                memory_available_mb=round(memory["MemAvailable"] / 1024, 1),
-                memory_used_mb=round(
-                    (memory["MemTotal"] - memory["MemAvailable"]) / 1024, 1
-                ),
-            )
-    except (OSError, ValueError):
-        pass
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info()
-            telemetry.update(
-                gpu_allocated_gb=round(torch.cuda.memory_allocated() / 1e9, 2),
-                gpu_reserved_gb=round(torch.cuda.memory_reserved() / 1e9, 2),
-                gpu_peak_gb=round(torch.cuda.max_memory_allocated() / 1e9, 2),
-                gpu_free_gb=round(free / 1e9, 2),
-                gpu_total_gb=round(total / 1e9, 2),
-            )
-    except Exception as exc:  # telemetry must never interrupt training
-        print(f"    [telemetry] CUDA query failed: {exc}", flush=True)
-    return telemetry
+    """Thin delegate: collection lives in _RuntimeTelemetry."""
+    return _RuntimeTelemetry._collect()
 
 
 def _format_telemetry(values: dict[str, float | int]) -> str:
-    pieces = [f"pid={values['pid']}"]
-    if "rss_mb" in values:
-        pieces.append(f"rss={values['rss_mb']:.0f}MB")
-    if "gpu_allocated_gb" in values:
-        pieces.append(
-            f"gpu={values['gpu_allocated_gb']:.2f}G alloc/"
-            f"{values['gpu_reserved_gb']:.2f}G reserved/"
-            f"{values['gpu_free_gb']:.2f}G free"
-        )
-    return " | ".join(pieces)
+    """Thin delegate: formatting lives in _RuntimeTelemetry."""
+    return _RuntimeTelemetry._format(values)
 
 
 def _wandb_memory_metrics(values: dict[str, float | int]) -> dict[str, float]:
-    """Return the only system telemetry allowed into W&B."""
-    names = {
-        "rss_mb": "memory/worker_rss_mb",
-        "memory_used_mb": "memory/total_used_mb",
-        "memory_available_mb": "memory/total_available_mb",
-    }
-    return {
-        target: float(values[source])
-        for source, target in names.items()
-        if source in values
-    }
+    """Thin delegate: the W&B projection lives in _RuntimeTelemetry."""
+    return _RuntimeTelemetry._memory_metrics(values)
+
+
+class _RuntimeTelemetry:
+    """Small SR owner of system telemetry facts and their two projections.
+
+    `_collect` — process/CUDA facts (pid, rss, host memory, GPU allocator);
+    `_format` — the pinned heartbeat console fragment;
+    `_memory_metrics` — the ONLY memory fields allowed into W&B.
+    """
+
+    @staticmethod
+    def _collect() -> dict[str, float | int]:
+        """Cheap process and CUDA facts emitted with each training heartbeat."""
+        telemetry: dict[str, float | int] = {"pid": os.getpid()}
+        try:
+            for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmRSS:"):
+                    telemetry["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
+                    break
+        except OSError:
+            pass
+        try:
+            memory = {}
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                key, value = line.split(":", 1)
+                if key in {"MemTotal", "MemAvailable"}:
+                    memory[key] = int(value.strip().split()[0])
+            if "MemTotal" in memory and "MemAvailable" in memory:
+                telemetry.update(
+                    memory_total_mb=round(memory["MemTotal"] / 1024, 1),
+                    memory_available_mb=round(memory["MemAvailable"] / 1024, 1),
+                    memory_used_mb=round(
+                        (memory["MemTotal"] - memory["MemAvailable"]) / 1024, 1
+                    ),
+                )
+        except (OSError, ValueError):
+            pass
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                telemetry.update(
+                    gpu_allocated_gb=round(torch.cuda.memory_allocated() / 1e9, 2),
+                    gpu_reserved_gb=round(torch.cuda.memory_reserved() / 1e9, 2),
+                    gpu_peak_gb=round(torch.cuda.max_memory_allocated() / 1e9, 2),
+                    gpu_free_gb=round(free / 1e9, 2),
+                    gpu_total_gb=round(total / 1e9, 2),
+                )
+        except Exception as exc:  # telemetry must never interrupt training
+            print(f"    [telemetry] CUDA query failed: {exc}", flush=True)
+        return telemetry
+
+    @staticmethod
+    def _format(values: dict[str, float | int]) -> str:
+        pieces = [f"pid={values['pid']}"]
+        if "rss_mb" in values:
+            pieces.append(f"rss={values['rss_mb']:.0f}MB")
+        if "gpu_allocated_gb" in values:
+            pieces.append(
+                f"gpu={values['gpu_allocated_gb']:.2f}G alloc/"
+                f"{values['gpu_reserved_gb']:.2f}G reserved/"
+                f"{values['gpu_free_gb']:.2f}G free"
+            )
+        return " | ".join(pieces)
+
+    @staticmethod
+    def _memory_metrics(values: dict[str, float | int]) -> dict[str, float]:
+        """Return the only system telemetry allowed into W&B."""
+        names = {
+            "rss_mb": "memory/worker_rss_mb",
+            "memory_used_mb": "memory/total_used_mb",
+            "memory_available_mb": "memory/total_available_mb",
+        }
+        return {
+            target: float(values[source])
+            for source, target in names.items()
+            if source in values
+        }
 
 
 class _CollapseReporter:
