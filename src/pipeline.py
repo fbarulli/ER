@@ -27,6 +27,7 @@ import math
 import os
 import re
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -470,14 +471,27 @@ class _PackEvidenceReader:
         return self.evidence
 
 
-def extract_pack_evidence(title: str) -> list[dict]:
-    """Retain physical-unit and outer-package quantities with original spans —
-    see _PackEvidenceReader.read (phases, order, output bytes identical)."""
+@lru_cache(maxsize=65536)
+def _extract_pack_evidence_cached(title: str) -> list[dict]:
     return _PackEvidenceReader(title).read()
 
 
-def extract_pack_from_title(title: str) -> tuple:
-    evidence = extract_pack_evidence(title)
+def extract_pack_evidence(title: str) -> list[dict]:
+    """Retain physical-unit and outer-package quantities with original spans —
+    see _PackEvidenceReader.read (phases, order, output bytes identical).
+
+    Memoized: the scan is a pure function of ``title`` and the same column is
+    re-scanned by several phases (volume resolution, evidence ledger). Callers
+    only read/spread the entries, so the cached list is safe to share.
+    """
+    if not isinstance(title, str):
+        return _PackEvidenceReader(title).read()
+    return _extract_pack_evidence_cached(title)
+
+
+@lru_cache(maxsize=65536)
+def _extract_pack_from_title_cached(title: str) -> tuple:
+    evidence = _extract_pack_evidence_cached(title)
     units = [entry for entry in evidence if entry["role"] == "unit_count"]
     if units:
         return units[0]["count"], units[0]["confidence"]
@@ -486,6 +500,12 @@ def extract_pack_from_title(title: str) -> tuple:
         return ambiguous_outer[0]["count"], ambiguous_outer[0]["confidence"]
     # Outer cases do not state the number of consumer units in each case.
     return 1, 0.0
+
+
+def extract_pack_from_title(title: str) -> tuple:
+    if not isinstance(title, str):
+        return _extract_pack_from_title_cached(str(title))
+    return _extract_pack_from_title_cached(title)
 
 
 def parse_attribute_volume_pack(
