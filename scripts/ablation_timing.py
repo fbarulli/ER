@@ -231,7 +231,11 @@ def run_round(round_no: int, rebuild_cache=False):
     identity = ensure_inputs(rebuild_cache=rebuild_cache)
     ROUNDS.mkdir(parents=True, exist_ok=True)
     folder = ROUNDS / f'round{round_no}'
-    folder.mkdir(parents=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    for stale in (folder/'vectors.npz', folder/'summary.json', folder/'ranking.csv',
+                  folder/'timings.log', folder/'profile.prof'):
+        if stale.exists():
+            stale.unlink()
     import core.step_trace as step_trace
     os.environ['ER_TIMING_LOG'] = str(folder / 'timings.log')
 
@@ -246,8 +250,11 @@ def run_round(round_no: int, rebuild_cache=False):
     profiler = cProfile.Profile()
     from model_tracks import ablation as ablation
 
+    wait_for_idle(limit=1.5)
+
     summary = {'notes': REPORT_NOTE, 'cohort': '10k', 'pairs_source': str(PAIRS),
                'checkpoint_sha256': identity, 'torch_threads': 4}
+    load_start = load_avg()
     started = time.perf_counter()
     profiler.enable()
     with trace_step('abl.prepare'):
@@ -271,6 +278,7 @@ def run_round(round_no: int, rebuild_cache=False):
         'report_seconds': phase_seconds(folder / 'timings.log', 'abl.report'),
         'fingerprint_request': fingerprint_prepare(request_path),
         'fingerprint_report': fingerprint_report(ABL / 'results' / 'report.json'),
+        'load_avg_start': load_start, 'load_avg_end': load_avg(),
     })
     (folder / 'summary.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
@@ -279,18 +287,37 @@ def run_round(round_no: int, rebuild_cache=False):
 
 
 def phase_seconds(log_path: Path, label: str) -> float | None:
+    """Parse [timing] <label> state=completed elapsed_seconds=<s> lines."""
     total = 0.0
     seen = False
     for line in log_path.read_text().splitlines():
         parts = line.split()
-        if len(parts) >= 4 and parts[2] == label and line.strip().startswith('[timing]') and 'state=' in parts[3]:
-            state = parts[3].split('=', 1)[1]
-            if state in {'completed', 'failed'}:
-                seen = state == 'completed'
+        if len(parts) >= 4 and parts[0] == '[timing]' and parts[1] == label \
+                and parts[2].startswith('state='):
+            state = parts[2].split('=', 1)[1]
+            if state == 'completed':
+                seen = True
             for part in parts:
                 if part.startswith('elapsed_seconds='):
                     total += float(part.split('=', 1)[1])
     return round(total, 3) if seen else None
+
+
+def load_avg() -> float:
+    try:
+        return float(open('/proc/loadavg').read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def wait_for_idle(limit: float = 2.0, timeout_s: int = 1800):
+    """Other optimization lanes share this host; never time under load."""
+    logger_i = 0
+    while load_avg() > limit:
+        logger_i += 1
+        if time.monotonic() % 120 < 1:
+            pass
+        time.sleep(30)
 
 
 def show_rankings():

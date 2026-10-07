@@ -1,0 +1,15 @@
+{
+  "notes": "inputs recorded 2026-10-07: catalog=dataset_10k.csv (10k real rows); pairs = consecutive sorted-sku_id neighbors over first 500 rows, label=1 iff both share a nonempty brand; split=dev; population=real; coverage=sampled sample_pairs=100; retrieval_catalog=full",
+  "cohort": "10k",
+  "pairs_source": "/tmp/opc/ER-abl-opt/artifacts/abl_opt/inputs/pairs_dev_500.csv",
+  "checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
+  "torch_threads": 4,
+  "wall_seconds": 305.303,
+  "prepare_seconds": 165.823,
+  "encode_seconds": 116.961,
+  "report_seconds": 22.518,
+  "fingerprint_request": "8a6a588b9e28fbb74757cacfdd89f8df4d76adf7c057440b407cb398b1c008e2",
+  "fingerprint_report": "f21ba267118091e45e324c4ac2b6979e49f72ead990bde206caf93f166827932",
+  "load_avg_start": 2.55,
+  "load_avg_end": 2.18
+}
