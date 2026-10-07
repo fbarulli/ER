@@ -351,25 +351,36 @@ def _measurement_candidate_re():
     )
 
 
-def extract_volume_evidence(text: str) -> list[dict]:
-    """Keep measurement roles and original spans before punctuation cleanup.
+class _VolumeEvidenceReader:
+    """One text's volume-evidence scan (roles and original spans preserved).
 
     A recipe yield, nutrition denominator, or dry weight is useful evidence,
     but cannot assert liquid package volume. Mixed and improper fractions are
     decoded before normalization; spaced ambiguous-ounce count/size notation
     such as ``24 / 2oz`` retains its package-size interpretation.
+
+    SR phases, ONE fixed order in read(); the guarded candidate loop is the
+    original body verbatim, so the candidate list is byte-identical.
+
+    Phase map:
+      prepare       — the dry-product pre-probe, one per text
+      classify_role — the precedence ladder: nutrition denominator, stated
+                      total, recipe yield, ingredient volume, dry net weight
+      decode_number — the fraction branch (count/size interpretation inside)
+      plausible     — the glued-code-artifact refusal vs the measured bulk
+                      ceiling
     """
-    if not isinstance(text, str):
-        return []
-    candidates = []
-    dry_product = bool(re.search(r"\b(?:powder(?:ed)?|dry mix|drink mix|tea bags?)\b", text, re.I))
-    for match in _measurement_candidate_re().finditer(text):
-        number = match.group('number') or match.group('prefix_number')
-        unit_surface = match.group('unit') or match.group('prefix_unit')
-        unit = norm_unit(unit_surface)
-        preceding = text[:match.start()].rstrip()
-        following = text[match.end():]
-        role = 'package_volume'
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+
+    def prepare(self) -> bool:
+        return bool(re.search(r"\b(?:powder(?:ed)?|dry mix|drink mix|tea bags?)\b", self._text, re.I))
+
+    def classify_role(self, preceding: str, following: str, unit: str,
+                      dry_product: bool) -> str:
+        """The role ladder is precedence-ordered (first proof wins)."""
         if (re.search(r"\bper\s*$", preceding, re.I)
                 or re.match(r"\s*(?:per\s+(?:serving|portion)|/\s*serving)\b", following, re.I)):
             role = 'nutrition'
@@ -383,35 +394,75 @@ def extract_volume_evidence(text: str) -> list[dict]:
             role = 'ingredient_volume'
         elif dry_product and unit in {'oz', 'ounce', 'ounces'}:
             role = 'net_weight'
-        if '/' in number:
-            fraction = re.fullmatch(r'(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)', number)
-            whole, numerator, denominator = (int(part or 0) for part in fraction.groups())
-            if denominator == 0:
-                continue
-            nested_count = bool(re.search(r'\d+\s*[x×]\s*$', preceding, re.I))
-            case_count = bool(re.search(r'\bcase\s+of\s*$|\d+\s*/\s*$', preceding, re.I))
-            count_size = (nested_count or case_count or (not whole and numerator >= denominator
-                          and unit in _volume_views()[1] and bool(re.search(r'\s/', number))))
-            value = float(denominator) if count_size else whole + numerator / denominator
-            parsed = (value, unit, unit in _volume_views()[1], match.group(0))
         else:
-            # Preserve comma decimal semantics. General normalization would
-            # erase the comma and turn 1 ,25 litres into a count-list.
-            # "concentrate 1 + 4, 200ml" is a dilution ratio followed by
-            # bottle size, not a 4.2 ml package. Preserve genuine 0, 33 l
-            # and 1,25 l decimals while separating integer/size lists.
-            count_list = re.fullmatch(r'([1-9]\d*),\s+(\d{3,})', number)
-            numeric = count_list.group(2) if count_list else re.sub(r'\s*([.,])\s*', r'\1', number)
-            parsed = _extract_volume_match_legacy(numeric + ' ' + unit_surface)
-        value, parsed_unit, ambiguous, _ = parsed
-        if value is None or parsed_unit is None or value <= 0:
-            continue
-        glued = match.start() > 0 and text[match.start() - 1].isalpha() and text[match.start() - 1].casefold() != 'x'
-        if glued and value * _volume_views()[0][parsed_unit] > _unit_spec().glued_code_max_ml:
-            continue
-        candidates.append(dict(value=value, unit=parsed_unit, ambiguous=ambiguous,
-                               raw_match=match.group(0), start=match.start(), end=match.end(), role=role))
-    return candidates
+            role = 'package_volume'
+        return role
+
+    def decode_number(self, number: str, unit: str, preceding: str):
+        """The mixed/improper fraction decode with its count/size ladder.
+
+        Returns a parsed 4-tuple, or None when the denominator is 0 (the
+        candidate dies exactly as before)."""
+        if '/' not in number:
+            return None
+        fraction = re.fullmatch(r'(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)', number)
+        whole, numerator, denominator = (int(part or 0) for part in fraction.groups())
+        if denominator == 0:
+            return None
+        nested_count = bool(re.search(r'\d+\s*[x×]\s*$', preceding, re.I))
+        case_count = bool(re.search(r'\bcase\s+of\s*$|\d+\s*/\s*$', preceding, re.I))
+        count_size = (nested_count or case_count or (not whole and numerator >= denominator
+                      and unit in _volume_views()[1] and bool(re.search(r'\s/', number))))
+        value = float(denominator) if count_size else whole + numerator / denominator
+        return value, unit, unit in _volume_views()[1]
+
+    def plausible(self, glued: bool, value: float, parsed_unit: str) -> bool:
+        """Digits glued to a preceding letter are CODE ARTIFACTS above the
+        configured bulk ceiling; plausible glued sizes stay candidates."""
+        return not (glued and value * _volume_views()[0][parsed_unit] > _unit_spec().glued_code_max_ml)
+
+    def read(self) -> list[dict]:
+        """The guarded candidate loop (statements verbatim)."""
+        text = self._text
+        candidates: list[dict] = []
+        dry_product = self.prepare()
+        for match in _measurement_candidate_re().finditer(text):
+            number = match.group('number') or match.group('prefix_number')
+            unit_surface = match.group('unit') or match.group('prefix_unit')
+            unit = norm_unit(unit_surface)
+            preceding = text[:match.start()].rstrip()
+            following = text[match.end():]
+            role = self.classify_role(preceding, following, unit, dry_product)
+            if '/' in number:
+                decoded = self.decode_number(number, unit, preceding)
+                if decoded is None:
+                    continue
+                value, parsed_unit, ambiguous = decoded
+            else:
+                # Preserve comma decimal semantics. General normalization would
+                # erase the comma and turn 1 ,25 litres into a count-list.
+                # "concentrate 1 + 4, 200ml" is a dilution ratio followed by
+                # bottle size, not a 4.2 ml package. Preserve genuine 0, 33 l
+                # and 1,25 l decimals while separating integer/size lists.
+                count_list = re.fullmatch(r'([1-9]\d*),\s+(\d{3,})', number)
+                numeric = count_list.group(2) if count_list else re.sub(r'\s*([.,])\s*', r'\1', number)
+                value, parsed_unit, ambiguous, _ = _extract_volume_match_legacy(numeric + ' ' + unit_surface)
+            if value is None or parsed_unit is None or value <= 0:
+                continue
+            glued = match.start() > 0 and text[match.start() - 1].isalpha() and text[match.start() - 1].casefold() != 'x'
+            if not self.plausible(glued, value, parsed_unit):
+                continue
+            candidates.append(dict(value=value, unit=parsed_unit, ambiguous=ambiguous,
+                                   raw_match=match.group(0), start=match.start(), end=match.end(), role=role))
+        return candidates
+
+
+def extract_volume_evidence(text: str) -> list[dict]:
+    """Keep measurement roles and original spans before punctuation cleanup —
+    one phase-ordered scan on :class:`_VolumeEvidenceReader`."""
+    if not isinstance(text, str):
+        return []
+    return _VolumeEvidenceReader(text).read()
 
 
 def extract_volume_match(text: str) -> tuple:
