@@ -234,13 +234,30 @@ def validate_sources(request):
         raise ValueError('ablation implementation changed; prepare again locally')
 
 
-@timed
-def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_checkpoint=None, config=None, checkpoint_role='selected',composer=None,token_cache=None):
-    from core.attribute_universe import attribute_registry
+class _TextPool:
+    """Interned model texts shared by the baseline, variant and candidate phases."""
+
+    def __init__(self):
+        self.texts, self.lookup = [], {}
+
+    def intern(self, text):
+        if text not in self.lookup:
+            self.lookup[text] = len(self.texts)
+            self.texts.append(text)
+        return self.lookup[text]
+
+
+def _compose(row, composer):
     from core.model_input import build_sku_text, model_input_info
     from core.sku_identity import row_identity
-    from core.attribute_conflicts import canonical_attribute_info
-    from core.attribute_decision import engine
+    if row.get('frozen_payload'):
+        return row['frozen_payload']
+    if composer is not None:
+        return composer(row)
+    return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
+
+
+def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
     if track not in {'text', 'gnn_only', 'hybrid'}:
         raise ValueError('unknown track')
@@ -252,6 +269,10 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
                TRAIN_ROOT/'src/graph_tracks/infer.py',TRAIN_ROOT/'src/graph_tracks/pooling.py',
                TRAIN_ROOT/'src/model_tracks/ablation_retrieval.py',TRAIN_ROOT/'src/training/hnsw_index.py']
     sources = {source_name(p): checkpoint_identity(Path(p)) for p in inputs}
+    return cfg, sources
+
+
+def _selected_pairs(pairs, cfg):
     chosen = sample_pairs(pd.read_csv(pairs, dtype=str, keep_default_na=False), cfg)
     # A present-but-empty slice column reads as '' (not None); normalize
     # all-empty axes to None so they are reported in missing_axes and the
@@ -260,20 +281,39 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         if chosen and all(p.get(axis) is None or p.get(axis) == '' for p in chosen):
             for p in chosen:
                 p[axis] = None
+    return chosen
+
+
+def _catalog_rows(catalog):
     from core.text import normalized_attribute_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
-    rows = frame.set_index('sku_id', drop=False).to_dict('index')
-    ids = sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
-    if set(ids)-rows.keys():
-        raise ValueError('pair endpoint absent from catalog')
+    return frame.set_index('sku_id', drop=False).to_dict('index')
+
+
+def _pair_endpoints(chosen):
+    return sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
+
+
+def _attributes(cfg):
+    from core.attribute_universe import attribute_registry
     attributes = cfg.attributes or sorted(attribute_registry())
     if len(set(attributes)) != len(attributes) or set(attributes)-attribute_registry().keys():
         raise ValueError('attributes must be unique registry keys')
+    return attributes
+
+
+def _listing_records(listings, ids, cfg):
     records = {r['sku_id']: r for r in load_records(listings)} if listings else {}
     if listings and any(i not in records or (cfg.coverage != 'all' and records[i]['split'] != cfg.split) for i in ids):
         raise ValueError('graph endpoints must belong to the selected held-out split')
+    return records
+
+
+def _pair_evidence(chosen, rows, cfg):
+    from core.attribute_conflicts import canonical_attribute_info
+    from core.attribute_decision import engine
     for pair in chosen:
         a, b = (rows[pair[k]] for k in ('sku_id1', 'sku_id2'))
         pair['gtin1'], pair['gtin2'] = a.get('gtin'), b.get('gtin')
@@ -283,24 +323,15 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
             pair['evidence_scope'] = 'frozen payload; raw-row evidence unavailable'
         for axis in cfg.slice_columns:
             pair.setdefault(axis, None)
-    texts, lookup = [], {}
-    def intern(text):
-        if text not in lookup:
-            lookup[text] = len(texts)
-            texts.append(text)
-        return lookup[text]
-    def compose(row):
-        if row.get('frozen_payload'):
-            return row['frozen_payload']
-        if composer is not None:
-            return composer(row)
-        return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
-    started = time.monotonic()
+    return chosen
+
+
+def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, listings, composer, started):
     print(f'[ablation/local] composing baseline endpoints={len(ids)} attributes={len(attributes)}',flush=True)
     baseline_text = []
     if track != 'gnn_only':
         for n,i in enumerate(ids):
-            baseline_text.append(intern(compose(rows[i])))
+            baseline_text.append(pool.intern(_compose(rows[i], composer)))
             if (n+1) % 25 == 0 or n+1 == len(ids):
                 print(f'[ablation/local] baseline={n+1}/{len(ids)} elapsed={time.monotonic()-started:.1f}s',flush=True)
     baseline_records = [records[i] for i in ids] if listings else []
@@ -321,7 +352,7 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
                     kept_attribute = ';'.join(kept_parts)
                     changed_row = ({**rows[i], 'attribute': kept_attribute}
                         if not frozen else declaration_removed(rows[i], attribute))
-                    altered_text.append(baseline_text[n] if changed_row == rows[i] else intern(compose(changed_row)))
+                    altered_text.append(baseline_text[n] if changed_row == rows[i] else pool.intern(_compose(changed_row, composer)))
                 else:
                     altered_text.append(baseline_text[n])
         altered_records = [graph_removed(r, cfg.graph_fields.get(attribute, [])) for r in baseline_records]
@@ -333,7 +364,11 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
                           (bool(gr) and gr[n] != baseline_records[n]) for n in range(len(ids)))
             variants.append({'attribute':attribute, 'channel':channel, 'text_indices':ti,
                              'records':gr, 'changed_listings':changed})
-        print(f'[ablation/local] attribute={attr_index}/{len(attributes)} {attribute} unique_texts={len(texts)} elapsed={time.monotonic()-started:.1f}s',flush=True)
+        print(f'[ablation/local] attribute={attr_index}/{len(attributes)} {attribute} unique_texts={len(pool.texts)} elapsed={time.monotonic()-started:.1f}s',flush=True)
+    return baseline_text, variants
+
+
+def _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, listings, composer, started):
     if cfg.retrieval_catalog not in {'full','sampled'}:
         raise ValueError('retrieval_catalog must be full or sampled')
     candidate_ids = sorted(rows) if cfg.retrieval_catalog == 'full' else ids
@@ -342,16 +377,21 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         baseline_lookup = dict(zip(ids,baseline_text))
         last_progress = time.monotonic()
         for n,i in enumerate(candidate_ids,1):
-            candidate_text.append(baseline_lookup[i] if i in baseline_lookup else intern(compose(rows[i])))
+            candidate_text.append(baseline_lookup[i] if i in baseline_lookup else pool.intern(_compose(rows[i], composer)))
             if n == len(candidate_ids) or time.monotonic()-last_progress >= 10:
                 print(f'[ablation/local] candidate texts={n}/{len(candidate_ids)} elapsed={time.monotonic()-started:.1f}s',flush=True)
                 last_progress = time.monotonic()
     candidate_records = [records[i] for i in candidate_ids] if listings else []
-    request = {'schema':'er-attribute-ablation-v2','track':track,'checkpoint_role':checkpoint_role, 'settings':cfg.model_dump(),
+    return candidate_ids, candidate_text, candidate_records
+
+
+def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_checkpoint,
+                      candidate_ids, candidate_text, candidate_records, ids, pool, chosen, variants, attributes):
+    return {'schema':'er-attribute-ablation-v2','track':track,'checkpoint_role':checkpoint_role, 'settings':cfg.model_dump(),
         'sources':sources, 'composition':composition_fingerprint(), 'implementation_sha256':file_hash(Path(__file__)),
         'checkpoint':source_name(checkpoint), 'text_checkpoint':source_name(text_checkpoint) if text_checkpoint else None,
         'candidate_ids':candidate_ids,'candidate_text_indices':candidate_text,'candidate_records':candidate_records,
-        'ids':ids, 'texts':texts, 'pairs':chosen, 'variants':variants,
+        'ids':ids, 'texts':pool.texts, 'pairs':chosen, 'variants':variants,
         'cohort_sha256':digest(chosen),
         'coverage':{'mode':cfg.coverage, 'pair_rows':len(chosen),
             'by_scope':pd.Series([p.get('evaluation_scope', p['split']) for p in chosen]).value_counts().to_dict(),
@@ -361,6 +401,9 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         'intervention':'declared attribute removed; title/brand and training graph context fixed',
         'retrieval_scope':f'fixed {cfg.retrieval_catalog} catalog; query-only interventions; incomplete known-positive truth',
         'missing_axes':[a for a in cfg.slice_columns if all(p.get(a) is None or p.get(a) == '' for p in chosen)]}
+
+
+def _persist_prepared(request, cfg, token_cache):
     from model_tracks.ablation_inputs import prepare_inputs
     resolve(cfg.output_dir).mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(dir=resolve(cfg.output_dir)) as tmp:
@@ -379,7 +422,33 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         if path.exists() and json.loads(path.read_text()) != request:
             raise ValueError('existing request differs')
         write(path,request)
-    print(f'[ablation/local] pairs={len(chosen)} endpoints={len(ids)} unique_texts={len(texts)} '
+    return path
+
+
+@timed
+def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_checkpoint=None, config=None, checkpoint_role='selected',composer=None,token_cache=None):
+    with _LOG.section('ablation.prepare.sources'):
+        cfg, sources = _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config)
+    with _LOG.section('ablation.prepare.cohort'):
+        chosen = _selected_pairs(pairs, cfg)
+        rows = _catalog_rows(catalog)
+        ids = _pair_endpoints(chosen)
+        if set(ids)-rows.keys():
+            raise ValueError('pair endpoint absent from catalog')
+        attributes = _attributes(cfg)
+        records = _listing_records(listings, ids, cfg)
+        _pair_evidence(chosen, rows, cfg)
+    pool = _TextPool()
+    started = time.monotonic()
+    with _LOG.section('ablation.prepare.baseline_variants'):
+        baseline_text, variants = _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, listings, composer, started)
+    with _LOG.section('ablation.prepare.candidates'):
+        candidate_ids, candidate_text, candidate_records = _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, listings, composer, started)
+    with _LOG.section('ablation.prepare.persist'):
+        request = _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_checkpoint,
+                                    candidate_ids, candidate_text, candidate_records, ids, pool, chosen, variants, attributes)
+        path = _persist_prepared(request, cfg, token_cache)
+    print(f'[ablation/local] pairs={len(chosen)} endpoints={len(ids)} unique_texts={len(pool.texts)} '
           f'variants={len(variants)-1} changed={sum(v["changed_listings"] > 0 for v in variants[1:])}', flush=True)
     return path
 
