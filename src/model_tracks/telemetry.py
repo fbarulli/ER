@@ -1,12 +1,29 @@
 """Durable, secret-redacted lifecycle events for each suite worker attempt."""
 from __future__ import annotations
 
+from dataclasses import is_dataclass, asdict
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
 import uuid
+
+
+def _json_default(value):
+    """Serialize event payloads at the write boundary.
+
+    v22 died at GPU-session time with "Object of type X is not JSON
+    serializable" because a staged writer fed a pydantic model (raw) into
+    json.dumps. Every structured record object (BaseModel, dataclass, plain
+    object) is converted here instead of bubbling a TypeError into the
+    session's only evidence channel.
+    """
+    if hasattr(value, 'model_dump'):
+        return value.model_dump(mode='json')
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    return vars(value)
 
 
 class WorkerEvents:
@@ -42,8 +59,10 @@ class WorkerEvents:
             return value
         event = sanitize(event)
         with self.path.open('a') as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+            handle.write(json.dumps(event, ensure_ascii=False, default=_json_default) + '\n')
             handle.flush()
             os.fsync(handle.fileno())
-        print(f"[lifecycle/{self.track}] " + json.dumps(event, ensure_ascii=False), flush=True)
+        print(f"[lifecycle/{self.track}] "
+              + json.dumps(event, ensure_ascii=False, default=_json_default),
+              flush=True)
         return event

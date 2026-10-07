@@ -633,6 +633,7 @@ class _CheckpointPublisher:
         generation config is normally unused, but align it when Transformers
         exposes one as well.
         """
+        model = getattr(model, 'module', model)  # duck-typed DataParallel/DDP unwrap
         tokenizer = model.tokenizer
         auto_model = model[0].auto_model
 
@@ -5259,6 +5260,11 @@ def train_one_config(
                         if hasattr(self.loss, 'flush_tracking'):
                             self.loss.flush_tracking()
                         super()._save_checkpoint(model, trial)
+                        # Duck-typed unwrap: HF wraps the model in DataParallel/DDP
+                        # when multiple GPUs are visible, which makes `model`
+                        # unsubscriptable and crashes the manifest writer below.
+                        # A bare SentenceTransformer never exposes `.module`.
+                        manifest_model = getattr(model, 'module', model)
                         checkpoint = (
                             Path(self._get_output_dir(trial=trial))
                             / f"checkpoint-{self.state.global_step}"
@@ -5268,7 +5274,7 @@ def train_one_config(
                             checkpoint,
                             epoch=self.state.epoch,
                             global_step=self.state.global_step,
-                            model=model,
+                            model=manifest_model,
                             optimizer=self.optimizer,
                             scheduler=self.lr_scheduler,
                             scaler=getattr(self.accelerator, "scaler", None),
