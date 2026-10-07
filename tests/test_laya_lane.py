@@ -72,14 +72,10 @@ REVISION_PIN = "abc123def"
 
 
 def _hermetic_staging(monkeypatch):
-    """Kernel staging inventories the REAL repo checkout + pins the worktree
-    HEAD; these pins only need the payload contracts, so the fakes close
+    """Kernel staging pins the worktree HEAD into the payload constants;
+    these pins only need the payload contracts, so the fake closes
     that door (kaggle test file precedent)."""
-    def members(extra=(), lane="bundle"):
-        return tuple(sorted(extra))
-
     monkeypatch.setattr(laya_lane, "_git_revision", lambda: REVISION_PIN)
-    monkeypatch.setattr(laya_lane, "checkout_inventory", members)
 
 
 # ── SSOT/additive contract ─────────────────────────────────────────────────
@@ -226,9 +222,25 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     assert 'REPOSITORY = "https://github.com/fbarulli/ER.git"' in script
     assert 'BRANCH = "kaggle-lane"' in script
     assert f'REVISION = "{REVISION_PIN}"' in script
-    assert "_runtime_root = Path(root)" in script
-    assert "_runtime_files = (" in script
+    # THE ATTACHED-INPUTS preflight (BUG 1 fix): root is /kaggle/input
+    # (never `_runtime_root = Path(root)` — no clone root is defined),
+    # the inventory shrank to the two attached staged files, and the
+    # verified-N print is the sibling kaggle-lane shape
+    assert 'INPUT_ROOT = Path("/kaggle/input")' in script
+    assert "_runtime_root = Path(root)" not in script
+    assert '_runtime_files = ("dataset.csv"' in script
     assert "[runtime-preflight] verified %d required files" in script
+    # BUG 2 fix: the inputs travel as the dataset — metadata attaches the
+    # slug and the staging receipt records the dataset payload files
+    assert metadata["dataset_sources"] == ["fbarulli/er-laya-payload"]
+    payload_dir = stage / "dataset_payload"
+    assert (payload_dir / "dataset-metadata.json").is_file()
+    assert (payload_dir / "dataset.csv").is_file()
+    assert (payload_dir / "laya.question.json").is_file()
+    assert receipt["dataset"]["slug"] == "fbarulli/er-laya-payload"
+    # the kernel resolves the RENAMED csv by name (the dataset csv lands
+    # under /kaggle/input/<slug>/dataset.csv; rglob finds it)
+    assert 'DECISION_CSV = "dataset.csv"' in script
     # the receipt publishes the pin so the orchestrator knows the
     # publish-tip expectation
     assert receipt["published_pin"] == {
@@ -267,6 +279,145 @@ def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     # the eval harness is unlatched by config default; the receipt records
     # what toggle state the kernel actually holds
     assert eval_receipt["evals_enabled"] is False
+
+
+def test_stage_decision_kernel_fails_loud_without_dataset_slug(
+        tmp_path, monkeypatch):
+    """BUG 2 regression pin: the kernel inputs travel as the dataset; an
+    unset laya.dataset_slug may never stage a push-less payload silently."""
+    _spec(tmp_path, monkeypatch, dataset_slug=None)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="dataset_slug"):
+        laya_lane.stage_decision_kernel(decision_kind="attribute")
+
+
+def test_dataset_payload_contract(tmp_path, monkeypatch):
+    """The DATASET payload the inputs travel with (BUG 2 fix): metadata
+    shape (kaggle-lane payload shape) + the renamed csv + schema copies."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    import hashlib
+
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = Path(receipt["staged"])
+    payload = stage / "dataset_payload"
+    metadata = json.loads(
+        (payload / "dataset-metadata.json").read_text())
+    assert metadata == {
+        "title": "er laya requests",
+        "id": "fbarulli/er-laya-payload",
+        "licenses": [{"name": "other"}],
+    }
+    data = Path(receipt["decision_input"])
+    assert (payload / "dataset.csv").read_bytes() == data.read_bytes()
+    assert (payload / "laya.question.json").is_file()
+    payload_receipt = json.loads(
+        (payload / "dataset_payload.receipt.json").read_text())
+    assert payload_receipt["dataset"] == "fbarulli/er-laya-payload"
+    assert payload_receipt["files"]["dataset.csv"] == hashlib.sha256(
+        data.read_bytes()).hexdigest()
+    # the attach itself is recorded in the KERNel staging receipt; the
+    # executed publish adds action + version later (see the publish pin)
+    assert receipt["dataset"]["payload"] == str(payload)
+
+
+def test_dataset_publish_dry_run_and_activate_gate(tmp_path, monkeypatch):
+    """publish_laya_dataset: dry run never spawns, and an un-staged
+    payload fails loud at the --activate gate (mirroring kernels push)."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    laya_lane.stage_decision_kernel(decision_kind="attribute")
+
+    def no_subprocess(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("offline: dry-run must not spawn the CLI")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", no_subprocess)
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=False)
+    assert plan["mode"] == "dry-run"
+    with pytest.raises(RuntimeError, match="--activate gate"):
+        laya_lane.publish_laya_dataset("identity", run_tag="laya_t",
+                                       execute=True)
+
+
+def test_dataset_publish_executed_uses_kaggle_lane_helpers(
+        tmp_path, monkeypatch):
+    """Executed attach: version-existing datasets via the IMPORTED
+    kaggle-lane helpers (never copied), zip payload + receipt carries
+    the recorded dataset version (offline-pinned, no network)."""
+    from cli import kaggle_datasets
+    from cli import kaggle_lane as lane
+
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    stage_receipt_path = (tmp_path / "results/laya_lane/kaggle/attribute"
+                          / "attribute.receipt.json")
+    laya_lane.stage_decision_kernel(decision_kind="attribute")
+    commands = []
+    monkeypatch.setattr(
+        kaggle_datasets.KaggleDatasets, "_dataset_current_version",
+        staticmethod(lambda slug: {"dataset_version": 3, "slug": slug}))
+    monkeypatch.setattr(
+        lane, "_require_kaggle_executable", staticmethod(
+            lambda executable: str(tmp_path / "fake-kaggle")))
+    def fake_run_kaggle(command):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr(
+        lane, "_run_kaggle", staticmethod(fake_run_kaggle))
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=True)
+    assert plan["mode"] == "executed"
+    assert plan["action"] == "version"
+    assert plan["dataset_version"] == 3
+    assert commands and commands[0][-5:] == [
+        "zip", "-m", "laya inputs laya_t", "-p",
+        str(tmp_path / "results/laya_lane/kaggle/attribute/dataset_payload")
+    ] and "datasets" in commands[0] and "version" in commands[0]
+    receipt = json.loads(stage_receipt_path.read_text())
+    assert receipt["dataset"]["action"] == "version"
+    assert receipt["dataset"]["version"] == 3
+
+
+def test_module_scope_gate_pins_nameerror_payload():
+    """AST-gate hardening regression pin (BUG 1): a post-substitution
+    payload loading an undefined TOP-LEVEL name (the `_runtime_root =
+    Path(root)` NameError class) never stages again."""
+    laya_lane._module_scope_gate(
+        "import json\nfrom pathlib import Path\n"
+        "QUESTION_SCHEMA_FILE = 'laya.question.json'\n"
+        "INPUT_ROOT = Path('/kaggle/input')\n"
+        "_runtime_files = (QUESTION_SCHEMA_FILE,)\n"
+        "print('ok')\n")
+    with pytest.raises(ValueError, match="undefined top-level names"):
+        laya_lane._module_scope_gate(
+            "import json\nfrom pathlib import Path\n"
+            "print(Path(root))\n")
+
+
+def test_staging_fails_loud_on_undefined_name_before_writes(
+        tmp_path, monkeypatch):
+    """End-to-end pin: a payload whose preflight emits an undefined
+    name fails staging BEFORE the kernel metadata lands (atomic
+    writes stay behind the gate)."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(laya_lane, "LAYA_RUNTIME_PREFLIGHT",
+                        "print(boom_undefined_name)\n")
+    with pytest.raises(ValueError, match="undefined top-level names"):
+        laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert not (stage / "kernel-metadata.json").exists()
 
 
 def test_stage_identity_csv_header_contract_fails_loud(tmp_path, monkeypatch):
