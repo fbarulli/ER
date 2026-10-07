@@ -40,6 +40,7 @@ _LOG = RunLogger(__name__)
 _BINDING_UNSET = object()
 
 
+@timed
 def _freeze_suite(setup,config,bundle):
     """Resolve ablation settings, gate the cohort and freeze the template root."""
     cfg = settings(config)
@@ -48,6 +49,7 @@ def _freeze_suite(setup,config,bundle):
     return cohort,frozen_config
 
 
+@timed
 def _cohort_gate(setup,cfg,bundle):
     """The exhaustive-coverage cohort, or None; loud when 'all' lacks a bundle."""
     cohort = None
@@ -59,6 +61,7 @@ def _cohort_gate(setup,cfg,bundle):
     return cohort
 
 
+@timed
 def _freeze_config(setup,cfg):
     """Point the settings at the template root and write the frozen yaml."""
     cfg.output_dir = str(setup/'ablation_templates')
@@ -68,6 +71,7 @@ def _freeze_config(setup,cfg):
     return frozen_config
 
 
+@timed
 def _frozen_support(setup):
     """The training-population support records and prepared vocabulary."""
     records = load_records(setup/'prepared/listings.json')
@@ -79,6 +83,7 @@ def _frozen_support(setup):
     return support,vocabulary
 
 
+@timed
 def _template_checkpoint(setup,baseline,track,vocabulary,support):
     """The text baseline checkpoint, or the other tracks' template tensor file."""
     checkpoint = baseline
@@ -91,6 +96,7 @@ def _template_checkpoint(setup,baseline,track,vocabulary,support):
     return checkpoint
 
 
+@timed
 def _track_request(setup,checkpoint,track,*,cohort,frozen_config,composer=None,token_cache=None):
     """prepare() the track's tokens/tensors and read back its emitted request."""
     path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
@@ -102,6 +108,7 @@ def _track_request(setup,checkpoint,track,*,cohort,frozen_config,composer=None,t
     return path,request
 
 
+@timed
 def _track_cohort(track,request,common_cohort):
     """Freeze the suite cohort on the text track; every other must match it."""
     if track == 'text':
@@ -111,6 +118,7 @@ def _track_cohort(track,request,common_cohort):
     return common_cohort
 
 
+@timed
 def _anchor_request(setup,request):
     """Anchor prepared sources and shared inputs to the portable package."""
     # Anchor prepared sources to the package setup; checkpoint binding later
@@ -126,6 +134,7 @@ def _anchor_request(setup,request):
     request['portable_setup'] = package_member('suite_package_shared')
 
 
+@timed
 def _copy_template(setup,track,path,request):
     """Materialize the fixed template folder: tensors copy + frozen request."""
     target = setup/'ablation_templates'/track
@@ -135,6 +144,7 @@ def _copy_template(setup,track,path,request):
     return target
 
 
+@timed
 def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None,graph_binding=_BINDING_UNSET):
     """One track's template: checkpoint, prepared request, anchors, folder copy."""
     checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
@@ -150,6 +160,7 @@ def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,suppo
     return common_cohort
 
 
+@timed
 def _drop_staging(setup):
     """Remove generated content-addressed staging dirs; fixed templates stay."""
     # Generated content-addressed staging directories are temporary; retain one
@@ -185,12 +196,14 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     return setup/'ablation_templates'
 
 
+@timed
 def _read_template(setup,track):
     """The track's frozen template request file."""
     template = setup/'ablation_templates'/track
     return template,json.loads((template/'request.json').read_text())
 
 
+@timed
 def _bind_staged_setup(setup,request):
     """Point the template request's shared inputs at the staged setup root."""
     from core.common import TRAIN_ROOT
@@ -198,6 +211,7 @@ def _bind_staged_setup(setup,request):
     request['portable_setup'] = setup.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
 
 
+@timed
 def _bind_template(setup,track):
     """The track's frozen template request, bound to the staged setup root."""
     template,request = _read_template(setup,track)
@@ -205,6 +219,7 @@ def _bind_template(setup,track):
     return template,request
 
 
+@timed
 def _check_graph_binding(checkpoint,track,request):
     """Reject a selected graph checkpoint that differs from frozen support."""
     payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
@@ -213,6 +228,7 @@ def _check_graph_binding(checkpoint,track,request):
         raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
 
 
+@timed
 def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
     """Resolve the selected/baseline checkpoint role onto the request."""
     if checkpoint_role not in {'selected','baseline'}:
@@ -229,6 +245,7 @@ def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
     request['checkpoint_role'] = checkpoint_role
 
 
+@timed
 def _bound_folder(output,template,request):
     """Materialize the bound request and local tensors into the output folder."""
     folder = output/'ablation';folder.mkdir(parents=True,exist_ok=True)
@@ -238,6 +255,7 @@ def _bound_folder(output,template,request):
     return path,folder
 
 
+@timed
 def _saved_text_default(request,*,output,setup,track,saved_text):
     """Default to the suite's saved vectors for the full local retrieval catalog."""
     if saved_text is None and request['settings']['retrieval_catalog'] == 'full' and request['settings'].get('coverage') != 'all':
@@ -246,6 +264,7 @@ def _saved_text_default(request,*,output,setup,track,saved_text):
     return saved_text
 
 
+@timed
 def _encode_vectors(path,vectors,*,device,saved_text,text_model,graph_encoder):
     """The lane's ONLY device-executing call: the GPU-vector encode surface.
 
@@ -255,6 +274,7 @@ def _encode_vectors(path,vectors,*,device,saved_text,text_model,graph_encoder):
     encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
 
 
+@timed
 def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
     """Validated existing vectors win; otherwise the device owner encodes."""
     vectors = folder/'vectors.npz'
