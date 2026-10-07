@@ -3884,8 +3884,7 @@ import glob, os, subprocess, sys
 rc = subprocess.run(
     [sys.executable, "-m", "training.prepare_all"],
     cwd={REMOTE_ROOT!r},
-    env={{**os.environ, "WANDB_MODE": "disabled",
-          "ER_PACKAGE_SKIP_ABLATION": "1"}},
+    env={{**os.environ, "WANDB_MODE": "disabled"}},
 ).returncode
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")

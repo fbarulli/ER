@@ -399,8 +399,7 @@ if COHORT != "full":
     print(f"[bundle-cpu] cohort remap: {COHORT_DATASET} -> dataset.csv", flush=True)
 sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
 env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
-       "ER_COHORT_TAG": COHORT if COHORT != "full" else "",
-       "ER_PACKAGE_SKIP_ABLATION": "1"}
+       "ER_COHORT_TAG": COHORT if COHORT != "full" else ""}
 sh([sys.executable, "-u", "-m", "training.prepare_all",
     "--tracks-config", "config/model_tracks.yaml"], cwd=root, env=env)
 runs = sorted((root / "results" / "training_prep").glob("*/all_tracks_inputs.tar.zst"),
