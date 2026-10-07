@@ -5,8 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.run_log import RunLogger
+from core.step_trace import timed
 from graph_tracks.data import file_hash, load_records, load_text_cache
 from model_tracks.ablation import checkpoint_identity, report, request_context, write
+
+_LOG = RunLogger(__name__)
 
 
 class BaselineCalibration(BaseModel):
@@ -37,38 +41,75 @@ def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_mo
                           checkpoint_role='baseline', saved_text=saved, text_model=text_model)
 
 
-def complete(output: Path, setup: Path, *, config: Path | None = None):
-    """Fit the untrained baseline threshold on dev; consume saved ablation only."""
-    from graph_tracks.report import dev_threshold
-    from graph_tracks.train import load_pairs
-    from model_tracks.ablation import resolve
-    request_path = output/'ablation/request.json'
-    request = json.loads(request_path.read_text())
-    if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
-        raise ValueError('baseline report requires the frozen baseline ablation')
-    records_path, pairs_path = setup/'prepared/listings.json', setup/'prepared/pairs.csv'
-    records = load_records(records_path)
+def _saved_vectors(records, output):
+    """Vectors and metadata for the saved catalog snapshot."""
     vectors_path = output/'shared_minilm__embeddings.npz'
     vectors, metadata = load_text_cache(vectors_path, [row['sku_id'] for row in records])
+    return vectors_path, vectors, metadata
+
+
+def _dev_scores(pairs_path, records, vectors):
+    """Dev-split indices/labels with dot-product scores from saved vectors."""
+    from graph_tracks.train import load_pairs
     indices, labels = load_pairs(pairs_path, records)['dev']
-    scores = (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
-    with request_context(request_path):
-        checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
-        if metadata.get('checkpoint_sha256') != checkpoint_sha256:
-            raise ValueError('baseline calibration vectors differ from frozen checkpoint')
-        calibration = BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
-            vectors_sha256=file_hash(vectors_path), listings_sha256=file_hash(records_path),
-            pairs_sha256=file_hash(pairs_path), threshold=dev_threshold(labels, scores),
-            dev_pairs=len(labels), dev_positives=int(labels.sum()),
-            dev_negatives=int((labels == 0).sum()))
-        binding = request_path.parent/'baseline_threshold.json'
-        document = calibration.model_dump(mode='json')
-        if binding.exists() and json.loads(binding.read_text()) != document:
-            raise ValueError('frozen baseline calibration changed during completion')
-        write(binding, document)
-        result = report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
-                        threshold_source=str(binding), config=config, save=False)
-        # Keep this baseline report separate from trained-text dashboard pointers.
-        write(request_path.parent/'report.json', result)
-        (request_path.parent/'report.sha256').write_text(file_hash(request_path.parent/'report.json')+'\n')
+    return indices, labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
+
+
+def _calibrated_calibration(checkpoint_sha256, vectors_path, vectors, metadata, records_path, pairs_path, indices, labels, scores):
+    """The BaselineCalibration for the untrained checkpoint, or identity raise."""
+    from graph_tracks.report import dev_threshold
+    from model_tracks.ablation import resolve
+    if metadata.get('checkpoint_sha256') != checkpoint_sha256:
+        raise ValueError('baseline calibration vectors differ from frozen checkpoint')
+    return BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
+        vectors_sha256=file_hash(vectors_path), listings_sha256=file_hash(records_path),
+        pairs_sha256=file_hash(pairs_path), threshold=dev_threshold(labels, scores),
+        dev_pairs=len(labels), dev_positives=int(labels.sum()),
+        dev_negatives=int((labels == 0).sum()))
+
+
+def _frozen_report(request_path, request, calibration, *, config, saved=None):
+    """Compute the threshold-frozen report at the baseline calibration threshold."""
+    return report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
+                  threshold_source=str(saved), config=config, save=False)
+
+
+def _frozen_calibration(request_path, calibration):
+    """Seal the calibration document into baseline_threshold.json, or refuse drift."""
+    binding = request_path.parent/'baseline_threshold.json'
+    document = calibration.model_dump(mode='json')
+    if binding.exists() and json.loads(binding.read_text()) != document:
+        raise ValueError('frozen baseline calibration changed during completion')
+    write(binding, document)
+    return binding
+
+
+def _persist_baseline(request_path, result):
+    """Write the baseline report beside its request with the sha sidecar."""
+    write(request_path.parent/'report.json', result)
+    (request_path.parent/'report.sha256').write_text(file_hash(request_path.parent/'report.json')+'\n')
+
+
+@timed
+def complete(output: Path, setup: Path, *, config: Path | None = None):
+    """Fit the untrained baseline threshold on dev; consume saved ablation only."""
+    with _LOG.section('ablation.baseline.load'):
+        from model_tracks.ablation import resolve
+        request_path = output/'ablation/request.json'
+        request = json.loads(request_path.read_text())
+        if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
+            raise ValueError('baseline report requires the frozen baseline ablation')
+        records_path, pairs_path = setup/'prepared/listings.json', setup/'prepared/pairs.csv'
+        records = load_records(records_path)
+        vectors_path, vectors, metadata = _saved_vectors(records, output)
+        indices, labels, scores = _dev_scores(pairs_path, records, vectors)
+    with _LOG.section('ablation.baseline.calibration'):
+        with request_context(request_path):
+            checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
+            calibration = _calibrated_calibration(checkpoint_sha256, vectors_path, vectors, metadata,
+                                                  records_path, pairs_path, indices, labels, scores)
+            binding = _frozen_calibration(request_path, calibration)
+            result = _frozen_report(request_path, request, calibration, config=config, saved=binding)
+            # Keep this baseline report separate from trained-text dashboard pointers.
+            _persist_baseline(request_path, result)
     return request_path.parent/'report.json'
