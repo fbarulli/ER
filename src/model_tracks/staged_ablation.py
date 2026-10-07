@@ -13,11 +13,13 @@ Single-responsibility phases (behaviour pinned, statements split verbatim):
   - :func:`_drop_staging`      — generated content-addressed staging cleanup
   - :func:`_track_template`    — the per-track phase orchestrator
   - :func:`_bind_template`     — the staged setup bound onto a track request
+  - :func:`_read_template` / :func:`_bind_staged_setup` — request read + staged root
   - :func:`_check_graph_binding` — selected checkpoint vs frozen support/vocabulary
   - :func:`_rebind_checkpoint` — selected/baseline checkpoint role resolution
   - :func:`_bound_folder`      — the bound request and local tensors materialized
   - :func:`_saved_text_default` — saved-vector default for the full local catalog
-  - :func:`_reuse_or_encode`   — the ONE device/encode touchpoint of the lane
+  - :func:`_encode_vectors`    — the ONLY device-executing leg (CPU migrations land here)
+  - :func:`_reuse_or_encode`   — validated existing vectors vs the device call
   - :func:`forward`            — the forward orchestrator (timed)
 """
 import json
