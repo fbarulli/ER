@@ -237,6 +237,7 @@ def _short_code_pattern(letters: int) -> re.Pattern:
     return re.compile(rf"^(?:[a-z]{{1,{letters}}}\d+|\d+[a-z]{{1,{letters}}})$")
 
 
+@lru_cache(maxsize=262144)
 def _is_noise(token: str) -> bool:
     """True when ``token`` is storefront scaffolding rather than product text.
 
