@@ -13,6 +13,7 @@ run (and it covers branches the fixture never reaches).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -189,6 +190,39 @@ def collect() -> dict:
                                    {'declared_identity': {'flavor': ['b']}}),
         identity_review_dimensions({}, {}),
     ]
+
+    # Wide-corpus gate. The 500-row fixture above is NOT enough on its own:
+    # r21 introduced a real behaviour difference that appeared ONLY on the 5k
+    # cohort — 'Tang Orange Powdered Drink Mix ( Makes 6 Quarts), 20-ounce
+    # Canister' — where a latched dry-product probe turned a net_weight role
+    # into package_volume. 24,025 texts over five real columns, stored as
+    # per-function digests so the document stays small.
+    cohort = ROOT / 'dataset_5k.csv'
+    if cohort.exists():
+        wide: list[str] = []
+        wide_frame = pd.read_csv(cohort)
+        for column in ('sku_name_eng', 'sku_url', 'image_url',
+                       'description_short_eng', 'attribute'):
+            if column in wide_frame:
+                wide += [value for value in
+                         wide_frame[column].fillna('').astype(str).tolist() if value]
+        out['wide_corpus_size'] = len(wide)
+        for label, function in (
+            ('extract_volume_evidence', _eve),
+            ('extract_volume_match', extract_volume_match),
+            ('extract_pack_counts', lambda text: sorted(extract_pack_counts(text))),
+            ('extract_volume_ml', extract_volume_ml),
+            ('normalize_text', normalize_text),
+            ('normalized_attribute_text', normalized_attribute_text),
+            ('unicode_casefold', unicode_casefold),
+            ('attribute_fields', attribute_fields),
+            ('_normalized_stream', _normalized_stream),
+        ):
+            digest = hashlib.sha256()
+            for text in wide:
+                digest.update(json.dumps(_call(function, text), sort_keys=True).encode())
+                digest.update(b'\x00')
+            out[f'wide_{label}'] = digest.hexdigest()
     return out
 
 

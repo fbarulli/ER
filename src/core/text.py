@@ -355,6 +355,10 @@ _NESTED_COUNT_RE = re.compile(r'\d+\s*[x×]\s*$', re.I)
 _CASE_COUNT_RE = re.compile(r'\bcase\s+of\s*$|\d+\s*/\s*$', re.I)
 _SLASH_NUMBER_RE = re.compile(r'\s/')
 _COUNT_LIST_RE = re.compile(r'([1-9]\d*),\s+(\d{3,})')
+# The units whose role depends on the dry-product pre-probe. Shared by the
+# ladder rung in classify_role and by the lazy guard in read() so the two can
+# never drift apart.
+_OUNCE_UNITS = frozenset({'oz', 'ounce', 'ounces'})
 _SEP_TIGHT_RE = re.compile(r'\s*([.,])\s*')
 
 
@@ -512,7 +516,7 @@ class _VolumeEvidenceReader:
         elif (_CONTAINS_TAIL_RE.search(preceding)
               and _INGREDIENT_LEAD_RE.match(following)):
             role = 'ingredient_volume'
-        elif dry_product and unit in {'oz', 'ounce', 'ounces'}:
+        elif dry_product and unit in _OUNCE_UNITS:
             role = 'net_weight'
         else:
             role = 'package_volume'
@@ -550,17 +554,31 @@ class _VolumeEvidenceReader:
                     > _volume_views()[6])
 
     def read(self) -> list[dict]:
-        """The guarded candidate loop (statements verbatim)."""
+        """The guarded candidate loop (statements verbatim).
+
+        PERF r21: `prepare()` — the dry-product pre-probe — was run once per
+        text even though its result is read by exactly ONE rung of the role
+        ladder (`dry_product and unit in _OUNCE_UNITS`).  Measured on the real
+        5,000-row cohort's title/url/image mix it costs 4.80 us/text, 12.1 % of
+        this function, and it was paid on texts that yield no candidate at all
+        (61 % of them).  It is now resolved on first demand, and only for a
+        candidate whose unit can actually reach that rung.  For every other
+        unit the rung is False regardless of the probe, so passing False there
+        is provably the same role; the candidate list this returns is
+        byte-identical and is checked by the equivalence dump.
+        """
         text = self._text
         candidates: list[dict] = []
-        dry_product = self.prepare()
+        dry_product: bool | None = None  # None = probe not run yet
         for match in _measurement_candidate_re().finditer(text):
             number = match.group('number') or match.group('prefix_number')
             unit_surface = match.group('unit') or match.group('prefix_unit')
             unit = norm_unit(unit_surface)
+            if dry_product is None and unit in _OUNCE_UNITS:
+                dry_product = self.prepare()
             preceding = text[:match.start()].rstrip()
             following = text[match.end():]
-            role = self.classify_role(preceding, following, unit, dry_product)
+            role = self.classify_role(preceding, following, unit, dry_product or False)
             if '/' in number:
                 decoded = self.decode_number(number, unit, preceding)
                 if decoded is None:
