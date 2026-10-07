@@ -27,6 +27,7 @@ from pathlib import Path
 import shutil
 import torch
 import yaml
+from core.model_input import model_input_composition
 from core.run_log import RunLogger
 from core.timing import Timing
 from training.prepare_all_trace import timed
@@ -34,6 +35,7 @@ from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
 from graph_tracks.text_cache import checkpoint_hash
 from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, _raw_checkpoint_identity, encode, request_context, validate_vectors
+from model_tracks.ablation_cohort import prepare_cohort
 from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
@@ -55,7 +57,6 @@ def _cohort_gate(setup,cfg,bundle):
     if cfg.coverage == 'all':
         if bundle is None:
             raise ValueError('exhaustive ablation requires the prepared training bundle')
-        from model_tracks.ablation_cohort import prepare_cohort
         cohort = prepare_cohort(setup, bundle)
     return cohort
 
@@ -85,7 +86,6 @@ def _frozen_support(setup):
 @timed
 def _template_checkpoint(setup,baseline,track,vocabulary,support):
     """The text baseline checkpoint, or the other tracks' template tensor file."""
-    from core.model_input import model_input_composition
     checkpoint = baseline
     if track != 'text':
         checkpoint = setup/(track+'__ablation_template.pt')
