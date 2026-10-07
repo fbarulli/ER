@@ -8,7 +8,13 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
   checkpoint binding, locally prepared token archive binding, and worker
   tokenizer-policy equality (fail-loud on every mismatch).
 - :class:`BatchEncoder` — the prepared-token batches -> normalized float32
-  embeddings loop.
+  embeddings loop (:meth:`BatchEncoder.run` is the timed pass; one
+  :meth:`BatchEncoder._encode_batch` per prepared batch).
+- :func:`_bind_request` — the request/checkpoint/token-archive phase.
+- :func:`_load_checkpoint` — the local-files-only SentenceTransformer load.
+- :func:`_verify_tokenizer_policy` — the fail-loud policy-equality phase.
+- :func:`_encode_prepared_batches` — the encoding phase (BatchEncoder pass).
+- :func:`_publish_embeddings` — the metadata + npz + sha256 sidecar publish.
 - :func:`main` — the CLI orchestrator (paths/device + publish).
 """
 import argparse
@@ -154,35 +160,72 @@ def _load_tokenization_policy():
     return tokenization_policy
 
 
-def main():
-    import numpy as np
-    import torch
-    from sentence_transformers import SentenceTransformer
+def _parse_arguments() -> argparse.Namespace:
+    """The worker CLI contract: request/checkpoint/output plus device."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--request', type=Path, required=True)
     parser.add_argument('--checkpoint', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--device', choices=('cuda', 'cpu'), default='cuda')
-    args = parser.parse_args()
-    if args.device == 'cuda' and not torch.cuda.is_available():
+    return parser.parse_args()
+
+
+def _require_cuda(device: str) -> None:
+    """Fail-loud gate: never fall back to CPU when CUDA was requested."""
+    import torch
+    if device == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError('CUDA required; refusing CPU fallback')
-    if args.output.exists():
+
+
+def _reject_existing_output(output: Path) -> None:
+    """Fail-loud gate: the worker never reuses an existing output."""
+    if output.exists():
         raise FileExistsError('Worker never reuses an existing output')
-    request = EncodeRequest(args.request, args.checkpoint)
+
+
+def _bind_request(args: argparse.Namespace):
+    """The request/checkpoint/token-archive binding phase (hashing-heavy)."""
+    with _LOG.section('encode_prepared_embeddings.request'):
+        return EncodeRequest(args.request, args.checkpoint)
+
+
+def _load_checkpoint(args: argparse.Namespace, request):
+    """The local-files-only SentenceTransformer load phase."""
+    from sentence_transformers import SentenceTransformer
     _LOG.info(
         f'[embeddings/{args.device}] loading checkpoint; '
         f"prepared texts={len(request.values['texts']):,}")
     model = SentenceTransformer(str(args.checkpoint), device=args.device, local_files_only=True)
     model.eval()
-    tokenization_policy = _load_tokenization_policy()
-    plan = request.values.get('prepared_text')
-    if tokenization_policy(model) != plan['tokenization']:
-        raise ValueError('Worker tokenizer policy differs from local preparation')
+    return model
+
+
+def _verify_tokenizer_policy(args: argparse.Namespace, model, request) -> None:
+    """The fail-loud worker tokenizer-policy equality phase."""
+    with _LOG.section('encode_prepared_embeddings.tokenizer_policy'):
+        tokenization_policy = _load_tokenization_policy()
+        plan = request.values.get('prepared_text')
+        if tokenization_policy(model) != plan['tokenization']:
+            raise ValueError('Worker tokenizer policy differs from local preparation')
+
+
+def _encode_prepared_batches(args: argparse.Namespace, model, request):
+    """The prepared-batch encoding phase, delegated to BatchEncoder."""
     _LOG.info(f'[embeddings/{args.device}] encoding prepared batches; truncated=0')
-    vectors = BatchEncoder(model, request.token_archive, args.device).run(request.token_batches)
+    return BatchEncoder(model, request.token_archive, args.device).run(request.token_batches)
+
+
+def _verify_population(request, vectors) -> None:
+    """Fail-loud gate: encoded rows must match the request IDs."""
     if len(vectors) != len(request.values['ids']):
         raise ValueError('Prepared token population differs from request IDs')
+
+
+@timed
+def _publish_embeddings(args: argparse.Namespace, request, vectors) -> None:
+    """One publish: bound metadata, compressed npz, sha256 sidecar."""
+    import numpy as np
     metadata = {**request.values['metadata'],
                 'request_sha256': hashlib.sha256(request.raw).hexdigest(),
                 'embedding_dtype': 'float32'}
@@ -192,6 +235,19 @@ def main():
                             embeddings=vectors, metadata=json.dumps(metadata, sort_keys=True))
     args.output.with_suffix('.sha256').write_text(
         hashlib.sha256(args.output.read_bytes()).hexdigest())
+
+
+@timed
+def main():
+    args = _parse_arguments()
+    _require_cuda(args.device)
+    _reject_existing_output(args.output)
+    request = _bind_request(args)
+    model = _load_checkpoint(args, request)
+    _verify_tokenizer_policy(args, model, request)
+    vectors = _encode_prepared_batches(args, model, request)
+    _verify_population(request, vectors)
+    _publish_embeddings(args, request, vectors)
     _LOG.info(f'[embeddings/{args.device}] encoded shape={vectors.shape}')
 
 
