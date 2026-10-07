@@ -212,7 +212,9 @@ class DaemonStopTests(unittest.TestCase):
 
     def test_the_daemon_match_rule_has_one_definition(self):
         """Both the stale-record path and the backstop use the same predicate."""
-        source = Path(colab.__file__).read_text(encoding="utf-8")
+        from cli import colab_runtime
+        source = (Path(colab.__file__).read_text(encoding="utf-8")
+                  + Path(colab_runtime.__file__).read_text(encoding="utf-8"))
         self.assertEqual(
             source.count("colab_cli_entry.py\" in command and \"keep-alive\""), 0,
             "the match rule must not be duplicated inline",
