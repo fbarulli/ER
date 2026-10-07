@@ -175,7 +175,17 @@ def main() -> None:
         timing.mark("run_within_brand_pipeline")
     log.info(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}")
     _report_regex_fallback_census()
+    _close_manifest(manifest, timing, df, pairs, canon)
 
+
+def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon) -> None:
+    """Assemble the stage's ledger into the manifest and print the closure.
+
+    Row accounting (gtin-guard drops vs kept-visible canonical records), the
+    attribute-consistency flag census, the frozen artifact list, the atomic
+    manifest publication and the closing closure line — the one
+    responsibility the stage owes AFTER the pipeline ran.
+    """
     # ---- row accounting (SILENT_DROPS task 6; capture-only) ────────────────
     # The pipeline's gtin-guard drops rows for two loud reasons (both
     # printed by run_within_brand_pipeline); every other input row either

@@ -432,6 +432,50 @@ class TieredCollapse:
         """Register one tier's deliberately dropped rows for the removal ledger."""
         self.drops[tier] = dropped
 
+    def run_tiers(
+        self, work: pd.DataFrame
+    ) -> tuple[pd.DataFrame, list, list[dict], int, int]:
+        """The four tiers over the staged work frame, under one log section.
+
+        Each tier re-emits its post-collapse work frame and appends its
+        per-tier summary row; T1's skipped (checksum-invalid) population and
+        T2's deferred (gtin-conflicting) re-enters feed the row accounting.
+        Returns (post-T3 work, summary rows, unresolved conflict rows,
+        n_t1_skipped, n_deferred_to_t3).
+        """
+        summary: list[dict] = []
+        with _LOG.section("dedupe.tiers"):
+            with_bc, malformed, no_bc = FrameWorkbook.partition_by_gtin_trust(work)
+            t1, dropped1 = self._tier_t1(with_bc)
+            n_t1_skipped = len(malformed)
+            work = pd.concat([t1, malformed, no_bc])
+            self.record(_TIER_T1, dropped1)
+            summary.append({"tier": _TIER_T1,
+                            "dropped_rows": len(dropped1),
+                            "skipped_checksum_invalid": n_t1_skipped})
+
+            t15_kept, t15_dropped, t15_groups, t15_unresolved, conflict_rows = (
+                self._tier_t15(malformed)
+            )
+            work = pd.concat([t1, t15_kept, no_bc])
+            self.record(_TIER_T15, t15_dropped)
+            summary.append({"tier": _TIER_T15,
+                            "dropped_rows": len(t15_dropped),
+                            "collapsed_groups": t15_groups,
+                            "unresolved_groups": t15_unresolved})
+
+            work, dropped2, t2_deferred = self._tier_t2(work)
+            self.record(_TIER_T2, dropped2)
+            summary.append({"tier": _TIER_T2,
+                            "dropped_rows": len(dropped2),
+                            "deferred_to_t3": len(t2_deferred)})
+
+            work, dropped3 = self._tier_t3(work)
+            self.record(_TIER_T3, dropped3)
+            summary.append({"tier": _TIER_T3,
+                            "dropped_rows": len(dropped3)})
+        return work, summary, conflict_rows, n_t1_skipped, len(t2_deferred)
+
     @timed
     def _tier_t1(self, with_bc: pd.DataFrame) -> tuple[pd.DataFrame, list]:
         """T1: retailer+gtin -> one row (ground-truth identity).
@@ -448,17 +492,14 @@ class TieredCollapse:
         )
         return t1, dropped
 
-    @timed
-    def _tier_t15(self, malformed: pd.DataFrame):
-        """T1.5: same retailer + same MALFORMED gtin + same product -> one row.
+    def _settle_groups(
+        self, malformed: pd.DataFrame
+    ) -> tuple[pd.DataFrame, list, int, int, list[dict]]:
+        """Iterate the malformed-gtin groups and settle each via T1.5 review.
 
-        T1 refuses to collapse on an invalid gtin, but a malformed gtin that
-        is byte-identical at one retailer is still a strong candidate, and
-        the descriptor bundle is the arbiter (IdentityDecider). A group it
-        cannot settle is kept whole and recorded as a review row. This
-        recovers the 97 groups measured in the dedupe invalid-gtin audit
-        (2026-09-29) while never merging genuinely different products.
-        Returns (work, dropped, collapsed_groups, unresolved_groups, conflicts).
+        groups are materialized up front (first-occurrence order, sort=False)
+        so the tqdm progress bar works. Returns (kept_frame, dropped,
+        collapsed_groups, unresolved_groups, conflicts).
         """
         kept: list[pd.DataFrame] = []
         dropped: list = []
@@ -477,6 +518,23 @@ class TieredCollapse:
             collapsed += bool(piece_dropped)
             unresolved += piece_unresolved
         kept_frame = pd.concat(kept)
+        return kept_frame, dropped, collapsed, unresolved, conflicts
+
+    @timed
+    def _tier_t15(self, malformed: pd.DataFrame):
+        """T1.5: same retailer + same MALFORMED gtin + same product -> one row.
+
+        T1 refuses to collapse on an invalid gtin, but a malformed gtin that
+        is byte-identical at one retailer is still a strong candidate, and
+        the descriptor bundle is the arbiter (IdentityDecider). A group it
+        cannot settle is kept whole and recorded as a review row. This
+        recovers the 97 groups measured in the dedupe invalid-gtin audit
+        (2026-09-29) while never merging genuinely different products.
+        Returns (work, dropped, collapsed_groups, unresolved_groups, conflicts).
+        """
+        kept_frame, dropped, collapsed, unresolved, conflicts = (
+            self._settle_groups(malformed)
+        )
         _LOG.info(f"[dedupe] T1.5 complete: {len(dropped):,} dropped across "
                   f"{collapsed:,} groups; {unresolved:,} unresolved escalations")
         return kept_frame, dropped, collapsed, unresolved, conflicts
@@ -515,20 +573,33 @@ class TieredCollapse:
         only when their trusted gtins agree (same non-empty identity, or
         both without one). Two DIFFERENT trusted gtins under one title are
         different products; those groups flow to T3 instead of collapsing
-        here. Returns (work, dropped_indices, deferred_frame).
+        here.         Returns (work, dropped_indices, deferred_frame).
         """
         work = FrameWorkbook.protect_missing_titles(work)
         work = FrameWorkbook.protect_untrusted_title_conflicts(work)
+        return self._collapse_keyed(work)
+
+    @staticmethod
+    def _defer_conflicting_gtins(work: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Split T2 by gtin agreement WITHIN each (retailer,title) group.
+
+        An all-same-identity group collapses losslessly; a group with >1
+        distinct trusted gtin carries genuinely different products — those
+        rows all flow to T3 (kept here via the conflict mask). Returns
+        (clean_keyed_frame, deferred_keyed_frame).
+        """
         keyed = work.assign(_t2_bc=work["_ident"])
-        # Split T2 by gtin agreement WITHIN each (retailer,title) group: an
-        # all-same-identity group collapses losslessly; a group with >1
-        # distinct trusted gtin carries genuinely different products — those
-        # rows all flow to T3 (kept here via the conflict mask).
         bc_agrees = keyed.groupby(
             ["retailer", "sku_name_eng"], sort=False, dropna=False
         )["_t2_bc"].transform("nunique").le(1)
-        clean = keyed[bc_agrees]
-        deferred = keyed[~bc_agrees]
+        return keyed[bc_agrees], keyed[~bc_agrees]
+
+    def _collapse_keyed(self, work: pd.DataFrame):
+        """The lossless collapse of gtin-agreeing title groups.
+
+        Returns (work, dropped_indices, deferred_frame).
+        """
+        clean, deferred = self._defer_conflicting_gtins(work)
         collapsed, dropped = collapse_representatives(
             clean, ["retailer", "sku_name_eng", "_t2_bc"], ["_complete"], [False],
             parent=self.parent,
@@ -662,6 +733,37 @@ class TieredCollapse:
             na_position="last", kind="stable",
         )
         return order.index[0], order.iloc[[0]]
+
+    def finalize(
+        self,
+        df: pd.DataFrame,
+        work: pd.DataFrame,
+        before_valid_gtins: set[str],
+        n0: int,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Resolve representatives and gate the collapse before publication.
+
+        Transitive representative resolution, the deduped output frame, the
+        raw-SKU -> rep mapping, every hard sanity gate and the removal
+        ledger. Returns (deduped, sku_to_rep, removals) for the writers.
+        """
+        self._resolve_representatives(df.index)
+        deduped = work.drop(columns=HELPERS, errors="ignore").reset_index(drop=True)
+        sku_to_rep = self._sku_to_rep_frame(df, work)
+
+        with _LOG.section("dedupe.sanity"):
+            SanityGate.no_partition_duplicates(work)
+            SanityGate.rep_mapping_complete(sku_to_rep, deduped)
+            _LOG.info("  [PASS] no retailer+title+identity duplicates remain; "
+                      "SKU->rep mapping complete")
+            SanityGate.identity_invariant(before_valid_gtins, deduped)
+            _LOG.info(f"  [PASS] identity invariant: all "
+                      f"{len(before_valid_gtins):,} trusted gtins still have "
+                      f"a representative")
+
+        removals = self._removal_frame(sku_to_rep)
+        SanityGate.removal_accounting(removals, n0 - len(deduped))
+        return deduped, sku_to_rep, removals
 
 
 # ── hard invariants ─────────────────────────────────────────────────────────
@@ -807,76 +909,15 @@ def main() -> None:
     # parent[i] = original row index of the surviving representative for
     # row i, owned by the tier runner (see TieredCollapse).
     tiers = TieredCollapse(work.index)
-    summary: list[dict] = []
-
     work, before_valid_gtins = FrameWorkbook.stage_trusted_gtins(work)
-    with _LOG.section("dedupe.tiers"):
-        with_bc, malformed, no_bc = FrameWorkbook.partition_by_gtin_trust(work)
-        t1, dropped1 = tiers._tier_t1(with_bc)
-        n_t1_skipped = len(malformed)
-        work = pd.concat([t1, malformed, no_bc])
-        tiers.record(_TIER_T1, dropped1)
-        summary.append({"tier": _TIER_T1,
-                        "dropped_rows": len(dropped1),
-                        "skipped_checksum_invalid": n_t1_skipped})
-
-        t15_kept, t15_dropped, t15_groups, t15_unresolved, conflict_rows = (
-            tiers._tier_t15(malformed)
-        )
-        work = pd.concat([t1, t15_kept, no_bc])
-        tiers.record(_TIER_T15, t15_dropped)
-        summary.append({"tier": _TIER_T15,
-                        "dropped_rows": len(t15_dropped),
-                        "collapsed_groups": t15_groups,
-                        "unresolved_groups": t15_unresolved})
-
-        work, dropped2, t2_deferred = tiers._tier_t2(work)
-        tiers.record(_TIER_T2, dropped2)
-        summary.append({"tier": _TIER_T2,
-                        "dropped_rows": len(dropped2),
-                        "deferred_to_t3": len(t2_deferred)})
-
-        work, dropped3 = tiers._tier_t3(work)
-        tiers.record(_TIER_T3, dropped3)
-        summary.append({"tier": _TIER_T3,
-                        "dropped_rows": len(dropped3)})
-
-    # ---- outputs --------------------------------------------------------------
-    with _LOG.section("dedupe.outputs"):
-        tiers._resolve_representatives(df.index)
-        deduped = work.drop(columns=HELPERS, errors="ignore").reset_index(drop=True)
-        sku_to_rep = tiers._sku_to_rep_frame(df, work)
-
-        with _LOG.section("dedupe.sanity"):
-            SanityGate.no_partition_duplicates(work)
-            SanityGate.rep_mapping_complete(sku_to_rep, deduped)
-            _LOG.info("  [PASS] no retailer+title+identity duplicates remain; "
-                      "SKU->rep mapping complete")
-            SanityGate.identity_invariant(before_valid_gtins, deduped)
-            _LOG.info(f"  [PASS] identity invariant: all "
-                      f"{len(before_valid_gtins):,} trusted gtins still have "
-                      f"a representative")
-
-        removals = tiers._removal_frame(sku_to_rep)
-        SanityGate.removal_accounting(removals, n0 - len(deduped))
-
-        StageWriter.deduped(deduped)
-        StageWriter.sku_to_rep(sku_to_rep)
-        StageWriter.removals(removals)
-        summary.append({"tier": "TOTAL dropped", "dropped_rows": n0 - len(deduped)})
-        summary.append({"tier": "TOTAL remaining", "dropped_rows": len(deduped)})
-        StageWriter.summary(summary)
-        ambiguous_out = StageWriter.ambiguous(ambiguous)
-        conflicts = pd.DataFrame(
-            conflict_rows,
-            columns=["tier", "retailer", "gtin", "label", "reasons",
-                     "title_a", "title_b", "brand_a", "brand_b"],
-        )
-        StageWriter.conflicts(conflicts)
-
+    work, summary, conflict_rows, n_t1_skipped, n_deferred = tiers.run_tiers(work)
+    deduped, ambiguous_out, conflicts = publish_stage_outputs(
+        tiers, df=df, work=work, before_valid_gtins=before_valid_gtins,
+        n0=n0, ambiguous=ambiguous, summary=summary, conflict_rows=conflict_rows,
+    )
     row_accounting = tiers.row_accounting(
         n0, deduped, ambiguous_out, conflicts,
-        n_t1_skipped=n_t1_skipped, n_deferred=len(t2_deferred),
+        n_t1_skipped=n_t1_skipped, n_deferred=n_deferred,
     )
     manifest_path = finish_manifest(
         manifest,
@@ -897,6 +938,68 @@ def main() -> None:
               f"(dropped {n0 - len(deduped):,}); "
               f"{len(ambiguous_out):,} retailer+title groups were "
               "price-varying offers (flagged, not silently merged)")
+
+
+def publish_stage_outputs(
+    tiers: TieredCollapse,
+    *,
+    df: pd.DataFrame,
+    work: pd.DataFrame,
+    before_valid_gtins: set[str],
+    n0: int,
+    ambiguous: pd.DataFrame,
+    summary: list,
+    conflict_rows: list[dict],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Finalize the collapse and publish every CSV the stage writes.
+
+    Representative resolution, the deduped output frame, the stage's sanity
+    gates and the atomic writes all live here so main() stays pure
+    orchestration. Returns (deduped, ambiguous_out, conflicts) for the
+    manifest's closure ledger.
+    """
+    # ---- outputs --------------------------------------------------------------
+    with _LOG.section("dedupe.outputs"):
+        deduped, sku_to_rep, removals = tiers.finalize(
+            df, work, before_valid_gtins, n0
+        )
+        ambiguous_out, conflicts = _publish_tables(
+            deduped, sku_to_rep, removals, ambiguous, summary, conflict_rows,
+            n0=n0,
+        )
+    return deduped, ambiguous_out, conflicts
+
+
+def _publish_tables(
+    deduped: pd.DataFrame,
+    sku_to_rep: pd.DataFrame,
+    removals: pd.DataFrame,
+    ambiguous: pd.DataFrame,
+    summary: list,
+    conflict_rows: list[dict],
+    *,
+    n0: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The publication block: every stage CSV, atomically.
+
+    The TOTAL rows close the display summary at write time (not before the
+    gates — the summary must reflect a collapse that passed). Returns
+    (ambiguous_out, conflicts) so the manifest can pin their populations.
+    """
+    StageWriter.deduped(deduped)
+    StageWriter.sku_to_rep(sku_to_rep)
+    StageWriter.removals(removals)
+    summary.append({"tier": "TOTAL dropped", "dropped_rows": n0 - len(deduped)})
+    summary.append({"tier": "TOTAL remaining", "dropped_rows": len(deduped)})
+    StageWriter.summary(summary)
+    ambiguous_out = StageWriter.ambiguous(ambiguous)
+    conflicts = pd.DataFrame(
+        conflict_rows,
+        columns=["tier", "retailer", "gtin", "label", "reasons",
+                 "title_a", "title_b", "brand_a", "brand_b"],
+    )
+    StageWriter.conflicts(conflicts)
+    return ambiguous_out, conflicts
 
 
 if __name__ == "__main__":
