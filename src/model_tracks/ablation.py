@@ -394,13 +394,17 @@ def load_prepared(request_path, request):
     return np.load(path,allow_pickle=False)
 
 
+def _validated_device(device):
+    from model_tracks.embedding_forward import validate_embedding_device
+    return validate_embedding_device(device)
+
+
 @timed
 @scoped_request
 def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
     """Colab inference only; all interventions and texts arrive prepared."""
     import torch
-    from model_tracks.embedding_forward import validate_embedding_device
-    device = validate_embedding_device(device)
+    device = _validated_device(device)
     if output.exists():
         raise FileExistsError(output)
     request = json.loads(request_path.read_text())
