@@ -2151,6 +2151,147 @@ def generate_ngrams(tokens: list[str], n: int) -> list[str]:
 # -----------------------------------------------------------------------------
 # Discriminative n‑gram extraction
 # -----------------------------------------------------------------------------
+class _SalientNgramScorer:
+    """Select a document's discriminative n-grams (1-4) by TF-IDF.
+
+    Single responsibility per phase; score() runs them in ONE fixed order and
+    the statements are the pre-refactor body verbatim, so the selected list
+    (and its ordering) is byte-identical.
+
+    Phase map:
+      tokenize       — normalized title/attribute streams: filtered unigram
+                       token lane + PRE-stopword phrase lane (the phrase
+                       regexes must see 'no'/'with'/'of')
+      tfidf_select   — candidate n-grams, global x brand IDF scoring (with the
+                       all-GTIN penalty and the length bonus), descending cut
+      keep_token_merge — KEEP_TOKENS/PHRASE_VARIANTS rescue lane (atomic and
+                       bigram forms, sorted for PYTHONHASHSEED determinism)
+    """
+
+    def __init__(self, titles: list[str], attributes: list[str],
+                 brand_tokens: set[str], global_idf: 'NgramIDF',
+                 brand_idf: 'NgramIDF', top_k: int) -> None:
+        self._titles = titles
+        self._attributes = attributes
+        self._brand_tokens = brand_tokens
+        self._global_idf = global_idf
+        self._brand_idf = brand_idf
+        self._top_k = top_k
+
+    # ── phase: tokenize ─────────────────────────────────────────────────────
+
+    def tokenize(self) -> tuple[list[str], list[str]]:
+        """Combine all text into token list; carry the PRE-stopword phrase
+        parts alongside the filtered stream."""
+        tokens = []
+        phrase_parts = []  # PRE-stopword text: phrase regexes must see 'no',
+        # 'with', 'of' — MINIMAL_STOPWORDS deletes them before the keep-token
+        # check could ever fire (the live miss on "no sugar"/"free of sugar")
+        for title, attr in zip(self._titles, self._attributes, strict=True):
+            text = normalize_text(title) + " " + normalize_text(attr)
+            text = re.sub(
+                r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
+                " ",
+                text,
+                flags=re.IGNORECASE,
+            )
+            toks = text.split()
+            phrase_parts.append(text)
+            toks = [tok for tok in toks if tok not in MINIMAL_STOPWORDS and len(tok) > 1]
+            tokens.extend(toks)
+        return tokens, phrase_parts
+
+    # ── phase: TF-IDF selection ─────────────────────────────────────────────
+
+    def tfidf_select(self, tokens: list[str]) -> list[str]:
+        """Candidate n-grams (1-4) scored against global + brand IDF; the
+        highest-scored ``top_k`` (underscore-joined) survive."""
+        candidates = []
+        for n in (1, 2, 3, 4):
+            candidates.extend(generate_ngrams(tokens, n))
+
+        if not candidates:
+            return []
+
+        tf = Counter(candidates)
+        total = len(candidates)
+
+        # Number of GTINs in the brand
+        N_brand = self._brand_idf.N if self._brand_idf else 1
+
+        scores = {}
+        for ngram, count in tf.items():
+            tf_val = count / total if total else 0
+            g_idf = self._global_idf.idf(ngram)
+            b_idf = self._brand_idf.idf(ngram) if self._brand_idf else 1.0
+
+            # Strong penalty for n‑grams present in ALL brand GTINs (not discriminative)
+            if self._brand_idf:
+                df_brand = self._brand_idf.df.get(ngram, 0)
+                if df_brand == N_brand:
+                    b_idf = 0.05  # almost zero
+
+            num_words = len(ngram.split())
+            # Length bonus: longer n‑grams are more specific, but we include unigrams with slight penalty
+            if num_words == 1:
+                length_bonus = 0.8
+            else:
+                length_bonus = 1.0 + 0.1 * (num_words - 1)
+
+            score = tf_val * g_idf * b_idf * length_bonus
+            scores[ngram] = score
+
+        sorted_ngrams = sorted(scores.items(), key=lambda x: -x[1])
+        return [ngram.replace(" ", "_") for ngram, _ in sorted_ngrams[:self._top_k]]
+
+    # ── phase: keep-token merge ─────────────────────────────────────────────
+
+    def keep_token_merge(self, tokens: list[str], phrase_parts: list[str],
+                         selected: list[str]) -> list[str]:
+        """Add KEEP_TOKENS that appear in the document but may not be top.
+
+        Compound keepers ('no_sugar', 'with_pulp') are stored underscore-joined
+        and used to be checked against SPACE-joined doc text — they could never
+        match (dead entries). Check the compound's WORDS as a contiguous bigram
+        instead ('no' is stopworded away, so 'sugar_free' matches 'sugar free').
+        The PRE-stopword text feeds the phrase regexes."""
+        bigrams = {
+            f"{tokens[i]}_{tokens[i + 1]}" for i in range(len(tokens) - 1)
+        }
+        # PRE-stopword text: 'no sugar'/'free of sugar'/'with added sugar' die
+        # in the MINIMAL_STOPWORDS filter before the keep check — the phrase
+        # regexes see the raw normalized text, the token/bigram checks keep
+        # using the filtered stream (unchanged behavior for plain keepers).
+        doc_text = " ".join(phrase_parts)
+        # DETERMINISM (reproducibility contract): iterating a SET of strings is
+        # process-random (PYTHONHASHSEED) — keep-tokens appended in a different
+        # order per run and canonical_records.csv drifted. sorted() pins it.
+        for keep in sorted(KEEP_TOKENS):
+            # PHRASE VARIATIONS (owner ruling 2026-09-07): one concept, many
+            # phrasings — a keep-token matches when ANY of its regex variants
+            # fires on the doc text (hyphens/fused/reversed/of-linked word
+            # orders all map to the SAME canonical token; census: sugar free
+            # 1,589 / sugarfree 124 / sugarless 13 / free sugar 9 / free of
+            # sugar 0-but-covered / no sugar 7,123 / no added sugar 4,039).
+            if keep in PHRASE_VARIANTS:
+                hit = any(p.search(doc_text) for p in PHRASE_VARIANTS[keep])
+            else:
+                hit = (keep in tokens) if "_" not in keep else (keep in bigrams)
+            if hit and keep not in selected:
+                selected.append(keep)
+                if len(selected) >= self._top_k + 3:
+                    break
+        return selected
+
+    # ── orchestration ───────────────────────────────────────────────────────
+
+    def score(self) -> list[str]:
+        """Run the load-bearing phase order."""
+        tokens, phrase_parts = self.tokenize()
+        selected = self.tfidf_select(tokens)
+        return self.keep_token_merge(tokens, phrase_parts, selected)
+
+
 def extract_discriminative_ngrams(
     titles: list[str],
     attributes: list[str],
@@ -2159,99 +2300,11 @@ def extract_discriminative_ngrams(
     brand_idf: NgramIDF,
     top_k: int = 5,
 ) -> list[str]:
-    """
-    Select n‑grams (1‑4) with highest TF‑IDF, considering global and within‑brand IDF.
-    """
-    # Combine all text into token list
-    tokens = []
-    phrase_parts = []  # PRE-stopword text: phrase regexes must see 'no',
-    # 'with', 'of' — MINIMAL_STOPWORDS deletes them before the keep-token
-    # check could ever fire (the live miss on "no sugar"/"free of sugar")
-    for title, attr in zip(titles, attributes, strict=True):
-        text = normalize_text(title) + " " + normalize_text(attr)
-        text = re.sub(
-            r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
-            " ",
-            text,
-            flags=re.IGNORECASE,
-        )
-        toks = text.split()
-        phrase_parts.append(text)
-        toks = [tok for tok in toks if tok not in MINIMAL_STOPWORDS and len(tok) > 1]
-        tokens.extend(toks)
-
-    candidates = []
-    for n in (1, 2, 3, 4):
-        candidates.extend(generate_ngrams(tokens, n))
-
-    if not candidates:
-        return []
-
-    tf = Counter(candidates)
-    total = len(candidates)
-
-    # Number of GTINs in the brand
-    N_brand = brand_idf.N if brand_idf else 1
-
-    scores = {}
-    for ngram, count in tf.items():
-        tf_val = count / total if total else 0
-        g_idf = global_idf.idf(ngram)
-        b_idf = brand_idf.idf(ngram) if brand_idf else 1.0
-
-        # Strong penalty for n‑grams present in ALL brand GTINs (not discriminative)
-        if brand_idf:
-            df_brand = brand_idf.df.get(ngram, 0)
-            if df_brand == N_brand:
-                b_idf = 0.05  # almost zero
-
-        num_words = len(ngram.split())
-        # Length bonus: longer n‑grams are more specific, but we include unigrams with slight penalty
-        if num_words == 1:
-            length_bonus = 0.8
-        else:
-            length_bonus = 1.0 + 0.1 * (num_words - 1)
-
-        score = tf_val * g_idf * b_idf * length_bonus
-        scores[ngram] = score
-
-    sorted_ngrams = sorted(scores.items(), key=lambda x: -x[1])
-    selected = [ngram.replace(" ", "_") for ngram, _ in sorted_ngrams[:top_k]]
-
-    # Add KEEP_TOKENS that appear in the document but may not be top.
-    # Compound keepers ('no_sugar', 'with_pulp') are stored underscore-joined
-    # and used to be checked against SPACE-joined doc text — they could never
-    # match (dead entries). Check the compound's WORDS as a contiguous bigram
-    # instead ('no' is stopworded away, so 'sugar_free' matches 'sugar free').
-    doc_tokens = tokens
-    bigrams = {
-        f"{doc_tokens[i]}_{doc_tokens[i + 1]}" for i in range(len(doc_tokens) - 1)
-    }
-    # PRE-stopword text: 'no sugar'/'free of sugar'/'with added sugar' die
-    # in the MINIMAL_STOPWORDS filter before the keep check — the phrase
-    # regexes see the raw normalized text, the token/bigram checks keep
-    # using the filtered stream (unchanged behavior for plain keepers).
-    doc_text = " ".join(phrase_parts)
-    # DETERMINISM (reproducibility contract): iterating a SET of strings is
-    # process-random (PYTHONHASHSEED) — keep-tokens appended in a different
-    # order per run and canonical_records.csv drifted. sorted() pins it.
-    for keep in sorted(KEEP_TOKENS):
-        # PHRASE VARIATIONS (owner ruling 2026-09-07): one concept, many
-        # phrasings — a keep-token matches when ANY of its regex variants
-        # fires on the doc text (hyphens/fused/reversed/of-linked word
-        # orders all map to the SAME canonical token; census: sugar free
-        # 1,589 / sugarfree 124 / sugarless 13 / free sugar 9 / free of
-        # sugar 0-but-covered / no sugar 7,123 / no added sugar 4,039).
-        if keep in PHRASE_VARIANTS:
-            hit = any(p.search(doc_text) for p in PHRASE_VARIANTS[keep])
-        else:
-            hit = (keep in doc_tokens) if "_" not in keep else (keep in bigrams)
-        if hit and keep not in selected:
-            selected.append(keep)
-            if len(selected) >= top_k + 3:
-                break
-
-    return selected[: top_k + 3]
+    """Select n‑grams (1‑4) with highest TF‑IDF, considering global and
+    within‑brand IDF — see _SalientNgramScorer.score."""
+    return _SalientNgramScorer(
+        titles, attributes, brand_tokens, global_idf, brand_idf, top_k
+    ).score()
 
 
 # -----------------------------------------------------------------------------
