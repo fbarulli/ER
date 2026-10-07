@@ -348,8 +348,10 @@ def stage_question_schema(kind: str, *,
 # This dedicated template instead verifies THE ATTACHED INPUTS: files
 # land under /kaggle/input/<slug>/ and resolve_input rglob's by name.
 # REPOSITORY/BRANCH/REVISION/_runtime_files stay assigned at top level
-# so core.runtime_inputs.staged_kernel_preflight still greps them (the
-# push gate imports that helper — never edited here).
+# so the laya push gate still literal-evals them (_staged_laya_push_
+# preflight — the push gate lives in this lane; the shared clone-lane
+# staged_kernel_preflight checked the git tree for the attached-inputs
+# inventory, which never matches a dataset-carried payload).
 LAYA_RUNTIME_PREFLIGHT = '''\
 _runtime_files = ("@DECISION_CSV@", @QUESTION_SCHEMA_FILE@)
 INPUT_ROOT = Path("/kaggle/input")
@@ -795,8 +797,10 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
     version = current.get("dataset_version")
     if version:
         plan["action"] = "version"
-        command = [executable, "datasets", "version", "-r",
-                   "--dir-mode", "zip",
+        # `-r` and `--dir-mode` are one argparse option: `-r --dir-mode
+        # zip` fails with "argument -r/--dir-mode: expected one
+        # argument" (fail-loud met live on the version path).
+        command = [executable, "datasets", "version", "-r", "zip",
                    "-m", f"laya inputs {run_tag}",
                    "-p", str(payload)]
     else:
@@ -908,7 +912,7 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
     # two-pass substitution (a nested value's @tokens@ are never
     # re-scanned once it is inserted): the preflight bakes its own
     # literal tuple FIRST, then drops into the script — the push gate
-    # (staged_kernel_preflight) literal-evals `_runtime_files`.
+    # (_staged_laya_push_preflight) literal-evals `_runtime_files`.
     preflight = _template(LAYA_RUNTIME_PREFLIGHT, values)
     script = _template(template, {**values,
                                   "RUNTIME_PREFLIGHT": preflight})
@@ -1009,6 +1013,42 @@ def stage_colab_notebook(*, decision_kind: str,
     return receipt
 
 
+def _staged_laya_push_preflight(stage_dir: Path) -> None:
+    """Laya push gate (the clone-lane staged_kernel_preflight shape, with
+    the laya payload semantics): the ATTACHED-inputs inventory
+    (`_runtime_files`) rides the er-laya-requests DATASET, never the git
+    checkout — so the inventory is verified against the STAGED
+    dataset_payload, and remote_revision_preflight (a core helper, never
+    edited here) checks only the publish pin with an empty inventory."""
+    import ast
+    import json
+
+    from core.runtime_inputs import remote_revision_preflight
+
+    metadata = json.loads((stage_dir / "kernel-metadata.json").read_text())
+    script = (stage_dir / metadata['code_file']).read_text()
+    values = {}
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                        'REPOSITORY', 'BRANCH', 'REVISION', '_runtime_files'}:
+                    values[target.id] = ast.literal_eval(node.value)
+    required = {'REPOSITORY', 'BRANCH', 'REVISION', '_runtime_files'}
+    if required - values.keys():
+        raise ValueError(
+            'Staged kernel lacks runtime preflight inventory; regenerate it')
+    payload = stage_dir / "dataset_payload"
+    missing = [name for name in values['_runtime_files']
+               if not (payload / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Staged dataset payload {payload} is missing attached inputs: "
+            + ", ".join(missing) + "; stage the payload first")
+    remote_revision_preflight(values['REPOSITORY'], values['BRANCH'], (),
+                              revision=values['REVISION'])
+
+
 # ── the executed ops (fail-loud, --execute gated) ─────────────────────────
 def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
                        activate: bool = True) -> dict[str, Any]:
@@ -1016,8 +1056,9 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
 
     Dry run: returns the plan + argv, never spawns the kaggle subprocess.
     Executed: requires the staged metadata file (--activate gate), runs
-    the preflight (staged_kernel_preflight), pushes, and embeds the CLI's
-    own output in the raised RuntimeError on a failing returncode.
+    the laya push preflight (_staged_laya_push_preflight), pushes, and
+    embeds the CLI's own output in the raised RuntimeError on a failing
+    returncode.
     """
     argv = [sys.executable, "-m", "kaggle", "kernels", "push",
             "-p", str(stage_dir)]
@@ -1032,9 +1073,7 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
             "--activate gate: no staged kernel at "
             f"{stage_dir} (kernel-metadata.json is missing); stage first "
             "(--what stage-kernel)")
-    from core.runtime_inputs import staged_kernel_preflight
-
-    staged_kernel_preflight(Path(stage_dir))
+    _staged_laya_push_preflight(Path(stage_dir))
     result = subprocess.run(argv, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
     output = result.stdout or ""
