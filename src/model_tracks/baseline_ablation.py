@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.run_log import RunLogger
 from core.step_trace import timed
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import load_records, load_text_cache
 from model_tracks.ablation import report, request_context, write
 
 _LOG = RunLogger(__name__)
@@ -80,9 +80,8 @@ def _frozen_calibration(request_path, calibration):
 
 
 def _persist_baseline(request_path, result):
-    """Write the baseline report beside its request with the sha sidecar."""
+    """Write the baseline report beside its request."""
     write(request_path.parent/'report.json', result)
-    (request_path.parent/'report.sha256').write_text(file_hash(request_path.parent/'report.json')+'\n')
 
 
 @timed
