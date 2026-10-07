@@ -2783,6 +2783,10 @@ class KaggleFilesSpec(BaseModel):
     # the single lane.log — no per-watcher or per-stream sidecar logs.
     autowatch_log: str = 'lane.log'
     stream_log: str = 'lane.log'
+    # The kernel_session_id capture follows the stream: the SSE proxy embeds
+    # it in the stream URL, the follower records it here, and the verified
+    # stop (cancel_kernel_session -> status poll) consumes it.
+    session_id_file: str = '{kernel}.session_id'
     autowatch_receipt: str = 'autowatch_{kind}.receipt.json'
     supervise_receipt: str = 'supervise.receipt.json'
     chain_receipt: str = 'chain.receipt.json'
@@ -2825,6 +2829,9 @@ class KaggleLimitsSpec(BaseModel):
     terminal_columns: int = Field(default=160, ge=1)
     read_buffer_bytes: int = Field(default=4096, ge=1)
     child_stop_seconds: float = Field(default=10.0, gt=0)
+    # Verified-stop bound: status polls allowed after a stop attempt before the
+    # verdict degrades from stopped to still_running (logs_poll_seconds apart).
+    stop_verify_polls: int = Field(default=20, ge=1)
 
 
 class KaggleSpec(BaseModel):

@@ -295,13 +295,20 @@ class KaggleKernels:
     @staticmethod
     def stop_kernel(slug: str | None = None, *, which: str = "cpu",
                     execute: bool) -> dict[str, Any]:
-        """Stop a kernel's running session and release its compute quota.
+        """Stop a kernel's running session with a verified verdict.
 
-        Kaggle's official CLI exposes no cancel verb and the cancel-session API
-        needs a session id the public surfaces never report, so the reliable
-        mechanism is a version replace: push a trivial stub that prints and
-        exits — the platform tears down the current session to run version N+1.
-        Dry-run by default; --execute performs the replace.
+        "Replacement is the kill" is not a verified kill: the plan must report
+        stopped / still_running and success is only ever a terminal status.
+        Preferred mechanism: the stream follower records the session's
+        kernel_session_id (files.session_id_file under logs/kaggle/); the SDK
+        cancels that exact session (cancel_kernel_session). Without a recorded
+        id — or when the SDK cancel raises — the fallback is the version
+        replace: push a trivial stub that prints and exits, and the platform
+        tears down the current session to run version N+1. Both paths are
+        verified by bounded status polls (limits.stop_verify_polls x
+        logs_poll_seconds); no terminal status inside the window degrades the
+        verdict to still_running and the stop fails loud. Dry-run by default;
+        --execute performs the cancel/replace.
         """
         from cli import kaggle_lane as lane
 
@@ -321,27 +328,68 @@ class KaggleKernels:
         }
         if not execute:
             return plan
-        stage.mkdir(parents=True, exist_ok=True)
-        title = resolved.rsplit("/", 1)[-1].replace("-", " ").title()
-        lane.atomic_write_json({
-            "id": resolved,
-            "title": title,
-            "code_file": lane._spec().files.stop_code,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": False,
-            "enable_internet": True,
-            "dataset_sources": [],
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }, stage / lane._spec().files.kernel_metadata)
-        (stage / lane._spec().files.stop_code).write_text(
-            'print("[kaggle-lane] run cancelled by owner; session released")\n',
-            encoding="utf-8")
-        executable = lane._require_kaggle_executable(spec.kaggle_executable)
-        command = [executable, "kernels", "push", "-p", str(stage)]
-        lane._run_kaggle(command)
-        plan.update(stopped=True)
+        session_id: int | None = None
+        session_file = (lane.lane_logs_dir()
+                        / spec.files.session_id_file.format(
+                            kernel=resolved.rsplit("/", 1)[-1]))
+        try:
+            session_id = int(session_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            session_id = None
+        if session_id is not None:
+            # Preferred: the SDK cancel — kills the exact recorded session.
+            try:
+                from kagglesdk.kaggle_client import KaggleClient
+                from kagglesdk.kaggle_env import KaggleEnv
+                from kagglesdk.kernels.types.kernels_api_service import (
+                    ApiCancelKernelSessionRequest)
+                request = ApiCancelKernelSessionRequest()
+                request.kernel_session_id = session_id
+                KaggleClient(env=KaggleEnv.PROD).kernels.kernels_api_client \
+                    .cancel_kernel_session(request)
+                plan["cancel_method"] = "sdk_cancel_kernel_session"
+            except Exception as err:
+                plan["cancel_error"] = f"{type(err).__name__}: {str(err)[:200]}"
+        if "cancel_method" not in plan:
+            # Fallback: version replace — the stub push tears the session down.
+            stage.mkdir(parents=True, exist_ok=True)
+            title = resolved.rsplit("/", 1)[-1].replace("-", " ").title()
+            lane.atomic_write_json({
+                "id": resolved,
+                "title": title,
+                "code_file": lane._spec().files.stop_code,
+                "language": "python",
+                "kernel_type": "script",
+                "enable_gpu": False,
+                "enable_internet": True,
+                "dataset_sources": [],
+                "kernel_sources": [],
+                "competition_sources": [],
+                "is_private": True,
+            }, stage / lane._spec().files.kernel_metadata)
+            (stage / lane._spec().files.stop_code).write_text(
+                'print("[kaggle-lane] run cancelled by owner; session released")\n',
+                encoding="utf-8")
+            executable = lane._require_kaggle_executable(spec.kaggle_executable)
+            command = [executable, "kernels", "push", "-p", str(stage)]
+            lane._run_kaggle(command)
+            plan["cancel_method"] = "version_replace"
+        # Verified stop: bounded status polls; only a terminal state is a stop.
+        verdict = "still_running"
+        deadline = (time.monotonic()
+                    + max(spec.limits.stop_verify_polls, 1) * spec.logs_poll_seconds)
+        while time.monotonic() < deadline:
+            state = lane.kernel_status(resolved)["status"]
+            if state in ("complete", "error"):
+                verdict = "stopped"
+                plan["terminal_state"] = state
+                break
+            time.sleep(spec.logs_poll_seconds)
+        plan["verdict"] = verdict
+        plan["stopped"] = verdict == "stopped"
+        if not plan["stopped"]:
+            raise RuntimeError(
+                f"stop did not reach a terminal state within the verify window "
+                f"({verdict}; session {resolved}, method {plan['cancel_method']})")
         return plan
 
