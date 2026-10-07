@@ -154,11 +154,15 @@ def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,bat
 def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
     """Deduped inference jobs; graph batches saved once per record set."""
     job_lookup = {}
+    record_keys = {}
     for variant in _LOG.progress(request['variants'],desc='ablation_variant_jobs',unit='variant',total=len(request['variants'])):
         key = digest({'text':variant['text_indices'],'graph':variant['records']})
         if key not in job_lookup:
             job_lookup[key] = len(plan['jobs'])
-            graph_key = digest(variant['records'])
+            graph_key = record_keys.get(id(variant['records']))
+            if graph_key is None:
+                graph_key = digest(variant['records'])
+                record_keys[id(variant['records'])] = graph_key
             if payload and graph_key not in plan['graph_batches']:
                 _graph_batch_prefixes(plan,arrays,graph_key,variant['records'],
                     payload=payload,vocabulary=vocabulary,batch_size=batch_size)
