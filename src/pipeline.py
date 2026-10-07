@@ -178,208 +178,302 @@ def extract_volume_from_title(title: str) -> dict:
             "parse_status": entry.family}
 
 
-def extract_pack_evidence(title: str) -> list[dict]:
-    """Retain physical-unit and outer-package quantities with original spans."""
-    text = str(title or "")
-    from core.text import extract_volume_evidence
-    measurements = extract_volume_evidence(text)
-    confidence = data_cfg().extraction.pack_confidence
-    # Count tokens must include their entire number: decimal and price tails
-    # cannot masquerade as integer quantities. Grouped thousands are counts.
-    count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
-    number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
-    containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
-    # The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
-    # container word), never any letter. `12x1 mineralwasser`/`12x1 pet`
-    # (SKUs 935970386, 935979247, 955514786) emitted false raw spans
-    # `12x1 m`/`12x1 p` — the unit word's first letter. One descriptive
-    # word may sit between the count and a MEASUREMENT unit ('6x20 organic
-    # cl'); a bare container word may not be reached THROUGH material words
-    # ('12x1 pet bottles' is not a recognized span).
-    measurement_tail = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
-    multiplier_tail = (rf"(?:\s*(?:{measurement_tail}|{containers})\b"
-                       rf"|\s+[a-z]+\s*{measurement_tail})")
-    patterns = (
-        ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
-        ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
-        # Retail titles also use a terminal count without a unit size:
-        # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
-        # a suffix; model codes and unfinished size multipliers stay unknown.
-        ("multiplier", rf"{number}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
-        ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
-        ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
-        ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
-        ("compact", rf"\bpack\s*[- ]?\s*{count_token}\b", "unit_count"),
-        ("container", rf"{number}\s*(?:glass\s*)?{containers}\b", "unit_count"),
-        ("count", rf"{number}\s*cases?\b", "outer_count"),
-    )
-    evidence = []
-    occupied = []
-    for kind, pattern, role in patterns:
-        for match in re.finditer(pattern, text, re.I):
-            if any(start <= match.start() < end for start, end in occupied):
+class _PackEvidenceReader:
+    """One title's pack-evidence scan, phase by phase.
+
+    The phases below run in ONE fixed order inside read(); the statements are
+    the pre-refactor body verbatim, so the returned evidence list (order,
+    keys, values, rule names) is byte-identical.
+
+    Phase map:
+      prepare            — text, volume measurements, package subset,
+                           configured confidence, count regex vocabulary,
+                           the family patterns
+      scan_family_patterns — the ordered span-claimed pattern scan
+      scan_prefix_multipliers — a multiplier preceding the product name
+      scan_set_and_count_words — set/bundle + retail unit counts + word
+                           counts + the sticks-per-box hierarchy
+      reconcile_totals   — whitespace-multiplier proof via stated totals
+      reinterpret_outer  — "(Pack of n)" outer/inner hierarchy rewrite
+    """
+
+    def __init__(self, title: str) -> None:
+        self._title = title
+        self.evidence: list[dict] = []
+        self.occupied: list[tuple[int, int]] = []
+
+    # ── phase: prepare ──────────────────────────────────────────────────────
+
+    def prepare(self) -> dict:
+        """Reader + regex vocabulary (shared by every scan phase)."""
+        text = str(self._title or "")
+        from core.text import extract_volume_evidence
+        measurements = extract_volume_evidence(text)
+        confidence = data_cfg().extraction.pack_confidence
+        # Count tokens must include their entire number: decimal and price tails
+        # cannot masquerade as integer quantities. Grouped thousands are counts.
+        count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
+        number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
+        containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
+        # The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
+        # container word), never any letter. `12x1 mineralwasser`/`12x1 pet`
+        # (SKUs 935970386, 935979247, 955514786) emitted false raw spans
+        # `12x1 m`/`12x1 p` — the unit word's first letter. One descriptive
+        # word may sit between the count and a MEASUREMENT unit ('6x20 organic
+        # cl'); a bare container word may not be reached THROUGH material words
+        # ('12x1 pet bottles' is not a recognized span).
+        measurement_tail = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
+        multiplier_tail = (rf"(?:\s*(?:{measurement_tail}|{containers})\b"
+                           rf"|\s+[a-z]+\s*{measurement_tail})")
+        patterns = (
+            ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
+            ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
+            # Retail titles also use a terminal count without a unit size:
+            # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
+            # a suffix; model codes and unfinished size multipliers stay unknown.
+            ("multiplier", rf"{number}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
+            ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
+            ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
+            ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
+            ("compact", rf"\bpack\s*[- ]?\s*{count_token}\b", "unit_count"),
+            ("container", rf"{number}\s*(?:glass\s*)?{containers}\b", "unit_count"),
+            ("count", rf"{number}\s*cases?\b", "outer_count"),
+        )
+        return {
+            "text": text,
+            "measurements": measurements,
+            "package_measurements": [m for m in measurements if m['role'] == 'package_volume'],
+            "confidence": confidence,
+            "count_token": count_token,
+            "number": number,
+            "patterns": patterns,
+        }
+
+    # ── phase: the family scan ──────────────────────────────────────────────
+
+    def scan_family_patterns(self, ctx: dict) -> None:
+        """Ordered span-claimed scan over every recognized family."""
+        text = ctx["text"]
+        measurements = ctx["measurements"]
+        confidence = ctx["confidence"]
+        for kind, pattern, role in ctx["patterns"]:
+            for match in re.finditer(pattern, text, re.I):
+                if any(start <= match.start() < end for start, end in self.occupied):
+                    continue
+                if kind == "compact" and any(
+                    entry["start"] == match.start(1) for entry in measurements
+                ):
+                    continue
+                if kind == "pack_of" and any(
+                    entry["start"] == match.start(1) for entry in measurements
+                ):
+                    # "8 pack of 16 Fl Oz" states eight units, not sixteen.
+                    # A quantity carrying a volume unit cannot be a pack count.
+                    continue
+                if kind == "compact" and text[match.end():].startswith(")") and re.search(
+                    rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
+                    text[match.end() + 1:],
+                ):
+                    # "Combo Pack - 1) product A & 2) product B" is a list.
+                    continue
+                # Currency followed by whitespace still denotes a price.
+                if re.search(r"[$€£]\s*$", text[:match.start()]):
+                    continue
+                # GDSN weight declarations ("gross weight: 527 unit (specific) …
+                # centiliters") are prose measurements, not a retail bundle: a
+                # count immediately preceded by a weight label is skipped.
+                if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
+                    continue
+                count = int(re.sub(r"[.,]", "", match.group(1)))
+                if kind == "nested":
+                    count *= int(match.group(2))
+                if count <= 0:
+                    continue
+                self.occupied.append(match.span())
+                self.evidence.append({"count": count, "confidence": confidence[kind],
+                                      "role": role, "raw_match": match.group(0),
+                                      "start": match.start(), "end": match.end(), "rule": kind})
+
+    # ── phase: multiplier before the product name ───────────────────────────
+
+    def scan_prefix_multipliers(self, ctx: dict) -> None:
+        """A multiplier can precede the product name, not just its unit size.
+
+        Require a physical-package measurement after it and reject dosage-only
+        text; bare model codes and unproved whitespace counts stay unknown."""
+        text = ctx["text"]
+        number = ctx["number"]
+        confidence = ctx["confidence"]
+        package_measurements = ctx["package_measurements"]
+        for match in re.finditer(rf"{number}\s*[x×]\s+(?=[a-z])", text, re.I):
+            if any(start <= match.start() < end for start, end in self.occupied):
                 continue
-            if kind == "compact" and any(
-                entry["start"] == match.start(1) for entry in measurements
-            ):
+            following = next((m for m in package_measurements
+                              if match.end() <= m['start'] and m['start'] - match.end() <= 100), None)
+            if following is None:
                 continue
-            if kind == "pack_of" and any(
-                entry["start"] == match.start(1) for entry in measurements
-            ):
-                # "8 pack of 16 Fl Oz" states eight units, not sixteen.
-                # A quantity carrying a volume unit cannot be a pack count.
+            between = text[match.end():following['start']]
+            if re.search(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", between, re.I):
                 continue
-            if kind == "compact" and text[match.end():].startswith(")") and re.search(
-                rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
-                text[match.end() + 1:],
-            ):
-                # "Combo Pack - 1) product A & 2) product B" is a list.
+            end = following['end']
+            self.evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
+                                  'confidence': confidence['multiplier'], 'role': 'unit_count',
+                                  'raw_match': text[match.start():end], 'start': match.start(),
+                                  'end': end, 'rule': 'multiplier'})
+            self.occupied.append((match.start(), end))
+
+    # ── phase: set/bundle + retail counts + word counts + sticks hierarchy ──
+
+    def scan_set_and_count_words(self, ctx: dict) -> None:
+        """set/bundle lane (requires package measurements), retail unit-count
+        lane, word-count lane, and the sticks-per-box hierarchy (deterministic
+        append order)."""
+        text = ctx["text"]
+        number = ctx["number"]
+        count_token = ctx["count_token"]
+        confidence = ctx["confidence"]
+        if ctx["package_measurements"]:
+            for match in re.finditer(rf"\b(?:set|bundle)\s+of\s*{count_token}\b", text, re.I):
+                if re.match(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", text[match.end():], re.I):
+                    continue
+                self.evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
+                                      'confidence': confidence['pack_of'], 'role': 'unit_count',
+                                      'raw_match': match.group(0), 'start': match.start(),
+                                      'end': match.end(), 'rule': 'pack_of'})
+        # Retail metadata is count evidence only when its unit is Count, not
+        # fluid ounces or a mass; decimal .00 is an integer count here.
+        for match in re.finditer(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", text, re.I):
+            if int(match.group(1)):
+                self.evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
+                                      'role': 'unit_count', 'raw_match': match.group(0),
+                                      'start': match.start(), 'end': match.end(), 'rule': 'count'})
+        word_counts = dict(zip(
+            ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
+            range(1, 13), strict=True,
+        ))
+        for match in re.finditer(r"\b(" + "|".join(word_counts) + r")\s*[- ]\s*packs?\b", text, re.I):
+            self.evidence.append({"count": word_counts[match.group(1).lower()],
+                                  "confidence": confidence["count"], "role": "unit_count",
+                                  "raw_match": match.group(0), "start": match.start(),
+                                  "end": match.end(), "rule": "count"})
+        inner = re.search(rf"(?<![\d.,]){count_token}\s*sticks?\s+per\s+box\b", text, re.I)
+        if inner:
+            inner_count = int(re.sub(r"[.,]", "", inner.group(1)))
+            self.evidence.append({"count": inner_count, "confidence": confidence["count"],
+                                  "role": "inner_count", "raw_match": inner.group(0),
+                                  "start": inner.start(), "end": inner.end(), "rule": "count"})
+            for entry in list(self.evidence):
+                if entry["rule"] == "compact" and entry["role"] == "unit_count":
+                    entry["role"] = "outer_count"
+                    entry["hierarchy_ambiguous"] = True
+                    start, end = min(entry["start"], inner.start()), max(entry["end"], inner.end())
+                    self.evidence.append({"count": inner_count * entry["count"],
+                                          "confidence": min(entry["confidence"], confidence["count"]),
+                                          "role": "derived_inner_total", "hierarchy_ambiguous": True,
+                                          "raw_match": text[start:end], "start": start, "end": end,
+                                          "rule": "nested"})
+            outer = re.search(rf"{number}\s*boxes\b", text, re.I)
+            if outer:
+                start, end = min(outer.start(), inner.start()), max(outer.end(), inner.end())
+                self.evidence.insert(0, {"count": inner_count * int(re.sub(r"[.,]", "", outer.group(1))),
+                                         "confidence": confidence["nested"], "role": "unit_count",
+                                         "raw_match": text[start:end], "start": start, "end": end,
+                                         "rule": "nested"})
+
+    # ── phase: whitespace-multiplier proof via stated totals ────────────────
+
+    def reconcile_totals(self, ctx: dict) -> None:
+        """Two passes over the measurements: the stated-total proof and the
+        package/total ratio (the ratio needs a REAL total_volume)."""
+        # Whitespace alone is not a multiplier. A nearby explicitly stated total
+        # can prove the relation, e.g. "6 330 ml (Total 1980 ml)".
+        from core.unit_canonicalization import canonical_volume_ml
+        text = ctx["text"]
+        confidence = ctx["confidence"]
+        measurements = ctx["measurements"]
+        for unit_entry, total_entry in zip(measurements, measurements[1:]):
+            prefix = re.search(rf"{ctx['number']}\s+$", text[:unit_entry["start"]])
+            between = text[unit_entry["end"]:total_entry["start"]]
+            if prefix is None or not re.fullmatch(r"[ .()]*total\s*", between, re.I):
                 continue
-            # Currency followed by whitespace still denotes a price.
-            if re.search(r"[$€£]\s*$", text[:match.start()]):
+            if any(start <= prefix.start() < end for start, end in self.occupied):
                 continue
-            # GDSN weight declarations ("gross weight: 527 unit (specific) …
-            # centiliters") are prose measurements, not a retail bundle: a
-            # count immediately preceded by a weight label is skipped.
-            if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
+            count = int(re.sub(r"[.,]", "", prefix.group(1)))
+            unit_volume = canonical_volume_ml(unit_entry["value"], unit_entry["unit"])
+            total_volume = canonical_volume_ml(total_entry["value"], total_entry["unit"])
+            if count > 0 and unit_volume > 0 and math.isclose(count * unit_volume, total_volume):
+                start, end = prefix.start(), total_entry["end"]
+                self.evidence.append({"count": count, "confidence": confidence["multiplier"],
+                                      "role": "unit_count", "raw_match": text[start:end],
+                                      "start": start, "end": end, "rule": "multiplier"})
+        for total_entry in measurements:
+            if total_entry["role"] != "total_volume":
                 continue
-            count = int(re.sub(r"[.,]", "", match.group(1)))
-            if kind == "nested":
-                count *= int(match.group(2))
-            if count <= 0:
-                continue
-            occupied.append(match.span())
-            evidence.append({"count": count, "confidence": confidence[kind],
-                             "role": role, "raw_match": match.group(0),
-                             "start": match.start(), "end": match.end(), "rule": kind})
-    # A multiplier can precede the product name, not just its unit size.
-    # Require a physical-package measurement after it and reject dosage-only
-    # text; bare model codes and unproved whitespace counts stay unknown.
-    package_measurements = [m for m in measurements if m['role'] == 'package_volume']
-    for match in re.finditer(rf"{number}\s*[x×]\s+(?=[a-z])", text, re.I):
-        if any(start <= match.start() < end for start, end in occupied):
-            continue
-        following = next((m for m in package_measurements
-                          if match.end() <= m['start'] and m['start'] - match.end() <= 100), None)
-        if following is None:
-            continue
-        between = text[match.end():following['start']]
-        if re.search(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", between, re.I):
-            continue
-        end = following['end']
-        evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
-                         'confidence': confidence['multiplier'], 'role': 'unit_count',
-                         'raw_match': text[match.start():end], 'start': match.start(),
-                         'end': end, 'rule': 'multiplier'})
-        occupied.append((match.start(), end))
-    if package_measurements:
-        for match in re.finditer(rf"\b(?:set|bundle)\s+of\s*{count_token}\b", text, re.I):
-            if re.match(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", text[match.end():], re.I):
-                continue
-            evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
-                             'confidence': confidence['pack_of'], 'role': 'unit_count',
-                             'raw_match': match.group(0), 'start': match.start(),
-                             'end': match.end(), 'rule': 'pack_of'})
-    # Retail metadata is count evidence only when its unit is Count, not
-    # fluid ounces or a mass; decimal .00 is an integer count here.
-    for match in re.finditer(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", text, re.I):
-        if int(match.group(1)):
-            evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
-                             'role': 'unit_count', 'raw_match': match.group(0),
-                             'start': match.start(), 'end': match.end(), 'rule': 'count'})
-    word_counts = dict(zip(
-        ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
-        range(1, 13), strict=True,
-    ))
-    for match in re.finditer(r"\b(" + "|".join(word_counts) + r")\s*[- ]\s*packs?\b", text, re.I):
-        evidence.append({"count": word_counts[match.group(1).lower()],
-                         "confidence": confidence["count"], "role": "unit_count",
-                         "raw_match": match.group(0), "start": match.start(),
-                         "end": match.end(), "rule": "count"})
-    inner = re.search(rf"(?<![\d.,]){count_token}\s*sticks?\s+per\s+box\b", text, re.I)
-    if inner:
-        inner_count = int(re.sub(r"[.,]", "", inner.group(1)))
-        evidence.append({"count": inner_count, "confidence": confidence["count"],
-                         "role": "inner_count", "raw_match": inner.group(0),
-                         "start": inner.start(), "end": inner.end(), "rule": "count"})
-        for entry in list(evidence):
-            if entry["rule"] == "compact" and entry["role"] == "unit_count":
-                entry["role"] = "outer_count"
-                entry["hierarchy_ambiguous"] = True
-                start, end = min(entry["start"], inner.start()), max(entry["end"], inner.end())
-                evidence.append({"count": inner_count * entry["count"],
-                                 "confidence": min(entry["confidence"], confidence["count"]),
-                                 "role": "derived_inner_total", "hierarchy_ambiguous": True,
-                                 "raw_match": text[start:end], "start": start, "end": end,
-                                 "rule": "nested"})
-        outer = re.search(rf"{number}\s*boxes\b", text, re.I)
-        if outer:
-            start, end = min(outer.start(), inner.start()), max(outer.end(), inner.end())
-            evidence.insert(0, {"count": inner_count * int(re.sub(r"[.,]", "", outer.group(1))),
-                                "confidence": confidence["nested"], "role": "unit_count",
-                                "raw_match": text[start:end], "start": start, "end": end,
-                                "rule": "nested"})
-    # Whitespace alone is not a multiplier. A nearby explicitly stated total
-    # can prove the relation, e.g. "6 330 ml (Total 1980 ml)".
-    from core.unit_canonicalization import canonical_volume_ml
-    for unit_entry, total_entry in zip(measurements, measurements[1:]):
-        prefix = re.search(rf"{number}\s+$", text[:unit_entry["start"]])
-        between = text[unit_entry["end"]:total_entry["start"]]
-        if prefix is None or not re.fullmatch(r"[ .()]*total\s*", between, re.I):
-            continue
-        if any(start <= prefix.start() < end for start, end in occupied):
-            continue
-        count = int(re.sub(r"[.,]", "", prefix.group(1)))
-        unit_volume = canonical_volume_ml(unit_entry["value"], unit_entry["unit"])
-        total_volume = canonical_volume_ml(total_entry["value"], total_entry["unit"])
-        if count > 0 and unit_volume > 0 and math.isclose(count * unit_volume, total_volume):
-            start, end = prefix.start(), total_entry["end"]
-            evidence.append({"count": count, "confidence": confidence["multiplier"],
-                             "role": "unit_count", "raw_match": text[start:end],
-                             "start": start, "end": end, "rule": "multiplier"})
-    for total_entry in measurements:
-        if total_entry["role"] != "total_volume":
-            continue
-        for unit_entry in measurements:
-            if (unit_entry["role"] != "package_volume"
-                or unit_entry["end"] >= total_entry["start"]
-                or unit_entry["unit"] != total_entry["unit"]
-                or unit_entry["value"] <= 0):
-                continue
-            ratio = total_entry["value"] / unit_entry["value"]
-            count = round(ratio)
-            if count <= 1 or not math.isclose(ratio, count):
-                continue
-            if any(entry["role"] == "unit_count" for entry in evidence):
+            for unit_entry in measurements:
+                if (unit_entry["role"] != "package_volume"
+                    or unit_entry["end"] >= total_entry["start"]
+                    or unit_entry["unit"] != total_entry["unit"]
+                    or unit_entry["value"] <= 0):
+                    continue
+                ratio = total_entry["value"] / unit_entry["value"]
+                count = round(ratio)
+                if count <= 1 or not math.isclose(ratio, count):
+                    continue
+                if any(entry["role"] == "unit_count" for entry in self.evidence):
+                    break
+                start, end = unit_entry["start"], total_entry["end"]
+                self.evidence.append({"count": count, "confidence": confidence["multiplier"],
+                                      "role": "unit_count", "raw_match": text[start:end],
+                                      "start": start, "end": end, "rule": "multiplier"})
                 break
-            start, end = unit_entry["start"], total_entry["end"]
-            evidence.append({"count": count, "confidence": confidence["multiplier"],
-                             "role": "unit_count", "raw_match": text[start:end],
-                             "start": start, "end": end, "rule": "multiplier"})
-            break
-    # "4 x 250ml (Pack of 2)" describes two inner four-packs. Preserve
-    # levels and a proven physical-unit total instead of picking inner four.
-    outer = re.search(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){count_token}\s*\)", text, re.I)
-    inner_units = [e for e in evidence if e['role'] == 'unit_count' and e['rule'] == 'multiplier'
-                   and (outer is None or e['end'] <= outer.start())]
-    if outer and inner_units:
-        inner = inner_units[0]
-        outer_count = int(re.sub(r'[.,]', '', outer.group(1)))
-        start, end = inner['start'], outer.end()
-        for entry in evidence:
-            if entry['role'] == 'unit_count':
-                entry['role'] = 'outer_count' if entry['start'] >= outer.start() else 'inner_count'
-        evidence.insert(0, {'count': inner['count'] * outer_count,
-                            'confidence': confidence['nested'], 'role': 'unit_count',
-                            'raw_match': text[start:end], 'start': start, 'end': end,
-                            'rule': 'nested'})
-    elif len({e['count'] for e in evidence if e['role'] == 'unit_count'}) > 1:
-        # Unresolved competing counts are not a license to select whichever
-        # happens to match another record.
-        for entry in evidence:
-            if entry['role'] == 'unit_count':
-                entry['hierarchy_ambiguous'] = True
-    return evidence
+
+    # ── phase: "(Pack of n)" outer reinterpretation ─────────────────────────
+
+    def reinterpret_outer(self, ctx: dict) -> None:
+        """Rewrite the hierarchy when an outer pack surrounds inner counts."""
+        # "4 x 250ml (Pack of 2)" describes two inner four-packs. Preserve
+        # levels and a proven physical-unit total instead of picking inner four.
+        text = ctx["text"]
+        count_token = ctx["count_token"]
+        confidence = ctx["confidence"]
+        outer = re.search(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){count_token}\s*\)", text, re.I)
+        inner_units = [e for e in self.evidence if e['role'] == 'unit_count' and e['rule'] == 'multiplier'
+                       and (outer is None or e['end'] <= outer.start())]
+        if outer and inner_units:
+            inner = inner_units[0]
+            outer_count = int(re.sub(r'[.,]', '', outer.group(1)))
+            start, end = inner['start'], outer.end()
+            for entry in self.evidence:
+                if entry['role'] == 'unit_count':
+                    entry['role'] = 'outer_count' if entry['start'] >= outer.start() else 'inner_count'
+            self.evidence.insert(0, {'count': inner['count'] * outer_count,
+                                     'confidence': confidence['nested'], 'role': 'unit_count',
+                                     'raw_match': text[start:end], 'start': start, 'end': end,
+                                     'rule': 'nested'})
+        elif len({e['count'] for e in self.evidence if e['role'] == 'unit_count'}) > 1:
+            # Unresolved competing counts are not a license to select whichever
+            # happens to match another record.
+            for entry in self.evidence:
+                if entry['role'] == 'unit_count':
+                    entry['hierarchy_ambiguous'] = True
+
+    # ── orchestration ───────────────────────────────────────────────────────
+
+    def read(self) -> list[dict]:
+        """Run the load-bearing scan order."""
+        ctx = self.prepare()
+        self.scan_family_patterns(ctx)
+        self.scan_prefix_multipliers(ctx)
+        self.scan_set_and_count_words(ctx)
+        self.reconcile_totals(ctx)
+        self.reinterpret_outer(ctx)
+        return self.evidence
+
+
+def extract_pack_evidence(title: str) -> list[dict]:
+    """Retain physical-unit and outer-package quantities with original spans —
+    see _PackEvidenceReader.read (phases, order, output bytes identical)."""
+    return _PackEvidenceReader(title).read()
 
 
 def extract_pack_from_title(title: str) -> tuple:
@@ -1494,6 +1588,396 @@ def attribute_gate_universe_scope_detail() -> dict[str, object]:
     }
 
 
+class _ThreeWayGate:
+    """One pair's three_way_gate decision, phase by phase.
+
+    The phases count and order are the ORIGINAL decision table, statement for
+    statement — same decisions, same reasons, same config reads; nothing is
+    reordered (several placements are load-bearing measured history, see the
+    inline comments). This class is the SR split of the former 310-line body;
+    the module-level three_way_gate keeps its documented call.
+
+    Phase map:
+      resolve_thresholds -> config blocks behind every None argument
+      pack_file_vetoes   -> pack_gate + the package_type/material/level hard nos
+      decision_engine    -> census evaluation + claim/engine categorical vetoes
+      fallback_lanes     -> source disagreement / ambiguity / confidence gates
+      overlap_lanes      -> volume + pack overlap hard nos
+      packaging_identity -> one-sided packaging level, consistency, supporting
+                            attributes, mode_flavor, declared identity, policy
+    """
+
+    def __init__(self, attrs1: dict, attrs2: dict, vol_tolerance: float,
+                 raw_conf_threshold: float, consistency_fallback_threshold: float,
+                 vol_abs_tolerance: float) -> None:
+        self.attrs1 = attrs1
+        self.attrs2 = attrs2
+        self.vol_tolerance = vol_tolerance
+        self.raw_conf_threshold = raw_conf_threshold
+        self.consistency_fallback_threshold = consistency_fallback_threshold
+        self.vol_abs_tolerance = vol_abs_tolerance
+
+    @classmethod
+    def from_config(cls, attrs1: dict, attrs2: dict, *,
+                    vol_tolerance: float | None, raw_conf_threshold: float | None,
+                    consistency_fallback_threshold: float | None,
+                    vol_abs_tolerance: float | None) -> "_ThreeWayGate":
+        """NO-FALLBACK SSOT (audit round 2, F01): the decision thresholds live
+        in config/training.yaml `gate:` and are read through training_cfg() —
+        the old signature defaults (0.05/0.85/0.3) were a second declaration
+        the config could not steer. Passing a value explicitly still wins
+        (selftest pins known-good gate behavior with explicit values)."""
+        if (
+            vol_tolerance is None
+            or raw_conf_threshold is None
+            or consistency_fallback_threshold is None
+            or vol_abs_tolerance is None
+        ):
+            _g = training_cfg().gate
+            if vol_tolerance is None:
+                vol_tolerance = float(_g.vol_tolerance)
+            if vol_abs_tolerance is None:
+                vol_abs_tolerance = float(_g.vol_abs_tolerance)
+            if raw_conf_threshold is None:
+                raw_conf_threshold = float(_g.raw_conf_threshold)
+            if consistency_fallback_threshold is None:
+                consistency_fallback_threshold = float(
+                    _g.consistency_fallback_threshold
+                )
+        return cls(attrs1, attrs2, float(vol_tolerance), float(raw_conf_threshold),
+                   float(consistency_fallback_threshold), float(vol_abs_tolerance))
+
+    # -- phase: pack + file vetoes ------------------------------------------
+
+    def pack_file_vetoes(self) -> dict | None:
+        """pack_gate + the package_type/material/level hard no vetoes."""
+        _r = training_cfg().gate.reasons
+        if not pack_gate(
+            0.0,
+            self.attrs1,
+            self.attrs2,
+            volume_relative_tolerance=float(self.vol_tolerance),
+            volume_absolute_tolerance_ml=float(self.vol_abs_tolerance),
+            trust_threshold=float(self.raw_conf_threshold),
+            check_categorical=False,
+        ):
+            return GateResult(
+                decision="hard_no",
+                reason=_r.pack_blocker,
+            ).model_dump()
+        veto_dimensions = self._veto_dimensions
+        for field, dimension, reason in (
+            ("package_type_set", "package_type", _r.package_type_mismatch),
+            ("package_material_set", "pack_material", _r.package_material_mismatch),
+            ("packaging_level_set", None, _r.packaging_level_mismatch),
+        ):
+            if dimension is not None and dimension not in veto_dimensions:
+                continue
+            if dimension is not None and any(_has_attribute_flag(record, f"categorical_source_conflict:{dimension}") for record in (self.attrs1, self.attrs2)):
+                continue
+            left, right = set(self.attrs1.get(field, set())), set(self.attrs2.get(field, set()))
+            if left and right and not (left & right):
+                return GateResult(decision="hard_no", reason=reason).model_dump()
+        return None
+
+    # -- phase: the single decision engine -----------------------------------
+
+    def decision_engine(self) -> dict | None:
+        """The census-engine lane: claim conflicts + engine conflicts."""
+        # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
+        # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
+        # process). The engine evaluates the three critical-categorical channels
+        # with the whole ordered stack (negation hard-veto, alias-folded
+        # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
+        # instead of riding bare inequality, while a negation conflict stays a
+        # definite negative. Unknown stays unknown here; it is not fabricated
+        # into a conflict or an agreement.
+        from core.attribute_conflicts import (
+            CRITICAL_NAME_BY_CENSUS_KEY,
+            canonical_attribute_info,
+        )
+        from core.attribute_decision import AttributeDecisionEngine
+        from core.attribute_universe import attribute_registry
+
+        left_info, right_info = canonical_attribute_info(self.attrs1), canonical_attribute_info(self.attrs2)
+        source_flags = _attribute_flags(self.attrs1) | _attribute_flags(self.attrs2)
+        sweetener_source_conflict = any(
+            flag.startswith("sweetener_source_conflict:") for flag in source_flags
+        )
+        uncertain_categorical_dimensions = {
+            flag.split(":", 1)[1] for flag in source_flags
+            if flag.startswith(("description_conflict:", "categorical_source_conflict:"))
+        }
+        if sweetener_source_conflict or source_flags & {
+            "unsweetened_with_declared_sweetener", "sweetening_status_conflict",
+            "no_added_sugar_with_cane_sugar",
+        }:
+            uncertain_categorical_dimensions.add("sweetener")
+        # Pulp has no registry key; the registry sweetener key owns ingredient
+        # identity, not sugar/no-sugar claims. Preserve these separate explicit
+        # claim predicates and report their actual dimensions.
+        claim_conflicts = sorted(
+            dimension for dimension in (self._veto_dimensions & {"sweetener", "pulp"}) - uncertain_categorical_dimensions
+            if categorical_conflict(dimension, left_info, right_info)
+        )
+        if claim_conflicts:
+            _r = training_cfg().gate.reasons
+            return GateResult(
+                decision="hard_no",
+                reason=f"{_r.categorical_mismatch} " + ",".join(claim_conflicts),
+            ).model_dump()
+        categorical_dimensions = self._veto_dimensions - {
+            "volume", "pack", "package_type", "pack_material"
+        }
+        # Evaluate the complete registry; configured vetoes and review policy
+        # consume this same evidence rather than projecting away attributes.
+        evidence = AttributeDecisionEngine(
+            volume_relative_tolerance=float(self.vol_tolerance),
+            volume_absolute_tolerance_ml=float(self.vol_abs_tolerance),
+        ).evaluate(left_info, right_info, left_raw=self.attrs1, right_raw=self.attrs2)
+        categorical_conflicts = sorted(
+            CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
+            if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in
+            categorical_dimensions - uncertain_categorical_dimensions
+        )
+        uncertain_categorical_dimensions.update(
+            CRITICAL_NAME_BY_CENSUS_KEY.get(key, key)
+            for key, entry in evidence.dimensions.items()
+            if entry.fallback_from in {"source_conflict", "claim_conflict"}
+        )
+        if sweetener_source_conflict:
+            categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
+        if categorical_conflicts:
+            _r = training_cfg().gate.reasons
+            return GateResult(
+                decision="hard_no",
+                reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
+            ).model_dump()
+
+        # carried into the later phases: the fallback gates need the uncertainty
+        # ledger and the summary evidences exactly as evaluated here.
+        self._uncertain_categorical = uncertain_categorical_dimensions
+        self._left_info = left_info
+        self._right_info = right_info
+        self._evidence = evidence
+        self._source_flags = source_flags
+        return None
+
+    # -- phase: fallback lanes ------------------------------------------------
+
+    def primary_fallback_lanes(self) -> dict | None:
+        """Source disagreement + ambiguity + the confidence gates."""
+        _r = training_cfg().gate.reasons
+        if self._uncertain_categorical or self._source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous"}:
+            return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
+
+        if _has_attribute_flag(self.attrs1, "ambiguous_volume") or _has_attribute_flag(
+            self.attrs2, "ambiguous_volume"
+        ):
+            return GateResult(
+                decision="fallback", reason=_r.ambiguous_volume
+            ).model_dump()
+
+        # raw confidence check
+        if (
+            not self.attrs1["volume_set"]
+            or not self.attrs2["volume_set"]
+            or not self._reliable(self.attrs1["volume_confidence"], self.raw_conf_threshold)
+            or not self._reliable(self.attrs2["volume_confidence"], self.raw_conf_threshold)
+        ):
+            return GateResult(
+                decision="fallback", reason=_r.low_volume_confidence
+            ).model_dump()
+        # Pack confidence: skip when both sides have no pack evidence
+        # (single-unit products with no "Count per Unit" in source attributes).
+        # pack_gate already treats low-confidence pack evidence as unknown.
+        if self.attrs1["pack_set"] or self.attrs2["pack_set"]:
+            if (
+                not self.attrs1["pack_set"]
+                or not self.attrs2["pack_set"]
+                or not self._reliable(self.attrs1["pack_confidence"], self.raw_conf_threshold)
+                or not self._reliable(self.attrs2["pack_confidence"], self.raw_conf_threshold)
+            ):
+                return GateResult(
+                    decision="fallback", reason=_r.low_pack_confidence
+                ).model_dump()
+        return None
+
+    # -- phase: overflow lanes -------------------------------------------------
+
+    def overlap_lanes(self) -> dict | None:
+        """Volume-overlap and pack-overlap hard nos (same predicates as every
+        other lane)."""
+        _r = training_cfg().gate.reasons
+        # volume overlap
+        vol_overlap = False
+        for v1 in self.attrs1["volume_set"]:
+            for v2 in self.attrs2["volume_set"]:
+                if v1 == 0 or v2 == 0:
+                    continue
+                # Same predicate as every other lane (SSOT, audit 2026-09-15):
+                # whichever of the two configured cuts is wider applies. The
+                # hand-rolled relative-only ratio this replaces disagreed with
+                # the veto lane at small volumes.
+                if volumes_compatible(
+                    {v1},
+                    {v2},
+                    volume_relative_tolerance=float(self.vol_tolerance),
+                    volume_absolute_tolerance_ml=float(self.vol_abs_tolerance),
+                ):
+                    vol_overlap = True
+                    break
+            if vol_overlap:
+                break
+        if "volume" in self._veto_dimensions and not vol_overlap:
+            return GateResult(decision="hard_no", reason=_r.no_volume_overlap).model_dump()
+
+        # pack overlap: skip when both sides have no pack evidence
+        # (single-unit products with no "Count per Unit" in source).
+        if self.attrs1["pack_set"] or self.attrs2["pack_set"]:
+            pack_overlap = self.attrs1["pack_set"] & self.attrs2["pack_set"]
+            if "pack" in self._veto_dimensions and not pack_overlap:
+                return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
+        return None
+
+    # -- phase: packaging level + identity + review lanes -----------------------
+
+    def identity_review_lanes(self) -> dict | None:
+        """Packaging level, consistency, supporting dims, mode_flavor, declared
+        identity, pair policy. Placement after the categorical conflict check
+        is load-bearing measured history (see the inline comments)."""
+        _r = training_cfg().gate.reasons
+        # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
+        # 13,250 records assert a level, and ZERO pairs have it populated on both
+        # sides), so the both-populated rule above can never fire for it. That is
+        # deliberate, not an oversight: a missing marker is absence of evidence,
+        # not an affirmative "retail" claim, so this CANNOT be a hard_no without
+        # inventing a negative from silence.
+        #
+        # PLACED AFTER the categorical conflict check on purpose (measured
+        # 2026-09-30): an earlier placement downgraded 79 genuine flavour
+        # conflicts from hard_no to fallback, because a one-sided level claim
+        # is WEAKER evidence than a two-sided attribute conflict. A definite
+        # negative must always win over a review flag.
+        #
+        # It still must not be a silent PROCEED. A case listing and a retail pack
+        # are distinct GS1 trade items carrying distinct GTINs, so merging them
+        # trains the linker to violate that. One-sided evidence is exactly what
+        # the fallback bucket is for: a human applies the rule, the model is not
+        # asked to guess. Measured impact: 109 proceed -> fallback, 0 hard_no.
+        _lvl_a, _lvl_b = set(self.attrs1.get("packaging_level_set", set())), set(
+            self.attrs2.get("packaging_level_set", set())
+        )
+        if _lvl_a and not _lvl_b or _lvl_b and not _lvl_a:
+            return GateResult(
+                decision="fallback",
+                reason=_r.packaging_level_review,
+            ).model_dump()
+
+        # consistency check
+        if (
+            not self._reliable(self.attrs1["volume_consistency"], self.consistency_fallback_threshold)
+            or not self._reliable(self.attrs2["volume_consistency"], self.consistency_fallback_threshold)
+            or not self._reliable(self.attrs1["pack_consistency"], self.consistency_fallback_threshold)
+            or not self._reliable(self.attrs2["pack_consistency"], self.consistency_fallback_threshold)
+        ):
+            return GateResult(
+                decision="fallback", reason=_r.low_consistency
+            ).model_dump()
+
+        # Supporting attributes can require review when the critical flavor
+        # evidence is incomplete. They never acquire a hard-veto permission.
+        if not self._left_info.get("flavor_set") or not self._right_info.get("flavor_set"):
+            from core.attribute_conflicts import _universe_value
+            from core.attribute_universe import attribute_registry
+            supporting = training_cfg().rand_matching.targeted_veto_gates.supporting_feature_review_dimensions
+            specs = attribute_registry()
+            differing_support = []
+            for dimension in supporting:
+                spec = specs[dimension]
+                left = set(_universe_value(self._left_info, dimension, spec))
+                right = set(_universe_value(self._right_info, dimension, spec))
+                if left and right and not (left <= right or right <= left):
+                    differing_support.append(dimension)
+            if differing_support:
+                return GateResult(
+                    decision="fallback",
+                    reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
+                ).model_dump()
+
+        # MODE_FLAVOR SURFACE LANE (JEV audit, 2026-10-02): reached only when
+        # no census conflict vetoed the pair. When the canonical mode_flavor
+        # values are both populated and different, this is not a clean
+        # proceed — the mode is the deterministic per-listing consensus and it
+        # disagrees. Measured on the JEV-graded slice: 216/523 falsified
+        # positives carry differing modes (plus 69 with one empty side, not
+        # reachable by this two-sided rule). REVIEW only, never a hard_no: a
+        # mode is weaker evidence than a census conflict, matching the
+        # packaging-level doctrine.
+        mf1 = str(self.attrs1.get("mode_flavor", "") or "").strip().lower()
+        mf2 = str(self.attrs2.get("mode_flavor", "") or "").strip().lower()
+        equal_full_flavor = bool(self._left_info.get("flavor_set")) and self._left_info.get("flavor_set") == self._right_info.get("flavor_set")
+        if mf1 and mf2 and mf1 != mf2 and not equal_full_flavor:
+            return GateResult(
+                decision="fallback",
+                reason=_r.supporting_feature_review + " mode_flavor:" + mf1 + "|" + mf2,
+            ).model_dump()
+
+        # Exact-product approval requires consistency of declared identity, not
+        # merely an absence of conflicts in generic or missing attribute sets.
+        # Review additions/subsets and named distinctions; existing configured
+        # hard vetoes retain precedence above this supplementary review lane.
+        from core.declared_identity import identity_review_dimensions
+        identity_differences = identity_review_dimensions(self.attrs1, self.attrs2)
+        if identity_differences:
+            return GateResult(
+                decision="fallback",
+                reason=_r.declared_identity_review + " " + ",".join(identity_differences),
+            ).model_dump()
+
+        from core.pair_policy import assess_pair
+        policy = assess_pair(self._evidence, self.attrs1, self.attrs2)
+        if policy['review']:
+            return GateResult(
+                decision="fallback",
+                reason=_r.supporting_feature_review + " full_evidence:" + ",".join(policy['review']),
+            ).model_dump()
+
+        return GateResult(
+            decision="proceed", reason=_r.clean_proceed
+        ).model_dump()
+
+    # -- shared helper ---------------------------------------------------------
+
+    @staticmethod
+    def _reliable(value: object, threshold: float) -> bool:
+        """NaN bypasses ordinary less-than checks; invalid evidence is unknown."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(number) and 0.0 <= number <= 1.0 and number >= threshold
+
+    def decide(self) -> dict:
+        """Run the ORIGINAL phase order; the first veto/fallback verdict wins."""
+        self._veto_dimensions = frozenset(
+            training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+        )
+        verdict = self.pack_file_vetoes()
+        if verdict is not None:
+            return verdict
+        verdict = self.decision_engine()
+        if verdict is not None:
+            return verdict
+        verdict = self.primary_fallback_lanes()
+        if verdict is not None:
+            return verdict
+        verdict = self.overlap_lanes()
+        if verdict is not None:
+            return verdict
+        return self.identity_review_lanes()
+
+
 def three_way_gate(
     attrs1: dict,
     attrs2: dict,
@@ -1502,310 +1986,16 @@ def three_way_gate(
     consistency_fallback_threshold: float | None = None,
     vol_abs_tolerance: float | None = None,
 ) -> dict:
-    """Deterministic volume/pack/flavor gate.
-
-    NO-FALLBACK SSOT (audit round 2, F01): the decision thresholds live in
-    config/training.yaml `gate:` and are read through training_cfg() — the
-    old signature defaults (0.05/0.85/0.3) were a second declaration the
-    config could not steer. Passing a value explicitly still wins (selftest
-    pins known-good gate behavior with explicit values).
-
-    VOLUME TOLERANCE (owner ruling 2026-10-01): BOTH cuts are read from the
-    gate block and threaded to every downstream volume comparison — the
-    pack_gate call, the inline overlap loop, the critical-7 evaluation and
-    the decision engine. The block previously carried only the relative cut,
-    so the absolute one stayed at its 0.0 parameter default here while the
-    veto lane applied it; since the relative cut is the stricter of the two
-    at small volumes, the gate and the veto lane then disagreed about the
-    same pair. volumes_compatible applies whichever cut is wider.
-    """
-    if (
-        vol_tolerance is None
-        or raw_conf_threshold is None
-        or consistency_fallback_threshold is None
-        or vol_abs_tolerance is None
-    ):
-        _g = training_cfg().gate
-        if vol_tolerance is None:
-            vol_tolerance = float(_g.vol_tolerance)
-        if vol_abs_tolerance is None:
-            vol_abs_tolerance = float(_g.vol_abs_tolerance)
-        if raw_conf_threshold is None:
-            raw_conf_threshold = float(_g.raw_conf_threshold)
-        if consistency_fallback_threshold is None:
-            consistency_fallback_threshold = float(
-                _g.consistency_fallback_threshold
-            )
-    _r = training_cfg().gate.reasons
-    if not pack_gate(
-        0.0,
-        attrs1,
-        attrs2,
-        volume_relative_tolerance=float(vol_tolerance),
-        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-        trust_threshold=float(raw_conf_threshold),
-        check_categorical=False,
-    ):
-        return GateResult(
-            decision="hard_no",
-            reason=_r.pack_blocker,
-        ).model_dump()
-    veto_dimensions = frozenset(
-        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+    """Deterministic volume/pack/flavor gate — one phase-ordered decision
+    table on _ThreeWayGate (same decisions, same reasons as before)."""
+    gate = _ThreeWayGate.from_config(
+        attrs1, attrs2,
+        vol_tolerance=vol_tolerance,
+        raw_conf_threshold=raw_conf_threshold,
+        consistency_fallback_threshold=consistency_fallback_threshold,
+        vol_abs_tolerance=vol_abs_tolerance,
     )
-    for field, dimension, reason in (
-        ("package_type_set", "package_type", _r.package_type_mismatch),
-        ("package_material_set", "pack_material", _r.package_material_mismatch),
-        ("packaging_level_set", None, _r.packaging_level_mismatch),
-    ):
-        if dimension is not None and dimension not in veto_dimensions:
-            continue
-        if dimension is not None and any(_has_attribute_flag(record, f"categorical_source_conflict:{dimension}") for record in (attrs1, attrs2)):
-            continue
-        left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
-        if left and right and not (left & right):
-            return GateResult(decision="hard_no", reason=reason).model_dump()
-
-
-    # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
-    # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
-    # process). The engine evaluates the three critical-categorical channels
-    # with the whole ordered stack (negation hard-veto, alias-folded
-    # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
-    # instead of riding bare inequality, while a negation conflict stays a
-    # definite negative. Unknown stays unknown here; it is not fabricated
-    # into a conflict or an agreement.
-    from core.attribute_conflicts import (
-        CRITICAL_NAME_BY_CENSUS_KEY,
-        canonical_attribute_info,
-    )
-    from core.attribute_decision import AttributeDecisionEngine
-    from core.attribute_universe import attribute_registry
-
-    left_info, right_info = canonical_attribute_info(attrs1), canonical_attribute_info(attrs2)
-    source_flags = _attribute_flags(attrs1) | _attribute_flags(attrs2)
-    sweetener_source_conflict = any(
-        flag.startswith("sweetener_source_conflict:") for flag in source_flags
-    )
-    uncertain_categorical_dimensions = {
-        flag.split(":", 1)[1] for flag in source_flags
-        if flag.startswith(("description_conflict:", "categorical_source_conflict:"))
-    }
-    if sweetener_source_conflict or source_flags & {
-        "unsweetened_with_declared_sweetener", "sweetening_status_conflict",
-        "no_added_sugar_with_cane_sugar",
-    }:
-        uncertain_categorical_dimensions.add("sweetener")
-    # Pulp has no registry key; the registry sweetener key owns ingredient
-    # identity, not sugar/no-sugar claims. Preserve these separate explicit
-    # claim predicates and report their actual dimensions.
-    claim_conflicts = sorted(
-        dimension for dimension in (veto_dimensions & {"sweetener", "pulp"}) - uncertain_categorical_dimensions
-        if categorical_conflict(dimension, left_info, right_info)
-    )
-    if claim_conflicts:
-        return GateResult(
-            decision="hard_no",
-            reason=f"{_r.categorical_mismatch} " + ",".join(claim_conflicts),
-        ).model_dump()
-    categorical_dimensions = veto_dimensions - {
-        "volume", "pack", "package_type", "pack_material"
-    }
-    # Evaluate the complete registry; configured vetoes and review policy
-    # consume this same evidence rather than projecting away attributes.
-    evidence = AttributeDecisionEngine(
-        volume_relative_tolerance=float(vol_tolerance),
-        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-    ).evaluate(left_info, right_info, left_raw=attrs1, right_raw=attrs2)
-    categorical_conflicts = sorted(
-        CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
-        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in
-        categorical_dimensions - uncertain_categorical_dimensions
-    )
-    uncertain_categorical_dimensions.update(
-        CRITICAL_NAME_BY_CENSUS_KEY.get(key, key)
-        for key, entry in evidence.dimensions.items()
-        if entry.fallback_from in {"source_conflict", "claim_conflict"}
-    )
-    if sweetener_source_conflict:
-        categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
-    if categorical_conflicts:
-        return GateResult(
-            decision="hard_no",
-            reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
-        ).model_dump()
-
-    if uncertain_categorical_dimensions or source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous"}:
-        return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
-
-    if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
-        attrs2, "ambiguous_volume"
-    ):
-        return GateResult(
-            decision="fallback", reason=_r.ambiguous_volume
-        ).model_dump()
-    def _reliable(value: object, threshold: float) -> bool:
-        # NaN bypasses ordinary less-than checks; invalid evidence is unknown.
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return False
-        return math.isfinite(number) and 0.0 <= number <= 1.0 and number >= threshold
-
-    # raw confidence check
-    if (
-        not attrs1["volume_set"]
-        or not attrs2["volume_set"]
-        or not _reliable(attrs1["volume_confidence"], raw_conf_threshold)
-        or not _reliable(attrs2["volume_confidence"], raw_conf_threshold)
-    ):
-        return GateResult(
-            decision="fallback", reason=_r.low_volume_confidence
-        ).model_dump()
-    # Pack confidence: skip when both sides have no pack evidence
-    # (single-unit products with no "Count per Unit" in source attributes).
-    # pack_gate already treats low-confidence pack evidence as unknown.
-    if attrs1["pack_set"] or attrs2["pack_set"]:
-        if (
-            not attrs1["pack_set"]
-            or not attrs2["pack_set"]
-            or not _reliable(attrs1["pack_confidence"], raw_conf_threshold)
-            or not _reliable(attrs2["pack_confidence"], raw_conf_threshold)
-        ):
-            return GateResult(
-                decision="fallback", reason=_r.low_pack_confidence
-            ).model_dump()
-
-    # volume overlap
-    vol_overlap = False
-    for v1 in attrs1["volume_set"]:
-        for v2 in attrs2["volume_set"]:
-            if v1 == 0 or v2 == 0:
-                continue
-            # Same predicate as every other lane (SSOT, audit 2026-09-15):
-            # whichever of the two configured cuts is wider applies. The
-            # hand-rolled relative-only ratio this replaces disagreed with
-            # the veto lane at small volumes.
-            if volumes_compatible(
-                {v1},
-                {v2},
-                volume_relative_tolerance=float(vol_tolerance),
-                volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-            ):
-                vol_overlap = True
-                break
-        if vol_overlap:
-            break
-    if "volume" in veto_dimensions and not vol_overlap:
-        return GateResult(decision="hard_no", reason=_r.no_volume_overlap).model_dump()
-
-    # pack overlap: skip when both sides have no pack evidence
-    # (single-unit products with no "Count per Unit" in source).
-    if attrs1["pack_set"] or attrs2["pack_set"]:
-        pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
-        if "pack" in veto_dimensions and not pack_overlap:
-            return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
-
-    # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
-    # 13,250 records assert a level, and ZERO pairs have it populated on both
-    # sides), so the both-populated rule above can never fire for it. That is
-    # deliberate, not an oversight: a missing marker is absence of evidence,
-    # not an affirmative "retail" claim, so this CANNOT be a hard_no without
-    # inventing a negative from silence.
-    #
-    # PLACED AFTER the categorical conflict check on purpose (measured
-    # 2026-09-30): an earlier placement downgraded 79 genuine flavour
-    # conflicts from hard_no to fallback, because a one-sided level claim
-    # is WEAKER evidence than a two-sided attribute conflict. A definite
-    # negative must always win over a review flag.
-    #
-    # It still must not be a silent PROCEED. A case listing and a retail pack
-    # are distinct GS1 trade items carrying distinct GTINs, so merging them
-    # trains the linker to violate that. One-sided evidence is exactly what
-    # the fallback bucket is for: a human applies the rule, the model is not
-    # asked to guess. Measured impact: 109 proceed -> fallback, 0 hard_no.
-    _lvl_a, _lvl_b = set(attrs1.get("packaging_level_set", set())), set(
-        attrs2.get("packaging_level_set", set())
-    )
-    if _lvl_a and not _lvl_b or _lvl_b and not _lvl_a:
-        return GateResult(
-            decision="fallback",
-            reason=_r.packaging_level_review,
-        ).model_dump()
-
-    # consistency check
-    if (
-        not _reliable(attrs1["volume_consistency"], consistency_fallback_threshold)
-        or not _reliable(attrs2["volume_consistency"], consistency_fallback_threshold)
-        or not _reliable(attrs1["pack_consistency"], consistency_fallback_threshold)
-        or not _reliable(attrs2["pack_consistency"], consistency_fallback_threshold)
-    ):
-        return GateResult(
-            decision="fallback", reason=_r.low_consistency
-        ).model_dump()
-
-    # Supporting attributes can require review when the critical flavor
-    # evidence is incomplete. They never acquire a hard-veto permission.
-    if not left_info.get("flavor_set") or not right_info.get("flavor_set"):
-        from core.attribute_conflicts import _universe_value
-        supporting = training_cfg().rand_matching.targeted_veto_gates.supporting_feature_review_dimensions
-        specs = attribute_registry()
-        differing_support = []
-        for dimension in supporting:
-            spec = specs[dimension]
-            left = set(_universe_value(left_info, dimension, spec))
-            right = set(_universe_value(right_info, dimension, spec))
-            if left and right and not (left <= right or right <= left):
-                differing_support.append(dimension)
-        if differing_support:
-            return GateResult(
-                decision="fallback",
-                reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
-            ).model_dump()
-
-    # MODE_FLAVOR SURFACE LANE (JEV audit, 2026-10-02): reached only when
-    # no census conflict vetoed the pair. When the canonical mode_flavor
-    # values are both populated and different, this is not a clean
-    # proceed — the mode is the deterministic per-listing consensus and it
-    # disagrees. Measured on the JEV-graded slice: 216/523 falsified
-    # positives carry differing modes (plus 69 with one empty side, not
-    # reachable by this two-sided rule). REVIEW only, never a hard_no: a
-    # mode is weaker evidence than a census conflict, matching the
-    # packaging-level doctrine.
-    mf1 = str(attrs1.get("mode_flavor", "") or "").strip().lower()
-    mf2 = str(attrs2.get("mode_flavor", "") or "").strip().lower()
-    equal_full_flavor = bool(left_info.get("flavor_set")) and left_info.get("flavor_set") == right_info.get("flavor_set")
-    if mf1 and mf2 and mf1 != mf2 and not equal_full_flavor:
-        return GateResult(
-            decision="fallback",
-            reason=_r.supporting_feature_review + " mode_flavor:" + mf1 + "|" + mf2,
-        ).model_dump()
-
-    # Exact-product approval requires consistency of declared identity, not
-    # merely an absence of conflicts in generic or missing attribute sets.
-    # Review additions/subsets and named distinctions; existing configured
-    # hard vetoes retain precedence above this supplementary review lane.
-    from core.declared_identity import identity_review_dimensions
-    identity_differences = identity_review_dimensions(attrs1, attrs2)
-    if identity_differences:
-        return GateResult(
-            decision="fallback",
-            reason=_r.declared_identity_review + " " + ",".join(identity_differences),
-        ).model_dump()
-
-    from core.pair_policy import assess_pair
-    policy = assess_pair(evidence, attrs1, attrs2)
-    if policy['review']:
-        return GateResult(
-            decision="fallback",
-            reason=_r.supporting_feature_review + " full_evidence:" + ",".join(policy['review']),
-        ).model_dump()
-
-    return GateResult(
-        decision="proceed", reason=_r.clean_proceed
-    ).model_dump()
-
-
+    return gate.decide()
 # ============================================================================
 # SIMILARITY
 # ============================================================================
@@ -1961,6 +2151,147 @@ def generate_ngrams(tokens: list[str], n: int) -> list[str]:
 # -----------------------------------------------------------------------------
 # Discriminative n‑gram extraction
 # -----------------------------------------------------------------------------
+class _SalientNgramScorer:
+    """Select a document's discriminative n-grams (1-4) by TF-IDF.
+
+    Single responsibility per phase; score() runs them in ONE fixed order and
+    the statements are the pre-refactor body verbatim, so the selected list
+    (and its ordering) is byte-identical.
+
+    Phase map:
+      tokenize       — normalized title/attribute streams: filtered unigram
+                       token lane + PRE-stopword phrase lane (the phrase
+                       regexes must see 'no'/'with'/'of')
+      tfidf_select   — candidate n-grams, global x brand IDF scoring (with the
+                       all-GTIN penalty and the length bonus), descending cut
+      keep_token_merge — KEEP_TOKENS/PHRASE_VARIANTS rescue lane (atomic and
+                       bigram forms, sorted for PYTHONHASHSEED determinism)
+    """
+
+    def __init__(self, titles: list[str], attributes: list[str],
+                 brand_tokens: set[str], global_idf: 'NgramIDF',
+                 brand_idf: 'NgramIDF', top_k: int) -> None:
+        self._titles = titles
+        self._attributes = attributes
+        self._brand_tokens = brand_tokens
+        self._global_idf = global_idf
+        self._brand_idf = brand_idf
+        self._top_k = top_k
+
+    # ── phase: tokenize ─────────────────────────────────────────────────────
+
+    def tokenize(self) -> tuple[list[str], list[str]]:
+        """Combine all text into token list; carry the PRE-stopword phrase
+        parts alongside the filtered stream."""
+        tokens = []
+        phrase_parts = []  # PRE-stopword text: phrase regexes must see 'no',
+        # 'with', 'of' — MINIMAL_STOPWORDS deletes them before the keep-token
+        # check could ever fire (the live miss on "no sugar"/"free of sugar")
+        for title, attr in zip(self._titles, self._attributes, strict=True):
+            text = normalize_text(title) + " " + normalize_text(attr)
+            text = re.sub(
+                r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
+                " ",
+                text,
+                flags=re.IGNORECASE,
+            )
+            toks = text.split()
+            phrase_parts.append(text)
+            toks = [tok for tok in toks if tok not in MINIMAL_STOPWORDS and len(tok) > 1]
+            tokens.extend(toks)
+        return tokens, phrase_parts
+
+    # ── phase: TF-IDF selection ─────────────────────────────────────────────
+
+    def tfidf_select(self, tokens: list[str]) -> list[str]:
+        """Candidate n-grams (1-4) scored against global + brand IDF; the
+        highest-scored ``top_k`` (underscore-joined) survive."""
+        candidates = []
+        for n in (1, 2, 3, 4):
+            candidates.extend(generate_ngrams(tokens, n))
+
+        if not candidates:
+            return []
+
+        tf = Counter(candidates)
+        total = len(candidates)
+
+        # Number of GTINs in the brand
+        N_brand = self._brand_idf.N if self._brand_idf else 1
+
+        scores = {}
+        for ngram, count in tf.items():
+            tf_val = count / total if total else 0
+            g_idf = self._global_idf.idf(ngram)
+            b_idf = self._brand_idf.idf(ngram) if self._brand_idf else 1.0
+
+            # Strong penalty for n‑grams present in ALL brand GTINs (not discriminative)
+            if self._brand_idf:
+                df_brand = self._brand_idf.df.get(ngram, 0)
+                if df_brand == N_brand:
+                    b_idf = 0.05  # almost zero
+
+            num_words = len(ngram.split())
+            # Length bonus: longer n‑grams are more specific, but we include unigrams with slight penalty
+            if num_words == 1:
+                length_bonus = 0.8
+            else:
+                length_bonus = 1.0 + 0.1 * (num_words - 1)
+
+            score = tf_val * g_idf * b_idf * length_bonus
+            scores[ngram] = score
+
+        sorted_ngrams = sorted(scores.items(), key=lambda x: -x[1])
+        return [ngram.replace(" ", "_") for ngram, _ in sorted_ngrams[:self._top_k]]
+
+    # ── phase: keep-token merge ─────────────────────────────────────────────
+
+    def keep_token_merge(self, tokens: list[str], phrase_parts: list[str],
+                         selected: list[str]) -> list[str]:
+        """Add KEEP_TOKENS that appear in the document but may not be top.
+
+        Compound keepers ('no_sugar', 'with_pulp') are stored underscore-joined
+        and used to be checked against SPACE-joined doc text — they could never
+        match (dead entries). Check the compound's WORDS as a contiguous bigram
+        instead ('no' is stopworded away, so 'sugar_free' matches 'sugar free').
+        The PRE-stopword text feeds the phrase regexes."""
+        bigrams = {
+            f"{tokens[i]}_{tokens[i + 1]}" for i in range(len(tokens) - 1)
+        }
+        # PRE-stopword text: 'no sugar'/'free of sugar'/'with added sugar' die
+        # in the MINIMAL_STOPWORDS filter before the keep check — the phrase
+        # regexes see the raw normalized text, the token/bigram checks keep
+        # using the filtered stream (unchanged behavior for plain keepers).
+        doc_text = " ".join(phrase_parts)
+        # DETERMINISM (reproducibility contract): iterating a SET of strings is
+        # process-random (PYTHONHASHSEED) — keep-tokens appended in a different
+        # order per run and canonical_records.csv drifted. sorted() pins it.
+        for keep in sorted(KEEP_TOKENS):
+            # PHRASE VARIATIONS (owner ruling 2026-09-07): one concept, many
+            # phrasings — a keep-token matches when ANY of its regex variants
+            # fires on the doc text (hyphens/fused/reversed/of-linked word
+            # orders all map to the SAME canonical token; census: sugar free
+            # 1,589 / sugarfree 124 / sugarless 13 / free sugar 9 / free of
+            # sugar 0-but-covered / no sugar 7,123 / no added sugar 4,039).
+            if keep in PHRASE_VARIANTS:
+                hit = any(p.search(doc_text) for p in PHRASE_VARIANTS[keep])
+            else:
+                hit = (keep in tokens) if "_" not in keep else (keep in bigrams)
+            if hit and keep not in selected:
+                selected.append(keep)
+                if len(selected) >= self._top_k + 3:
+                    break
+        return selected
+
+    # ── orchestration ───────────────────────────────────────────────────────
+
+    def score(self) -> list[str]:
+        """Run the load-bearing phase order."""
+        tokens, phrase_parts = self.tokenize()
+        selected = self.tfidf_select(tokens)
+        return self.keep_token_merge(tokens, phrase_parts, selected)
+
+
 def extract_discriminative_ngrams(
     titles: list[str],
     attributes: list[str],
@@ -1969,99 +2300,11 @@ def extract_discriminative_ngrams(
     brand_idf: NgramIDF,
     top_k: int = 5,
 ) -> list[str]:
-    """
-    Select n‑grams (1‑4) with highest TF‑IDF, considering global and within‑brand IDF.
-    """
-    # Combine all text into token list
-    tokens = []
-    phrase_parts = []  # PRE-stopword text: phrase regexes must see 'no',
-    # 'with', 'of' — MINIMAL_STOPWORDS deletes them before the keep-token
-    # check could ever fire (the live miss on "no sugar"/"free of sugar")
-    for title, attr in zip(titles, attributes, strict=True):
-        text = normalize_text(title) + " " + normalize_text(attr)
-        text = re.sub(
-            r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
-            " ",
-            text,
-            flags=re.IGNORECASE,
-        )
-        toks = text.split()
-        phrase_parts.append(text)
-        toks = [tok for tok in toks if tok not in MINIMAL_STOPWORDS and len(tok) > 1]
-        tokens.extend(toks)
-
-    candidates = []
-    for n in (1, 2, 3, 4):
-        candidates.extend(generate_ngrams(tokens, n))
-
-    if not candidates:
-        return []
-
-    tf = Counter(candidates)
-    total = len(candidates)
-
-    # Number of GTINs in the brand
-    N_brand = brand_idf.N if brand_idf else 1
-
-    scores = {}
-    for ngram, count in tf.items():
-        tf_val = count / total if total else 0
-        g_idf = global_idf.idf(ngram)
-        b_idf = brand_idf.idf(ngram) if brand_idf else 1.0
-
-        # Strong penalty for n‑grams present in ALL brand GTINs (not discriminative)
-        if brand_idf:
-            df_brand = brand_idf.df.get(ngram, 0)
-            if df_brand == N_brand:
-                b_idf = 0.05  # almost zero
-
-        num_words = len(ngram.split())
-        # Length bonus: longer n‑grams are more specific, but we include unigrams with slight penalty
-        if num_words == 1:
-            length_bonus = 0.8
-        else:
-            length_bonus = 1.0 + 0.1 * (num_words - 1)
-
-        score = tf_val * g_idf * b_idf * length_bonus
-        scores[ngram] = score
-
-    sorted_ngrams = sorted(scores.items(), key=lambda x: -x[1])
-    selected = [ngram.replace(" ", "_") for ngram, _ in sorted_ngrams[:top_k]]
-
-    # Add KEEP_TOKENS that appear in the document but may not be top.
-    # Compound keepers ('no_sugar', 'with_pulp') are stored underscore-joined
-    # and used to be checked against SPACE-joined doc text — they could never
-    # match (dead entries). Check the compound's WORDS as a contiguous bigram
-    # instead ('no' is stopworded away, so 'sugar_free' matches 'sugar free').
-    doc_tokens = tokens
-    bigrams = {
-        f"{doc_tokens[i]}_{doc_tokens[i + 1]}" for i in range(len(doc_tokens) - 1)
-    }
-    # PRE-stopword text: 'no sugar'/'free of sugar'/'with added sugar' die
-    # in the MINIMAL_STOPWORDS filter before the keep check — the phrase
-    # regexes see the raw normalized text, the token/bigram checks keep
-    # using the filtered stream (unchanged behavior for plain keepers).
-    doc_text = " ".join(phrase_parts)
-    # DETERMINISM (reproducibility contract): iterating a SET of strings is
-    # process-random (PYTHONHASHSEED) — keep-tokens appended in a different
-    # order per run and canonical_records.csv drifted. sorted() pins it.
-    for keep in sorted(KEEP_TOKENS):
-        # PHRASE VARIATIONS (owner ruling 2026-09-07): one concept, many
-        # phrasings — a keep-token matches when ANY of its regex variants
-        # fires on the doc text (hyphens/fused/reversed/of-linked word
-        # orders all map to the SAME canonical token; census: sugar free
-        # 1,589 / sugarfree 124 / sugarless 13 / free sugar 9 / free of
-        # sugar 0-but-covered / no sugar 7,123 / no added sugar 4,039).
-        if keep in PHRASE_VARIANTS:
-            hit = any(p.search(doc_text) for p in PHRASE_VARIANTS[keep])
-        else:
-            hit = (keep in doc_tokens) if "_" not in keep else (keep in bigrams)
-        if hit and keep not in selected:
-            selected.append(keep)
-            if len(selected) >= top_k + 3:
-                break
-
-    return selected[: top_k + 3]
+    """Select n‑grams (1‑4) with highest TF‑IDF, considering global and
+    within‑brand IDF — see _SalientNgramScorer.score."""
+    return _SalientNgramScorer(
+        titles, attributes, brand_tokens, global_idf, brand_idf, top_k
+    ).score()
 
 
 # -----------------------------------------------------------------------------
