@@ -112,19 +112,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             baseline_output.mkdir(exist_ok=True)
             shutil.copy2(baseline,baseline_output/baseline.name)
             events.emit('baseline_embedding','completed',device=cfg.device)
-        if cfg.post_training_ablation:
-            # Ablation staging lives in the CPU data bundle (model_tracks.package
-            # _prepare_exports), so every session forwards from the shipped
-            # per-track templates and no accelerator time is spent staging them.
-            from model_tracks.baseline_ablation import forward as forward_baseline_ablation
-            template = setup/'ablation_templates'/'text'/'request.json'
-            if template.is_file():
-                events.emit('baseline_ablation','started',device=cfg.device)
-                forward_baseline_ablation(baseline_output,setup,Path(resolve_model(cfg.text_model)),device=cfg.device,text_model=baseline_model)
-                events.emit('baseline_ablation','completed',device=cfg.device)
-            else:
-                events.emit('ablation', 'skipped', device=cfg.device,
-                            reason='bundle shipped no ablation templates')
+        # Ablation is not a training-session phase (owner order 2026-10-07):
+        # the GPU ablation staging/forward block is removed entirely; ablation
+        # lives in the CPU lanes. This deletes the ~205s
+        # ablation_inputs.prepare_inputs burn the T4 box paid on 2026-10-07.
         del baseline_model
         torch.cuda.empty_cache()
     # Every data test runs here: once, on the machine that will train, after the
