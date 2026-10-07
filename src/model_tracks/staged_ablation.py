@@ -1,15 +1,24 @@
 """Two phases: local interventions/tensors, selected-weight binding and GPU forward.
 
 Single-responsibility phases (behaviour pinned, statements split verbatim):
-  - :func:`_freeze_suite`      — settings, cohort gate and frozen template root
+  - :func:`prepare_suite`      — the suite orchestrator (timed)
+  - :func:`_cohort_gate`       — the exhaustive-coverage cohort, or None
+  - :func:`_freeze_config`     — settings pointed at the root + frozen yaml
   - :func:`_frozen_support`    — train-population support records and vocabulary
-  - :func:`_track_template`    — one track's tokens/tensors/request emission
+  - :func:`_template_checkpoint` — the text baseline or a template tensor file
+  - :func:`_track_request`     — prepare() tokens/tensors, emitted request read
+  - :func:`_track_cohort`      — suite-cohort freeze on text, equality elsewhere
+  - :func:`_anchor_request`    — prepared sources anchored to the portable package
+  - :func:`_copy_template`     — the fixed template folder materialized
   - :func:`_drop_staging`      — generated content-addressed staging cleanup
+  - :func:`_track_template`    — the per-track phase orchestrator
   - :func:`_bind_template`     — the staged setup bound onto a track request
   - :func:`_check_graph_binding` — selected checkpoint vs frozen support/vocabulary
   - :func:`_rebind_checkpoint` — selected/baseline checkpoint role resolution
   - :func:`_bound_folder`      — the bound request and local tensors materialized
-  - :func:`_materialize_vectors` — the ONE device/encode touchpoint of the lane
+  - :func:`_saved_text_default` — saved-vector default for the full local catalog
+  - :func:`_reuse_or_encode`   — the ONE device/encode touchpoint of the lane
+  - :func:`forward`            — the forward orchestrator (timed)
 """
 import json
 from pathlib import Path
@@ -212,16 +221,23 @@ def _bound_folder(output,template,request):
     return path,folder
 
 
-def _materialize_vectors(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
-    """Reuse validated vectors or encode them (the lane's single device call)."""
+def _saved_text_default(request,*,output,setup,track,saved_text):
+    """Default to the suite's saved vectors for the full local retrieval catalog."""
+    if saved_text is None and request['settings']['retrieval_catalog'] == 'full' and request['settings'].get('coverage') != 'all':
+        saved_text = (output/'text__vectors.npz' if track == 'text' else
+                      setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
+    return saved_text
+
+
+def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
+    """Validated existing vectors win; otherwise the ONE device call encodes."""
     vectors = folder/'vectors.npz'
     if vectors.exists():
         from model_tracks.ablation import validate_vectors
         validate_vectors(path,vectors)
     else:
-        if saved_text is None and request['settings']['retrieval_catalog'] == 'full' and request['settings'].get('coverage') != 'all':
-            saved_text = (output/'text__vectors.npz' if track == 'text' else
-                          setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
+        saved_text = _saved_text_default(request,output=output,setup=setup,
+            track=track,saved_text=saved_text)
         encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
 
 
@@ -239,6 +255,6 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
     with _LOG.section('ablation_forward.write_bound_request'):
         path,folder = _bound_folder(output,template,request)
     with _LOG.section('ablation_forward.vectors'):
-        _materialize_vectors(path,folder,request,output=output,setup=setup,track=track,
+        _reuse_or_encode(path,folder,request,output=output,setup=setup,track=track,
             saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
     return path
