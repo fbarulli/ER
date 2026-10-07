@@ -1,0 +1,14 @@
+{
+  "label": "before",
+  "rows": 2000,
+  "calls": 26000,
+  "seconds": 1.943,
+  "samples": [
+    1.948,
+    1.944,
+    1.934,
+    1.942
+  ],
+  "per_call_us": 74.727,
+  "digest": "9acd0c8a4074865307f09a19880c5d14482749fbc39d58a638db74ab1ea088b7"
+}

@@ -1,0 +1,14 @@
+{
+  "label": "after",
+  "rows": 2000,
+  "calls": 26000,
+  "seconds": 1.713,
+  "samples": [
+    1.744,
+    1.729,
+    1.697,
+    1.694
+  ],
+  "per_call_us": 65.883,
+  "digest": "9acd0c8a4074865307f09a19880c5d14482749fbc39d58a638db74ab1ea088b7"
+}
