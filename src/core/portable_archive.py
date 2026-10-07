@@ -81,36 +81,69 @@ def _add_tar_text(archive, name, value):
     archive.addfile(member, io.BytesIO(payload))
 
 
+def _source_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
+    """Regular-file check then hash: every source once, inline text bytes too."""
+    inventory: dict[str, str] = {}
+    for target, source in tracked(files.items(), desc='archive.hash_sources'):
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('archive requires regular files, not symbolic links')
+        with source.open('rb') as handle:
+            inventory[target] = hashlib.file_digest(handle, 'sha256').hexdigest()
+    inventory.update({target: hashlib.sha256(value.encode()).hexdigest()
+                      for target, value in inline.items()})
+    return inventory
+
+
+def _candidate_path(output: Path) -> Path:
+    """One unique unpublished staging sibling for an atomic publish."""
+    return output.with_name(f'{output.name}.partial-{os.getpid()}-{uuid.uuid4().hex}')
+
+
+def _publish_atomically(candidate: Path, output: Path) -> None:
+    """Link the completed staging sibling; the name never races with a reader."""
+    with candidate.open('rb') as handle:
+        os.fsync(handle.fileno())
+    # Linking the completed sibling publishes atomically without replacing
+    # an existing immutable generation, even when two writers race.
+    os.link(candidate, output)
+    candidate.unlink(missing_ok=True)
+
+
+def _profile_sidecar(output: Path, timings: dict[str, float],
+                     files: dict[str, Path]) -> None:
+    """The run-side cost profile (hash/compress/verify seconds + sizes)."""
+    archive_sidecar(output, ".profile.json").write_text(json.dumps({
+        **timings, "timestamp_unix": time.time(),
+        "archive_bytes": output.stat().st_size,
+        "source_bytes": sum(source.stat().st_size for source in files.values()),
+        "file_count": len(files)}, indent=2) + "\n")
+
+
 @timed
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
                   inventory_key: str = 'files', profile: bool = False) -> Path:
+    """Publish one SHA256-inventoried archive (staging → verify → atomic link)."""
     if output.exists():
         raise FileExistsError(output)
     inline = inline or {}
     if set(files) & set(inline) or manifest_name in files or manifest_name in inline:
         raise ValueError('archive member collision')
     timings = {}
-    started = time.monotonic()
-    # Reject malformed inventories before expensive source hashing.
     for target in files:
         _check_member(target)
     for target in inline:
         _check_member(target)
     _check_member(manifest_name)
-    inventory = {}
-    for target, source in tracked(files.items(), desc='archive.hash_sources'):
-        if source.is_symlink() or not source.is_file():
-            raise ValueError('archive requires regular files, not symbolic links')
-        with source.open('rb') as handle:
-            inventory[target] = hashlib.file_digest(handle, 'sha256').hexdigest()
-    inventory.update({target:hashlib.sha256(value.encode()).hexdigest() for target,value in inline.items()})
+    started = time.monotonic()
+    # Reject malformed inventories before expensive source hashing.
+    inventory = _source_inventory(files, inline)
     timings["inventory_hash_seconds"] = time.monotonic() - started
     output.parent.mkdir(parents=True, exist_ok=True)
-    candidate = output.with_name(f'{output.name}.partial-{os.getpid()}-{uuid.uuid4().hex}')
+    candidate = _candidate_path(output)
     try:
         started = time.monotonic()
-        manifest = json.dumps({**metadata, inventory_key:inventory}, indent=2)+'\n'
+        manifest = json.dumps({**metadata, inventory_key: inventory}, indent=2) + '\n'
         if output.name.endswith('.tar.zst'):
             with trace_step('archive.zstandard', files=len(files),
                             compression_level=archive_settings().compression_level):
@@ -126,18 +159,11 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         with trace_step('archive.verify'):
             verify_archive(candidate, manifest_name, inventory_key=inventory_key)
         timings["verification_seconds"] = time.monotonic() - started
-        with candidate.open('rb') as handle:
-            os.fsync(handle.fileno())
-        # Linking the completed sibling publishes atomically without replacing
-        # an existing immutable generation, even when two writers race.
-        os.link(candidate, output)
+        _publish_atomically(candidate, output)
     finally:
         candidate.unlink(missing_ok=True)
     if profile:
-        archive_sidecar(output, ".profile.json").write_text(json.dumps({**timings,
-            "timestamp_unix": time.time(), "archive_bytes": output.stat().st_size,
-            "source_bytes": sum(source.stat().st_size for source in files.values()),
-            "file_count": len(files)}, indent=2) + "\n")
+        _profile_sidecar(output, timings, files)
     return output
 
 

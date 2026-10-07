@@ -469,6 +469,262 @@ class CrossBrandMiningFunnel(MiningFunnelBase):
         }
 
 
+class _TargetedAttributeMiner:
+    """One targeted-attribute mining pass over the ranked gate candidates.
+
+    SR phases, ONE fixed order in run(); the statements are the original
+    miner body verbatim (funnel accounting, guard chain and emission order),
+    so the returned pairs/scores are byte-identical.
+
+    Phase map:
+      configure       — name-rule validation, funnel setup, the n_target guard
+      rank_candidates — the above-similarity-floor ranked ordering (the
+                        candidate universe, with its funnel census)
+      scan_candidates — the guard chain + conflict evaluation + emission
+      _payload_ready  — same-canonical + index guards
+      _name_gate      — exact/relaxed name gate with the blocked-conflict
+                        census
+      _emit           — both-directions emission, existing-keys guard, target
+                        cutoff
+    """
+
+    def __init__(self, df, gates, canonical_records, gtin_to_row,
+                 gtin_to_canon_idx, *, existing, n_target, min_similarity,
+                 volume_relative_tolerance, volume_absolute_tolerance_ml,
+                 canonical_map, name_match, funnel) -> None:
+        self._df = df
+        self._gates = gates
+        self._canonical_records = canonical_records
+        self._gtin_to_row = gtin_to_row
+        self._gtin_to_canon_idx = gtin_to_canon_idx
+        self._existing = existing
+        self._n_target = n_target
+        self._min_similarity = min_similarity
+        self._vol_rel = volume_relative_tolerance
+        self._vol_abs = volume_absolute_tolerance_ml
+        self._canonical_map = canonical_map
+        self._name_match = str(name_match)
+        self._funnel = funnel
+        self._records: dict[str, Mapping[str, object]] = {}
+        self._existing_keys: set[tuple[int, int]] = set()
+
+    # ── evaluators (SR islands, used by the guard chain) ────────────────────
+
+    def _evaluate(self, left: object, right: object) -> dict[str, list[str]]:
+        from core.attribute_conflicts import (
+            canonical_attribute_info,
+            critical_attribute_evaluation,
+        )
+
+        return critical_attribute_evaluation(
+            canonical_attribute_info(left),
+            canonical_attribute_info(right),
+            volume_relative_tolerance=float(self._vol_rel),
+            volume_absolute_tolerance_ml=float(self._vol_abs),
+        )
+
+    # ── phase: configure ─────────────────────────────────────────────────────
+
+    def configure(self) -> bool:
+        """Validate the call, bind the funnel label; False = skipped run."""
+        _funnel = self._funnel
+        if self._name_match not in {"exact", "flavor_variant"}:
+            raise ValueError(
+                "name_match must be 'exact' or 'flavor_variant'; "
+                f"got {self._name_match!r}"
+            )
+        if _funnel is not None:
+            _funnel.miner = "targeted_attribute_negatives"
+            _funnel.n_target = int(self._n_target)
+            _funnel.min_similarity = float(self._min_similarity)
+            _funnel.volume_relative_tolerance = float(self._vol_rel)
+            _funnel.volume_absolute_tolerance_ml = float(self._vol_abs)
+            _funnel.name_match = self._name_match
+            _funnel.gate_rows = int(len(self._gates))
+        if self._n_target <= 0:
+            if _funnel is not None:
+                _funnel.skipped_reason = "n_target <= 0"
+            return False
+        return True
+
+    # ── phase: rank the candidate universe ───────────────────────────────────
+
+    def rank_candidates(self) -> pd.DataFrame:
+        """The above-similarity-floor candidates, in emission order."""
+        ranked = self._gates.assign(
+            candidate_similarity=pd.to_numeric(self._gates["similarity"], errors="coerce")
+        )
+        ranked = ranked[ranked["candidate_similarity"].gt(float(self._min_similarity))]
+        if self._funnel is not None:
+            self._funnel.above_similarity_floor = int(len(ranked))
+            decisions = ranked["gate_decision"].astype(str).value_counts().to_dict() if "gate_decision" in ranked else {}
+            self._funnel.above_floor_hard_no = int(decisions.get("hard_no", 0))
+            self._funnel.above_floor_proceed = int(decisions.get("proceed", 0))
+            self._funnel.above_floor_fallback = int(decisions.get("fallback", 0))
+        ranked = ranked.sort_values(
+            ["candidate_similarity", "gtin1", "gtin2"],
+            ascending=[False, True, True],
+            kind="stable",
+        )
+        return ranked
+
+    # ── candidate guard chain (one SR test per drop reason) ──────────────────
+
+    def _payload_ready(self, row) -> tuple[str, str] | None:
+        """Index + same-canonical identity chain; None = candidate dropped."""
+        left_gtin, right_gtin = str(row.gtin1), str(row.gtin2)
+        funnel = self._funnel
+        if left_gtin not in self._records or right_gtin not in self._records:
+            if funnel is not None:
+                funnel.dropped_candidates_no_canonical_record += 1
+            return None
+        if left_gtin not in self._gtin_to_row or right_gtin not in self._gtin_to_row:
+            if funnel is not None:
+                funnel.dropped_candidates_no_source_row += 1
+            return None
+        if left_gtin not in self._gtin_to_canon_idx or right_gtin not in self._gtin_to_canon_idx:
+            if funnel is not None:
+                funnel.dropped_candidates_no_canonical_index += 1
+            return None
+        # Same canonical item => true match, never a label-0 pair.
+        if self._canonical_map is not None:
+            left_canon = self._canonical_map.get(left_gtin)
+            right_canon = self._canonical_map.get(right_gtin)
+            if left_canon is not None and left_canon == right_canon:
+                if funnel is not None:
+                    funnel.dropped_candidates_same_canonical += 1
+                return None
+        return left_gtin, right_gtin
+
+    def _name_gate(self, row, left_gtin: str, right_gtin: str):
+        """Exact / flavor-variant relaxed name gate; None = dropped, else
+        (evaluation, left_row, right_row)."""
+        funnel = self._funnel
+        left_record = self._records[left_gtin]
+        right_record = self._records[right_gtin]
+        left_row = self._gtin_to_row[left_gtin]
+        right_row = self._gtin_to_row[right_gtin]
+        left_brand = str(left_record.get("mode_brand", "")).strip().casefold()
+        right_brand = str(right_record.get("mode_brand", "")).strip().casefold()
+        if not left_brand or left_brand != right_brand:
+            if funnel is not None:
+                funnel.dropped_candidates_brand += 1
+            return None
+        left_name = normalized_product_name(self._df.iloc[left_row].get("sku_name_eng", ""), left_brand)
+        right_name = normalized_product_name(self._df.iloc[right_row].get("sku_name_eng", ""), right_brand)
+        exact_name = bool(left_name) and left_name == right_name
+        evaluation: dict[str, list[str]] | None = None
+        if not exact_name:
+            left_residual = flavor_variant_product_name(left_name)
+            relaxed = (
+                self._name_match == "flavor_variant"
+                and bool(left_residual)
+                and left_residual == flavor_variant_product_name(right_name)
+                # The gate is the label authority: only a pair the gate has
+                # ALREADY called hard_no may be re-exposed by this rule.
+                and str(getattr(row, "gate_decision", "")) == "hard_no"
+            )
+            if funnel is not None:
+                # Census of what the NAME filter blocks: the evidence that
+                # made flavour/pulp negatives structurally unreachable.
+                evaluation = self._evaluate(left_record, right_record)
+                _census(
+                    funnel.name_blocked_conflict_dimension_census,
+                    evaluation["conflicts"],
+                )
+            if not relaxed:
+                if funnel is not None:
+                    funnel.dropped_candidates_name += 1
+                return None
+            if evaluation is None:
+                evaluation = self._evaluate(left_record, right_record)
+            if "flavor" not in evaluation["conflicts"]:
+                # The names differ only by flavour words, but the shared
+                # evaluator sees no flavour conflict: nothing identity-bearing
+                # separates them, so this is not a negative.
+                if funnel is not None:
+                    funnel.dropped_candidates_name += 1
+                return None
+            if funnel is not None:
+                funnel.flavor_variant_candidates += 1
+        if evaluation is None:
+            evaluation = self._evaluate(left_record, right_record)
+        if not evaluation["conflicts"]:
+            if funnel is not None:
+                funnel.dropped_candidates_no_conflict += 1
+            return None
+        if funnel is not None:
+            _census(funnel.conflict_dimension_census, evaluation["conflicts"])
+            funnel.passed_candidates += 1
+        return evaluation, left_row, right_row
+
+    def _emit(self, row, left_gtin: str, right_gtin: str,
+              left_row: int, right_row: int, found: list) -> bool:
+        """Both-directions emission with the existing-keys guard and the
+        target cutoff; True = the target is met and the scan stops."""
+        funnel = self._funnel
+        score = float(row.candidate_similarity)
+        for pair in (
+            (left_row, self._gtin_to_canon_idx[right_gtin]),
+            (right_row, self._gtin_to_canon_idx[left_gtin]),
+        ):
+            pair = (int(pair[0]), int(pair[1]))
+            if pair in self._existing_keys:
+                if funnel is not None:
+                    funnel.dropped_pairs_already_in_baseline += 1
+                continue
+            self._existing_keys.add(pair)
+            found.append((pair[0], pair[1], score))
+            if len(found) >= int(self._n_target):
+                break
+        return len(found) >= int(self._n_target)
+
+    # ── phase: the guarded scan ──────────────────────────────────────────────
+
+    def scan_candidates(self, ranked: pd.DataFrame) -> list[tuple[int, int, float]]:
+        found: list[tuple[int, int, float]] = []
+        for row in ranked.itertuples(index=False):
+            payload = self._payload_ready(row)
+            if payload is None:
+                continue
+            left_gtin, right_gtin = payload
+            verdict = self._name_gate(row, left_gtin, right_gtin)
+            if verdict is None:
+                continue
+            _evaluation, left_row, right_row = verdict
+            if self._emit(row, left_gtin, right_gtin, left_row, right_row, found):
+                break
+        if self._funnel is not None:
+            self._funnel.emitted_pairs = int(len(found))
+        return found
+
+    # ── orchestration ────────────────────────────────────────────────────────
+
+    def run(self) -> tuple[np.ndarray, np.ndarray]:
+        if not self.configure():
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        self._records = {
+            str(row["gtin"]): row
+            for row in self._canonical_records.to_dict("records")
+        }
+        self._existing_keys = {
+            (int(a), int(b)) for a, b in (self._existing if self._existing is not None else [])
+        }
+        found = self.scan_candidates(self.rank_candidates())
+        if not found:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        return (
+            np.asarray([(a, b) for a, b, _ in found], dtype=int),
+            np.asarray([score for _, _, score in found], dtype=float),
+        )
+
+
+def _census(target: dict[str, int], dimensions: object) -> None:
+    """Count one conflict-dimension census entry per dimension."""
+    for dimension in dimensions or ():
+        target[str(dimension)] = target.get(str(dimension), 0) + 1
+
+
 def mine_targeted_attribute_negatives(
     df: pd.DataFrame,
     gates: pd.DataFrame,
@@ -485,235 +741,22 @@ def mine_targeted_attribute_negatives(
     name_match: str = "flavor_variant",
     funnel: MiningFunnel | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine same-brand/name critical-attribute negatives from gate evidence.
+    """Mine same-brand/name critical-attribute negatives from gate evidence —
+    one phase-ordered pass on :class:`_TargetedAttributeMiner`.
 
     ``similarity`` is the existing gate candidate's short-canonical-token
     Jaccard score. The threshold is strict (``score > min_similarity``).
     Both directions are emitted as source-SKU -> other-canonical pairs and
     all critical conflicts come from the same evaluator used at inference.
-
-    SAME-CANONICAL GUARD (audit 2026-09-15): two GTINs can resolve to the
-    SAME canonical item. ``build_training_data`` drops exactly those pairs
-    with the documented rule "Those rows are true matches and must never be
-    emitted as label-0 pairs", and reports the count as
-    ``n_neg_same_canonical_dropped``. The gate's ``similarity`` score does not
-    know about that identity, so without this guard the miner re-added 154 of
-    the 350 committed targeted negatives — 44% — as label-0 pairs whose two
-    GTINs share byte-identical canonical text, giving one anchor/target pair
-    both label 1 and label 0. Passing ``canonical_map`` (gtin -> canonical
-    string) applies the same identity rule here.
-
-    SSOT (audit 2026-09-15): the conflict verdict MUST use the same volume
-    tolerance as the training-label gate. Defaulting to exact equality here
-    made the two lanes disagree on the same pair — a pair whose volumes sit
-    inside the gate's ``vol_tolerance`` was labelled ``proceed`` by the gate
-    (a positive) while this miner emitted it as a hard negative. Live check
-    found exactly such a pair (`8002267004212`/`8002267025644`: identical
-    canonical text, volumes 480 vs 500 = 4.0% <= 0.05, gate ``proceed``).
-
-    NAME RULE (audit 2026-09-15): strict name equality is the filter that
-    actually bounds this lane — on the live gate artifact it dropped 40,269 of
-    the 43,209 candidates that reached it (93.2%), and because the flavour word
-    is part of the name BY DESIGN, no flavour-conflict pair could ever be
-    emitted (5,549 flavour-conflict candidates above the floor, 0 reachable,
-    while the gate itself labels 876 rows "Critical attribute mismatch:
-    flavor"). ``name_match="flavor_variant"`` (default) admits a candidate
-    whose names are equal once FLAVOR_LEXICON tokens are dropped ONLY when the
-    pair carries an explicit flavour conflict AND the training gate already
-    labels that same row ``hard_no``. The gate is the label authority: this
-    rule can only re-expose pairs the gate has itself called label 0, never
-    relabel a ``proceed``/``fallback`` row. ``name_match="exact"`` restores the
-    pre-audit behaviour (196 pairs on the live artifact vs 504 with the rule).
-
-    FUNNEL (audit 2026-09-15): pass a :class:`MiningFunnel` through ``funnel=``
-    to receive the miner's own step-by-step accounting. The consolidated-trace
-    owner should call the miner as::
-
-        from core.hard_negatives import (
-            MiningFunnel, mine_targeted_attribute_negatives,
-        )
-        funnel = MiningFunnel()
-        targeted_neg, targeted_scores = mine_targeted_attribute_negatives(
-            df, gates, canonical_records, gtin_to_row, gtin_to_canon_idx,
-            existing=neg, n_target=int(targeted_cfg["target"]),
-            min_similarity=float(targeted_cfg["min_similarity"]),
-            # BOTH volume cuts: a relative-only cut rejects small-volume
-            # pairs the gate accepts (at 14ml, 5% is 0.7ml), which would
-            # mine a true match as a label-0 row.
-            volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
-            volume_absolute_tolerance_ml=float(
-                training_cfg().gate.vol_abs_tolerance
-            ),
-            canonical_map=canon_map, funnel=funnel,
-        )
-        for step, in_count, out_count, reason in funnel.stages():
-            pair_trace.add(
-                "mining", f"targeted_attribute_funnel.{step}",
-                in_count=in_count, out_count=out_count,
-                reason=reason, detail=funnel.to_dict(),
-                source="gate_results.csv + canonical_records.csv",
-            )
-
-    The returned pair/score arrays keep their historical shape and order.
+    The long-form phase/audit notes live on the class docstring.
     """
-    name_match = str(name_match)
-    if name_match not in {"exact", "flavor_variant"}:
-        raise ValueError(
-            "name_match must be 'exact' or 'flavor_variant'; "
-            f"got {name_match!r}"
-        )
-    if funnel is not None:
-        funnel.miner = "targeted_attribute_negatives"
-        funnel.n_target = int(n_target)
-        funnel.min_similarity = float(min_similarity)
-        funnel.volume_relative_tolerance = float(volume_relative_tolerance)
-        funnel.volume_absolute_tolerance_ml = float(volume_absolute_tolerance_ml)
-        funnel.name_match = name_match
-        funnel.gate_rows = int(len(gates))
-    if n_target <= 0:
-        if funnel is not None:
-            funnel.skipped_reason = "n_target <= 0"
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    from core.attribute_conflicts import (
-        canonical_attribute_info,
-        critical_attribute_evaluation,
-    )
-
-    def _census(target: dict[str, int], dimensions: object) -> None:
-        for dimension in dimensions or ():
-            target[str(dimension)] = target.get(str(dimension), 0) + 1
-
-    def _evaluate(left: object, right: object) -> dict[str, list[str]]:
-        return critical_attribute_evaluation(
-            canonical_attribute_info(left),
-            canonical_attribute_info(right),
-            volume_relative_tolerance=float(volume_relative_tolerance),
-            volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
-        )
-
-    records = {
-        str(row["gtin"]): row
-        for row in canonical_records.to_dict("records")
-    }
-    existing_keys = {
-        (int(a), int(b)) for a, b in (existing if existing is not None else [])
-    }
-    ranked = gates.assign(
-        candidate_similarity=pd.to_numeric(gates["similarity"], errors="coerce")
-    )
-    ranked = ranked[ranked["candidate_similarity"].gt(float(min_similarity))]
-    if funnel is not None:
-        funnel.above_similarity_floor = int(len(ranked))
-        decisions = ranked["gate_decision"].astype(str).value_counts().to_dict() if "gate_decision" in ranked else {}
-        funnel.above_floor_hard_no = int(decisions.get("hard_no", 0))
-        funnel.above_floor_proceed = int(decisions.get("proceed", 0))
-        funnel.above_floor_fallback = int(decisions.get("fallback", 0))
-    ranked = ranked.sort_values(
-        ["candidate_similarity", "gtin1", "gtin2"],
-        ascending=[False, True, True],
-        kind="stable",
-    )
-    found: list[tuple[int, int, float]] = []
-    for row in ranked.itertuples(index=False):
-        left_gtin, right_gtin = str(row.gtin1), str(row.gtin2)
-        if left_gtin not in records or right_gtin not in records:
-            if funnel is not None:
-                funnel.dropped_candidates_no_canonical_record += 1
-            continue
-        if left_gtin not in gtin_to_row or right_gtin not in gtin_to_row:
-            if funnel is not None:
-                funnel.dropped_candidates_no_source_row += 1
-            continue
-        if left_gtin not in gtin_to_canon_idx or right_gtin not in gtin_to_canon_idx:
-            if funnel is not None:
-                funnel.dropped_candidates_no_canonical_index += 1
-            continue
-        # Same canonical item => true match, never a label-0 pair.
-        if canonical_map is not None:
-            left_canon = canonical_map.get(left_gtin)
-            right_canon = canonical_map.get(right_gtin)
-            if left_canon is not None and left_canon == right_canon:
-                if funnel is not None:
-                    funnel.dropped_candidates_same_canonical += 1
-                continue
-        left_record, right_record = records[left_gtin], records[right_gtin]
-        left_row, right_row = gtin_to_row[left_gtin], gtin_to_row[right_gtin]
-        left_brand = str(left_record.get("mode_brand", "")).strip().casefold()
-        right_brand = str(right_record.get("mode_brand", "")).strip().casefold()
-        if not left_brand or left_brand != right_brand:
-            if funnel is not None:
-                funnel.dropped_candidates_brand += 1
-            continue
-        left_name = normalized_product_name(df.iloc[left_row].get("sku_name_eng", ""), left_brand)
-        right_name = normalized_product_name(df.iloc[right_row].get("sku_name_eng", ""), right_brand)
-        exact_name = bool(left_name) and left_name == right_name
-        evaluation: dict[str, list[str]] | None = None
-        if not exact_name:
-            left_residual = flavor_variant_product_name(left_name)
-            relaxed = (
-                name_match == "flavor_variant"
-                and bool(left_residual)
-                and left_residual == flavor_variant_product_name(right_name)
-                # The gate is the label authority: only a pair the gate has
-                # ALREADY called hard_no may be re-exposed by this rule.
-                and str(getattr(row, "gate_decision", "")) == "hard_no"
-            )
-            if funnel is not None:
-                # Census of what the NAME filter blocks: the evidence that
-                # made flavour/pulp negatives structurally unreachable.
-                evaluation = _evaluate(left_record, right_record)
-                _census(
-                    funnel.name_blocked_conflict_dimension_census,
-                    evaluation["conflicts"],
-                )
-            if not relaxed:
-                if funnel is not None:
-                    funnel.dropped_candidates_name += 1
-                continue
-            if evaluation is None:
-                evaluation = _evaluate(left_record, right_record)
-            if "flavor" not in evaluation["conflicts"]:
-                # The names differ only by flavour words, but the shared
-                # evaluator sees no flavour conflict: nothing identity-bearing
-                # separates them, so this is not a negative.
-                if funnel is not None:
-                    funnel.dropped_candidates_name += 1
-                continue
-            if funnel is not None:
-                funnel.flavor_variant_candidates += 1
-        if evaluation is None:
-            evaluation = _evaluate(left_record, right_record)
-        if not evaluation["conflicts"]:
-            if funnel is not None:
-                funnel.dropped_candidates_no_conflict += 1
-            continue
-        if funnel is not None:
-            _census(funnel.conflict_dimension_census, evaluation["conflicts"])
-            funnel.passed_candidates += 1
-        score = float(row.candidate_similarity)
-        for pair in (
-            (left_row, gtin_to_canon_idx[right_gtin]),
-            (right_row, gtin_to_canon_idx[left_gtin]),
-        ):
-            pair = (int(pair[0]), int(pair[1]))
-            if pair in existing_keys:
-                if funnel is not None:
-                    funnel.dropped_pairs_already_in_baseline += 1
-                continue
-            existing_keys.add(pair)
-            found.append((pair[0], pair[1], score))
-            if len(found) >= int(n_target):
-                break
-        if len(found) >= int(n_target):
-            break
-    if funnel is not None:
-        funnel.emitted_pairs = int(len(found))
-    if not found:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    return (
-        np.asarray([(a, b) for a, b, _ in found], dtype=int),
-        np.asarray([score for _, _, score in found], dtype=float),
-    )
+    return _TargetedAttributeMiner(
+        df, gates, canonical_records, gtin_to_row, gtin_to_canon_idx,
+        existing=existing, n_target=n_target, min_similarity=min_similarity,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        canonical_map=canonical_map, name_match=name_match, funnel=funnel,
+    ).run()
 
 
 def mine_targeted_attribute_negatives_with_funnel(
@@ -863,6 +906,242 @@ def _canonical_similarity(left: object, right: object) -> float:
     )
 
 
+class _CrossBrandMiner:
+    """One cross-brand mining pass (the brand-separation mirror lane).
+
+    SR phases, ONE fixed order in run(); every statement below is the
+    original miner body verbatim, so funnel accounting, guard order, the
+    hardest-first cap selection and the emission bytes are identical. The
+    module-level mine_cross_brand_negatives keeps its documented call.
+
+    The long-form rationale (why the lane exists, label-error exclusion,
+    agreement blocking and the END-STATE doctrine) lives on
+    mine_cross_brand_negatives' docstring.
+    """
+
+    def __init__(self, df, canonical_records, gtin_to_row, gtin_to_canon_idx, *,
+                 existing, n_target, require_agreement, min_similarity,
+                 max_per_canonical, max_per_brand, volume_relative_tolerance,
+                 volume_absolute_tolerance_ml, exclude_conflicting, funnel):
+        self._df = df
+        self._canonical_records = canonical_records
+        self._gtin_to_row = gtin_to_row
+        self._gtin_to_canon_idx = gtin_to_canon_idx
+        self._existing = existing
+        self._n_target = n_target
+        self._require_agreement = require_agreement
+        self._min_similarity = min_similarity
+        self._max_per_canonical = max_per_canonical
+        self._max_per_brand = max_per_brand
+        self._vol_rel = volume_relative_tolerance
+        self._vol_abs = volume_absolute_tolerance_ml
+        self._exclude_conflicting = exclude_conflicting
+        self._funnel = funnel
+
+    def run(self):
+        """The original miner body verbatim, as the phase order."""
+        df = self._df
+        canonical_records = self._canonical_records
+        gtin_to_row = self._gtin_to_row
+        gtin_to_canon_idx = self._gtin_to_canon_idx
+        existing = self._existing
+        n_target = self._n_target
+        require_agreement = self._require_agreement
+        min_similarity = self._min_similarity
+        max_per_canonical = self._max_per_canonical
+        max_per_brand = self._max_per_brand
+        volume_relative_tolerance = self._vol_rel
+        volume_absolute_tolerance_ml = self._vol_abs
+        exclude_conflicting = self._exclude_conflicting
+        funnel = self._funnel
+        require = tuple(str(dimension) for dimension in require_agreement)
+        if not require:
+            raise ValueError(
+                "require_agreement must name at least one critical dimension; an "
+                "empty requirement would mine pairs that share nothing"
+            )
+        unknown = sorted(set(require) - set(CRITICAL_ATTRIBUTE_DIMENSIONS))
+        if unknown:
+            raise ValueError(
+                f"require_agreement names non-critical dimensions {unknown}; "
+                f"allowed: {list(CRITICAL_ATTRIBUTE_DIMENSIONS)}"
+            )
+        if n_target <= 0:
+            if funnel is not None:
+                funnel.miner = "cross_brand_negatives"
+                funnel.skipped_reason = "n_target <= 0"
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+
+        from core.attribute_conflicts import (
+            canonical_attribute_info,
+            critical_attribute_evaluation,
+        )
+
+        if funnel is not None:
+            funnel.miner = "cross_brand_negatives"
+            funnel.n_target = int(n_target)
+            funnel.require_agreement = require
+            funnel.min_similarity = float(min_similarity)
+            funnel.max_per_canonical = int(max_per_canonical)
+            funnel.max_per_brand = int(max_per_brand)
+            funnel.volume_relative_tolerance = float(volume_relative_tolerance)
+            funnel.volume_absolute_tolerance_ml = float(volume_absolute_tolerance_ml)
+
+        if "canonical" not in canonical_records.columns:
+            raise ValueError(
+                "canonical_records must carry the 'canonical' column: it is the "
+                "identity the same-canonical true-match guard compares"
+            )
+        records = {str(row["gtin"]): row for row in canonical_records.to_dict("records")}
+        infos = {gtin: canonical_attribute_info(record) for gtin, record in records.items()}
+        brands = {gtin: _brand_identity(record) for gtin, record in records.items()}
+        canonicals = {gtin: str(record.get("canonical", "")) for gtin, record in records.items()}
+        if funnel is not None:
+            funnel.canonicals_total = len(records)
+
+        # ── candidate generation (blocking on the required-agreement values) ──
+        blocks: dict[tuple[frozenset[object], ...], list[str]] = defaultdict(list)
+        n_without_evidence = 0
+        for gtin in sorted(records):
+            key = tuple(
+                _required_agreement_values(infos[gtin], dimension)
+                for dimension in require
+            )
+            if any(not part for part in key):
+                n_without_evidence += 1
+                continue
+            blocks[key].append(gtin)
+        if funnel is not None:
+            funnel.canonicals_without_required_evidence = n_without_evidence
+            funnel.blocks = len(blocks)
+            funnel.candidates_in_blocks = int(
+                sum(len(members) * (len(members) - 1) // 2 for members in blocks.values())
+            )
+            funnel.gate_rows = funnel.candidates_in_blocks
+
+        label_errors = conflicting_gtin_pairs(df) if exclude_conflicting else set()
+        existing_keys = {
+            (int(left), int(right)) for left, right in (existing if existing is not None else [])
+        }
+
+        ranked: list[tuple[float, str, str]] = []
+        for key in sorted(blocks):
+            members = sorted(blocks[key])
+            for left, right in combinations(members, 2):
+                if (
+                    left not in gtin_to_row
+                    or right not in gtin_to_row
+                    or left not in gtin_to_canon_idx
+                    or right not in gtin_to_canon_idx
+                ):
+                    if funnel is not None:
+                        funnel.dropped_candidates_endpoint_unresolved += 1
+                    continue
+                # Same canonical item => true match, never a label-0 pair.
+                if canonicals[left] and canonicals[left] == canonicals[right]:
+                    if funnel is not None:
+                        funnel.dropped_candidates_same_canonical += 1
+                    continue
+                if exclude_conflicting:
+                    left_row, right_row = gtin_to_row[left], gtin_to_row[right]
+                    if (min(left_row, right_row), max(left_row, right_row)) in label_errors:
+                        if funnel is not None:
+                            funnel.dropped_candidates_label_error += 1
+                        continue
+                left_brand, right_brand = brands.get(left, ""), brands.get(right, "")
+                if not left_brand or not right_brand or left_brand == right_brand:
+                    if funnel is not None:
+                        funnel.dropped_candidates_same_brand += 1
+                    continue
+                if _brand_surface_variant(left_brand, right_brand):
+                    if funnel is not None:
+                        funnel.dropped_candidates_brand_surface_variant += 1
+                    continue
+                evaluation = critical_attribute_evaluation(
+                    infos[left],
+                    infos[right],
+                    volume_relative_tolerance=float(volume_relative_tolerance),
+                    volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
+                )
+                if evaluation["conflicts"]:
+                    if funnel is not None:
+                        funnel.dropped_candidates_attribute_conflict += 1
+                        for dimension in evaluation["conflicts"]:
+                            funnel.conflict_dimension_census[dimension] = (
+                                funnel.conflict_dimension_census.get(dimension, 0) + 1
+                            )
+                    continue
+                score = _canonical_similarity(canonicals[left], canonicals[right])
+                if not score > float(min_similarity):
+                    if funnel is not None:
+                        funnel.dropped_candidates_below_similarity += 1
+                    continue
+                if funnel is not None:
+                    funnel.passed_candidates += 1
+                ranked.append((score, left, right))
+
+        # Deterministic prefix selection: hardest first, ties by GTIN. No RNG and
+        # no replacement, so a row cannot be emitted twice.
+        ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
+        canonical_usage: dict[str, int] = defaultdict(int)
+        brand_usage: dict[str, int] = defaultdict(int)
+        found: list[tuple[int, int, float]] = []
+        for score, left, right in ranked:
+            if len(found) >= int(n_target):
+                if funnel is not None:
+                    funnel.dropped_candidates_target_cap += 1
+                continue
+            if int(max_per_canonical) and (
+                canonical_usage[left] >= int(max_per_canonical)
+                or canonical_usage[right] >= int(max_per_canonical)
+            ):
+                if funnel is not None:
+                    funnel.dropped_candidates_endpoint_cap += 1
+                continue
+            if int(max_per_brand) and (
+                brand_usage[brands[left]] >= int(max_per_brand)
+                or brand_usage[brands[right]] >= int(max_per_brand)
+            ):
+                if funnel is not None:
+                    funnel.dropped_candidates_endpoint_cap += 1
+                continue
+            for pair in (
+                (gtin_to_row[left], gtin_to_canon_idx[right]),
+                (gtin_to_row[right], gtin_to_canon_idx[left]),
+            ):
+                if len(found) >= int(n_target):
+                    break
+                resolved = (int(pair[0]), int(pair[1]))
+                if resolved in existing_keys:
+                    if funnel is not None:
+                        funnel.dropped_pairs_already_in_baseline += 1
+                    continue
+                existing_keys.add(resolved)
+                found.append((resolved[0], resolved[1], score))
+            if funnel is not None:
+                funnel.accepted_candidates += 1
+            canonical_usage[left] += 1
+            canonical_usage[right] += 1
+            brand_usage[brands[left]] += 1
+            brand_usage[brands[right]] += 1
+
+        if len(found) != len({(left, right) for left, right, _ in found}):
+            raise AssertionError(
+                "cross-brand miner emitted a duplicate pair direction: the lane "
+                "must never duplicate rows (the defect this guard exists for)"
+            )
+        if funnel is not None:
+            funnel.emitted_pairs = int(len(found))
+        if not found:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        return (
+            np.asarray([(left, right) for left, right, _ in found], dtype=int),
+            np.asarray([score for _, _, score in found], dtype=float),
+        )
+
+
+
+
 def mine_cross_brand_negatives(
     df: pd.DataFrame,
     canonical_records: pd.DataFrame,
@@ -880,235 +1159,44 @@ def mine_cross_brand_negatives(
     exclude_conflicting: bool = True,
     funnel: CrossBrandMiningFunnel | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine cross-brand hard negatives: DIFFERENT brand, everything else agrees.
+    """Mine cross-brand hard negatives — one phase-ordered pass on
+    :class:`_CrossBrandMiner` (long-form rationale below, statements
+    verbatim on the class).
 
-    THE DEFECT THIS LANE EXISTS FOR (MODEL_INPUT_FIX_REPORT §15): the gate's
-    candidate pairs are generated inside a brand block (``pipeline``'s "Brand
-    blocking"), so every labelled pair — positives AND negatives — carries the
-    same brand on both sides. Brand agreement is 100 % in both classes of the
-    training population, so the encoder can only learn that brand is noise;
+    DEDUPE-TIER-WEIGHTED SPACE: the encoder gets its brand signal from THIS
+    population. The gate's candidate space is brand-blocked upstream, so the
     measured pair separation is exactly 0.000 for brand while volume separates
-    at +0.837. The lever is a negative population where brand is the ONLY
-    discriminating evidence.
+    strongly. This lane mines the mirror population — brands DIFFER, every
+    required critical attribute agrees — and its dedupe-tier weighting puts
+    the hardest identities first so a same-product cross-brand listing is
+    mined, not merely a same-category one.
 
-    Definition of one mined candidate: two DISTINCT canonical GTINs whose
-    brands differ and which carry an explicit, agreeing value for every
-    dimension in ``require_agreement``, with NO conflict in any critical
-    dimension under the shared evaluator (``core.attribute_conflicts``) and the
-    training gate's own volume tolerance. The pair is therefore a verified
-    non-match — different canonical items, different brands — that is otherwise
-    indistinguishable, i.e. a true hard negative.
+    WHY the candidate space is generated, not handed in: the gate's
+    ``hard_no`` population brands are constant, so a cross-brand pair must
+    come from elsewhere. Generation = blocking on the required-agreement
+    values, then every filter's attrition is reported as its own funnel step,
+    never a silent continue.
 
-    CANDIDATE GENERATION is blocking, not a full pairwise scan: canonicals are
-    grouped by the exact values of the required-agreement dimensions, so every
-    pair inside a block satisfies the requirement BY CONSTRUCTION and a
+    AGREEMENT BLOCKING = the required dims come from the config block; a
     canonical carrying no evidence for a required dimension generates none.
-    The blocking census is reported through ``funnel.generation_steps()``
-    (canonicals in, candidate pairs out), exactly like the gate's own brand
-    blocking, so the candidate space is never an unexplained number.
+    MINING IS GUARDED by the training label source (the funnel reports every
+    drop); the emitted pairs respect n_target/max_per_canonical/
+    max_per_brand in hardest-first order; the lane NEVER duplicates a pair
+    direction (asserted, not assumed).
 
-    TWO HISTORICAL DEFECTS, both guarded here:
-
-    * a previous miner re-added same-canonical TRUE MATCHES as label-0 pairs
-      (154 of 350, 44 %) — the ``same_canonical_guard`` drops any candidate
-      whose two GTINs resolve to the same canonical text, and the guard is a
-      reported funnel step, never a silent ``continue``;
-    * negative sampling with ``replace=True`` duplicated rows while reporting
-      them as distinct data — this miner does not sample at all. It ranks the
-      surviving candidates (hardest gate similarity first, deterministic ties)
-      and takes a deterministic PREFIX under configured endpoint-diversity and
-      target caps, so no row can be emitted twice; the emitted rows are
-      asserted distinct before returning.
-
-    The returned arrays are ``(source SKU row, other canonical payload index)``
-    pairs in BOTH directions, the same shape every other negative lane returns,
-    so ``folds.pairs_in_set`` keeps an emitted pair inside one fold exactly as
-    it does for the gate and targeted populations.
+    The returned pair/score arrays keep their historical shape and order.
     """
-    require = tuple(str(dimension) for dimension in require_agreement)
-    if not require:
-        raise ValueError(
-            "require_agreement must name at least one critical dimension; an "
-            "empty requirement would mine pairs that share nothing"
-        )
-    unknown = sorted(set(require) - set(CRITICAL_ATTRIBUTE_DIMENSIONS))
-    if unknown:
-        raise ValueError(
-            f"require_agreement names non-critical dimensions {unknown}; "
-            f"allowed: {list(CRITICAL_ATTRIBUTE_DIMENSIONS)}"
-        )
-    if n_target <= 0:
-        if funnel is not None:
-            funnel.miner = "cross_brand_negatives"
-            funnel.skipped_reason = "n_target <= 0"
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-
-    from core.attribute_conflicts import (
-        canonical_attribute_info,
-        critical_attribute_evaluation,
-    )
-
-    if funnel is not None:
-        funnel.miner = "cross_brand_negatives"
-        funnel.n_target = int(n_target)
-        funnel.require_agreement = require
-        funnel.min_similarity = float(min_similarity)
-        funnel.max_per_canonical = int(max_per_canonical)
-        funnel.max_per_brand = int(max_per_brand)
-        funnel.volume_relative_tolerance = float(volume_relative_tolerance)
-        funnel.volume_absolute_tolerance_ml = float(volume_absolute_tolerance_ml)
-
-    if "canonical" not in canonical_records.columns:
-        raise ValueError(
-            "canonical_records must carry the 'canonical' column: it is the "
-            "identity the same-canonical true-match guard compares"
-        )
-    records = {str(row["gtin"]): row for row in canonical_records.to_dict("records")}
-    infos = {gtin: canonical_attribute_info(record) for gtin, record in records.items()}
-    brands = {gtin: _brand_identity(record) for gtin, record in records.items()}
-    canonicals = {gtin: str(record.get("canonical", "")) for gtin, record in records.items()}
-    if funnel is not None:
-        funnel.canonicals_total = len(records)
-
-    # ── candidate generation (blocking on the required-agreement values) ──
-    blocks: dict[tuple[frozenset[object], ...], list[str]] = defaultdict(list)
-    n_without_evidence = 0
-    for gtin in sorted(records):
-        key = tuple(
-            _required_agreement_values(infos[gtin], dimension)
-            for dimension in require
-        )
-        if any(not part for part in key):
-            n_without_evidence += 1
-            continue
-        blocks[key].append(gtin)
-    if funnel is not None:
-        funnel.canonicals_without_required_evidence = n_without_evidence
-        funnel.blocks = len(blocks)
-        funnel.candidates_in_blocks = int(
-            sum(len(members) * (len(members) - 1) // 2 for members in blocks.values())
-        )
-        funnel.gate_rows = funnel.candidates_in_blocks
-
-    label_errors = conflicting_gtin_pairs(df) if exclude_conflicting else set()
-    existing_keys = {
-        (int(left), int(right)) for left, right in (existing if existing is not None else [])
-    }
-
-    ranked: list[tuple[float, str, str]] = []
-    for key in sorted(blocks):
-        members = sorted(blocks[key])
-        for left, right in combinations(members, 2):
-            if (
-                left not in gtin_to_row
-                or right not in gtin_to_row
-                or left not in gtin_to_canon_idx
-                or right not in gtin_to_canon_idx
-            ):
-                if funnel is not None:
-                    funnel.dropped_candidates_endpoint_unresolved += 1
-                continue
-            # Same canonical item => true match, never a label-0 pair.
-            if canonicals[left] and canonicals[left] == canonicals[right]:
-                if funnel is not None:
-                    funnel.dropped_candidates_same_canonical += 1
-                continue
-            if exclude_conflicting:
-                left_row, right_row = gtin_to_row[left], gtin_to_row[right]
-                if (min(left_row, right_row), max(left_row, right_row)) in label_errors:
-                    if funnel is not None:
-                        funnel.dropped_candidates_label_error += 1
-                    continue
-            left_brand, right_brand = brands.get(left, ""), brands.get(right, "")
-            if not left_brand or not right_brand or left_brand == right_brand:
-                if funnel is not None:
-                    funnel.dropped_candidates_same_brand += 1
-                continue
-            if _brand_surface_variant(left_brand, right_brand):
-                if funnel is not None:
-                    funnel.dropped_candidates_brand_surface_variant += 1
-                continue
-            evaluation = critical_attribute_evaluation(
-                infos[left],
-                infos[right],
-                volume_relative_tolerance=float(volume_relative_tolerance),
-                volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
-            )
-            if evaluation["conflicts"]:
-                if funnel is not None:
-                    funnel.dropped_candidates_attribute_conflict += 1
-                    for dimension in evaluation["conflicts"]:
-                        funnel.conflict_dimension_census[dimension] = (
-                            funnel.conflict_dimension_census.get(dimension, 0) + 1
-                        )
-                continue
-            score = _canonical_similarity(canonicals[left], canonicals[right])
-            if not score > float(min_similarity):
-                if funnel is not None:
-                    funnel.dropped_candidates_below_similarity += 1
-                continue
-            if funnel is not None:
-                funnel.passed_candidates += 1
-            ranked.append((score, left, right))
-
-    # Deterministic prefix selection: hardest first, ties by GTIN. No RNG and
-    # no replacement, so a row cannot be emitted twice.
-    ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
-    canonical_usage: dict[str, int] = defaultdict(int)
-    brand_usage: dict[str, int] = defaultdict(int)
-    found: list[tuple[int, int, float]] = []
-    for score, left, right in ranked:
-        if len(found) >= int(n_target):
-            if funnel is not None:
-                funnel.dropped_candidates_target_cap += 1
-            continue
-        if int(max_per_canonical) and (
-            canonical_usage[left] >= int(max_per_canonical)
-            or canonical_usage[right] >= int(max_per_canonical)
-        ):
-            if funnel is not None:
-                funnel.dropped_candidates_endpoint_cap += 1
-            continue
-        if int(max_per_brand) and (
-            brand_usage[brands[left]] >= int(max_per_brand)
-            or brand_usage[brands[right]] >= int(max_per_brand)
-        ):
-            if funnel is not None:
-                funnel.dropped_candidates_endpoint_cap += 1
-            continue
-        for pair in (
-            (gtin_to_row[left], gtin_to_canon_idx[right]),
-            (gtin_to_row[right], gtin_to_canon_idx[left]),
-        ):
-            if len(found) >= int(n_target):
-                break
-            resolved = (int(pair[0]), int(pair[1]))
-            if resolved in existing_keys:
-                if funnel is not None:
-                    funnel.dropped_pairs_already_in_baseline += 1
-                continue
-            existing_keys.add(resolved)
-            found.append((resolved[0], resolved[1], score))
-        if funnel is not None:
-            funnel.accepted_candidates += 1
-        canonical_usage[left] += 1
-        canonical_usage[right] += 1
-        brand_usage[brands[left]] += 1
-        brand_usage[brands[right]] += 1
-
-    if len(found) != len({(left, right) for left, right, _ in found}):
-        raise AssertionError(
-            "cross-brand miner emitted a duplicate pair direction: the lane "
-            "must never duplicate rows (the defect this guard exists for)"
-        )
-    if funnel is not None:
-        funnel.emitted_pairs = int(len(found))
-    if not found:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    return (
-        np.asarray([(left, right) for left, right, _ in found], dtype=int),
-        np.asarray([score for _, _, score in found], dtype=float),
-    )
+    return _CrossBrandMiner(
+        df, canonical_records, gtin_to_row, gtin_to_canon_idx,
+        existing=existing, n_target=n_target,
+        require_agreement=require_agreement,
+        min_similarity=min_similarity,
+        max_per_canonical=max_per_canonical,
+        max_per_brand=max_per_brand,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        exclude_conflicting=exclude_conflicting, funnel=funnel,
+    ).run()
 
 
 def mine_cross_brand_negatives_with_funnel(
@@ -1402,6 +1490,233 @@ def build_triplets(
     return triples
 
 
+class _AnnHardNegativeMiner:
+    """One ANN hard-negative mining pass (macro-blocked cosine ANN).
+
+    SR phases, ONE fixed order in run(); the statements are the original
+    miner body verbatim (config SSOT reads, chunked block scan, audit trail,
+    hardest-first cap selection), so the returned pairs/scores are
+    byte-identical.
+
+    Phase map:
+      resolve_config — every miner parameter from config/training.yaml when
+                       omitted (target, band, k, chunk size, exclusion)
+      scan_blocks    — per-macro chunked BLAS neighbor scan with the gtin/
+                       brand/checksum guards and the label-error exclusion
+      apply_caps     — dedupe + endpoint diversity caps + target cutoff
+    """
+
+    def __init__(self, df: pd.DataFrame, emb: np.ndarray, *, seed, n_target,
+                 cosine_lo, cosine_hi, exclude_conflicting, k,
+                 max_per_canonical, max_per_brand) -> None:
+        self._df = df
+        self._emb = emb
+        self._seed_arg = seed
+        self._n_target_arg = n_target
+        self._cosine_lo_arg = cosine_lo
+        self._cosine_hi_arg = cosine_hi
+        self._exclude_arg = exclude_conflicting
+        self._k_arg = k
+        self._max_per_canonical_arg = max_per_canonical
+        self._max_per_brand_arg = max_per_brand
+
+    def resolve_config(self) -> None:
+        from core.common import SEED, category_macros, training_cfg
+
+        if self._seed_arg is None:
+            self._seed = SEED
+        else:
+            self._seed = self._seed_arg
+        ann_cfg = training_cfg().mining.ann
+        self._ann_cfg = ann_cfg
+        self._n_target = (
+            int(ann_cfg.target) if self._n_target_arg is None
+            else self._n_target_arg
+        )
+        self._k = int(ann_cfg.k) if self._k_arg is None else self._k_arg
+        self._exclude_conflicting = (
+            bool(ann_cfg.exclude_conflicting) if self._exclude_arg is None
+            else self._exclude_arg
+        )
+        self._max_per_canonical = (
+            int(ann_cfg.max_per_canonical) if self._max_per_canonical_arg is None
+            else self._max_per_canonical_arg
+        )
+        self._max_per_brand = (
+            int(ann_cfg.max_per_brand) if self._max_per_brand_arg is None
+            else self._max_per_brand_arg
+        )
+        if self._cosine_lo_arg is None or self._cosine_hi_arg is None:
+            lo, hi = ann_cfg.band.split("-")
+            self._cosine_lo = float(lo) if self._cosine_lo_arg is None else self._cosine_lo_arg
+            self._cosine_hi = float(hi) if self._cosine_hi_arg is None else self._cosine_hi_arg
+        else:
+            self._cosine_lo = self._cosine_lo_arg
+            self._cosine_hi = self._cosine_hi_arg
+
+    def scan_blocks(self) -> tuple[list, int, int]:
+        """Per-macro chunked scan; returns (found, band_seen, excluded_in_band)."""
+        from core.common import category_macros
+
+        df = self._df
+        emb = self._emb
+        cosine_lo = self._cosine_lo
+        cosine_hi = self._cosine_hi
+        k = self._k
+        ann_cfg = self._ann_cfg
+        excluded = self._excluded
+        gtins = df["gtin"].fillna("").astype(str).to_numpy()
+        brands = df["brand"].fillna("").astype(str).to_numpy()
+        # MACRO_MAP moved to config (SSOT): config/paths.yaml category_macros,
+        # read via lib.common.category_macros() — no module-level copy.
+        macro_map = category_macros()
+        macro = df["category"].fillna("").map(lambda c: macro_map.get(c, "?")).to_numpy()
+        # GTIN trust (owner ruling, see src/core/gtin.py): a checksum-fail gtin
+        # cannot certify "known different" any more than a missing one can —
+        # exclude from the negative population exactly like empty gtins.
+        from core.gtin import gtin_validity
+
+        bc_valid = gtin_validity(df["gtin"].fillna("").astype(str)).to_numpy()
+        found = []
+        n_band_seen = 0  # pairs reaching all filters except exclusion (audit denominator)
+        n_excluded_in_band = 0  # pairs the label-error guard DROPPED (audit trail)
+        for m in np.unique(macro):
+            idx = np.flatnonzero(macro == m)
+            if len(idx) < 2:
+                continue
+            # VECTORIALIZED neighbor search: one BLAS matmul per macro block replaces
+            # sklearn's kneighbors (5x faster, identical top-k neighbor sets —
+            # verified on the deduped corpus: block CONCENTRATES 7,881 rows, top-5
+            # neighbor identities match exactly). Emb rows are L2-normalized so the
+            # dot product IS cosine similarity.
+            #
+            # CHUNKED over block rows (OOM fix, owner audit 2026-09-07): the old
+            # full-grid version materialized N x N arrays (sims + meshgrid + cand
+            # + topk mask ~= 11-16 GB for JUICE's N=18,251) and the kernel OOM-
+            # killed the full-corpus run (rc=137 after the zero-shot encode).
+            # Chunking is candidate-IDENTICAL: np.argpartition(axis=1) is
+            # row-independent, so per-row top-k over a (chunk, N) slice equals
+            # the full matrix's, and the a<b order filter then selects the same
+            # (i, j) pairs the grid's top-k membership mask did. Peak memory per
+            # chunk = chunk x N float64 (~300 MB at chunk=2048, N=18k).
+            k_eff = min(k, len(idx))
+            n = len(idx)
+            # rows of this block, reindexed 0..n-1 (local), global = idx[local]
+            bc_blk = gtins[idx]
+            br_blk = brands[idx]
+            bcv_blk = bc_valid[idx]
+            # Gather once: advanced indexing otherwise copies the entire macro's
+            # embeddings for every query chunk. Row slices below are views.
+            emb_blk = emb[idx]
+            chunk_size = int(ann_cfg.chunk_size)
+            for c0 in range(0, n, chunk_size):
+                c1 = min(c0 + chunk_size, n)
+                sims_chunk = emb_blk[c0:c1] @ emb_blk.T  # (c, n) cosine
+                top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
+                # candidate pairs from top-k membership: (local_i, local_j)
+                li = np.repeat(np.arange(c0, c1), k_eff)
+                lj = top.ravel()
+                # same order filter as the full grid: a < b in LOCAL indices
+                keep = li < lj
+                # flat candidate scores over the SAME (li, lj) arrays — filtered
+                # in lockstep with keep below so index spaces never mix
+                s_flat = sims_chunk[li - c0, lj]
+                keep &= (s_flat >= cosine_lo) & (s_flat <= cosine_hi)  # band
+                bc_a = bc_blk[li[keep]]
+                bc_b = bc_blk[lj[keep]]
+                br_a = br_blk[li[keep]]
+                br_b = br_blk[lj[keep]]
+                # real, distinct, and BOTH trusted (GS1 checksum) — an invalid
+                # gtin has unknown identity, not "known different"
+                valid = (
+                    (bc_a != "")
+                    & (bc_b != "")
+                    & (bc_a != bc_b)
+                    & (br_a != br_b)  # different brand
+                    & bcv_blk[li[keep]]
+                    & bcv_blk[lj[keep]]
+                )
+                sel_local = np.flatnonzero(keep)[valid]
+                li_sel = li[keep][valid]
+                lj_sel = lj[keep][valid]
+                sels = s_flat[keep][valid]
+                ga = idx[li_sel]
+                gb = idx[lj_sel]
+                n_band_seen += len(sel_local)
+                if excluded:
+                    # only check membership for pairs; keep the loop off the hot path
+                    # unless exclusions exist for this block's rows
+                    ex_rows = excluded  # set of (min,max) global pairs
+                    for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
+                        if (min(a_, b_), max(a_, b_)) in ex_rows:
+                            n_excluded_in_band += 1
+                        else:
+                            found.append((a_, b_, s_))
+                else:
+                    for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
+                        found.append((a_, b_, s_))
+        return found, n_band_seen, n_excluded_in_band
+
+    def apply_caps(self, found: list, n_band_seen: int, n_excluded_in_band: int):
+        """Audit line + hardest-first dedupe + endpoint caps + cutoff."""
+        if self._exclude_conflicting:
+            # the exclusion is auditable, never hidden: the count is part of the
+            # return so callers can report (and tests can pin) how many candidate
+            # pairs the label-error guard dropped.
+            print(
+                f"mining audit: {n_band_seen:,} candidate pairs in band, "
+                f"{n_excluded_in_band:,} excluded as conflicting-gtin label errors"
+            )
+
+        found.sort(key=lambda t: -t[2])  # hardest (highest cosine) first
+        seen: set[tuple[int, int]] = set()
+        canonical_counts: dict[str, int] = defaultdict(int)
+        brand_counts: dict[str, int] = defaultdict(int)
+        gtins = self._df["gtin"].fillna("").astype(str).to_numpy()
+        brands = self._df["brand"].fillna("").astype(str).to_numpy()
+        pairs_out: list[tuple[int, int]] = []
+        cos_out: list[float] = []
+        for a, b, s in found:
+            if (a, b) in seen:
+                continue
+            endpoint_gtins = (str(gtins[a]), str(gtins[b]))
+            endpoint_brands = (
+                str(brands[a]).strip().lower(),
+                str(brands[b]).strip().lower(),
+            )
+            if any(
+                value and canonical_counts[value] >= int(self._max_per_canonical)
+                for value in endpoint_gtins
+            ):
+                continue
+            if any(
+                value and brand_counts[value] >= int(self._max_per_brand)
+                for value in endpoint_brands
+            ):
+                continue
+            seen.add((a, b))
+            pairs_out.append((a, b))
+            cos_out.append(s)
+            for value in endpoint_gtins:
+                if value:
+                    canonical_counts[value] += 1
+            for value in endpoint_brands:
+                if value:
+                    brand_counts[value] += 1
+            if len(pairs_out) >= self._n_target:
+                break
+
+        if not pairs_out:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+        return np.asarray(pairs_out, dtype=int), np.asarray(cos_out, dtype=float)
+
+    def run(self):
+        self.resolve_config()
+        self._excluded = conflicting_gtin_pairs(self._df) if self._exclude_conflicting else set()
+        found, n_band_seen, n_excluded_in_band = self.scan_blocks()
+        return self.apply_caps(found, n_band_seen, n_excluded_in_band)
+
+
 def mine_hard_negatives(
     df: pd.DataFrame,
     emb: np.ndarray,
@@ -1415,7 +1730,8 @@ def mine_hard_negatives(
     max_per_canonical: int | None = None,
     max_per_brand: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine hard negatives: cross-gtin, different-brand, same-macro, mid-cosine.
+    """Mine hard negatives: cross-gtin, different-brand, same-macro,
+    mid-cosine — one phase-ordered pass on :class:`_AnnHardNegativeMiner`.
 
     Uses cosine ANN within each macro-category block, then filters to the
     confusion band (cosine_lo..cosine_hi) with a DIFFERENT brand (the signature
@@ -1428,166 +1744,11 @@ def mine_hard_negatives(
     under mining.ann. Explicit values still win. Endpoint diversity caps keep
     one canonical or brand cluster from consuming the entire target.
     """
-    from core.common import SEED, category_macros, training_cfg
-
-    if seed is None:
-        seed = SEED
-    ann_cfg = training_cfg().mining.ann
-    if n_target is None:
-        n_target = int(ann_cfg.target)
-    if k is None:
-        k = int(ann_cfg.k)
-    if exclude_conflicting is None:
-        exclude_conflicting = bool(ann_cfg.exclude_conflicting)
-    if max_per_canonical is None:
-        max_per_canonical = int(ann_cfg.max_per_canonical)
-    if max_per_brand is None:
-        max_per_brand = int(ann_cfg.max_per_brand)
-    if cosine_lo is None or cosine_hi is None:
-        lo, hi = ann_cfg.band.split("-")
-        cosine_lo = float(lo) if cosine_lo is None else cosine_lo
-        cosine_hi = float(hi) if cosine_hi is None else cosine_hi
-    gtins = df["gtin"].fillna("").astype(str).to_numpy()
-    brands = df["brand"].fillna("").astype(str).to_numpy()
-    # MACRO_MAP moved to config (SSOT): config/paths.yaml category_macros,
-    # read via lib.common.category_macros() — no module-level copy.
-    macro_map = category_macros()
-    macro = df["category"].fillna("").map(lambda c: macro_map.get(c, "?")).to_numpy()
-    # GTIN trust (owner ruling, see src/core/gtin.py): a checksum-fail gtin
-    # cannot certify "known different" any more than a missing one can —
-    # exclude from the negative population exactly like empty gtins.
-    from core.gtin import gtin_validity
-
-    bc_valid = gtin_validity(df["gtin"].fillna("").astype(str)).to_numpy()
-    excluded = conflicting_gtin_pairs(df) if exclude_conflicting else set()
-
-    found: list[tuple[int, int, float]] = []
-    n_band_seen = 0  # pairs reaching all filters except exclusion (audit denominator)
-    n_excluded_in_band = 0  # pairs the label-error guard DROPPED (audit trail)
-    for m in np.unique(macro):
-        idx = np.flatnonzero(macro == m)
-        if len(idx) < 2:
-            continue
-        # VECTORIALIZED neighbor search: one BLAS matmul per macro block replaces
-        # sklearn's kneighbors (5x faster, identical top-k neighbor sets —
-        # verified on the deduped corpus: block CONCENTRATES 7,881 rows, top-5
-        # neighbor identities match exactly). Emb rows are L2-normalized so the
-        # dot product IS cosine similarity.
-        #
-        # CHUNKED over block rows (OOM fix, owner audit 2026-09-07): the old
-        # full-grid version materialized N x N arrays (sims + meshgrid + cand
-        # + topk mask ~= 11-16 GB for JUICE's N=18,251) and the kernel OOM-
-        # killed the full-corpus run (rc=137 after the zero-shot encode).
-        # Chunking is candidate-IDENTICAL: np.argpartition(axis=1) is
-        # row-independent, so per-row top-k over a (chunk, N) slice equals
-        # the full matrix's, and the a<b order filter then selects the same
-        # (i, j) pairs the grid's top-k membership mask did. Peak memory per
-        # chunk = chunk x N float64 (~300 MB at chunk=2048, N=18k).
-        k_eff = min(k, len(idx))
-        n = len(idx)
-        # rows of this block, reindexed 0..n-1 (local), global = idx[local]
-        bc_blk = gtins[idx]
-        br_blk = brands[idx]
-        bcv_blk = bc_valid[idx]
-        # Gather once: advanced indexing otherwise copies the entire macro's
-        # embeddings for every query chunk. Row slices below are views.
-        emb_blk = emb[idx]
-        chunk_size = int(ann_cfg.chunk_size)
-        for c0 in range(0, n, chunk_size):
-            c1 = min(c0 + chunk_size, n)
-            sims_chunk = emb_blk[c0:c1] @ emb_blk.T  # (c, n) cosine
-            top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
-            # candidate pairs from top-k membership: (local_i, local_j)
-            li = np.repeat(np.arange(c0, c1), k_eff)
-            lj = top.ravel()
-            # same order filter as the full grid: a < b in LOCAL indices
-            keep = li < lj
-            # flat candidate scores over the SAME (li, lj) arrays — filtered
-            # in lockstep with keep below so index spaces never mix
-            s_flat = sims_chunk[li - c0, lj]
-            keep &= (s_flat >= cosine_lo) & (s_flat <= cosine_hi)  # band
-            bc_a = bc_blk[li[keep]]
-            bc_b = bc_blk[lj[keep]]
-            br_a = br_blk[li[keep]]
-            br_b = br_blk[lj[keep]]
-            # real, distinct, and BOTH trusted (GS1 checksum) — an invalid
-            # gtin has unknown identity, not "known different"
-            valid = (
-                (bc_a != "")
-                & (bc_b != "")
-                & (bc_a != bc_b)
-                & (br_a != br_b)  # different brand
-                & bcv_blk[li[keep]]
-                & bcv_blk[lj[keep]]
-            )
-            sel_local = np.flatnonzero(keep)[valid]
-            li_sel = li[keep][valid]
-            lj_sel = lj[keep][valid]
-            sels = s_flat[keep][valid]
-            ga = idx[li_sel]
-            gb = idx[lj_sel]
-            n_band_seen += len(sel_local)
-            if excluded:
-                # only check membership for pairs; keep the loop off the hot path
-                # unless exclusions exist for this block's rows
-                ex_rows = excluded  # set of (min,max) global pairs
-                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
-                    if (min(a_, b_), max(a_, b_)) in ex_rows:
-                        n_excluded_in_band += 1
-                    else:
-                        found.append((a_, b_, s_))
-            else:
-                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
-                    found.append((a_, b_, s_))
-
-    if exclude_conflicting:
-        # the exclusion is auditable, never hidden: the count is part of the
-        # return so callers can report (and tests can pin) how many candidate
-        # pairs the label-error guard dropped.
-        print(
-            f"mining audit: {n_band_seen:,} candidate pairs in band, "
-            f"{n_excluded_in_band:,} excluded as conflicting-gtin label errors"
-        )
-
-    found.sort(key=lambda t: -t[2])  # hardest (highest cosine) first
-    seen: set[tuple[int, int]] = set()
-    canonical_counts: dict[str, int] = defaultdict(int)
-    brand_counts: dict[str, int] = defaultdict(int)
-    pairs_out: list[tuple[int, int]] = []
-    cos_out: list[float] = []
-    for a, b, s in found:
-        if (a, b) in seen:
-            continue
-        endpoint_gtins = (str(gtins[a]), str(gtins[b]))
-        endpoint_brands = (
-            str(brands[a]).strip().lower(),
-            str(brands[b]).strip().lower(),
-        )
-        if any(
-            value and canonical_counts[value] >= int(max_per_canonical)
-            for value in endpoint_gtins
-        ):
-            continue
-        if any(
-            value and brand_counts[value] >= int(max_per_brand)
-            for value in endpoint_brands
-        ):
-            continue
-        seen.add((a, b))
-        pairs_out.append((a, b))
-        cos_out.append(s)
-        for value in endpoint_gtins:
-            if value:
-                canonical_counts[value] += 1
-        for value in endpoint_brands:
-            if value:
-                brand_counts[value] += 1
-        if len(pairs_out) >= n_target:
-            break
-
-    if not pairs_out:
-        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
-    return np.asarray(pairs_out, dtype=int), np.asarray(cos_out, dtype=float)
+    return _AnnHardNegativeMiner(
+        df, emb, seed=seed, n_target=n_target, cosine_lo=cosine_lo,
+        cosine_hi=cosine_hi, exclude_conflicting=exclude_conflicting, k=k,
+        max_per_canonical=max_per_canonical, max_per_brand=max_per_brand,
+    ).run()
 
 
 def calibrated_ann_band(

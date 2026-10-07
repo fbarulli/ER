@@ -18,15 +18,148 @@ above. That handoff is pinned in the trace by each stage's column-contract row.
 
 from __future__ import annotations
 
+import pandas as pd
 
 from core.common import DATA_PATH, SEED, F, CONFIG_PATH, VOCABULARY_CONFIG_PATH, load_raw_export
 from core.manifest import begin_manifest, finish_manifest
+from core.run_log import RunLogger
+from core.step_trace import timed
 from core.tracing import trace_path
 from pipeline import run_within_brand_pipeline
 
+log = RunLogger(__name__)
 
+
+def _load_raw() -> pd.DataFrame:
+    """The raw export exactly as the pipeline expects it (raw column names)."""
+    return load_raw_export()
+
+
+def _regex_fallback_census(pipeline_module) -> int:
+    """Digit tokens the numbers lane resolved by regex fallback, not reference."""
+    return int(pipeline_module._UNSEEN_TOKEN_TOTAL)
+
+
+def _report_regex_fallback_census() -> None:
+    """AUDIT 2026-09-09: print the one degradation the numbers lane allows."""
+    import pipeline as _dp
+
+    log.info(
+        f"[numbers] {_regex_fallback_census(_dp):,} digit-token resolutions "
+        f"via regex fallback (not in reference CSV)"
+    )
+
+
+def _identifiable_gtin_mask(df: pd.DataFrame) -> pd.Series:
+    """Rows whose gtin cell names a barcode at all (vs missing/NaN/'nan')."""
+    gtin = df["gtin"].astype(str)
+    return (
+        df["gtin"].notna()
+        & (gtin.str.strip() != "")
+        & (gtin.str.lower() != "nan")
+    )
+
+
+def _gtin_guard_census(df: pd.DataFrame) -> dict[str, int]:
+    """Recompute the gtin-guard populations exactly as the pipeline drops them.
+
+    The counters below are recomputed from the frame the same way the guard
+    computes them, so the manifest can never drift from the code's truth.
+    """
+    from core.gtin import gtin_validity
+    from core.identity_policy import reviewed_row_mask
+
+    reviewed = reviewed_row_mask(df)
+    barcode = df["gtin"].fillna("").astype(str).str.strip()
+    bc_valid = gtin_validity(barcode)
+    bc_valid.index = df.index
+    bc_valid &= ~reviewed
+    return {
+        "n_missing_gtin": int((~_identifiable_gtin_mask(df)).sum()),
+        "n_checksum": int((_identifiable_gtin_mask(df) & ~bc_valid & ~reviewed).sum()),
+        "n_valid": int((_identifiable_gtin_mask(df) & bc_valid).sum()),
+        "n_reviewed": int(reviewed.sum()),
+    }
+
+
+def _row_closures(census: dict[str, int], canon: pd.DataFrame, pairs, df) -> dict:
+    """Assemble the manifest's capture-only row accounting.
+
+    input_rows: every raw-export row the pipeline read. dropped: the
+    gtin-guard populations (missing/NaN gtin, failed GS1 checksum) —
+    run_within_brand_pipeline prints both. Rows with a valid gtin collapse
+    into one canonical record per gtin (not a "drop" — they're aggregated);
+    that population is recorded under collapsed_same_gtin so the closure
+    reads input == output_rows + dropped + collapsed.
+    """
+    n_canon = len(canon)
+    collapsed = census["n_valid"] - n_canon
+    return {
+        "input_rows": len(df),
+        "output_rows": n_canon,
+        "dropped": {
+            "gtin_missing_or_nan": census["n_missing_gtin"],
+            "gtin_checksum_failed": census["n_checksum"],
+            "identity_review_quarantined": census["n_reviewed"],
+        },
+        # kept-and-aggregated, NOT dropped (closure-extension key)
+        "collapsed_same_gtin": collapsed,
+        # pair-level population (not row accounting, but pinned here so
+        # the gate census can't silently thin)
+        "gate_pairs": len(pairs),
+    }
+
+
+def _dp_manifest_accounting(df, pairs, canon) -> dict:
+    """Capture-only row accounting for the data_prep manifest."""
+    from core.identity_policy import apply_identity_links
+
+    linked = apply_identity_links(df)
+    census = _gtin_guard_census(linked)
+    return _row_closures(census, canon, pairs, linked)
+
+
+def _flag_census(canon) -> dict[str, int]:
+    """Count attribute-consistency flags per canonical record (gtin level).
+
+    ``canon`` is the in-memory canonical-records frame returned by
+    ``run_within_brand_pipeline``; its ``attribute_consistency_flags`` column
+    holds a sorted list of flags per gtin (aggregated from extract_all in
+    generate_canonical). Counting these makes the previously in-memory-only
+    flags verifiable from committed data, since the census rides the data_prep
+    manifest. Each gtin carrying a flag counts once; a gtin can carry several.
+    """
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    if "attribute_consistency_flags" not in canon:
+        return {}
+    flags_column = canon["attribute_consistency_flags"]
+    for flags in log.progress(flags_column, desc="flag_census", unit="gtin"):
+        if not isinstance(flags, (list, tuple, set)):
+            continue
+        for flag in flags:
+            counts[str(flag)] += 1
+    return dict(sorted(counts.items()))
+
+
+def _stage_outputs() -> tuple[list, list[str]]:
+    """The stage's two frozen artifacts plus the consolidated trace.
+
+    The trace used to be listed here by its OLD per-stage name
+    (results/logs/gate_visibility.csv), whose writer this directive deleted —
+    finish_manifest hashes every listed output, so a stale name made the
+    stage die with FileNotFoundError after all the work was done. The name
+    now comes from the layout that owns it (core.tracing → training_trace).
+    """
+    outputs = [F["canonical_records"], F["gate_results"], trace_path()]
+    return outputs, [path.name for path in outputs]
+
+
+@timed
 def main() -> None:
     from core.timing import Timing
+
     timing = Timing("data_prep")
     # Stage manifest (SILENT_DROPS task 6) — begin BEFORE the work: the
     # raw export is hashed now (53MB, chunked) so the record pins exactly
@@ -34,22 +167,25 @@ def main() -> None:
     # deterministic, no RNG is consumed.
     manifest = begin_manifest("data_prep", inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
     timing.mark("manifest_begin")
-    df = load_raw_export()
-    timing.mark("load_raw_export")
-    print(f"[data_prep] loaded {len(df):,} raw rows", flush=True)
-    pairs, canon = run_within_brand_pipeline(df)
-    timing.mark("run_within_brand_pipeline")
-    print(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}", flush=True)
-    # AUDIT 2026-09-09: digit tokens resolved by the regex fallback (not in
-    # the reference CSV) — the one degradation the numbers lane allows;
-    # printed so it can never be silent.
-    import pipeline as _dp
+    with log.section("data_prep.pipeline"):
+        df = _load_raw()
+        timing.mark("load_raw_export")
+        log.info(f"[data_prep] loaded {len(df):,} raw rows")
+        pairs, canon = run_within_brand_pipeline(df)
+        timing.mark("run_within_brand_pipeline")
+    log.info(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}")
+    _report_regex_fallback_census()
+    _close_manifest(manifest, timing, df, pairs, canon)
 
-    print(
-        f"[numbers] {_dp._UNSEEN_TOKEN_TOTAL:,} digit-token resolutions "
-        f"via regex fallback (not in reference CSV)"
-    )
 
+def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon) -> None:
+    """Assemble the stage's ledger into the manifest and print the closure.
+
+    Row accounting (gtin-guard drops vs kept-visible canonical records), the
+    attribute-consistency flag census, the frozen artifact list, the atomic
+    manifest publication and the closing closure line — the one
+    responsibility the stage owes AFTER the pipeline ran.
+    """
     # ---- row accounting (SILENT_DROPS task 6; capture-only) ────────────────
     # The pipeline's gtin-guard drops rows for two loud reasons (both
     # printed by run_within_brand_pipeline); every other input row either
@@ -66,22 +202,7 @@ def main() -> None:
     # pinning them. Persist the census here so the counts are verifiable
     # from committed data (results/manifests/data_prep.json).
     row_accounting["flags_census"] = _flag_census(canon)
-    # The stage's outputs are its two frozen artifacts plus the consolidated
-    # trace. The trace used to be listed here by its OLD per-stage name
-    # (results/logs/gate_visibility.csv), whose writer this directive deleted —
-    # finish_manifest hashes every listed output, so a stale name made the
-    # stage die with FileNotFoundError after all the work was done. The name
-    # now comes from the layout that owns it (core.tracing → training_trace).
-    out_paths = [
-        F["canonical_records"],
-        F["gate_results"],
-        trace_path(),
-    ]
-    expected = [
-        F["canonical_records"].name,
-        F["gate_results"].name,
-        trace_path().name,
-    ]
+    out_paths, expected = _stage_outputs()
     timing.mark("accounting_and_flags")
     mpath = finish_manifest(
         manifest, out_paths, row_accounting, expected_outputs=expected
@@ -90,86 +211,10 @@ def main() -> None:
     n_in = row_accounting["input_rows"]
     n_out = row_accounting["output_rows"]
     n_drop = sum(row_accounting["dropped"].values())
-    print(
+    log.info(
         f"[manifest] data_prep complete -> {mpath} | "
         f"closure {n_in:,} == {n_out:,} kept-visible + {n_drop:,} dropped"
     )
-
-
-def _dp_manifest_accounting(df, pairs, canon) -> dict:
-    """Capture-only row accounting for the data_prep manifest.
-
-    input_rows: every raw-export row the pipeline read. dropped: the
-    gtin-guard populations (missing/NaN gtin, failed GS1 checksum) —
-    run_within_brand_pipeline prints both, and the numbers below are
-    recomputed from the frame the same way the guard computes them, so
-    the manifest can never drift from the code's truth. Rows with a
-    valid gtin collapse into one canonical record per gtin (not a
-    "drop" — they're aggregated); that population is recorded under
-    collapsed_same_gtin so the closure reads input == output_rows +
-    dropped + collapsed.
-    """
-
-    from core.gtin import gtin_validity
-
-    from core.identity_policy import apply_identity_links
-    df = apply_identity_links(df)
-    gtin_valid = (
-        df["gtin"].notna()
-        & (df["gtin"].astype(str).str.strip() != "")
-        & (df["gtin"].astype(str).str.lower() != "nan")
-    )
-    bc_valid = gtin_validity(df["gtin"].fillna("").astype(str).str.strip())
-    bc_valid.index = df.index
-    n_missing_gtin = int((~gtin_valid).sum())
-    from core.identity_policy import reviewed_row_mask
-    reviewed = reviewed_row_mask(df)
-    bc_valid &= ~reviewed
-    n_checksum = int((gtin_valid & ~bc_valid & ~reviewed).sum())
-    n_valid = int((gtin_valid & bc_valid).sum())
-    # canonical records = distinct valid gtins; collapsed = valid rows
-    # folded into them
-    n_canon = len(canon)
-    collapsed = n_valid - n_canon
-    return {
-        "input_rows": len(df),
-        "output_rows": n_canon,
-        "dropped": {
-            "gtin_missing_or_nan": n_missing_gtin,
-            "gtin_checksum_failed": n_checksum,
-            "identity_review_quarantined": int(reviewed.sum()),
-        },
-        # kept-and-aggregated, NOT dropped (closure-extension key)
-        "collapsed_same_gtin": collapsed,
-        # pair-level population (not row accounting, but pinned here so
-        # the gate census can't silently thin)
-        "gate_pairs": len(pairs),
-    }
-
-
-def _flag_census(canon) -> dict[str, int]:
-    """Count attribute-consistency flags per canonical record (gtin level).
-
-    ``canon`` is the in-memory canonical-records frame returned by
-    ``run_within_brand_pipeline``; its ``attribute_consistency_flags`` column
-    holds a sorted list of flags per gtin (aggregated from extract_all in
-    generate_canonical). Counting these makes the previously in-memory-only
-    flags verifiable from committed data, since the census rides the data_prep
-    manifest. Each gtin carrying a flag counts once; a gtin can carry several.
-    """
-    from collections import Counter
-    from core.progress import tracked
-
-    counts: Counter[str] = Counter()
-    column = getattr(canon, "get", None)
-    if column is None or "attribute_consistency_flags" not in canon:
-        return {}
-    for flags in tracked(canon["attribute_consistency_flags"], "flag_census"):
-        if not isinstance(flags, (list, tuple, set)):
-            continue
-        for flag in flags:
-            counts[str(flag)] += 1
-    return dict(sorted(counts.items()))
 
 
 if __name__ == "__main__":

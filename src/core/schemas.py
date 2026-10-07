@@ -3083,6 +3083,10 @@ class PackagingSpec(BaseModel):
     composition_cache_entries: int = Field(ge=0)
     composition_cache_bytes: int = Field(ge=0)
     token_cache_bytes: int = Field(ge=0)
+    # The runtime snapshot's pinned repository files and configs (declared
+    # once so the packaging module never spells a top-level name itself).
+    snapshot_pinned_files: tuple[str, ...] = Field(default_factory=tuple)
+    snapshot_pinned_configs: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class PreparationSpec(BaseModel):

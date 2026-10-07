@@ -88,13 +88,17 @@ from core.common import (
     training_cfg,
 )
 from core.manifest import sha256_file
+from core.run_log import RunLogger
 from core.schemas import ResultBundleManifest, StageManifest, canonical_suite_matrix
+from training.prepare_all_trace import timed
 from cli.colab_lane import (
     DELIVERY_DATA_MEMBERS,
     DELIVERY_PREPARED_DIRS,
     DELIVERY_TRACKED_DIRS,
 )
 from cli.log_capture import logs_root, progress_frames_to_lines
+
+_LOG = RunLogger(__name__)
 
 # Smoke and normal training defaults come from the Colab runtime config.
 # Sweep fractions remain exclusive to the sweep lane.
@@ -1224,6 +1228,8 @@ print(json.dumps(payload), flush=True)
             return
         time.sleep(_LOG_POLL_SECONDS)
 
+
+@timed
 def run_parallel_train_and_tail(
     args: list[str], workers: int, *, resume_run: str | None = None,
     smoke: bool = False,
@@ -2463,6 +2469,7 @@ def _remote_auth_env_script(
             + wandb + (_optuna_env_script() if include_optuna else ""))
 
 @_timed_colab("step")
+@timed
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
 
@@ -2572,6 +2579,8 @@ print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes
 """
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
+
+@timed
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
@@ -3421,6 +3430,8 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
         remotes[key] = remote
     return remotes
 
+
+@timed
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
     smoke: bool = False,
@@ -3590,6 +3601,8 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     )
     return remote_base, 1
 
+
+@timed
 def run_hpo(
     mode: str | None = None,
     *,
@@ -3763,6 +3776,7 @@ def _bundle_delivery_local(run_id: str) -> Path:
 
     return ColabCPULane().delivery_root(run_id)
 
+@timed
 def run_bundle(dataset_csv: Path | None = None) -> None:
     """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
 
@@ -3856,6 +3870,8 @@ print("[bundle] delivery archive ready", flush=True)
         flush=True,
     )
 
+
+@timed
 def run_sims() -> None:
     """Run the configured zero-shot embedding model lane on the VM."""
     print(_stamp(), f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
@@ -3875,6 +3891,8 @@ if rc != 0:
     print(_stamp(), "[sims] remote zero-shot completed; downloading verified results ...", flush=True)
     download_results(skip_checkpoints=True, require_manifests=True)
 
+
+@timed
 def run_mixed(
     frac: float,
     epochs: int,
@@ -4181,6 +4199,8 @@ def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
             + "\n  - ".join(problems)
         )
 
+
+@timed
 def download_results(
     skip_checkpoints: bool = True, *, require_manifests: bool = False
 ) -> list[StageManifest]:
@@ -4223,6 +4243,8 @@ def download_results(
     _verify_manifest_downloads(manifests)
     return manifests
 
+
+@timed
 def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
     """Pull the trained checkpoints (model weights) back.
 
@@ -4461,6 +4483,7 @@ def _suite_freshness_gate(suite) -> None:
           f'(written: {manifest.timestamp})', flush=True)
 
 def main() -> None:
+    RunLogger.configure_console()
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", default="tracks",

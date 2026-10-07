@@ -1,17 +1,123 @@
-"""Colab worker: encode locally prepared text, never compose or reuse a cache."""
+"""Colab worker: encode locally prepared text, never compose or reuse a cache.
+
+RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
+-------------------------------------------------------------------------
+- :class:`CheckpointDigest` — directory-order sha256 of the uploaded
+  checkpoint (:func:`checkpoint_hash` stays the public face).
+- :class:`EncodeRequest` — the request contract: schema, id/text population,
+  checkpoint binding, locally prepared token archive binding, and worker
+  tokenizer-policy equality (fail-loud on every mismatch).
+- :class:`BatchEncoder` — the prepared-token batches -> normalized float32
+  embeddings loop.
+- :func:`main` — the CLI orchestrator (paths/device + publish).
+"""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 
+try:
+    from core.run_log import RunLogger
+    _LOG = RunLogger('encode_prepared_embeddings')
+except ImportError:  # Colab ships this script standalone; prints stay contract
+    class _Fallback:
+        @staticmethod
+        def info(message):
+            print(message, flush=True)
+
+        @staticmethod
+        def progress(iterable, **kwargs):
+            return iterable
+
+    _LOG = _Fallback()
+
+REQUEST_SCHEMA = 'er-embedding-request-v2'
+
+
+class CheckpointDigest:
+    """The path-ordered directory digest (order makes it deterministic)."""
+
+    @staticmethod
+    def of(path: Path) -> str:
+        digest = hashlib.sha256()
+        for file in sorted(path.rglob('*')):
+            if file.is_file():
+                digest.update(str(file.relative_to(path)).encode())
+                digest.update(hashlib.sha256(file.read_bytes()).digest())
+        return digest.hexdigest()
+
 
 def checkpoint_hash(path):
-    digest = hashlib.sha256()
-    for file in sorted(path.rglob('*')):
-        if file.is_file():
-            digest.update(str(file.relative_to(path)).encode())
-            digest.update(hashlib.sha256(file.read_bytes()).digest())
-    return digest.hexdigest()
+    return CheckpointDigest.of(path)
+
+
+class EncodeRequest:
+    """The prepared-text request contract (transport integrity only)."""
+
+    def __init__(self, request_path: Path, checkpoint: Path):
+        self.path = request_path
+        self.raw = request_path.read_bytes()
+        self.values = json.loads(self.raw)
+        self._check_schema()
+        self._bind_checkpoint(checkpoint)
+        self.token_archive = request_path.parent / 'prepared_text.npz'
+        self.token_batches = self._bind_token_archive()
+
+    def _check_schema(self) -> None:
+        if (self.values['schema'] != REQUEST_SCHEMA
+                or len(self.values['ids']) != len(self.values['texts'])):
+            raise ValueError('Invalid prepared text request')
+
+    def _bind_checkpoint(self, checkpoint: Path) -> None:
+        # Transport integrity only: semantic validation and cache decisions
+        # are local.
+        if checkpoint_hash(checkpoint) != self.values['metadata']['checkpoint_sha256']:
+            raise ValueError('Uploaded checkpoint differs from local request')
+
+    def _bind_token_archive(self) -> list:
+        plan = self.values.get('prepared_text')
+        if (not plan or hashlib.sha256(self.token_archive.read_bytes()).hexdigest()
+                != plan['sha256']):
+            raise ValueError('Locally prepared tokens required; missing or corrupt token archive')
+        return plan['token_batches']
+
+
+class BatchEncoder:
+    """Prepared token batches -> L2-normalized float32 embedding rows."""
+
+    def __init__(self, model, token_archive: Path, device: str):
+        self._model = model
+        self._token_archive = token_archive
+        self._device = device
+
+    def run(self, token_batches: list):
+        import numpy as np
+        import torch
+        try:
+            from encoding_inputs import load_token_features
+        except ImportError:
+            from core.encoding_inputs import load_token_features
+        chunks = []
+        total = len(token_batches)
+        with np.load(self._token_archive, allow_pickle=False) as data, torch.no_grad():
+            for n, batch in enumerate(
+                _LOG.progress(token_batches, desc='prepared_encode_batches',
+                              unit='batch', total=total), 1
+            ):
+                features = load_token_features(data, batch, self._device)
+                vector = self._model(features)['sentence_embedding']
+                chunks.append(torch.nn.functional.normalize(
+                    vector, p=2, dim=1).cpu().numpy().astype(np.float32))
+                _LOG.info(f'[embeddings/{self._device}] batch={n}/{total}')
+        return np.concatenate(chunks)
+
+
+def _load_tokenization_policy():
+    try:
+        from encoding_inputs import tokenization_policy
+    except ImportError:
+        from core.encoding_inputs import tokenization_policy
+    return tokenization_policy
 
 
 def main():
@@ -29,44 +135,30 @@ def main():
         raise RuntimeError('CUDA required; refusing CPU fallback')
     if args.output.exists():
         raise FileExistsError('Worker never reuses an existing output')
-    raw = args.request.read_bytes()
-    request = json.loads(raw)
-    if request['schema'] != 'er-embedding-request-v2' or len(request['ids']) != len(request['texts']):
-        raise ValueError('Invalid prepared text request')
-    # Transport integrity only: semantic validation and cache decisions are local.
-    if checkpoint_hash(args.checkpoint) != request['metadata']['checkpoint_sha256']:
-        raise ValueError('Uploaded checkpoint differs from local request')
-    print(f'[embeddings/{args.device}] loading checkpoint; prepared texts={len(request["texts"]):,}', flush=True)
+    request = EncodeRequest(args.request, args.checkpoint)
+    _LOG.info(
+        f'[embeddings/{args.device}] loading checkpoint; '
+        f"prepared texts={len(request.values['texts']):,}")
     model = SentenceTransformer(str(args.checkpoint), device=args.device, local_files_only=True)
     model.eval()
-    try:
-        from encoding_inputs import tokenization_policy, load_token_features
-    except ImportError:
-        from core.encoding_inputs import tokenization_policy, load_token_features
-    plan = request.get('prepared_text')
-    tokens = args.request.parent/'prepared_text.npz'
-    if not plan or hashlib.sha256(tokens.read_bytes()).hexdigest() != plan['sha256']:
-        raise ValueError('Locally prepared tokens required; missing or corrupt token archive')
+    tokenization_policy = _load_tokenization_policy()
+    plan = request.values.get('prepared_text')
     if tokenization_policy(model) != plan['tokenization']:
         raise ValueError('Worker tokenizer policy differs from local preparation')
-    print(f'[embeddings/{args.device}] encoding prepared batches; truncated=0',flush=True)
-    chunks = []
-    with np.load(tokens,allow_pickle=False) as data, torch.no_grad():
-        for n,batch in enumerate(plan['token_batches'],1):
-            features = load_token_features(data,batch,args.device)
-            vector = model(features)['sentence_embedding']
-            chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy().astype(np.float32))
-            print(f'[embeddings/{args.device}] batch={n}/{len(plan["token_batches"])}',flush=True)
-    vectors = np.concatenate(chunks)
-    if len(vectors) != len(request['ids']):
+    _LOG.info(f'[embeddings/{args.device}] encoding prepared batches; truncated=0')
+    vectors = BatchEncoder(model, request.token_archive, args.device).run(request.token_batches)
+    if len(vectors) != len(request.values['ids']):
         raise ValueError('Prepared token population differs from request IDs')
-    metadata = {**request['metadata'], 'request_sha256': hashlib.sha256(raw).hexdigest(), 'embedding_dtype':'float32'}
+    metadata = {**request.values['metadata'],
+                'request_sha256': hashlib.sha256(request.raw).hexdigest(),
+                'embedding_dtype': 'float32'}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('wb') as handle:
-        np.savez_compressed(handle, ids=np.asarray(request['ids'], dtype=str),
+        np.savez_compressed(handle, ids=np.asarray(request.values['ids'], dtype=str),
                             embeddings=vectors, metadata=json.dumps(metadata, sort_keys=True))
-    args.output.with_suffix('.sha256').write_text(hashlib.sha256(args.output.read_bytes()).hexdigest())
-    print(f'[embeddings/{args.device}] encoded shape={vectors.shape}', flush=True)
+    args.output.with_suffix('.sha256').write_text(
+        hashlib.sha256(args.output.read_bytes()).hexdigest())
+    _LOG.info(f'[embeddings/{args.device}] encoded shape={vectors.shape}')
 
 
 if __name__ == '__main__':

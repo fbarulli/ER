@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
+from core.run_log import RunLogger
 
 import cli.colab as _colab
 from cli.colab_lane import (

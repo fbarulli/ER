@@ -17,6 +17,11 @@ REPRODUCIBILITY CONTRACT (owner ruling): every .csv in this lane is either
 committed input (dataset.csv, number_tokens_reference.csv) or regenerated
 by a script. This file closes the last "committed but unregenerable" gap.
 
+Class map (one owner per responsibility):
+  - BrandVocabulary      — the raw-brand lowercase token vocabulary
+  - ReferenceVerifier    — the --verify surface against the committed CSV
+  - ReferencePublisher   — the write + live-preparation registration
+
 Usage:
   python src/training/build_reference.py            # (re)build the reference
   python src/training/build_reference.py --verify   # assert byte-equality vs
@@ -28,13 +33,20 @@ first if the raw export changed.
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
+
 import pandas as pd
 
 from pipeline import build_reference, census_texts, reference_path
 from core.common import load_dataset
+from core.run_log import RunLogger
+from core.step_trace import timed
+
+_LOG = RunLogger(__name__)
 
 
-def _brand_vocab() -> set[str]:
+class BrandVocabulary:
     """Vocabulary from the RAW brand strings (lowercased word tokens).
 
     Verified detail (this is what makes the rebuild byte-equal): the vocab
@@ -42,14 +54,24 @@ def _brand_vocab() -> set[str]:
     normalize_text, NOT the spelled numeric brands. spell_numeric_brand
     is applied by clean_sku_text at USE time, not census time.
     """
-    from core.progress import tracked
-    df = load_dataset(columns=["brand"])
-    vocab: set[str] = set()
-    for b in tracked(df["brand"].dropna().astype(str), "brand_vocab"):
-        vocab.update(b.lower().split())
-    return vocab
+
+    @staticmethod
+    def build() -> set[str]:
+        """The raw-brand lowercase token vocabulary."""
+        df = load_dataset(columns=["brand"])
+        vocab: set[str] = set()
+        brands = df["brand"].dropna().astype(str)
+        for brand in _LOG.progress(brands, desc="brand_vocab", unit="brand"):
+            vocab.update(brand.lower().split())
+        return vocab
 
 
+def _brand_vocab() -> set[str]:
+    """Vocabulary from the RAW brand strings (see :class:`BrandVocabulary`)."""
+    return BrandVocabulary.build()
+
+
+@timed
 def build() -> pd.DataFrame:
     """Rebuild the reference from the current dataset_deduped.csv."""
     from core.common import load_dataset_deduped
@@ -60,68 +82,140 @@ def build() -> pd.DataFrame:
     return ref
 
 
-def main() -> None:
-    import argparse
+# ── the --verify surface ────────────────────────────────────────────────────
+class ReferenceVerifier:
+    """Asserts the committed reference reproduces exactly (SystemExit on drift)."""
 
+    @staticmethod
+    def missing(committed: pd.DataFrame, rebuilt: pd.DataFrame) -> pd.DataFrame:
+        """Rows whose verdict drifts between committed and rebuilt census."""
+        merged = committed.merge(
+            rebuilt, on="token", how="outer", suffixes=("_old", "_new")
+        )
+        return merged[
+            merged["verdict_old"].fillna("") != merged["verdict_new"].fillna("")
+        ]
+
+    @staticmethod
+    def committed(path: Path) -> pd.DataFrame:
+        """Load the committed reference, failing loud with the pinned message."""
+        if not path.exists():
+            raise SystemExit(
+                f"[verify] FAIL: {path} missing — nothing to compare against"
+            )
+        return pd.read_csv(path, dtype={"token": str})
+
+    @staticmethod
+    def rebuilt() -> pd.DataFrame:
+        """The rebuilt reference, reusing the preparation run's object when live."""
+        from training.preparation_run import active_preparation
+
+        run = active_preparation()
+        rebuilt = run._objects.get("number_reference") if run is not None else None
+        return rebuilt if rebuilt is not None else build()
+
+    @classmethod
+    def verify(cls, committed: pd.DataFrame, rebuilt: pd.DataFrame) -> None:
+        """Assert the committed reference reproduces exactly; exit on drift."""
+        if len(committed) != len(rebuilt):
+            raise SystemExit(
+                f"[verify] FAIL: row count {len(committed)} vs rebuilt "
+                f"{len(rebuilt)}"
+            )
+        bad_verdict = cls.missing(committed, rebuilt)
+        if len(bad_verdict):
+            for _, row in _LOG.progress(
+                bad_verdict.head(10).iterrows(),
+                desc="verdict_drift", unit="token",
+                total=min(10, len(bad_verdict)),
+            ):
+                _LOG.info(
+                    f"  token {row['token']!r}: {row['verdict_old']!r} -> "
+                    f"{row['verdict_new']!r}"
+                )
+            raise SystemExit(
+                f"[verify] FAIL: {len(bad_verdict)} verdict mismatches"
+            )
+        _LOG.info(
+            f"[verify] PASS: {len(committed):,} rows, all verdicts identical "
+            f"— the committed reference reproduces exactly"
+        )
+
+
+def _verdict_mismatches(committed: pd.DataFrame, rebuilt: pd.DataFrame) -> pd.DataFrame:
+    """Rows whose verdict drifts (see :class:`ReferenceVerifier`)."""
+    return ReferenceVerifier.missing(committed, rebuilt)
+
+
+def _require_committed_csv(path: Path) -> pd.DataFrame:
+    """Load the committed reference (see :class:`ReferenceVerifier`)."""
+    return ReferenceVerifier.committed(path)
+
+
+def _rebuilt_reference() -> pd.DataFrame:
+    """The rebuilt reference (see :class:`ReferenceVerifier`)."""
+    return ReferenceVerifier.rebuilt()
+
+
+def _verify(committed: pd.DataFrame, rebuilt: pd.DataFrame) -> None:
+    """Assert the committed reference reproduces exactly; exit on drift."""
+    ReferenceVerifier.verify(committed, rebuilt)
+
+
+# ── the write + publication surface ────────────────────────────────────────
+class ReferencePublisher:
+    """Persists the rebuilt reference and registers it with a live run."""
+
+    @staticmethod
+    def register(ref: pd.DataFrame) -> None:
+        """Publish the freshly built frame to a live preparation run, if any."""
+        from training.preparation_run import active_preparation
+
+        run = active_preparation()
+        if run is not None:
+            run._objects["number_reference"] = ref
+
+    @classmethod
+    def write(cls, ref: pd.DataFrame, path: Path) -> None:
+        """Persist the rebuilt reference and register it with a live run."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ref.to_csv(path, index=False)
+        cls.register(ref)
+        _LOG.info(f"wrote {path} ({len(ref):,} rows)")
+        _LOG.info(f"  verdict mix: {dict(ref['verdict'].value_counts())}")
+
+
+def _register_in_preparation(ref: pd.DataFrame) -> None:
+    """Publish the fresh frame to a live run (see :class:`ReferencePublisher`)."""
+    ReferencePublisher.register(ref)
+
+
+def _write_reference(ref: pd.DataFrame, path: Path) -> None:
+    """Persist the rebuilt reference (see :class:`ReferencePublisher`)."""
+    ReferencePublisher.write(ref, path)
+
+
+def _parse_args() -> argparse.Namespace:
+    """The lane's only switch: --verify compares instead of writing."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--verify",
         action="store_true",
         help="compare against the committed CSV instead of writing",
     )
-    args = ap.parse_args()
-    p = reference_path()
+    return ap.parse_args()
+
+
+@timed
+def main() -> None:
+    args = _parse_args()
+    path = reference_path()
 
     if args.verify:
-        if not p.exists():
-            raise SystemExit(
-                f"[verify] FAIL: {p} missing — nothing to compare against"
-            )
-        committed = pd.read_csv(p, dtype={"token": str})
-        from training.preparation_run import active_preparation
-        run = active_preparation()
-        rebuilt = run._objects.get('number_reference') if run is not None else None
-        if rebuilt is None:
-            rebuilt = build()
-        if len(committed) != len(rebuilt):
-            raise SystemExit(
-                f"[verify] FAIL: row count {len(committed)} vs rebuilt "
-                f"{len(rebuilt)}"
-            )
-        merged = committed.merge(
-            rebuilt, on="token", how="outer", suffixes=("_old", "_new")
-        )
-        bad_verdict = merged[
-            merged["verdict_old"].fillna("") != merged["verdict_new"].fillna("")
-        ]
-        if len(bad_verdict):
-            for _, r in bad_verdict.head(10).iterrows():
-                print(
-                    f"  token {r['token']!r}: {r['verdict_old']!r} -> "
-                    f"{r['verdict_new']!r}"
-                )
-            raise SystemExit(
-                f"[verify] FAIL: {len(bad_verdict)} verdict mismatches"
-            )
-        print(
-            f"[verify] PASS: {len(committed):,} rows, all verdicts identical "
-            f"— the committed reference reproduces exactly",
-            flush=True,
-        )
+        _verify(ReferenceVerifier.committed(path), ReferenceVerifier.rebuilt())
         return
 
-    ref = build()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    ref.to_csv(p, index=False)
-    from training.preparation_run import active_preparation
-    run = active_preparation()
-    if run is not None:
-        run._objects['number_reference'] = ref
-    print(f"wrote {p} ({len(ref):,} rows)", flush=True)
-    print(
-        f"  verdict mix: {dict(ref['verdict'].value_counts())}",
-        flush=True,
-    )
+    _write_reference(build(), path)
 
 
 if __name__ == "__main__":

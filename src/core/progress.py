@@ -16,25 +16,49 @@ from typing import Iterable, Iterator, TypeVar
 T = TypeVar("T")
 
 
+def _resolve_total(iterable: Iterable[T], total: int | None) -> int | None:
+    """The caller's hint, corrected when the iterable declares its own length."""
+    if total is not None:
+        return total
+    try:
+        return len(iterable)  # type: ignore[arg-type]
+    except TypeError:
+        return None
+
+
+def _shim_interval(total: int | None) -> int:
+    """How many items pass between shim lines: ~20 per pass, minimum 1."""
+    return max(1, (total or 1000) // 20)
+
+
 def _tqdm(iterable: Iterable[T], desc: str, total: int | None = None,
           quiet: bool = False) -> Iterator[T]:
-    """tqdm when it is importable and attached to a terminal, else a shim.
+    """tqdm when it is importable and not silenced, else the shim.
 
-    The shim prints one line every `every` items so a redirected log stays
-    readable — tqdm's default carriage-return stream is unreadable there.
+    `disable` stays tqdm's own default (None): it belongs to the tqdm
+    convention every downstream consumer of tracked() shares, so it is
+    spelled out rather than left up to a later rewrite of the call.
     """
     if not quiet:
         try:
             from tqdm import tqdm as _tqdm_impl
 
-            return _tqdm_impl(iterable, desc=desc, total=total, dynamic_ncols=True)
+            return _tqdm_impl(
+                iterable, desc=desc, total=total,
+                dynamic_ncols=True, disable=None,
+            )
         except ImportError:
             pass
-    return _shim(iterable, desc, total, every=max(1, (total or 1000) // 20))
+    return _shim(iterable, desc, total, _shim_interval(total))
 
 
 def _shim(iterable: Iterable[T], desc: str, total: int | None,
           every: int) -> Iterator[T]:
+    """Yield through, printing one stderr line every `every` items.
+
+    The redirected-log fallback: tqdm's default carriage-return stream is
+    unreadable there, so degraded reporter emits periodic lines instead.
+    """
     start = time.time()
     for n, item in enumerate(iterable, 1):
         yield item
@@ -47,12 +71,7 @@ def _shim(iterable: Iterable[T], desc: str, total: int | None,
 def tracked(iterable: Iterable[T], desc: str, total: int | None = None,
             quiet: bool = False) -> Iterator[T]:
     """Public entry point. `total` is a hint; it is corrected when len() works."""
-    if total is None:
-        try:
-            total = len(iterable)  # type: ignore[arg-type]
-        except TypeError:
-            total = None
-    return _tqdm(iterable, desc, total, quiet)
+    return _tqdm(iterable, desc, _resolve_total(iterable, total), quiet)
 
 
 __all__ = ["tracked"]
