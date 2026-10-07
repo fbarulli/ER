@@ -257,6 +257,7 @@ def _compose(row, composer):
     return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
 
 
+@timed
 def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
     if track not in {'text', 'gnn_only', 'hybrid'}:
@@ -402,6 +403,7 @@ def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_che
         'missing_axes':[a for a in cfg.slice_columns if all(p.get(a) is None or p.get(a) == '' for p in chosen)]}
 
 
+@timed
 def _persist_prepared(request, cfg, token_cache):
     from model_tracks.ablation_inputs import prepare_inputs
     resolve(cfg.output_dir).mkdir(parents=True,exist_ok=True)
@@ -466,6 +468,7 @@ def _validated_device(device):
     return validate_embedding_device(device)
 
 
+@timed
 def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
     if track == 'gnn_only':
         return None
@@ -525,6 +528,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     return text_vectors
 
 
+@timed
 def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder):
     encoder = None
     graph_batches = {}
@@ -544,6 +548,7 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
     return encoder, graph_batches
 
 
+@timed
 def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates):
     candidate_vectors = saved_candidates
     if candidate_vectors is not None and (candidate_vectors.dtype != np.float32 or candidate_vectors.shape[0] != len(request['candidate_ids']) or not np.isfinite(candidate_vectors).all() or not np.allclose(np.linalg.norm(candidate_vectors,axis=1),1,atol=1e-4)):
@@ -555,6 +560,7 @@ def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, s
     return candidate_vectors
 
 
+@timed
 def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
     indices = arrays['pair_indices']
     results = []
@@ -580,6 +586,7 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
     return vectors, scores
 
 
+@timed
 def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
