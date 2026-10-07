@@ -63,7 +63,7 @@ def _dev_scores(pairs_path, records, vectors):
 
 
 @timed
-def _calibrated_calibration(checkpoint_sha256, vectors_path, vectors, metadata, records_path, pairs_path, indices, labels, scores):
+def _calibrated_calibration(checkpoint_sha256, vectors_path, metadata, records_path, pairs_path, labels, scores):
     """The BaselineCalibration for the untrained checkpoint, or identity raise."""
     with _LOG.section('ablation.baseline.calibrate'):
         if metadata.get('checkpoint_sha256') != checkpoint_sha256:
@@ -118,8 +118,8 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
     with _LOG.section('ablation.baseline.calibration'):
         with request_context(request_path):
             checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
-            calibration = _calibrated_calibration(checkpoint_sha256, vectors_path, vectors, metadata,
-                                                  records_path, pairs_path, indices, labels, scores)
+            calibration = _calibrated_calibration(checkpoint_sha256, vectors_path, metadata,
+                                                  records_path, pairs_path, labels, scores)
             binding = _frozen_calibration(request_path, calibration)
             result = _frozen_report(request_path, calibration, saved=binding)
             # Keep this baseline report separate from trained-text dashboard pointers.
