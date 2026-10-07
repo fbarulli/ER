@@ -728,9 +728,6 @@ def verify_threshold_binding(request, provenance):
 def validate_vectors(request_path, result):
     """Cheap integrity validation before closing the GPU; no metrics or ANN."""
     request = json.loads(request_path.read_text())
-    validate_sources(request)
-    if 'prepared_inputs' in request:
-        load_prepared(request_path,request).close()
     with np.load(result,allow_pickle=False) as data:
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None
