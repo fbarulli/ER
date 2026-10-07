@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import json
 import math
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -2772,6 +2773,71 @@ def _dominant_brand(values: list) -> str:
     return Counter(values).most_common(1)[0][0]
 
 
+_CANONICAL_WORKER_STATE: dict[str, object] = {}
+
+
+def _canonical_worker_state_bind(global_idf: 'NgramIDF',
+                                 brand_idf_map: dict[str, 'NgramIDF']) -> None:
+    """Publish the per-run IDF state to the worker pool (fork COW share)."""
+    _CANONICAL_WORKER_STATE.clear()
+    _CANONICAL_WORKER_STATE['global_idf'] = global_idf
+    _CANONICAL_WORKER_STATE['brand_idf_map'] = brand_idf_map
+
+
+def _canonical_record_task(task: tuple) -> dict:
+    """One canonical record, computed from pre-assembled group payload only."""
+    gtin, brand, rows, descriptions, urls, image_urls, breadcrumbs_engs, \
+        categories, description_evidence, breadcrumb_evidence, source_rows = task
+    record = generate_canonical(
+        gtin, brand, rows,
+        _CANONICAL_WORKER_STATE['global_idf'],
+        _CANONICAL_WORKER_STATE['brand_idf_map'][brand.lower().strip()],
+        descriptions=descriptions, urls=urls, image_urls=image_urls,
+        breadcrumbs_engs=breadcrumbs_engs, categories=categories,
+    )
+    record['description_evidence'] = description_evidence
+    record['breadcrumb_evidence'] = breadcrumb_evidence
+    record['source_rows'] = source_rows
+    return record
+
+
+def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',
+                          brand_idf_map: dict[str, 'NgramIDF']) -> pd.DataFrame:
+    """Build every canonical record: parallel across cores when worthwhile.
+
+    Deterministic either way: imap yields results in submission order, and
+    every task is a pure function of its payload + fork-inherited IDF maps.
+    """
+    tasks = list(
+        (row.gtin, row.brand, row.rows, row.descriptions, row.urls,
+         row.image_urls, row.breadcrumbs_engs, row.categories,
+         row.description_evidence, row.breadcrumb_evidence, row.source_rows)
+        for row in grouped.itertuples(index=False)
+    )
+    _canonical_worker_state_bind(global_idf, brand_idf_map)
+    threshold = 256
+    if len(tasks) < threshold:
+        records = [
+            _canonical_record_task(task)
+            for task in _LOG.progress(tasks, desc='cards_inline', unit='gtin')
+        ]
+        return pd.DataFrame(records)
+    import concurrent.futures
+    from multiprocessing import get_context
+    records: list[dict] = []
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=max(2, os.cpu_count() - 1), mp_context=get_context('fork'),
+    ) as pool:
+        bar = _LOG.bar(total=len(tasks), desc='canonical_cards', unit='gtin')
+        try:
+            for record in pool.map(_canonical_record_task, tasks, chunksize=16):
+                records.append(record)
+                bar.update()
+        finally:
+            bar.close()
+    return pd.DataFrame(records)
+
+
 def run_within_brand_pipeline(
     df_full: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
@@ -2903,29 +2969,7 @@ def run_within_brand_pipeline(
     timing.mark("guards_grouping_idf")
 
     # Generate canonical records
-    canonical_records = []
-    from tqdm import tqdm
-    for row in tqdm(grouped.itertuples(index=False), total=len(grouped), unit="gtin", desc="cards", disable=None):
-        brand_key = row.brand.lower().strip()
-        record = generate_canonical(
-            row.gtin,
-            row.brand,
-            row.rows,
-            global_idf,
-            brand_idf_map[brand_key],
-            descriptions=row.descriptions,
-            urls=row.urls,
-            image_urls=row.image_urls,
-            breadcrumbs_engs=row.breadcrumbs_engs,
-            categories=row.categories,
-        )
-        record["description_evidence"] = row.description_evidence
-        record["breadcrumb_evidence"] = row.breadcrumb_evidence
-        # Per-title original evidence, carried so the engine's stage-7
-        # clarification can reach the real columns (see _source_rows_for).
-        record["source_rows"] = row.source_rows
-        canonical_records.append(record)
-    df_canon = pd.DataFrame(canonical_records)
+    df_canon = _canonical_records_df(grouped, global_idf, brand_idf_map)
     timing.mark("canonical_cards")
 
     # ── CONSOLIDATED TRACE: the row identity closes here ──────────────────
