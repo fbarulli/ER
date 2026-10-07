@@ -754,31 +754,10 @@ def validate_vectors(request_path, result):
 
 
 @timed
-@scoped_request
-def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
-    """Paired local comparisons at a supplied, already selected threshold."""
-    if not np.isfinite(threshold) or not threshold_source:
-        raise ValueError('frozen threshold and its source are required')
-    threshold_provenance = frozen_threshold(threshold_source, threshold)
-    request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
-    threshold_binding = verify_threshold_binding(request,threshold_provenance)
-    nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
-    cfg = Settings.model_validate(request['settings'])
-    if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
-        raise ValueError('retrieval ks must be positive')
-    id_lookup = {i:n for n,i in enumerate(request['ids'])}
-    from model_tracks.ablation_retrieval import RetrievalComparison
-    candidate_ids = request.get('candidate_ids',request['ids'])
-    if request.get('candidate_ids') and candidate_vectors is None:
-        raise ValueError('full catalog candidate vectors missing')
-    candidates = vectors[0] if candidate_vectors is None else candidate_vectors
-    retrieval = RetrievalComparison(candidate_ids,candidates,request,request_path,cfg)
+def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
+    rows = []
     def ranks(vec):
         return retrieval.ranks(vec)
-    baseline_ranks = ranks(vectors[0])
-    ann_baseline = retrieval.ann_hits(vectors[0])
-    comparison_cache = {hashlib.sha256(vectors[0].tobytes()).hexdigest():(baseline_ranks,ann_baseline)}
-    rows = []
     for n, variant in enumerate(request['variants'][1:], 1):
         if not variant['changed_listings'] and (not np.array_equal(vectors[n],vectors[0]) or not np.array_equal(scores[n],scores[0])):
             raise ValueError('no-op ablation changed model output')
@@ -808,8 +787,11 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
                 'ann_baseline_hits':ann_baseline[p], 'ann_ablated_hits':ann_ablated[p],
                 'known_positive_recall_change':{str(k):[(int(rank[p][e]<=k)-int(baseline_ranks[p][e]<=k))
                     if pair['label']=='1' else None for e in (0,1)] for k in cfg.retrieval_ks}})
-    retrieval.close()
-    output = {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
+    return rows
+
+
+def _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids):
+    return {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
         'request_path':source_name(request_path), 'request_sha256':file_hash(request_path),
         'result_path':source_name(result),'result_sha256':file_hash(result),
         'sources':request['sources'],'composition':request['composition'],
@@ -819,6 +801,38 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         'missing_axes':request['missing_axes'], 'retrieval_catalog_count':len(candidate_ids),
         'cohort_sha256':request.get('cohort_sha256'), 'coverage':request.get('coverage'),
         'retrieval_intervention':'query only; fixed candidates', 'rows':rows}
+
+
+@timed
+@scoped_request
+def report(request_path, result, threshold, *, threshold_source, config=None, save=True):
+    """Paired local comparisons at a supplied, already selected threshold."""
+    if not np.isfinite(threshold) or not threshold_source:
+        raise ValueError('frozen threshold and its source are required')
+    threshold_provenance = frozen_threshold(threshold_source, threshold)
+    request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
+    threshold_binding = verify_threshold_binding(request,threshold_provenance)
+    nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
+    cfg = Settings.model_validate(request['settings'])
+    with _LOG.section('ablation.report.comparison'):
+        if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
+            raise ValueError('retrieval ks must be positive')
+        id_lookup = {i:n for n,i in enumerate(request['ids'])}
+        from model_tracks.ablation_retrieval import RetrievalComparison
+        candidate_ids = request.get('candidate_ids',request['ids'])
+        if request.get('candidate_ids') and candidate_vectors is None:
+            raise ValueError('full catalog candidate vectors missing')
+        candidates = vectors[0] if candidate_vectors is None else candidate_vectors
+        retrieval = RetrievalComparison(candidate_ids,candidates,request,request_path,cfg)
+        def ranks(vec):
+            return retrieval.ranks(vec)
+        baseline_ranks = ranks(vectors[0])
+        ann_baseline = retrieval.ann_hits(vectors[0])
+        comparison_cache = {hashlib.sha256(vectors[0].tobytes()).hexdigest():(baseline_ranks,ann_baseline)}
+        rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
+                                baseline_ranks, ann_baseline, comparison_cache)
+        retrieval.close()
+    output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
     validate_sources(request)
     if frozen_threshold(threshold_source, threshold) != threshold_provenance:
         raise ValueError('threshold report changed during comparison')
@@ -841,9 +855,7 @@ def save_report(request_path, output, *, config=None):
     return path
 
 
-@timed
-def main():
-    RunLogger.configure_console()
+def _cli_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     prep = sub.add_parser('prepare')
@@ -861,6 +873,13 @@ def main():
     post.add_argument('--threshold',type=float,required=True)
     post.add_argument('--threshold-source',required=True)
     post.add_argument('--config',type=Path)
+    return parser
+
+
+@timed
+def main():
+    RunLogger.configure_console()
+    parser = _cli_parser()
     args = vars(parser.parse_args())
     action = args.pop('action')
     if action == 'prepare':
