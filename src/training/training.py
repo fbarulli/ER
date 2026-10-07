@@ -402,31 +402,15 @@ class _CalibrationEvaluator:
             unavailable_calibration_metrics,
         )
 
-        calibration_metrics: dict[str, object]
         if len(calibration_pos) == 0 or len(calibration_neg) == 0:
-            calibration_metrics = unavailable_calibration_metrics(
+            calibration_metrics = _CalibrationEvaluator._empty_split_result(
+                fold_i,
+                sample,
+                calibration_pos,
+                calibration_neg,
                 reason_code=CALIBRATION_REASON_EMPTY_SPLIT,
-                reason=(
-                    "empty calibration split — Rand threshold calibration "
-                    f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
-                ),
-                positive_pairs=len(calibration_pos),
-                negative_pairs=len(calibration_neg),
+                unavailable=unavailable_calibration_metrics,
             )
-            print(
-                f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
-                f"unavailable; {calibration_metrics['calibration_reason']}",
-                flush=True,
-            )
-            # Chain-check samples intentionally do not reserve a Rand
-            # calibration population: their job is to prove training,
-            # checkpointing, and inference wiring on a bounded input.
-            # Full runs must still fail loudly rather than publish an
-            # uncalibrated threshold.
-            if not sample:
-                raise RequiredCalibrationError(
-                    calibration_metrics["calibration_reason"]
-                )
         else:
             # The explicit empty-population branch above is the only
             # expected unavailable-calibration condition.  An exception
@@ -453,6 +437,42 @@ class _CalibrationEvaluator:
                 raise CalibrationEvaluatorError(
                     f"calibration evaluator failed on fold {fold_i}"
                 ) from exc
+        return calibration_metrics
+
+    @staticmethod
+    def _empty_split_result(
+        fold_i: int,
+        sample: bool,
+        calibration_pos: np.ndarray,
+        calibration_neg: np.ndarray,
+        *,
+        reason_code: str,
+        unavailable,
+    ):
+        """The empty-split branch: unavailable record + loud failure gate."""
+        calibration_metrics = unavailable(
+            reason_code=reason_code,
+            reason=(
+                "empty calibration split — Rand threshold calibration "
+                f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
+            ),
+            positive_pairs=len(calibration_pos),
+            negative_pairs=len(calibration_neg),
+        )
+        print(
+            f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
+            f"unavailable; {calibration_metrics['calibration_reason']}",
+            flush=True,
+        )
+        # Chain-check samples intentionally do not reserve a Rand
+        # calibration population: their job is to prove training,
+        # checkpointing, and inference wiring on a bounded input.
+        # Full runs must still fail loudly rather than publish an
+        # uncalibrated threshold.
+        if not sample:
+            raise RequiredCalibrationError(
+                calibration_metrics["calibration_reason"]
+            )
         return calibration_metrics
 
     @staticmethod
