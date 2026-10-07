@@ -90,6 +90,25 @@ def test_collapse_regulation_ignores_unrelated_config_changes():
     assert run_plan.validate_collapse_regulation(config) is config
 
 
+def test_collapse_regulation_gate_is_pure_and_cheap(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            'the collapse gate must not derive data or reload the config')
+    monkeypatch.setattr(run_plan, 'data_digest', _boom)
+    monkeypatch.setattr(run_plan, 'load_config', _boom)
+    config = _valid_collapse_config()
+    assert run_plan.validate_collapse_regulation(config) is config
+
+
+def test_validate_run_plan_loads_active_config_once(monkeypatch, saved_plan):
+    calls = []
+    real = run_plan.load_config
+    monkeypatch.setattr(run_plan, 'load_config',
+                        lambda: (calls.append(1), real())[1])
+    assert validate(saved_plan) is saved_plan
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize('mutate,knob', [
     (lambda cfg: cfg['training']['uniformity_regularization'].pop('temperature'),
      'training.uniformity_regularization.temperature'),

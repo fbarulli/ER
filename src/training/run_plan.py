@@ -55,6 +55,10 @@ def validate_collapse_regulation(config):
     uniformity regularizer and the collapse guardrail; every unrelated config
     key (laya/kaggle/paths/script lanes) is ignored on purpose, because the
     plan's data/row identity is already bound by ``data_sha256``.
+
+    Pure and cheap by construction: O(number of collapse knobs) dict reads of
+    an already-loaded config object.  No ``data_digest``, no array work, no
+    model/dataset load, no full-config serialisation, no config reload.
     """
     config = config or {}
     training = config.get('training') or {}
