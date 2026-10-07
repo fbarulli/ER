@@ -70,11 +70,12 @@ from cli.colab_lane_contracts import (  # noqa: F401
     _stamp,
 )
 from cli.colab_lane_cpu_provision import ColabCPULaneProvision
+from cli.colab_lane_cpu_poll import ColabCPULanePoll
 
 
 
 
-class ColabCPULane(ColabCPULaneProvision, ColabLaneBase):
+class ColabCPULane(ColabCPULanePoll, ColabCPULaneProvision, ColabLaneBase):
     """CPU lanes: committed-export delivery + data-bundle prep parity."""
 
     kind = "cpu"
@@ -100,70 +101,6 @@ class ColabCPULane(ColabCPULaneProvision, ColabLaneBase):
             resume_from=resume_from,
             resume_run_id=resume_run_id,
         )
-
-    def poll_prepare_log(self, deadline_seconds: int) -> None:
-        """Stream the VM-side prepare log into both local transcripts."""
-        surface = self.surface
-        remote_root = self.remote_root
-        session = self.session
-        started = time.monotonic()
-        offset = 0
-        transit_budget = surface._PROBE_RETRIES
-        while True:
-            probe = self.bundle_head() + f"""
-import json, os
-
-root = "{remote_root}"
-log_path = root + "/{PREPARE_LOG_NAME}"
-status_path = root + "/{PREPARE_STATUS_NAME}"
-offset = {offset}
-payload = {{"offset": offset, "chunk": "", "status": None}}
-try:
-    with open(log_path, "rb") as handle:
-        handle.seek(offset)
-        data = handle.read()
-    payload["offset"] = offset + len(data)
-    payload["chunk"] = data.decode("utf-8", errors="replace")
-    if os.path.exists(status_path):
-        payload["status"] = int(open(status_path).read().strip() or "-1")
-except FileNotFoundError:
-    pass
-print(json.dumps(payload), flush=True)
-"""
-            try:
-                payload = self.parse_remote_json(
-                    self.exec_capture(
-                        session, probe, timeout=surface._PROBE_TIMEOUT_SECONDS,
-                        training_output=True,
-                    )
-                )
-            except RuntimeError as exc:
-                if self.transit_fatal(exc):
-                    raise
-                transit_budget -= 1
-                if transit_budget <= 0:
-                    raise
-                message = f"[probe] prepare log unavailable; continuing: {exc}"
-                surface._write_training_log(message + "\n")
-                print(_stamp(), message, flush=True)
-                time.sleep(surface._LOG_POLL_SECONDS)
-                continue
-            transit_budget = surface._PROBE_RETRIES
-            chunk = payload["chunk"]
-            if chunk:
-                for line in chunk.splitlines():
-                    surface._write_training_log(f"[prepare] {line}\n")
-                    print(f"[prepare] {line}", flush=True)
-                offset = int(payload["offset"])
-            status = payload["status"]
-            if status is not None:
-                if int(status) != 0:
-                    raise RuntimeError(
-                        f"prepare_all failed on the VM (rc={status}); see the [prepare] log above")
-                return
-            if time.monotonic() - started > deadline_seconds:
-                raise RuntimeError(f"prepare poll deadline exceeded ({deadline_seconds}s)")
-            time.sleep(surface._LOG_POLL_SECONDS)
 
     def delivery_segment(self) -> str:
         return f"""
