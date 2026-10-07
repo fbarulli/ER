@@ -8,7 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.run_log import RunLogger
 from core.step_trace import timed
 from graph_tracks.data import load_records, load_text_cache
+from graph_tracks.report import dev_threshold
+from graph_tracks.train import load_pairs
 from model_tracks.ablation import report, request_context, write
+from model_tracks.staged_ablation import forward as forward_staged
 
 _LOG = RunLogger(__name__)
 
@@ -32,7 +35,6 @@ class BaselineCalibration(BaseModel):
 def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_model=None):
     """Reuse text interventions and frozen catalog vectors in this suite session."""
     with _LOG.section('ablation.baseline.forward'):
-        from model_tracks.staged_ablation import forward as forward_staged
         template = json.loads((setup/'ablation_templates/text/request.json').read_text())
         saved = (setup/'shared_minilm__embeddings.npz'
                  if template['settings']['retrieval_catalog'] == 'full' and template['settings'].get('coverage') != 'all' else None)
@@ -53,7 +55,6 @@ def _saved_vectors(records, output):
 def _dev_scores(pairs_path, records, vectors):
     """Dev-split indices/labels with dot-product scores from saved vectors."""
     with _LOG.section('ablation.baseline.dev_scores'):
-        from graph_tracks.train import load_pairs
         indices, labels = load_pairs(pairs_path, records)['dev']
         return labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
 
@@ -62,7 +63,6 @@ def _dev_scores(pairs_path, records, vectors):
 def _calibrated_calibration(checkpoint_sha256, metadata, labels, scores):
     """The BaselineCalibration for the untrained checkpoint, or identity raise."""
     with _LOG.section('ablation.baseline.calibrate'):
-        from graph_tracks.report import dev_threshold
         if metadata.get('checkpoint_sha256') != checkpoint_sha256:
             raise ValueError('baseline calibration vectors differ from frozen checkpoint')
         return BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
