@@ -20,8 +20,9 @@ class RetrievalComparison:
         targets = {}
         for n,(a,b) in enumerate(self.pairs):
             for side,source,target in ((0,a,b),(1,b,a)):
-                targets.setdefault(source, []).append((n, side, target))
-        self.targets = targets
+                targets.setdefault(source, []).append((n, side, self.endpoints[target]))
+        self.targets = [(source, tuple(requested)) for source, requested in targets.items()]
+        self.rank_cache = {}
         self.tmp = tempfile.TemporaryDirectory(dir=request_path.parent)
         from model_tracks.ablation import resolve
         marker = resolve(request['checkpoint']) if request.get('checkpoint') else request_path
@@ -33,15 +34,24 @@ class RetrievalComparison:
         # Only compare queries against candidates; never construct catalog².
         pair_ranks = [[None, None] for _ in self.pairs]
         candidate_order = self.candidate_order
-        for source, requested in self.targets.items():
-            scores = queries[source] @ self.vectors.T
-            scores[self.endpoints[source]] = -np.inf
-            for n, side, target in requested:
-                target_index = self.endpoints[target]
-                value = scores[target_index]
-                rank = 1+np.count_nonzero(scores > value)+np.count_nonzero(
-                    (scores == value)&(candidate_order < target_index))
-                pair_ranks[n][side] = int(rank)
+        cache = self.rank_cache
+        for source, requested in self.targets:
+            # Rank of a query row depends only on the row bytes; unchanged rows
+            # recur across ablation variants, so memoize the per-target ranks.
+            key = (source, queries[source].tobytes())
+            cached = cache.get(key)
+            if cached is None:
+                scores = queries[source] @ self.vectors.T
+                scores[self.endpoints[source]] = -np.inf
+                cached = []
+                for n, side, target_index in requested:
+                    value = scores[target_index]
+                    rank = 1+np.count_nonzero(scores > value)+np.count_nonzero(
+                        (scores == value)&(candidate_order < target_index))
+                    cached.append((n, side, int(rank)))
+                cache[key] = cached
+            for n, side, rank in cached:
+                pair_ranks[n][side] = rank
         return pair_ranks
 
     def ann_hits(self, queries):
