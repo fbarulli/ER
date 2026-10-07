@@ -1,9 +1,18 @@
 """Lane C micro-benchmark: CPU-time A/B for the five lane-C owned modules.
 
-Workload: the 11,441-row prefix of the 10k-cohort eligible catalog, fed to the
-same five per-column entry points the pipeline uses (see
+Workload: the 5,720-row prefix of the eligible catalog, fed to the same five
+per-column entry points the pipeline uses (see
 src/pipeline.py:harvest_evidence_channels / __init__), so each target function
-sees the same call counts as the recorded cProfile attribution.
+sees the same call mix as the recorded cProfile attribution.
+
+COHORT SCALE. The 24,722-row catalog at LANE_C_CATALOG is the 10k cohort's
+eligible export; the 10k-cohort call counts in the lane profile correspond to
+its 11,441-row prefix, and the operator's 5k cohort corresponds to the 5,720-row
+prefix used here (ROWS). Results are NOT comparable across cohorts: every
+results file records its own row count and cohort note, and a ratio must never
+be computed between files with different row counts. The r14/r15/r16/r17
+results files were measured at 11,441 rows (10k scale) and are kept only as the
+10k record; r14_baseline_5k.json / r15_r17_5k.json are the 5k pair.
 
 Why CPU time: the host is shared by several lanes, so wall clock is noisy.
 time.process_time() measures only this process, and the reported number is the
@@ -34,7 +43,7 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 os.environ.setdefault("EUROMONITOR_PROJECT_ROOT", str(ROOT))
 
-ROWS = 11441
+ROWS = 5720
 CATALOG = Path(os.environ.get("LANE_C_CATALOG", "/tmp/opc/eligible_catalog.csv"))
 
 
@@ -245,6 +254,9 @@ def main() -> int:
 
     rows = load_rows()
     results = {"label": args.label, "catalog": str(CATALOG), "rows": len(rows),
+               "cohort": (f"{len(rows)}-row prefix of {CATALOG.name} (5,720 rows == 5k "
+                          f"cohort, 11,441 rows == 10k cohort); ratios are only "
+                          f"valid between files with equal `rows`"),
                "targets": {}}
     total = 0.0
     for name, target in build_targets(rows):

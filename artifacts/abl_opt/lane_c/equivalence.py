@@ -1,8 +1,8 @@
 """Lane C equivalence gate: HEAD implementation vs working-tree implementation.
 
-Loads each lane-C owned module twice — once from `git show HEAD:<path>` into a
-separate module object, once from the working tree — and compares their outputs
-over the same 11,441-row corpus. This is a stronger check than a repr digest:
+Loads each lane-C owned module twice — once from `git show --base-ref:<path>`
+into a separate module object, once from the working tree — and compares their
+outputs over the same corpus micro_bench.py uses (5,720 rows by default). This is a stronger check than a repr digest:
 it asserts `base.f(args) == new.f(args)` for every row and every target, with
 Python's own equality (so frozenset order is irrelevant and list order is not).
 
