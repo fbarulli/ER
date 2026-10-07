@@ -13,12 +13,57 @@ import zipfile
 from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from core.archive_reader import open_archive, zstd_module, archive_sidecar, archive_settings, tar_archive
+from core.perf_switches import perf_enabled
 from core.progress import tracked
 from core.step_trace import timed, trace_step
 
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 INVENTORY = TypeAdapter(dict[str, Digest])
+
+#: Per-process digest cache keyed by (absolute path, mtime_ns, size). Repeated
+#: validation of the SAME bytes in one process (the suite gate, resume
+#: inventories, archive inventories) reuses the digest instead of re-reading
+#: the file. A content change that preserves both mtime and size is not seen,
+#: so the switch is off under ER_PERF_LEGACY=1 and individually via
+#: ER_PERF_DIGEST_CACHE=0.
+_DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def _raw_file_digest(path: Path) -> str:
+    with Path(path).open('rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def cached_file_digest(path: Path | str) -> str:
+    """SHA256 of one regular file, memoized on (abspath, mtime_ns, size)."""
+    path = Path(path)
+    if not perf_enabled('digest.cache'):
+        return _raw_file_digest(path)
+    stat = path.stat()
+    key = (os.path.abspath(os.fspath(path)), stat.st_mtime_ns, stat.st_size)
+    value = _DIGEST_CACHE.get(key)
+    if value is None:
+        value = _raw_file_digest(path)
+        _DIGEST_CACHE[key] = value
+    return value
+
+
+class _HashingReader:
+    """File-like tee that records the SHA256 of exactly the bytes read."""
+
+    def __init__(self, handle, digest):
+        self._handle = handle
+        self._digest = digest
+
+    def read(self, size=-1):
+        data = self._handle.read(size)
+        if data:
+            self._digest.update(data)
+        return data
+
+    def close(self):
+        self._handle.close()
 
 
 class RuntimeSnapshot(BaseModel):
@@ -37,8 +82,7 @@ class RuntimeSnapshot(BaseModel):
         return self
 
     def inventory(self) -> dict[str, str]:
-        from core.manifest import sha256_file
-        return {relative: sha256_file(path) for relative, path in self.files.items()}
+        return {relative: cached_file_digest(path) for relative, path in self.files.items()}
 
 
 RESULT_ARCHIVE_EXCLUDED_DIRS = frozenset({
@@ -65,10 +109,21 @@ def _write_zip(candidate, files, inline, manifest_name, manifest):
         archive.writestr(manifest_name, manifest)
 
 
-def _write_tar(candidate, files, inline, manifest_name, manifest):
+def _write_tar(candidate, files, inline, manifest_name, manifest, *,
+               digests: dict[str, str] | None = None):
+    """Stream a zstd tar. When ``digests`` is given, record each member's SHA256
+    from the bytes handed to the writer, so the caller need not re-read the
+    archive to prove it matches its frozen inventory."""
     with tar_archive(candidate, 'x') as archive:
         for target, source in tracked(files.items(), desc='archive.tar_files'):
-            archive.add(source, arcname=target, recursive=False)
+            if digests is None:
+                archive.add(source, arcname=target, recursive=False)
+                continue
+            info = archive.gettarinfo(str(source), arcname=target)
+            hasher = hashlib.sha256()
+            with source.open('rb') as handle:
+                archive.addfile(info, _HashingReader(handle, hasher))
+            digests[target] = hasher.hexdigest()
         for target, value in inline.items():
             _add_tar_text(archive, target, value)
         _add_tar_text(archive, manifest_name, manifest)
@@ -87,8 +142,7 @@ def _source_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[st
     for target, source in tracked(files.items(), desc='archive.hash_sources'):
         if source.is_symlink() or not source.is_file():
             raise ValueError('archive requires regular files, not symbolic links')
-        with source.open('rb') as handle:
-            inventory[target] = hashlib.file_digest(handle, 'sha256').hexdigest()
+        inventory[target] = cached_file_digest(source)
     inventory.update({target: hashlib.sha256(value.encode()).hexdigest()
                       for target, value in inline.items()})
     return inventory
@@ -144,20 +198,33 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     try:
         started = time.monotonic()
         manifest = json.dumps({**metadata, inventory_key: inventory}, indent=2) + '\n'
+        stream_digests: dict[str, str] | None = (
+            {} if perf_enabled('archive.write_digest') else None)
         if output.name.endswith('.tar.zst'):
             with trace_step('archive.zstandard', files=len(files),
                             compression_level=archive_settings().compression_level):
-                _write_tar(candidate, files, inline, manifest_name, manifest)
+                _write_tar(candidate, files, inline, manifest_name, manifest,
+                           digests=stream_digests)
         else:
             # Explicit ZIP outputs remain available for historical callers.
+            stream_digests = None
             with trace_step('archive.zip', files=len(files)):
                 _write_zip(candidate, files, inline, manifest_name, manifest)
         # Sources can change while being archived (e.g. checkpoint rotation).
         # Never publish an archive whose bytes disagree with its frozen inventory.
         timings["compression_seconds"] = time.monotonic() - started
         started = time.monotonic()
-        with trace_step('archive.verify'):
-            verify_archive(candidate, manifest_name, inventory_key=inventory_key)
+        if stream_digests is not None:
+            # The writer hashed every member payload as it wrote it; comparing
+            # those bytes to the frozen inventory is the whole integrity check,
+            # so the archive is not read and inflated a second time.
+            with trace_step('archive.verify_written'):
+                for target in files:
+                    if stream_digests.get(target) != inventory[target]:
+                        raise ValueError(f'archive integrity mismatch: {target}')
+        else:
+            with trace_step('archive.verify'):
+                verify_archive(candidate, manifest_name, inventory_key=inventory_key)
         timings["verification_seconds"] = time.monotonic() - started
         _publish_atomically(candidate, output)
     finally:

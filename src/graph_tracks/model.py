@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from core.execution_policy import AggregationBackend, resolve_aggregation
+from core.perf_switches import perf_enabled
 
 import torch
 from torch import nn
@@ -15,6 +16,10 @@ from torch.nn import functional as F
 
 from graph_tracks.data import GraphBatch, NUMERIC, RELATIONS
 from graph_tracks.pooling import pool, segment_pool, topology
+
+# Performance switches (see core.perf_switches). Legacy mode turns both off.
+_POOL_BACKEND_CACHE = perf_enabled("graph.pool_backend_cache")
+_ACCUMULATE_MESSAGES = perf_enabled("graph.accumulate_messages")
 
 
 def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.Tensor:
@@ -35,6 +40,9 @@ class AttributeGNN(nn.Module):
         self.aggregation_backend = aggregation_backend
         self.graph_enabled = graph_enabled
         self.text_dim = text_dim
+        # Aggregation backend is fixed per device type for the whole run; the
+        # cached operation avoids re-resolving the string policy every call.
+        self._pool_operations: dict[str, object] = {}
         self.tokens = nn.ModuleDict({r: nn.Embedding(len(vocabulary[r]) + 1, hidden)
                                     for r in RELATIONS})
         self.input = nn.Linear(len(NUMERIC) * 3 + len(RELATIONS) * hidden + text_dim, hidden)
@@ -44,8 +52,16 @@ class AttributeGNN(nn.Module):
         self.norm = nn.LayerNorm(hidden)
 
     def pool(self, values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
-        operation = (segment_pool if resolve_aggregation(self.aggregation_backend, str(values.device)) == 'segment'
-                     else pool)
+        if not _POOL_BACKEND_CACHE:
+            operation = (segment_pool if resolve_aggregation(self.aggregation_backend, str(values.device)) == 'segment'
+                         else pool)
+            return operation(values, target, sizes)
+        kind = values.device.type
+        operation = self._pool_operations.get(kind)
+        if operation is None:
+            operation = (segment_pool if resolve_aggregation(self.aggregation_backend, kind) == 'segment'
+                         else pool)
+            self._pool_operations[kind] = operation
         return operation(values, target, sizes)
 
     def initial(self, batch: GraphBatch, text: torch.Tensor | None = None) -> torch.Tensor:
@@ -80,14 +96,27 @@ class AttributeGNN(nn.Module):
     def encode(self, batch: GraphBatch, states: dict,
                text: torch.Tensor | None = None, *, initial=None) -> torch.Tensor:
         h = self.initial(batch, text) if initial is None else initial
-        messages = []
+        message = None
         for relation in RELATIONS if self.graph_enabled else ():
             value, listing, sizes = topology(batch, relation, dtype=h.dtype)
             transformed = self.to_listing[relation](states[relation][value])
             # Autocast may change the linear output dtype. Keep the original
             # pooling arithmetic in that dtype as well.
-            messages.append(self.pool(transformed, listing, sizes.to(transformed.dtype)))
-        message = torch.stack(messages).mean(0) if self.graph_enabled else torch.zeros_like(h)
+            pooled = self.pool(transformed, listing, sizes.to(transformed.dtype))
+            if not _ACCUMULATE_MESSAGES:
+                if message is None:
+                    message = []
+                message.append(pooled)
+                continue
+            # Accumulate in place instead of materialising an (R, N, H) stack;
+            # the addition order matches torch.stack(...).mean(0) exactly.
+            message = pooled if message is None else message + pooled
+        if not self.graph_enabled:
+            message = torch.zeros_like(h)
+        elif _ACCUMULATE_MESSAGES:
+            message = message / float(len(RELATIONS))
+        elif message is not None:
+            message = torch.stack(message).mean(0)
         return F.normalize(self.output(torch.cat([h, message], dim=-1)), dim=-1)
 
 

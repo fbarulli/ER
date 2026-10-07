@@ -10,8 +10,11 @@ import traceback
 import shlex
 import yaml
 
+from core.run_log import RunLogger
 from model_tracks.config import load_config
 from model_tracks.parallel import wait_for_start
+
+_LOG = RunLogger(__name__)
 
 
 def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = False) -> dict:
@@ -106,69 +109,75 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     wait_for_start(Path(os.environ['ER_TRACK_BARRIER']), track)
     events.emit('barrier', 'released')
     events.emit('training', 'started', includes_graph_postprocess=track != 'text')
-    subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
+    with _LOG.section('phase.training', track=track):
+        subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
     events.emit('training', 'completed', includes_graph_postprocess=track != 'text')
     if gpu_only or track == 'text' or cfg.post_training_ablation:
-        events.emit('inference_export','started',device=cfg.device)
-        if track == 'text':
-            from model_tracks.text_export import forward
-            _,selected_text_model = forward(output,setup,return_model=True,device=cfg.device)
-        else:
-            from graph_tracks.config import GraphConfig
-            from graph_tracks.infer import forward_outputs
-            from graph_tracks.artifacts import name
-            selected = list(output.rglob(name(track,'best_checkpoint.json')))
-            if len(selected) != 1:
-                raise ValueError('ambiguous selected graph checkpoint')
-            checkpoint = Path(json.loads(selected[0].read_text())['path'])
-            settings['device'] = cfg.device
-            settings.update(cfg.graph_execution_overrides())
-            _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
-                output/(track+'__inference'),GraphConfig.model_validate(settings),
-                text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None,
-                return_encoder=True)
-        events.emit('inference_export','completed',device=cfg.device)
-        if cfg.post_training_ablation:
-            from model_tracks.staged_ablation import forward as forward_ablation
+        with _LOG.section('phase.inference_export', track=track):
+            events.emit('inference_export','started',device=cfg.device)
             if track == 'text':
-                from training.validation_inference import resolve_best_checkpoint
-                checkpoint,_ = resolve_best_checkpoint(output)
-            if (gpu_only and not (setup/'ablation_templates'/track/'request.json').is_file()):
-                # 47f0641 removed ablation staging from the CPU bundle, so GPU
-                # sessions ship no templates at all; a template read here would
-                # be FileNotFoundError. Local lanes keep the loud read.
-                events.emit('attribute_ablation_export','skipped',device=cfg.device,
-                            reason='ablation is not a GPU-session phase (owner order 2026-10-07); bundle ships no templates')
+                from model_tracks.text_export import forward
+                _,selected_text_model = forward(output,setup,return_model=True,device=cfg.device)
             else:
-                events.emit('attribute_ablation_export','started',device=cfg.device)
-                forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
-                    graph_encoder=selected_graph_encoder if track != 'text' else None)
-                events.emit('attribute_ablation_export','completed',device=cfg.device)
-        if track == 'text':
-            del selected_text_model
-        else:
-            del selected_graph_encoder
+                from graph_tracks.config import GraphConfig
+                from graph_tracks.infer import forward_outputs
+                from graph_tracks.artifacts import name
+                selected = list(output.rglob(name(track,'best_checkpoint.json')))
+                if len(selected) != 1:
+                    raise ValueError('ambiguous selected graph checkpoint')
+                checkpoint = Path(json.loads(selected[0].read_text())['path'])
+                settings['device'] = cfg.device
+                settings.update(cfg.graph_execution_overrides())
+                _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
+                    output/(track+'__inference'),GraphConfig.model_validate(settings),
+                    text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None,
+                    return_encoder=True)
+            events.emit('inference_export','completed',device=cfg.device)
+            if cfg.post_training_ablation:
+                from model_tracks.staged_ablation import forward as forward_ablation
+                if track == 'text':
+                    from training.validation_inference import resolve_best_checkpoint
+                    checkpoint,_ = resolve_best_checkpoint(output)
+                if gpu_only and not (setup/'ablation_templates'/track/'request.json').is_file():
+                    # A GPU session relies on the CPU data bundle shipping the
+                    # templates; a bundle built before that contract would
+                    # FileNotFoundError here, so skip with a named reason.
+                    # Local sessions keep the loud read.
+                    events.emit('attribute_ablation_export','skipped',device=cfg.device,
+                                reason='bundle shipped no ablation templates')
+                else:
+                    events.emit('attribute_ablation_export','started',device=cfg.device)
+                    forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
+                        graph_encoder=selected_graph_encoder if track != 'text' else None)
+                    events.emit('attribute_ablation_export','completed',device=cfg.device)
+            if track == 'text':
+                del selected_text_model
+            else:
+                del selected_graph_encoder
     if track == 'text' and not gpu_only:
-        from model_tracks.text_report import complete
-        events.emit('postprocess', 'started', report_test=cfg.report_test)
-        complete(output, setup, device=cfg.device, report_test=cfg.report_test)
-        events.emit('postprocess', 'completed')
+        with _LOG.section('phase.postprocess', track=track, report_test=cfg.report_test):
+            from model_tracks.text_report import complete
+            events.emit('postprocess', 'started', report_test=cfg.report_test)
+            complete(output, setup, device=cfg.device, report_test=cfg.report_test)
+            events.emit('postprocess', 'completed')
         from model_tracks.incremental import ArtifactPublisher
-        with ArtifactPublisher(output) as publisher:
+        with _LOG.section('phase.incremental_publish', track=track):
+            with ArtifactPublisher(output) as publisher:
+                if publisher.enabled:
+                    events.emit('publication', 'started', publication_owner='ArtifactPublisher')
+                    publisher.submit('postprocess', [p for p in output.iterdir()
+                        if p.name.startswith('text__') or p.name == 'profiles'])
+                    events.emit('publication', 'submitted')
+                else:
+                    events.emit('publication', 'skipped', reason='incremental publication disabled')
             if publisher.enabled:
-                events.emit('publication', 'started', publication_owner='ArtifactPublisher')
-                publisher.submit('postprocess', [p for p in output.iterdir()
-                    if p.name.startswith('text__') or p.name == 'profiles'])
-                events.emit('publication', 'submitted')
-            else:
-                events.emit('publication', 'skipped', reason='incremental publication disabled')
-        if publisher.enabled:
-            events.emit('publication', 'context_closed',
-                        detail='publisher context finished; remote receipts are in publication metadata')
+                events.emit('publication', 'context_closed',
+                            detail='publisher context finished; remote receipts are in publication metadata')
     from model_tracks.resume import record_completion
-    record_completion(output, track, postprocess_complete=not gpu_only)
-    events.emit('completion', 'verified', inventory='track_inventory.json',
-                marker='track_complete.json')
+    with _LOG.section('phase.completion', track=track):
+        record_completion(output, track, postprocess_complete=not gpu_only)
+        events.emit('completion', 'verified', inventory='track_inventory.json',
+                    marker='track_complete.json')
 
 
 def main():

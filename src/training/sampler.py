@@ -42,6 +42,11 @@ from typing import Iterator
 
 import numpy as np
 
+from core.perf_switches import perf_enabled
+
+# Share one text-hash pass between the cpu and cuda plans packed for a fold.
+_SHARE_TEXT_HASHES = perf_enabled("text.share_sampler_hashes")
+
 
 def _text_hash_columns(dataset) -> list[str]:
     columns = {"sentence1", "sentence2", "anchor", "positive", "negative"}
@@ -91,6 +96,7 @@ class ControlledBatchSampler:
         seed: int = 0,
         drop_last: bool = False,
         population_column: str = "pair_population",
+        text_hashes: list[frozenset[str]] | None = None,
     ):
         if not composition:
             raise ValueError("composition must be non-empty")
@@ -150,8 +156,14 @@ class ControlledBatchSampler:
         self._epoch = 0
         self._packed_epoch = None
         self._packed_batches = None
-        # Pre-compute text hashes for duplicate detection.
-        self._text_hashes = _row_text_hashes(dataset)
+        # Pre-compute text hashes for duplicate detection, or reuse a hash pass
+        # already computed for the same dataset by a sibling device plan.
+        if text_hashes is not None:
+            if len(text_hashes) != len(dataset):
+                raise ValueError("shared text hashes do not align with dataset rows")
+            self._text_hashes = text_hashes
+        else:
+            self._text_hashes = _row_text_hashes(dataset)
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = epoch

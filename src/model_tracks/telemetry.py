@@ -9,6 +9,20 @@ from pathlib import Path
 import re
 import uuid
 
+from core.perf_switches import perf_enabled
+from core.run_log import RunLogger
+
+_LOG = RunLogger(__name__)
+
+#: Non-lifecycle events. They are still flushed (so a crashed process leaves
+#: them readable) but not fsynced unless they carry a terminal status. Lifecycle
+#: boundaries keep the fsync: durability across a kernel/power loss is the whole
+#: reason this file exists.
+_NONCRITICAL_PHASES = frozenset({'heartbeat', 'worker_spawn', 'command',
+                                 'cpu_budget', 'input_validation'})
+_TERMINAL_STATUSES = frozenset({'failed', 'complete', 'completed', 'passed',
+                                'ok', 'verified', 'skipped'})
+
 
 def _json_default(value):
     """Serialize event payloads at the write boundary.
@@ -58,11 +72,14 @@ class WorkerEvents:
                 return [sanitize(item) for item in value]
             return value
         event = sanitize(event)
+        durable = (not perf_enabled('telemetry.fsync_lifecycle')
+                   or status in _TERMINAL_STATUSES
+                   or phase not in _NONCRITICAL_PHASES)
         with self.path.open('a') as handle:
             handle.write(json.dumps(event, ensure_ascii=False, default=_json_default) + '\n')
             handle.flush()
-            os.fsync(handle.fileno())
-        print(f"[lifecycle/{self.track}] "
-              + json.dumps(event, ensure_ascii=False, default=_json_default),
-              flush=True)
+            if durable:
+                os.fsync(handle.fileno())
+        _LOG.info(f"[lifecycle/{self.track}] "
+                  + json.dumps(event, ensure_ascii=False, default=_json_default))
         return event

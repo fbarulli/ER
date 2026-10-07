@@ -6,6 +6,7 @@ This worker is independent of the existing Colab launcher's dispatch.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -26,10 +27,17 @@ from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.tracking import GraphWandb
 from graph_tracks.data import census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
+from core.perf_switches import perf_enabled
 from core.run_log import RunLogger
 from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
+
+# Performance switches (see core.perf_switches). Each is individually off under
+# ER_PERF_LEGACY=1 so the pre-optimization path stays reachable.
+_FAST_AMP = perf_enabled("graph.amp")
+# Defaults OFF: deterministic algorithms stay on unless explicitly opted out.
+_ALLOW_NONDETERMINISTIC = perf_enabled("graph.allow_nondeterministic", default=False)
 
 
 class SupervisedPairs:
@@ -175,7 +183,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         torch.manual_seed(cfg.seed)
         np.random.seed(cfg.seed)
         random.seed(cfg.seed)
-        torch.use_deterministic_algorithms(True)
+        # Fast CUDA kernels (e.g. atomic-free scatter) are unavailable while
+        # deterministic algorithms are forced. Kept ON by default for parity;
+        # ER_PERF_GRAPH_ALLOW_NONDETERMINISTIC=1 opts into the fast kernels.
+        if not _ALLOW_NONDETERMINISTIC:
+            torch.use_deterministic_algorithms(True)
         from graph_tracks.preflight import load_inputs
         logger.info("[graph-phase] input_validation start listings=%s pairs=%s manifest=%s text_cache=%s output=%s",
                     resolve(cfg.listings), resolve(cfg.pairs), cfg.input_manifest, cfg.text_cache, output)
@@ -198,10 +210,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         support_records = [records[i] for i in support_indices]
         dev_indices = [i for i, record in enumerate(records) if record['split'] == 'dev']
         dev_records = [records[i] for i in dev_indices]
-        support = (load_batch(prepared_arrays, 'train', cfg.device, vocabulary) if prepared_plan
-                   else tensorize(support_records, vocabulary, cfg.device))
-        dev_batch = (load_batch(prepared_arrays, 'dev', cfg.device, vocabulary) if prepared_plan
-                     else tensorize(dev_records, vocabulary, cfg.device))
+        with _LOG.section("graph.support_batch", listings=len(support_records)):
+            support = (load_batch(prepared_arrays, 'train', cfg.device, vocabulary) if prepared_plan
+                       else tensorize(support_records, vocabulary, cfg.device))
+        with _LOG.section("graph.dev_batch", listings=len(dev_records)):
+            dev_batch = (load_batch(prepared_arrays, 'dev', cfg.device, vocabulary) if prepared_plan
+                         else tensorize(dev_records, vocabulary, cfg.device))
         # Query encoding is independent per listing against training-only context.
         # Encode only supervised/evaluated populations, rather than every holdout.
         if prepared_plan:
@@ -232,6 +246,17 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             optimizer, mode="max", factor=cfg.lr_factor, patience=cfg.lr_patience,
             threshold=cfg.early_stopping_threshold, threshold_mode="abs", min_lr=cfg.min_lr)
             if cfg.lr_scheduler == "plateau" else None)
+        # Mixed precision is CUDA-only; CPU stays exact FP32. BF16 is used
+        # natively when the GPU supports it, otherwise FP16 plus a GradScaler
+        # (the T4 case). amp_ctx() is a null-context off the fast path.
+        amp_enabled = _FAST_AMP and cfg.device == "cuda"
+        amp_dtype = torch.bfloat16 if amp_enabled and torch.cuda.is_bf16_supported() else torch.float16
+        grad_scaler = (torch.amp.GradScaler("cuda")
+                       if amp_enabled and amp_dtype is torch.float16 else None)
+        amp_ctx = ((lambda: torch.autocast("cuda", dtype=amp_dtype)) if amp_enabled
+                   else contextlib.nullcontext)
+        logger.info("[graph-amp] enabled=%s device=%s dtype=%s grad_scaler=%s",
+                    amp_enabled, cfg.device, amp_dtype if amp_enabled else None, grad_scaler is not None)
         stopping_best, bad_epochs = -1., 0
         logger.info("[graph-phase] features complete listings=%d training_support=%d text_dim=%d parameters=%d",
                     len(records), len(support_records), model.text_dim,
@@ -394,48 +419,59 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 model.train()
                 scorer.train()
                 optimizer.zero_grad(set_to_none=True)
-                initial = profiler.call('graph/train_initial', model.initial, support, support_text)
-                states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
-                embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
-                scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs,
-                                       text_cosine=train_text_cosine)
-                classification = F.binary_cross_entropy_with_logits(scores.logits, train_labels)
-                cos = scores.cosine
-                metric = (train_labels * (1 - cos) + (1 - train_labels)
-                          * F.relu(cos - cfg.negative_margin)).mean()
-                loss = classification + cfg.metric_weight * metric
+                with _LOG.section("graph.train_forward", epoch=epoch), amp_ctx():
+                    initial = profiler.call('graph/train_initial', model.initial, support, support_text)
+                    states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
+                    embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
+                    scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs,
+                                           text_cosine=train_text_cosine)
+                    classification = F.binary_cross_entropy_with_logits(scores.logits, train_labels)
+                    cos = scores.cosine
+                    metric = (train_labels * (1 - cos) + (1 - train_labels)
+                              * F.relu(cos - cfg.negative_margin)).mean()
+                    loss = classification + cfg.metric_weight * metric
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
-                profiler.call('graph/backward',loss.backward)
-                gradient_parameters = [(parameter_name, parameter) for parameter_name, parameter in model.named_parameters()
-                                       if parameter.grad is not None]
-                gradient_parameters.extend((f'scorer.{parameter_name}', parameter)
-                                           for parameter_name, parameter in scorer.named_parameters()
-                                           if parameter.grad is not None)
-                gradient_statistics = GradientStatistics.collect(gradient_parameters)
-                # Loss telemetry shares the gradient-norm transfer; logging and
-                # persisted metrics reuse these pre-update scalar values.
-                host_values: list[float] = torch.stack([
-                    loss.detach(), classification.detach(), metric.detach(),
-                    *gradient_statistics.norms,
-                ]).detach().cpu().tolist()
-                loss_value, classification_value, metric_value = host_values[:3]
-                norm_values = host_values[3:]
-                gradient_norms = dict(zip((parameter_name for parameter_name, _ in gradient_parameters), norm_values))
-                if not all(np.isfinite(value) for value in gradient_norms.values()):
-                    raise RuntimeError("nonfinite gradients")
-                with (output / name(cfg.track, "gradient_metrics.jsonl")).open("a") as handle:
-                    handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
-                gradient_statistics.clip(cfg.max_grad_norm)
-                profiler.call('graph/optimizer',optimizer.step)
+                with _LOG.section("graph.train_update", epoch=epoch):
+                    scaled = grad_scaler.scale(loss) if grad_scaler is not None else loss
+                    profiler.call('graph/backward', scaled.backward)
+                    gradient_parameters = [(parameter_name, parameter) for parameter_name, parameter in model.named_parameters()
+                                           if parameter.grad is not None]
+                    gradient_parameters.extend((f'scorer.{parameter_name}', parameter)
+                                               for parameter_name, parameter in scorer.named_parameters()
+                                               if parameter.grad is not None)
+                    if grad_scaler is not None:
+                        # Unscale before reading norms so telemetry and clipping
+                        # see the true gradients, not scaler-scaled ones.
+                        grad_scaler.unscale_(optimizer)
+                    gradient_statistics = GradientStatistics.collect(gradient_parameters)
+                    # Loss telemetry shares the gradient-norm transfer; logging and
+                    # persisted metrics reuse these pre-update scalar values.
+                    host_values: list[float] = torch.stack([
+                        loss.detach(), classification.detach(), metric.detach(),
+                        *gradient_statistics.norms,
+                    ]).detach().cpu().tolist()
+                    loss_value, classification_value, metric_value = host_values[:3]
+                    norm_values = host_values[3:]
+                    gradient_norms = dict(zip((parameter_name for parameter_name, _ in gradient_parameters), norm_values))
+                    if not all(np.isfinite(value) for value in gradient_norms.values()):
+                        raise RuntimeError("nonfinite gradients")
+                    with (output / name(cfg.track, "gradient_metrics.jsonl")).open("a") as handle:
+                        handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
+                    gradient_statistics.clip(cfg.max_grad_norm)
+                    if grad_scaler is not None:
+                        profiler.call('graph/optimizer', grad_scaler.step, optimizer)
+                        grad_scaler.update()
+                    else:
+                        profiler.call('graph/optimizer', optimizer.step)
                 scorer.project_similarity_weights()
                 logger.info("[graph-phase] dev_evaluation start epoch=%d/%d dev_pairs=%d",
                             epoch, cfg.epochs, len(dev_pairs))
                 model.eval()
                 scorer.eval()
-                with torch.no_grad(), profiler.section('graph/dev_evaluation'):
+                with torch.no_grad(), profiler.section('graph/dev_evaluation'), _LOG.section("graph.dev_eval", epoch=epoch), amp_ctx():
                     embeddings = model.encode(dev_batch, model.context(support, support_text), dev_text)
-                    dev_scores = scorer.score(embeddings, dev_pairs, text_cosine=dev_text_cosine).logits.sigmoid().cpu().numpy()
+                    dev_scores = scorer.score(embeddings, dev_pairs, text_cosine=dev_text_cosine).logits.float().sigmoid().cpu().numpy()
                 metrics = {"epoch": epoch, "train_loss": loss_value,
                            "train_classification_loss": classification_value,
                            "train_metric_loss": metric_value, **quality(pairs["dev"][1], dev_scores),
@@ -478,7 +514,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                             epoch, checkpoint, improved,
                             'strictly higher dev_pr_auc' if improved else 'dev_pr_auc did not strictly improve',
                             metrics['dev_pr_auc'], previous_best)
-                profiler.call('graph/checkpoint_write',torch.save,payload,checkpoint)
+                with _LOG.section("graph.checkpoint_write", epoch=epoch):
+                    profiler.call('graph/checkpoint_write',torch.save,payload,checkpoint)
                 write_json(checkpoint_dir / name(cfg.track, "trainer_state.json"), {
                     "global_step": epoch, "best_metric": best_metric,
                     "best_model_checkpoint": str(best_path.parent)})

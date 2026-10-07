@@ -31,10 +31,16 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from core.perf_switches import perf_enabled
 from core.run_log import RunLogger
 from core.sku_identity import ProductIdentity, graph_schema
 
 _LOG = RunLogger(__name__)
+
+# Defaults OFF: the full finite/norm scan stays on so corruption detection is
+# unchanged. Opting in skips the O(rows*cols) scan on caches the data gate has
+# already attested; the dtype and provenance guards below always run.
+_CACHE_SKIP_FULL_SCAN = perf_enabled("graph.cache_skip_full_scan", default=False)
 
 # DERIVED, never pinned: the graph carries whatever the shared extractor
 # (`core.sku_identity.row_identity`) yields — string descriptor fields are
@@ -234,7 +240,9 @@ class TextCache:
             raise ValueError('text cache embeddings must persist float32; silent dtype coercion is forbidden')
         if self._metadata.get('embedding_dtype', 'float32') != 'float32':
             raise ValueError('text cache embedding dtype attestation mismatch')
-        if not np.isfinite(self._vectors).all() or np.any(np.linalg.norm(self._vectors, axis=1) <= 1e-12):
+        if not _CACHE_SKIP_FULL_SCAN and (
+                not np.isfinite(self._vectors).all()
+                or np.any(np.linalg.norm(self._vectors, axis=1) <= 1e-12)):
             raise ValueError("text cache contains nonfinite or zero vectors")
         if not self._metadata.get("checkpoint_sha256") or not self._metadata.get("composition"):
             raise ValueError("text cache must identify checkpoint_sha256 and composition")

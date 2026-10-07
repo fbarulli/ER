@@ -13,10 +13,15 @@ from pydantic import BaseModel, ConfigDict
 from sentence_transformers.sentence_transformer.data_collator import SentenceTransformerDataCollator
 
 from core.encoding_inputs import prepare_text_features, tokenization_policy
+from core.perf_switches import perf_enabled
 from core.run_log import RunLogger
 from core.timing import Timing
 
 _LOG = RunLogger(__name__)
+
+# Cache the bound native task contract once at lookup construction instead of
+# re-introspecting the model on every preprocess call.
+_CACHE_BOUND_CONTRACT = perf_enabled("text.bound_task_contract")
 
 TEXT_COLUMNS = {"sentence1", "sentence2", "anchor", "positive", "negative"}
 COLLATOR_TEXT_COLUMNS = set(TEXT_COLUMNS) | {"label", "dataset_name"}
@@ -164,6 +169,7 @@ class PreparedTokenLookup:
         self._require_fixed_membership(payload)
         self.model = model
         self.task_contract = self._require_task_contract(model, table)
+        self._bound_task_contract = self.task_contract
         self.original = model.preprocess
         self.generated = Counter()
         self.model.preprocess = self.preprocess
@@ -205,8 +211,14 @@ class PreparedTokenLookup:
         """No positional args, no post-binding drift, only prepared task routes."""
         if args:
             raise ValueError("prepared training tokens do not support task routing; prepare that task explicitly")
-        if task is not None and PreparedTaskContract.from_model(self.model) != self.task_contract:
-            raise ValueError("native task preprocessing changed after prepared-token binding")
+        if task is not None:
+            current = (
+                self._bound_task_contract
+                if _CACHE_BOUND_CONTRACT
+                else PreparedTaskContract.from_model(self.model)
+            )
+            if current != self.task_contract:
+                raise ValueError("native task preprocessing changed after prepared-token binding")
         self.task_contract.validate_task(task)
 
     def _variant_for(self, prompt: str) -> dict:

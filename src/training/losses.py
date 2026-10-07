@@ -9,8 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from core.perf_switches import perf_enabled
+
 if TYPE_CHECKING:
     from torch import Tensor
+
+# Hoist the per-batch label-smoothing range check to loss construction. The
+# check is unchanged and still runs when this switch is off (ER_PERF_LEGACY=1
+# or ER_PERF_TEXT_SMOOTHING_VALIDATION_HOIST=0).
+_SMOOTHING_VALIDATED = perf_enabled("text.smoothing_validation_hoist")
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,7 @@ def _smoothed_contrastive_losses(
     import torch.nn.functional as F
 
     smoothing = float(label_smoothing)
-    if not 0.0 <= smoothing < 0.5:
+    if not _SMOOTHING_VALIDATED and not 0.0 <= smoothing < 0.5:
         raise ValueError("contrastive label smoothing must be in [0, 0.5)")
     positive_hinge = F.relu(float(margin) - positive_pairs)
     negative_hinge = F.relu(float(margin) - negative_pairs)
@@ -60,21 +67,28 @@ def _tracking_contrastive_loss(
     uniformity_temperature: float,
     uniformity_min_batch_size: int,
     label_smoothing: float,
+    telemetry_enabled: bool = True,
 ):
     """Return OnlineContrastiveLoss with selection/backprop telemetry.
 
     The implementation preserves the installed loss's hard-pair selection
     and arithmetic. It only accumulates detached counters and loss-component
     values during gradient-enabled forwards; ProgressCallback drains them at
-    Trainer logging steps.
+    Trainer logging steps. When ``telemetry_enabled`` is false the exact loss
+    is returned without the per-step payload/accumulation work (the consumers
+    then report empty telemetry).
     """
     import torch
     import torch.nn.functional as F
     from sentence_transformers.sentence_transformer import losses
 
+    if _SMOOTHING_VALIDATED and not 0.0 <= float(label_smoothing) < 0.5:
+        raise ValueError("contrastive label smoothing must be in [0, 0.5)")
+
     class _TrackedOnlineContrastiveLoss(losses.OnlineContrastiveLoss):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
+            self._telemetry_enabled = bool(telemetry_enabled)
             self._tracking_totals: dict[str, float] = {}
             self._tracking_batches = 0
             self._pending_telemetry: list[ContrastiveTelemetryBatch] = []
@@ -202,7 +216,7 @@ def _tracking_contrastive_loss(
 
             # Evaluator forwards are no-grad; only optimizer-facing forwards
             # belong to the backprop attribution window.
-            if torch.is_grad_enabled():
+            if self._telemetry_enabled and torch.is_grad_enabled():
                 scalars = torch.stack([positive_loss.detach(), negative_loss.detach(),
                                        uniformity_loss.detach(), anti_collapse_loss.detach()])
                 payload = torch.cat([labels.detach().ne(0).to(scalars.dtype),

@@ -167,7 +167,7 @@ def test_gpu_worker_skips_ablation_export_without_bundle_templates(tmp_path,monk
     worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
     assert order == ['train','vectors','complete']
     skips = [kwargs for args,kwargs in emitted if args[:2] == ('attribute_ablation_export','skipped')]
-    assert skips and skips[0]['reason'] == 'ablation is not a GPU-session phase (owner order 2026-10-07); bundle ships no templates'
+    assert skips and skips[0]['reason'] == 'bundle shipped no ablation templates'
 
 
 def test_local_worker_keepsloud_ablation_template_error(tmp_path,monkeypatch):

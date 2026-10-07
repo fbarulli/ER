@@ -6,7 +6,10 @@ import shutil
 
 from core.portable_archive import write_archive
 from core.archive_reader import archive_sidecar, archive_settings
+from core.run_log import RunLogger
 from model_tracks.publish import persist_results
+
+_LOG = RunLogger(__name__)
 
 
 def _publish(archive, tag):
@@ -44,8 +47,9 @@ class ArtifactPublisher:
                     files[item.relative_to(self.output).as_posix()] = item
         # Snapshot before returning: checkpoint rotation and mutable reports
         # cannot change the bytes read by the background DVC publisher.
-        archive = write_archive(directory / f'{tag}.{archive_settings().format}', files,
-                                manifest_name='suite_bundle_manifest.json', metadata={'run_tag': tag})
+        with _LOG.section('incremental.archive', files=len(files), generation=generation):
+            archive = write_archive(directory / f'{tag}.{archive_settings().format}', files,
+                                    manifest_name='suite_bundle_manifest.json', metadata={'run_tag': tag})
         self.futures.append(self.executor.submit(_publish, archive, tag))
 
     def check(self):

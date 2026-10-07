@@ -13,11 +13,16 @@ import time
 import torch
 from torch.nn import functional as F
 
+from core.perf_switches import perf_enabled
 from graph_tracks.config import load_config
 from graph_tracks.data import fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
 from graph_tracks.preflight import preflight
 from graph_tracks.train import load_pairs
+
+# Defaults OFF: deterministic algorithms stay on unless explicitly opted out,
+# so the benchmark measures the same kernels the default trainer uses.
+_ALLOW_NONDETERMINISTIC = perf_enabled("graph.allow_nondeterministic", default=False)
 
 
 def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
@@ -32,7 +37,8 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
     info = preflight(config, check_device=False)
     cfg = load_config(config)
     torch.manual_seed(cfg.seed)
-    torch.use_deterministic_algorithms(True)
+    if not _ALLOW_NONDETERMINISTIC:
+        torch.use_deterministic_algorithms(True)
     resolve = lambda raw: (TRAIN_ROOT / raw).resolve()
     records = load_records(resolve(cfg.listings))
     pairs = load_pairs(resolve(cfg.pairs), records)['train']

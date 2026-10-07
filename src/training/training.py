@@ -76,6 +76,7 @@ from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
 from core.timing import emit_timing
 from core.step_trace import send, timed, trace_step
+from core.perf_switches import perf_enabled
 
 # D7 telemetry: wall seconds spent inside load_config's deepcopy, keyed by
 # call-site label (fold{n}.* for per-fold sites); aggregated per fold and
@@ -114,6 +115,14 @@ N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
 ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
 MASK_TRACK_PER_EPOCH = bool(config_section("masking", "track_per_epoch"))
 TRACK_DATAPOINT_USAGE = bool(config_section("training", "track_datapoint_usage"))
+# Contrastive per-step telemetry is skipped only when the run has disabled
+# datapoint tracking (the consumers of that telemetry) AND the switch is on.
+# With the default config (track_datapoint_usage: true) the exact telemetry
+# artifacts are preserved; ER_PERF_LEGACY=1 always collects.
+_COLLECT_CONTRASTIVE_TELEMETRY = not (
+    perf_enabled("text.contrastive_telemetry_gate") and not TRACK_DATAPOINT_USAGE
+)
+_SHARE_TEXT_HASHES = perf_enabled("text.share_sampler_hashes")
 _UNIFORMITY_CFG = config_section("training", "uniformity_regularization")
 # ── DATAPOINT POPULATION REGISTRY (SSOT for the coverage audit) ────────────
 # DERIVED FROM THE PRODUCERS, not hand-kept beside them (audit A4-2). Every
@@ -1508,6 +1517,7 @@ def _make_loss(
     twin_warmup_enabled: bool = False,
     twin_warmup_epochs: int = 2,
     twin_weight: float = 0.25,
+    contrastive_telemetry_enabled: bool = True,
 ):
     """Loss factory (SSOT knobs: training.loss / training.contrastive_margin).
 
@@ -1550,6 +1560,7 @@ def _make_loss(
             uniformity_temperature=uniformity_temperature,
             uniformity_min_batch_size=uniformity_min_batch_size,
             label_smoothing=label_smoothing,
+            telemetry_enabled=contrastive_telemetry_enabled,
         )
     return losses.TripletLoss(model)
 
@@ -2888,7 +2899,31 @@ def _discriminative_groups(
     return groups
 
 
+# Per-process memo of the two read-only CSV artifacts. Keyed by (path, mtime,
+# size) like folds.LabeledPairsCache, so a rebound F (tests, prepared-bundle
+# materialization) or an in-place regeneration still loads fresh.
+_ARTIFACT_CACHE = perf_enabled("text.artifact_cache")
+_CANONICAL_METADATA_CACHE: dict[tuple, dict] = {}
+_GATE_LOOKUP_CACHE: dict[tuple, dict] = {}
+
+
+def _artifact_cache_key(path: Path) -> tuple:
+    if not _ARTIFACT_CACHE:
+        return (str(path),)
+    try:
+        stat = Path(path).stat()
+        return (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return (str(path),)
+
+
+@timed
 def _load_canonical_metadata() -> dict[str, dict]:
+    cache_key = _artifact_cache_key(F["canonical_records"])
+    if _ARTIFACT_CACHE:
+        cached = _CANONICAL_METADATA_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     records = pd.read_csv(
         F["canonical_records"], dtype=str, keep_default_na=False
     )
@@ -2911,10 +2946,13 @@ def _load_canonical_metadata() -> dict[str, dict]:
         )
     if records["gtin"].duplicated().any():
         raise ValueError("canonical_records.csv contains duplicate GTIN rows")
-    return {
+    result = {
         str(row["gtin"]): row.to_dict()
         for _, row in records.iterrows()
     }
+    if _ARTIFACT_CACHE:
+        _CANONICAL_METADATA_CACHE[cache_key] = result
+    return result
 
 
 def _sku_payload_metadata(index: int, row, gtin: str, text: str) -> dict:
@@ -2982,6 +3020,11 @@ def _canonical_payload_metadata(
 @timed
 def _load_gate_lookup() -> dict[tuple[str, str], dict[str, object]]:
     gate_path = F["gate_results"]
+    cache_key = _artifact_cache_key(gate_path)
+    if _ARTIFACT_CACHE:
+        cached = _GATE_LOOKUP_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     if not gate_path.is_file():
         raise FileNotFoundError(f"gate metadata is missing: {gate_path}")
     gates = pd.read_csv(gate_path, dtype=str, keep_default_na=False)
@@ -3001,9 +3044,12 @@ def _load_gate_lookup() -> dict[tuple[str, str], dict[str, object]]:
             if key in lookup and lookup[key] != value:
                 raise ValueError(f"conflicting gate metadata for GTIN pair: {key}")
             lookup[key] = value
+    if _ARTIFACT_CACHE:
+        _GATE_LOOKUP_CACHE[cache_key] = lookup
     return lookup
 
 
+@timed
 def _build_payload_metadata(
     df: pd.DataFrame,
     payload: list[str],
@@ -3916,13 +3962,18 @@ def _load_labeled_different_positive_pairs(
         raise FileNotFoundError(
             "labeled-pairs calibration input is missing: " f"{labeled_path}"
         )
-    labeled = check_labeled_pairs_frame(
-        pd.read_csv(
-            labeled_path,
-            dtype={"gtin1": str, "gtin2": str},
-            keep_default_na=False,
+    if _ARTIFACT_CACHE:
+        from training.folds import load_labeled_pairs
+
+        labeled = check_labeled_pairs_frame(load_labeled_pairs(labeled_path))
+    else:
+        labeled = check_labeled_pairs_frame(
+            pd.read_csv(
+                labeled_path,
+                dtype={"gtin1": str, "gtin2": str},
+                keep_default_na=False,
+            )
         )
-    )
     labels = pd.to_numeric(labeled["true_label"], errors="raise").astype(int)
     positives = labeled.loc[
         (labels == 1)
@@ -4082,6 +4133,7 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
     epochs = int(_timed_load_config(f"fold{fold_i}.epochs")["training"]["epochs"])
     packed = {}
     grouped_ds = None
+    shared_text_hashes = None
     for device, batch_size in (("cpu", BATCH_SIZE_CPU), ("cuda", BATCH_SIZE_CUDA)):
         device_started = time.perf_counter()
         print(f"[plan-sampler] start device={device} batch_size={batch_size} rows={len(ds):,} epochs={epochs}", flush=True)
@@ -4090,8 +4142,16 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
             composition = resolve_composition(weights, sampler_populations, batch_size)
             if grouped_ds is None:
                 grouped_ds = ds.add_column("sampler_population", sampler_populations)
+            if _SHARE_TEXT_HASHES:
+                if shared_text_hashes is None:
+                    from training.sampler import _row_text_hashes
+                    shared_text_hashes = _row_text_hashes(grouped_ds)
+                text_hashes = shared_text_hashes
+            else:
+                text_hashes = None
             sampler = ControlledBatchSampler(grouped_ds, batch_size, composition, seed=int(bs_cfg["seed"]),
-                                              population_column="sampler_population")
+                                              population_column="sampler_population",
+                                              text_hashes=text_hashes)
         else:
             import torch
             from sentence_transformers.base.sampler import NoDuplicatesBatchSampler, DefaultBatchSampler
@@ -4325,13 +4385,20 @@ def prepare_fixed_training_inputs(
                     pairs.add((a, b))
                     pairs.add((b, a))
 
-            labeled = check_labeled_pairs_frame(
-                pd.read_csv(
-                    RESULTS / F["labeled_pairs"],
-                    dtype={"gtin1": str, "gtin2": str},
-                    keep_default_na=False,
+            if _ARTIFACT_CACHE:
+                from training.folds import load_labeled_pairs
+
+                labeled = check_labeled_pairs_frame(
+                    load_labeled_pairs(RESULTS / F["labeled_pairs"])
                 )
-            )
+            else:
+                labeled = check_labeled_pairs_frame(
+                    pd.read_csv(
+                        RESULTS / F["labeled_pairs"],
+                        dtype={"gtin1": str, "gtin2": str},
+                        keep_default_na=False,
+                    )
+                )
             labels = pd.to_numeric(labeled["true_label"], errors="raise").astype(int)
             positives = labeled.loc[labels == 1]
             for left, right in zip(positives["gtin1"], positives["gtin2"], strict=True):
@@ -5387,6 +5454,7 @@ def train_one_config(
                     twin_warmup_enabled=bool(mnrl_cfg.twin_loss_warmup.enabled),
                     twin_warmup_epochs=int(mnrl_cfg.twin_loss_warmup.warmup_epochs),
                     twin_weight=float(mnrl_cfg.twin_loss_warmup.twin_weight),
+                    contrastive_telemetry_enabled=_COLLECT_CONTRASTIVE_TELEMETRY,
                 )
                 if loss == "mnrl" and hasattr(loss_fn, "set_triple_populations"):
                     loss_fn.set_triple_populations(triple_populations)

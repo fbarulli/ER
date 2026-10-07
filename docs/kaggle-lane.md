@@ -127,11 +127,11 @@ completes), `--key-env`, `--revision` (pin; default current HEAD).
 | `10k` | `dataset_10k.csv` | `ER_COHORT_TAG=10k` |
 
 The remap is copy-on-checkout — the commit carries the bytes, no upload round
-trip (kaggle_lane.py:407–415). Kaggle sessions ship the bundle without ablation
-templates: no CPU staging exists anywhere, and the GPU suite session runs no
-ablation at all — the suite records `ablation skipped` with the reason
-'ablation is not a GPU-session phase (owner order 2026-10-07)'. Ablation
-artifacts come from local/Colab CPU suite runs, not the Kaggle session.
+trip (kaggle_lane.py:407–415). Ablation staging lives in the CPU data bundle:
+`training.prepare_all` → `model_tracks.package._prepare_exports` mints the
+per-track `ablation_templates/` on the prep machine, so the bundle ships them
+and every training suite session (CPU or GPU) forwards from the shipped
+templates instead of staging on the accelerator.
 
 ## Config (SSOT: `config/training.yaml` → `kaggle:`)
 
@@ -248,7 +248,7 @@ publish to the wrong target.
 
 | intent | command | remote surface | artifacts | teardown |
 |---|---|---|---|---|
-| kaggle CPU bundle (any cohort) | `er-kaggle --what bundle-kernel --cohort full\|50pct\|10k --execute`, then `--what supervise --kind bundle --execute` — or the whole loop via `--what chain --cohort <c> --execute` | CPU kernel: pinned clone → cohort remap → `prepare_all` (no ablation staging — the bundle ships without ablation templates) | `all_tracks_inputs.tar.zst` + `bundle.receipt.json` → verified `results/kaggle_lane/<cohort>/bundle/`; then the publish default (`<cohort>_bundle_dataset` → fresh dataset version) | session ends with the kernel; supervise auto-stops on failure |
+| kaggle CPU bundle (any cohort) | `er-kaggle --what bundle-kernel --cohort full\|50pct\|10k --execute`, then `--what supervise --kind bundle --execute` — or the whole loop via `--what chain --cohort <c> --execute` | CPU kernel: pinned clone → cohort remap → `prepare_all` (stages the per-track ablation templates into the bundle) | `all_tracks_inputs.tar.zst` + `bundle.receipt.json` → verified `results/kaggle_lane/<cohort>/bundle/`; then the publish default (`<cohort>_bundle_dataset` → fresh dataset version) | session ends with the kernel; supervise auto-stops on failure |
 | kaggle GPU train chain (train + embed, 10k) | `er-kaggle --what chain --cohort 10k --with-embed --execute` (steps 1–6 manual list replaced by the chain op above) | GPU kernels `er-train-gpu`, `er-embed-gpu` | `train.tar.zst`, `vectors.tar.zst` verified installs; `chain.receipt.json` | watcher release + stop stub on error |
 | kaggle status | `er-kaggle --what kernel-status --kernel cpu\|gpu\|embed` | status API only | console JSON | none |
 | kaggle logs | `er-kaggle --what kernel-logs --kernel <k> [--follow]` or `--what kernel-stream --kernel <k>` | status polling / SSE stream | `logs/kaggle/*` | stream closes at session teardown |

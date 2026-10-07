@@ -127,3 +127,6 @@ dashboard/diagrams/
 # Local scratch space for temporary work (never committed)
 scratch/
 data/track_setup.pre_rename_stale/
+
+# Local profiling artifacts (generated; rebuild with scripts/training_profile.py)
+training_profile/

@@ -7,10 +7,13 @@ from pathlib import Path
 import re
 import sys
 
+from core.archive_reader import archive_sidecar
+from core.run_log import RunLogger
 from model_tracks.config import load_config
 from model_tracks.parallel import mps_environment, run_parallel
 from model_tracks.preflight import preflight
-from core.archive_reader import archive_sidecar
+
+_LOG = RunLogger(__name__)
 
 
 def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Path:
@@ -63,16 +66,17 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     if cfg.dvc_enabled and not gpu_only and not os.environ.get('DVC_API_KEY'):
         raise RuntimeError('DVC_API_KEY is required before training a publishing suite')
     events.emit('preflight', 'starting')
-    if gpu_only:
-        from core.common import TRAIN_ROOT
-        inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
-    else:
-        # When this suite exports the baseline itself, the hybrid text cache is a
-        # declared pending input at preflight time: it is produced by the export
-        # a few lines below.  Verifying it as missing-and-bound-to-a-checked
-        # embedding request is what lets preflight run before the export instead
-        # of demanding bytes that do not exist yet.
-        inputs = preflight(config, allow_gpu_pending=cfg.post_training_ablation)
+    with _LOG.section('phase.preflight', gpu_only=gpu_only):
+        if gpu_only:
+            from core.common import TRAIN_ROOT
+            inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
+        else:
+            # When this suite exports the baseline itself, the hybrid text cache is a
+            # declared pending input at preflight time: it is produced by the export
+            # a few lines below.  Verifying it as missing-and-bound-to-a-checked
+            # embedding request is what lets preflight run before the export instead
+            # of demanding bytes that do not exist yet.
+            inputs = preflight(config, allow_gpu_pending=cfg.post_training_ablation)
     # Reject an unusable parallel runtime before the baseline consumes GPU
     # time. MPS is a required capability for this suite, not a late fallback.
     if cfg.device == 'cuda':
@@ -90,41 +94,30 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from model_tracks.baseline_export import forward as forward_baseline
         from core.common import resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
-        events.emit('baseline_embedding','started',device=cfg.device)
-        baseline, baseline_model = forward_baseline(setup,Path(resolve_model(cfg.text_model)),device=cfg.device,return_model=True)
-        # Keep this verified encoder through baseline ablation, then release
-        # supervisor allocations before workers create their CUDA allocators.
-        import torch
-        import shutil
-        baseline_output = output/'baseline'
-        baseline_output.mkdir(exist_ok=True)
-        shutil.copy2(baseline,baseline_output/baseline.name)
-        events.emit('baseline_embedding','completed',device=cfg.device)
+        with _LOG.section('phase.baseline_embedding', device=cfg.device):
+            events.emit('baseline_embedding','started',device=cfg.device)
+            baseline, baseline_model = forward_baseline(setup,Path(resolve_model(cfg.text_model)),device=cfg.device,return_model=True)
+            # Keep this verified encoder through baseline ablation, then release
+            # supervisor allocations before workers create their CUDA allocators.
+            import torch
+            import shutil
+            baseline_output = output/'baseline'
+            baseline_output.mkdir(exist_ok=True)
+            shutil.copy2(baseline,baseline_output/baseline.name)
+            events.emit('baseline_embedding','completed',device=cfg.device)
         if cfg.post_training_ablation:
+            # Ablation staging lives in the CPU data bundle (model_tracks.package
+            # _prepare_exports), so every session forwards from the shipped
+            # per-track templates and no accelerator time is spent staging them.
             from model_tracks.baseline_ablation import forward as forward_baseline_ablation
-            # GPU sessions stage the GPU-side suite themselves; bundle
-            # templates are complete for this lane.
             template = setup/'ablation_templates'/'text'/'request.json'
-            if not template.is_file():
-                events.emit('ablation_staging','started',device=cfg.device)
-                from training.prepared_bundle import load_prepared_bundle
-                from model_tracks.package import _release_bundle, _make_composer
-                _, staging_bundle = load_prepared_bundle((TRAIN_ROOT/cfg.text_bundle).resolve())
-                try:
-                    from model_tracks.staged_ablation import prepare_suite
-                    # baseline must be the local checkpoint DIRECTORY (the
-                    # same anchor package.py passes); the EXPORT file is the
-                    # baseline_output copy only.
-                    prepare_suite(setup, Path(resolve_model(cfg.text_model)),
-                                  TRAIN_ROOT/cfg.ablation_config,
-                                  composer=_make_composer(), token_cache={},
-                                  bundle=staging_bundle)
-                finally:
-                    _release_bundle((TRAIN_ROOT/cfg.text_bundle).resolve())
-                events.emit('ablation_staging','completed',device=cfg.device)
-            events.emit('baseline_ablation','started',device=cfg.device)
-            forward_baseline_ablation(baseline_output,setup,Path(resolve_model(cfg.text_model)),device=cfg.device,text_model=baseline_model)
-            events.emit('baseline_ablation','completed',device=cfg.device)
+            if template.is_file():
+                events.emit('baseline_ablation','started',device=cfg.device)
+                forward_baseline_ablation(baseline_output,setup,Path(resolve_model(cfg.text_model)),device=cfg.device,text_model=baseline_model)
+                events.emit('baseline_ablation','completed',device=cfg.device)
+            else:
+                events.emit('ablation', 'skipped', device=cfg.device,
+                            reason='bundle shipped no ablation templates')
         del baseline_model
         torch.cuda.empty_cache()
     # Every data test runs here: once, on the machine that will train, after the
@@ -134,9 +127,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # time training instead of re-arguing shared immutable inputs.
     from model_tracks.data_gate import validate as validate_data
     events.emit('data_gate', 'starting')
-    gate = validate_data(config, allow_gpu_pending=True,
-                         suite_inputs=None if gpu_only else inputs)
-    events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
+    with _LOG.section('phase.data_gate'):
+        gate = validate_data(config, allow_gpu_pending=True,
+                             suite_inputs=None if gpu_only else inputs)
+        events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
@@ -187,18 +181,21 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_DATA_GATE_GPU_PENDING': '1',
            'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
-    if not commands:
-        result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}
-    elif cfg.device == 'cuda':
-        with mps_environment(output) as mps_env:
-            result = run_parallel(commands, output, {**env, **mps_env, 'PYTHONPATH':str(TRAIN_ROOT/'src')}, resume=resume)
-    else:
-        result = run_parallel(commands, output, env, resume=resume)
+    with _LOG.section('phase.worker_launch', workers=len(commands), device=cfg.device):
+        if not commands:
+            result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}
+        elif cfg.device == 'cuda':
+            share = max(1, 100 // len(commands)) if commands else None
+            with mps_environment(output, thread_percentage=share) as mps_env:
+                result = run_parallel(commands, output, {**env, **mps_env, 'PYTHONPATH':str(TRAIN_ROOT/'src')}, resume=resume)
+        else:
+            result = run_parallel(commands, output, env, resume=resume)
     result['skipped_verified_tracks'] = skipped
     # Validate the current artifact generation, not just completion markers.
-    for track in TRACKS:
-        if not completed_track(output / track, track, postprocess_complete=not gpu_only):
-            raise ValueError(f'incomplete track: {track}')
+    with _LOG.section('phase.completion', tracks=len(TRACKS)):
+        for track in TRACKS:
+            if not completed_track(output / track, track, postprocess_complete=not gpu_only):
+                raise ValueError(f'incomplete track: {track}')
     if cfg.post_training_ablation and not gpu_only:
         from model_tracks.baseline_ablation import complete as complete_baseline
         from model_tracks.post_training_ablation import complete_saved
@@ -217,16 +214,18 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             raise FileExistsError(archive_path)
         from model_tracks.resume import verify_suite_archive
         verify_suite_archive(archive_path, output, run_tag, identity, postprocess_complete=not gpu_only)
-        archive_sidecar(archive_path, '.sha256').write_text(file_hash(archive_path) + '\n')
-        events.emit('collection', 'verified', archive=str(archive_path), sha256=file_hash(archive_path),
+        archive_sha = file_hash(archive_path)
+        archive_sidecar(archive_path, '.sha256').write_text(archive_sha + '\n')
+        events.emit('collection', 'verified', archive=str(archive_path), sha256=archive_sha,
                     reused=True)
-        if cfg.dvc_enabled and not gpu_only:
-            from model_tracks.local_complete import _publish
-            events.emit('publication', 'starting', archive=str(archive_path))
-            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
-            events.emit('publication', 'complete')
-        else:
-            events.emit('publication', 'skipped', reason='publication disabled in suite config')
+        with _LOG.section('phase.publication', reused=True):
+            if cfg.dvc_enabled and not gpu_only:
+                from model_tracks.local_complete import _publish
+                events.emit('publication', 'starting', archive=str(archive_path))
+                _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
+                events.emit('publication', 'complete')
+            else:
+                events.emit('publication', 'skipped', reason='publication disabled in suite config')
         return archive_path
     from core.portable_archive import RESULT_ARCHIVE_EXCLUDED_DIRS
     files = {p.relative_to(output).as_posix(): p for p in output.rglob('*')
@@ -238,17 +237,20 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
              and not any(part.endswith('__payload') for part in p.relative_to(output).parts)
              and not ('.dvc' in p.relative_to(output).parts and 'cache' in p.relative_to(output).parts)}
     from core.portable_archive import write_archive
-    write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag}, profile=cfg.profiling)
-    archive_sidecar(archive_path, '.sha256').write_text(file_hash(archive_path)+'\n')
-    events.emit('collection', 'complete', archive=str(archive_path), sha256=file_hash(archive_path),
-                bytes=archive_path.stat().st_size)
-    if cfg.dvc_enabled and not gpu_only:
-        from model_tracks.local_complete import _publish
-        events.emit('publication', 'starting', archive=str(archive_path))
-        _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
-        events.emit('publication', 'complete')
-    else:
-        events.emit('publication', 'skipped', reason='publication disabled in suite config')
+    with _LOG.section('phase.archive_write', files=len(files), format=cfg.result_archive_format):
+        write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag}, profile=cfg.profiling)
+        archive_sha = file_hash(archive_path)
+        archive_sidecar(archive_path, '.sha256').write_text(archive_sha + '\n')
+        events.emit('collection', 'complete', archive=str(archive_path), sha256=archive_sha,
+                    bytes=archive_path.stat().st_size)
+    with _LOG.section('phase.publication', reused=False):
+        if cfg.dvc_enabled and not gpu_only:
+            from model_tracks.local_complete import _publish
+            events.emit('publication', 'starting', archive=str(archive_path))
+            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
+            events.emit('publication', 'complete')
+        else:
+            events.emit('publication', 'skipped', reason='publication disabled in suite config')
     return archive_path
 
 

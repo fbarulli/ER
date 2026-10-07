@@ -31,7 +31,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.perf_switches import perf_enabled
+from core.run_log import RunLogger
+from core.step_trace import timed
 from model_tracks.config import load_config
+
+_LOG = RunLogger(__name__)
 
 #: Set by the supervisor for its children; holds the gate attestation.
 ATTESTATION_ENV = 'ER_DATA_GATE'
@@ -105,10 +110,10 @@ def _repo_relative(path: Path) -> str:
 
 def _required(path: Path, owner: str) -> str:
     """Digest a declared input; its absence is a failure, never a skip."""
-    from graph_tracks.data import file_hash
+    from core.portable_archive import cached_file_digest
     if not path.is_file():
         raise FileNotFoundError(f'data gate input missing: {owner} -> {_repo_relative(path)}')
-    return file_hash(path)
+    return cached_file_digest(path)
 
 
 def _suite_digest(config: Path) -> str:
@@ -122,6 +127,7 @@ def _suite_digest(config: Path) -> str:
     return digest.hexdigest()
 
 
+@timed
 def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str, str]:
     """Digest every prepared input the gate verifies, keyed by owner.
 
@@ -130,8 +136,8 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
     enforcement active.
     """
     from core.common import TRAIN_ROOT, F
+    from core.portable_archive import cached_file_digest
     from graph_tracks.config import load_config as load_graph_config
-    from graph_tracks.data import file_hash
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     bundle = (TRAIN_ROOT / cfg.text_bundle).resolve()
@@ -169,7 +175,7 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
             path = (TRAIN_ROOT / raw).resolve()
             owner = f'{track}.{key}'
             if path.is_file():
-                digests[owner] = file_hash(path)
+                digests[owner] = cached_file_digest(path)
             elif key == 'text_cache' and allow_gpu_pending:
                 digests[owner] = GPU_PENDING
             else:
@@ -178,6 +184,7 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
     return digests
 
 
+@timed
 def attestation(config: Path, *, allow_gpu_pending: bool = False) -> str:
     """The digest a worker must match to treat the gate as proof."""
     config = _resolve(config)
@@ -192,7 +199,10 @@ def attestation(config: Path, *, allow_gpu_pending: bool = False) -> str:
     return digest.hexdigest()
 
 
-_enforced: bool | None = None
+#: Per-process memo of `enforced` verdicts, keyed by (resolved config, pending).
+#: A worker asks the same question several times (gate, preflight, trainer);
+#: replaying `attestation` for each is redundant re-hashing of the same bytes.
+_enforced: dict | None = None
 
 
 def _gpu_pending() -> bool:
@@ -216,19 +226,31 @@ def enforced(config: Path, *, allow_gpu_pending: bool = False) -> bool:
     expected = os.environ.get(ATTESTATION_ENV)
     if not expected:
         return True
-    return expected != attestation(_resolve(config),
-        allow_gpu_pending=allow_gpu_pending or _gpu_pending())
+    resolved = _resolve(config)
+    pending = allow_gpu_pending or _gpu_pending()
+    if perf_enabled('data_gate.enforced_memo'):
+        global _enforced
+        if _enforced is None:
+            _enforced = {}
+        key = (str(resolved), pending)
+        verdict = _enforced.get(key)
+        if verdict is None:
+            verdict = expected != attestation(resolved, allow_gpu_pending=pending)
+            _enforced[key] = verdict
+        return verdict
+    return expected != attestation(resolved, allow_gpu_pending=pending)
 
 
 def trusted(config: Path, owner: str, *, allow_gpu_pending: bool = False) -> bool:
     """Record that the gate already proved these inputs, and say so once."""
     if enforced(config, allow_gpu_pending=allow_gpu_pending):
         return False
-    print(f'[data-gate] {owner}: verified before training by the suite gate; '
-          'configuration and input bytes unchanged', flush=True)
+    _LOG.info(f'[data-gate] {owner}: verified before training by the suite gate; '
+              'configuration and input bytes unchanged')
     return True
 
 
+@timed
 def validate(config: Path, *, suite_inputs: dict | None = None,
              allow_gpu_pending: bool = False,
              native_token_model: Path | None = None) -> DataGateResult:

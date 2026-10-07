@@ -1,13 +1,45 @@
-"""Explicit execution policies and reusable detached GPU diagnostics."""
+"""Explicit execution policies and reusable detached GPU diagnostics.
+
+The ``auto`` optimizer backend is upgraded by two opt-in switches (both
+disabled by ``ER_PERF_LEGACY=1``):
+
+  * ``accel.optimizer_fused``   -- on CUDA, prefer fused AdamW when the
+    installed torch actually exposes it (``auto`` -> ``fused``).
+  * ``accel.optimizer_foreach`` -- otherwise, on CPU or fused-less CUDA, use
+    the ``foreach`` AdamW path when available (``auto`` -> ``foreach``).
+
+Explicit backends (``foreach``/``fused``/``cuda_fused``) are unchanged and the
+frozen ``validate_restored`` contract still compares the recorded flags
+against the same resolution used at construction.
+"""
 from __future__ import annotations
 
+import functools
+import inspect
 from dataclasses import dataclass
 from typing import Iterable
 
 import torch
 
 from core.execution_policy import OptimizerBackend, ResolvedOptimizerBackend
+from core.perf_switches import perf_enabled
 from pydantic import BaseModel, ConfigDict
+
+
+@functools.lru_cache(maxsize=1)
+def _adamw_supports(name: str) -> bool:
+    """Probe whether this torch's AdamW accepts ``name`` (never assume)."""
+    try:
+        return name in inspect.signature(torch.optim.AdamW).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _device_type(device: str | torch.device) -> str:
+    try:
+        return torch.device(device).type
+    except (RuntimeError, TypeError, ValueError):
+        return 'cpu'
 
 
 class OptimizerExecution(BaseModel):
@@ -15,9 +47,26 @@ class OptimizerExecution(BaseModel):
     backend: OptimizerBackend
 
     def resolved_backend(self, device: str | torch.device) -> ResolvedOptimizerBackend:
+        device_type = _device_type(device)
         if self.backend == 'cuda_fused':
-            return 'fused' if torch.device(device).type == 'cuda' else 'auto'
-        return self.backend
+            if device_type == 'cuda' and torch.cuda.is_available() and _adamw_supports('fused'):
+                return 'fused'
+            return 'auto'
+        if self.backend != 'auto':
+            return self.backend
+        # ``auto``: opt-in accelerators, only when the installed torch supports
+        # the flag and the device is actually usable. Explicit backends never
+        # change, and an unavailable device stays ``auto`` (construction fails
+        # later, exactly as before).
+        if device_type == 'cuda' and torch.cuda.is_available():
+            if perf_enabled('accel.optimizer_fused') and _adamw_supports('fused'):
+                return 'fused'
+            if perf_enabled('accel.optimizer_foreach') and _adamw_supports('foreach'):
+                return 'foreach'
+            return 'auto'
+        if device_type == 'cpu' and perf_enabled('accel.optimizer_foreach') and _adamw_supports('foreach'):
+            return 'foreach'
+        return 'auto'
 
     def kwargs(self, device: str | torch.device) -> dict[str, bool]:
         backend = self.resolved_backend(device)

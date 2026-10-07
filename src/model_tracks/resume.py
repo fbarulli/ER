@@ -1,13 +1,13 @@
 """Portable suite identity and verified worker completion for recovery."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
 from core.archive_reader import open_archive
+from core.portable_archive import Digest, RuntimeSnapshot, cached_file_digest
+from core.step_trace import timed
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
-from core.portable_archive import Digest, RuntimeSnapshot
 from model_tracks.config import SuiteConfig
 
 TRACKS = ('text', 'gnn_only', 'hybrid')
@@ -146,11 +146,13 @@ def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: di
 
 
 def digest(path: Path) -> str:
-    result = hashlib.sha256()
-    with path.open('rb') as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-            result.update(chunk)
-    return result.hexdigest()
+    """SHA256 of one artifact, memoized per process on (path, mtime_ns, size).
+
+    Completion is checked repeatedly over the same unchanged artifacts within a
+    run; the cache removes the repeated reads while a rewrite (different
+    mtime/size) still forces a fresh hash and is detected.
+    """
+    return cached_file_digest(path)
 
 
 def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> dict[str, Any]:
@@ -206,6 +208,7 @@ def artifact_files(output: Path) -> list[Path]:
             and not path.name.endswith('.log')]
 
 
+@timed
 def record_completion(output: Path, track: Track, *, postprocess_complete: bool = True) -> None:
     files = {path.relative_to(output).as_posix(): digest(path) for path in artifact_files(output)}
     if not files:
@@ -217,6 +220,7 @@ def record_completion(output: Path, track: Track, *, postprocess_complete: bool 
     atomic_write_text(output / 'track_complete.json', completion.model_dump_json() + '\n')
 
 
+@timed
 def completed_track(output: Path, track: Track, *, postprocess_complete: bool = True) -> bool:
     marker = output / 'track_complete.json'
     if not marker.exists():

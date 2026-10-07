@@ -10,9 +10,11 @@ import tempfile
 import time
 import uuid
 
+from core.perf_switches import perf_enabled
+
 
 @contextmanager
-def mps_environment(root: Path):
+def mps_environment(root: Path, *, thread_percentage: int | None = None):
     control = shutil.which('nvidia-cuda-mps-control')
     if not control:
         raise RuntimeError('true multi-process GPU parallelism requires NVIDIA MPS in this runtime')
@@ -24,6 +26,11 @@ def mps_environment(root: Path):
     logs.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, 'CUDA_MPS_PIPE_DIRECTORY': str(pipes.resolve()),
            'CUDA_MPS_LOG_DIRECTORY': str(logs.resolve())}
+    if thread_percentage and perf_enabled('parallel.mps_threads'):
+        # Each concurrent worker gets an equal share of the GPU's SM threads;
+        # without this every client may try to occupy the whole device.
+        env['CUDA_MPS_ACTIVE_THREAD_PERCENTAGE'] = str(
+            max(1, min(100, int(thread_percentage))))
     startup = subprocess.run([control, '-d'], env=env, capture_output=True,
                              text=True, timeout=30)
     if startup.returncode:
@@ -89,6 +96,12 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
                           'EUROMONITOR_RUN_ID': f'{root.name}-{track}',
                           'OMP_NUM_THREADS': str(worker_threads),
                           'MKL_NUM_THREADS': str(worker_threads)}
+            if perf_enabled('parallel.thread_pinning'):
+                # BLAS backends other than OpenMP/MKL size their own pools from
+                # these; pin them so three workers cannot each grab every core.
+                worker_env.update(OPENBLAS_NUM_THREADS=str(worker_threads),
+                                  NUMEXPR_NUM_THREADS=str(worker_threads),
+                                  VECLIB_MAXIMUM_THREADS=str(worker_threads))
             (root / track / 'wandb').mkdir(parents=True, exist_ok=True)
             processes[track] = subprocess.Popen(command, env=worker_env, stdout=log,
                                                  stderr=subprocess.STDOUT, start_new_session=True)

@@ -11,10 +11,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from core.perf_switches import perf_enabled
 from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.data import file_hash, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
 from graph_tracks.train import write_json
+
+# CUDA-only: keep encoded batches on device and transfer once instead of
+# syncing the host after every query batch. CPU keeps the original path.
+_INFER_BATCHED_TRANSFER = perf_enabled("graph.infer_batched_transfer")
 
 
 class GraphEncoder:
@@ -59,13 +64,20 @@ class GraphEncoder:
 
     def encode_prepared(self, batches, text=None):
         """Forward already tensorized batches; preparation may run locally."""
-        chunks, start = [], 0
+        chunks, pending, start = [], [], 0
+        batched_transfer = _INFER_BATCHED_TRANSFER and torch.device(self.device).type == 'cuda'
         with torch.no_grad():
             for batch in batches:
                 end = start + len(batch.numeric)
                 vectors = None if text is None else torch.as_tensor(text[start:end], device=self.device)
-                chunks.append(self.model.encode(batch, self.states, vectors).cpu().numpy())
+                encoded = self.model.encode(batch, self.states, vectors)
+                if batched_transfer:
+                    pending.append(encoded)
+                else:
+                    chunks.append(encoded.cpu().numpy())
                 start = end
+        if pending:
+            chunks.append(torch.cat(pending).cpu().numpy())
         if not chunks or (text is not None and start != len(text)):
             raise ValueError('prepared graph batch population mismatch')
         vectors = np.concatenate(chunks)

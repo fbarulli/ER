@@ -269,6 +269,15 @@ def _prepare_exports(cfg, setup, bundle):
     token_cache = {}
     with trace_step('package.text_export'):
         prepare_text_export(setup,Path(resolve_model(cfg.text_model)),batch_size=runtime('batch_size_embed'),composer=compose,token_cache=token_cache)
+    with trace_step('package.ablation_suite'):
+        # Ablation staging lives in the CPU data bundle: prepare_suite mints the
+        # per-track templates (tokens/tensors/frozen requests) the training
+        # suite later forwards from, so no accelerator session stages them.
+        # Deactivate with ER_PERF_BUNDLE_ABLATION_STAGING=0 (or ER_PERF_LEGACY=1).
+        from core.perf_switches import perf_enabled
+        if cfg.post_training_ablation and perf_enabled('bundle.ablation_staging'):
+            from model_tracks.staged_ablation import prepare_suite
+            prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
     with trace_step('package.baseline_export'):
         from model_tracks.baseline_export import prepare as prepare_baseline
         prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)
