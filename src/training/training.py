@@ -1765,54 +1765,73 @@ class _TrainLogDispatcher:
         if not logs or not state.is_world_process_zero:
             return
         if "loss" in logs:
-            loss = float(logs["loss"])
-            self.latest_train_loss = loss
-            loss_stats = self.pop_tracking_stats()
-            grad_norm = (
-                float(logs["grad_norm"])
-                if logs.get("grad_norm") is not None
-                else float("nan")
-            )
-            grad_norm_wire = (
-                float(logs["grad_norm"])
-                if logs.get("grad_norm") is not None
-                else None
-            )
-            self.journal.record_loss_step(state, loss, grad_norm, loss_stats)
+            loss, loss_stats, grad_norm, grad_norm_wire = self._record(state, logs)
             telemetry = _runtime_telemetry()
-            total_epochs = float(args.num_train_epochs)
-            accuracy = (
-                f" | dev_acc {dev_accuracy:.4f}"
-                if dev_accuracy is not None
-                else ""
-            )
-            print(
-                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
-                flush=True,
-            )
-            if self.wandb_ctx is not None:
-                self.wandb_ctx.log_metrics(
-                    {
-                        "live/train_loss": loss,
-                        "live/epoch": float(state.epoch or 0.0),
-                        "live/grad_norm": grad_norm_wire,
-                        **{
-                            f"live/loss_{key}": value
-                            for key, value in loss_stats.items()
-                        },
-                        **_wandb_memory_metrics(telemetry),
-                    },
-                )
-            self.live._write(
-                state,
-                "train",
-                train_loss=loss,
-                dev_accuracy=dev_accuracy,
-                grad_norm=grad_norm_wire,
-                **{f"loss_{key}": value for key, value in loss_stats.items()},
-                **telemetry,
-            )
+            self._console(args, state, loss, dev_accuracy, telemetry)
+            self._wandb_log(state, loss, loss_stats, grad_norm_wire, telemetry)
+            self._heartbeat(state, loss, dev_accuracy, loss_stats, grad_norm_wire, telemetry)
+
+    def _record(self, state, logs) -> tuple[float, dict, float, float | None]:
+        """Persist the step into the journal; return its loss facts."""
+        loss = float(logs["loss"])
+        self.latest_train_loss = loss
+        loss_stats = self.pop_tracking_stats()
+        grad_norm = (
+            float(logs["grad_norm"])
+            if logs.get("grad_norm") is not None
+            else float("nan")
+        )
+        grad_norm_wire = (
+            float(logs["grad_norm"])
+            if logs.get("grad_norm") is not None
+            else None
+        )
+        self.journal.record_loss_step(state, loss, grad_norm, loss_stats)
+        return loss, loss_stats, grad_norm, grad_norm_wire
+
+    @staticmethod
+    def _console(args, state, loss, dev_accuracy, telemetry) -> None:
+        """The pinned train-loss epoch line."""
+        total_epochs = float(args.num_train_epochs)
+        accuracy = (
+            f" | dev_acc {dev_accuracy:.4f}"
+            if dev_accuracy is not None
+            else ""
+        )
+        print(
+            f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
+            f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
+            flush=True,
+        )
+
+    def _wandb_log(self, state, loss, loss_stats, grad_norm_wire, telemetry) -> None:
+        """The live/ W&B projection of a training log event."""
+        if self.wandb_ctx is None:
+            return
+        self.wandb_ctx.log_metrics(
+            {
+                "live/train_loss": loss,
+                "live/epoch": float(state.epoch or 0.0),
+                "live/grad_norm": grad_norm_wire,
+                **{
+                    f"live/loss_{key}": value
+                    for key, value in loss_stats.items()
+                },
+                **_wandb_memory_metrics(telemetry),
+            },
+        )
+
+    def _heartbeat(self, state, loss, dev_accuracy, loss_stats, grad_norm_wire, telemetry) -> None:
+        """The shared worker live-status event for a training log event."""
+        self.live._write(
+            state,
+            "train",
+            train_loss=loss,
+            dev_accuracy=dev_accuracy,
+            grad_norm=grad_norm_wire,
+            **{f"loss_{key}": value for key, value in loss_stats.items()},
+            **telemetry,
+        )
 
 
 class _DevEvaluatePresenter:
@@ -1830,7 +1849,6 @@ class _DevEvaluatePresenter:
         self.wandb_ctx = wandb_ctx
         self.latest_dev_accuracy: float | None = None
         self.latest_collapse_metrics: dict[str, float | int | str] = {}
-        self.collapse = None
 
     def _contract_values(self, metrics: dict) -> tuple[float, float, float, float, float]:
         """Validate the structured evaluator contract, then unpack its values."""
@@ -1864,6 +1882,13 @@ class _DevEvaluatePresenter:
         if collapse_metrics:
             self.journal.record_collapse_event(state, collapse_metrics)
         telemetry = _runtime_telemetry()
+        self._console(args, state, ap, accuracy, f1, collapse_metrics, latest_train_loss, telemetry)
+        self._wandb_evaluation(state, metrics, accuracy, ap, f1, precision, recall, collapse_metrics, telemetry)
+        self._heartbeat(state, metrics, latest_train_loss, accuracy, ap, f1, precision, recall, collapse_metrics, telemetry)
+
+    @staticmethod
+    def _console(args, state, ap, accuracy, f1, collapse_metrics, latest_train_loss, telemetry) -> None:
+        """The pinned dev-evaluation epoch line (+ collapse status when run)."""
         parts = [
             f"dev_ap {ap:.4f}",
             f"dev_acc {accuracy:.4f}",
@@ -1891,21 +1916,34 @@ class _DevEvaluatePresenter:
                 f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
                 flush=True,
             )
-        if self.wandb_ctx is not None:
-            self.wandb_ctx.log_metrics(
-                {
-                    "live/dev_loss": float(metrics["eval_loss"])
-                    if metrics.get("eval_loss") is not None else None,
-                    "live/dev_accuracy": accuracy,
-                    "live/dev_average_precision": ap,
-                    "live/dev_f1": f1,
-                    "live/dev_precision": precision,
-                    "live/dev_recall": recall,
-                    "live/epoch": float(state.epoch or 0.0),
-                    **_CollapseReporter._wandb_metrics(collapse_metrics),
-                    **_wandb_memory_metrics(telemetry),
-                },
-            )
+
+    def _wandb_evaluation(
+        self, state, metrics, accuracy, ap, f1, precision, recall,
+        collapse_metrics, telemetry,
+    ) -> None:
+        """The live/ W&B projection of an evaluation event."""
+        if self.wandb_ctx is None:
+            return
+        self.wandb_ctx.log_metrics(
+            {
+                "live/dev_loss": float(metrics["eval_loss"])
+                if metrics.get("eval_loss") is not None else None,
+                "live/dev_accuracy": accuracy,
+                "live/dev_average_precision": ap,
+                "live/dev_f1": f1,
+                "live/dev_precision": precision,
+                "live/dev_recall": recall,
+                "live/epoch": float(state.epoch or 0.0),
+                **_CollapseReporter._wandb_metrics(collapse_metrics),
+                **_wandb_memory_metrics(telemetry),
+            },
+        )
+
+    def _heartbeat(
+        self, state, metrics, latest_train_loss, accuracy, ap, f1, precision, recall,
+        collapse_metrics, telemetry,
+    ) -> None:
+        """The shared worker live-status event for an evaluation event."""
         self.live._write(
             state,
             "evaluation",
