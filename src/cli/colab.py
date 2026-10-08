@@ -218,6 +218,19 @@ _original_stdout = None
 _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
 
+
+def _suite_config_path() -> Path:
+    """The default all-track suite config, resolved from config SSOT.
+
+    ``BundleSpec.suite_config`` (config/training.yaml ``bundle.suite_config``)
+    owns the default; a relative value resolves against ``TRAIN_ROOT`` exactly
+    as the former hardcoded suite-config path did, so the resolved path is
+    unchanged for the shipped config.
+    """
+    configured = Path(training_cfg().bundle.suite_config)
+    return configured if configured.is_absolute() else TRAIN_ROOT / configured
+
+
 def _legacy_validation_sources() -> dict[str, Path]:
     """Materialize listing partitions from the validated shared component split.
 
@@ -228,7 +241,7 @@ def _legacy_validation_sources() -> dict[str, Path]:
     from model_tracks.config import load_config as load_suite
     from model_tracks.preflight import preflight as suite_preflight
     from graph_tracks.data import file_hash
-    config = TRAIN_ROOT / 'config/model_tracks.yaml'
+    config = _suite_config_path()
     suite_preflight(config)
     suite = load_suite(config)
     setup = (TRAIN_ROOT / suite.setup_dir).resolve()
@@ -279,7 +292,7 @@ def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
     from training.prepared_bundle import load_prepared_bundle, prepared_holdout
     from training.folds import normalize_gtin
     from core.common import SEED
-    suite = load_suite(TRAIN_ROOT / 'config/model_tracks.yaml')
+    suite = load_suite(_suite_config_path())
     setup = TRAIN_ROOT / suite.setup_dir
     layout = training_cfg().preparation.graph_setup
     catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
@@ -621,6 +634,7 @@ def run_parallel_train_and_tail(
     ) + f"""
 import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
 from core.common import F
+from core.tracing import run_trace_env
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 run_id = base.name.removeprefix("concurrent_train_")
@@ -713,7 +727,7 @@ for number in range(1, {workers} + 1):
            "WANDB_RUN_NAME": training_name,
            "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
-           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1"}}
+           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1", **run_trace_env(lane=training_name)}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
         "wandb_run_name": env["WANDB_RUN_NAME"],
@@ -1151,6 +1165,7 @@ def run_single_train_and_stream(
     script = _BOOTSTRAP + _remote_auth_env_script(include_wandb=include_wandb) + f"""
 import os, pathlib, shutil, subprocess, sys
 from core.common import F
+from core.tracing import run_trace_env
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 out = base / "worker_1"
@@ -1168,13 +1183,14 @@ print("[worker] resolving versioned checkout inputs", flush=True)
     shutil.copy2(source, destination)
 wandb_dir = out / "wandb"
 wandb_dir.mkdir(parents=True, exist_ok=True)
+training_name = {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r}
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "EUROMONITOR_RESULTS_DIR": str(out),
        "WANDB_DIR": str(wandb_dir),
        "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
-       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1"}}
+       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1", **run_trace_env(lane=training_name)}}
 if {prepare_remote_labeled_pairs!r}:
     calibration = out / "training" / "labeled_pairs.csv"
     if not calibration.is_file():
@@ -1295,6 +1311,7 @@ def run_hpo(
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, time
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
+from core.tracing import run_trace_env
 root = pathlib.Path("{REMOTE_ROOT}")
 hpo_root = root / "results" / "hpo_runs" / "{run_id}"
 hpo_root.mkdir(parents=True, exist_ok=False)
@@ -1365,6 +1382,7 @@ def worker_setup(model_key):
         "EUROMONITOR_HPO_RETENTION_MODE": "1",
         "EUROMONITOR_HPO_GENERATION_ID": "{run_id}",
         "EUROMONITOR_HPO_MODEL_KEY": model_key,
+        **run_trace_env(lane=model_key),
     }}
 
 def run_model(model_key):
@@ -1602,6 +1620,7 @@ def run_mixed(
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, threading, time
 from core.common import F
+from core.tracing import run_trace_env
 
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
@@ -1675,6 +1694,7 @@ def run_worker(number, label, command_args, profile, masking_applied):
         "EUROMONITOR_RUN_ID": f"{{base.name}}-{{label}}",
         "EUROMONITOR_MINING_PROFILE": profile,
         "EUROMONITOR_REMOTE_TRAINING": "1",
+        **run_trace_env(lane=label),
     }}
     command = [sys.executable, *command_args]
     print(f"[mixed] starting {{label}}: {{' '.join(command)}}", flush=True)
@@ -2356,7 +2376,7 @@ def main() -> None:
         from model_tracks.config import load_config as load_suite
         from model_tracks.preflight import preflight as suite_preflight
         from model_tracks.package import package as suite_package
-        suite_config = args.tracks_config or TRAIN_ROOT/'config/model_tracks.yaml'
+        suite_config = args.tracks_config or _suite_config_path()
         suite = load_suite(suite_config)
         # Policy: the default tracks launch always trains the full cohort from the
         # prebuilt full bundle. An explicit --tracks-config (e.g. the CPU smoke)
