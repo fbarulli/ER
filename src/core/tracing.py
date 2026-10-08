@@ -97,7 +97,8 @@ wedge the pipeline on stale data — the prune of old runs happens inside the ve
 commit that would fail, so no write could ever heal the file. The remedy for an
 invalid historical run is to regenerate or prune it (the trace is a regenerated
 artifact). The join from an orchestrator stage to its trace rows is declared in
-``ORCHESTRATION_TRACE_STAGES`` / :func:`trace_stages_for`.
+``config/paths.yaml`` (``orchestration_stages``) and read by
+:func:`orchestration_trace_stages` / :func:`trace_stages_for`.
 
 ENTITY SAMPLING (why the per-entity rows are capped)
 ----------------------------------------------------
@@ -245,6 +246,18 @@ CENSUS_TOP_N = 24
 DETAIL_CELL_CHARS = 4096
 DETAIL_VALUE_CHARS = 512
 
+# ── the trace batch-grain budget ───────────────────────────────────────────
+# A stage that walks a large population does not emit one row per item: it
+# accumulates a BATCH of source rows and emits ONE BATCH row carrying the
+# batch's counts, and the remainder is announced in the stage's
+# ``batch_census`` row. Both numbers are the trace's own contract — how many
+# source rows make a batch, and how many batch rows a stage traces — so the
+# producers read them here instead of re-spelling the literals in each module
+# (build_final_validation, build_second04_pairs, graph_tracks.setup). A stage
+# that traced MORE batches than the budget would grow the file past its design.
+TRACE_BATCH_ROWS = 4096
+TRACE_MAX_BATCH_ROWS = 16
+
 # ── the accounting identity's terms ────────────────────────────────────────
 # The gtin-guard row's fields, BY NAME, because the identity is stated over
 # named populations: a term the row does not state cannot be checked, and an
@@ -259,75 +272,73 @@ CANONICAL_IDENTITY_TERMS: tuple[str, ...] = ("collapsed_same_gtin",)
 GUARD_STEP = ("data_prep", "gtin_guard.identity_claims_evaluated")
 CANONICAL_STEP = ("data_prep", "canonical.records_built")
 
-# ── the ONE registry of the preparation's orchestration stages ─────────────
+# ── the ONE registry of the preparation's orchestration stages (config SSOT) ─
 # The preparation orchestrator (``training.prepare_all``) names its stages one
 # way and each child writes its rows under its own module's stage
 # (``training.data_prep`` -> "data_prep", ``training.build_final_validation`` ->
 # "final_validation", ``graph_tracks.setup`` -> "graph_setup"/"graph_prepare"),
 # so a reader cannot join a stage's manifest entry to its trace rows without a
-# hand map. This dict IS that join, and it is the ONE declaration of the
-# preparation's stage inventory: its KEYS are every orchestration stage (in
-# execution order) and its VALUES are the trace stage name(s) the stage's
-# producer writes rows under. ``training.prepare_all`` DERIVES its ``STAGES`` /
-# ``_LANE_STAGE_ORDER`` / ``_EXTRA_LANE_STAGES`` from here instead of restating
-# the names, so the plan can never drift from the join.
+# hand map. That join IS ``config/paths.yaml``'s ``orchestration_stages`` block
+# (keys = every orchestration stage, in execution order; values = the trace
+# stage name(s) the stage's producer writes rows under), with
+# ``orchestration_lane_stages`` naming the stages only a negative-supply run tag
+# inserts. Config is the ONE home: ``training.prepare_all`` DERIVES its
+# ``STAGES``/``_LANE_STAGE_ORDER`` from the accessors below instead of restating
+# the names, so the plan can never drift from the join. The block's empty lists
+# mark a stage that writes NO trace rows today (a coverage gap a reader must not
+# mistake for "no work happened"); the two row-free stages stay explicit there.
 #
-# ``()`` marks a stage that writes NO trace rows, i.e. a coverage gap a reader
-# must not mistake for "no work happened": it is invisible in the trace. Only
-# TWO stages are genuinely row-free today — ``gate_census`` (an inline
-# measurement that writes its census JSON, not trace rows) and ``discriminator``
-# (an inline diagnostic child whose verdict lands in the manifest). The four
-# stages that used to be declared row-free (``dedupe``, ``suite_inputs``,
-# ``verify_handoff``, ``negative_supply``) all construct a ``TraceRun`` and write
-# rows, so those declarations were STALE and made a reader believe their work
-# was untraced.
-#
-# CONFIG SSOT: this map belongs in config/ (a new ``paths.yaml`` block, e.g.
-# ``orchestration_stages: {canonical_and_gates: [data_prep], ...}``) so the
-# orchestrator and the trace read one declaration. paths.yaml declares paths and
-# layouts today, not stage vocabularies, so the map lives here until that key
-# exists; ``training.prepare_all`` is the key's intended first reader.
-ORCHESTRATION_TRACE_STAGES: dict[str, tuple[str, ...]] = {
-    "dedupe": ("dedupe",),
-    "cross_country_pairs": ("build_second04_pairs",),
-    "number_reference": ("number_reference",),
-    "verify_reference": ("verify_reference",),
-    "canonical_and_gates": ("data_prep",),
-    "gate_census": (),
-    "labeled_pairs": ("labeled_pairs",),
-    "negative_supply": ("negative_supply",),
-    "discriminator": (),
-    "validation": ("final_validation",),
-    "graph_inputs": ("graph_setup", "graph_prepare"),
-    "full_bundle": ("full_bundle",),
-    "suite_inputs": ("suite_inputs",),
-    "verify_handoff": ("verify_handoff",),
-}
+# The accessors import ``core.common`` lazily: ``common`` imports the config that
+# declares this block, so a module-level import would be circular (the same
+# reason :func:`trace_path` imports it lazily).
 
-#: The registry's LANE subset: the stages the orchestrator inserts (before
-#: ``validation``) only when a negative-supply run tag is requested, and the ones
-#: ``prepare_all`` excludes when it needs the base stage list (state validation,
-#: resume arithmetic). Declared next to the registry whose keys it annotates, so
-#: ``training.prepare_all`` never spells a stage name at all.
-ORCHESTRATION_LANE_STAGES: tuple[str, ...] = ("negative_supply", "discriminator")
+
+def orchestration_trace_stages() -> dict[str, tuple[str, ...]]:
+    """The orchestration stage -> trace stage(s) join, read from config SSOT.
+
+    Names come from ``config/paths.yaml`` (``orchestration_stages``); this
+    module holds no copy of them. Keys are orchestration stages in execution
+    order, values the trace stage name(s) their producers write. An empty tuple
+    means the stage writes no trace rows today (a coverage gap, not a silent
+    success).
+    """
+    from core import common
+
+    declared = common.load_config().get("orchestration_stages", {})
+    return {str(stage): tuple(names) for stage, names in declared.items()}
+
+
+def orchestration_lane_stages() -> tuple[str, ...]:
+    """The registry's LANE subset, read from ``config/paths.yaml``.
+
+    These are the stages the orchestrator inserts (before ``validation``) only
+    when a negative-supply run tag is requested, and the ones ``prepare_all``
+    excludes when it needs the base stage list (state validation, resume
+    arithmetic).
+    """
+    from core import common
+
+    return tuple(common.load_config().get("orchestration_lane_stages", ()))
 
 
 def trace_stages_for(orchestration_stage: str) -> tuple[str, ...]:
     """The trace stage name(s) one orchestration stage writes rows under.
 
     Empty means the stage writes no trace rows today (a coverage gap, not a
-    silent success). ``training.prepare_all`` DERIVES its stage list from this
-    registry (its base stages are these keys minus :data:`ORCHESTRATION_LANE_STAGES`),
-    so a key here IS a stage the plan runs and there is no second list to drift
-    against. An unknown name is still a loud error: a caller asking for a stage
-    the registry never declared is a bug on the caller's side, not an empty join.
+    silent success). ``training.prepare_all`` DERIVES its stage list from the
+    same config registry (its base stages are these keys minus
+    :func:`orchestration_lane_stages`), so a key there IS a stage the plan runs
+    and there is no second list to drift against. An unknown name is still a
+    loud error: a caller asking for a stage the registry never declared is a bug
+    on the caller's side, not an empty join.
     """
+    registry = orchestration_trace_stages()
     try:
-        return ORCHESTRATION_TRACE_STAGES[str(orchestration_stage)]
+        return registry[str(orchestration_stage)]
     except KeyError as exc:
         raise ValueError(
             f"unknown orchestration stage {orchestration_stage!r}; declared: "
-            f"{sorted(ORCHESTRATION_TRACE_STAGES)}"
+            f"{sorted(registry)}"
         ) from exc
 
 
@@ -1962,15 +1973,17 @@ __all__ = [
     "ENTITY_SAMPLE_PER_REASON",
     "GUARD_IDENTITY_TERMS",
     "GUARD_STEP",
-    "ORCHESTRATION_LANE_STAGES",
-    "ORCHESTRATION_TRACE_STAGES",
+    "orchestration_lane_stages",
+    "orchestration_trace_stages",
     "PRODUCER",
     "RUN_UNBOUND",
     "SCOPE_ENTITY",
     "SCOPE_GROUP",
     "SCOPE_RUN",
+    "TRACE_BATCH_ROWS",
     "TRACE_COLUMNS",
     "TRACE_LANE_ENV",
+    "TRACE_MAX_BATCH_ROWS",
     "TRACE_PATH_ENV",
     "TRACE_PENDING_RUN",
     "TRACE_RUN_HISTORY",

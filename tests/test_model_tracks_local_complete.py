@@ -23,6 +23,11 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
           cascade_complete=False, ablation_skip_event=False):
     from core import common
     from graph_tracks import preflight, report
+    # Bind the graph modules that import ``load_records``/``load_pairs`` BY VALUE
+    # (module-level ``from graph_tracks.data import load_records``) before the
+    # fixture patches the shared module attributes, so the stub never leaks into
+    # a later test's already-imported reference (test isolation).
+    from graph_tracks import prepare as _prepare, prepared_inputs as _prepared_inputs  # noqa: F401
     from model_tracks import text_report, worker
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     cfg = {'setup_dir': 'data/model_tracks/shared',
@@ -259,3 +264,43 @@ def test_zstandard_checkpoints_complete_locally_and_remain_retryable(tmp_path, m
     assert calls == ['text', 'gnn_only', 'cascade']
     assert complete(training, inputs, 'run') == final
     assert len(calls) == 3
+
+
+def test_legacy_source_pin_uses_the_runtime_inventory_ssot(tmp_path, monkeypatch):
+    """Legacy mode pins code/config/scripts, never the gitignored registry.
+
+    The pinned surface is ``resume.runtime_source_inventory`` minus the registry:
+    a changed runtime member fails loud, a changed registry is ignored, and the
+    whole check is a no-op outside legacy mode.
+    """
+    from types import SimpleNamespace
+
+    from core.bundle import _bundle_spec
+    from graph_tracks.data import file_hash
+    from model_tracks import local_complete
+    from model_tracks.config import SuiteConfig
+
+    monkeypatch.setattr('core.common.TRAIN_ROOT', tmp_path)
+    (tmp_path / 'src').mkdir()
+    (tmp_path / 'src' / 'a.py').write_text('code')
+    (tmp_path / 'artifacts').mkdir()
+    (tmp_path / 'artifacts' / 'registry.json').write_text('registry')
+    settings = SuiteConfig.model_validate({
+        'setup_dir': 's', 'text_bundle': 'b',
+        'publish_git': False, 'publish_dvc': False})
+    files = {
+        'src/a.py': file_hash(tmp_path / 'src' / 'a.py'),
+        # Present but deliberately wrong: the registry is not on the pin surface.
+        'artifacts/registry.json': '0' * 64,
+    }
+    inputs = SimpleNamespace(manifest={_bundle_spec().files_key: files})
+
+    monkeypatch.setattr('core.perf_switches.legacy_mode', lambda: False)
+    local_complete._require_legacy_source_pin(inputs, settings)  # no-op outside legacy
+
+    monkeypatch.setattr('core.perf_switches.legacy_mode', lambda: True)
+    local_complete._require_legacy_source_pin(inputs, settings)  # registry drift ignored
+
+    files['src/a.py'] = '1' * 64
+    with pytest.raises(ValueError, match='differs from training'):
+        local_complete._require_legacy_source_pin(inputs, settings)

@@ -190,3 +190,33 @@ def test_validation_artifact_slices_frozen(validation: pd.DataFrame) -> None:
     for field in fields:
         assert (pos[f"v1_{field}"] != "").all(), f"{field}: v1 unpopulated"
         assert (pos[f"v2_{field}"] != "").all(), f"{field}: v2 unpopulated"
+
+
+def test_negative_free_census_keeps_the_evidence_contract_shape() -> None:
+    """A census with no negatives must still produce the full evidence shape.
+
+    The 2026-10-08 shape fix (policy -> half -> census) stops
+    ``_scored_contract`` raising KeyError on a negative-free census; this pins
+    that branch, which has no positives-only sibling elsewhere.
+    """
+    from training.build_final_validation import SLICE_FIELDS, negative_policy_evidence
+
+    columns: dict[str, list] = {
+        "true_label": [1, 1],
+        "fold": [2, 3],
+        "fold_2": [2, 3],
+    }
+    for name, _col in SLICE_FIELDS:
+        columns[f"v1_{name}"] = ["", ""]
+        columns[f"v2_{name}"] = ["", ""]
+    frame = pd.DataFrame(columns)
+
+    evidence = negative_policy_evidence(frame, min_test_negatives=1, n_folds=4)
+    zero_cells = {name: 0 for name, _col in SLICE_FIELDS}
+    for policy in ("withhold_straddle", "train_side"):
+        assert evidence[policy]["scored_dev_negatives"] == 0
+        assert evidence[policy]["scored_test_negatives"] == 0
+        assert evidence[policy]["scored_negatives_with_trained_on_endpoint"] == 0
+        for half in ("dev", "test"):
+            assert evidence[policy]["populated_cells"][half] == zero_cells
+            assert evidence[policy]["thin_cells"][half] == zero_cells

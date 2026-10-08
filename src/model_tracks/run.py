@@ -12,13 +12,16 @@ from core.archive_reader import archive_sidecar
 from core.run_log import RunLogger
 from core.tracing import (
     SCOPE_ENTITY,
-    TRACE_LANE_ENV,
     flush_stage_trace,
-    run_trace_env,
     stage_trace,
 )
 from model_tracks.config import load_config
-from model_tracks.parallel import mps_environment, run_parallel
+from model_tracks.parallel import (
+    mps_environment,
+    run_parallel,
+    run_postprocess_track,
+    split_tracks,
+)
 from model_tracks.preflight import preflight
 
 _LOG = RunLogger(__name__)
@@ -116,26 +119,18 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
                            env: dict, *, resume: bool, events) -> str:
     """Run one post-training combinator lane after the parallel barrier.
 
-    The lane trains nothing and consumes the trained lanes' artifacts, so it is
-    spawned as a normal worker process with the suite environment plus its own
-    results directory once ``run_parallel`` has returned. Like every other lane
-    it gets the RUN's trace pins, so its rows land in the run's ONE trace.
+    The spawn mechanics (env, log, cwd, barrier exclusion) live in
+    :func:`model_tracks.parallel.run_postprocess_track`, the one place a
+    postprocess lane is launched; this supervisor only builds the command and
+    records the run's rows.
     """
-    import subprocess
-    from core.common import TRAIN_ROOT
-    track_env = {**env, 'EUROMONITOR_RESULTS_DIR': str((output / track).resolve()),
-                 'ER_TRACK_BARRIER': str((output / 'barrier').resolve()),
-                 TRACE_LANE_ENV: track,
-                 **run_trace_env()}
     command = [sys.executable, '-m', 'model_tracks.worker', '--config',
                str(config.resolve()), '--track', track, '--run-tag', f'{run_tag}-{track}']
     if resume:
         command.append('--resume')
     events.emit('worker_spawn', 'started', worker_track=track,
                 log=str(output / f'{track}__worker.log'))
-    with (output / f'{track}__worker.log').open('a') as log:
-        subprocess.run(command, cwd=TRAIN_ROOT, env=track_env,
-                       stdout=log, stderr=subprocess.STDOUT, check=True)
+    run_postprocess_track(command, output, env, track, resume=resume)
     trace().add(
         'run', 'postprocess_lane',
         scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
@@ -292,9 +287,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     )
     # The trained lanes (text, gnn_only) run in parallel behind the start
     # barrier. The cascade trains nothing and consumes both trained artifacts,
-    # so it runs sequentially after the parallel phase completes. Both groups
-    # come from the suite's declared track taxonomy, not a hardcoded tuple.
-    parallel_tracks = [track for track in TRAINING_TRACKS if track not in skipped]
+    # so it runs sequentially after the parallel phase completes. The partition
+    # is the suite taxonomy (``parallel.split_tracks``), not a per-callsite list.
+    parallel_tracks, postprocess_tracks = split_tracks(
+        track for track in TRACKS if track not in skipped)
+    parallel_tracks, postprocess_tracks = list(parallel_tracks), list(postprocess_tracks)
     commands = {track: [sys.executable, '-m', 'model_tracks.worker', '--config', str(config.resolve()),
                         '--track', track, '--run-tag', f'{run_tag}-{track}'] + (['--resume'] if resume else [])
                 for track in parallel_tracks}
@@ -307,7 +304,6 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_DATA_GATE_GPU_PENDING': '1',
            'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
-    postprocess_tracks = [track for track in POSTPROCESS_TRACKS if track not in skipped]
     with _LOG.section('phase.worker_launch', workers=len(commands) + len(postprocess_tracks), device=cfg.device):
         if not commands:
             result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}

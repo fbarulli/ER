@@ -59,6 +59,7 @@ def _render_finetune_script() -> str:
         "TEST_JSONL": "test.jsonl",
         "FINETUNE_CONFIG": repr(laya_lane.finetune_config()),
         "FINETUNE_DEVICE": "auto",
+        "HELD_OUT_BATCH": str(laya_lane._spec().laya_decision_batch_size),
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",

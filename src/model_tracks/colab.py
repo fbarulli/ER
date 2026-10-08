@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import hashlib
 
-from core.bundle import Bundle, BundleRole
+from core.bundle import Bundle, BundleRole, manifest_name
 from core.archive_reader import open_archive, tar_archive
 from core.manifest import publish_replacing
 from graph_tracks.data import file_hash
@@ -114,10 +114,12 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
 def _collect_failure_logs(backend, remote_output: str, run_tag: str):
     """Collect diagnostics even when preflight never produced a suite manifest."""
     from core.common import RESULTS
+    from core.bundle import _bundle_spec
     from model_tracks.resume import TRACKS
-    names = ['suite_events.jsonl']
+    spec = _bundle_spec()
+    names = [spec.suite_events_file]
     for track in TRACKS:
-        names.extend([f'{track}__worker.log', f'{track}/worker_events.jsonl'])
+        names.extend([f'{track}__worker.log', f'{track}/{spec.worker_events_file}'])
     # PINNED STANDALONE COPY: `run_colab_exec_capture` executes this probe
     # verbatim (no `_BOOTSTRAP`, so the checkout is not on sys.path) and it
     # hashes a handful of small log files, so it uses the stdlib digest the
@@ -291,7 +293,7 @@ for pid in owned:
 destination=pathlib.Path({recovery_remote!r})
 if destination.exists():
     destination.unlink()
-input_package=json.loads(pathlib.Path({backend.REMOTE_ROOT!r},'model_tracks_package.json').read_text())
+input_package=json.loads(pathlib.Path({backend.REMOTE_ROOT!r},{manifest_name(BundleRole.inputs)!r}).read_text())
 recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_package=input_package)
 destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
 '''

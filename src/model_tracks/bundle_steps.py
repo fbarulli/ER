@@ -236,7 +236,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
                 "finalize", "saved_ablation",
                 reason='the suite recorded a deliberate ablation skip; there is no saved ablation to consume',
                 detail={'destination': str(destination), 'recorded_skip': True},
-                source=str(destination / 'suite_events.jsonl'),
+                source=str(destination / _spec().suite_events_file),
             )
         else:
             from model_tracks.post_training_ablation import complete_saved

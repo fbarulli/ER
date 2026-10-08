@@ -105,20 +105,24 @@ def recorded_ablation_skip(output: Path) -> bool:
 
 
 def runtime_source_inventory(files: dict[str, Digest], *,
-                             ablation_config: str | None = None) -> dict[str, Digest]:
+                             ablation_config: str | None = None,
+                             include_registry: bool = True) -> dict[str, Digest]:
     """The package members that form a suite's recorded runtime snapshot.
 
     Mirrors :func:`model_tracks.package.runtime_snapshot_files`: the checkout
     source/config/script neighborhoods, the pinned semantic family registry
     (which lives under ``artifacts/`` and would otherwise be dropped by a
-    prefix-only filter), and the ablation config.
+    prefix-only filter), and the ablation config. ``include_registry=False``
+    keeps only the checkout neighborhoods (the legacy source pin's stricter
+    surface, which never hashes the gitignored registry).
     """
     from model_tracks.package import package_member
     inventory = {relative: expected for relative, expected in files.items()
                  if relative.startswith(('src/', 'config/', 'scripts/'))}
-    registry = package_member('semantic_family_registry')
-    if registry in files:
-        inventory[registry] = files[registry]
+    if include_registry:
+        registry = package_member('semantic_family_registry')
+        if registry in files:
+            inventory[registry] = files[registry]
     if ablation_config in files:
         inventory[ablation_config] = files[ablation_config]
     return inventory

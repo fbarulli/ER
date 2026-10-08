@@ -39,20 +39,23 @@ from core.portable_archive import Digest
 from core.run_log import RunLogger
 from core.schemas import PREPARATION_REUSABLE_KEYS
 from core.tracing import (
-    ORCHESTRATION_LANE_STAGES,
-    ORCHESTRATION_TRACE_STAGES,
+    orchestration_lane_stages,
+    orchestration_trace_stages,
     trace_stages_for,
 )
 from training.prepare_all_trace import send, timed, trace_step
 
-#: The preparation's stage inventory is declared ONCE, in ``core.tracing``
-#: (``ORCHESTRATION_TRACE_STAGES``: keys = every orchestration stage, order =
-#: execution order, values = the trace stage(s) its producer writes rows under).
-#: Derived here instead of restated, so a stage can never be planned without a
-#: trace join (or the join name a stage the plan never runs).
+#: The preparation's stage inventory is declared ONCE, in the config SSOT
+#: (``config/paths.yaml`` ``orchestration_stages``: keys = every orchestration
+#: stage, order = execution order, values = the trace stage(s) its producer
+#: writes rows under), read through ``core.tracing``. Derived here instead of
+#: restated, so a stage can never be planned without a trace join (or the join
+#: name a stage the plan never runs).
+_TRACE_STAGES = orchestration_trace_stages()
+_LANE_STAGE_ORDER = orchestration_lane_stages()
 STAGES = tuple(
-    stage for stage in ORCHESTRATION_TRACE_STAGES
-    if stage not in ORCHESTRATION_LANE_STAGES
+    stage for stage in _TRACE_STAGES
+    if stage not in _LANE_STAGE_ORDER
 )
 
 REUSABLE_KEYS = PREPARATION_REUSABLE_KEYS
@@ -63,10 +66,9 @@ _LINUX_FICLONE = 0x40049409
 _CLONE_UNSUPPORTED = frozenset({errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY,
                                 errno.EINVAL, errno.ENOSYS})
 _RUN_TAG_PATTERN = r'[A-Za-z0-9_-]+'
-#: The registry's LANE subset (``core.tracing.ORCHESTRATION_LANE_STAGES``): the
-#: stages the orchestrator inserts before ``validation`` only when a run tag is
-#: requested; ``_EXTRA_LANE_STAGES`` is the set form the state validator uses.
-_LANE_STAGE_ORDER = ORCHESTRATION_LANE_STAGES
+#: The registry's LANE subset (``orchestration_lane_stages()``): the stages the
+#: orchestrator inserts before ``validation`` only when a run tag is requested;
+#: ``_EXTRA_LANE_STAGES`` is the set form the state validator uses.
 _EXTRA_LANE_STAGES = frozenset(_LANE_STAGE_ORDER)
 
 #: The stage that WRITES the artifacts defining the run's trace identity
@@ -96,7 +98,7 @@ _STAGE_MODULES = {
 if _UNREGISTERED := sorted(set(_STAGE_MODULES) - set(STAGES)):
     raise ValueError(
         f'_STAGE_MODULES names stages absent from the ONE preparation registry '
-        f'(core.tracing.ORCHESTRATION_TRACE_STAGES): {_UNREGISTERED}'
+        f'(config/paths.yaml orchestration_stages): {_UNREGISTERED}'
     )
 
 

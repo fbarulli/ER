@@ -46,9 +46,6 @@ def _source_layout_key() -> str:
     from core.common import LAYOUTS
     return str(LAYOUTS['source_code_dir'].template)
 
-PACKAGE_MANIFEST = 'model_tracks_package.json'
-RECOVERY_MANIFEST = 'suite_recovery_manifest.json'
-
 
 def _spec():
     """The bundle contract from config (single source for member names)."""
@@ -57,11 +54,7 @@ def _spec():
 
 
 def package_manifest() -> str:
-    """The inputs bundle's manifest member name (``bundle.manifest_inputs``).
-
-    The literals above are retired names kept only for readers of the module
-    header; every caller resolves the manifest through the bundle contract.
-    """
+    """The inputs bundle's manifest member name (``bundle.manifest_inputs``)."""
     from core.bundle import BundleRole, manifest_name
     return manifest_name(BundleRole.inputs)
 
@@ -117,11 +110,6 @@ def _walk_files(root: Path, *, excluded_dirs=frozenset(), excluded_suffixes=()) 
 
 def _read_json(path: Path) -> Any:
     with path.open(encoding='utf-8') as handle:
-        return json.load(handle)
-
-
-def _archive_json(archive, name: str) -> Any:
-    with archive.open(name) as handle:
         return json.load(handle)
 
 

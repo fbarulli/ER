@@ -16,8 +16,9 @@ enforces:
    tarball with "archive manifest missing").
 4. Config-leaf coverage — every ``config/*.yaml`` leaf has a reader, and no code
    literal duplicates a config-owned artifact value.
-5. ``ORCHESTRATION_TRACE_STAGES`` matches the producers' own ``STAGE`` constants
-   (read-only: the map lives in ``core/tracing.py``).
+5. The orchestration stage -> trace-stage map (``config/paths.yaml``
+   ``orchestration_stages``, read via ``core.tracing.orchestration_trace_stages``)
+   matches the producers' own ``STAGE`` constants.
 
 Where the required fix is outside this change's ownership the test still runs
 the real check and records the drift through ``pytest.xfail`` naming the owner,
@@ -403,9 +404,10 @@ def test_config_leaves_have_readers_and_no_literal_duplicate_values():
 # ── 5. the orchestration stage map matches the producers' STAGE constants ───
 
 #: Each orchestration stage and the producer module + attribute that declares the
-#: stage name it writes rows under. ``core/tracing.ORCHESTRATION_TRACE_STAGES``
-#: must map every one of these to its producer's constant: ``()`` means "writes
-#: no trace rows" and must never stand next to a producer that writes them.
+#: stage name it writes rows under. ``core.tracing.orchestration_trace_stages()``
+#: (reading config/paths.yaml's ``orchestration_stages`` block) must map every one
+#: of these to its producer's constant: ``()`` means "writes no trace rows" and
+#: must never stand next to a producer that writes them.
 _PRODUCER_STAGE_CONSTANTS = {
     "dedupe": ("training.dedupe", "STAGE"),
     "cross_country_pairs": ("training.build_second04_pairs", "STAGE"),
@@ -432,16 +434,11 @@ def test_orchestration_stage_map_matches_producer_stage_constants():
     from core import tracing
     from training import prepare_all
 
-    if not hasattr(tracing, "ORCHESTRATION_TRACE_STAGES") \
-            or not hasattr(tracing, "trace_stages_for"):
-        pytest.xfail(
-            "core/tracing.py declares no ORCHESTRATION_TRACE_STAGES/trace_stages_for "
-            "(they were dead before the stage-map change) — owner: core/tracing.py")
-    ORCHESTRATION_TRACE_STAGES = tracing.ORCHESTRATION_TRACE_STAGES
+    registry = tracing.orchestration_trace_stages()
     trace_stages_for = tracing.trace_stages_for
 
     declared = set(prepare_all.STAGES) | {"negative_supply", "discriminator"}
-    assert declared == set(ORCHESTRATION_TRACE_STAGES), \
+    assert declared == set(registry), \
         "the map and the orchestrator's stage list are one contract"
 
     drifted = []
@@ -460,6 +457,6 @@ def test_orchestration_stage_map_matches_producer_stage_constants():
 
     if drifted:
         pytest.xfail(
-            "ORCHESTRATION_TRACE_STAGES claims '() = writes no trace rows' for stages "
-            "whose producers write them under that exact name — owner: "
-            "core/tracing.py (ORCHESTRATION_TRACE_STAGES): " + "; ".join(drifted))
+            "the config registry (config/paths.yaml orchestration_stages) claims "
+            "'() = writes no trace rows' for stages whose producers write them "
+            "under that exact name — owner: config/paths.yaml: " + "; ".join(drifted))

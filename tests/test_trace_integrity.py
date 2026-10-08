@@ -638,7 +638,8 @@ def test_pending_rows_are_adopted_onto_the_runs_own_id(tmp_path):
 # ── 6. the orchestration stage -> trace stage join (G4) ────────────────────
 def test_orchestration_stage_map_is_the_producers_own_vocabulary():
     """G4: a reader joins prepare_all's manifest to the trace without a hand map."""
-    from core.tracing import ORCHESTRATION_TRACE_STAGES, trace_stages_for
+    from core import tracing
+    from core.tracing import trace_stages_for
     from training import (
         build_final_validation,
         build_reference,
@@ -648,9 +649,10 @@ def test_orchestration_stage_map_is_the_producers_own_vocabulary():
     )
 
     # every orchestration stage is declared (the lane stages are the two the
-    # orchestrator inserts when a negative-supply tag is requested)
+    # orchestrator inserts when a negative-supply tag is requested); the
+    # registry reads config/paths.yaml, so it cannot drift from the join
     declared = set(prepare_all.STAGES) | {"negative_supply", "discriminator"}
-    assert declared == set(ORCHESTRATION_TRACE_STAGES)
+    assert declared == set(tracing.orchestration_trace_stages())
     # the mapped names are the PRODUCERS' stage constants, so the map cannot
     # drift from the rows the producers actually write
     assert trace_stages_for("cross_country_pairs") == (build_second04_pairs.STAGE,)

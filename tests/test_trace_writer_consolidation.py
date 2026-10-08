@@ -11,8 +11,9 @@ class or validator internals:
    no producer restates the lazy-init/flush body (the regression this file
    guards). ``training.training`` is the ONE documented reset-on-flush variant.
 
-2. The orchestration stage registry lives ONCE in :mod:`core.tracing`
-   (``ORCHESTRATION_TRACE_STAGES`` + its lane subset). ``training.prepare_all``
+2. The orchestration stage registry is read from the config SSOT
+   (``config/paths.yaml`` ``orchestration_stages`` / ``orchestration_lane_stages``,
+   via :func:`core.tracing.orchestration_trace_stages`). ``training.prepare_all``
    DERIVES its stage lists from it instead of restating the names, and the four
    stages the registry used to declare row-free (``dedupe``, ``suite_inputs``,
    ``verify_handoff``, ``negative_supply``) are pinned to the producer module
@@ -142,11 +143,11 @@ def test_training_writer_is_the_one_reset_on_flush_variant(shim_env, monkeypatch
 # ── the ONE orchestration registry ─────────────────────────────────────────
 def test_prepare_all_stage_lists_derive_from_the_one_registry():
     """``prepare_all`` derives its stage lists; it never restates the names."""
-    from core.tracing import ORCHESTRATION_LANE_STAGES, ORCHESTRATION_TRACE_STAGES
+    from core import tracing
     from training import prepare_all
 
-    registry = tuple(ORCHESTRATION_TRACE_STAGES)
-    lane = tuple(ORCHESTRATION_LANE_STAGES)
+    registry = tuple(tracing.orchestration_trace_stages())
+    lane = tuple(tracing.orchestration_lane_stages())
     assert prepare_all._LANE_STAGE_ORDER == lane
     assert prepare_all._EXTRA_LANE_STAGES == frozenset(lane)
     assert prepare_all.STAGES == tuple(s for s in registry if s not in lane)
@@ -160,7 +161,8 @@ def test_prepare_all_stage_lists_derive_from_the_one_registry():
 
 def test_registry_declares_the_producers_that_write_rows_and_only_two_gaps():
     """The four stale row-free declarations are corrected, tied to producers."""
-    from core.tracing import ORCHESTRATION_TRACE_STAGES, trace_stages_for
+    from core import tracing
+    from core.tracing import trace_stages_for
     from model_tracks import package
     from training import dedupe, handoff, negative_supply
 
@@ -176,7 +178,8 @@ def test_registry_declares_the_producers_that_write_rows_and_only_two_gaps():
     # only two stages are genuinely row-free: the inline gate census and the
     # inline diagnostic child (neither constructs a TraceRun)
     assert {
-        stage for stage, names in ORCHESTRATION_TRACE_STAGES.items() if not names
+        stage for stage, names in tracing.orchestration_trace_stages().items()
+        if not names
     } == {"gate_census", "discriminator"}
 
 

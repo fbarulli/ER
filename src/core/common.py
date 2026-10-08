@@ -66,6 +66,7 @@ import yaml
 from core.schemas import (
     DataConfig,
     LayoutSpec,
+    PreparationGraphSetupSpec,
     TrainingConfig,
     check_canonical_records_frame,
     upgrade_canonical_records_frame,
@@ -398,6 +399,15 @@ def refresh_training_config() -> TrainingConfig:
 def training_cfg() -> TrainingConfig:
     """The validated training-lane config (config/training.yaml)."""
     return _TRAIN_CFG
+
+
+def prepared_setup_layout() -> PreparationGraphSetupSpec:
+    """The declared prepared setup-dir layout (training.preparation.graph_setup).
+
+    THE accessor every lane reads the prepared layout names through, instead of
+    re-deriving ``training_cfg().preparation.graph_setup`` at every call site.
+    """
+    return training_cfg().preparation.graph_setup
 
 
 def _profile_applied(

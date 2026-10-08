@@ -24,6 +24,12 @@ from core.tracing import TRACE_LANE_ENV, run_trace_env
 from model_tracks.resume import POSTPROCESS_TRACKS, TRACKS, TRAINING_TRACKS
 
 
+def _spec():
+    """The bundle contract from config (single source for member names)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
+
+
 @contextmanager
 def mps_environment(root: Path, *, thread_percentage: int | None = None):
     control = shutil.which('nvidia-cuda-mps-control')
@@ -165,7 +171,7 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
     from model_tracks.live_logs import WorkerLogs
     logs = WorkerLogs(root, commands, from_end=resume)
     from model_tracks.telemetry import WorkerEvents
-    events = WorkerEvents(root, 'suite', root.name, filename='suite_events.jsonl')
+    events = WorkerEvents(root, 'suite', root.name, filename=_spec().suite_events_file)
     if env.get('ER_SUITE_ATTEMPT'):
         events.attempt = env['ER_SUITE_ATTEMPT']
     events.emit('workers', 'starting', tracks=list(commands), resume=resume,

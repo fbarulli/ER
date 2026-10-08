@@ -62,12 +62,11 @@ paths:
 # success). `orchestration_lane_stages` names the stages the orchestrator
 # inserts only when a negative-supply run tag is requested.
 #
-# NOTE (config-SSOT audit 2026-10-08): the runtime registry still lives in
-# core/tracing.py (ORCHESTRATION_TRACE_STAGES / ORCHESTRATION_LANE_STAGES);
-# core/tracing.py is out of this task's scope, so this declaration is the
-# config home a follow-up wires the orchestrator to, kept in lockstep by
-# tests/test_config_section.py. Do not treat tracing.py as authoritative once
-# the orchestrator reads this block.
+# This block is the ONE home (config-SSOT audit 2026-10-08): core/tracing.py
+# reads it through orchestration_trace_stages()/orchestration_lane_stages()
+# (it holds no copy), and training.prepare_all derives its stage lists from the
+# same accessors, so the plan, the trace join and this declaration can never
+# drift apart.
 orchestration_stages:
   dedupe: [dedupe]
   cross_country_pairs: [build_second04_pairs]

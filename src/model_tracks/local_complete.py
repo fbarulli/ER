@@ -25,7 +25,7 @@ from model_tracks.package import package_member
 from core.archive_reader import archive_sidecar
 
 from core.run_log import RunLogger
-from core.tracing import flush_stage_trace, stage_trace
+from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from graph_tracks.data import file_hash
 from model_tracks.config import SuiteConfig
 
@@ -111,7 +111,7 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
                 'publish', 'ablation',
                 reason='the suite recorded a deliberate ablation skip, so there are no exports to publish',
                 detail={'run_state': str(run_state), 'recorded_skip': True},
-                source=str(run_state / 'suite_events.jsonl'),
+                source=str(run_state / _spec().suite_events_file),
             )
         else:
             from model_tracks.post_training_ablation import publish_saved
@@ -145,21 +145,27 @@ def _require_legacy_source_pin(inputs, settings: SuiteConfig) -> None:
     """
     from core.common import TRAIN_ROOT
     from core.perf_switches import legacy_mode
+    from model_tracks.resume import runtime_source_inventory
     if not legacy_mode():
         return
-    for relative, expected in inputs.manifest[_spec().files_key].items():
-        if relative.startswith(('src/', 'config/', 'scripts/')) or relative == settings.ablation_config:
-            if file_hash(TRAIN_ROOT / relative) != expected:
-                trace().add(
-                    'legacy_pin', 'code_changed',
-                    scope=SCOPE_ENTITY, key=relative,
-                    reason='legacy mode pins the live checkout to the packaged inventory; the '
-                           'completion runtime differs from the one that trained',
-                    detail={'relative': relative, 'train_root': str(TRAIN_ROOT)},
-                    source=str(TRAIN_ROOT / relative),
-                )
-                flush_trace()
-                raise ValueError(f'Local completion code/config differs from training: {relative}')
+    # The pinned surface is the package's runtime inventory (the shared SSOT),
+    # minus the gitignored semantic-family registry: legacy mode pins the live
+    # checkout's code/config/scripts and ablation config only.
+    inventory = runtime_source_inventory(
+        inputs.manifest[_spec().files_key],
+        ablation_config=settings.ablation_config, include_registry=False)
+    for relative, expected in inventory.items():
+        if file_hash(TRAIN_ROOT / relative) != expected:
+            trace().add(
+                'legacy_pin', 'code_changed',
+                scope=SCOPE_ENTITY, key=relative,
+                reason='legacy mode pins the live checkout to the packaged inventory; the '
+                       'completion runtime differs from the one that trained',
+                detail={'relative': relative, 'train_root': str(TRAIN_ROOT)},
+                source=str(TRAIN_ROOT / relative),
+            )
+            flush_trace()
+            raise ValueError(f'Local completion code/config differs from training: {relative}')
 
 
 def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity: dict,

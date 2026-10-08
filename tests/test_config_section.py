@@ -105,21 +105,44 @@ def test_the_dead_ner_config_loader_is_gone():
 
 
 # ── orchestration stage inventory lives in config/paths.yaml (audit 2026-10-08) ──
-# herb's requested block: the trace-stage join. core/tracing.py still owns the
-# RUNTIME registry (it is out of this task's edit scope), so this pins the two
-# together until the orchestrator reads the config block.
+# The trace-stage join is the SSOT-sanctioned block: config/paths.yaml declares
+# it, and ``core.tracing`` reads it back through its accessors (no code-side copy).
 
-def test_orchestration_stages_config_matches_the_runtime_registry():
+def test_orchestration_stages_read_from_the_config_ssot():
     from core import tracing
 
     merged = common.load_config()
     declared = {stage: tuple(names)
                 for stage, names in merged['orchestration_stages'].items()}
-    assert declared == dict(tracing.ORCHESTRATION_TRACE_STAGES)
+    assert declared == tracing.orchestration_trace_stages()
     assert tuple(merged['orchestration_lane_stages']) == \
-        tuple(tracing.ORCHESTRATION_LANE_STAGES)
+        tracing.orchestration_lane_stages()
     # the two row-free stages stay explicit (a coverage gap, not "no work")
     assert declared['gate_census'] == () and declared['discriminator'] == ()
+    # the code-side duplicate registry is GONE: config is the ONE home
+    assert not hasattr(tracing, 'ORCHESTRATION_TRACE_STAGES')
+    assert not hasattr(tracing, 'ORCHESTRATION_LANE_STAGES')
+
+
+def _paths_config(**overrides):
+    from core.schemas import DataConfig
+
+    raw = yaml.safe_load(common.CONFIG_PATH.read_text())
+    raw.update(overrides)
+    return DataConfig.model_validate(raw)
+
+
+def test_orchestration_lane_stages_must_name_declared_stages():
+    """A lane stage absent from ``orchestration_stages`` can never join its
+    rows: the root contract fails loud at load instead of mid-run."""
+    with pytest.raises(ValidationError, match='undeclared orchestration'):
+        _paths_config(orchestration_lane_stages=['not_a_stage'])
+
+
+def test_orchestration_lane_stages_reject_duplicates():
+    declared = next(iter(_paths_config().orchestration_stages))
+    with pytest.raises(ValidationError, match='contains duplicates'):
+        _paths_config(orchestration_lane_stages=[declared, declared])
 
 
 # ── config/training.yaml bundle: block declares every BundleSpec value ──────
@@ -142,6 +165,29 @@ def test_bundle_block_matches_the_loaded_spec():
         loaded = getattr(spec, key)
         expected = tuple(value) if isinstance(loaded, tuple) else value
         assert loaded == expected, key
+
+
+# ── prepared setup layout: ONE accessor + config-owned child filenames ──────
+# The prepared-setup layout (training.preparation.graph_setup) is read through
+# common.prepared_setup_layout(), and its child filenames are config-owned, so
+# no lane re-spells ``training_cfg().preparation.graph_setup`` or a literal.
+
+def test_prepared_setup_layout_accessor_is_the_training_cfg_layout():
+    layout = common.prepared_setup_layout()
+    assert layout is common.training_cfg().preparation.graph_setup
+    assert layout.input_manifest == 'input_manifest.json'
+    assert layout.listings == 'listings.json'
+
+
+def test_graph_setup_block_declares_every_layout_field():
+    from core.schemas import PreparationGraphSetupSpec
+
+    raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
+    block = raw['preparation']['graph_setup']
+    assert set(block) == set(PreparationGraphSetupSpec.model_fields), (
+        'config/training.yaml preparation.graph_setup must declare every '
+        f'layout field; missing '
+        f'{sorted(set(PreparationGraphSetupSpec.model_fields) - set(block))}')
 
 
 # ── the archive sidecar suffix has ONE home (audit 2026-10-08) ──────────────

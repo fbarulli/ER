@@ -20,7 +20,7 @@ def test_worker_events_are_durable_per_attempt_and_redact_secrets(tmp_path, monk
     assert 'api_key=foo' not in logs
 
 
-@pytest.mark.parametrize('track', ['text', 'gnn_only', 'hybrid'])
+@pytest.mark.parametrize('track', ['text', 'gnn_only', 'cascade'])
 def test_worker_failure_records_traceback_then_reraises(tmp_path, monkeypatch, track):
     from model_tracks import worker
     monkeypatch.setenv('EUROMONITOR_RESULTS_DIR', str(tmp_path))

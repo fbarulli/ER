@@ -125,6 +125,41 @@ def test_laya_push_dry_run_emits_the_same_argv():
     assert plan["mode"] == "dry-run"
 
 
+def test_laya_push_routes_through_the_shared_launch_aid(tmp_path, monkeypatch):
+    """Executed laya push: the shared argv helper AND the shared
+    clear/push/capture launch-aid sequence (never re-spelled in this lane)."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "kernel-metadata.json").write_text(
+        json.dumps({"id": "owner/laya"}), encoding="utf-8")
+    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr(laya_lane, "_staged_laya_push_preflight",
+                        lambda path: None)
+    seen: dict = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+    calls: list = []
+
+    def fake_session_capture(slug, push):
+        calls.append(("capture", slug))
+        push()
+        calls.append(("captured", slug))
+        return {"session_id": "sess-9"}
+
+    monkeypatch.setattr(KaggleKernels, "push_with_session_capture",
+                        staticmethod(fake_session_capture))
+    plan = laya_lane.push_kaggle_kernel(stage, execute=True)
+    assert plan["returncode"] == 0 and plan["pushed"] is True
+    assert plan["session_id"] == "sess-9"
+    assert seen["argv"] == [sys.executable, "-m", "kaggle", "kernels", "push",
+                            "-p", str(stage)]
+    assert calls == [("capture", "owner/laya"), ("captured", "owner/laya")]
+
+
 def test_dataset_publish_argv_tokens_are_byte_identical_for_both_lanes():
     bundle = KaggleDatasets.dataset_publish_commands(
         "/usr/bin/kaggle", "payload", message="er bundle: cohort=c",

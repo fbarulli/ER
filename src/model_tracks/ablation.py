@@ -144,7 +144,8 @@ def request_context(request_path):
             raise ValueError('unsafe portable setup anchor')
         # Bound jobs always live at <suite>/<track>/ablation/request.json.
         suite = request_path.parent.parent.parent
-        setup = suite/'local_inputs'/request['portable_setup']
+        from core.bundle import _bundle_spec
+        setup = suite / _bundle_spec().prepared_inputs_dir / request['portable_setup']
         if not setup.exists():
             setup = TRAIN_ROOT/request['portable_setup']
         context = {'@setup':setup,'@suite':suite}

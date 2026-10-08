@@ -1165,9 +1165,14 @@ def _module_scope_gate(script: str) -> None:
 
 
 def _template(script: str, values: dict[str, str]) -> str:
-    for token, replacement in values.items():
-        script = script.replace(f"@{token}@", replacement)
-    return script
+    """Substitute ``@TOKEN@`` placeholders (ONE home: ``KernelTemplates``).
+
+    The byte-exact token loop lives in ``KernelTemplates.substitute`` (the
+    kaggle lane's renderer); this lane delegates so the two can never drift.
+    """
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    return KernelTemplates.substitute(script, values)
 
 
 def _git_revision() -> str:
@@ -2411,13 +2416,16 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
         plan["action"] = "version"
         # `-r` and `--dir-mode` are one argparse option: `-r --dir-mode
         # zip` fails with "argument -r/--dir-mode: expected one
-        # argument" (fail-loud met live on the version path).
-        command = [executable, "datasets", "version", "-r", "zip",
-                   "-m", f"laya inputs {run_tag}",
-                   "-p", str(payload)]
+        # argument" (fail-loud met live on the version path). The argv
+        # SHAPE is the kaggle lane's ONE home, never re-spelled here.
+        command = KaggleDatasets.dataset_publish_commands(
+            executable, payload, message=f"laya inputs {run_tag}",
+            dir_mode_args=["-r", "zip"])["version"]
     else:
         plan["action"] = "create"
-        command = [executable, "datasets", "create", "-p", str(payload)]
+        command = KaggleDatasets.dataset_publish_commands(
+            executable, payload, message=f"laya inputs {run_tag}",
+            dir_mode_args=["-r", "zip"])["create"]
     plan["command"] = command
     _, _ = lane._run_kaggle(command)
     plan["returncode"] = 0
@@ -3055,8 +3063,10 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
     embeds the CLI's own output in the raised RuntimeError on a failing
     returncode.
     """
-    argv = [sys.executable, "-m", "kaggle", "kernels", "push",
-            "-p", str(stage_dir)]
+    from cli.kaggle_kernels import KaggleKernels
+
+    argv = KaggleKernels.kernels_push_argv([sys.executable, "-m", "kaggle"],
+                                          stage_dir)
     plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
                             "argv": argv, "stage": str(stage_dir)}
     if not execute:
@@ -3069,30 +3079,29 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
             f"{stage_dir} (kernel-metadata.json is missing); stage first "
             "(--what stage-kernel)")
     _staged_laya_push_preflight(Path(stage_dir))
-    from cli import kaggle_lane as lane
 
     slug = json.loads(metadata_file.read_text(encoding="utf-8"))["id"]
-    # Record the session id at launch (the capture point the verified stop
-    # reads): a later stop then cancels the EXACT session via the SDK instead
-    # of a blind version replace. Drop any stale id first.
-    lane.clear_kernel_session_id(slug)
-    result = subprocess.run(argv, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True)
-    output = result.stdout or ""
-    rc = result.returncode
-    plan["returncode"] = rc
-    if rc != 0:
-        tail = output.strip()[-4000:] or "(kaggle produced no output)"
-        raise RuntimeError(
-            f"kaggle command failed (rc={rc}): {' '.join(argv)}\n"
-            f"--- kaggle output ---\n{tail}")
+    completed: dict[str, Any] = {}
+
+    def _push() -> None:
+        result = subprocess.run(argv, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        completed["result"] = result
+        if result.returncode != 0:
+            tail = (result.stdout or "").strip()[-4000:] or \
+                "(kaggle produced no output)"
+            raise RuntimeError(
+                f"kaggle command failed (rc={result.returncode}): "
+                f"{' '.join(argv)}\n--- kaggle output ---\n{tail}")
+
+    # ONE home for the clear/push/capture launch-aid sequence (shared with
+    # KaggleKernels): a stale session id is dropped FIRST, the push runs, and
+    # the new session id is captured best-effort (the verified stop reads it).
+    captured = KaggleKernels.push_with_session_capture(slug, _push)
+    result = completed["result"]
+    plan["returncode"] = result.returncode
     plan["pushed"] = True
-    try:
-        captured = lane.capture_kernel_session_id(slug)
-        plan["session_id"] = captured.get("session_id")
-    except Exception as error:  # noqa: BLE001 - best-effort launch aid
-        plan["session_id"] = None
-        _log_lane(f"[{slug}] session-id capture skipped: {error}")
+    plan["session_id"] = captured.get("session_id")
     _log_lane(f"pushed kernel payload: {' '.join(argv)} rc=0 "
               f"session_id={plan.get('session_id')}")
     return plan
@@ -3133,9 +3142,12 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
+    from cli.kaggle_kernels import KaggleKernels
+
     result = subprocess.run(
-        [sys.executable, "-m", "kaggle", "kernels", "output", slug,
-         "-p", str(stage)], cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
+        KaggleKernels.kernels_output_argv([sys.executable, "-m", "kaggle"],
+                                          slug, stage),
+        cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         raise RuntimeError(

@@ -95,6 +95,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
@@ -509,8 +510,6 @@ class NegativeFoldPolicy:
         if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
             return fold_a
         if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
-            import numpy as np
-
             train_endpoints = (fold_a < n_folds - 2) | (fold_b < n_folds - 2)
             return pd.Series(
                 np.where(train_endpoints, np.minimum(fold_a, fold_b), fold_a),
@@ -624,8 +623,6 @@ class NegativeFoldPolicy:
         # it is MEASURED per policy (on the raw endpoint folds the masks were
         # built from) instead of asserted in prose — the 2026-10-01 rejection
         # of ``train_side`` rested on this claim, so it has to be checkable.
-        import numpy as np
-
         trained_on_endpoint = (
             np.minimum(raw_first, raw_second) < n_folds - 2
         )

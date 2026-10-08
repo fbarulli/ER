@@ -786,22 +786,19 @@ class SplitSpec(BaseModel):
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)
-    # DECIDED (2026-10-01, measured — see the DECISION block in
-    # src/training/build_final_validation.py): the scored half's negative
-    # fold-assignment policy. The winner is coded as the required default in
+    # DECIDED (2026-10-01, RE-DECIDED 2026-10-08 from measured evidence — see
+    # the DECISION block in src/training/build_final_validation.py): the scored
+    # half's negative fold-assignment policy. The winner is pinned in
     # config/training.yaml split.negative_fold_policy; this field has NO
     # pydantic default on purpose (fail-loud: a config that omits it is a
     # load error, not a silent policy choice).
     #   "withhold_straddle" (A, legacy): a negative with mismatched endpoint
-    #     folds scores nowhere. Measured DEV 592 / TEST 466 scored negatives,
-    #     4,728 withheld and consumed by nothing.
-    #   "train_side" (B): every negative gets ONE whole fold — the fold of
-    #     its train-side endpoint if one endpoint is a train fold, else the
-    #     fold of gtin1. Measured DEV 1,087 (+495, +83.6%) / TEST 957
-    #     (+491, +105.4%); slice-cell thinness share improves
-    #     (DEV 67.6% -> 64.9%, TEST 70.2% -> 67.2% below
-    #     robust_validation.min_test_negatives=5) and no trained-on endpoint
-    #     enters the scored half under either policy.
+    #     folds scores nowhere (a coverage gap, consumed by nothing).
+    #   "train_side" (B, pinned 2026-10-08): every negative gets ONE whole
+    #     fold — the fold of its train-side endpoint if one endpoint is a
+    #     train fold, else the fold of gtin1 — so both scored halves carry
+    #     roughly double the negatives and no trained-on endpoint enters the
+    #     scored half (measured zero under BOTH policies).
     negative_fold_policy: Literal["withhold_straddle", "train_side"]
 
     @model_validator(mode="after")
@@ -3072,6 +3069,11 @@ class PreparationGraphSetupSpec(BaseModel):
     text_config: str = "text.yaml"
     track_config_suffix: str = ".yaml"
     prepared_dir: str = "prepared"
+    # The child filenames INSIDE ``prepared_dir`` that producers (graph_tracks,
+    # prepare_embeddings/tokens) and consumers spell today; declaring them here
+    # retires those literals into the ONE layout contract.
+    input_manifest: str = "input_manifest.json"
+    listings: str = "listings.json"
     shared_training_data: str = "shared_training_data.json"
     shared_training_projection: str = "shared_training_projection.json"
     text_training_binding: str = "text_training_binding.json"

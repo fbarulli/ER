@@ -22,7 +22,7 @@ def population():
             for split in ('train', 'dev', 'test') for i in range(3)]
 
 
-def inputs(tmp_path, hybrid=False):
+def inputs(tmp_path):
     records = population()
     listings = tmp_path / 'listings.json'
     listings.write_text(json.dumps({'schema': 'er-graph-listings-v1', 'listings': records}))
@@ -30,17 +30,11 @@ def inputs(tmp_path, hybrid=False):
     pd.DataFrame([{'sku_id1': f'{s}-0', 'sku_id2': f'{s}-{j}',
                    'label': int(j == 1), 'split': s}
                   for s in ('train', 'dev', 'test') for j in (1, 2)]).to_csv(pairs, index=False)
-    cfg = {'track': 'hybrid' if hybrid else 'gnn_only', 'listings': str(listings),
+    cfg = {'track': 'gnn_only', 'listings': str(listings),
            'pairs': str(pairs), 'output_dir': str(tmp_path / 'run'),
            'hidden_dim': 8, 'output_dim': 8, 'epochs': 2, 'device': 'cpu',
            'allow_unmanifested_inputs': True, 'wandb': {'mode': 'disabled'}, 'dvc': {'enabled': False}}
     cache = None
-    if hybrid:
-        cache = tmp_path / 'text.npz'
-        np.savez(cache, ids=np.asarray([r['sku_id'] for r in records]),
-                 embeddings=np.random.default_rng(42).normal(size=(len(records), 6)).astype('float32'),
-                 metadata=json.dumps({'checkpoint_sha256': 'test-checkpoint', 'composition': {'profile': 'test'}}))
-        cfg['text_cache'] = str(cache)
     config = tmp_path / 'config.yaml'
     config.write_text(yaml.safe_dump(cfg))
     return listings, pairs, cache, config
@@ -97,11 +91,11 @@ def test_cache_alignment_and_zero_guard(tmp_path):
         load_text_cache(path, ['a'])
 
 
-def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid=False):
+def test_worker_export_and_resume(tmp_path, monkeypatch):
     disable_tracking(monkeypatch)
-    listings, pairs, cache, config = inputs(tmp_path, hybrid)
+    listings, pairs, cache, config = inputs(tmp_path)
     checkpoint = train(config, run_tag='smoke')
-    track = 'hybrid' if hybrid else 'gnn_only'
+    track = 'gnn_only'
     run = tmp_path / 'run' / name(track, 'smoke')
     assert json.loads((run / name(track, 'graph_worker_result.json')).read_text())['status'] == 'ok'
     assert (run / name(track, 'gradient_metrics.jsonl')).is_file()
@@ -115,7 +109,7 @@ def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid=False):
     from training.hnsw_index import PersistentHnswIndex
     index = PersistentHnswIndex(target / name(track, 'index'), ef_construction=200, M=16, ef_search=100)
     index.load(ids=[r['sku_id'] for r in population()], dim=8, checkpoint=checkpoint,
-               model_name='hybrid' if hybrid else 'gnn_only', preprocessing_fingerprint=file_hash(listings))
+               model_name='gnn_only', preprocessing_fingerprint=file_hash(listings))
     labels, distances = index.query(vectors[:1], top_k=3)
     assert labels.shape == (1, 3)
     assert np.isfinite(distances).all()
@@ -125,7 +119,7 @@ def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid=False):
     # Move the whole checkpoint tree, removing original absolute best paths.
     relocated = tmp_path / 'relocated'
     shutil.copytree(run / '_checkpoints', relocated)
-    resume = relocated / 'gnn_only' if not hybrid else relocated / 'hybrid'
+    resume = relocated / 'gnn_only'
     resume = resume / 'smoke_f0' / 'checkpoint-2' / name(track, 'graph_model.pt')
     shutil.rmtree(run)
     cfg = yaml.safe_load(config.read_text())
@@ -167,13 +161,13 @@ def test_prepared_export_shared_identity(tmp_path):
         load_records(listings)
 
 
-def test_complete_offline_wandb_dvc_lifecycle(tmp_path, monkeypatch, hybrid=False):
+def test_complete_offline_wandb_dvc_lifecycle(tmp_path, monkeypatch):
     """Exercise real W&B SDK and DVC add/push/clean-pull without external services."""
     disable_tracking(monkeypatch)
     monkeypatch.setenv('WANDB_MODE', 'offline')
     monkeypatch.setenv('WANDB_SILENT', 'true')
     monkeypatch.setenv('WANDB_CONSOLE', 'off')
-    listings, pairs, cache, config = inputs(tmp_path, hybrid)
+    listings, pairs, cache, config = inputs(tmp_path)
     cfg = yaml.safe_load(config.read_text())
     cfg['wandb'] = {'project': 'e-r-graph-smoke', 'mode': 'offline'}
     cfg['dvc'] = {'enabled': True, 'remote': str(tmp_path / 'local-remote'), 'push': True}
@@ -340,7 +334,7 @@ def test_prepare_rejects_scoped_hold_without_blocking_gtin_peers(tmp_path):
         prepare(catalog, splits, pairs, tmp_path / 'blocked')
 
 
-def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch, hybrid=False):
+def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch):
     import importlib
     worker = importlib.import_module('graph_tracks.train')
     disable_tracking(monkeypatch)
@@ -348,7 +342,7 @@ def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch, h
                                                        'dev_precision_at_recall': 0.4,
                                                        'dev_p_at_r95': 0.4,
                                                        'agreed_recall': 0.95})
-    _, _, _, config = inputs(tmp_path, hybrid=hybrid)
+    _, _, _, config = inputs(tmp_path)
     cfg = yaml.safe_load(config.read_text())
     cfg.update(epochs=10, postprocess=False)
     config.write_text(yaml.safe_dump(cfg))
