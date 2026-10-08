@@ -84,6 +84,7 @@ import itertools
 import json
 import math
 import re
+import shlex
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -2773,6 +2774,32 @@ class ColabDataBundleSpec(BaseModel):
         return self.remote_recovery_template.format(run_tag=run_tag)
 
 
+class ColabLaneEnvSpec(BaseModel):
+    """The environment a Colab lane process runs with (declarative names).
+
+    ``ColabSpec.lane_env`` renders this spec into the mapping, so PYTHONPATH, the
+    session/transcript identity, the lane's suite config, and the always-on
+    GPU-only/unbuffered switches are one declaration instead of literals at the
+    emission sites (cli.colab, model_tracks.colab, the smoke shell entrypoint).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_env: str = Field(min_length=1)
+    log_env: str = Field(min_length=1)
+    suite_config_env: str = Field(min_length=1)
+    python_path_env: str = Field(min_length=1)
+    #: Repo-relative source directory under the remote checkout root.
+    remote_src_dir: str = Field(min_length=1)
+    #: The Colab lanes always train with GPU-only semantics (CPU postprocessing
+    #: is deferred to the local finalize), on CPU and on T4 alike.
+    gpu_training_only_env: str = Field(min_length=1)
+    gpu_training_only: Literal[True] = True
+    #: The unbuffered-output variable (a remote process must stream its log).
+    unbuffered_env: str = Field(min_length=1)
+    unbuffered: Literal[True] = True
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
@@ -2807,6 +2834,10 @@ class ColabSpec(BaseModel):
     # launcher sharing one VM (cli.colab_launch). Declared here so the lock
     # name is not a second literal beside the session name it derives from.
     launcher_lock_template: str = Field(min_length=1)
+    # The environment one lane process runs with (names + fixed switches);
+    # ``ColabSpec.lane_env``/``lane_env_exports`` render it, so no emission site
+    # spells PYTHONPATH or ER_GPU_TRAINING_ONLY or the session/log variables.
+    lane_env_spec: ColabLaneEnvSpec
     # The W&B settings the Colab lanes use (project/mode are projected from
     # tracking.wandb by TrainingConfig; the env names are the lane's own).
     wandb: ColabWandbSpec
@@ -2954,6 +2985,26 @@ class ColabSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
+    def _no_freshness_check_can_exist(self) -> "ColabSpec":
+        """NO FRESHNESS CHECKS (owner directive 2026-10-08, item 3).
+
+        The class states the rule explicitly, twice: the field is
+        ``Literal[False]`` and this validator refuses a constructed spec that
+        carries one. There is no staleness test anywhere on the Colab lanes —
+        freshness/integrity comes from the data bundle, i.e. the sealed
+        ``Bundle`` whose role contract is verified exactly once at the boundary
+        (``core.bundle.Bundle.load`` / ``core.portable_archive.verify_archive_digest``).
+        A downstream consumer that re-derives a hash and compares it against a
+        recorded one is a bug, not a check.
+        """
+        if self.freshness_checks:
+            raise ValueError(
+                "colab.freshness_checks cannot be enabled: the Colab lanes never "
+                "re-derive a hash to test staleness (integrity is the bundle digest "
+                "at the boundary)")
+        return self
+
+    @model_validator(mode="after")
     def _data_bundle_suite_lives_in_the_setup_dir(self) -> "ColabSpec":
         """The suite config BOTH lanes load must sit inside the declared setup dir."""
         setup = PurePosixPath(self.data_bundle.setup_dir)
@@ -2974,14 +3025,23 @@ class ColabSpec(BaseModel):
         """The declared repository-root file entries."""
         return tuple(name for name in self.checkout_paths if not name.endswith("/"))
 
-    def checkout_patterns(self) -> tuple[str, ...]:
-        """The no-cone git sparse patterns the VM checks out."""
+    def sparse_checkout_patterns(self) -> tuple[str, ...]:
+        """The no-cone git sparse patterns the VM checks out.
+
+        THE emitted form of ``checkout_paths``: one leading slash per declared
+        entry, directories keeping their trailing slash. ``cli.colab_runtime``
+        emits exactly this in ``runtime_checkout_paths()``.
+        """
         return tuple("/" + name for name in self.checkout_paths)
 
     # ── lane identity accessors ────────────────────────────────────────────
     def lane_for(self, gpu: str) -> ColabLaneSpec:
         """The lane an accelerator request selects (only ``CPU`` is the CPU lane)."""
         return self.lanes["cpu"] if str(gpu).upper() == "CPU" else self.lanes["gpu"]
+
+    def session_for(self, gpu: str) -> str:
+        """The VM session name for one accelerator request."""
+        return self.lane_for(gpu).session
 
     def lane_by_session(self, session: str) -> ColabLaneSpec | None:
         """The declared lane whose session is ``session``, if any."""
@@ -3002,9 +3062,88 @@ class ColabSpec(BaseModel):
             return self.default_log_name
         return self.log_name_template.format(session=session)
 
+    def lane_log_relative_path(self, session: str) -> str:
+        """The declared transcript path for one session: ``<log_dir>/<name>``."""
+        return f"{self.log_dir}/{self.transcript_name(session)}"
+
     def launcher_lock_name(self, session: str) -> str:
         """The advisory lock file name that guards one launcher session."""
         return self.launcher_lock_template.format(session=session)
+
+    # ── the lane's environment (one assembly, both lanes) ─────────────────
+    def lane_env(self, gpu: str, *, session: str | None = None,
+                 log_name: str | None = None,
+                 remote_root: str | None = None) -> dict[str, str]:
+        """The environment one Colab lane process runs with.
+
+        ``session`` supplied -> the launcher-side identity keys: the session
+        name, that session's declared transcript, and the lane's suite config
+        (the data bundle's, identical for both lanes). ``log_name`` overrides
+        the derived transcript for a caller that already exported one.
+
+        ``remote_root`` supplied -> the VM-side process keys: PYTHONPATH into the
+        checkout's src directory, unbuffered output, and the GPU-only training
+        switch (the Colab lanes defer CPU postprocessing on CPU and T4 alike).
+
+        Nothing else may assemble these: the emission sites merge this mapping
+        instead of spelling the variables.
+        """
+        env = self.lane_env_spec
+        rendered: dict[str, str] = {}
+        if session is not None:
+            rendered[env.session_env] = session
+            rendered[env.log_env] = log_name or self.transcript_name(session)
+            rendered[env.suite_config_env] = self.suite_config_for(gpu)
+        if remote_root is not None:
+            rendered[env.python_path_env] = f"{str(remote_root).rstrip('/')}/{env.remote_src_dir}"
+            rendered[env.gpu_training_only_env] = "1" if env.gpu_training_only else "0"
+            rendered[env.unbuffered_env] = "1" if env.unbuffered else "0"
+        return rendered
+
+    def lane_env_exports(self, gpu: str, *, session: str | None = None,
+                         log_name: str | None = None) -> str:
+        """The launcher-side lane env as shell ``export`` lines.
+
+        What ``python -m cli.colab --print-lane-env`` prints and
+        ``scripts/run_colab_smoke.sh`` evaluates, so the shell entrypoint holds
+        no session/log/suite-config literal.
+        """
+        lane = self.lane_for(gpu)
+        environment = self.lane_env(gpu, session=session or lane.session,
+                                    log_name=log_name)
+        return "\n".join(f"export {name}={shlex.quote(value)}"
+                         for name, value in environment.items())
+
+    # ── the ONE data bundle, for BOTH lanes ───────────────────────────────
+    def data_bundle_for(self, gpu: str) -> ColabDataBundleSpec:
+        """The data bundle the selected lane trains from.
+
+        Both lanes get the SAME declaration object: ``--gpu CPU`` and ``--gpu
+        T4`` differ only in the accelerator request (and the device flip it
+        triggers), never in the data they consume.
+        """
+        self.lane_for(gpu)  # validates the accelerator into a declared lane
+        return self.data_bundle
+
+    def suite_config_for(self, gpu: str) -> str:
+        """The suite config the selected lane launches."""
+        self.data_bundle_for(gpu)
+        return self.data_bundle.suite_config
+
+    def wandb_env(self, *, run_name: str, directory) -> dict[str, str]:
+        """The W&B env one Colab lane process runs with.
+
+        The variable NAMES come from this class (``wandb.dir_env`` /
+        ``wandb.run_name_env``) and the project/mode it reports to are the
+        projected ``tracking.wandb`` values, so no lane spells ``WANDB_DIR`` or
+        ``WANDB_RUN_NAME`` for itself.
+        """
+        return {self.wandb.dir_env: str(directory),
+                self.wandb.run_name_env: str(run_name)}
+
+    def wandb_env_names(self) -> tuple[str, str, str]:
+        """``(api_key_env, run_name_env, dir_env)`` as declared."""
+        return (self.wandb.api_key_env, self.wandb.run_name_env, self.wandb.dir_env)
 
     # ── the freshness ruling, readable by consumers ────────────────────────
     def verifies_freshness(self) -> bool:

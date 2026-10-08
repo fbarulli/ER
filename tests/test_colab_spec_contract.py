@@ -16,6 +16,7 @@ can reappear anywhere in ``src/``.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -46,10 +47,13 @@ def test_sparse_checkout_comes_from_the_class():
     declared = spec()
     assert colab_runtime.RUNTIME_DIRECTORY_PATHS == declared.checkout_directory_paths()
     assert colab_runtime.RUNTIME_REQUIRED_ROOT_FILES == declared.checkout_root_files()
-    assert colab_runtime.runtime_checkout_paths() == declared.checkout_patterns()
+    assert colab_runtime.runtime_checkout_paths() == declared.sparse_checkout_patterns()
     # A directory entry carries a trailing slash; a root file does not.
     assert all(name.endswith("/") for name in declared.checkout_directory_paths())
     assert all(not name.endswith("/") for name in declared.checkout_root_files())
+    # The class PRODUCES the emitted patterns from the declared list.
+    assert declared.sparse_checkout_patterns() == tuple(
+        "/" + name for name in declared.checkout_paths)
 
 
 def test_the_checkout_set_is_the_config_declaration():
@@ -94,6 +98,106 @@ def test_one_data_bundle_serves_the_cpu_and_the_gpu_lane():
     # The smoke suite the shell entrypoint launches IS the declared bundle.
     assert canonical_suite_matrix().entry("smoke_200").suite_config == bundle.suite_config
     assert training_cfg().preparation.smoke_dir == bundle.setup_dir
+
+
+def test_the_class_resolves_the_data_bundle_for_both_lanes():
+    declared = spec()
+    for gpu in ("CPU", "T4", "A100", "cpu"):
+        assert declared.data_bundle_for(gpu) is declared.data_bundle
+        assert declared.suite_config_for(gpu) == declared.data_bundle.suite_config
+        assert declared.session_for(gpu) == (
+            declared.lanes["cpu"].session if gpu.upper() == "CPU"
+            else declared.lanes["gpu"].session)
+
+
+def test_lane_env_is_assembled_by_the_class():
+    declared = spec()
+    for gpu, session, log_name in (("CPU", "smoke-cpu", "lane_cpu.log"),
+                                   ("T4", "smoke-gpu", "lane_gpu.log")):
+        environment = declared.lane_env(gpu, session=session,
+                                        remote_root="/content/EuromonitoR")
+        names = declared.lane_env_spec
+        assert environment[names.session_env] == session
+        assert environment[names.log_env] == log_name
+        assert environment[names.suite_config_env] == declared.data_bundle.suite_config
+        assert environment[names.python_path_env] == "/content/EuromonitoR/src"
+        assert environment[names.gpu_training_only_env] == "1"
+        assert environment[names.unbuffered_env] == "1"
+    # A remote process env carries no launcher-side session identity.
+    remote_only = declared.lane_env("T4", remote_root="/content/EuromonitoR")
+    assert declared.lane_env_spec.session_env not in remote_only
+    assert set(remote_only) == {declared.lane_env_spec.python_path_env,
+                                declared.lane_env_spec.gpu_training_only_env,
+                                declared.lane_env_spec.unbuffered_env}
+    # An override still wins over the derived transcript.
+    assert declared.lane_env("CPU", session="smoke-cpu",
+                             log_name="lane_custom.log")[
+        declared.lane_env_spec.log_env] == "lane_custom.log"
+
+
+def test_lane_env_exports_is_shell_evaluable():
+    import os
+    import subprocess
+
+    declared = spec()
+    for gpu, session in (("CPU", "smoke-cpu"), ("T4", "smoke-gpu")):
+        script = declared.lane_env_exports(gpu)
+        completed = subprocess.run(
+            ["bash", "-c", f'{script}\nprintf "%s %s %s" '
+                           f'"${declared.lane_env_spec.session_env}" '
+                           f'"${declared.lane_env_spec.log_env}" '
+                           f'"${declared.lane_env_spec.suite_config_env}"'],
+            capture_output=True, text=True, env={**os.environ},
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.split() == [
+            session, declared.transcript_name(session), declared.data_bundle.suite_config]
+
+
+def test_the_launcher_env_names_come_from_the_class():
+    """cli.colab reads the env names off the class, never a literal."""
+    import cli.colab as colab
+
+    declared = spec()
+    assert colab._LANE_ENV is declared.lane_env_spec
+    assert colab._PYTHONPATH_ENV == declared.lane_env_spec.python_path_env
+    assert colab._UNBUFFERED_ENV == declared.lane_env_spec.unbuffered_env
+    assert colab._REMOTE_SRC_DIR == declared.lane_env_spec.remote_src_dir
+    assert colab._WANDB_RUN_NAME_ENV == declared.wandb.run_name_env
+    assert colab._WANDB_DIR_ENV == declared.wandb.dir_env
+    assert colab._WANDB_DIR_NAME == declared.wandb.dir_name
+    from cli import colab_runtime
+    assert colab_runtime._BOOTSTRAP.splitlines()[2].endswith(
+        f'"{colab.REMOTE_ROOT}/{declared.lane_env_spec.remote_src_dir}")')
+
+
+def test_the_preflight_reports_the_class_resolved_lane():
+    """The all-track preflight publishes the lane contract the launch consumes."""
+    import json
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "cli.colab", "--preflight-only", "--what", "tracks",
+         "--tracks-config", training_cfg().colab.data_bundle.suite_config,
+         "--gpu", "CPU"],
+        cwd=ROOT, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(SRC)},
+    )
+    assert completed.returncode == 0, completed.stderr
+    output = completed.stdout[completed.stdout.index("\n{") + 1:]
+    lane = json.loads(output)["lane"]
+    declared = spec()
+    assert lane["gpu"] == "CPU"
+    assert lane["session"] == declared.lanes["cpu"].session
+    assert lane["transcript"] == declared.lane_log_relative_path(
+        declared.lanes["cpu"].session)
+    assert lane["suite_config"] == declared.data_bundle.suite_config
+    assert lane["entrypoint_env"]["ER_GPU_TRAINING_ONLY"] == "1"
+    assert lane["entrypoint_env"]["PYTHONUNBUFFERED"] == "1"
+    assert lane["wandb"]["project"] == declared.wandb.project
+    assert lane["wandb"]["env"] == declared.wandb_env(
+        run_name="<run>", directory=f"<worker-output>/{declared.wandb.dir_name}")
 
 
 def test_data_bundle_archive_names_are_derived_not_literal():
@@ -233,8 +337,13 @@ def test_the_class_states_there_are_no_freshness_checks():
 
 
 def test_the_class_refuses_a_freshness_check():
-    """``freshness_checks`` is ``Literal[False]``: no config can turn it on."""
-    with pytest.raises(ValidationError):
+    """``freshness_checks`` is ``Literal[False]`` AND the validator refuses it.
+
+    Two independent statements of the rule: the literal type, and the explicit
+    ``_no_freshness_check_can_exist`` model validator whose message names the
+    field.
+    """
+    with pytest.raises(ValidationError, match='freshness_checks'):
         ColabSpec.model_validate({**spec().model_dump(), "freshness_checks": True})
 
 

@@ -163,18 +163,20 @@ def ensure_session() -> None:
 #
 # ONE HOME (consolidated 2026-10-08): the Colab checkout contract lives in
 # ``ColabSpec`` (config/training.yaml colab.checkout_paths) — the declared
-# list, its emitted sparse patterns (``ColabSpec.checkout_patterns``), and the
-# path-shape rule every consumer shares (is_checkout_relative_path, which the
-# lane's ColabLaneBase.checkout_relative_guard now delegates to). The two
-# module attributes below are the PROJECTION the offline checkout tests patch;
-# the spec remains the only declaration. The Colab list is deliberately NOT
-# derivable from kaggle.checkout_paths (this lane needs artifacts/wheels +
+# list, its emitted sparse patterns (``ColabSpec.sparse_checkout_patterns``),
+# and the path-shape rule every consumer shares (is_checkout_relative_path,
+# which the lane's ColabLaneBase.checkout_relative_guard now delegates to).
+# The two module attributes below are the PROJECTION the offline checkout test
+# patches; the spec remains the only declaration. The Colab list is deliberately
+# NOT derivable from kaggle.checkout_paths (this lane needs artifacts/wheels +
 # artifacts/evidence and no requirements/artifacts/models), which is why it has
 # its own config key.
 _COLAB = training_cfg().colab
 #: Directory entries carry a trailing slash; the rest are repo-root files.
 RUNTIME_DIRECTORY_PATHS = _COLAB.checkout_directory_paths()
 RUNTIME_REQUIRED_ROOT_FILES = _COLAB.checkout_root_files()
+#: The declared projection, used to tell an unpatched pair from a test override.
+_DECLARED_CHECKOUT_LISTS = (RUNTIME_DIRECTORY_PATHS, RUNTIME_REQUIRED_ROOT_FILES)
 # Characters that can never appear in a repository-relative checkout path: a
 # newline/CR breaks the emitted git pathspec, a backslash escapes it, and
 # ``*?[]{}`` turned a declared path into a pattern/expansion in the old
@@ -201,8 +203,16 @@ def is_checkout_relative_path(value: str, *, single_component: bool = False) -> 
 
 
 def runtime_checkout_paths() -> tuple[str, ...]:
-    """The no-cone sparse patterns every prepared runtime lane checks out."""
-    return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS, *RUNTIME_REQUIRED_ROOT_FILES))
+    """The no-cone sparse patterns every prepared runtime lane checks out.
+
+    THE declaration is ``ColabSpec.sparse_checkout_paths()``; the module
+    attributes above are its projection, and a caller that patches them (the
+    offline checkout test) still steers the emitted patterns.
+    """
+    if (RUNTIME_DIRECTORY_PATHS, RUNTIME_REQUIRED_ROOT_FILES) == _DECLARED_CHECKOUT_LISTS:
+        return _COLAB.sparse_checkout_patterns()
+    return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS,
+                                         *RUNTIME_REQUIRED_ROOT_FILES))
 
 
 def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
@@ -425,8 +435,8 @@ else:
 
 _BOOTSTRAP = f"""
 import sys, runpy, pathlib, os
-sys.path.insert(0, "{_REMOTE_ROOT}/src")
-os.environ["PYTHONPATH"] = "{_REMOTE_ROOT}/src" + os.pathsep + os.environ.get("PYTHONPATH", "")
+sys.path.insert(0, "{_REMOTE_ROOT}/{_COLAB.lane_env_spec.remote_src_dir}")
+os.environ["{_COLAB.lane_env_spec.python_path_env}"] = "{_REMOTE_ROOT}/{_COLAB.lane_env_spec.remote_src_dir}" + os.pathsep + os.environ.get("{_COLAB.lane_env_spec.python_path_env}", "")
 (pathlib.Path("{_REMOTE_ROOT}/results")).mkdir(parents=True, exist_ok=True)
 (pathlib.Path("{_REMOTE_ROOT}/artifacts/data")).mkdir(parents=True, exist_ok=True)
 """

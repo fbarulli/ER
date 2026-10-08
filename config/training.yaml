@@ -396,6 +396,21 @@ colab:
   # The advisory launcher lock that refuses a second launcher sharing one VM
   # (cli.colab_launch): one template, rendered with the session name.
   launcher_lock_template: "launcher-{session}.lock"
+  # The environment ONE lane process runs with (ColabSpec.lane_env renders it,
+  # and ColabSpec.lane_env_exports prints the shell form the smoke entrypoint
+  # evaluates): the launcher-side session/transcript/suite-config identity, and
+  # the VM-side PYTHONPATH/unbuffered/GPU-only switch. No emission site spells
+  # any of these variable names.
+  lane_env_spec:
+    session_env: "EUROMONITOR_COLAB_SESSION"
+    log_env: "EUROMONITOR_LANE_LOG"
+    suite_config_env: "EUROMONITOR_LANE_SUITE_CONFIG"
+    python_path_env: "PYTHONPATH"
+    remote_src_dir: "src"
+    gpu_training_only_env: "ER_GPU_TRAINING_ONLY"
+    gpu_training_only: true
+    unbuffered_env: "PYTHONUNBUFFERED"
+    unbuffered: true
   # W&B wiring the Colab lanes use. project/mode are PROJECTED from
   # tracking.wandb at config load (TrainingConfig._colab_wandb_is_the_tracking_ssot),
   # so the values below are placeholders the projection overwrites; the env

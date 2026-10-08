@@ -142,6 +142,14 @@ _WANDB_API_KEY_ENV = _WANDB.api_key_env
 _WANDB_RUN_NAME_ENV = _WANDB.run_name_env
 _WANDB_DIR_ENV = _WANDB.dir_env
 _WANDB_DIR_NAME = _WANDB.dir_name
+# The lane's process-env names and remote source dir (ColabSpec.lane_env_spec,
+# rendered by ColabSpec.lane_env): the generated remote scripts and the
+# bootstrap read these instead of spelling PYTHONPATH / PYTHONUNBUFFERED / the
+# src directory themselves.
+_LANE_ENV = _COLAB.lane_env_spec
+_PYTHONPATH_ENV = _LANE_ENV.python_path_env
+_UNBUFFERED_ENV = _LANE_ENV.unbuffered_env
+_REMOTE_SRC_DIR = _LANE_ENV.remote_src_dir
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
@@ -338,7 +346,7 @@ def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
 
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
-    train_only: bool = False,
+    train_only: bool = False, gpu: str | None = None,
 ) -> dict[str, object]:
     """Validate the scored-pair validation contract without contacting Colab.
 
@@ -348,6 +356,10 @@ def training_lifecycle_preflight(
     on the identity `scored_pair_validation_census` asserts before the dict
     is built (train side + validation entities == deduped; deduped + dropped
     == the 71,623 source-export census pin).
+
+    ``gpu`` supplied -> the report also carries the LANE section: the session,
+    transcript, and remote process env the selected lane runs with, plus the
+    W&B wiring, all resolved by ``ColabSpec`` (no literal at the emission site).
     """
     training_path = _validation_input_path(_COLAB.training_dataset_csv)
     profiles = _expand_worker_profiles(masking_profile, workers, "masking")
@@ -387,6 +399,36 @@ def training_lifecycle_preflight(
             ["train", "resolve_best_checkpoint", "heldout_sku_inference",
              "write_success_status", "download", "teardown"]
         ),
+    }
+    if gpu is not None:
+        # One lane contract, resolved by ColabSpec: the accelerator selection,
+        # the session/transcript identity, the VM-side process env, and the W&B
+        # wiring (project/mode are the tracking SSOT's).
+        lifecycle["lane"] = _lane_contract(gpu)
+    return lifecycle
+
+
+def _lane_contract(gpu: str) -> dict[str, object]:
+    """The lane contract ``ColabSpec`` resolves for one accelerator request.
+
+    Shared by both preflight surfaces (all-track suites and the legacy
+    train/smoke lifecycle) so the operator sees the same declarations the
+    launch consumes: session, transcript, suite config, the entrypoint env, and
+    the W&B wiring.
+    """
+    lane = _COLAB.lane_for(gpu)
+    return {
+        "gpu": gpu,
+        "session": _COLAB.session_for(gpu),
+        "transcript": _COLAB.lane_log_relative_path(lane.session),
+        "suite_config": _COLAB.suite_config_for(gpu),
+        "entrypoint_env": _COLAB.lane_env(
+            gpu, session=_COLAB.session_for(gpu), remote_root=REMOTE_ROOT),
+        "wandb": {
+            "project": _COLAB.wandb.project, "mode": _COLAB.wandb.mode,
+            "env": _COLAB.wandb_env(run_name="<run>",
+                                    directory=f"<worker-output>/{_COLAB.wandb.dir_name}"),
+        },
     }
 
 
@@ -749,7 +791,7 @@ for number in range(1, {workers} + 1):
     live_status_path = out / "live_status.json"
     wandb_dir = out / {_WANDB_DIR_NAME!r}
     wandb_dir.mkdir(parents=True, exist_ok=True)
-    env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
+    env = {{**os.environ, {_UNBUFFERED_ENV!r}: "1", {_PYTHONPATH_ENV!r}: str(root / {_REMOTE_SRC_DIR!r}), "EUROMONITOR_RESULTS_DIR": str(out),
            {_WANDB_DIR_ENV!r}: str(wandb_dir),
            {_WANDB_RUN_NAME_ENV!r}: training_name,
            "EUROMONITOR_RUN_ID": training_name,
@@ -922,11 +964,12 @@ from cli.colab_retention import (  # noqa: E402,F401
 def lane_transcript_path() -> Path:
     """The ONE Colab lane transcript path (declared dir + derived basename).
 
-    ``ColabSpec.log_dir`` declares the transcript roof and
-    ``ColabSpec.transcript_name`` derives the basename from the session, so the
-    path is never assembled from a literal here.
+    ``ColabSpec.lane_log_relative_path`` derives ``<log_dir>/<name>`` from the
+    session and ``log_capture.lane_log_at`` resolves it under the repo root, so
+    the path is never assembled from a literal here.
     """
-    return lane_log_at(_COLAB.log_dir, LANE_LOG_NAME)
+    relative = Path(_COLAB.lane_log_relative_path(SESSION))
+    return lane_log_at(relative.parent.as_posix(), relative.name)
 
 
 def start_live_log() -> None:
@@ -1222,7 +1265,7 @@ print("[worker] resolving versioned checkout inputs", flush=True)
 wandb_dir = out / {_WANDB_DIR_NAME!r}
 wandb_dir.mkdir(parents=True, exist_ok=True)
 training_name = {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r}
-env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
+env = {{**os.environ, {_UNBUFFERED_ENV!r}: "1", {_PYTHONPATH_ENV!r}: str(root / {_REMOTE_SRC_DIR!r}),
        "EUROMONITOR_RESULTS_DIR": str(out),
        {_WANDB_DIR_ENV!r}: str(wandb_dir),
        {_WANDB_RUN_NAME_ENV!r}: {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
@@ -1377,7 +1420,7 @@ def run_logged(args, label, extra_env=None):
         f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%m%dT%H%M%SZ')}}.log"
     )
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    env = {{**os.environ, "PYTHONUNBUFFERED": "1"}}
+    env = {{**os.environ, {_UNBUFFERED_ENV!r}: "1"}}
     if extra_env:
         env.update(extra_env)
     print(f"[subprocess] {{' '.join(args)}} -> {{log_path}}", flush=True)
@@ -1724,8 +1767,8 @@ def run_worker(number, label, command_args, profile, masking_applied):
     }}, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
     env = {{
         **os.environ,
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONPATH": str(root / "src"),
+        {_UNBUFFERED_ENV!r}: "1",
+        {_PYTHONPATH_ENV!r}: str(root / {_REMOTE_SRC_DIR!r}),
         "EUROMONITOR_RESULTS_DIR": str(out),
         {_WANDB_DIR_ENV!r}: str(out / {_WANDB_DIR_NAME!r}),
         {_WANDB_RUN_NAME_ENV!r}: f"{{base.name}}-{{label}}",
@@ -2391,13 +2434,13 @@ def main() -> None:
     if args.print_lane_env:
         # The shell entrypoint (scripts/run_colab_smoke.sh) asks the class for
         # the lane's session, transcript, and the ONE data-bundle suite config
-        # both lanes train from, instead of hardcoding any of them; nothing is
-        # provisioned and no transcript is opened.
-        lane = _COLAB.lane_for(args.gpu)
-        print(f"export EUROMONITOR_COLAB_SESSION={shlex.quote(lane.session)}")
-        print(f"export EUROMONITOR_LANE_LOG={shlex.quote(lane.log_name)}")
-        print("export EUROMONITOR_LANE_SUITE_CONFIG="
-              + shlex.quote(_COLAB.data_bundle.suite_config))
+        # both lanes train from (ColabSpec.lane_env_exports); nothing is
+        # provisioned and no transcript is opened. An already-exported value
+        # wins, so an operator override is never clobbered by the eval.
+        declared = _COLAB.lane_env_spec
+        session = os.environ.get(declared.session_env) or _COLAB.session_for(args.gpu)
+        log_name = os.environ.get(declared.log_env)
+        print(_COLAB.lane_env_exports(args.gpu, session=session, log_name=log_name))
         return
     if args.what == "hpo" and args.hpo_persistence not in {"local", "none"}:
         raise ValueError("Colab HPO supports local/none persistence only")
@@ -2448,6 +2491,7 @@ def main() -> None:
                 checks = verify_package(args.prepared_input_package)['preflight']
             else:
                 checks = suite_preflight(suite_config)
+            checks = {**checks, 'lane': _lane_contract(args.gpu)}
             print(json.dumps(checks,indent=2))
             return
         if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
@@ -2525,6 +2569,7 @@ def main() -> None:
             model=args.model,
             masking_profile=args.masking_profile,
             train_only=args.train_only,
+            gpu=args.gpu,
         ), indent=2, sort_keys=True))
         return
 

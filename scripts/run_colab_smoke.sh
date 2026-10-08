@@ -10,9 +10,10 @@ set -euo pipefail
 # lane with the frozen S suite is the working command (docs/colab-lane.md).
 LANE_GPU="${COLAB_GPU:-CPU}"
 # Nothing below is spelled here: the launcher prints the selected lane's
-# declarations (ColabSpec.lanes) and the ONE data-bundle suite config both lanes
-# train from (ColabSpec.data_bundle). An exported override still wins, because
-# the eval runs last.
+# declarations (ColabSpec.lane_env_exports -> session, transcript, and the ONE
+# data-bundle suite config both lanes train from) and this evaluates them. An
+# already-exported value wins: the launcher reads the current environment first,
+# so an operator override is never clobbered.
 eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu "$LANE_GPU")"
 args=(--what tracks --tracks-config "$EUROMONITOR_LANE_SUITE_CONFIG" --gpu "$LANE_GPU")
 if [ "$LANE_GPU" != "CPU" ]; then
