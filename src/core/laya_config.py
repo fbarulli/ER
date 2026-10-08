@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.laya_datasets import LayaDatasets
+
 
 class FinetuneSpec(BaseModel):
     """laya.finetune — the fine-tune recipe SSOT (additive).
@@ -270,7 +272,7 @@ class LayaSpec(BaseModel):
     # archive under /kaggle/input to a local dir, and passes the extracted
     # DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local dir
     # carrying rl_agent_config.json and never calls the Hub.
-    base_model_dataset: str | None = "fbarulli/er-laya-base"
+    base_model_dataset: str | None = LayaDatasets.BASE.slug
     base_model_archive: str = "convaiinnovations-laya.tar.zst"
     # The single top-level member of base_model_archive (extraction yields
     # a dir of this name); used as a deterministic hint before the rglob.
@@ -292,13 +294,13 @@ class LayaSpec(BaseModel):
     # Both kaggle dataset slugs ('owner/slug') are owner-picked
     # 2026-10-07 (no silent default account; kaggle_slug=None sibling
     # precedent).
-    dataset_slug: str | None = "fbarulli/er-laya-requests"
-    export_dataset_slug: str | None = "fbarulli/er-laya-decisions"
+    dataset_slug: str | None = LayaDatasets.REQUESTS.slug
+    export_dataset_slug: str | None = LayaDatasets.DECISIONS.slug
     # The fine-tune corpus (data/laya/{train,dev,test}.jsonl + receipt.json,
     # scripts/laya_build_dataset.py) travels as its OWN kaggle dataset and the
     # trained checkpoint is its own kernel — distinct slugs from the decision
     # payloads so a dataset version never drops the decision inputs.
-    finetune_dataset_slug: str | None = "fbarulli/er-laya-train"
+    finetune_dataset_slug: str | None = LayaDatasets.CORPUS.slug
     finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
     # ── fine-tune EVAL-only path (held-out score, no retrain) ─────────────
     # A dedicated eval-only kernel scores a fine-tuned checkpoint on the
@@ -309,7 +311,7 @@ class LayaSpec(BaseModel):
     # no Hub fetch. The checkpoint dataset is optional when the operator
     # bakes an explicit local/attached path instead.
     finetune_eval_kernel_slug: str | None = "fbarulli/er-laya-finetune-eval"
-    finetune_ckpt_dataset: str | None = "fbarulli/er-laya-finetune-ckpt"
+    finetune_ckpt_dataset: str | None = LayaDatasets.FINETUNE_CKPT.slug
     # Deterministic member-dir hint inside the attached checkpoint dataset
     # (mirrors base_model_dir); the kernel rglobs `rl_agent_config.json` as
     # a fallback when the hint misses.
@@ -325,7 +327,7 @@ class LayaSpec(BaseModel):
     # locally. Attaches the staged holdout dataset (holdout_dataset_slug) + the
     # checkpoint dataset (finetune_ckpt_dataset).
     holdout_eval_kernel_slug: str | None = "fbarulli/er-laya-holdout-eval"
-    holdout_dataset_slug: str | None = "fbarulli/er-laya-holdout"
+    holdout_dataset_slug: str | None = LayaDatasets.HOLDOUT.slug
     holdout_csv: str = "data/laya/holdout.csv"
     holdout_eval_batch_size: int = Field(default=16, ge=1, le=256)
     holdout_eval_bootstrap: int = Field(default=2000, ge=0, le=100000)

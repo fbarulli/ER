@@ -316,7 +316,8 @@ kaggle:
   embedding_kernel_slug: "fbarulli/er-embed-gpu"
   embedding_dataset_slug: "fbarulli/er-embed-requests"
   # Dataset the train kernel attaches (fresh bundle versions upload here).
-  bundle_dataset_slug: "fbarulli/er-10k-bundle"
+  # Slug is declared once in core.laya_datasets.LayaDatasets.BUNDLE (SSOT);
+  # this block inherits it as the default and never re-spells the literal.
   checkout_paths: ["src", "scripts", "config", "requirements", "artifacts/models"]
   bundle_requirements: "requirements/graph_tracks.txt"
   # Suite config the train kernel runs (members of the prepared package

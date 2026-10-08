@@ -107,6 +107,7 @@ from pydantic import (
     model_validator,
 )
 
+from core.laya_datasets import LayaDatasets
 from core.tracing import TRACE_COLUMNS as TRACE_FRAME_COLUMNS
 
 
@@ -2963,7 +2964,8 @@ class KaggleSpec(BaseModel):
     # Dataset ("owner/slug") carrying the verified CPU bundle the train
     # kernel attaches (kernel-output mounts go stale on stop-stub versions;
     # a dataset is immutable at fetch time). Cohort implied by the bundle.
-    bundle_dataset_slug: str | None = None
+    # Slug is declared ONCE in the laya dataset registry (SSOT), never here.
+    bundle_dataset_slug: str | None = LayaDatasets.BUNDLE.slug
     # Publish default (owner order 2026-10-07): after a verified fetch the
     # lane builds the dataset stage dir results/kaggle_lane/<cohort> with
     # this suffix (the ER 10k bundle precedent: dataset-metadata.json +
