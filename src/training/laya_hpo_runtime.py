@@ -13,6 +13,7 @@ pinned without a real PostgreSQL or a GPU.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 
@@ -71,6 +72,17 @@ def finished_trial_count(study, finished_states):
     return sum(1 for trial in study.trials if trial.state.name in states)
 
 
+def per_worker_budget(remaining, workers):
+    """Split the remaining trial budget across the worker processes.
+
+    ``workers`` is the actual number of concurrent worker processes (slots) or
+    1 (DDP-per-trial serialises). The ceiling avoids leaving trials unrun when
+    the budget is not divisible; each worker re-counts finished trials, so a
+    resumed session never overshoots by more than the worker count.
+    """
+    return max(0, math.ceil(max(0, int(remaining)) / max(1, int(workers))))
+
+
 def objective_value(trial, run_fn, lease_store, champion_store,
                     generation_id, model_key, objective_mode=None):
     """One fenced HPO trial: lease -> run -> assert -> promote -> return.
@@ -86,8 +98,9 @@ def objective_value(trial, run_fn, lease_store, champion_store,
     ``run_fn`` returns ``(accuracy, dev_loss, artifact)`` or, when a secondary
     objective is configured, ``(accuracy, dev_loss, artifact, secondary)``.
     """
-    lease = lease_store.issue(generation_id=generation_id, model_key=model_key,
-                              trial_number=int(trial.number))
+    lease = (lease_store.issue(generation_id=generation_id, model_key=model_key,
+                               trial_number=int(trial.number))
+             if lease_store is not None else None)
     try:
         result = run_fn(trial)
         if len(result) == 4:
@@ -95,15 +108,17 @@ def objective_value(trial, run_fn, lease_store, champion_store,
         else:
             accuracy, dev_loss, artifact = result
             secondary = None
-        lease_store.assert_current(lease)
+        if lease_store is not None:
+            lease_store.assert_current(lease)
         trial.set_user_attr("dev_accuracy", float(accuracy))
         if dev_loss is not None:
             trial.set_user_attr("dev_loss", float(dev_loss))
         trial.set_user_attr("checkpoint", str(artifact))
-        champion_store.promote(
-            generation_id=generation_id, model_key=model_key,
-            trial_number=int(trial.number), value=float(accuracy),
-            artifact_snapshot=str(artifact), lease_epoch=int(lease.epoch))
+        if champion_store is not None:
+            champion_store.promote(
+                generation_id=generation_id, model_key=model_key,
+                trial_number=int(trial.number), value=float(accuracy),
+                artifact_snapshot=str(artifact), lease_epoch=int(lease.epoch))
         value = float(accuracy)
         if objective_mode is not None and objective_mode.multi:
             metrics = {"dev_accuracy": float(accuracy)}
@@ -112,10 +127,11 @@ def objective_value(trial, run_fn, lease_store, champion_store,
             value = objective_mode.value(metrics)
         return value
     except BaseException:
-        try:
-            lease_store.revoke(lease)
-        except Exception:  # noqa: BLE001,S110 - best-effort; the primary error re-raises
-            pass
+        if lease_store is not None:
+            try:
+                lease_store.revoke(lease)
+            except Exception:  # noqa: BLE001,S110 - best-effort; the primary error re-raises
+                pass
         raise
 
 

@@ -269,6 +269,13 @@ def test_finished_trial_count_counts_only_terminal_states():
         study, ("COMPLETE", "PRUNED", "FAIL")) == 3
 
 
+def test_per_worker_budget_splits_the_remaining_trials():
+    assert laya_hpo_runtime.per_worker_budget(24, 2) == 12
+    assert laya_hpo_runtime.per_worker_budget(25, 2) == 13  # ceiling
+    assert laya_hpo_runtime.per_worker_budget(0, 4) == 0
+    assert laya_hpo_runtime.per_worker_budget(24, 0) == 24  # guards /0
+
+
 def test_objective_value_multi_objective_returns_tuple_and_promotes_primary():
     trial = FakeTrial(number=9)
     leases = FakeLeaseStore()
@@ -361,6 +368,8 @@ def test_stage_kernel_requires_optuna_url(monkeypatch, tmp_path):
 
 def _stage_colab(monkeypatch, tmp_path, url):
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-colab-1")
+    # Reuse of cli.colab_runtime._optuna_env_script reads os.environ too.
+    monkeypatch.setenv(laya_hpo.OPTUNA_URL_ENV, url)
     monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
     monkeypatch.setattr(laya_lane, "_git_revision", lambda: "b" * 40)
     monkeypatch.setattr(laya_lane, "_env_value",
@@ -387,7 +396,8 @@ def test_stage_colab_writes_entry_without_the_secret(monkeypatch, tmp_path):
     assert secret in script and secret not in entry
     assert receipt["lane"] == "colab"
     assert receipt["working"].startswith("/content")
-    assert set(receipt["registry"]) == {"laya", "text", "gnn", "cascade"}
+    assert {"laya", "text", "gnn", "cascade"}.issubset(receipt["registry"])
+    assert "minilm_l6" in receipt["registry"]  # SSOT-sourced key
     assert secret not in json.dumps(receipt)
     assert not (stage / "kernel-metadata.json").exists()  # colab is not a kernel
 
@@ -398,11 +408,35 @@ def test_cli_lane_dispatch_registry_is_complete():
     assert laya_hpo.STAGE_DISPATCH["colab"] == "stage_laya_hpo_colab"
 
 
+def test_kernel_slug_dispatch_resolves_the_hpo_kind():
+    laya_hpo.register_dispatch()
+    slug = laya_hpo.kernel_slug("laya-hpo")
+    assert slug.endswith("er-laya-hpo")
+    assert laya_lane.kernel_slug("laya-hpo") == slug
+
+
+def test_space_is_bound_in_the_paths_ssot():
+    from core.common import F
+
+    assert "laya_hpo_space" in F
+    assert str(F["laya_hpo_space"]).endswith("config/laya_hpo_space.yaml")
+
+
+def test_console_script_is_declared():
+    import re
+
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+        encoding="utf-8")
+    assert re.search(r'^er-hpo\s*=\s*"cli\.laya_hpo:main"', text, re.MULTILINE)
+
+
 def test_stage_kernel_receipt_carries_registry_and_observability(monkeypatch,
                                                                 tmp_path):
     receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
-    assert set(receipt["registry"]) == {"laya", "text", "gnn", "cascade"}
+    assert {"laya", "text", "gnn", "cascade"}.issubset(receipt["registry"])
+    assert "minilm_l6" in receipt["registry"]  # SSOT-sourced key
     observability = receipt["observability"]
+    assert observability["mode"] == "postgres"
     assert observability["events"].endswith("trial_events.jsonl")
     assert observability["mirror"].endswith("study_mirror.jsonl")
     assert observability["ledger"].endswith("hpo_trials.jsonl")

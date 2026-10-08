@@ -112,6 +112,7 @@ options:
     timeout_s: 0              # 0 = no wall-clock timeout; else stop cleanly
     load_if_exists: true      # resume the shared study across sessions
     processes_only: true      # never study.optimize(n_jobs>1) threads
+    offline: false            # true = single-process SQLite + offline ledger
 
 
 # The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune

@@ -68,8 +68,17 @@ def test_offline_trial_ledger_fallback(tmp_path):
     assert ledger.best()["trial_number"] == 1  # FAIL rows are not best
 
 
-def test_trial_observer_composes_the_three_surfaces(tmp_path):
-    observer = obs.TrialObserver(tmp_path)
+def test_trial_observer_online_mode_skips_the_offline_ledger(tmp_path):
+    observer = obs.TrialObserver(tmp_path)  # Postgres mode
+    observer.observe(_trial(number=1, value=0.7))
+    assert observer.events.count() == 1
+    assert observer.mirror.rows() and not observer.ledger.load()
+    assert observer.mode == "postgres"
+    assert observer.as_dict()["ledger_active"] is False
+
+
+def test_trial_observer_offline_mode_writes_the_ledger(tmp_path):
+    observer = obs.TrialObserver(tmp_path, offline=True)
     trial = _trial(number=4, value=0.81, params={"a": 1})
     observer.observe(trial)
     observer.observe(trial, promoted=True)
@@ -79,9 +88,38 @@ def test_trial_observer_composes_the_three_surfaces(tmp_path):
     assert len(observer.ledger.load()) == 2
     assert len(observer.mirror.load()) == 2
     payload = observer.as_dict()
+    assert payload["mode"] == "offline" and payload["ledger_active"] is True
     assert payload["events_count"] == 2
     assert payload["mirror"].endswith("study_mirror.jsonl")
     assert payload["ledger"].endswith("hpo_trials.jsonl")
+
+
+def test_study_mirror_best_uses_the_primary_of_a_multi_objective(tmp_path):
+    mirror = obs.StudyMirror(tmp_path / "study_mirror.jsonl")
+    mirror.record(_trial(number=0, value=[0.5, 9.9]))
+    mirror.record(_trial(number=1, value=[0.9, 1.0]))
+    assert mirror.best()["number"] == 1  # primary, not lexicographic tail
+    assert mirror.best("minimize")["number"] == 0
+
+
+def test_session_artifacts_build_a_verified_snapshot(tmp_path):
+    from training import hpo_persistence
+
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "laya-hpo.receipt.json").write_text("{}", encoding="utf-8")
+    observer = obs.TrialObserver(work / "hpo_observability", offline=True)
+    observer.observe(_trial(number=0, value=0.5))
+    observer.flush()
+    include = [p for p in (
+        work / "laya-hpo.receipt.json",
+        work / "hpo_observability" / "trial_events.jsonl",
+        work / "hpo_observability" / "study_mirror.jsonl",
+        work / "hpo_observability" / "hpo_trials.jsonl") if p.exists()]
+    snapshot = hpo_persistence.build_snapshot(
+        generation=work, sequence=1, optuna_db=None, include=include)
+    hpo_persistence.verify_snapshot(snapshot)
+    assert (snapshot / "READY").is_file()
 
 
 if __name__ == "__main__":

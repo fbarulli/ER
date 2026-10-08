@@ -121,6 +121,8 @@ files:
   attribute_separation_values: "results_training:attribute_separation_values.csv"
   fold_metrics: "results:train_fold_metrics.csv"       # worker-scoped pointer
   hpo_grid_csv: "results_hpo:hpo_grid.csv"
+  # The laya HPO search-space SSOT (cli.laya_hpo / training.hpo_registry).
+  laya_hpo_space: "repo:config/laya_hpo_space.yaml"
   # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead key —
   # F["hpo_tpe_best"] had zero readers. The TPE lane writes its best-config
   # JSON under a run-tagged name (train_<model><era>_hpo_best.json) built

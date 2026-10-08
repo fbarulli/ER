@@ -44,6 +44,13 @@ def _trial_value(trial):
     return value
 
 
+def _rank_value(value):
+    """The comparable scalar for a value: the primary of a multi-objective tuple."""
+    if isinstance(value, (list, tuple)) and value:
+        return value[0]
+    return value
+
+
 class TrialEventLog:
     """Append-only ``trial_events.jsonl`` CDC stream (best-effort, never fatal)."""
 
@@ -135,14 +142,14 @@ class StudyMirror:
             encoding="utf-8").splitlines() if line.strip()]
 
     def best(self, direction="maximize"):
-        rows = [row for row in self.load()
+        rows = [row for row in (self.load() or self.rows())
                 if row.get("value") is not None
                 and row.get("state") == "COMPLETE"]
         if not rows:
             return None
         if direction == "minimize":
-            return min(rows, key=lambda row: row["value"])
-        return max(rows, key=lambda row: row["value"])
+            return min(rows, key=lambda row: _rank_value(row["value"]))
+        return max(rows, key=lambda row: _rank_value(row["value"]))
 
 
 class OfflineTrialLedger:
@@ -194,29 +201,37 @@ class OfflineTrialLedger:
         if not rows:
             return None
         if direction == "minimize":
-            return min(rows, key=lambda row: row["value"])
-        return max(rows, key=lambda row: row["value"])
+            return min(rows, key=lambda row: _rank_value(row["value"]))
+        return max(rows, key=lambda row: _rank_value(row["value"]))
 
 
 class TrialObserver:
     """Compose the CDC log, the study mirror and the offline ledger.
 
-    ``observe(trial)`` fans one committed trial out to all three; ``flush()``
-    writes the mirror snapshot. Every write is best-effort — observability must
-    never fail a trial.
+    ``observe(trial)`` always writes the CDC event log and the local mirror.
+    The ``hpo_trials.jsonl`` ledger is the OFFLINE-ONLY fallback: it is written
+    only when ``offline=True`` (no shared PostgreSQL), so a healthy Postgres run
+    never double-writes the same trial. ``flush()`` writes the mirror snapshot.
+    Every write is best-effort — observability must never fail a trial.
     """
 
-    def __init__(self, root):
+    def __init__(self, root, *, offline=False):
         root = Path(root)
+        self.offline = bool(offline)
         self.events = TrialEventLog(root / "trial_events.jsonl")
         self.mirror = StudyMirror(root / "study_mirror.jsonl")
         self.ledger = OfflineTrialLedger(root / "hpo_trials.jsonl")
+
+    @property
+    def mode(self):
+        return "offline" if self.offline else "postgres"
 
     def observe(self, trial, *, promoted=False):
         self.events.observe(
             trial, event=EVENT_PROMOTE if promoted else None)
         self.mirror.record(trial)
-        self.ledger.observe(trial)
+        if self.offline:
+            self.ledger.observe(trial)
         return self
 
     def flush(self):
@@ -227,8 +242,10 @@ class TrialObserver:
 
     def as_dict(self):
         return {
+            "mode": self.mode,
             "events": str(self.events.path),
             "mirror": str(self.mirror.path),
             "ledger": str(self.ledger.path),
+            "ledger_active": self.offline,
             "events_count": self.events.count(),
         }

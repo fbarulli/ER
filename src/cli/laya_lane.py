@@ -4449,6 +4449,12 @@ _KIND_KERNEL_SLUG_ATTR = {
     HOLDOUT_EVAL_DECISION: "holdout_eval_kernel_slug",
 }
 
+#: Optional external kind -> slug hook. A sibling lane whose slug lives in its
+#: OWN SSOT (not LayaSpec) registers here at import (cli.laya_hpo registers the
+#: "laya-hpo" kind), so `kernel_slug("laya-hpo")` resolves without duplicating
+#: the slug into LayaSpec or hardcoding it here.
+EXTERNAL_KIND_SLUGS: dict[str, str] = {}
+
 
 def kernel_slug(decision_kind: str) -> str:
     """The pushed Kaggle kernel slug a decision kind runs on (stop target).
@@ -4457,6 +4463,8 @@ def kernel_slug(decision_kind: str) -> str:
     export slug); the two fine-tune kinds carry dedicated kernel slugs. Fail
     loud when the knob is unset — never guess an account.
     """
+    if decision_kind in EXTERNAL_KIND_SLUGS:
+        return EXTERNAL_KIND_SLUGS[decision_kind]
     spec = _spec()
     if decision_kind in _KIND_KERNEL_SLUG_ATTR:
         attr = _KIND_KERNEL_SLUG_ATTR[decision_kind]

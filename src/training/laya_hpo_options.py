@@ -121,6 +121,7 @@ class SessionPolicy:
         self.timeout_s = int(config.get("timeout_s", 0))
         self.load_if_exists = bool(config.get("load_if_exists", True))
         self.processes_only = bool(config.get("processes_only", True))
+        self.offline = bool(config.get("offline", False))
         self.n_jobs_threads = 1  # never >1: trials run in their own processes
 
     def study_kwargs(self):
@@ -136,6 +137,7 @@ class SessionPolicy:
         return {"timeout_s": self.timeout_s,
                 "load_if_exists": self.load_if_exists,
                 "processes_only": self.processes_only,
+                "offline": self.offline,
                 "n_jobs_threads": self.n_jobs_threads}
 
 

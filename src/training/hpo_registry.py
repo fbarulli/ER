@@ -1,62 +1,168 @@
-"""Model-agnostic HPO registry: one entry per project model key.
+"""Model-agnostic HPO registry, sourced from the project SSOTs.
 
-Every model the project trains (``laya``, ``text``, ``gnn``, ``cascade``) has a
-real ``search_space()`` (the tunable dials with types/bounds/choices) and a real
-``objective()`` descriptor naming the metric, direction and the concrete runner
-that evaluates a trial. The registry is deliberately model-agnostic: the lane,
-the workers and the control plane consume it by ``model_key`` and never branch
-on a model name.
+Keys are NOT a parallel list: the canonical model keys come from
+``config/paths.yaml models:`` (the project model registry); the track keys and
+the lane key come from their own SSOT YAMLs
+(``config/text_track.yaml``, ``config/graph_tracks_gnn.yaml``,
+``config/graph_tracks_cascade.yaml``, ``config/laya_hpo_space.yaml``).
 
-The registry carries no model implementation: ``objective().resolve_runner()``
-imports the model's own runner lazily, so importing this module stays light and
-there is exactly one place that says which function scores which model.
+Each entry exposes a real ``search_space()`` (dial types/bounds DERIVED from the
+SSOT values, never re-declared) and an ``objective()`` returning a callable
+``TrialObjective`` with the contract ``(trial, context=None) -> float``. The
+registry carries no model implementation: the objective's evaluator resolves the
+model's own runner lazily.
 """
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+import importlib
+import inspect
+from dataclasses import dataclass, field
+from pathlib import Path
 
-MODEL_KEYS = ("laya", "text", "gnn", "cascade")
+# Per-track tunable knobs, named from their SSOT YAML; their bounds are DERIVED
+# from the SSOT values at load (see `_dial_from_value`), never hardcoded.
+_TRACK_FILES = {
+    "text": "config/text_track.yaml",
+    "gnn": "config/graph_tracks_gnn.yaml",
+    "cascade": "config/graph_tracks_cascade.yaml",
+}
+_TRACK_TUNABLES = {
+    "text": ("hnsw_m", "hnsw_ef_construction", "hnsw_ef_search"),
+    "gnn": ("hidden_dim", "epochs", "learning_rate", "weight_decay",
+            "negative_margin", "max_grad_norm", "early_stopping_patience"),
+    "cascade": ("hnsw_m", "hnsw_ef_construction", "hnsw_ef_search"),
+}
+_TRACK_OBJECTIVES = {
+    "text": ("recall_at_k", "maximize", "model_tracks.run:run"),
+    "gnn": ("pair_auc", "maximize", "graph_tracks.train:train"),
+    "cascade": ("cascade_recall", "maximize", "graph_tracks.report:report_cascade"),
+}
 
 
-def _laya_space():
+def project_root() -> Path:
+    from core.project_root import find_project_root
+    return find_project_root(Path(__file__).resolve())
+
+
+def ssot_model_keys() -> list[str]:
+    """The canonical model keys from ``config/paths.yaml models:`` (SSOT)."""
+    from core.common import load_config
+    return list(load_config()["models"])
+
+
+def training_hpo_space() -> dict:
+    """The main training HPO space from ``config/training.yaml hpo.tpe_space``.
+
+    The SSOT already carries ranges; only the type/log flag is inferred from the
+    values (int vs float; log for learning-rate-style knobs).
+    """
+    from core.common import hpo_cfg
+    out = {}
+    for name, (lo, hi) in hpo_cfg()["tpe_space"].items():
+        is_int = isinstance(lo, int) and isinstance(hi, int)
+        spec = {"type": "int" if is_int else "float",
+                "lo": int(lo) if is_int else float(lo),
+                "hi": int(hi) if is_int else float(hi),
+                "target": "config"}
+        if not is_int and "lr" in name:
+            spec["log"] = True
+        out[name] = spec
+    return out
+
+
+def _dial_from_value(value) -> dict:
+    """Derive a dial (type/bounds) from an SSOT scalar — no re-declared bound."""
+    if isinstance(value, bool):
+        return {"type": "categorical", "choices": [False, True]}
+    if isinstance(value, int):
+        lo = max(1, value // 2) if value > 0 else 0
+        hi = max(value, value * 2, lo + 1)
+        return {"type": "int", "lo": int(lo), "hi": int(hi)}
+    number = float(value)
+    if number > 0.0:
+        return {"type": "float", "lo": number * 0.25, "hi": number * 4.0,
+                "log": True}
+    return {"type": "float", "lo": 0.0, "hi": 1.0}
+
+
+def _read_yaml(path: Path) -> dict:
+    import yaml
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def track_space(track: str, *, root: Path | None = None) -> dict:
+    """Read a track's tunable dials from its SSOT YAML (bounds derived)."""
+    root = Path(root) if root else project_root()
+    raw = _read_yaml(root / _TRACK_FILES[track])
+    space = {}
+    for knob in _TRACK_TUNABLES[track]:
+        if knob not in raw:
+            raise KeyError(f"{_TRACK_FILES[track]} has no knob {knob!r}")
+        dial = _dial_from_value(raw[knob])
+        dial["target"] = "config"
+        space[knob] = dial
+    return space
+
+
+def laya_space() -> dict:
     """The laya dials from the search-space SSOT (lazy import: no cycle)."""
     from cli.laya_hpo import load_space
     return load_space()["dials"]
 
 
-# The non-laya spaces are declarative registry data over each lane's real
-# config keys (config/graph_tracks_gnn.yaml, config/text_track.yaml).
-_TEXT_SPACE = {
-    "hnsw_m": {"type": "int", "lo": 8, "hi": 64},
-    "hnsw_ef_construction": {"type": "int", "lo": 64, "hi": 400},
-    "hnsw_ef_search": {"type": "int", "lo": 32, "hi": 256},
-}
-_GNN_SPACE = {
-    "hidden_dim": {"type": "categorical", "choices": [32, 64, 128, 256]},
-    "epochs": {"type": "int", "lo": 4, "hi": 40},
-    "learning_rate": {"type": "float", "lo": 1.0e-4, "hi": 1.0e-2, "log": True},
-    "weight_decay": {"type": "float", "lo": 0.0, "hi": 1.0e-2},
-    "negative_margin": {"type": "float", "lo": 0.0, "hi": 1.0},
-    "max_grad_norm": {"type": "float", "lo": 0.1, "hi": 5.0},
-    "early_stopping_patience": {"type": "int", "lo": 1, "hi": 8},
-}
-_CASCADE_SPACE = {
-    "hnsw_m": {"type": "int", "lo": 8, "hi": 64},
-    "hnsw_ef_construction": {"type": "int", "lo": 64, "hi": 400},
-    "hnsw_ef_search": {"type": "int", "lo": 32, "hi": 256},
-}
+@dataclass(frozen=True)
+class TrialObjective:
+    """A real ``(trial, context=None) -> float`` objective for one model.
+
+    ``evaluator`` is a callable ``(dials: dict, context: dict) -> metric``. The
+    contract is validated at construction (it must accept exactly the two
+    arguments) so a bare runner with the wrong signature can never masquerade as
+    an objective.
+    """
+
+    model_key: str
+    space: dict
+    metric: str
+    direction: str
+    evaluator: object
+    lower_is_better: bool = False
+
+    def __post_init__(self):
+        if not callable(self.evaluator):
+            raise TypeError(f"{self.model_key}: evaluator must be callable")
+        try:
+            inspect.signature(self.evaluator).bind({}, {})
+        except TypeError as exc:
+            raise TypeError(
+                f"{self.model_key}: evaluator must accept (dials, context): "
+                f"{exc}") from exc
+
+    def sample(self, trial) -> dict:
+        from training.laya_hpo_runtime import sample_dials
+        return sample_dials(trial, {"dials": self.space})
+
+    def __call__(self, trial, context=None) -> float:
+        dials = self.sample(trial)
+        return float(self.evaluator(dials, dict(context or {})))
+
+    def as_dict(self):
+        return {"model_key": self.model_key, "metric": self.metric,
+                "direction": self.direction, "lower_is_better": self.lower_is_better,
+                "dials": sorted(self.space)}
 
 
 @dataclass(frozen=True)
 class ObjectiveDescriptor:
-    """How a trial is scored: metric, direction and the concrete runner."""
+    """How a trial is scored: metric, direction, runner and the objective."""
 
     model_key: str
     metric: str
     direction: str
     runner: str
+    space: dict = field(default_factory=dict)
     lower_is_better: bool = False
+    evaluator: str = ""
 
     def resolve_runner(self):
         """Import and return the model's real runner callable."""
@@ -64,8 +170,6 @@ class ObjectiveDescriptor:
             raise ValueError(
                 f"runner must be 'module:attr', got {self.runner!r}")
         module_name, _, attr = self.runner.partition(":")
-        import importlib
-
         module = importlib.import_module(module_name)
         try:
             return getattr(module, attr)
@@ -73,10 +177,47 @@ class ObjectiveDescriptor:
             raise RuntimeError(
                 f"objective runner {self.runner!r} is not defined") from exc
 
+    def objective(self) -> TrialObjective:
+        """The real objective callable wrapping the evaluator adapter."""
+        evaluator = _resolve_evaluator(self.evaluator) if self.evaluator else None
+        if evaluator is None:
+            evaluator = _runner_evaluator(self.runner, self.metric)
+        return TrialObjective(
+            model_key=self.model_key, space=copy.deepcopy(self.space),
+            metric=self.metric, direction=self.direction,
+            evaluator=evaluator, lower_is_better=self.lower_is_better)
+
     def as_dict(self):
         return {"model_key": self.model_key, "metric": self.metric,
                 "direction": self.direction, "runner": self.runner,
-                "lower_is_better": self.lower_is_better}
+                "lower_is_better": self.lower_is_better,
+                "dials": sorted(self.space)}
+
+
+def _resolve_evaluator(reference: str):
+    if ":" not in reference:
+        raise ValueError(f"evaluator must be 'module:attr', got {reference!r}")
+    module_name, _, attr = reference.partition(":")
+    module = importlib.import_module(module_name)
+    try:
+        return getattr(module, attr)
+    except AttributeError as exc:
+        raise RuntimeError(
+            f"objective evaluator {reference!r} is not defined") from exc
+
+
+def _runner_evaluator(runner_ref: str, metric: str):
+    """A real evaluator that calls the model runner and extracts the metric.
+
+    The runner contract is ``runner(dials, context) -> mapping`` (or a scalar).
+    """
+    def evaluate(dials, context):
+        runner = _resolve_evaluator(runner_ref)
+        result = runner(dials, context)
+        if isinstance(result, dict):
+            return float(result[metric])
+        return float(result)
+    return evaluate
 
 
 @dataclass(frozen=True)
@@ -89,6 +230,7 @@ class ModelHpoSpec:
     direction: str
     runner: str
     lower_is_better: bool = False
+    evaluator: str = ""
 
     def search_space(self):
         space = self.space() if callable(self.space) else self.space
@@ -98,12 +240,12 @@ class ModelHpoSpec:
         return ObjectiveDescriptor(
             model_key=self.model_key, metric=self.metric,
             direction=self.direction, runner=self.runner,
-            lower_is_better=self.lower_is_better)
+            space=self.search_space(), lower_is_better=self.lower_is_better,
+            evaluator=self.evaluator)
 
     def as_dict(self):
-        return {"model_key": self.model_key,
-                "metric": self.metric, "direction": self.direction,
-                "runner": self.runner,
+        return {"model_key": self.model_key, "metric": self.metric,
+                "direction": self.direction, "runner": self.runner,
                 "dials": sorted(self.search_space())}
 
 
@@ -126,8 +268,7 @@ class HpoModelRegistry:
             return self._specs[model_key]
         except KeyError as exc:
             raise KeyError(
-                f"unknown model key {model_key!r}; "
-                f"registered: {self.keys()}") from exc
+                f"unknown model key {model_key!r}; registered: {self.keys()}") from exc
 
     def keys(self):
         return sorted(self._specs)
@@ -151,28 +292,51 @@ class HpoModelRegistry:
         return self.describe()
 
 
-def default_registry() -> HpoModelRegistry:
-    """The four project model keys, each with a real space + objective."""
-    return HpoModelRegistry([
-        ModelHpoSpec(
-            model_key="laya", space=_laya_space, metric="dev_accuracy",
-            direction="maximize", runner="training.laya_hpo_runtime:objective_value"),
-        ModelHpoSpec(
-            model_key="text", space=_TEXT_SPACE, metric="recall_at_k",
-            direction="maximize", runner="model_tracks.run:run"),
-        ModelHpoSpec(
-            model_key="gnn", space=_GNN_SPACE, metric="pair_auc",
-            direction="maximize", runner="graph_tracks.train:train"),
-        ModelHpoSpec(
-            model_key="cascade", space=_CASCADE_SPACE, metric="cascade_recall",
-            direction="maximize", runner="graph_tracks.report:report_cascade"),
-    ])
+def model_keys(*, root: Path | None = None) -> list[str]:
+    """Every registered key: SSOT backbones + track keys + the laya lane key."""
+    keys = list(ssot_model_keys())
+    keys.extend(_TRACK_FILES)  # text, gnn, cascade
+    from cli.laya_hpo import load_space
+    keys.append(load_space()["model_key"])
+    seen = []
+    for key in keys:
+        if key not in seen:
+            seen.append(key)
+    return seen
+
+
+def default_registry(*, root: Path | None = None) -> HpoModelRegistry:
+    """The SSOT-sourced registry (no parallel key list, no re-declared bounds)."""
+    registry = HpoModelRegistry()
+    # Every project model backbone shares the training HPO space/objective.
+    for key in ssot_model_keys():
+        registry.register(ModelHpoSpec(
+            model_key=key, space=training_hpo_space, metric="rand_index_proxy",
+            direction="maximize", runner="training.training:run_hpo"))
+    # The laya lane's own key.
+    from cli.laya_hpo import load_space
+    laya_key = load_space()["model_key"]
+    registry.register(ModelHpoSpec(
+        model_key=laya_key, space=laya_space, metric="dev_accuracy",
+        direction="maximize",
+        runner="training.laya_hpo_runtime:objective_value"))
+    # The track keys, spaces read from their SSOT YAMLs.
+    for track, (metric, direction, runner) in _TRACK_OBJECTIVES.items():
+        registry.register(ModelHpoSpec(
+            model_key=track, space=(lambda t=track: track_space(t, root=root)),
+            metric=metric, direction=direction, runner=runner))
+    return registry
 
 
 __all__ = [
-    "MODEL_KEYS",
     "HpoModelRegistry",
     "ModelHpoSpec",
     "ObjectiveDescriptor",
+    "TrialObjective",
     "default_registry",
+    "laya_space",
+    "model_keys",
+    "ssot_model_keys",
+    "track_space",
+    "training_hpo_space",
 ]

@@ -53,6 +53,7 @@ from training import (
     hpo_control_plane,
     hpo_fencing,
     hpo_observability,
+    hpo_persistence,
     hpo_registry,
     laya_hpo_options,
     laya_hpo_runtime,
@@ -90,8 +91,14 @@ _TOKEN_PATTERN = re.compile(r"@[A-Z][A-Z0-9_]*@")
 
 # ── search-space SSOT (config/laya_hpo_space.yaml) ─────────────────────────
 def space_path(path: str | Path | None = None) -> Path:
-    """The search-space config path (explicit override wins)."""
-    return Path(path) if path else (TRAIN_ROOT / "config" / SPACE_FILE_NAME)
+    """The search-space config path (SSOT binding; explicit override wins)."""
+    if path:
+        return Path(path)
+    try:
+        from core.common import F
+        return Path(F["laya_hpo_space"])
+    except Exception:  # noqa: BLE001 - fall back to the conventional path
+        return TRAIN_ROOT / "config" / SPACE_FILE_NAME
 
 
 def load_space(path: str | Path | None = None) -> dict[str, Any]:
@@ -275,7 +282,7 @@ def hpo_runtime_source() -> str:
     chunks: list[str] = []
     for module in (hpo_control_plane, hpo_fencing, hpo_champions,
                    laya_hpo_runtime, laya_hpo_options, hpo_observability,
-                   hpo_registry):
+                   hpo_registry, hpo_persistence):
         text = inspect.getsource(module)
         cleaned = "\n".join(
             line for line in text.splitlines()
@@ -345,7 +352,8 @@ laya_runtime_preflight()
 def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
                         budget_trials: int, budget_jobs: int, url: str,
                         repository: str, branch: str,
-                        revision: str) -> str:
+                        revision: str,
+                        optuna_env_script: str | None = None) -> str:
     """Render the ONE HPO kernel script (shared by the Kaggle and Colab lanes).
 
     Output/input roots are runtime env (ER_LAYA_HPO_WORKING/INPUT) so the same
@@ -380,7 +388,9 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
         "HPO_RUNTIME_SOURCE": hpo_runtime_source(),
-        "OPTUNA_ENV_SCRIPT": _optuna_env_script(url),
+        "OPTUNA_ENV_SCRIPT": (optuna_env_script
+                              if optuna_env_script is not None
+                              else _optuna_env_script(url)),
         "RUNTIME_PREFLIGHT": preflight,
     }
     script = laya_lane._template(_HPO_KERNEL_TEMPLATE, values)
@@ -523,6 +533,23 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
     return receipt
 
 
+def _colab_optuna_env_line() -> str:
+    """The Colab lane reuses the canonical `cli.colab_runtime._optuna_env_script`.
+
+    It reads OPTUNA_STORAGE_URL exactly like the Colab lane and returns the
+    `os.environ[...] = ...` line (or '' when absent); absent is a hard error
+    here, matching the lane's fail-loud rule.
+    """
+    from cli import colab_runtime
+
+    line = colab_runtime._optuna_env_script()
+    if not line.strip():
+        raise RuntimeError(
+            f"[laya-hpo] {OPTUNA_URL_ENV} is missing; the Colab lane needs it "
+            "in the runtime secret store / .env before staging")
+    return line
+
+
 def _compose_colab_entry(script_name: str, working: str,
                          input_root: str) -> str:
     """The Colab driver: override the env roots and run the shared kernel.
@@ -592,7 +619,8 @@ def stage_laya_hpo_colab(*, revision: str | None = None,
     script = _compose_hpo_script(
         spec=spec, space=space, generation=generation, key=key, tag=tag,
         budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
-        repository=repository, branch=branch, revision=revision)
+        repository=repository, branch=branch, revision=revision,
+        optuna_env_script=_colab_optuna_env_line())
     (stage / HPO_CODE_FILE).write_text(script, encoding="utf-8")
     (stage / COLAB_ENTRY_FILE).write_text(
         _compose_colab_entry(HPO_CODE_FILE, working, input_root),
@@ -1120,11 +1148,20 @@ def run_worker(device):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     globals()["OPTION_SET"] = options
     options.resource_caps.apply_torch(torch)
-    observer = TrialObserver(WORKING / "hpo_observability")
+    offline = bool(options.session.offline)
+    observer = TrialObserver(WORKING / "hpo_observability", offline=offline)
     globals()["OBSERVER"] = observer
 
-    storage_config = storage_from_environment()
-    storage = create_storage(storage_config)
+    if offline:
+        # Offline fallback: a single-process local SQLite study + the offline
+        # ledger. No shared control plane, so no leases/champions.
+        WORKING.mkdir(parents=True, exist_ok=True)
+        storage_config = None
+        storage = optuna.storages.RDBStorage(
+            "sqlite:///" + str(WORKING / "hpo_offline.db"))
+    else:
+        storage_config = storage_from_environment()
+        storage = create_storage(storage_config)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
     sampler = options.sampler.create(optuna)
@@ -1139,15 +1176,16 @@ def run_worker(device):
         storage=storage,
         **options.session.study_kwargs(),
         **study_kwargs)
-    fail_stale_trials(study)
+    if not offline:
+        fail_stale_trials(study)
     # Warm start: enqueue known-good seed configs so TPE starts from them.
     for seed_config in options.warm_start.enqueued_trials():
         try:
             study.enqueue_trial(seed_config)
         except Exception as error:
             log("enqueue_trial skipped: " + str(error)[:160])
-    lease_store = TrialLeaseStore(storage_config.url)
-    champion_store = ChampionStore(storage_config.url)
+    lease_store = None if offline else TrialLeaseStore(storage_config.url)
+    champion_store = None if offline else ChampionStore(storage_config.url)
 
     train_path = resolve_input(TRAIN_JSONL)
     dev_path = resolve_input(DEV_JSONL)
@@ -1173,7 +1211,7 @@ def run_worker(device):
     else:
         divisor = max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
                              or N_JOBS))
-    per_worker = max(0, math.ceil(remaining / divisor))
+    per_worker = per_worker_budget(remaining, divisor)
     log("worker budget prior=%d remaining=%d per_worker=%d study=%s timeout=%s"
         % (prior, remaining, per_worker, study_name,
            options.session.timeout_s or "none"))
@@ -1193,11 +1231,16 @@ def sha256_of(path):
 
 def write_session_receipt():
     import optuna
-    storage_config = storage_from_environment()
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    offline = bool(options.session.offline)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
-    study = optuna.load_study(study_name=study_name,
-                              storage=create_storage(storage_config))
+    if offline:
+        storage = optuna.storages.RDBStorage(
+            "sqlite:///" + str(WORKING / "hpo_offline.db"))
+    else:
+        storage = create_storage(storage_from_environment())
+    study = optuna.load_study(study_name=study_name, storage=storage)
     complete = [trial for trial in study.trials
                 if trial.state == optuna.trial.TrialState.COMPLETE
                 and trial.value is not None]
@@ -1212,7 +1255,7 @@ def write_session_receipt():
     } for trial in study.trials]
     # Control-plane observability: CDC events + local study mirror + offline
     # ledger, rebuilt from the authoritative study at session end.
-    observer = TrialObserver(WORKING / "hpo_observability")
+    observer = TrialObserver(WORKING / "hpo_observability", offline=offline)
     for trial in study.trials:
         observer.observe(trial)
     observer.flush()
@@ -1268,13 +1311,15 @@ def write_session_receipt():
 
 
 def main():
-    ensure_optuna_url()
     pip_install_runtime()
     pip_install_laya()
     import torch
     options = build_option_set(HPO_SPACE)
     globals()["OPTION_SET"] = options
     options.resource_caps.apply_torch(torch)
+    offline = bool(options.session.offline)
+    if not offline:
+        ensure_optuna_url()
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     if options.scheduler.mode == "slots":
         options.mps.start()
@@ -1320,6 +1365,21 @@ def main():
             tar.add(champion, arcname="champion")
             log("staged champion checkpoint " + champion)
     log("staged laya_hpo.tar.gz + receipt in /kaggle/working")
+    # Durable, self-validating snapshot of the session's decision trail.
+    try:
+        include = [p for p in (
+            WORKING / "laya-hpo.receipt.json",
+            WORKING / "hpo_observability" / "trial_events.jsonl",
+            WORKING / "hpo_observability" / "study_mirror.jsonl",
+            WORKING / "hpo_observability" / "hpo_trials.jsonl",
+        ) if p.exists()]
+        snapshot = build_snapshot(
+            generation=WORKING, sequence=int(time.time()),
+            optuna_db=(WORKING / "hpo_offline.db" if offline else None),
+            include=include)
+        log("hpo snapshot -> " + str(snapshot))
+    except Exception as error:
+        log("hpo snapshot skipped: " + str(error)[:200])
     if any(code != 0 for code in codes):
         raise SystemExit("laya HPO worker failure: exit codes " + str(codes))
 
@@ -1384,6 +1444,29 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def register_dispatch() -> str | None:
+    """Register the HPO kind with the laya lane's `kernel_slug` dispatch.
+
+    The HPO slug lives in the HPO space SSOT, not LayaSpec, so we push it into
+    `laya_lane.EXTERNAL_KIND_SLUGS` instead of duplicating it.
+    """
+    slug = load_space().get("kernel_slug")
+    if slug:
+        laya_lane.EXTERNAL_KIND_SLUGS[HPO_DECISION] = slug
+    return slug
+
+
+def kernel_slug(decision_kind: str = HPO_DECISION) -> str:
+    """`laya_lane.kernel_slug` including the HPO kind (delegates)."""
+    return laya_lane.kernel_slug(decision_kind)
+
+
+try:  # registering at import makes `laya_lane.kernel_slug("laya-hpo")` work
+    register_dispatch()
+except Exception:  # noqa: BLE001,S110 - a bad/missing space must not break import
+    pass
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
 
@@ -1400,8 +1483,10 @@ __all__ = [
     "apply_dials",
     "finished_trial_count",
     "hpo_runtime_source",
+    "kernel_slug",
     "load_space",
     "objective_value",
+    "register_dispatch",
     "require_optuna_url",
     "resolve_study_config",
     "route_dials",
