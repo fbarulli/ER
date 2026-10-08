@@ -312,6 +312,256 @@ class TrainingControls:
             lower_is_better=policy.lower_is_better)
 
 
+class ParamGroupBuilder:
+    """Splits optimizer groups into decay / no-decay (bias + norm, ndim<=1).
+
+    Composes with (never replaces) ``weight_decay``: when disabled the groups
+    pass through untouched and the optimizer's global weight_decay applies.
+    """
+
+    @staticmethod
+    def is_no_decay(name, param):
+        return param.ndim <= 1 or str(name).endswith("bias")
+
+    @staticmethod
+    def apply(model, groups, enabled):
+        if not enabled:
+            return groups
+        named = {id(param): name for name, param in model.named_parameters()}
+        decay_groups, no_decay_groups = [], []
+        for group in groups:
+            decay, no_decay = [], []
+            for param in group["params"]:
+                target = no_decay if ParamGroupBuilder.is_no_decay(
+                    named.get(id(param), ""), param) else decay
+                target.append(param)
+            base = {key: value for key, value in group.items()
+                    if key != "params"}
+            if decay:
+                decay_groups.append({**base, "params": decay})
+            if no_decay:
+                no_decay_groups.append({**base, "params": no_decay,
+                                        "weight_decay": 0.0})
+        return decay_groups + no_decay_groups
+
+
+class OptimizerStateCaster:
+    """Best-effort bf16 optimizer states (composes with AMP forward dtype)."""
+
+    @staticmethod
+    def apply(torch_module, optimizer, dtype_name):
+        if str(dtype_name or "fp32").lower() != "bf16":
+            return False
+        target = torch_module.bfloat16
+        for state in optimizer.state.values():
+            for key, value in list(state.items()):
+                if (torch_module.is_tensor(value)
+                        and value.is_floating_point()
+                        and value.dtype != target):
+                    state[key] = value.to(target)
+        return True
+
+
+class LrScaler:
+    """Scale the peak LR from the effective batch (explicit LRs win at none)."""
+
+    @staticmethod
+    def factor(effective_batch, base_batch, rule):
+        if str(rule or "none").lower() == "none" or not base_batch:
+            return 1.0
+        ratio = float(effective_batch) / float(base_batch)
+        if str(rule).lower() == "linear":
+            return ratio
+        if str(rule).lower() == "sqrt":
+            return math.sqrt(ratio)
+        return 1.0
+
+    @staticmethod
+    def effective_batch(micro_batch, grad_accum, world_size):
+        return max(1, int(micro_batch)) * max(1, int(grad_accum)) * max(
+            1, int(world_size))
+
+    @staticmethod
+    def apply(optimizer, factor):
+        for group in optimizer.param_groups:
+            group["lr"] = float(group["lr"]) * factor
+        return factor
+
+
+class BatchRamp:
+    """Linear micro-batch/grad-accum ramp (grad_accum here: rank-symmetric)."""
+
+    @staticmethod
+    def grad_accum(epoch, target, start_frac, ramp_epochs):
+        target = max(1, int(target))
+        if not ramp_epochs or ramp_epochs <= 0 or epoch >= ramp_epochs:
+            return target
+        start = max(1, int(round(target * float(start_frac))))
+        frac = float(epoch + 1) / float(ramp_epochs)
+        return max(1, int(round(start + (target - start) * frac)))
+
+
+class LossWeightSchedule:
+    """ONE schedule for sigma / w_sph / w_rps / contrastive margin.
+
+    ``mode == "laya"`` reproduces ``laya.train.sigma_at`` exactly (linear sigma,
+    constant weights) so a default run is byte-identical; ``linear``/``cosine``
+    interpolate every term with the same curve (never double-scheduled).
+    """
+
+    def __init__(self, mode, epochs, sigma_start, sigma_end, w_sph, w_sph_end,
+                 w_rps, w_rps_end, margin, margin_end):
+        self.mode = str(mode or "laya").lower()
+        self.epochs = max(1, int(epochs))
+        self.sigma_start = float(sigma_start)
+        self.sigma_end = float(sigma_end)
+        self.w_sph = float(w_sph)
+        self.w_sph_end = w_sph_end
+        self.w_rps = float(w_rps)
+        self.w_rps_end = w_rps_end
+        self.margin = float(margin or 0.0)
+        self.margin_end = margin_end
+
+    @classmethod
+    def from_control(cls, control, config):
+        # The START values (sigma/w_sph/w_rps) are TRAINCONFIG fields; only the
+        # new end values + margin live in the control block. No value is baked
+        # twice.
+        return cls(
+            mode=control["loss_schedule"], epochs=config.epochs,
+            sigma_start=config.sigma_start, sigma_end=config.sigma_end,
+            w_sph=config.w_sph, w_sph_end=control.get("w_sph_end"),
+            w_rps=config.w_rps, w_rps_end=control.get("w_rps_end"),
+            margin=control["contrastive_margin"],
+            margin_end=control.get("contrastive_margin_end"))
+
+    @staticmethod
+    def _curve(frac, mode):
+        if mode == "cosine":
+            return 0.5 * (1.0 - math.cos(math.pi * frac))
+        return frac
+
+    @staticmethod
+    def _interp(start, end, curve):
+        if end is None:
+            return start
+        return start + (float(end) - start) * curve
+
+    def at(self, epoch):
+        frac = float(epoch) / float(max(1, self.epochs - 1))
+        curve = self._curve(frac, "linear" if self.mode == "laya" else self.mode)
+        return {
+            "sigma": self.sigma_start + (self.sigma_end - self.sigma_start) * curve,
+            "w_sph": self._interp(self.w_sph, self.w_sph_end, curve),
+            "w_rps": self._interp(self.w_rps, self.w_rps_end, curve),
+            "margin": self._interp(self.margin, self.margin_end, curve),
+        }
+
+
+class RDrop:
+    """R-Drop: two dropout-masked forwards + symmetric KL (dropout-gated)."""
+
+    @staticmethod
+    def available(model):
+        import torch
+
+        for module in model.modules():
+            if isinstance(module, torch.nn.Dropout) and module.p > 0:
+                return True
+        return False
+
+    @staticmethod
+    def kl(torch_module, logits_one, logits_two, mask):
+        fill = -1e9
+        logp = torch_module.log_softmax(logits_one.masked_fill(~mask, fill), -1)
+        logq = torch_module.log_softmax(logits_two.masked_fill(~mask, fill), -1)
+        p, q = logp.exp(), logq.exp()
+        sym = 0.5 * ((p * (logp - logq)).sum(-1)
+                     + (q * (logq - logp)).sum(-1))
+        return sym.mean()
+
+    @staticmethod
+    def combine(loss_one, loss_two, kl, alpha):
+        return 0.5 * (loss_one + loss_two) + float(alpha) * kl
+
+
+class DropPath:
+    """Stochastic depth over transformer blocks (norm-first residual form)."""
+
+    @staticmethod
+    def rate(epoch, epochs, base_rate, schedule):
+        base = float(base_rate or 0.0)
+        if base <= 0.0:
+            return 0.0
+        if str(schedule).lower() == "linear" and epochs > 1:
+            return base * float(epoch + 1) / float(epochs)
+        return base
+
+    @staticmethod
+    def apply(model, rate, blocks=None):
+        import torch
+
+        rate = float(rate or 0.0)
+        if rate <= 0.0:
+            return 0
+        targets = blocks
+        if targets is None:
+            head = getattr(model, "head", None)
+            targets = list(getattr(head, "layers", []) or [])
+        wrapped = 0
+        for module in targets:
+            if getattr(module, "_laya_drop_path", False):
+                module.drop_path_rate = rate
+                continue
+            original = module.forward
+
+            def forward_with_drop_path(*args, _original=original, **kwargs):
+                x = args[0] if args else None
+                out = _original(*args, **kwargs)
+                current = float(getattr(module, "drop_path_rate", 0.0))
+                if (current > 0.0 and module.training and x is not None
+                        and torch.is_tensor(out) and out.shape == x.shape):
+                    keep = 1.0 - current
+                    shape = [1] * out.dim()
+                    shape[0] = out.shape[0]
+                    mask = (torch.rand(shape, device=out.device) < keep).to(out.dtype)
+                    out = x + (out - x) * mask / max(keep, 1e-6)
+                return out
+
+            module.forward = forward_with_drop_path
+            module._laya_drop_path = True
+            module.drop_path_rate = rate
+            wrapped += 1
+        return wrapped
+
+
+class DynamicPadder:
+    """Rounds a collated batch's token length up to ``pad_to_multiple``."""
+
+    @staticmethod
+    def pad(torch_module, batch, multiple):
+        multiple = int(multiple or 0)
+        if multiple <= 1 or batch is None:
+            return batch
+        length = int(batch["input_ids"].shape[1])
+        target = ((length + multiple - 1) // multiple) * multiple
+        if target == length:
+            return batch
+        pad = target - length
+        import torch.nn.functional as functional
+
+        def _grow(tensor, value):
+            return functional.pad(tensor, (0, pad), value=value)
+
+        result = dict(batch)
+        result["input_ids"] = _grow(batch["input_ids"], 0)
+        result["attention_mask"] = _grow(batch["attention_mask"], 0)
+        for key in ("position_ids", "option_ids"):
+            if key in batch:
+                result[key] = _grow(batch[key], 0)
+        return result
+
+
 class ProfilerSession:
     """A bounded, fail-soft ``torch.profiler`` wrapper (rank 0 + CUDA only).
 

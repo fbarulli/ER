@@ -215,7 +215,7 @@ def test_recipe_defaults_reproduced_from_config(tmp_path, monkeypatch):
     assert "FINETUNE_CONTROL = {" in script
     assert not __import__("re").search(r"@[A-Z][A-Z0-9_]*@", script)
     # the patch is a faithful copy: the recipe-critical schedule lines stay
-    assert "window_start = (n_steps // config.grad_accum) * config.grad_accum" in script
+    assert "window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum" in script
     assert "torch.nn.utils.clip_grad_norm_(params, config.grad_clip)" in script
     assert "scheduler.step()" in script
     assert "torch.manual_seed(config.seed)" in script

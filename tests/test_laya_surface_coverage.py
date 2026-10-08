@@ -165,6 +165,18 @@ def test_finetune_kernel_wires_wandb_and_profiler_surfaces():
     assert "os.path.join(str(self._checkpoint_dir), \"checkpoints\")" in script
 
 
+def test_finetune_kernel_wires_extended_knobs():
+    """Every extended knob is consumed in the staged kernel (no phantom)."""
+    script = render_finetune()
+    for needle in (
+            "ParamGroupBuilder.apply(", "OptimizerStateCaster.apply(",
+            "LrScaler.effective_batch(", "LrScaler.factor(",
+            "BatchRamp.grad_accum(", "LossWeightSchedule.from_control(",
+            "RDrop.available(", "RDrop.kl(", "DropPath.apply(",
+            "DynamicPadder.pad(", "LossBuilder.compute("):
+        assert needle in script, needle
+
+
 def test_finetune_kernel_wires_adversarial_and_swa_dials():
     """No phantom dials: adv_kind selects the FGM/AWP target set and swa_lr
     switches the optimizer LR during the SWA phase."""

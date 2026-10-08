@@ -192,6 +192,13 @@ FINETUNE_CONTROL_FIELDS = (
     "write_error_artifacts", "deterministic",
     # torch.profiler (default-ON; auto-OFF without CUDA)
     "profile", "profile_dir", "profile_schedule",
+    # Extended knobs (all default-OFF; HPO-searchable)
+    "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
+    "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
+    "drop_path_schedule", "dynamic_padding", "pad_to_multiple",
+    "batch_size_ramp", "batch_ramp_start_frac", "batch_ramp_epochs",
+    "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
+    "contrastive_margin_end",
 )
 
 
@@ -1663,6 +1670,14 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_controls.AbstainCoverage,
         laya_controls.DevReport,
         laya_controls.TrainingControls,
+        laya_controls.ParamGroupBuilder,
+        laya_controls.OptimizerStateCaster,
+        laya_controls.LrScaler,
+        laya_controls.BatchRamp,
+        laya_controls.LossWeightSchedule,
+        laya_controls.RDrop,
+        laya_controls.DropPath,
+        laya_controls.DynamicPadder,
         laya_controls.ProfilerSession,
     )
 )
@@ -1974,8 +1989,10 @@ class TrainingOptimizer:
     """Optimizer construction + best-effort layer-wise LR decay."""
 
     @staticmethod
-    def make(torch, groups, config, control):
+    def make(torch, model, groups, config, control):
         kind = str(control.get("optimizer") or "").lower()
+        groups = ParamGroupBuilder.apply(
+            model, groups, bool(control.get("no_decay_bias_norm")))
         fused = any(param.is_cuda for group in groups
                     for param in group["params"])
         if kind == "adafactor":
@@ -2059,6 +2076,26 @@ class LossBuilder:
     def per_row(torch, logits, target, mask):
         logp = torch.log_softmax(logits.masked_fill(~mask, -1e9), -1)
         return (-(target * logp * mask).sum(-1)).detach()
+
+    @staticmethod
+    def compute(torch, laya_train, config, logits, target, mask, qtype, sigma,
+                w_sph, w_rps, class_weights, margin):
+        """The objective for one forward: laya's rlcd / weighted / soft-CE.
+
+        With no class weights and margin==0 this returns laya's
+        ``soft_ce_loss`` unchanged (byte-identical default). The contrastive
+        margin is applied to the soft-CE objective only (laya's ``rlcd_loss``
+        exposes no margin); class_weight takes precedence over margin.
+        """
+        if config.loss == "rlcd":
+            return laya_train.rlcd_loss(logits, target, mask, qtype, sigma,
+                                        config.rl_samples, w_sph, w_rps)
+        if margin and float(margin) > 0.0:
+            logits = logits - float(margin) * (1.0 - target)
+        if class_weights is not None:
+            return LossBuilder.weighted(torch, logits, target, mask,
+                                        class_weights)
+        return laya_train.soft_ce_loss(logits, target, mask)
 
 
 class Forwarder:
@@ -2280,7 +2317,20 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     layer_decay = control.get("layer_decay")
     if layer_decay and 0.0 < float(layer_decay) < 1.0:
         groups = TrainingOptimizer.apply_layer_decay(model, groups, float(layer_decay))
-    optimizer = TrainingOptimizer.make(torch, groups, config, control)
+    optimizer = TrainingOptimizer.make(torch, model, groups, config, control)
+    # LR scaling from the effective batch (explicit encoder_lr/head_lr win when
+    # lr_scaling == "none"): scaled BEFORE the scheduler so its base LRs and
+    # onecycle max_lr see the scaled peak.
+    world_size = dist_env()[2] if is_distributed() else 1
+    effective_batch = LrScaler.effective_batch(
+        config.micro_batch, config.grad_accum, world_size)
+    lr_factor = LrScaler.factor(effective_batch, control.get("base_batch"),
+                                control.get("lr_scaling"))
+    if lr_factor != 1.0:
+        LrScaler.apply(optimizer, lr_factor)
+        print("[perf-patch] lr_scaling=%s effective_batch=%d factor=%.4g"
+              % (control.get("lr_scaling"), effective_batch, lr_factor),
+              flush=True)
     # DDP: wrap the model (grads averaged across ranks) and shard the items
     # with a per-rank DistributedSampler. The shard length is equal on every
     # rank (pad-to-even), so the grad-accum window and the optimizer steps
@@ -2344,6 +2394,19 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
               % (len(dev_items), dev_skipped), flush=True)
     class_weights = (LossBuilder.class_weights(torch, items, device)
                      if control.get("class_weight") else None)
+    loss_schedule = LossWeightSchedule.from_control(control, config)
+    r_drop_requested = bool(control.get("r_drop"))
+    r_drop_on = r_drop_requested and RDrop.available(model)
+    if r_drop_requested and not r_drop_on:
+        print("[perf-patch] r_drop auto-disabled: model carries no dropout>0",
+              flush=True)
+    r_drop_alpha = control.get("r_drop_alpha")
+    drop_path_on = bool(control.get("drop_path"))
+    dynamic_padding_on = bool(control.get("dynamic_padding"))
+    pad_to_multiple = control.get("pad_to_multiple")
+    ramp_on = bool(control.get("batch_size_ramp"))
+    target_grad_accum = int(config.grad_accum)
+    optim_state_dtype = control.get("optim_state_dtype")
     adv_eps = control.get("adv_eps")
     adv_kind = control.get("adv_kind")
     ema_decay = (float(control.get("ema_decay"))
@@ -2384,6 +2447,15 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 group["lr"] = float(swa_lr)
             print("[perf-patch] SWA phase: lr -> %.6g" % float(swa_lr),
                   flush=True)
+        if drop_path_on:
+            DropPath.apply(model, DropPath.rate(
+                epoch, config.epochs, control.get("drop_path_rate"),
+                control.get("drop_path_schedule")))
+        # batch-size ramp ramps grad_accum (rank-symmetric => DDP lockstep);
+        # steps_per_epoch/updates stay on the TARGET so schedules keep length.
+        epoch_grad_accum = (BatchRamp.grad_accum(
+            epoch, target_grad_accum, control.get("batch_ramp_start_frac"),
+            control.get("batch_ramp_epochs")) if ramp_on else target_grad_accum)
         if ddp_sampler is not None:
             # Per-epoch reseed: every rank shuffles identically then takes a
             # disjoint stride slice, so no item is trained twice per epoch.
@@ -2395,8 +2467,12 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             epoch_items = EpochItemSelector.select(control, epoch_items, epoch,
                                               config, config.seed)
         hard_scores = ({} if control.get("hard_example_frac") else None)
-        sigma = laya_train.sigma_at(epoch, config.epochs, config.sigma_start,
-                                    config.sigma_end)
+        # ONE loss-weight schedule: mode "laya" reproduces sigma_at exactly and
+        # keeps w_sph/w_rps/margin constant (byte-identical default).
+        weights = loss_schedule.at(epoch)
+        sigma = weights["sigma"]
+        epoch_w_sph, epoch_w_rps = weights["w_sph"], weights["w_rps"]
+        epoch_margin = weights["margin"]
         total, n_steps = None, 0
         grad_norm_sum, grad_steps = 0.0, 0
         optimizer.zero_grad(set_to_none=True)
@@ -2420,6 +2496,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                     chunk.append(encoded)
             with profiler.phase("collate+batch_move"):
                 batch = laya_train.collate_items([chunk], tok.pad_token_id)
+                # dynamic padding: laya's collate already pads to the batch
+                # longest (max_len only TRUNCATES); this rounds the collated
+                # batch length to pad_to_multiple.
+                if dynamic_padding_on:
+                    batch = DynamicPadder.pad(torch, batch, pad_to_multiple)
                 # (2) one device move for what the loop consumes; _forward's own
                 # .to(device) on the same device is then a no-op.
                 mask = batch["marker_mask"].to(device)
@@ -2429,17 +2510,22 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 logits = Forwarder.run(torch, laya_train, model, batch, device,
                                         amp, config.freeze_encoder, amp_dtype)
             with profiler.phase("loss"):
-                if config.loss == "rlcd":
-                    loss = laya_train.rlcd_loss(logits, target, mask, qtype,
-                                                sigma, config.rl_samples,
-                                                config.w_sph, config.w_rps)
-                elif class_weights is not None:
-                    loss = LossBuilder.weighted(torch, logits, target, mask,
-                                             class_weights)
-                else:
-                    loss = laya_train.soft_ce_loss(logits, target, mask)
-            window_start = (n_steps // config.grad_accum) * config.grad_accum
-            window_size = min(config.grad_accum,
+                loss = LossBuilder.compute(
+                    torch, laya_train, config, logits, target, mask, qtype,
+                    sigma, epoch_w_sph, epoch_w_rps, class_weights,
+                    epoch_margin)
+                if r_drop_on:
+                    logits_two = Forwarder.run(
+                        torch, laya_train, model, batch, device, amp,
+                        config.freeze_encoder, amp_dtype)
+                    loss_two = LossBuilder.compute(
+                        torch, laya_train, config, logits_two, target, mask,
+                        qtype, sigma, epoch_w_sph, epoch_w_rps, class_weights,
+                        epoch_margin)
+                    kl = RDrop.kl(torch, logits, logits_two, mask)
+                    loss = RDrop.combine(loss, loss_two, kl, r_drop_alpha)
+            window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum
+            window_size = min(epoch_grad_accum,
                               steps_per_epoch - window_start)
             scaled = loss / window_size
             with profiler.phase("backward"):
@@ -2469,7 +2555,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                     adv_scaled.backward()
                 AdversarialPerturber.restore(torch, deltas)
             n_steps += 1
-            if (n_steps % config.grad_accum == 0
+            if (n_steps % epoch_grad_accum == 0
                     or start + config.micro_batch >= len(epoch_items)):
                 with profiler.phase("optimizer_step"):
                     if scaler is not None:
@@ -2485,6 +2571,9 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                         optimizer.step()
                     if not plateau:
                         scheduler.step()
+                    if str(optim_state_dtype or "fp32").lower() == "bf16":
+                        OptimizerStateCaster.apply(torch, optimizer,
+                                                   optim_state_dtype)
                     if ema_state is not None:
                         with torch.no_grad():
                             for p in params:
