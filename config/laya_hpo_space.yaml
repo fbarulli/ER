@@ -63,15 +63,14 @@ options:
   max_concurrent_trials: 2    # ceiling across all GPUs/slots
   mps: false                  # CUDA Multi-Process Service (slots mode)
   ddp:
-    nproc_per_node: 2         # ddp mode: ranks per trial
-    backend: nccl
-    master_port: 29500
+    nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
+    backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
+    master_port: 0            # 0 = allocate a free port per trial (retry-safe)
   resources:                  # per-worker CPU/CUDA fairness caps
     threads_per_worker: 1     # thread/core matching (no oversubscription)
     omp_threads: 1            # default = threads_per_worker
     torch_threads: 1          # default = threads_per_worker
-    dataloader_workers: 2
-    cuda_alloc_fraction: 0.45 # per-process CUDA memory fraction in slots mode
+    cuda_alloc_fraction: 1.0  # PER-GPU budget, split across that GPU's slots
   # B) search / scheduling
   sampler:
     kind: tpe                 # tpe | cmaes | random | gp | qmc
@@ -95,11 +94,7 @@ options:
   staged:
     enabled: false            # coarse-to-fine: head-only frozen-encoder warmup
     head_only_epochs: 0
-  # C) exploit shared data
-  shared_data:
-    tokenized_cache: true     # pre-tokenize ONCE; all trials read the mmap
-    embedding_cache: true     # frozen-encoder embeddings reused across trials
-    dev_encoding_cache: true  # dev encodings cached for fast per-epoch eval
+  # C) warm start / ensembling
   warm_start:
     mode: base                # scratch | base | champion
     enqueue: []               # known-good param dicts -> study.enqueue_trial

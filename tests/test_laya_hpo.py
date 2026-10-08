@@ -445,6 +445,68 @@ def test_fidelity_reporter_reports_per_epoch_and_prunes():
     assert namespace["_dev_metrics"] is dev_metrics
 
 
+def test_fidelity_reporter_wires_the_real_dev_evaluator_seam():
+    """The kernel's real seam is `DevEvaluator.metrics`, returning a DevReport
+    with `.accuracy` — the dead `_dev_metrics` path is never required."""
+    class _TrialPruned(Exception):
+        pass
+
+    class _DevReport:
+        def __init__(self, accuracy):
+            self.accuracy = accuracy
+
+    class _DevEvaluator:
+        @staticmethod
+        def metrics(*args, **kwargs):
+            return _DevReport(0.75)
+
+    reports = []
+
+    class _Trial:
+        def report(self, value, step):
+            reports.append((value, step))
+
+        def should_prune(self):
+            return False
+
+    namespace = {"DevEvaluator": _DevEvaluator}
+    original = namespace["DevEvaluator"].metrics
+    reporter = laya_hpo_runtime.FidelityReporter(
+        _Trial(), SimpleNamespace(TrialPruned=_TrialPruned), namespace)
+    reporter.install()
+    assert reporter.installed is True
+    namespace["DevEvaluator"].metrics(None)
+    assert reports == [(0.75, 0)]
+    reporter.uninstall()
+    assert namespace["DevEvaluator"].metrics is original
+
+
+def test_fidelity_reporter_sink_mode_streams_without_a_trial():
+    class _DevEvaluator:
+        @staticmethod
+        def metrics(*args, **kwargs):
+            return SimpleNamespace(accuracy=0.42)
+
+    streamed = []
+    namespace = {"DevEvaluator": _DevEvaluator}
+    reporter = laya_hpo_runtime.FidelityReporter(
+        None, None, namespace, sink=lambda step, value: streamed.append(
+            (step, value)))
+    reporter.install()
+    namespace["DevEvaluator"].metrics(None)
+    namespace["DevEvaluator"].metrics(None)
+    assert streamed == [(0, 0.42), (1, 0.42)]
+    reporter.uninstall()
+
+
+def test_fidelity_reporter_without_a_hook_is_a_harmless_no_op():
+    reporter = laya_hpo_runtime.FidelityReporter(
+        SimpleNamespace(report=lambda *a: None, should_prune=lambda: False),
+        SimpleNamespace(TrialPruned=RuntimeError), {})
+    assert reporter.install() is reporter
+    assert reporter.installed is False
+
+
 # ── staged kernel composition + secret hygiene ─────────────────────────────
 def test_hpo_runtime_source_has_no_future_import_and_carries_primitives():
     source = laya_hpo.hpo_runtime_source()
@@ -625,8 +687,33 @@ def test_stage_kernel_receipt_carries_the_option_set(monkeypatch, tmp_path):
     assert receipt["options"]["sampler"]["kind"] == "tpe"
     assert receipt["options"]["pruner"]["kind"] == "hyperband"
     assert receipt["options"]["warm_start"]["mode"] == "base"
-    assert receipt["options"]["shared_data"]["tokenized"] is True
+    assert "shared_data" not in receipt["options"]
+    assert "core_allocator" not in receipt["options"]
+    assert receipt["options"]["resource_caps"]["cuda_alloc_fraction"] == 1.0
     assert receipt["options"]["session"]["processes_only"] is True
+
+
+def test_stage_kernel_wires_the_parallelism_fixes(monkeypatch, tmp_path):
+    """The staged script must carry the real fixes, not the old bugs."""
+    receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    # #1/#8 real seams (not the invented `_dev_metrics` / `_make_optimizer`).
+    assert "DevEvaluator.metrics" in script
+    assert "TrainingOptimizer.make" in script
+    # #2 race-safe extraction + #12 atomic nested subsets.
+    assert "def exclusive_lock" in script
+    assert "def locate_base_model_dir" in script
+    assert ".extract_ready" in script
+    assert "def apply_fidelity_and_staging" in script
+    assert "def enqueue_warm_start" in script
+    # #3/#4/#7 DDP rank gate + streaming reporter + single profiler owner.
+    assert "rank0=is_rank0()" in script
+    assert "ddp_metric_sink" in script
+    assert 'control_dict["profile"] = False' in script
+    # #9 no advertised-but-absent cache manifest.
+    assert "SHARED_CACHE_MANIFESTS" not in script
+    assert "shared_data" not in script
 
 
 # ── per-trial profiler coverage (stubbed torch, no GPU) ────────────────────
@@ -725,13 +812,27 @@ class _FakeLayaTrain:
         return 4
 
 
+class _FakeDevEvaluator:
+    """The REAL per-epoch dev seam the kernel's perf patch exposes."""
+
+    @staticmethod
+    def metrics(*args, **kwargs):
+        return SimpleNamespace(accuracy=0.9, loss=0.1)
+
+
+class _FakeTrainingOptimizer:
+    """The REAL optimizer factory the kernel's perf patch exposes."""
+
+    @staticmethod
+    def make(*args, **kwargs):
+        return _FakeOptimizer()
+
+
 def _fake_namespace():
-    return {
-        "_forward_dtype": lambda: 5,
-        "_dev_metrics": lambda: 6,
-        "_save_control_checkpoint": lambda: 7,
-        "_make_optimizer": lambda *args, **kwargs: _FakeOptimizer(),
-    }
+    # Mirrors the staged kernel: the real perf-patch seams, NOT the invented
+    # `_dev_metrics`/`_make_optimizer` names that never existed.
+    return {"DevEvaluator": _FakeDevEvaluator,
+            "TrainingOptimizer": _FakeTrainingOptimizer}
 
 
 def test_space_declares_profiler_block():
@@ -764,7 +865,7 @@ def test_profiler_annotates_every_phase_without_gpu(tmp_path):
     namespace = _fake_namespace()
     trace = tmp_path / "ckpt" / "profiler" / "trial_0.json"
     original_backward = torch_module.Tensor.backward
-    original_forward = namespace["_forward_dtype"]
+    original_metrics = namespace["DevEvaluator"].metrics
     profiler = laya_hpo_runtime.TrialProfiler(
         torch_module=torch_module,
         config={"enabled": True, "wait": 1, "warmup": 1, "active": 2,
@@ -773,17 +874,19 @@ def test_profiler_annotates_every_phase_without_gpu(tmp_path):
         namespace=namespace, logger=lambda line: None, rank0=True)
     with profiler:
         laya.encode_item()
-        namespace["_forward_dtype"]()
         laya.soft_ce_loss()
         torch_module.Tensor().backward()
-        namespace["_make_optimizer"]().step()
-        namespace["_dev_metrics"]()
-        namespace["_save_control_checkpoint"]()
+        namespace["TrainingOptimizer"].make().step()
+        namespace["DevEvaluator"].metrics()
         laya.fit_temperature_map()
 
+    # The REAL seams are annotated; the vanished `_forward_dtype` /
+    # `_save_control_checkpoint` names are (correctly) not phases any more.
     assert set(_RECORDED) >= {
-        "data.encode", "forward", "loss", "backward", "optimizer_step",
-        "dev_eval", "checkpoint_save", "calibration"}
+        "data.encode", "loss", "backward", "optimizer_step", "dev_eval",
+        "calibration"}
+    assert "forward" not in _RECORDED
+    assert "checkpoint_save" not in _RECORDED
     assert torch_module.profiler.schedule_kwargs == {
         "wait": 1, "warmup": 1, "active": 2, "repeat": 1}
     assert torch_module.profiler.profile_kwargs["profile_memory"] is True
@@ -794,7 +897,7 @@ def test_profiler_annotates_every_phase_without_gpu(tmp_path):
     assert trace.is_file()
     # Hooks are restored after the trial (no global leakage).
     assert torch_module.Tensor.backward is original_backward
-    assert namespace["_forward_dtype"] is original_forward
+    assert namespace["DevEvaluator"].metrics is original_metrics
 
 
 def test_profiler_fail_soft_when_setup_raises(tmp_path):
