@@ -378,7 +378,7 @@ def completeness_frame(frame: pd.DataFrame) -> pd.Series:
 
 @lru_cache(maxsize=32)
 def _attr_token_re(key: str) -> re.Pattern[str]:
-    """`<key>\s*:\s*([^;]+)` compiled once per key.
+    r"""`<key>\s*:\s*([^;]+)` compiled once per key.
 
     The key is the caller's field pattern (`flavou?r`, `roast\s*type`,
     `pack\s*material\s*type`), so the source text is constant per key: a
