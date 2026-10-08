@@ -1245,10 +1245,15 @@ def _git_revision() -> str:
 def _env_value(name: str) -> str | None:
     """Read KEY=VALUE from .env (TRAIN_ROOT, then its parent), then the env.
 
-    The same lookup the Colab lane uses (cli.colab_runtime._env_value). The
-    secret is baked into the STAGED kernel only, never written to the repo.
+    The same lookup the Colab lane uses (cli.colab_runtime._env_value), plus
+    the box's project .env (`$HOME/ONE/.env`, the path .bashrc sources) so the
+    lane finds the keys from any worktree. The secret is baked into the STAGED
+    kernel only, never written to the repo.
     """
-    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env"):
+    from pathlib import Path as _Path
+
+    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env",
+                     _Path.home() / "ONE" / ".env"):
         if not env_path.is_file():
             continue
         for line in env_path.read_text(encoding="utf-8").splitlines():
