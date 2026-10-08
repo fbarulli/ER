@@ -4660,41 +4660,6 @@ class ColabBundlePlan(BaseModel):
     resume_run_id: str | None = None
 
 
-class SuiteFreshnessManifest(BaseModel):
-    """data/prepared/<suite>/freshness.json — one additive freshness gate
-    record.
-
-    The contract is additive: suites that have no manifest are not gated
-    (the writer is a prep-stage follow-up, documented in docs/colab-lane.md).
-    When a setup dir DOES carry one, the suite-loading lane compares it
-    against the current files and refuses a launch on drift:
-
-    * `catalog_sha256` — sha256 of `<setup>/eligible_catalog.csv`
-    * `graph_sha256`   — sha256 of `<setup>/prepared/input_manifest.json`
-      (the er-graph-inputs-v1 provenance manifest binding the graph inputs)
-    * `timestamp`      — informational only (when the writer saw the files)
-    """
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    schema_: Literal["er-suite-freshness-v1"] = Field(
-        default="er-suite-freshness-v1", alias="schema"
-    )
-    catalog_sha256: str = Field(min_length=64, max_length=64)
-    graph_sha256: str = Field(min_length=64, max_length=64)
-    timestamp: str = Field(min_length=1)
-
-    @classmethod
-    def current_hashes(cls, setup: Path) -> dict[str, str]:
-        """The two hashes the gate diffs a present manifest against."""
-        from core.manifest import sha256_file
-
-        return {
-            "catalog_sha256": sha256_file(setup / "eligible_catalog.csv"),
-            "graph_sha256": sha256_file(setup / "prepared" / "input_manifest.json"),
-        }
-
-
 class SuiteDeviceFlip(BaseModel):
     """The automatic device-flip pattern for a tracked device-cpu suite.
 

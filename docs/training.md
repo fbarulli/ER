@@ -86,19 +86,17 @@ GPU workers own optimization and embedding forward passes. Everything else —
 scored-pair reports, calibration, HNSW indexes, attribute slices, ablation
 analysis — runs locally on CPU after download.
 
-## Freshness
+## Bundle reuse
 
-A package is rejected before provisioning if any of these changed since it was
-built:
+Every launch trains the full cohort on a GPU from the prebuilt full bundle. The
+source/config freshness gate is removed: the package is verified for archive
+integrity only, so a bundle built by an older revision is accepted as-is. An
+unspecified `--prepared-input-package` resolves to
+`results/kaggle_lane/full/bundle` (`default_prepared_input_package`); pass
+`--prepared-input-package` (archive or bundle directory) to override.
 
-- source bytes (every `.py` under `src/` and `scripts/`)
-- config bytes (every file under `config/`)
-- the raw input CSV
-- the checkpoint
-- the smoke inputs
-
-Editing any source file invalidates in-flight resume. That is the intended
-behaviour, not a bug.
+Editing a source file no longer invalidates a package, but the VM still runs only
+pushed `origin/main`, so code changes must be committed and pushed to take effect.
 
 ## Resume
 

@@ -40,7 +40,7 @@ sims | mixed | smoke | bundle | stop`. Flags:
 | flag | meaning (source anchor) |
 |---|---|
 | `--tracks-config <yaml>` | all-track suite; applies to train/tracks/smoke only (colab.py:4576–4577); forces `--what tracks` (colab.py:4616) |
-| `--prepared-input-package <path>` | reuse a `training.prepare_all` `all_tracks_inputs` package after freshness verification; suite-only; verified then copied to `results/model_tracks/<tag>__inputs.<fmt>`. `<path>` may be the archive, a bundle directory (resolved through its `bundle.receipt.json`'s `archive`, else the canonical `all_tracks_inputs.tar.zst`), so `results/kaggle_lane/full/bundle` works directly. A path that resolves to nothing fails before the VM with every known bundle + cohort/revision (`resolve_prepared_input_package`, `prepared_package_candidates`) |
+| `--prepared-input-package <path>` | reuse a `training.prepare_all` `all_tracks_inputs` package; suite-only; archive-integrity verified then copied to `results/model_tracks/<tag>__inputs.<fmt>`. `<path>` may be the archive, a bundle directory (resolved through its `bundle.receipt.json`'s `archive`, else the canonical `all_tracks_inputs.tar.zst`), so `results/kaggle_lane/full/bundle` works directly. Unspecified on the default `--what tracks` launch, it resolves to that full bundle. A path that resolves to nothing fails before the VM with every known bundle + cohort/revision (`resolve_prepared_input_package`, `prepared_package_candidates`) |
 | `--dataset-csv` | raw export for `--what bundle` only (colab.py:4464–4468) |
 | `--train-frac`, `--epochs`, `--workers`, `--model`, `--loss`, `--run-label`, `--masking-profile`, `--collapse-guardrail-profile` | plain `train`/`dual-train`/`hpo` knobs (colab.py:4469–4509) |
 | `--sample` | sampled-training cap; requires `--tracks-config` frozen parent splits (colab.py:4623–4625) |
@@ -90,7 +90,7 @@ PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_50pct.
 | legacy `--what smoke` (no tracks-config) | raised before provisioning: `legacy smoke does not preserve the shared component holdout; use --what tracks --tracks-config ...` — the smoke body behind this branch is unreachable | colab.py:4618–4622; dispatch 4796 |
 | `--tracks-config` on other `--what` | `--tracks-config applies to train/tracks/smoke only` | colab.py:4576–4577 |
 | suite device vs `--gpu` | `suite.device and --gpu must agree`: `--gpu CPU` requires `suite.device: cpu`; any accelerator request (e.g. T4) maps to `cuda`. **Baked default (S/M/L matrix): a non-CPU request against a device-cpu tracked suite AUTO-generates the scratch cuda clone** `results/model_tracks/<suite>__gpu/suite.yaml` (only the yamls are copied — every data binding stays under `data/`; the tracks gate then validates the clone), and the launch proceeds with the flipped config. Opt out with `ER_SUITES_KEEP_DEVICE=1` to get the raw must-agree error | colab.py:4794–4808 device gate; `_suite_device_flip` colab.py:4580–4602; schemas.py `SuiteDeviceFlip` |
-| suite gate freshness | additive: `data/prepared/<suite>/freshness.json` (`er-suite-freshness-v1`: `catalog_sha256` = sha256 of `eligible_catalog.csv`, `graph_sha256` = sha256 of `prepared/input_manifest.json`, `timestamp` informational) is compared, when PRESENT, against the current files at suite load — mismatch fails loud (`suite freshness manifest is stale`). ABSENT = proceeded-with, one log line. The writer is a prep-stage follow-up (do NOT expect the gate to regenerate prepared inputs) | colab.py:4604–4635 `_suite_freshness_gate`; schemas.py `SuiteFreshnessManifest` |
+| full-cohort bundle default | the default `--what tracks` launch resolves an unspecified `--prepared-input-package` to `results/kaggle_lane/full/bundle` (`default_prepared_input_package`); an explicit `--tracks-config` (CPU smoke) or `--prepared-input-package` wins. **The source/config freshness gate is removed** (no `freshness.json`, no `SuiteFreshnessManifest`, no `ER_SKIP_CONFIG_VERIFY`): a reused package is verified for archive integrity only | colab.py `default_prepared_input_package` / `resolve_prepared_input_package`; model_tracks/package.py `verify` |
 | S/M/L dataset matrix | baked SSOT in `canonical_suite_matrix()`: `S=smoke_200` (device cpu), `M=50pct` (device cpu; suite config + prepared writer are prep-stage follow-ups), `L=full` (`config/model_tracks.yaml`, device cuda). ADDITIVE ONLY: unknown suite configs keep working — the matrix supplies labels and the device-flip pattern, it never restricts | schemas.py `SuiteMatrixSpec`/`canonical_suite_matrix` |
 | `--allow-gpu` | non-CPU `--gpu` without it: `GPU launch requires --allow-gpu` | colab_lane.py:485–486 |
 | `--keep-alive` on GPU | refused: `--keep-alive is CPU-only (a retained GPU VM consumes accelerator quota indefinitely)` | colab_lane.py:487–492 |
@@ -158,10 +158,11 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
   for the baked automatic device flip — the suite gate then reports the raw
   `suite device and --gpu must agree` error instead of generating the
   `results/model_tracks/<suite>__gpu/` cuda clone. Unset = flipped (default).
-- Freshness writer follow-up: the gate side (FAIL LOUD on drifted
-  `freshness.json`) is baked today; the WRITER (emit the manifest at the end
-  of the prep stage so `data/prepared/<suite>/freshness.json` is always
-  live) is a prep-stage follow-up. Never write `data/**` from the Colab lane.
+- Full-cohort policy: `--what tracks` with no explicit `--tracks-config`/
+  `--prepared-input-package` resolves to the prebuilt
+  `results/kaggle_lane/full/bundle` (`default_prepared_input_package`). The
+  source/config freshness gate and `ER_SKIP_CONFIG_VERIFY` are gone; a reused
+  package is checked for archive integrity only.
 - Every Colab status/log line carries a Europe/Paris local stamp (CET/CEST, e.g. `[colab 2026-10-07T09:13:28 CEST]`) and goes through the timestamped live-log wrapper
   (`start_live_log`) into `logs/colab/system.log` / `logs/colab/training.log`, session-qualified
   to `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` when

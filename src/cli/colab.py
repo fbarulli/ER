@@ -2112,39 +2112,6 @@ def _suite_device_flip(suite_config: Path, suite) -> Path:
     flip_path.write_text(flipped, encoding='utf-8')
     return flip_path
 
-def _suite_freshness_gate(suite) -> None:
-    """Baked freshness gate: fail loud when the setup dir carries a
-    freshness.json whose hashes no longer match the current files;
-    absent, one log line and proceed (the manifest writer is a
-    prep-stage follow-up, docs/colab-lane.md)."""
-    from pydantic import ValidationError
-    from core.schemas import SuiteFreshnessManifest
-    manifest_path = (TRAIN_ROOT / suite.setup_dir).resolve() / 'freshness.json'
-    if not manifest_path.is_file():
-        print(_stamp(), '[suite-freshness] manifest absent for '
-              f'{suite.setup_dir}; freshness gate skipped '
-              '(writer is a prep-stage follow-up)', flush=True)
-        return
-    try:
-        manifest = SuiteFreshnessManifest.model_validate_json(
-            manifest_path.read_text(encoding='utf-8'))
-    except ValidationError as exc:
-        raise ValueError(f'suite freshness manifest is malformed: {manifest_path}') from exc
-    current = SuiteFreshnessManifest.current_hashes(manifest_path.parent)
-    drift = [key for key, value in current.items()
-             if getattr(manifest, key) != value]
-    if drift:
-        raise ValueError(
-            'suite freshness manifest is stale for '
-            f'{manifest_path.parent.name}/freshness.json: '
-            f'{"; ".join(f"{key} manifest={getattr(manifest, key)[:16]} current={current[key][:16]}"
-                         for key in drift)}'
-            f' (manifest timestamp: {manifest.timestamp}); the artifacts changed '
-            'after the manifest was written — re-run the prep stage or delete '
-            'the manifest once the rebuild is knowingly verified')
-    print(_stamp(), f'[suite-freshness] manifest verified for {suite.setup_dir} '
-          f'(written: {manifest.timestamp})', flush=True)
-
 
 def prepared_package_candidates() -> list[tuple[Path, dict]]:
     """Known prepared all_tracks_inputs archives with receipt metadata, newest first.
@@ -2217,6 +2184,18 @@ def resolve_prepared_input_package(value: Path) -> Path:
     raise FileNotFoundError(
         f'no prepared all_tracks_inputs package at {value!s}; pass the archive, a '
         f'bundle directory, or one of:\n{listing}')
+
+
+def default_prepared_input_package() -> Path | None:
+    """The canonical full-cohort bundle when the operator names none.
+
+    Policy: every launch trains the full cohort on a GPU from the prebuilt full
+    bundle, so an unspecified --prepared-input-package resolves to
+    results/kaggle_lane/full/bundle instead of repackaging locally. Unknown
+    layout returns None and the lane falls back to on-VM packaging.
+    """
+    bundle = RESULTS / 'kaggle_lane' / 'full' / 'bundle'
+    return bundle if bundle.is_dir() else None
 
 
 def main() -> None:
@@ -2377,11 +2356,20 @@ def main() -> None:
         from model_tracks.package import package as suite_package
         suite_config = args.tracks_config or TRAIN_ROOT/'config/model_tracks.yaml'
         suite = load_suite(suite_config)
-        _suite_freshness_gate(suite)
+        # Policy: the default tracks launch always trains the full cohort from the
+        # prebuilt full bundle. An explicit --tracks-config (e.g. the CPU smoke)
+        # or an explicit --prepared-input-package still wins.
+        if (args.prepared_input_package is None and not args.resume_run
+                and args.tracks_config is None):
+            canonical = default_prepared_input_package()
+            if canonical is not None:
+                args.prepared_input_package = resolve_prepared_input_package(canonical)
+                print(_stamp(), f'[bundle] using canonical full bundle '
+                      f'{args.prepared_input_package}', flush=True)
         if args.preflight_only:
             if args.prepared_input_package is not None:
-                from model_tracks.package import verify_current
-                checks = verify_current(args.prepared_input_package, suite_config)['preflight']
+                from model_tracks.package import verify as verify_package
+                checks = verify_package(args.prepared_input_package)['preflight']
             else:
                 checks = suite_preflight(suite_config)
             print(json.dumps(checks,indent=2))
@@ -2406,8 +2394,8 @@ def main() -> None:
             verify_suite_package(suite_archive)
         else:
             if args.prepared_input_package is not None:
-                from model_tracks.package import verify_current
-                verify_current(args.prepared_input_package, suite_config)
+                from model_tracks.package import verify as verify_package
+                verify_package(args.prepared_input_package)
                 suite_archive.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(args.prepared_input_package, suite_archive)
             else:

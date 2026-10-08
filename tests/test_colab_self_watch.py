@@ -38,6 +38,7 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
                         mock.Mock(return_value=None))
     monkeypatch.setattr(colab, "release_colab_launch_lock", mock.Mock())
     monkeypatch.setattr(colab, "ensure_session", mock.Mock())
+    monkeypatch.setattr(colab, "validate_runtime_checkout", mock.Mock())
     monkeypatch.setattr(colab, "prepare_remote_layout", mock.Mock())
     monkeypatch.setattr(colab, "install_deps", mock.Mock())
     monkeypatch.setattr(colab, "verify_remote_models", mock.Mock())

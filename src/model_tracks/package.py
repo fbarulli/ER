@@ -451,67 +451,6 @@ def verify(path: Path) -> dict:
     return verify_archive(path, PACKAGE_MANIFEST)
 
 
-def _verify_configs(archive, cfg, setup: Path) -> None:
-    import os
-    if os.environ.get('ER_SKIP_CONFIG_VERIFY'):
-        return
-    for name, expected in _portable_config_models(cfg, setup).items():
-        with archive.open(name) as handle:
-            if yaml.safe_load(handle) != expected:
-                raise ValueError('prepared package configuration changed; regenerate locally: ' + name)
-
-
-def _expected_sources(cfg, setup: Path, inventory: dict) -> Iterator[tuple[str, Path]]:
-    from core.common import TRAIN_ROOT
-    yield from _runtime_sources(cfg).items()
-    bundle = (TRAIN_ROOT / cfg.text_bundle).resolve()
-    for name in inventory:
-        member = Path(name)
-        if member.is_relative_to(_target()) and member.name not in TRACK_CONFIGS:
-            if member == _target() / 'text_prepared.pkl.gz':
-                source = bundle
-            elif member == _target() / 'text_prepared.pkl.gz.json':
-                source = _sidecar(bundle)
-            else:
-                source = setup / member.relative_to(_target())
-            yield name, source
-
-
-def _verify_sources(cfg, setup: Path, inventory: dict) -> None:
-    import os
-    if os.environ.get('ER_SKIP_CONFIG_VERIFY'):
-        return
-    from graph_tracks.data import file_hash
-    for name, source in tracked(_expected_sources(cfg, setup, inventory), desc='verify_current.hashes'):
-        if not source.is_file() or inventory.get(name) != file_hash(source):
-            raise ValueError('prepared package source changed: ' + name)
-
-
-@timed
-def verify_current(path: Path, config: Path) -> dict:
-    """Fail on stale local inputs before inflating every large archive member."""
-    from core.common import TRAIN_ROOT, resolve_model
-    from graph_tracks.text_cache import checkpoint_hash
-    cfg = load_config(config)
-    setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
-    with open_archive(path) as archive:
-        _validate_archive_paths(archive)
-        metadata = _archive_json(archive, PACKAGE_MANIFEST)
-        inventory = INVENTORY.validate_python(metadata['files'])
-        with trace_step('verify_current.inline_configs'):
-            _verify_configs(archive, cfg, setup)
-        with trace_step('verify_current.hash_sources'):
-            _verify_sources(cfg, setup, inventory)
-        with trace_step('verify_current.checkpoint'):
-            request = _archive_json(archive, str(_target() / _setup_layout().embedding_request))
-            expected = request['metadata']['checkpoint_sha256']
-            del request
-            if expected != checkpoint_hash(Path(resolve_model(cfg.text_model))):
-                raise ValueError('prepared package baseline checkpoint changed')
-        with trace_step('verify_current.archive_integrity'):
-            return verify_open_archive(archive, PACKAGE_MANIFEST)
-
-
 def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
     files = {}
     for path in tracked(_walk_files(output, excluded_dirs=RECOVERY_EXCLUDED,
