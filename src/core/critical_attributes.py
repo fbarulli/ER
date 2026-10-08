@@ -315,17 +315,16 @@ def _extract_critical_claims_cached(values: tuple[object, ...]) -> dict[str, fro
     return _extract_critical_claims_impl(*values)
 
 
-def _extract_critical_claims_impl(
-    *values: object, _with_flavor: bool = True
-) -> dict[str, frozenset[str]]:
-    """Extract explicit non-numeric critical claims from source text.
+@lru_cache(maxsize=131072)
+def _non_flavor_claims_from_text(text: str) -> dict[str, frozenset[str]]:
+    """The four non-flavor dimensions, keyed by ALREADY normalized text.
 
-    ``no added sugar`` is retained separately: it does not prove that a
-    product contains no naturally occurring sugar.  ``diet`` is compatible
-    with ``no_sugar`` but conflicts with an explicit ``sugar`` claim.
+    Two raw value tuples can fold to the same text (a trailing mode_flavor
+    column, a different column split), and the description lane and the
+    title+attribute lane both consume this text.  Caching these ~15 pure
+    regex scans on the folded text shares them across every such caller; the
+    returned frozensets are immutable, so the cached dict can be copied out.
     """
-    text = normalized_attribute_text(*values)
-
     no_sugar = bool(NO_SUGAR_RE.search(text))
     no_added_sugar = bool(NO_ADDED_SUGAR_RE.search(text))
     sugar = bool(SUGAR_CLAIM_RE.search(text))
@@ -401,18 +400,34 @@ def _extract_critical_claims_impl(
         frozenset({"organic"}) if _ORGANIC_RE.search(text) else frozenset()
     )
 
-    result: dict[str, frozenset[str]] = {}
+    return {
+        "carbonation": frozenset(carbonation),
+        "sweetener": frozenset(sweetener),
+        "pulp": frozenset(pulp),
+        "organic": organic,
+    }
+
+
+def _extract_critical_claims_impl(
+    *values: object, _with_flavor: bool = True
+) -> dict[str, frozenset[str]]:
+    """Extract explicit non-numeric critical claims from source text.
+
+    ``no added sugar`` is retained separately: it does not prove that a
+    product contains no naturally occurring sugar.  ``diet`` is compatible
+    with ``no_sugar`` but conflicts with an explicit ``sugar`` claim.
+    """
+    text = normalized_attribute_text(*values)
+    base = _non_flavor_claims_from_text(text)
     if _with_flavor:
         # Key order is preserved exactly (flavor first) for callers that
-        # serialize the mapping; the non-flavor four still follow.
-        result["flavor"] = (
-            flavor_tokens_from_text(text) | extract_declared_flavor_tokens(*values)
-        )
-    result["carbonation"] = frozenset(carbonation)
-    result["sweetener"] = frozenset(sweetener)
-    result["pulp"] = frozenset(pulp)
-    result["organic"] = organic
-    return result
+        # serialize the mapping; the non-flavor four follow from the cache.
+        return {
+            "flavor": flavor_tokens_from_text(text)
+            | extract_declared_flavor_tokens(*values),
+            **base,
+        }
+    return dict(base)
 
 
 @lru_cache(maxsize=131072)
