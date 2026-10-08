@@ -31,10 +31,20 @@ FIELDS = (
     "carbonation_set", "sweetener_set", "pulp_set", "package_material_set",
 )
 GATE = ("volume_set", "pack_set", "package_type_set", "flavor_set")
-SLICE_COLS = [
-    "slice_volume", "slice_pack", "slice_sweetener",
-    "slice_flavor", "slice_package_type", "slice_carbonation",
-]
+# Slice label per structured field, mapped BY NAME. GATE is a shorter tuple that
+# is not a prefix of SLICE_COLS, so a positional zip silently drifted:
+# package_type_set landed in slice_sweetener while slice_package_type and
+# slice_carbonation were never filled (the negative-pair writer then KeyError'd).
+SLICE_FIELDS = (
+    ("volume_set", "slice_volume"),
+    ("pack_set", "slice_pack"),
+    ("sweetener_set", "slice_sweetener"),
+    ("flavor_set", "slice_flavor"),
+    ("package_type_set", "slice_package_type"),
+    ("carbonation_set", "slice_carbonation"),
+)
+SLICE_COLS = [col for _, col in SLICE_FIELDS]
+COL_FOR_FIELD = {field: col for field, col in SLICE_FIELDS}
 ROLE = "external_eval"
 
 
@@ -46,17 +56,33 @@ def parse_set(v: object) -> set[str]:
     return {str(t).strip().lower() for t in parsed if str(t).strip()}
 
 
+def census_cell_value(cell: dict, field: str) -> tuple[str, ...]:
+    """One census cell field as a 1-tuple of labels, matching cell_for() rows.
+
+    Census cells hold ONE label string per field (see scripts/compute_strata.py:
+    "cell values are already strings ... like '900.0'"); absent or explicit
+    "<none>" is the missing sentinel. Sibling scripts wrap the same way
+    (augment_catalog.py builds ``(c["cell"][f],)``). Reading the bare string
+    positionally used to take its first CHARACTER.
+    """
+    raw = cell.get(field) or "<none>"
+    if isinstance(raw, (list, tuple)):
+        labels = tuple(str(v) for v in raw)
+        return labels if labels != ("<none>",) else ("<none>",)
+    return ("<none>",) if raw == "<none>" else (str(raw),)
+
+
 def cell_for(row: pd.Series) -> tuple[tuple[str, ...], ...]:
     return tuple(
-        tuple(sorted(parse(getattr(row, f)))) if parse(getattr(row, f)) else ("<none>",)
+        tuple(sorted(parse_set(getattr(row, f)))) if parse_set(getattr(row, f)) else ("<none>",)
         for f in GATE
     )
 
 
 def slice_flags(row: pd.Series) -> dict[str, str]:
     out: dict[str, str] = {}
-    for f, col in zip(GATE + ("carbonation_set",), SLICE_COLS):
-        vals = parse(getattr(row, f))
+    for field, col in SLICE_FIELDS:
+        vals = parse_set(getattr(row, field))
         out[col] = "|".join(sorted(vals)) if vals else "<none>"
     return out
 
@@ -81,7 +107,7 @@ def main() -> int:
     for f in GATE:
         cnt: dict[str, int] = defaultdict(int)
         for v in can[f]:
-            for vv in parse(v):
+            for vv in parse_set(v):
                 cnt[vv] += 1
         marg[f] = dict(cnt)
 
@@ -92,7 +118,7 @@ def main() -> int:
     for f in GATE:
         vals = {vv for vv, c in marg[f].items() if c >= args.support_threshold}
         for v in vals:
-            matches = can[can[f].apply(lambda x: v in parse(x))]
+            matches = can[can[f].apply(lambda x: v in parse_set(x))]
             if matches.empty:
                 continue
             row = matches.iloc[0]
@@ -140,14 +166,13 @@ def main() -> int:
         # Find the blind spot cell for this entity
         idx = blind_ents.index(ent)
         c = blind[idx]
-        cell = tuple(tuple([v]) if v != "<none>" else ("<none>",) for v in [c["cell"][f][0] if c["cell"][f] != ("<none>",) else "<none>" for f in GATE])
-        # Build slice flags from the blind-spot cell
+        cell = tuple(census_cell_value(c["cell"], f) for f in GATE)
+        # Build slice flags from the blind-spot cell (carbonation may be absent
+        # from a census cell; the missing value is "<none>", never a KeyError).
         slices: dict[str, str] = {}
-        for i, f in enumerate(GATE):
-            vals = c["cell"][f]
-            slices[SLICE_COLS[i]] = "|".join(sorted(vals)) if vals != ("<none>",) else "<none>"
-        # Carbonation is not in GATE; default to <none>
-        slices["slice_carbonation"] = "<none>"
+        for field, col in SLICE_FIELDS:
+            vals = census_cell_value(c["cell"], field)
+            slices[col] = "|".join(sorted(vals)) if vals != ("<none>",) else "<none>"
         ent_profile[ent] = (cell, slices)
 
     # Positive pairs: for each entity, pair with other entities sharing the same product.
@@ -232,9 +257,9 @@ def main() -> int:
     print(f"[holdout] straddles: {straddles}")
 
     # Verify all strata covered
-    for i, f in enumerate(GATE):
-        vals = {row[SLICE_COLS[i]] for _, row in df.iterrows()}
-        print(f"[holdout] {f}: {len(vals)} values covered")
+    for field in GATE:
+        vals = {row[COL_FOR_FIELD[field]] for _, row in df.iterrows()}
+        print(f"[holdout] {field}: {len(vals)} values covered")
 
     return 0
 

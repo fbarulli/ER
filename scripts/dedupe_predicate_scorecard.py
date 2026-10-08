@@ -54,7 +54,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-WORK = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+WORK = find_project_root(Path(__file__))
 sys.path.insert(0, str(WORK / "src"))
 
 from core.common import SEED                                          # noqa: E402

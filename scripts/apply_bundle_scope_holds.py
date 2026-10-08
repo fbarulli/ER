@@ -18,9 +18,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-import sys; sys.path.insert(0, str(ROOT/'src'))
-from core.common import audit_finding
+from core.common import AUDIT_FINDINGS_DIR, audit_finding
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
+# The census inputs and the holds/report outputs all live in the config-owned
+# audit findings root (core.common.AUDIT_FINDINGS_DIR), never a second spelling.
+FINDINGS = AUDIT_FINDINGS_DIR
 CONFIG = ROOT / 'config/identity_reviews.json'
 REASON = ('Source titles advertise different explicit retail bundle counts '
           'under one GTIN; identifier scope (inner item versus complete '

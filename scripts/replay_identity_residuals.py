@@ -7,7 +7,9 @@ from collections import Counter
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(ROOT/'src'))
 from core.common import AUDIT_FINDINGS_DIR
 from core.sku_identity import row_identity, identity_conflict, evaluate_sku_identity

@@ -18,9 +18,10 @@ import pandas as pd
 
 from core.common import DATA_PATH, TRAIN_ROOT, data_cfg, training_cfg
 from core.manifest import sha256_file
+from core.project_root import find_project_root
 if __package__ in (None, ""):
     # Permit the documented direct script command as well as test imports.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(find_project_root(Path(__file__))))
 from scripts.evaluate_gate_logic import json_ready
 
 

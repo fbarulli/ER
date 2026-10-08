@@ -41,7 +41,9 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 import os  # noqa: E402
 
 sys.path.insert(0, str(ROOT / 'src'))

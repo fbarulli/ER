@@ -38,9 +38,12 @@ from pipeline import (
     _MODEL_STOP,
     normalize_text,
 )
-from core.text import VOLUME_RE
 
-
+# VOLUME_RE (and every other span pattern above) comes from
+# ner.ner_product_attributes: that is the extractor whose candidate spans this
+# audit strips. Do NOT re-import core.text's config-derived VOLUME_RE. The two
+# patterns differ (core.text also matches cc/dl), and a second copy here would
+# silently strip spans the NER extractor never emits.
 
 # These are the phrase branches in core.critical_attributes.extract_critical_claims.
 # Keep each entire claim together so a residual cannot turn "no sugar" into

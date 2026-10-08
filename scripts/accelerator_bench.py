@@ -29,7 +29,9 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+REPO = find_project_root(Path(__file__))
 SRC = REPO / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))

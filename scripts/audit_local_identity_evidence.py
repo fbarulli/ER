@@ -4,8 +4,11 @@ import hashlib,json,re,sys
 from collections import Counter,defaultdict
 from pathlib import Path
 import pandas as pd
-ROOT=Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT=find_project_root(Path(__file__))
 sys.path.insert(0,str(ROOT/'src'))
+from core.common import AUDIT_FINDINGS_DIR
 from core.critical_attributes import extract_critical_claims
 from core.identity_policy import resolve_listing_row
 from core.text import attribute_fields

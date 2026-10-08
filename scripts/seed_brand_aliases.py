@@ -44,7 +44,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-TRAIN_ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+TRAIN_ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(TRAIN_ROOT / "src"))
 
 from core.common import DATA_PATH, load_dataset, _read_vocabulary, VOCABULARY_CONFIG_PATH

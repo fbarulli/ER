@@ -14,8 +14,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from core.common import audit_finding
+from core.project_root import find_project_root
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = find_project_root(Path(__file__))
 
 DIMS = ('brand', 'volume_ml', 'pack', 'flavor', 'carbonation', 'sweetener',
         'sweetener_type', 'sweetening', 'pulp', 'package_type', 'package_material')

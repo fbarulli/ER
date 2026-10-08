@@ -40,8 +40,6 @@ def project_train_time_neg_views(
     neg_views: int, *, enabled: bool, ratio_to_hard: float, loss: str
 ) -> int:
     """Upper projection only; actual split-local easy candidates can be absent."""
-    import math
-
     base = int(neg_views)
     if loss != "contrastive" or not enabled or float(ratio_to_hard) <= 0.0 or base <= 0:
         return base

@@ -11,11 +11,12 @@ import pandas as pd
 from core.audit_guard import ATTRIBUTE_SELF_SAMPLE, assert_vocabulary_overlap, self_comparison_control
 from core.common import DATA_PATH, data_cfg
 from core.manifest import sha256_file
+from core.project_root import find_project_root
 from core.text import attribute_fields
 from core.attribute_universe import attribute_registry
 from core.date_evidence import extract_date_evidence
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(find_project_root(Path(__file__))))
 from scripts.evaluate_gate_logic import wiring_inventory
 
 
