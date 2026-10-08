@@ -493,6 +493,36 @@ def test_dataset_publish_executed_uses_kaggle_lane_helpers(
     assert receipt["dataset"]["version"] == 3
 
 
+def test_dataset_publish_create_carries_dir_mode_for_nested_payloads(
+        tmp_path, monkeypatch):
+    """A create with no remote version still passes `-r zip`: without it the
+    CLI silently skips every subdirectory, so a nested payload (the recovered
+    checkpoint's `checkpoint/` tree) would upload only its flat files."""
+    from cli import kaggle_datasets
+    from cli import kaggle_lane as lane
+
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    laya_lane.stage_decision_kernel(decision_kind="attribute")
+    commands = []
+    monkeypatch.setattr(
+        kaggle_datasets.KaggleDatasets, "_dataset_current_version",
+        staticmethod(lambda slug: {"dataset_version": None, "slug": slug}))
+    monkeypatch.setattr(
+        lane, "_require_kaggle_executable", staticmethod(
+            lambda executable: str(tmp_path / "fake-kaggle")))
+    monkeypatch.setattr(
+        lane, "_run_kaggle", staticmethod(
+            lambda command: (commands.append(command), (0, ""))[1]))
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=True)
+    assert plan["action"] == "create"
+    assert commands[0][:5] == [str(tmp_path / "fake-kaggle"), "datasets",
+                               "create", "-r", "zip"]
+
+
 def test_module_scope_gate_pins_nameerror_payload():
     """AST-gate hardening regression pin (BUG 1): a post-substitution
     payload loading an undefined TOP-LEVEL name (the `_runtime_root =

@@ -304,10 +304,15 @@ class KaggleDatasets:
         ``dir_mode_args`` is the caller's own ``-r`` form (the laya lane passes
         ``["-r", "zip"]``; the bundle publish keeps its historical
         ``["-r", "--dir-mode", "skip"]``), a parameter because the two
-        surfaces pin different directory modes.
+        surfaces pin different directory modes. It rides BOTH forms: without it
+        on ``create`` the CLI silently skips every subdirectory
+        ("Skipping folder ... use --dir-mode"), so a nested payload (the
+        recovered checkpoint's ``checkpoint/`` tree) would upload only its
+        flat files.
         """
         return {
-            "create": [executable, "datasets", "create", "-p", str(payload)],
+            "create": [executable, "datasets", "create", *dir_mode_args,
+                       "-p", str(payload)],
             "version": [executable, "datasets", "version", *dir_mode_args,
                         "-m", message, "-p", str(payload)],
         }

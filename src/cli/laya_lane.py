@@ -3719,17 +3719,14 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
         lane._spec().kaggle_executable)
     current = KaggleDatasets._dataset_current_version(slug)
     version = current.get("dataset_version")
-    if version:
-        plan["action"] = "version"
-        # `-r` and `--dir-mode` are one argparse option: `-r --dir-mode
-        # zip` fails with "argument -r/--dir-mode: expected one
-        # argument" (fail-loud met live on the version path).
-        command = [executable, "datasets", "version", "-r", "zip",
-                   "-m", f"laya inputs {run_tag}",
-                   "-p", str(payload)]
-    else:
-        plan["action"] = "create"
-        command = [executable, "datasets", "create", "-p", str(payload)]
+    # The argv shape is the shared owner's (KaggleDatasets); `-r zip` rides
+    # BOTH create and version so a payload with subdirectories (the recovered
+    # checkpoint's `checkpoint/` tree) travels whole. `-r --dir-mode zip` is ONE
+    # argparse option (splitting it fails live).
+    plan["action"] = "version" if version else "create"
+    command = KaggleDatasets.dataset_publish_commands(
+        executable, payload, message=f"laya inputs {run_tag}",
+        dir_mode_args=["-r", "zip"])[plan["action"]]
     plan["command"] = command
     _, _ = lane._run_kaggle(command)
     plan["returncode"] = 0
