@@ -25,6 +25,66 @@ def _reported_session_id(text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+class ReconnectBackoff:
+    """429-aware reconnect pacing for the live log stream.
+
+    Kaggle throttles the SSE log endpoint; a dropped stream that reconnects
+    immediately can self-inflict HTTP 429 and then worsen it (every reconnect
+    is a fresh request). Pace reconnects with exponential backoff + jitter,
+    honouring ``Retry-After`` when present, with a longer ceiling for 429s so
+    the follower cannot hammer the endpoint.
+    """
+
+    def __init__(self, *, base_seconds: float = 1.0, cap_seconds: float = 60.0,
+                 rate_limit_cap_seconds: float = 300.0, jitter: float = 0.25):
+        self._base = max(0.1, float(base_seconds))
+        self._cap = float(cap_seconds)
+        self._rate_limit_cap = float(rate_limit_cap_seconds)
+        self._jitter = float(jitter)
+
+    @staticmethod
+    def is_rate_limited(error: BaseException) -> bool:
+        status = getattr(error, "status_code", None)
+        if status is None:
+            response = getattr(error, "response", None)
+            status = getattr(response, "status_code", None)
+        if status == 429:
+            return True
+        text = str(error)
+        return "429" in text or "Too Many Requests" in text
+
+    @staticmethod
+    def _retry_after(error: BaseException) -> float | None:
+        header = None
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            try:
+                header = headers.get("Retry-After")
+            except AttributeError:
+                header = None
+        if not header:
+            match = re.search(r"[Rr]etry-[Aa]fter[:=]\s*(\d+(?:\.\d+)?)",
+                              str(error))
+            header = match.group(1) if match else None
+        try:
+            return float(header) if header is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def delay(self, attempt: int, error: BaseException | None = None) -> float:
+        import random
+
+        rate_limited = error is not None and self.is_rate_limited(error)
+        ceiling = self._rate_limit_cap if rate_limited else self._cap
+        delay = min(self._base * (2 ** max(0, int(attempt) - 1)), ceiling)
+        if error is not None:
+            retry_after = self._retry_after(error)
+            if retry_after is not None:
+                delay = max(delay, min(retry_after, self._rate_limit_cap))
+        return delay * (1.0 + random.uniform(0.0, self._jitter))
+
+
 class KaggleMonitor:
     """Detached supervision, live progress, and terminal harvesting."""
 
@@ -323,6 +383,8 @@ class KaggleMonitor:
             section_start = log_handle.tell()
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
+            backoff = ReconnectBackoff(
+                base_seconds=float(lane._spec().limits.retry_seconds))
             while True:
                 try:
                     request = ApiGetKernelSessionLogsStreamRequest()
@@ -398,8 +460,12 @@ class KaggleMonitor:
                     log_handle.seek(section_start)
                     log_handle.truncate()
                     log_handle.seek(0, os.SEEK_END)
-                    time.sleep(min(lane._spec().limits.retry_seconds * attempts,
-                                   60.0))
+                    delay = backoff.delay(attempts, error)
+                    if backoff.is_rate_limited(error):
+                        lane._log_lane(
+                            f"[stream {kernel}] rate-limited (429); backing off "
+                            f"{delay:.0f}s before reconnect {attempts + 1}")
+                    time.sleep(delay)
         plan["session_id"] = session_id
         return plan
 
