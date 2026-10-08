@@ -1,0 +1,121 @@
+self_seconds,ncalls,total_seconds,function
+95.688,777,95.688,~:0:<built-in method torch._C._nn.linear>
+6.418,19033192,10.911,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/json/encoder.py:339:_iterencode_dict
+5.171,126,5.171,~:0:<built-in method torch._C._nn.scaled_dot_product_attention>
+4.466,1226770,4.466,~:0:<method 'search' of 're.Pattern' objects>
+3.691,126,3.691,~:0:<built-in method torch._C._nn.gelu>
+2.672,7987125,9.229,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/json/encoder.py:280:_iterencode_list
+2.546,3,15.318,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/json/__init__.py:120:dump
+2.417,13380233,2.927,~:0:<built-in method builtins.isinstance>
+1.764,6504035,12.745,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/json/encoder.py:426:_iterencode
+1.552,579072,1.561,~:0:<method 'sub' of 're.Pattern' objects>
+1.530,483,1.530,~:0:<method 'compress' of 'zlib.Compress' objects>
+1.479,1889492,2.640,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/re/__init__.py:330:_compile
+1.317,94223,2.717,/src/core/text.py:574:read
+1.262,36,1.282,/src/model_tracks/ablation_retrieval.py:26:ranks
+1.124,5924529,1.124,~:0:<method 'write' of '_io.TextIOWrapper' objects>
+1.089,927,1.160,~:0:<method 'acquire' of '_thread.lock' objects>
+1.029,38385,2.063,/src/pipeline.py:254:scan_family_patterns
+0.992,63150,1.669,/src/core/text.py:68:unicode_casefold
+0.742,22205,0.837,/src/core/date_evidence.py:38:extract_date_evidence
+0.673,12855,1.153,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/transformers/tokenization_utils_base.py:83:flatten
+0.632,710706,2.492,/src/core/text.py:97:normalized_attribute_text
+0.617,36,0.617,~:0:<built-in method hnswlib.knn_query>
+0.607,23682,5.047,/src/core/url_evidence.py:329:url_text
+0.591,16316,0.949,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/arrays/string_arrow.py:195:_from_sequence
+0.577,4928242,0.577,~:0:<built-in method unicodedata.combining>
+0.576,66,0.576,~:0:<method 'encode_batch' of 'tokenizers.Tokenizer' objects>
+0.573,428324,4.617,~:0:<method 'join' of 'str' objects>
+0.526,2429531,0.527,~:0:<method 'get' of 'dict' objects>
+0.507,460619,0.571,~:0:<built-in method builtins.sorted>
+0.496,273,0.496,~:0:<built-in method torch.layer_norm>
+0.495,31149,2.659,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/construction.py:531:sanitize_array
+0.487,145534,2.088,/src/core/url_evidence.py:231:_is_noise
+0.482,1008665,0.482,~:0:<method 'finditer' of 're.Pattern' objects>
+0.458,873646,0.940,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/re/__init__.py:305:escape
+0.436,701601,4.056,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/re/__init__.py:174:search
+0.434,2535920,0.485,~:0:<built-in method builtins.len>
+0.427,38385,0.930,/src/pipeline.py:327:scan_set_and_count_words
+0.420,71368,0.420,~:0:<method 'findall' of 're.Pattern' objects>
+0.402,3125,0.767,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/transformers/utils/import_utils.py:2916:fetch__all__
+0.398,1732234,0.398,~:0:<built-in method _json.encode_basestring>
+0.394,846266,0.394,~:0:<method 'split' of 'str' objects>
+0.389,7400,14.610,/src/core/attribute_decision.py:749:reparse
+0.379,1,0.379,~:0:<built-in method hnswlib.add_items>
+0.376,873646,0.376,~:0:<method 'translate' of 'str' objects>
+0.374,2476804,0.374,~:0:<method 'append' of 'list' objects>
+0.366,36,0.991,/src/model_tracks/ablation_retrieval.py:45:ann_hits
+0.363,2582,0.363,~:0:<built-in method marshal.loads>
+0.360,251,1.651,/src/model_tracks/ablation.py:119:digest
+0.352,4441,1.820,/src/core/product_dimensions.py:54:row_dimensions
+0.350,29805,5.201,/src/core/critical_attributes.py:228:extract_critical_claims
+0.347,2582,0.713,<frozen importlib._bootstrap_external>:509:_compile_bytecode
+0.334,3562,7.907,~:0:<built-in method builtins.exec>
+0.332,88782,0.561,/src/core/critical_attributes.py:177:<genexpr>
+0.329,551248,1.476,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/re/__init__.py:280:finditer
+0.314,19450,0.315,/src/core/url_evidence.py:371:<genexpr>
+0.314,34948,0.427,/src/core/critical_attributes.py:184:extract_declared_flavor_tokens
+0.297,23715,3.947,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/series.py:369:__init__
+0.284,208,0.284,~:0:<built-in method torch.tensor>
+0.283,2051132,0.283,~:0:<method 'startswith' of 'str' objects>
+0.271,674051,0.392,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/enum.py:187:__get__
+0.269,25164,0.595,/src/core/text.py:730:attribute_fields
+0.269,101317,0.517,/src/core/url_evidence.py:286:_has_unit_suffix
+0.257,106771,0.266,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/arrays/arrow/array.py:818:__iter__
+0.243,34532,0.533,/src/core/text.py:383:_VOLUME_SEARCH
+0.241,1244376,0.241,~:0:<method 'strip' of 'str' objects>
+0.240,11841,1.687,/src/core/sweetener_values.py:62:negated_sweetener_types
+0.240,618716,0.861,/src/core/sweetener_values.py:44:<genexpr>
+0.234,161810,0.401,/src/core/url_evidence.py:46:_spec
+0.234,69570,0.454,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py:341:drive
+0.232,1,2.497,/src/model_tracks/ablation.py:754:_comparison_rows
+0.227,11857,2.344,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/indexes/base.py:486:__new__
+0.224,55332,0.230,~:0:<built-in method builtins.max>
+0.224,4441,23.752,/src/core/sku_identity.py:378:row_identity
+0.222,38385,1.450,/src/pipeline.py:207:prepare
+0.221,32564,2.058,/src/core/sweetener_values.py:37:title_sweetener_types
+0.218,507810,0.218,~:0:<built-in method builtins.id>
+0.208,48,0.208,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/json/decoder.py:351:raw_decode
+0.208,126,33.819,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/transformers/models/bert/modeling_bert.py:347:forward
+0.205,11847,0.331,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/indexes/base.py:7837:maybe_sequence_to_range
+0.202,329245,0.202,~:0:<method 'match' of 're.Pattern' objects>
+0.200,57886,0.633,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/dtypes/common.py:1821:pandas_dtype
+0.194,668140,0.194,~:0:<method 'group' of 're.Match' objects>
+0.191,290719,0.576,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/re/__init__.py:169:fullmatch
+0.190,7400,1.258,/src/core/attribute_universe.py:347:parse
+0.186,601,0.186,~:0:<method 'decompress' of 'zlib.Decompress' objects>
+0.183,11904,0.183,/src/core/sweetener_values.py:71:<genexpr>
+0.182,37278,0.602,~:0:<built-in method posix.stat>
+0.181,364564,0.181,~:0:<method 'fullmatch' of 're.Pattern' objects>
+0.175,16295,0.360,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/dtypes/cast.py:127:maybe_convert_platform
+0.174,13381,0.174,~:0:<method 'splitlines' of 'str' objects>
+0.172,34532,0.810,/src/core/text.py:421:_extract_volume_match_legacy
+0.171,13913,0.329,/src/core/sweetener_values.py:77:declared_sweeteners
+0.168,628957,0.218,~:0:<built-in method builtins.getattr>
+0.162,4441,10.543,/src/pipeline.py:864:harvest_evidence_channels
+0.162,1046,1.101,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/transformers/utils/import_utils.py:2958:create_import_structure_from_path
+0.161,61069,0.556,/src/core/text.py:75:normalize_text
+0.158,277502,0.158,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/json/encoder.py:226:floatstr
+0.158,42723,0.188,/src/core/unit_canonicalization.py:53:_decimal
+0.155,992428,0.155,~:0:<method 'endswith' of 'str' objects>
+0.152,94223,2.902,/src/core/text.py:624:extract_volume_evidence
+0.151,190169,0.846,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/re/__init__.py:183:sub
+0.147,11886,0.396,~:0:<method 'validate_python' of 'pydantic_core._pydantic_core.SchemaValidator' objects>
+0.146,126,8.401,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/transformers/models/bert/modeling_bert.py:289:forward
+0.142,161817,0.142,/src/core/common.py:911:__getattr__
+0.141,38385,0.241,/src/pipeline.py:299:scan_prefix_multipliers
+0.139,42941,0.139,~:0:<built-in method numpy.fromiter>
+0.137,258295,0.312,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/dtypes/generic.py:43:_instancecheck
+0.136,7978,0.169,/src/ner/ner_product_attributes.py:169:_candidates_from_package_details
+0.136,38385,5.052,/src/pipeline.py:462:read
+0.134,1588,0.212,/src/core/identity_policy.py:148:<genexpr>
+0.130,16305,0.304,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/arrays/string_.py:196:__init__
+0.130,671200,0.130,~:0:<method 'zfill' of 'str' objects>
+0.126,111444,0.126,/src/core/text.py:261:__getattr__
+0.122,4441,28.885,/src/model_tracks/ablation.py:248:_compose
+0.121,670318,0.121,/home/opc/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/enum.py:1325:value
+0.120,16400,0.292,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/arrays/string_arrow.py:134:__init__
+0.118,84379,0.161,/src/core/structured_features.py:57:_as_string_set
+0.117,496559,0.117,~:0:<method 'lower' of 'str' objects>
+0.116,13393,0.152,/home/opc/ONE/ER/.venv/lib/python3.14/site-packages/pandas/core/arrays/arrow/array.py:721:__getitem__
+0.113,24878,0.393,/src/core/unit_canonicalization.py:68:canonical_volume_ml

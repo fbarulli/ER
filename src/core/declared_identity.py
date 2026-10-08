@@ -17,6 +17,65 @@ from core.text import normalized_attribute_text
 
 _GENERIC_FLAVORS = frozenset({'fruit', 'cola', 'coffee', 'tea', 'tonic'})
 
+# Module-scope compiled patterns (PERF r15).
+#
+# `listing_identity` runs ~25 word-probe patterns per row through the `re`
+# module, and every one of those calls re-hashes the pattern string and
+# re-reads `re`'s internal cache (`re._compile`) before matching.  Binding the
+# compiled patterns here removes that dispatch from a per-row hot path; the
+# pattern text is copied verbatim from the call sites, so nothing about the
+# match semantics changes.
+_FLAVOR_VARIANT_RE = re.compile(
+    r'\b(?:fruit punch|root beer|blood orange|black cherry|white grape|black grape|'
+    r'grape white|grape black|cool blue|glacier freeze|red peak rush|carmel valley)\b')
+_APPLE_RE = re.compile(r'\bapple\b')
+_JUICE_RE = re.compile(r'\bjuice\b')
+_CULTIVAR_RE = re.compile(r'\b(?:gala|braeburn|russet|golden delicious|cox)\b')
+_FORMULATION_RE = re.compile(
+    r'\b(?:protein boost|caffeine boost|double espresso|women fit|c mix|multi v|'
+    r'immune strong|morgenstark|bcaa|collagen|pink beach|glow)\b')
+_BATTERY_RE = re.compile(r'\bbattery\b')
+_BATTERY_LINE_RE = re.compile(r'\b(?:black|rise|pearberry)\b')
+_SOFT_DRINK_RE = re.compile(r'\b(?:cola|kola|soda|birch beer|energy drink)\b')
+_RECIPE_VARIANT_RE = re.compile(r'\b(?:regular|original|light|lite|diet)\b')
+_SPICE_PRODUCT_RE = re.compile(r'\b(?:turnip|ginger ale)\b')
+_SPICY_RE = re.compile(r'\b(?:spicy|hot)\b')
+_PLAIN_RE = re.compile(r'\b(?:plain|simple)\b')
+_CAFFEINE_FREE_RE = re.compile(
+    r'\b(?:zero caffeine|no caffeine|caffeine free|decaf|decaffeinated)\b')
+_JUICE_CONTENT_RE = re.compile(
+    r'(?:^|;)\s*juice content\s*:\s*(\d+)(?:\s*[-–]\s*(\d+))?\s*%', re.I)
+_DESCRIPTION_FLAVOR_RE = re.compile(
+    r"(?:[a-z]+\s+){0,2}[a-z]+\s+flavou?red|(?:flavou?r|taste)\s+of\s+(?:[a-z]+\s*){1,3}")
+_WATER_RE = re.compile(r'\bwater\b')
+_LIGHT_STRENGTH_RE = re.compile(r'\b(?:slight|lightly|light)\b')
+_MEDIUM_STRENGTH_RE = re.compile(r'\bmedium\b')
+_STRONG_STRENGTH_RE = re.compile(r'\b(?:strong|strongly)\b')
+_COLA_FAMILY_RE = re.compile(r'\b(?:cola|kola)\b')
+_MATE_FAMILY_RE = re.compile(r'\b(?:mate|yerba)\b')
+_HERBAL_VARIANT_RE = re.compile(r'\barishta\s+([a-z]+)\b')
+_NAMED_FAMILIES = (
+    ('cream_soda', re.compile(r'\bcream soda\b')),
+    ('dr_bob', re.compile(r'\bdr[.]? bob\b')),
+    ('lemon_tea', re.compile(r'\blemon tea\b')),
+    ('chai_concentrate', re.compile(r'\bchai\b.*\bconcentrate\b')),
+    ('gingerbread_syrup', re.compile(r'\bgingerbread\b.*\bsyrup\b')),
+)
+
+# flavor -> the `\b<flavor>\b` probe, built once per lexicon entry instead of
+# re-escaping and re-compiling it inside the per-phrase loop.
+#
+# The key space is CLOSED: `_flavor_probe` is only ever called with members of
+# `core.critical_attributes.DECLARED_FLAVOR_LEXICON`, which is a frozenset built
+# from `_VOCAB["declared_flavor_lexicon"]` in config/vocabulary.json — 89
+# entries at the time of writing, and re-read only at import. Nothing derived
+# from a row can enter the key. `lru_cache` is used anyway rather than a bare
+# module dict so the bound is structural: if that vocabulary ever becomes
+# dynamic, the cache can still not grow without limit on a per-row path.
+@lru_cache(maxsize=256)
+def _flavor_probe(flavor: str) -> "re.Pattern":
+    return re.compile(r'\b' + re.escape(flavor) + r'\b')
+
 
 def listing_identity(title: str, attributes: str = '', description: str = '') -> dict[str, list[str]]:
     from core.product_selection import selected_identity_inputs
@@ -27,49 +86,52 @@ def listing_identity(title: str, attributes: str = '', description: str = '') ->
     if selected_variant:
         facts['selected_variant'] = [selected_variant]
     # Preserve phrase identity instead of reducing it to a generic ingredient.
-    flavor_variants = set(re.findall(
-        r'\b(?:fruit punch|root beer|blood orange|black cherry|white grape|black grape|'
-        r'grape white|grape black|cool blue|glacier freeze|red peak rush|carmel valley)\b', title_text))
+    flavor_variants = set(_FLAVOR_VARIANT_RE.findall(title_text))
     flavor_variants = {'white grape' if v == 'grape white' else 'black grape' if v == 'grape black' else v
                        for v in flavor_variants}
     if flavor_variants:
         facts['flavor_variant'] = sorted(flavor_variants)
-    if re.search(r'\bapple\b', title_text) and re.search(r'\bjuice\b', title_text):
-        cultivars = set(re.findall(r'\b(?:gala|braeburn|russet|golden delicious|cox)\b', title_text))
+    if _APPLE_RE.search(title_text) and _JUICE_RE.search(title_text):
+        cultivars = set(_CULTIVAR_RE.findall(title_text))
         if cultivars:
             facts['cultivar'] = sorted(cultivars)
-    formulations = set(re.findall(
-        r'\b(?:protein boost|caffeine boost|double espresso|women fit|c mix|multi v|'
-        r'immune strong|morgenstark|bcaa|collagen|pink beach|glow)\b', title_text))
-    if re.search(r'\bbattery\b', title_text):
-        formulations.update(re.findall(r'\b(?:black|rise|pearberry)\b', title_text))
+    formulations = set(_FORMULATION_RE.findall(title_text))
+    if _BATTERY_RE.search(title_text):
+        formulations.update(_BATTERY_LINE_RE.findall(title_text))
     if formulations:
         facts['formulation'] = sorted(formulations)
-    if re.search(r'\b(?:cola|kola|soda|birch beer|energy drink)\b', title_text):
-        labels = set(re.findall(r'\b(?:regular|original|light|lite|diet)\b', title_text))
+    if _SOFT_DRINK_RE.search(title_text):
+        labels = set(_RECIPE_VARIANT_RE.findall(title_text))
         if labels:
             facts['recipe_variant'] = sorted('light' if v == 'lite' else 'original' if v == 'regular' else v for v in labels)
-    if re.search(r'\b(?:turnip|ginger ale)\b', title_text):
-        spice = 'not_as_hot' if 'not as hot' in title_text else 'spicy' if re.search(r'\b(?:spicy|hot)\b', title_text) else 'plain' if re.search(r'\b(?:plain|simple)\b', title_text) else ''
+    if _SPICE_PRODUCT_RE.search(title_text):
+        spice = 'not_as_hot' if 'not as hot' in title_text else 'spicy' if _SPICY_RE.search(title_text) else 'plain' if _PLAIN_RE.search(title_text) else ''
         if spice:
             facts['spice_variant'] = [spice]
     if claims['organic']:
         facts['organic'] = sorted(claims['organic'])
     declared_text = normalized_attribute_text(selected_title, selected_attributes)
-    if re.search(r'\b(?:zero caffeine|no caffeine|caffeine free|decaf|decaffeinated)\b', declared_text):
+    if _CAFFEINE_FREE_RE.search(declared_text):
         facts['caffeine_status'] = ['caffeine_free']
     # Only explicit concentration declarations, never category membership.
-    content = re.search(r'(?:^|;)\s*juice content\s*:\s*(\d+)(?:\s*[-–]\s*(\d+))?\s*%', selected_attributes, re.I)
+    content = _JUICE_CONTENT_RE.search(selected_attributes)
     if content:
         lo, hi = int(content.group(1)), int(content.group(2) or content.group(1))
         if 0 <= lo <= hi <= 100:
             facts['juice_concentration'] = ['pure' if lo == hi == 100 else 'diluted' if hi < 100 else 'unspecified']
-    description_flavors = set()
-    for phrase in re.findall(r"(?:[a-z]+\s+){0,2}[a-z]+\s+flavou?red|(?:flavou?r|taste)\s+of\s+(?:[a-z]+\s*){1,3}", normalized_attribute_text(description)):
+    # The lexicon import stays lazy (and out of the phrase loop): it is only
+    # needed when the description actually carries a flavor phrase.
+    phrases = _DESCRIPTION_FLAVOR_RE.findall(normalized_attribute_text(description))
+    if phrases:
         from core.critical_attributes import DECLARED_FLAVOR_LEXICON, FLAVOR_ALIASES
-        for flavor in DECLARED_FLAVOR_LEXICON:
-            if re.search(r'\b' + re.escape(flavor) + r'\b', phrase):
-                description_flavors.add(FLAVOR_ALIASES.get(flavor, flavor))
+        description_flavors = {
+            FLAVOR_ALIASES.get(flavor, flavor)
+            for phrase in phrases
+            for flavor in DECLARED_FLAVOR_LEXICON
+            if _flavor_probe(flavor).search(phrase)
+        }
+    else:
+        description_flavors = set()
     if description_flavors - _GENERIC_FLAVORS:
         facts['description_flavor'] = sorted(description_flavors - _GENERIC_FLAVORS)
     flavors = claims['flavor'] - _GENERIC_FLAVORS
@@ -80,36 +142,32 @@ def listing_identity(title: str, attributes: str = '', description: str = '') ->
         facts['pulp'] = sorted(pulp)
     # Compare strength only when the product title identifies water.
     # Generic "strong" in coffee/health claims does not assert carbonation.
-    if re.search(r'\bwater\b', title_text):
+    if _WATER_RE.search(title_text):
         strengths = set()
-        if re.search(r'\b(?:slight|lightly|light)\b', title_text):
+        if _LIGHT_STRENGTH_RE.search(title_text):
             strengths.add('light')
-        if re.search(r'\bmedium\b', title_text):
+        if _MEDIUM_STRENGTH_RE.search(title_text):
             strengths.add('medium')
-        if re.search(r'\b(?:strong|strongly)\b', title_text):
+        if _STRONG_STRENGTH_RE.search(title_text):
             strengths.add('strong')
         if strengths:
             facts['carbonation_strength'] = sorted(strengths)
     families = set()
-    if re.search(r'\b(?:cola|kola)\b', title_text):
+    if _COLA_FAMILY_RE.search(title_text):
         families.add('cola')
-    if re.search(r'\b(?:mate|yerba)\b', title_text):
+    if _MATE_FAMILY_RE.search(title_text):
         families.add('mate')
     if families:
         facts['drink_family'] = sorted(families)
-    for family, pattern in (
-        ('cream_soda', r'\bcream soda\b'), ('dr_bob', r'\bdr[.]? bob\b'),
-        ('lemon_tea', r'\blemon tea\b'), ('chai_concentrate', r'\bchai\b.*\bconcentrate\b'),
-        ('gingerbread_syrup', r'\bgingerbread\b.*\bsyrup\b'),
-    ):
-        if re.search(pattern, title_text):
+    for family, pattern in _NAMED_FAMILIES:
+        if pattern.search(title_text):
             facts.setdefault('drink_family', []).append(family)
     carbonation = claims['carbonation'] | extract_description_claims(description)['carbonation']
     if len(carbonation) > 1:
         facts['_source_conflicts'] = ['carbonation']
     # A named herbal variant is the word immediately after its product line,
     # not a bag of arbitrary residual title words.
-    variants = set(re.findall(r'\barishta\s+([a-z]+)\b', title_text))
+    variants = set(_HERBAL_VARIANT_RE.findall(title_text))
     if variants:
         facts['herbal_variant'] = sorted(variants)
     return facts

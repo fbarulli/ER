@@ -58,11 +58,28 @@ _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _FIELD_GROUP_RE = re.compile(r"\[FIELD_([A-Z_]+)\]")
 
 
+# PERF r19: validated-spec cache, keyed on the SECTION CONTENT.
+#
+# `build_sku_text` -> `_resolve(None)` -> here once per row, and the pydantic
+# validation was measured at 2.8 us of a 5.0 us call.  Memoizing on the section
+# content (not on the module or on a bare "already computed" flag) keeps the
+# contract `tests/test_config_section.py` pins — a changed config source is
+# still observed, because a changed section is a different key.  A json.dumps
+# key was tried first and measured SLOWER than not caching (4.95 -> 6.32 us);
+# the section is a flat dict of scalars, so `tuple(items())` is the cheap key
+# (5.03 -> 2.69 us, measured back-to-back).
+_MODEL_INPUT_SPEC_CACHE: dict = {}
+
+
 def model_input_spec() -> TrainingSpec.ModelInputSpec:
     """The validated model-input composition settings (config SSOT)."""
-    return TrainingSpec.ModelInputSpec.model_validate(
-        config_section('training', 'model_input', loader=load_config)
-    )
+    section = config_section('training', 'model_input', loader=load_config)
+    key = tuple(section.items())
+    spec = _MODEL_INPUT_SPEC_CACHE.get(key)
+    if spec is None:
+        spec = _MODEL_INPUT_SPEC_CACHE[key] = (
+            TrainingSpec.ModelInputSpec.model_validate(section))
+    return spec
 
 
 def model_input_composition() -> TrainingSpec.ModelInputComposition:
@@ -131,9 +148,16 @@ def _structured_text_enabled() -> bool:
 
     Owned here so the three call sites stop recomputing the same
     ``enabled and append_to_text`` pair from their own config reads.
+
+    PERF r19: reads the two scalar keys instead of deep-copying the whole
+    `structured_features` section to look at two booleans.  Measured
+    back-to-back: 2.96 -> 0.85 us per call, once per row in `_cleaned_sku_text`.
+    Same values, same live config read — only the copy is gone.
     """
-    cfg = config_section('training', 'structured_features', loader=load_config)
-    return bool(cfg["enabled"]) and bool(cfg["append_to_text"])
+    return (bool(config_section(
+                'training', 'structured_features', 'enabled', loader=load_config))
+            and bool(config_section(
+                'training', 'structured_features', 'append_to_text', loader=load_config)))
 
 
 @lru_cache(maxsize=65536)
@@ -237,17 +261,23 @@ def _reduce_redundancy(text: str, *, spec: TrainingSpec.ModelInputSpec) -> str:
         and spec.emit_singleton_pack_token
     ):
         return text  # nothing selected: leave the string byte-identical
+    drop_markers = not spec.emit_field_markers
     tokens = text.split()
-    if not spec.emit_field_markers:
+    if drop_markers:
         tokens = [t for t in tokens if not t.startswith("[FIELD_")]
     if not spec.keep_redundant_attribute_words:
         structured = {t for t in tokens if t.startswith(_STRUCTURED_PREFIXES)}
         twins = {done.split("_", 1)[1] for done in structured}
         tokens = [t for t in tokens if not (t in twins and t not in structured)]
     if not spec.emit_singleton_pack_token:
-        tokens = [t for t in tokens if t != "pack_qty_1"]
+        if "pack_qty_1" in text:  # a token equal to it implies the substring
+            tokens = [t for t in tokens if t != "pack_qty_1"]
         # A group marker must not survive with no value left in its group.
-        if not any(t.startswith("pack_qty_") for t in tokens):
+        # PERF r19: when the marker sweep above ran, every "[FIELD_*" token is
+        # already gone, so this cleanup can never remove anything — the whole
+        # scan that guarded it (`any(t.startswith("pack_qty_") for t in ...)`)
+        # is provably dead there and is skipped.
+        if not drop_markers and not any(t.startswith("pack_qty_") for t in tokens):
             tokens = [t for t in tokens if t != "[FIELD_PACK_SIZE]"]
     return " ".join(tokens)
 

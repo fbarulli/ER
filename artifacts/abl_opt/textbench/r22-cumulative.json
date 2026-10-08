@@ -1,0 +1,141 @@
+{
+  "a": "/tmp/opc/reg2-A-pristine/src",
+  "b": "/tmp/opc/ER-reg2-A/src",
+  "best_a": {
+    "attribute_fields": 0.02079,
+    "casefold": 0.020295,
+    "critical_claims": 0.160458,
+    "identity": 0.287838,
+    "model_input": 1.530436,
+    "norm_attr_keys": 0.068851,
+    "normalize_text": 0.015598,
+    "pack_counts": 0.009732,
+    "selected_inputs": 0.001505,
+    "sku_info": 1.447724,
+    "sku_text": 0.030396,
+    "volume_adapter": 0.06727,
+    "volume_evidence": 0.053009,
+    "volume_match": 0.053377
+  },
+  "best_b": {
+    "attribute_fields": 0.002645,
+    "casefold": 0.012828,
+    "critical_claims": 0.092457,
+    "identity": 0.177223,
+    "model_input": 1.080161,
+    "norm_attr_keys": 0.002625,
+    "normalize_text": 0.013211,
+    "pack_counts": 0.009602,
+    "selected_inputs": 0.001461,
+    "sku_info": 1.011253,
+    "sku_text": 0.025461,
+    "volume_adapter": 0.049202,
+    "volume_evidence": 0.042217,
+    "volume_match": 0.042561
+  },
+  "digests_a": [
+    "e554a292ac4c291f75c008dcccf0f9291d876097090926b81a8cd94d009aceba"
+  ],
+  "digests_b": [
+    "e554a292ac4c291f75c008dcccf0f9291d876097090926b81a8cd94d009aceba"
+  ],
+  "loadavg_per_run": [
+    {
+      "after": [
+        1.66,
+        4.08,
+        5.71
+      ],
+      "before": [
+        1.56,
+        4.18,
+        5.77
+      ],
+      "round": 0,
+      "tree": "a"
+    },
+    {
+      "after": [
+        1.71,
+        4.01,
+        5.67
+      ],
+      "before": [
+        1.66,
+        4.08,
+        5.71
+      ],
+      "round": 0,
+      "tree": "b"
+    },
+    {
+      "after": [
+        1.77,
+        3.91,
+        5.61
+      ],
+      "before": [
+        1.71,
+        4.01,
+        5.67
+      ],
+      "round": 1,
+      "tree": "a"
+    },
+    {
+      "after": [
+        1.89,
+        3.86,
+        5.58
+      ],
+      "before": [
+        1.77,
+        3.91,
+        5.61
+      ],
+      "round": 1,
+      "tree": "b"
+    },
+    {
+      "after": [
+        1.91,
+        3.77,
+        5.52
+      ],
+      "before": [
+        1.89,
+        3.86,
+        5.58
+      ],
+      "round": 2,
+      "tree": "a"
+    },
+    {
+      "after": [
+        1.93,
+        3.71,
+        5.48
+      ],
+      "before": [
+        1.91,
+        3.77,
+        5.52
+      ],
+      "round": 2,
+      "tree": "b"
+    }
+  ],
+  "reps": 2,
+  "rounds": 3,
+  "tag": "r22-cumulative",
+  "totals_a": [
+    3.769188,
+    3.778238,
+    3.771318
+  ],
+  "totals_b": [
+    2.570416,
+    2.56475,
+    2.566862
+  ]
+}
