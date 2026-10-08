@@ -71,7 +71,7 @@ from core.common import (
     training_cfg,
     trace_artifact,
 )
-from core.schemas import check_labeled_pairs_frame
+from core.schemas import check_labeled_pairs_frame, hf_scheduler_type
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
 from core.timing import emit_timing
@@ -3198,61 +3198,6 @@ class DvcCheckpointCallback(TrainerCallback):
         return control
 
 
-class _WeightEmaCallback(TrainerCallback):
-    """TASK B item 1: epoch-wise weight EMA, persisted beside each checkpoint.
-
-    The EMA arithmetic lives in the tested ``training.advanced.EmaTracker``.
-    The callback folds the model's state dict in at each epoch boundary and
-    writes ``ema_state.pt`` into every checkpoint directory and the run output
-    dir, so the EMA model is checkpointed and resumable. (Best-model SELECTION
-    on the EMA dev AP is left to the caller; the online metric stays the
-    selection signal unless EMA selection is explicitly wired.)
-    """
-
-    def __init__(self, decay: float, warmup_updates: int = 0):
-        self._decay = float(decay)
-        self._warmup_updates = int(warmup_updates)
-        self._tracker = None
-
-    def _unwrap(self, model):
-        return getattr(model, "module", model)
-
-    def on_epoch_end(self, args, state, control, model=None, **kwargs):
-        if model is None or not state.is_world_process_zero:
-            return control
-        from training.advanced import EmaTracker
-
-        if self._tracker is None:
-            self._tracker = EmaTracker(
-                decay=self._decay, warmup_updates=self._warmup_updates
-            )
-        self._tracker.update(dict(self._unwrap(model).state_dict()))
-        return control
-
-    def _write(self, destination: Path) -> None:
-        if self._tracker is None:
-            return
-        import torch
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self._tracker.state_dict(), destination)
-
-    def on_save(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self._write(
-                Path(args.output_dir) / f"checkpoint-{state.global_step}" / "ema_state.pt"
-            )
-        return control
-
-    def on_train_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self._write(Path(args.output_dir) / "ema_state.pt")
-        return control
-
-    def state_dict(self):
-        return None if self._tracker is None else self._tracker.state_dict()
-
-
 class FineTunedAnnRefreshCallback(TrainerCallback):
     """Refresh ANN negatives from the live fine-tuned model after saves.
 
@@ -6041,9 +5986,18 @@ def train_one_config(
                 controlled_sampler = FrozenBatchSampler(
                     fixed_sampler["epochs"], expected_rows=len(train_ds), batch_size=batch_size
                 )
-                n_steps_per_epoch = max(1, len(controlled_sampler))
-                warmup_steps = int(sum(len(batches) for batches in fixed_sampler["epochs"][:cfg["epochs"]]) * cfg["warmup_ratio"])
-                eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
+                n_steps_per_epoch = max(1, len(controlled_sampler))  # micro-batches
+                # LOW audit fix: under gradient accumulation HF's warmup/eval
+                # cadence counts OPTIMIZER steps, not micro-batches; divide the
+                # batch-count-derived quantities by the accumulation factor.
+                _accum = max(1, int(training_cfg().advanced.gradient_accumulation_steps))
+                optimizer_steps_per_epoch = max(1, -(-n_steps_per_epoch // _accum))
+                warmup_steps = int(
+                    sum(len(batches) for batches in fixed_sampler["epochs"][: cfg["epochs"]])
+                    / _accum
+                    * cfg["warmup_ratio"]
+                )
+                eval_steps = max(1, optimizer_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
 
                 # dev evaluator: pos pairs vs hard negatives, binary AUC-style
                 from sentence_transformers.evaluation import BinaryClassificationEvaluator
@@ -6261,7 +6215,10 @@ def train_one_config(
                     learning_rate=cfg["lr"],
                     warmup_steps=warmup_steps,
                     weight_decay=cfg["weight_decay"],
-                    lr_scheduler_type=cfg["lr_scheduler"],
+                    # ONE menu: translate the canonical name to the HF scheduler
+                    # string (plateau -> reduce_lr_on_plateau). Passing the raw
+                    # canonical name raised for plateau/one_cycle (audit HIGH 2).
+                    lr_scheduler_type=hf_scheduler_type(cfg["lr_scheduler"]),
                     max_grad_norm=cfg["max_grad_norm"],
                     # TASK B item 7: micro-batch accumulation (SSOT, default 1).
                     gradient_accumulation_steps=int(
@@ -6402,15 +6359,6 @@ def train_one_config(
                         early_stopping_threshold=cfg["es_threshold"],
                     ),
                 ]
-                # TASK B item 1: weight EMA (default OFF).
-                _ema_cfg = training_cfg().advanced.ema
-                if _ema_cfg.enabled:
-                    callbacks.append(
-                        _WeightEmaCallback(
-                            decay=float(_ema_cfg.decay),
-                            warmup_updates=int(_ema_cfg.warmup_updates),
-                        )
-                    )
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
                 # the collector never writes the trace itself (train_one_config
@@ -6720,7 +6668,7 @@ def train_one_config(
                 hist=hist,
                 trainer_state=trainer.state,
                 cfg=cfg,
-                planned_steps=n_steps_per_epoch * cfg["epochs"],
+                planned_steps=optimizer_steps_per_epoch * cfg["epochs"],
                 best_metric_key=getattr(args_hf, "metric_for_best_model", None),
                 guardrail=calibration_config["collapse_guardrail"],
                 collapse_records=_fold_collapse_records,
@@ -6938,7 +6886,7 @@ def train_one_config(
                 # train time; same formulas as the main path's latency
                 # block, minus the encode terms)
                 _steps_run = trainer.state.global_step
-                _steps_full = n_steps_per_epoch * cfg["epochs"]
+                _steps_full = optimizer_steps_per_epoch * cfg["epochs"]
                 rows.append(
                     {
                         "fold": fold_i,
@@ -7141,8 +7089,9 @@ def train_one_config(
                 steps_run = trainer.state.global_step
                 s_per_step = train_s / steps_run if steps_run else float("nan")
                 texts_per_s = len(eval_rows) / encode_s if encode_s else float("nan")
-                # steps saved by early stopping (epochs requested vs run)
-                steps_full = n_steps_per_epoch * cfg["epochs"]
+                # steps saved by early stopping (epochs requested vs run);
+                # optimizer steps, so accumulation-aware.
+                steps_full = optimizer_steps_per_epoch * cfg["epochs"]
                 es_saved_pct = (
                     100 * (1 - steps_run / steps_full) if steps_full else float("nan")
                 )

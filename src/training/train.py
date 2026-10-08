@@ -2158,6 +2158,10 @@ class _TrainerDriver:
         mask_audit = self.mask_audit
         hard_negative_mask_audit = self.hard_negative_mask_audit
         ann_mining_enabled = self.ann_mining_enabled
+        # LOW audit fix: the callback's REAL gate is ``ann.refresh_enabled``
+        # (it also re-checks it in on_save); pass that, not the broader
+        # ``ann.enabled``, so the two lanes agree with train_prepared.py.
+        ann_refresh_enabled = bool(self.ann_cfg["refresh_enabled"])
         attribute_conflict_enabled = self.attribute_conflict_enabled
         run_tag = self.run_tag
         mask_cfg = self.mask_cfg
@@ -2278,7 +2282,7 @@ class _TrainerDriver:
                 dynamic_mask_hi=hard_negative_mask_hi,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
-                ann_refresh_enabled=ann_mining_enabled,
+                ann_refresh_enabled=ann_refresh_enabled,
                 attribute_conflict_refresh_enabled=attribute_conflict_enabled,
                 train_frac=args.train_frac if args.train_frac < 1.0 else None,
                 run_tag=run_tag,

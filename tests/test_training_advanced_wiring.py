@@ -1,8 +1,8 @@
-"""TASK B config wiring: gates default OFF and new schema keys validate.
+"""TASK B config wiring: gates default OFF, dials map to real consumers.
 
 These pin the SSOT contract — the shipped config must NOT silently turn any
-TASK B feature on (TASK A is the only explicit turn-on), and the new schema
-keys must reject nonsense at load.
+TASK B feature on, no unread dial may ship, and the new schema keys must
+reject nonsense at load.
 """
 
 from __future__ import annotations
@@ -11,25 +11,29 @@ import pytest
 from pydantic import ValidationError
 
 from core.common import training_cfg
-from core.schemas import AdvancedSpec, HpoSpaceSpec, TrainingSpec
+from core.schemas import AdvancedSpec, HpoSpaceSpec, LR_SCHEDULERS, TrainingSpec
 
 
 def test_all_advanced_features_default_off():
     advanced = training_cfg().advanced
-    assert advanced.ema.enabled is False
     assert advanced.calibration.enabled is False
-    assert advanced.adversarial.enabled is False
-    assert advanced.swa.enabled is False
-    assert advanced.curriculum.enabled is False
     assert advanced.accel.tf32 is False
     assert advanced.accel.compile is False
     assert advanced.telemetry.nvml is False
-    assert advanced.focal.enabled is False
-    assert advanced.rerank.enabled is False
-    assert advanced.distillation.enabled is False
-    assert advanced.embedding_ensemble.enabled is False
+    assert advanced.graph.ema.enabled is False
+    assert advanced.graph.calibration.enabled is False
     assert advanced.graph.focal.enabled is False
+    assert advanced.graph.swa.enabled is False
     assert advanced.graph.arch.two_hop is False
+
+
+def test_no_dead_dials_ship():
+    """Every advanced.* field must have a live consumer; the unread ones are gone."""
+    fields = set(AdvancedSpec.model_fields)
+    assert fields == {
+        "calibration", "accel", "telemetry",
+        "gradient_accumulation_steps", "graph",
+    }
 
 
 def test_gradient_accumulation_defaults_to_one():
@@ -53,30 +57,33 @@ def test_calibration_temperature_bounds_are_validated():
         )
 
 
+def _space(**overrides):
+    base = {
+        "epochs": (1, 2), "lr": (1e-5, 1e-4), "warmup_ratio": (0.0, 0.1),
+        "weight_decay": (0.0, 0.1), "negative_mask_frac": (0.0, 0.5),
+        "uniformity_weight": (0.0, 0.05), "lr_scheduler": None,
+    }
+    base.update(overrides)
+    return HpoSpaceSpec.model_validate(base)
+
+
 def test_hpo_scheduler_choices_are_validated():
-    ok = HpoSpaceSpec.model_validate(
-        {"lr_scheduler": ["linear", "cosine"], "epochs": (1, 2), "lr": (1e-5, 1e-4),
-         "warmup_ratio": (0.0, 0.1), "weight_decay": (0.0, 0.1),
-         "negative_mask_frac": (0.0, 0.5), "uniformity_weight": (0.0, 0.05)}
-    )
-    assert ok.lr_scheduler == ["linear", "cosine"]
+    assert _space(lr_scheduler=["linear", "plateau"]).lr_scheduler == ["linear", "plateau"]
     with pytest.raises(ValidationError):
-        HpoSpaceSpec.model_validate(
-            {"lr_scheduler": ["warp-speed"], "epochs": (1, 2), "lr": (1e-5, 1e-4),
-             "warmup_ratio": (0.0, 0.1), "weight_decay": (0.0, 0.1),
-             "negative_mask_frac": (0.0, 0.5), "uniformity_weight": (0.0, 0.05)}
-        )
+        _space(lr_scheduler=["warp-speed"])
+    with pytest.raises(ValidationError):
+        _space(lr_scheduler=[])
 
 
-def test_lr_scheduler_enum_rejects_unknown_value():
+def test_lr_scheduler_enum_is_the_single_hf_menu():
+    # ONE menu: LrScheduler Literal -> LR_SCHEDULERS, and no one_cycle (HF's
+    # Trainer cannot schedule it through lr_scheduler_type).
+    assert set(LR_SCHEDULERS) == {"linear", "cosine", "constant", "plateau"}
     field = TrainingSpec.model_fields["lr_scheduler"]
-    literal_values = set(getattr(field.annotation, "__args__", ()))
-    assert literal_values == {"linear", "cosine", "one_cycle", "plateau", "constant"}
+    assert set(field.annotation.__args__) == set(LR_SCHEDULERS)
 
 
 def test_hpo_space_dict_excludes_the_scheduler_key():
-    # HPO_SPACE must stay a pure lo/hi mapping; the categorical scheduler is
-    # carried separately (HPO_SCHEDULERS) so the TPE layout is unchanged.
     import training.training as training_module
 
     assert "lr_scheduler" not in training_module.HPO_SPACE

@@ -1,9 +1,8 @@
-"""Pure-logic tests for TASK B training additions (src/training/advanced.py).
+"""Pure-logic tests for the surviving TASK B helpers (src/training/advanced.py).
 
-No GPU, no training run: every helper is exercised directly. The point is to
-pin the arithmetic (EMA, temperature/ECE/Brier, focal, scheduler, SWA,
-curriculum, telemetry parsing, FGM, ensembling, distillation) before the loop
-wiring, so a regression is caught here and not only on a GPU.
+No GPU, no training run: every helper is exercised directly. The pruned API
+contains ONLY helpers with live consumers (EMA, calibration, focal, SWA
+averaging, scheduler menu/translation, GPU telemetry parsing).
 """
 
 from __future__ import annotations
@@ -63,7 +62,6 @@ def test_fit_temperature_recovers_scale_on_synthetic_logits():
     logits = rng.normal(size=4000) * true_temp
     labels = (rng.uniform(size=4000) < 1.0 / (1.0 + np.exp(-logits / true_temp))).astype(int)
     temperature = adv.fit_temperature(logits, labels)
-    # the fit should not be wildly off: it shrinks the over-confident logits
     assert temperature > 1.0
     assert temperature < 10.0
 
@@ -77,16 +75,13 @@ def test_expected_calibration_error_exact_and_zero_when_perfect():
     probs = np.array([0.0, 0.0, 1.0, 1.0])
     labels = np.array([0, 0, 1, 1])
     assert adv.expected_calibration_error(probs, labels, n_bins=5) == pytest.approx(0.0)
-    # all mass in the top bin, half wrong -> ECE 0.5
     probs = np.full(4, 0.95)
     labels = np.array([1, 1, 0, 0])
     assert adv.expected_calibration_error(probs, labels, n_bins=10) == pytest.approx(0.45)
 
 
 def test_brier_score_exact():
-    probs = np.array([1.0, 0.0])
-    labels = np.array([1, 0])
-    assert adv.brier_score(probs, labels) == 0.0
+    assert adv.brier_score(np.array([1.0, 0.0]), np.array([1, 0])) == 0.0
     assert adv.brier_score(np.array([0.5, 0.5]), np.array([1, 0])) == pytest.approx(0.25)
 
 
@@ -97,7 +92,6 @@ def test_reliability_diagram_payload_shape():
     assert diagram["n"] == 4
     assert len(diagram["bins"]) == 4
     assert set(diagram) >= {"ece", "brier", "temperature", "bins"}
-    assert all(b["count"] >= 0 for b in diagram["bins"])
 
 
 def test_fit_temperature_rejects_empty_and_mismatched():
@@ -116,7 +110,6 @@ def test_calibration_report_fits_on_dev_only():
     report = adv.calibration_report(dev, dev_y, test, test_y, n_bins=5)
     assert set(report) >= {"temperature", "dev_ece", "test_ece", "test_brier", "reliability"}
     assert report["reliability"]["temperature"] == report["temperature"]
-    # fitting is a pure function of dev: changing test scores cannot change T
     report2 = adv.calibration_report(dev, dev_y, test * 10.0, test_y, n_bins=5)
     assert report2["temperature"] == pytest.approx(report["temperature"])
 
@@ -138,7 +131,7 @@ def test_focal_gamma_zero_equals_bce():
 
 
 def test_focal_downweights_easy_examples():
-    logits = torch.tensor([5.0, -5.0])  # very easy, correctly classified
+    logits = torch.tensor([5.0, -5.0])
     targets = torch.tensor([1.0, 0.0])
     bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
     focal = adv.sigmoid_focal_bce_with_logits(logits, targets, gamma=2.0)
@@ -155,50 +148,23 @@ def test_focal_pos_weight_raises_positive_contribution():
     assert weighted > unweighted
 
 
-# ── scheduler factory ───────────────────────────────────────────────────────
+# ── scheduler menu (one registry, HF translation) ───────────────────────────
 
-def test_validate_lr_scheduler_menu():
+def test_scheduler_menu_is_hf_translatable():
     for name in adv.LR_SCHEDULERS:
         assert adv.validate_lr_scheduler(name) == name
+        assert adv.hf_scheduler_type(name) in {
+            "linear", "cosine", "constant", "reduce_lr_on_plateau",
+        }
+    assert adv.hf_scheduler_type("plateau") == "reduce_lr_on_plateau"
+    assert "one_cycle" not in adv.LR_SCHEDULERS
+
+
+def test_unknown_scheduler_rejected_by_both_apis():
     with pytest.raises(adv.AdvancedConfigError):
         adv.validate_lr_scheduler("exponential")
-
-
-def test_linear_scheduler_decays_to_min_ratio():
-    fn = adv.lr_lambda("linear", num_training_steps=10, warmup_steps=2, min_lr_ratio=0.1)
-    assert fn(0) < fn(2)  # warmup
-    assert fn(10) == pytest.approx(0.1)
-    slopes = [fn(i) for i in range(2, 11)]
-    assert all(a >= b for a, b in zip(slopes, slopes[1:]))
-
-
-def test_cosine_scheduler_endpoints():
-    fn = adv.lr_lambda("cosine", num_training_steps=10, warmup_steps=0)
-    assert fn(0) == pytest.approx(1.0)
-    assert fn(10) == pytest.approx(0.0, abs=1e-9)
-
-
-def test_constant_scheduler_is_flat_after_warmup():
-    fn = adv.lr_lambda("constant", num_training_steps=10, warmup_steps=3)
-    assert fn(3) == 1.0
-    assert fn(9) == 1.0
-
-
-def test_plateau_has_no_step_lambda_but_is_valid():
-    assert adv.is_plateau_scheduler("plateau")
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.lr_lambda("plateau", num_training_steps=10)
-
-
-def test_build_lr_scheduler_wires_lambdalr_and_none_for_plateau():
-    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
-    scheduler = adv.build_lr_scheduler(
-        optimizer, name="cosine", num_training_steps=10
-    )
-    assert isinstance(scheduler, torch.optim.lr_scheduler.LambdaLR)
-    assert adv.build_lr_scheduler(
-        optimizer, name="plateau", num_training_steps=10
-    ) is None
+    with pytest.raises(ValueError):
+        adv.hf_scheduler_type("warp-speed")
 
 
 # ── SWA averaging ───────────────────────────────────────────────────────────
@@ -212,9 +178,9 @@ def test_average_state_dicts_equal_weights():
 
 
 def test_average_state_dicts_weighted():
-    a = {"w": np.array([0.0])}
-    b = {"w": np.array([10.0])}
-    avg = adv.average_state_dicts([a, b], weights=[3.0, 1.0])
+    avg = adv.average_state_dicts(
+        [{"w": np.array([0.0])}, {"w": np.array([10.0])}], weights=[3.0, 1.0]
+    )
     assert avg["w"][0] == pytest.approx(2.5)
 
 
@@ -226,125 +192,33 @@ def test_average_state_dicts_rejects_mismatch_and_empty():
 
 
 def test_average_state_dicts_torch_tensors():
-    a = {"w": torch.tensor([1.0, 3.0])}
-    b = {"w": torch.tensor([3.0, 5.0])}
-    avg = adv.average_state_dicts([a, b])
+    avg = adv.average_state_dicts(
+        [{"w": torch.tensor([1.0, 3.0])}, {"w": torch.tensor([3.0, 5.0])}]
+    )
     assert torch.allclose(avg["w"], torch.tensor([2.0, 4.0]))
 
 
-# ── curriculum ──────────────────────────────────────────────────────────────
+# ── GPU telemetry parsing (shared core query) ───────────────────────────────
 
-def test_curriculum_easy_to_hard_is_monotone_and_full_at_end():
-    difficulty = ["hard", "easy", "medium", "hard", "easy"]
-    plan = adv.curriculum_plan(difficulty, epochs=4, warmup_fraction=0.4)
-    assert plan[-1] == [0, 1, 2, 3, 4]
-    assert len(plan[0]) <= len(plan[-1])
-    # first epoch exposes the two easiest items (indices 1 and 4)
-    assert set(plan[0]) == {1, 4}
-
-
-def test_curriculum_hard_to_easy_starts_hard():
-    difficulty = ["hard", "easy", "medium"]
-    plan = adv.curriculum_plan(difficulty, epochs=1, schedule="hard_to_easy",
-                               warmup_fraction=0.34)
-    assert len(plan) == 1
-
-
-def test_curriculum_is_deterministic_and_empty_safe():
-    difficulty = [3, 1, 2]
-    assert adv.curriculum_plan(difficulty, 3) == adv.curriculum_plan(difficulty, 3)
-    assert adv.curriculum_plan([], 2) == [[], []]
-
-
-def test_curriculum_rejects_bad_args():
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.curriculum_plan([1], 1, schedule="zigzag")
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.curriculum_plan([1], 0)
-
-
-# ── telemetry parsing ───────────────────────────────────────────────────────
-
-def test_parse_gpu_query_maps_fields():
-    row = "42, 70.5, 1410, 5001, 65, 1200"
+def test_parse_gpu_query_maps_shared_fields_by_position():
+    row = "2026/01/01 00:00:00, 0, 42, 30, 1200, 16000, 70.5, 65, 1410, 5001"
     parsed = adv.parse_gpu_query(row)
+    assert parsed["gpu_index"] == 0.0
     assert parsed["gpu_util_pct"] == 42.0
+    assert parsed["gpu_memory_used_mb"] == 1200.0
     assert parsed["power_w"] == pytest.approx(70.5)
     assert parsed["sm_clock_mhz"] == 1410.0
-    assert parsed["gpu_memory_used_mb"] == 1200.0
+    assert parsed["mem_clock_mhz"] == 5001.0
+    assert "timestamp" not in parsed  # non-numeric column skipped
 
 
 def test_parse_gpu_query_drops_na_and_empty():
     assert adv.parse_gpu_query("") == {}
-    parsed = adv.parse_gpu_query("52, N/A, 900")
-    assert "power_w" not in parsed
+    parsed = adv.parse_gpu_query("2026/01/01, 0, 52, N/A, N/A, N/A, N/A, 60, 900, 800")
     assert parsed["gpu_util_pct"] == 52.0
     assert parsed["sm_clock_mhz"] == 900.0
+    assert "power_w" not in parsed
 
 
-def test_collect_nvml_telemetry_never_raises():
+def test_collect_telemetry_never_raises():
     assert isinstance(adv.collect_nvml_telemetry(), dict)
-
-
-# ── FGM ─────────────────────────────────────────────────────────────────────
-
-def test_adversarial_perturbation_l2_has_unit_scaled_norm():
-    x = torch.zeros(2, 4)
-    grad = torch.ones(2, 4)
-    out = adv.adversarial_perturbation(x, grad, 0.5, norm="l2")
-    # FGM normalizes the whole gradient tensor to unit l2 norm, then scales
-    # the perturbation by epsilon.
-    assert out.norm(p=2) == pytest.approx(0.5, abs=1e-5)
-
-
-def test_adversarial_perturbation_linf_uses_sign():
-    x = torch.zeros(1, 3)
-    grad = torch.tensor([[-2.0, 3.0, 0.0]])
-    out = adv.adversarial_perturbation(x, grad, 0.1, norm="linf")
-    assert torch.allclose(out, torch.tensor([[-0.1, 0.1, 0.0]]))
-
-
-def test_adversarial_perturbation_rejects_bad_norm():
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.adversarial_perturbation(torch.zeros(1), torch.zeros(1), 0.1, norm="bogus")
-
-
-# ── accumulation / ensembling / distillation ────────────────────────────────
-
-def test_accumulates_now_boundaries():
-    assert adv.accumulates_now(0, 2) is False
-    assert adv.accumulates_now(1, 2) is True
-    assert adv.accumulates_now(0, 1) is True
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.accumulates_now(0, 0)
-
-
-def test_scale_accumulated_loss():
-    assert adv.scale_accumulated_loss(torch.tensor(4.0), 4) == pytest.approx(1.0)
-
-
-def test_average_embeddings_normalizes():
-    a = np.array([[3.0, 0.0]])
-    b = np.array([[0.0, 4.0]])
-    out = adv.average_embeddings([a, b], normalize=True)
-    assert out.shape == (1, 2)
-    assert np.linalg.norm(out[0]) == pytest.approx(1.0)
-    raw = adv.average_embeddings([a, b], normalize=False)
-    assert np.allclose(raw, [[1.5, 2.0]])
-
-
-def test_average_embeddings_shape_guard():
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.average_embeddings([np.zeros((2, 3)), np.zeros((2, 4))])
-
-
-def test_distillation_alpha_endpoints():
-    student = torch.tensor([0.0, 1.0])
-    teacher = torch.tensor([2.0, -2.0])
-    labels = torch.tensor([1.0, 0.0])
-    # alpha weights the SOFT (teacher) term: 0 -> hard only, 1 -> soft only.
-    hard_only = adv.distillation_loss(student, teacher, alpha=0.0, hard_labels=labels)
-    soft_only = adv.distillation_loss(student, teacher, alpha=1.0, hard_labels=labels)
-    expected_hard = torch.nn.functional.binary_cross_entropy_with_logits(student, labels)
-    assert hard_only.item() == pytest.approx(expected_hard.item())
-    assert soft_only.item() > 0.0

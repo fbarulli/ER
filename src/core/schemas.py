@@ -87,7 +87,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import numpy as np
 import pandas as pd
@@ -116,6 +116,29 @@ THRESHOLD_TIE_BREAK_CRITERIA = (
     "lowest_threshold",
 )
 GTIN_STATUSES = ("both_equal", "different", "one_missing", "both_missing")
+
+# ONE scheduler menu. The Literal is the single spelling; LR_SCHEDULERS is its
+# projection for validators/consumers, and HF_LR_SCHEDULER_TYPES is the
+# text-lane's HF `lr_scheduler_type` mapping. Dropped `one_cycle`: HF's Trainer
+# cannot schedule it via `lr_scheduler_type`, so blessing it would be a dial
+# that raises at runtime. `plateau` maps to HF's `reduce_lr_on_plateau`.
+LrScheduler = Literal["linear", "cosine", "constant", "plateau"]
+LR_SCHEDULERS: tuple[str, ...] = tuple(get_args(LrScheduler))
+HF_LR_SCHEDULER_TYPES: dict[str, str] = {
+    "linear": "linear",
+    "cosine": "cosine",
+    "constant": "constant",
+    "plateau": "reduce_lr_on_plateau",
+}
+
+
+def hf_scheduler_type(name: str) -> str:
+    """Map the canonical menu to the HF ``lr_scheduler_type`` string."""
+    if name not in LR_SCHEDULERS:
+        raise ValueError(
+            f"unknown lr_scheduler {name!r}; expected one of {LR_SCHEDULERS}"
+        )
+    return HF_LR_SCHEDULER_TYPES[name]
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIG CONTRACTS
@@ -1815,7 +1838,7 @@ class TrainingSpec(BaseModel):
     weight_decay: float = Field(ge=0.0)
     projection_dropout: float = Field(ge=0.0, lt=1.0)
     label_smoothing: float = Field(ge=0.0, lt=0.5)
-    lr_scheduler: Literal["linear", "cosine", "one_cycle", "plateau", "constant"]
+    lr_scheduler: LrScheduler
     max_grad_norm: float = Field(gt=0.0)
     es_patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
@@ -2258,12 +2281,11 @@ class HpoSpaceSpec(BaseModel):
     def _schedulers_declared(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return value
-        allowed = {"linear", "cosine", "one_cycle", "plateau", "constant"}
-        unknown = sorted(set(value) - allowed)
+        unknown = sorted(set(value) - set(LR_SCHEDULERS))
         if unknown or not value:
             raise ValueError(
                 f"hpo.tpe_space.lr_scheduler choices must be non-empty and in "
-                f"{sorted(allowed)}, got {value!r}"
+                f"{sorted(LR_SCHEDULERS)}, got {value!r}"
             )
         return value
 
@@ -3283,7 +3305,7 @@ class PreparationSpec(BaseModel):
 
 
 class EmaSpec(BaseModel):
-    """Weight-EMA knobs (advanced.ema) — default OFF."""
+    """Weight-EMA knobs (advanced.graph.ema) — default OFF."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -3316,34 +3338,14 @@ class CalibrationSpec(BaseModel):
         return self
 
 
-class AdversarialSpec(BaseModel):
-    """FGM adversarial perturbations on embeddings (advanced.adversarial)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    epsilon: float = Field(default=1.0e-3, ge=0.0)
-    norm: Literal["l2", "linf"] = "l2"
-
-
 class SwaSpec(BaseModel):
-    """SWA / top-k checkpoint averaging (advanced.swa)."""
+    """SWA / top-k checkpoint averaging (advanced.graph.swa)."""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     k: int = Field(default=3, ge=1)
     use_best_k: bool = False  # False = last-k, True = best-k by dev AP
-
-
-class CurriculumSpec(BaseModel):
-    """Pair-difficulty curriculum (advanced.curriculum); train-side only."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    schedule: Literal["easy_to_hard", "hard_to_easy"] = "easy_to_hard"
-    warmup_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
 
 
 class AccelSpec(BaseModel):
@@ -3365,7 +3367,7 @@ class TelemetrySpec(BaseModel):
 
 
 class FocalSpec(BaseModel):
-    """Class-weighted / focal BCE for the graph scorer (advanced.focal)."""
+    """Class-weighted / focal BCE for the graph scorer (advanced.graph.focal)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -3373,38 +3375,6 @@ class FocalSpec(BaseModel):
     gamma: float = Field(default=2.0, ge=0.0)
     pos_weight: float | None = Field(default=None, gt=0.0)
     alpha: float | None = Field(default=None, ge=0.0, le=1.0)
-
-
-class RerankAdvancedSpec(BaseModel):
-    """Cross-encoder rerank tuning knobs (advanced.rerank); default OFF."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    model: str | None = None
-    learning_rate: float = Field(default=2.0e-5, gt=0.0)
-    epochs: int = Field(default=3, ge=1)
-    batch_size: int = Field(default=16, ge=1)
-
-
-class DistillationSpec(BaseModel):
-    """Teacher->student distillation (advanced.distillation); default OFF."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    teacher_model: str | None = None
-    temperature: float = Field(default=2.0, gt=0.0)
-    alpha: float = Field(default=0.5, ge=0.0, le=1.0)
-
-
-class EmbeddingEnsembleSpec(BaseModel):
-    """Seed/fold embedding averaging at publish (advanced.embedding_ensemble)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    normalize: bool = True
 
 
 class GraphArchSpec(BaseModel):
@@ -3444,20 +3414,12 @@ class AdvancedSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ema: EmaSpec = Field(default_factory=EmaSpec)
+    # Text-lane dials (each has a live consumer in training.py).
     calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
-    adversarial: AdversarialSpec = Field(default_factory=AdversarialSpec)
-    swa: SwaSpec = Field(default_factory=SwaSpec)
-    curriculum: CurriculumSpec = Field(default_factory=CurriculumSpec)
     accel: AccelSpec = Field(default_factory=AccelSpec)
     telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
-    focal: FocalSpec = Field(default_factory=FocalSpec)
     gradient_accumulation_steps: int = Field(default=1, ge=1)
-    rerank: RerankAdvancedSpec = Field(default_factory=RerankAdvancedSpec)
-    distillation: DistillationSpec = Field(default_factory=DistillationSpec)
-    embedding_ensemble: EmbeddingEnsembleSpec = Field(
-        default_factory=EmbeddingEnsembleSpec
-    )
+    # GNN-lane dials (each has a live consumer in graph_tracks/train.py).
     graph: GraphAdvancedSpec = Field(default_factory=GraphAdvancedSpec)
 
 
@@ -4124,7 +4086,7 @@ class TrainConfig(BaseModel):
     random_easy_enabled: bool
     random_easy_ratio_to_hard: float = Field(ge=0.0)
     random_easy_candidate_pool_size: int = Field(ge=1)
-    lr_scheduler: Literal["linear", "cosine", "one_cycle", "plateau", "constant"]
+    lr_scheduler: LrScheduler
     max_grad_norm: float = Field(gt=0.0)
     patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)

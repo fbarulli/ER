@@ -43,12 +43,16 @@ masking:
     mask_extent: 0.15
   profile: baseline
   frac: 0.80          # fraction of positive anchors masked when enabled
-  mask_hard_negatives: true   # ON (TASK A): dynamic per-presentation masking of hard negatives
-  hard_negative_frac: 0.15    # conservative non-zero default: 15% of hard negatives get a
-                              # dynamic masked view (band hard_negative_mask_lo..hi). Kept
-                              # BELOW the TIER-3 sweep band (0.20-0.33) so the shipped
-                              # baseline stays the low end of the dynamic layer and the
-                              # sweep remains the evidence path for a higher value.
+  # ── OWNER RULING CHANGE (recorded 2026-10-08, TASK A) ─────────────────────
+  # The 2026-10-05 ruling zeroed the dynamic hard-negative layer pending
+  # evidence (see calibration_sweep, TIER 3). TASK A explicitly supersedes it:
+  # the dynamic layer is turned ON at a conservative, NON-ZERO frac below the
+  # TIER-3 sweep band, and the sweep remains the evidence path for a higher
+  # value. This comment IS the recorded ruling change; it is not silent.
+  mask_hard_negatives: true   # ON (TASK A 2026-10-08): dynamic per-presentation masking
+  hard_negative_frac: 0.15    # 15% of hard negatives get a dynamic masked view (band
+                              # hard_negative_mask_lo..hi); below the 0.20-0.33 sweep arm
+                              # so the shipped baseline is the low end of the layer.
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
@@ -1003,12 +1007,15 @@ training:
   # Monitoring records per-population (twin/masked/base) mean loss per epoch to
   # mnrl_subset_loss_by_epoch_fold{i}.csv. Observability only: without it no
   # P@R95 move can be attributed to a population, so every calibration call
-  # (TIER 3) is unanswerable. The warmup changes LOSS WEIGHTING and stays
-  # DISABLED — that is a calibration decision, not an observability one.
+  # (TIER 3) is unanswerable.
   mnrl_monitoring:
     enabled: true
+  # Twin warmup is an MNRL-only mechanism (it down-weights twin-population rows
+  # in _tracking_mnrl_loss). With the shipped objective now `contrastive` it
+  # would be INERT, so it stays DISABLED — enabling it would be a no-op dial.
+  # It remains selectable for `er-colab --loss mnrl` experiments.
   twin_loss_warmup:
-    enabled: true           # TASK A: ramp twin-population loss weight over the first epochs
+    enabled: false
     warmup_epochs: 2
     twin_weight: 0.25
   contrastive_margin: 0.1     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
@@ -1142,63 +1149,32 @@ rerank:
   min_delta_f1: 0.005
 
 # ── TASK B advanced training additions (config/training.yaml advanced:) ─────
-# ONE config-owned home for every TASK B knob. All switches default OFF so the
-# shipped baseline is unchanged until an experiment flips one. Validated by
-# AdvancedSpec in src/core/schemas.py; pure helpers live in
-# src/training/advanced.py. Leakage discipline: calibration fitting reads the
-# dev/calibration carve only; test stays report-only.
+# ONE config-owned home for every TASK B knob that HAS a live consumer. All
+# switches default OFF so the shipped baseline is unchanged until an experiment
+# flips one. Validated by AdvancedSpec in src/core/schemas.py; pure helpers
+# live in src/training/advanced.py. Leakage discipline: calibration fitting
+# reads the dev/calibration carve only; test stays report-only.
+#
+# Dial -> consumer:
+#   calibration / accel / telemetry / gradient_accumulation_steps -> text lane
+#   graph.{ema,calibration,focal,swa,arch,telemetry}              -> GNN lane
 advanced:
-  ema:                       # weight EMA for eval/checkpoint/best-model select
-    enabled: false
-    decay: 0.999
-    warmup_updates: 0
   calibration:               # post-hoc temperature scaling + ECE/Brier/reliability
     enabled: false
     temperature_scaling: false
     n_bins: 15
     min_temperature: 0.05
     max_temperature: 50.0
-  adversarial:               # FGM on embeddings before the loss (train-only)
-    enabled: false
-    epsilon: 1.0e-3
-    norm: "l2"
-  swa:                       # average last-k / best-k checkpoints post-train
-    enabled: false
-    k: 3
-    use_best_k: false
-  curriculum:                # epoch-wise easy->hard on measured pair difficulty
-    enabled: false
-    schedule: "easy_to_hard"
-    warmup_fraction: 0.0
   accel:                     # TF32 + text torch.compile
     tf32: false
     compile: false
     compile_mode: "default"
-  telemetry:                 # NVML utilization/power/SM clocks into telemetry
+  telemetry:                 # nvidia-smi util/power/clocks into telemetry
     nvml: false
-  focal:                     # class-weighted / focal BCE (GNN scorer)
-    enabled: false
-    gamma: 2.0
-    pos_weight: null
-    alpha: null
   # Micro-batch accumulation for the text lane; 1 keeps today's behavior.
   # NOTE: with the FrozenBatchSampler a step boundary is per optimizer step,
   # so accumulation must divide the per-epoch batch count evenly.
   gradient_accumulation_steps: 1
-  rerank:                    # cross-encoder stage-2 tuning
-    enabled: false
-    model: null
-    learning_rate: 2.0e-5
-    epochs: 3
-    batch_size: 16
-  distillation:              # larger teacher encoder -> student (train split only)
-    enabled: false
-    teacher_model: null
-    temperature: 2.0
-    alpha: 0.5
-  embedding_ensemble:        # average embeddings across folds/seeds at publish
-    enabled: false
-    normalize: true
   graph:                     # GNN-lane overrides (all default OFF)
     ema:
       enabled: false
@@ -1324,10 +1300,10 @@ mining:
   # Each miner has an independent switch and parameter set. Masking is
   # configured separately above.
   ann:
-    # TASK A: ANN mining enabled as the shipped default. The earlier
-    # "masking_only profiles must not turn it on implicitly" caution is
-    # superseded by the explicit owner turn-on; profiles can still override
-    # this per experiment (mining_profiles.*).
+    # OWNER RULING CHANGE (recorded 2026-10-08, TASK A): ANN mining is the
+    # shipped default. The earlier "masking_only profiles must not turn it on
+    # implicitly" caution is explicitly superseded here; profiles can still
+    # override this per experiment (mining_profiles.*).
     enabled: true
     target: 20000             # maximum generic hard/eval pairs per lane
     band: "0.45-0.80"        # cosine band for ANN candidates

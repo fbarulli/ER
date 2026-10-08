@@ -589,7 +589,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             epoch_limit = start_epoch if bad_epochs >= cfg.early_stopping_patience else cfg.epochs
             # TASK B graph enhancements (default OFF -> byte-identical baseline).
             from training.advanced import (
-                EmaTracker, calibration_report, collect_nvml_telemetry,
+                EmaTracker, apply_temperature, brier_score,
+                collect_nvml_telemetry, expected_calibration_error,
+                fit_temperature, reliability_diagram,
                 sigmoid_focal_bce_with_logits,
             )
             _ema_cfg = _adv.ema
@@ -708,21 +710,34 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     ema_metric = quality(pairs["dev"][1], ema_scores)["dev_pr_auc"]
                     metrics["ema_dev_pr_auc"] = ema_metric
                 # TASK B item 2: dev-fit temperature + ECE/Brier/reliability.
+                # The GNN lane scores the TEST quarter only in postprocess, so
+                # these are explicitly DEV-only (keys/artifact named dev_*). The
+                # temperature is fitted on dev; test calibration is produced by
+                # graph_tracks.report.complete on the selected checkpoint.
                 if _adv.calibration.enabled:
                     _dev_labels = np.asarray(pairs["dev"][1]).reshape(-1).astype(int)
-                    _cal = calibration_report(
-                        dev_logits, _dev_labels, dev_logits, _dev_labels,
-                        n_bins=int(_adv.calibration.n_bins),
-                        min_temperature=float(_adv.calibration.min_temperature),
-                        max_temperature=float(_adv.calibration.max_temperature),
-                        fit=bool(_adv.calibration.temperature_scaling),
+                    _temp = (
+                        fit_temperature(
+                            dev_logits, _dev_labels,
+                            min_temperature=float(_adv.calibration.min_temperature),
+                            max_temperature=float(_adv.calibration.max_temperature),
+                        )
+                        if _adv.calibration.temperature_scaling else 1.0
                     )
-                    metrics.update(
-                        {f"calibration_{k}": v for k, v in _cal.items() if k != "reliability"}
+                    _dev_probs = apply_temperature(dev_logits, _temp)
+                    metrics["calibration_dev_temperature"] = float(_temp)
+                    metrics["calibration_dev_ece"] = expected_calibration_error(
+                        _dev_probs, _dev_labels, n_bins=int(_adv.calibration.n_bins)
+                    )
+                    metrics["calibration_dev_brier"] = brier_score(
+                        _dev_probs, _dev_labels
                     )
                     write_json(
-                        output / name(cfg.track, f"reliability_epoch{epoch}.json"),
-                        _cal["reliability"],
+                        output / name(cfg.track, f"reliability_dev_epoch{epoch}.json"),
+                        reliability_diagram(
+                            _dev_probs, _dev_labels,
+                            n_bins=int(_adv.calibration.n_bins), temperature=_temp,
+                        ),
                     )
                 # TASK B item 16: GPU utilization/power/clocks telemetry.
                 if _adv.telemetry.nvml:
@@ -898,7 +913,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 model.load_state_dict(_online_model)
                 scorer.load_state_dict(_online_scorer)
                 swa_pr_auc = float(quality(_dev_labels, _swa_scores)["dev_pr_auc"])
-                swa_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / f"{CHECKPOINT_PREFIX}swa"
+                # LOW audit fix: do NOT use the CHECKPOINT_PREFIX here — a
+                # ``checkpoint-*`` name collides with epoch-checkpoint globbing.
+                swa_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / "swa"
                 swa_dir.mkdir(parents=True, exist_ok=True)
                 swa_path = swa_dir / name(cfg.track, "graph_model.pt")
                 torch.save({"schema": "er-graph-checkpoint-v1", "manifest": manifest,

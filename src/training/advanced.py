@@ -6,30 +6,50 @@ loops only wire it behind an ``advanced.*`` config gate. The module must stay
 importable without torch: torch is imported lazily inside the few functions
 that need it.
 
-Leakage discipline: the calibration helpers (``fit_temperature`` and the
-reliability metrics) are fit-only utilities — callers fit them on the
-dev/calibration carve and report on the test quarter. Nothing here reads a
-test split.
+The ``advanced.*`` config block is deliberately limited to dials that HAVE a
+live consumer:
+
+  * ``advanced.calibration``        -> text fold metrics + reliability artifact
+  * ``advanced.accel``              -> text TF32 / torch.compile
+  * ``advanced.telemetry``          -> text NVML telemetry
+  * ``advanced.gradient_accumulation_steps`` -> text STArgs
+  * ``advanced.graph.{ema,calibration,focal,swa,arch,telemetry}`` -> GNN lane
+
+Leakage discipline: the calibration helpers fit on the dev/calibration carve
+ONLY. Nothing here reads a test split.
 """
 
 from __future__ import annotations
 
-import math
+import shutil
+import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-# The one declared scheduler menu. ``plateau`` is special (ReduceLROnPlateau
-# needs the dev metric), the rest are step-based. Validated by the config
-# schema and by ``validate_lr_scheduler`` at wire time.
-LR_SCHEDULERS: tuple[str, ...] = (
-    "linear",
-    "cosine",
-    "one_cycle",
-    "plateau",
-    "constant",
-)
+from core.gpu_execution import gpu_query_string, parse_gpu_query
+from core.schemas import LR_SCHEDULERS, hf_scheduler_type
+
+__all__ = [
+    "AdvancedConfigError",
+    "LR_SCHEDULERS",
+    "hf_scheduler_type",
+    "validate_lr_scheduler",
+    "ema_update",
+    "ema_decay_for_step",
+    "EmaTracker",
+    "apply_temperature",
+    "fit_temperature",
+    "expected_calibration_error",
+    "brier_score",
+    "reliability_diagram",
+    "calibration_report",
+    "sigmoid_focal_bce_with_logits",
+    "average_state_dicts",
+    "parse_gpu_query",
+    "collect_nvml_telemetry",
+]
 
 
 class AdvancedConfigError(ValueError):
@@ -76,10 +96,10 @@ def ema_decay_for_step(
 class EmaTracker:
     """Numpy EMA over a flat ``name -> array`` parameter mapping.
 
-    The tracker is device-agnostic and float-only: non-floating entries
-    (integer buffers such as ``num_batches_tracked``) are carried through
-    unchanged. ``step`` drives the warmup decay, so a resumed run can reload
-    the step count from the checkpoint manifest for reproducibility.
+    Device-agnostic and float-only: non-floating entries (integer buffers such
+    as ``num_batches_tracked``) are carried through unchanged. ``step`` drives
+    the warmup decay, so a resumed run reloads the step count from the
+    checkpoint manifest for reproducibility.
     """
 
     decay: float
@@ -158,15 +178,15 @@ def _sigmoid(z: np.ndarray) -> np.ndarray:
 def apply_temperature(logits: np.ndarray, temperature: float) -> np.ndarray:
     """Temperature-scaled probabilities (binary logits, sigmoid link)."""
     if temperature <= 0.0:
-        raise AdvancedConfigError(
-            f"temperature must be > 0, got {temperature}"
-        )
+        raise AdvancedConfigError(f"temperature must be > 0, got {temperature}")
     return _sigmoid(np.asarray(logits, dtype=np.float64) / float(temperature))
 
 
 def _nll(logits: np.ndarray, labels: np.ndarray, temperature: float) -> float:
     probs = np.clip(apply_temperature(logits, temperature), 1e-12, 1.0 - 1e-12)
-    return float(-np.mean(labels * np.log(probs) + (1.0 - labels) * np.log(1.0 - probs)))
+    return float(
+        -np.mean(labels * np.log(probs) + (1.0 - labels) * np.log(1.0 - probs))
+    )
 
 
 def fit_temperature(
@@ -178,8 +198,8 @@ def fit_temperature(
 ) -> float:
     """Fit ONE scalar temperature on DEV logits/labels (never test).
 
-    Minimizes binary NLL over ``T`` with a bounded scalar search. Returns the
-    best temperature; T == 1.0 means the model was already calibrated.
+    Minimizes binary NLL over ``T``. ``T == 1.0`` means the model was already
+    calibrated.
     """
     logits = np.asarray(logits, dtype=np.float64).reshape(-1)
     labels = np.asarray(labels, dtype=np.float64).reshape(-1)
@@ -201,7 +221,7 @@ def fit_temperature(
         )
         return float(np.clip(result.x, min_temperature, max_temperature))
     except Exception:
-        # Deterministic fallback: log-spaced grid + local refinement, no scipy.
+        # Deterministic fallback: log-spaced grid, no scipy.
         grid = np.geomspace(min_temperature, max_temperature, 200)
         best = min(grid, key=lambda t: _nll(logits, labels, float(t)))
         return float(best)
@@ -227,9 +247,9 @@ def expected_calibration_error(
         count = int(mask.sum())
         if not count:
             continue
-        confidence = float(probs[mask].mean())
-        accuracy = float(labels[mask].mean())
-        ece += (count / probs.size) * abs(confidence - accuracy)
+        ece += (count / probs.size) * abs(
+            float(probs[mask].mean()) - float(labels[mask].mean())
+        )
     return float(ece)
 
 
@@ -251,11 +271,7 @@ def reliability_diagram(
     n_bins: int = 15,
     temperature: float | None = None,
 ) -> dict[str, Any]:
-    """Reliability-diagram artifact payload (JSON-serializable).
-
-    ``temperature`` is recorded for provenance; it is NOT applied here — the
-    caller decides whether to fit/report calibrated or raw probabilities.
-    """
+    """Reliability-diagram artifact payload (JSON-serializable)."""
     probs = np.asarray(probs, dtype=np.float64).reshape(-1)
     labels = np.asarray(labels, dtype=np.float64).reshape(-1)
     if probs.size != labels.size:
@@ -301,9 +317,7 @@ def calibration_report(
     """Fit a temperature on DEV and report ECE/Brier on DEV and TEST.
 
     Leakage contract: the temperature is fitted on the dev/calibration carve
-    ONLY. Test scores are never used to fit; they are only scored with the
-    dev-fitted temperature, and the reliability artifact is built on test
-    probabilities for reporting.
+    ONLY. Test scores are only scored with the dev-fitted temperature.
     """
     dev_scores = np.asarray(dev_scores, dtype=np.float64).reshape(-1)
     dev_labels = np.asarray(dev_labels, dtype=np.float64).reshape(-1)
@@ -317,7 +331,9 @@ def calibration_report(
             min_temperature=min_temperature,
             max_temperature=max_temperature,
         )
-    dev_probs = apply_temperature(dev_scores, temperature) if dev_scores.size else dev_scores
+    dev_probs = (
+        apply_temperature(dev_scores, temperature) if dev_scores.size else dev_scores
+    )
     test_probs = (
         apply_temperature(test_scores, temperature) if test_scores.size else test_scores
     )
@@ -345,7 +361,7 @@ def calibration_report(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Focal / class-weighted BCE (graph scorer loss)
+# Focal / class-weighted BCE (GNN scorer loss)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -391,115 +407,7 @@ def sigmoid_focal_bce_with_logits(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LR-scheduler factory (enum-validated)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def lr_lambda(
-    name: str,
-    *,
-    num_training_steps: int,
-    warmup_steps: int = 0,
-    min_lr_ratio: float = 0.0,
-) -> Callable[[int], float]:
-    """Return a step->multiplier callable for a step-based scheduler.
-
-    ``plateau`` has no step lambda (it needs the dev metric); callers detect it
-    with :func:`is_plateau_scheduler`. ``constant`` returns 1.0 after warmup.
-    """
-    validate_lr_scheduler(name)
-    if name == "plateau":
-        raise AdvancedConfigError(
-            "plateau is metric-driven; use is_plateau_scheduler() and "
-            "ReduceLROnPlateau instead"
-        )
-    if num_training_steps <= 0:
-        raise AdvancedConfigError("num_training_steps must be > 0")
-    warmup_steps = max(0, min(int(warmup_steps), int(num_training_steps)))
-    min_lr_ratio = float(min_lr_ratio)
-    if not 0.0 <= min_lr_ratio <= 1.0:
-        raise AdvancedConfigError("min_lr_ratio must be in [0, 1]")
-
-    def _warmup(step: int) -> float:
-        if warmup_steps <= 0:
-            return 1.0
-        return min(1.0, (step + 1) / warmup_steps)
-
-    if name == "constant":
-        return lambda step: _warmup(step)
-
-    if name == "linear":
-        def _linear(step: int) -> float:
-            if step < warmup_steps:
-                return _warmup(step)
-            progress = min(
-                1.0, (step - warmup_steps) / max(1, num_training_steps - warmup_steps)
-            )
-            return min_lr_ratio + (1.0 - min_lr_ratio) * (1.0 - progress)
-
-        return _linear
-
-    if name == "cosine":
-        def _cosine(step: int) -> float:
-            if step < warmup_steps:
-                return _warmup(step)
-            progress = min(
-                1.0, (step - warmup_steps) / max(1, num_training_steps - warmup_steps)
-            )
-            return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (
-                1.0 + math.cos(math.pi * progress)
-            )
-
-        return _cosine
-
-    # one_cycle: linear warmup to peak, then cosine anneal to the floor.
-    def _one_cycle(step: int) -> float:
-        if warmup_steps <= 0:
-            warmup_steps_ = max(1, num_training_steps // 10)
-        else:
-            warmup_steps_ = warmup_steps
-        if step < warmup_steps_:
-            return max(min_lr_ratio, (step + 1) / warmup_steps_)
-        progress = min(
-            1.0, (step - warmup_steps_) / max(1, num_training_steps - warmup_steps_)
-        )
-        return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (
-            1.0 + math.cos(math.pi * progress)
-        )
-
-    return _one_cycle
-
-
-def is_plateau_scheduler(name: str) -> bool:
-    validate_lr_scheduler(name)
-    return name == "plateau"
-
-
-def build_lr_scheduler(optimizer, *, name: str, num_training_steps: int,
-                       warmup_steps: int = 0, min_lr_ratio: float = 0.0):
-    """Build a torch scheduler from the validated enum (or None for plateau).
-
-    Plateau must be constructed by the caller with the dev metric, so this
-    returns ``None`` for it after validating the name.
-    """
-    import torch
-
-    validate_lr_scheduler(name)
-    if name == "plateau":
-        return None
-    return torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lr_lambda(
-            name,
-            num_training_steps=num_training_steps,
-            warmup_steps=warmup_steps,
-            min_lr_ratio=min_lr_ratio,
-        ),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SWA / top-k checkpoint averaging
+# SWA / top-k checkpoint averaging (GNN lane)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -511,9 +419,7 @@ def average_state_dicts(
     """Weighted element-wise average of flat parameter mappings.
 
     Floating tensors/arrays are averaged; non-floating entries (e.g.
-    ``num_batches_tracked`` ints) are taken from the first state. Returns
-    numpy arrays when any input is numpy, otherwise the first state's tensor
-    type via each tensor's own arithmetic (torch safe).
+    ``num_batches_tracked`` ints) are taken from the first state.
     """
     if not states:
         raise AdvancedConfigError("cannot average an empty checkpoint list")
@@ -558,228 +464,33 @@ def average_state_dicts(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Curriculum on pair difficulty
+# GPU-utilization telemetry (nvidia-smi; shared query in core.gpu_execution)
 # ─────────────────────────────────────────────────────────────────────────────
-
-_DIFFICULTY_ORDER = {"easy": 0, "medium": 1, "hard": 2, "unknown": 1}
-
-
-def difficulty_rank(value: Any) -> float:
-    """Map a difficulty label/score to an ascending comparable rank."""
-    if isinstance(value, str):
-        return float(_DIFFICULTY_ORDER.get(value, 1))
-    return float(value)
-
-
-def curriculum_plan(
-    difficulty: Sequence[Any],
-    epochs: int,
-    *,
-    schedule: str = "easy_to_hard",
-    warmup_fraction: float = 0.0,
-) -> list[list[int]]:
-    """Deterministic epoch -> available-item index plan (train side only).
-
-    ``schedule`` is ``easy_to_hard`` or ``hard_to_easy``. The pool is sorted
-    by difficulty once; each epoch exposes a growing prefix of that order,
-    starting at ``warmup_fraction`` of the data and reaching 100% on the last
-    epoch. Ties keep input order (stable), so the plan is reproducible.
-    """
-    if schedule not in ("easy_to_hard", "hard_to_easy"):
-        raise AdvancedConfigError(
-            f"curriculum schedule must be easy_to_hard|hard_to_easy, got {schedule!r}"
-        )
-    if epochs < 1:
-        raise AdvancedConfigError("curriculum epochs must be >= 1")
-    if not 0.0 <= warmup_fraction < 1.0:
-        raise AdvancedConfigError("curriculum warmup_fraction must be in [0, 1)")
-    n = len(difficulty)
-    if n == 0:
-        return [[] for _ in range(epochs)]
-    order = sorted(range(n), key=lambda i: difficulty_rank(difficulty[i]))
-    if schedule == "hard_to_easy":
-        order = order[::-1]
-    start = max(1, int(math.ceil(warmup_fraction * n)))
-    plan: list[list[int]] = []
-    for epoch in range(1, epochs + 1):
-        if epochs == 1:
-            count = n
-        else:
-            progress = (epoch - 1) / (epochs - 1)
-            count = int(round(start + (n - start) * progress))
-        count = min(n, max(start, count))
-        plan.append(sorted(order[:count]))
-    return plan
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Adversarial FGM (embeddings)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def adversarial_perturbation(x, grad, epsilon: float, *, norm: str = "l2",
-                             emb_name: str = "embeddings"):
-    """FGM perturbation: ``epsilon * grad / ||grad||`` (l2) or sign (linf).
-
-    Returns the adversarial embedding ``x + delta`` detached from the graph.
-    Pure torch helper; used train-only to harden the encoder against small
-    embedding-space shifts.
-    """
-    import torch
-
-    if epsilon < 0.0:
-        raise AdvancedConfigError("FGM epsilon must be >= 0")
-    g = grad if grad is not None else torch.zeros_like(x)
-    if norm == "l2":
-        value = g / (g.norm(p=2) + 1e-12)
-    elif norm == "linf":
-        value = g.sign()
-    else:
-        raise AdvancedConfigError(f"FGM norm must be l2|linf, got {norm!r}")
-    return (x.detach() + epsilon * value).detach()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GPU-utilization telemetry parsing (nvidia-smi / NVML)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_GPU_QUERY_FIELDS: tuple[tuple[str, str], ...] = (
-    ("utilization.gpu", "gpu_util_pct"),
-    ("power.draw", "power_w"),
-    ("clocks.sm", "sm_clock_mhz"),
-    ("clocks.mem", "mem_clock_mhz"),
-    ("temperature.gpu", "temperature_c"),
-    ("memory.used", "gpu_memory_used_mb"),
-)
-
-
-def parse_gpu_query(raw: str) -> dict[str, float]:
-    """Parse one ``nvidia-smi --query-gpu=... --format=csv,noheader,nounits``
-    row into a float mapping.
-
-    Unknown/NA cells are dropped rather than guessed. The field order is the
-    canonical query order above; a shorter row is accepted (trailing fields
-    omitted).
-    """
-    cells = [cell.strip() for cell in str(raw).strip().split(",")]
-    if not cells or cells == [""]:
-        return {}
-    telemetry: dict[str, float] = {}
-    for (_, key), cell in zip(_GPU_QUERY_FIELDS, cells):
-        try:
-            telemetry[key] = float(cell)
-        except ValueError:
-            continue
-    return telemetry
-
-
-def gpu_query() -> str:
-    """The canonical query string for :func:`parse_gpu_query` (display only)."""
-    return ",".join(field for field, _ in _GPU_QUERY_FIELDS)
 
 
 def collect_nvml_telemetry() -> dict[str, float]:
-    """Best-effort NVML utilization/power/clocks for device 0.
+    """Best-effort one-shot GPU utilization/power/clocks for device 0.
 
-    Returns ``{}`` when NVML/pynvml is unavailable — telemetry must never
-    crash a run. Parsing lives in :func:`parse_gpu_query` so the pure logic is
-    testable without a GPU.
+    Shells out to ``nvidia-smi`` with the shared query in
+    ``core.gpu_execution`` and parses with the shared parser. Returns ``{}``
+    when nvidia-smi is unavailable — telemetry must never crash a run.
     """
+    binary = shutil.which("nvidia-smi")
+    if not binary:
+        return {}
     try:
-        import pynvml
-
-        pynvml.nvmlInit()
-        try:
-            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
-            sm = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM)
-            mem = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
-            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
-            used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 2)
-            return {
-                "gpu_util_pct": float(util.gpu),
-                "power_w": float(power),
-                "sm_clock_mhz": float(sm),
-                "mem_clock_mhz": float(mem),
-                "temperature_c": float(temp),
-                "gpu_memory_used_mb": float(used),
-            }
-        finally:
-            pynvml.nvmlShutdown()
+        completed = subprocess.run(
+            [
+                binary,
+                f"--query-gpu={gpu_query_string()}",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
     except Exception:
         return {}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Gradient accumulation + embedding ensembling + distillation
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def accumulates_now(global_step: int, accumulation_steps: int) -> bool:
-    """True when this micro-step closes an accumulation window (step on it).
-
-    ``global_step`` is 0-indexed; with accumulation=1 every step closes.
-    """
-    if accumulation_steps < 1:
-        raise AdvancedConfigError("gradient_accumulation_steps must be >= 1")
-    return (global_step + 1) % accumulation_steps == 0
-
-
-def scale_accumulated_loss(loss, accumulation_steps: int):
-    """Divide a micro-batch loss so accumulated gradients match the mean."""
-    if accumulation_steps < 1:
-        raise AdvancedConfigError("gradient_accumulation_steps must be >= 1")
-    return loss / accumulation_steps
-
-
-def average_embeddings(
-    embeddings: Iterable[np.ndarray], *, normalize: bool = True
-) -> np.ndarray:
-    """Average dense embeddings across folds/seeds, then optionally L2-norm."""
-    arrays = [np.asarray(e, dtype=np.float64) for e in embeddings]
-    if not arrays:
-        raise AdvancedConfigError("cannot average zero embedding sets")
-    shapes = {a.shape for a in arrays}
-    if len(shapes) != 1:
-        raise AdvancedConfigError(f"embedding shapes disagree: {sorted(shapes)}")
-    mean = np.mean(np.stack(arrays, axis=0), axis=0)
-    if normalize:
-        norms = np.linalg.norm(mean, axis=1, keepdims=True)
-        mean = mean / np.clip(norms, 1e-12, None)
-    return mean
-
-
-def distillation_loss(
-    student_logits,
-    teacher_logits,
-    *,
-    temperature: float = 2.0,
-    alpha: float = 0.5,
-    hard_labels=None,
-):
-    """KD loss: ``alpha * soft(student||teacher) + (1-alpha) * hard_BCE``.
-
-    When ``hard_labels`` is None the hard term is dropped and the soft term is
-    returned. Teacher logits are detached (no gradient path into the teacher).
-    """
-    import torch
-    import torch.nn.functional as F
-
-    if temperature <= 0.0:
-        raise AdvancedConfigError("distillation temperature must be > 0")
-    if not 0.0 <= alpha <= 1.0:
-        raise AdvancedConfigError("distillation alpha must be in [0, 1]")
-    teacher = torch.as_tensor(teacher_logits).detach().to(student_logits.device)
-    t = float(temperature)
-    soft = F.binary_cross_entropy_with_logits(
-        student_logits / t, torch.sigmoid(teacher / t)
-    ) * (t * t)
-    if hard_labels is None:
-        return soft
-    hard = F.binary_cross_entropy_with_logits(
-        student_logits,
-        torch.as_tensor(hard_labels, dtype=student_logits.dtype,
-                        device=student_logits.device),
-    )
-    return alpha * soft + (1.0 - alpha) * hard
+    row = completed.stdout.strip().splitlines()
+    return parse_gpu_query(row[0]) if row else {}
