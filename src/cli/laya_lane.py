@@ -67,7 +67,7 @@ from core.manifest import atomic_write_json, sha256_file
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
 GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune",
-             "finetune-eval")
+             "finetune-eval", "holdout-eval")
 LANE_LOG_NAME = "lane.log"
 # One fresh lane.log per run: first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
@@ -112,6 +112,19 @@ FINETUNE_EVAL_DECISION = "finetune-eval"
 FINETUNE_EVAL_CODE_FILE = "laya_finetune_eval.py"
 FINETUNE_EVAL_REPORT_FILE = "eval_report.json"
 FINETUNE_EVAL_RECEIPT_FILE = "laya_finetune-eval.receipt.json"
+
+# ── holdout-eval kind: component-disjoint verification, run on Kaggle ───────
+# Scores a fine-tuned checkpoint on the staged holdout (real pairs + P0 + gate
+# strata) in-session and writes the clustered, gate-stratified report, so the
+# honest verification never runs on the operator box. The holdout travels as a
+# staged JSONL dataset (one composed identity state + label + stratum per row);
+# the checkpoint rides the finetune_ckpt_dataset.
+HOLDOUT_EVAL_DECISION = "holdout-eval"
+HOLDOUT_EVAL_CODE_FILE = "laya_holdout_eval.py"
+HOLDOUT_EVAL_REPORT_FILE = "holdout_report.json"
+HOLDOUT_EVAL_RECEIPT_FILE = "laya_holdout-eval.receipt.json"
+HOLDOUT_JSONL = "holdout.jsonl"
+HOLDOUT_CATALOG_FILE = "holdout_catalog.csv"
 # The corpus split name is a config literal; map it to the JSONL file the
 # corpus dataset carries. Never duplicated: the tuple above is the SSOT.
 FINETUNE_EVAL_SPLIT_FILES = {
@@ -2671,16 +2684,17 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
             "--activate gate: no staged dataset payload at "
             f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
     corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION)
-    slug = (_spec().finetune_dataset_slug if corpus_kind
-            else _spec().dataset_slug)
+    if decision_kind == HOLDOUT_EVAL_DECISION:
+        slug, key = _spec().holdout_dataset_slug, "holdout_dataset_slug"
+    else:
+        slug = (_spec().finetune_dataset_slug if corpus_kind
+                else _spec().dataset_slug)
+        key = "finetune_dataset_slug" if corpus_kind else "dataset_slug"
     plan["slug"] = slug
     if not slug:
         raise RuntimeError(
-            "config laya.finetune_dataset_slug is unset; name the corpus "
-            "dataset (owner/slug) before an executed attach"
-            if corpus_kind else
-            "config laya.dataset_slug is unset; name the input dataset "
-            "(owner/slug) before an executed attach")
+            f"config laya.{key} is unset; name the dataset (owner/slug) "
+            "before an executed attach")
     from cli import kaggle_lane as lane
     from cli.kaggle_datasets import KaggleDatasets
 
@@ -2922,6 +2936,437 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
     atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
     _log_lane(f"staged finetune dataset payload {dataset_slug} "
               f"files={files} -> {stage}")
+    return receipt
+
+
+def _pairs_composer():
+    """The corpus pair composer (scripts/laya_metrics_pairs.py; reused, not copied)."""
+    import importlib.util
+
+    path = TRAIN_ROOT / "scripts/laya_metrics_pairs.py"
+    spec = importlib.util.spec_from_file_location("laya_metrics_pairs", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _csv_rows(path: Path) -> list[dict]:
+    import csv
+
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _norm_gtin(value: object) -> str:
+    from training.folds import normalize_gtin
+
+    return normalize_gtin(value)
+
+
+def stage_holdout_dataset_payload(*, dataset_slug: str, holdout_csv: Path,
+                                  catalog_path: Path, question_path: Path
+                                  ) -> dict[str, Any]:
+    """Stage the component-disjoint holdout as a kaggle dataset payload (dry-safe).
+
+    Builds results/laya_lane/kaggle/<decision>/dataset_payload/: the kaggle
+    `dataset-metadata.json`, ONE ``holdout.jsonl`` (each labelled pair composed
+    into laya's identity state with its stratum/component tags), plus a receipt.
+    Only labelled rows travel — the gate strata are label-less difficulty tags,
+    not truth, and must not enter the checkpoint's held-out score.
+    """
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.holdout_dataset_slug is unset; name the holdout "
+            "dataset (owner/slug) before staging")
+    questions = json.loads(
+        Path(question_path).read_text(encoding="utf-8"))["questions"]
+    composer = _pairs_composer()
+    rows = _csv_rows(Path(holdout_csv))
+    by_gtin: dict[str, dict] = {}
+    for row in _csv_rows(Path(catalog_path)):
+        by_gtin.setdefault(_norm_gtin(row.get("gtin")), row)
+    lines, skipped = [], 0
+    for row in rows:
+        label = str(row.get("label", "")).strip()
+        one = by_gtin.get(_norm_gtin(row.get("gtin1")))
+        two = by_gtin.get(_norm_gtin(row.get("gtin2")))
+        if label not in ("0", "1") or one is None or two is None:
+            skipped += 1
+            continue
+        state = composer.compose_state(
+            composer.compose_side(one["attribute"]),
+            composer.compose_side(two["attribute"]))
+        lines.append({
+            "state": state, "questions": questions,
+            "expected": {"identity_claim": "true" if label == "1" else "false"},
+            "stratum": str(row.get("stratum", "")),
+            "component": str(row.get("component", "")),
+        })
+    if not lines:
+        raise RuntimeError(
+            f"holdout {holdout_csv} produced no labelled rows; build it with "
+            "scripts/laya_holdout.py first")
+    stage = staging_dir() / "kaggle" / HOLDOUT_EVAL_DECISION / DATASET_PAYLOAD_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    metadata = {"title": "er laya holdout", "id": dataset_slug,
+                "licenses": [{"name": "other"}]}
+    atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+    body = "".join(json.dumps(line, sort_keys=True) + "\n" for line in lines)
+    (stage / HOLDOUT_JSONL).write_text(body, encoding="utf-8")
+    receipt = {
+        "dataset": dataset_slug, "payload": str(stage), "rows": len(lines),
+        "skipped": skipped, "question_schema": str(question_path),
+        "files": {HOLDOUT_JSONL: sha256_file(stage / HOLDOUT_JSONL)},
+    }
+    atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
+    _log_lane(f"staged holdout dataset payload {dataset_slug} "
+              f"rows={len(lines)} (skipped {skipped}) -> {stage}")
+    return receipt
+
+
+HOLDOUT_EVAL_KERNEL_SCRIPT = '''\
+"""ER laya holdout verification on Kaggle (cli.laya_lane).
+
+Single T4: installs laya over pip, attaches the staged component-disjoint
+holdout (JSONL of composed identity states + labels + strata) and the fine-tuned
+checkpoint dataset, scores each pair's identity_claim with the checkpoint, and
+writes holdout_report.json: overall + per-stratum precision/recall/F1/PR-AUC at
+the configured threshold, each with a COMPONENT-clustered bootstrap CI (real
+held-out verification, never the in-sample training eval). NO training, NO Hub.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tarfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+LAYA_PACKAGE = "@LAYA_PACKAGE@"
+RUN_TAG = "@RUN_TAG@"
+HOLDOUT_JSONL = "@HOLDOUT_JSONL@"
+CKPT_DIR_HINT = "@CKPT_DIR@"
+BATCH_SIZE = @BATCH_SIZE@
+THRESHOLD = @THRESHOLD@
+N_BOOT = @N_BOOT@
+SEED = @SEED@
+
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+@RUNTIME_PREFLIGHT@
+
+WORKING = Path("/kaggle/working")
+INPUTS = Path("/kaggle/input")
+
+
+def log(line):
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print("[laya-lane " + stamp + "] " + line, flush=True)
+
+
+def pip_install_laya():
+    command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
+               "--disable-pip-version-check", LAYA_PACKAGE]
+    print("+ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def pick_device():
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    import torch
+    if not torch.cuda.is_available():
+        raise SystemExit("cuda unavailable: the session is not a T4")
+    log("device pinned: " + torch.cuda.get_device_name(0))
+    return "cuda"
+
+
+def resolve_input(name):
+    for candidate in sorted(INPUTS.rglob(name)):
+        return candidate
+    raise FileNotFoundError("attached inputs carried no " + name)
+
+
+def resolve_checkpoint():
+    if CKPT_DIR_HINT:
+        for found in sorted(INPUTS.rglob(CKPT_DIR_HINT)):
+            if found.is_dir() and (found / "rl_agent_config.json").is_file():
+                return found
+    for found in sorted(INPUTS.rglob("rl_agent_config.json")):
+        return found.parent
+    raise FileNotFoundError("attached inputs carried no checkpoint")
+
+
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def binary_metrics(labels, scores, threshold):
+    tp = fp = tn = fn = 0
+    for y, s in zip(labels, scores):
+        pred = 1 if s >= threshold else 0
+        if pred and y:
+            tp += 1
+        elif pred and not y:
+            fp += 1
+        elif not pred and y:
+            fn += 1
+        else:
+            tn += 1
+    def pr(tp, fp):
+        return tp / (tp + fp) if (tp + fp) else 0.0
+    def rc(tp, fn):
+        return tp / (tp + fn) if (tp + fn) else 0.0
+    precision, recall = pr(tp, fp), rc(tp, fn)
+    f1 = (2 * precision * recall / (precision + recall)
+          if (precision + recall) else 0.0)
+    n = tp + fp + tn + fn
+    return {"n": n, "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            "accuracy": (tp + tn) / n if n else None,
+            "precision": precision, "recall": recall, "f1": f1}
+
+
+def pr_auc(labels, scores):
+    import numpy as np
+    labels = np.asarray(labels)
+    if len(set(labels.tolist())) < 2:
+        return None
+    order = np.argsort(-np.asarray(scores, dtype=float))
+    hits = labels[order]
+    cum = np.cumsum(hits)
+    precision = cum / (np.arange(len(hits)) + 1)
+    return float((precision * hits).sum() / hits.sum())
+
+
+def bootstrap_ci(labels, scores, components, stat, n_boot, seed, alpha=0.05):
+    import numpy as np
+    components = np.asarray(components, dtype=object)
+    labels, scores = np.asarray(labels), np.asarray(scores)
+    unique = np.unique(components)
+    rows_of = {c: np.where(components == c)[0] for c in unique}
+    rng = np.random.default_rng(seed)
+    samples = []
+    for _ in range(int(n_boot)):
+        picks = rng.choice(unique, size=unique.size, replace=True)
+        idx = np.concatenate([rows_of[c] for c in picks])
+        value = stat(labels[idx], scores[idx])
+        if value is not None:
+            samples.append(float(value))
+    point = stat(labels, scores)
+    if not samples:
+        return {"point": point, "lo": None, "hi": None}
+    lo, hi = np.percentile(samples, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return {"point": point, "lo": float(lo), "hi": float(hi)}
+
+
+def block(labels, scores, components, threshold):
+    m = binary_metrics(labels, scores, threshold)
+    def _f1(y, s):
+        return binary_metrics(y, s, threshold)["f1"]
+    def _precision(y, s):
+        return binary_metrics(y, s, threshold)["precision"]
+    def _recall(y, s):
+        return binary_metrics(y, s, threshold)["recall"]
+    return {
+        "metrics": m,
+        "pr_auc": pr_auc(labels, scores),
+        "cis": {
+            "precision": bootstrap_ci(labels, scores, components, _precision, N_BOOT, SEED),
+            "recall": bootstrap_ci(labels, scores, components, _recall, N_BOOT, SEED),
+            "f1": bootstrap_ci(labels, scores, components, _f1, N_BOOT, SEED),
+            "pr_auc": bootstrap_ci(labels, scores, components, pr_auc, N_BOOT, SEED),
+        },
+    }
+
+
+def main():
+    pip_install_laya()
+    device = pick_device()
+    import numpy as np
+    import torch
+    from laya import train as laya_train
+    holdout = resolve_input(HOLDOUT_JSONL)
+    checkpoint = resolve_checkpoint()
+    log("holdout: " + str(holdout))
+    log("checkpoint: " + str(checkpoint))
+    rows = [json.loads(line) for line in holdout.read_text().splitlines()
+            if line.strip()]
+    model, tok, cfg = laya_train.load_checkpoint(str(checkpoint))
+    model = model.to(torch.device(device)).eval()
+    max_len = int(cfg.get("max_len", 512))
+    head_max_len = int(cfg.get("head_max_len", 192))
+    parallel = laya_train.uses_parallel_layout(cfg)
+    items, skipped = laya_train.items_from_rows(
+        tok, rows, max_len, head_max_len, label_smoothing=0.0)
+    if len(items) != len(rows):
+        raise SystemExit("holdout items %d != rows %d (skipped %s)"
+                         % (len(items), len(rows), repr(skipped)))
+    records = laya_train.calibration_records(
+        model, tok, items, device, max_len, head_max_len,
+        batch_size=BATCH_SIZE, parallel=parallel)
+    scores = []
+    for _qt, logits, _t, _k in records:
+        z = np.asarray(logits, dtype=float)
+        z = z - z.max()
+        p = np.exp(z)
+        p = p / p.sum()
+        scores.append(float(p[1]))
+    labels = [1 if str(r.get("expected", {}).get("identity_claim")).lower()
+              in ("true", "1") else 0 for r in rows]
+    strata = [str(r.get("stratum") or "unknown") for r in rows]
+    components = [str(r.get("component") or r["state"][:24]) for r in rows]
+    by_stratum = {}
+    for name in sorted(set(strata)):
+        idx = [i for i, s in enumerate(strata) if s == name]
+        by_stratum[name] = block([labels[i] for i in idx],
+                                 [scores[i] for i in idx],
+                                 [components[i] for i in idx], THRESHOLD)
+    report = {
+        "eval_mode": "holdout",
+        "is_held_out": True,
+        "checkpoint": str(checkpoint),
+        "run_tag": RUN_TAG,
+        "rows": len(rows),
+        "skipped": skipped,
+        "threshold": THRESHOLD,
+        "n_boot": N_BOOT,
+        "overall": block(labels, scores, components, THRESHOLD),
+        "by_stratum": by_stratum,
+    }
+    WORKING.mkdir(parents=True, exist_ok=True)
+    out = WORKING / "holdout_report.json"
+    out.write_text(json.dumps(report, indent=2) + "\\n", encoding="utf-8")
+    receipt = {
+        "gpu_kind": "holdout-eval",
+        "run_tag": RUN_TAG,
+        "device": device,
+        "checkpoint": str(checkpoint),
+        "holdout": str(holdout),
+        "holdout_sha256": sha256_of(holdout),
+        "rows": len(rows),
+        "overall_accuracy": report["overall"]["metrics"]["accuracy"],
+        "overall_f1": report["overall"]["metrics"]["f1"],
+        "report": str(out),
+    }
+    (WORKING / "laya_holdout-eval.receipt.json").write_text(
+        json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+    with tarfile.open(WORKING / "laya_holdout-eval.tar.gz", "w:gz",
+                      compresslevel=1) as tar:
+        for item in sorted(WORKING.iterdir()):
+            if item.name != "laya_holdout-eval.tar.gz":
+                tar.add(item, arcname=item.name)
+    log("overall accuracy=" + str(report["overall"]["metrics"]["accuracy"])
+        + " f1=" + str(report["overall"]["metrics"]["f1"]))
+    print("[holdout-eval] report: " + json.dumps(report, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def stage_holdout_eval_kernel(*, revision: str | None = None,
+                              run_tag: str | None = None) -> dict[str, Any]:
+    """Stage the holdout-verification kaggle kernel (dry-safe).
+
+    Writes under results/laya_lane/kaggle/holdout-eval/: kernel-metadata.json +
+    laya_holdout_eval.py + holdout-eval.receipt.json (+ the staged holdout
+    dataset payload). Attaches the holdout dataset + the fine-tuned checkpoint
+    dataset.
+    """
+    spec = _spec()
+    slug = spec.holdout_eval_kernel_slug
+    if not slug:
+        raise RuntimeError(
+            "config laya.holdout_eval_kernel_slug is unset; name the target "
+            "kernel (owner/slug) before staging")
+    dataset_slug = spec.holdout_dataset_slug
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.holdout_dataset_slug is unset; the holdout travels as "
+            "that dataset (owner/slug) — name it before staging")
+    ckpt_dataset = spec.finetune_ckpt_dataset
+    repository = training_cfg().kaggle.repository
+    branch = training_cfg().kaggle.branch
+    revision = revision or _git_revision()
+    from core import runtime_inputs
+
+    tip = runtime_inputs.require_published_tip_match(
+        revision, repository, branch)
+    question_path = TRAIN_ROOT / spec.question_schema
+    dataset_receipt = stage_holdout_dataset_payload(
+        dataset_slug=dataset_slug,
+        holdout_csv=TRAIN_ROOT / spec.holdout_csv,
+        catalog_path=TRAIN_ROOT / "data/track_setup/eligible_catalog.csv",
+        question_path=question_path)
+    stage = staging_dir() / "kaggle" / HOLDOUT_EVAL_DECISION
+    stage.mkdir(parents=True, exist_ok=True)
+    tag = run_tag or spec.run_tag_prefix + decision_tag()
+    dataset_sources = [dataset_slug]
+    if ckpt_dataset:
+        dataset_sources.append(ckpt_dataset)
+    metadata: dict[str, Any] = {
+        "id": slug,
+        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
+        "code_file": HOLDOUT_EVAL_CODE_FILE,
+        "language": "python",
+        "kernel_type": "script",
+        "enable_gpu": True,
+        "enable_internet": True,
+        "dataset_sources": dataset_sources,
+        "kernel_sources": [],
+        "competition_sources": [],
+        "is_private": True,
+    }
+    values = {
+        "LAYA_PACKAGE": spec.finetune_package,
+        "RUN_TAG": tag,
+        "HOLDOUT_JSONL": HOLDOUT_JSONL,
+        "CKPT_DIR": spec.finetune_ckpt_dir,
+        "BATCH_SIZE": str(spec.holdout_eval_batch_size),
+        "THRESHOLD": repr(spec.holdout_eval_threshold),
+        "N_BOOT": str(spec.holdout_eval_bootstrap),
+        "SEED": "1729",
+        "REPOSITORY": repository,
+        "BRANCH": branch,
+        "REVISION": revision,
+    }
+    preflight = _template(LAYA_RUNTIME_PREFLIGHT, {
+        **values, "DECISION_CSV": HOLDOUT_JSONL,
+        "QUESTION_SCHEMA_FILE": repr(QUESTION_SCHEMA_FILE)})
+    script = _template(HOLDOUT_EVAL_KERNEL_SCRIPT,
+                       {**values, "RUNTIME_PREFLIGHT": preflight})
+    _kernel_script_gate(script)
+    _module_scope_gate(script)
+    atomic_write_json(metadata, stage / "kernel-metadata.json")
+    (stage / HOLDOUT_EVAL_CODE_FILE).write_text(script, encoding="utf-8")
+    receipt = {
+        "kernel": slug,
+        "kind": HOLDOUT_EVAL_DECISION,
+        "gpu": "T4 (single)",
+        "run_tag": tag,
+        "staged": str(stage),
+        "code_file": HOLDOUT_EVAL_CODE_FILE,
+        "dataset": {"slug": dataset_slug,
+                    "payload": dataset_receipt["payload"],
+                    "files": dataset_receipt["files"]},
+        "checkpoint_dataset": ckpt_dataset,
+        "threshold": spec.holdout_eval_threshold,
+        "n_boot": spec.holdout_eval_bootstrap,
+        "published_pin": {"repository": repository, "branch": branch,
+                          "revision": revision},
+        "published_tip": tip,
+    }
+    atomic_write_json(receipt, stage / f"{HOLDOUT_EVAL_DECISION}.receipt.json")
+    _log_lane(f"staged kaggle kernel [{HOLDOUT_EVAL_DECISION}] ({spec.gpu}) "
+              f"run_tag={tag} -> {stage}")
     return receipt
 
 
@@ -3287,6 +3732,7 @@ def _staged_laya_push_preflight(stage_dir: Path) -> None:
 _KIND_KERNEL_SLUG_ATTR = {
     FINETUNE_DECISION: "finetune_kernel_slug",
     FINETUNE_EVAL_DECISION: "finetune_eval_kernel_slug",
+    HOLDOUT_EVAL_DECISION: "holdout_eval_kernel_slug",
 }
 
 
@@ -3665,6 +4111,8 @@ class LayaLane:
               checkpoint_path: Path | None = None) -> dict[str, Any]:
         """Stage the payload (offline, dry-safe)."""
         if self.kind == "kaggle":
+            if decision_kind == HOLDOUT_EVAL_DECISION:
+                return stage_holdout_eval_kernel()
             return stage_decision_kernel(
                 decision_kind=decision_kind, input_override=input_override,
                 checkpoint_path=checkpoint_path)
