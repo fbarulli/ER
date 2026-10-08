@@ -19,15 +19,10 @@ import tempfile
 import time
 import uuid
 
+from core.bundle import bundle_spec
 from core.perf_switches import perf_enabled
 from core.tracing import TRACE_LANE_ENV, run_trace_env
 from model_tracks.resume import POSTPROCESS_TRACKS, TRACKS, TRAINING_TRACKS
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 @contextmanager
@@ -171,7 +166,7 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
     from model_tracks.live_logs import WorkerLogs
     logs = WorkerLogs(root, commands, from_end=resume)
     from model_tracks.telemetry import WorkerEvents
-    events = WorkerEvents(root, 'suite', root.name, filename=_spec().suite_events_file)
+    events = WorkerEvents(root, 'suite', root.name, filename=bundle_spec().suite_events_file)
     if env.get('ER_SUITE_ATTEMPT'):
         events.attempt = env['ER_SUITE_ATTEMPT']
     events.emit('workers', 'starting', tracks=list(commands), resume=resume,

@@ -61,7 +61,7 @@ def validate_pending(setup,checkpoint,*,native_model=None):
             raise ValueError('pending baseline source changed: '+key)
     if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
         raise ValueError('pending baseline ID/text alignment differs')
-    if set(request['ids']) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/'listings.json')}:
+    if set(request['ids']) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)}:
         raise ValueError('pending baseline listing population differs')
     tokens = setup/'prepared_text.npz'
     plan = request['prepared_text']

@@ -32,7 +32,7 @@ import argparse
 import json
 from pathlib import Path
 
-from core.bundle import Bundle, BundlePipeline, BundleRole
+from core.bundle import Bundle, BundlePipeline, BundleRole, bundle_spec
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 
 #: The stage name this module owns in the ONE consolidated pipeline trace.
@@ -80,11 +80,6 @@ def _shared_embeddings_name() -> str:
     return _setup_layout().shared_embeddings
 
 
-def _spec():
-    from core.bundle import bundle_spec
-    return bundle_spec()
-
-
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
@@ -106,7 +101,7 @@ def prepare_inputs(pipeline: BundlePipeline) -> Bundle:
 
     output = Path(pipeline.output)
     run_dir = Path(pipeline.run_dir) if pipeline.run_dir is not None else output.parent
-    config = pipeline.config or Path(_spec().suite_config)
+    config = pipeline.config or Path(bundle_spec().suite_config)
     prepare_all(run_dir=run_dir, tracks_config=config)
 
     context = _load_run_context(config)
@@ -161,7 +156,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
     if pipeline.output is None:
         raise ValueError("finalize requires pipeline.output (the sealed result archive)")
 
-    spec = _spec()
+    spec = bundle_spec()
     run_tag = result.run_tag()
     _require(bool(run_tag), "result bundle manifest carries no run tag")
     output = Path(pipeline.output)
@@ -236,7 +231,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
                 "finalize", "saved_ablation",
                 reason='the suite recorded a deliberate ablation skip; there is no saved ablation to consume',
                 detail={'destination': str(destination), 'recorded_skip': True},
-                source=str(destination / _spec().suite_events_file),
+                source=str(destination / bundle_spec().suite_events_file),
             )
         else:
             from model_tracks.post_training_ablation import complete_saved
@@ -327,7 +322,7 @@ def extract_prepared_inputs(inputs: Bundle, destination: Path, config_member: st
     """
     from core.portable_archive import cached_file_digest
     package_root = Path(config_member).parent
-    members = inputs.manifest.get(_spec().files_key, {})
+    members = inputs.manifest.get(bundle_spec().files_key, {})
     written = verified = outside = 0
     for relative, expected in members.items():
         if not Path(relative).is_relative_to(package_root):
@@ -421,7 +416,7 @@ def _restore_frozen_baseline(destination: Path, setup: Path) -> None:
 
 def _track_postprocessed(output: Path) -> bool:
     """The track marker says its CPU post-processing already completed."""
-    marker = output / _spec().complete_file
+    marker = output / bundle_spec().complete_file
     try:
         return bool(json.loads(marker.read_text()).get("postprocess_complete"))
     except (OSError, ValueError):

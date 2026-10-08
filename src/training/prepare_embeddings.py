@@ -23,7 +23,7 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
     from core.identity_policy import POLICY_PATH
     from core.model_input import model_input_composition
     layout = _setup_layout()
-    manifest = json.loads((setup / layout.prepared_dir / 'input_manifest.json').read_text())
+    manifest = json.loads((setup / layout.prepared_dir / layout.input_manifest).read_text())
     baseline = json.loads((setup / layout.manifest).read_text())
     expected = {
         'catalog_sha256': file_hash(setup / layout.catalog),
@@ -36,8 +36,8 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
         # name it too; otherwise the request omits the key and the cache builder
         # compares None against 'float32' and refuses its own output.
         'embedding_dtype': 'float32',
-        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / 'input_manifest.json'),
-        'listings_sha256': file_hash(setup / layout.prepared_dir / 'listings.json'),
+        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / layout.input_manifest),
+        'listings_sha256': file_hash(setup / layout.prepared_dir / layout.listings),
     }
     for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):
         if expected[key] != manifest[key]:
@@ -54,7 +54,7 @@ def prepare_request(setup: Path, checkpoint: Path) -> dict:
     expected = input_identity(setup, checkpoint)
     layout = _setup_layout()
     ids, texts = compose_texts(setup / layout.catalog)
-    listing_ids = [row['sku_id'] for row in load_records(setup / layout.prepared_dir / 'listings.json')]
+    listing_ids = [row['sku_id'] for row in load_records(setup / layout.prepared_dir / layout.listings)]
     if set(ids) != set(listing_ids) or len(ids) != len(listing_ids):
         raise ValueError('Catalog and prepared listings do not have identical IDs')
     drifted_inputs = input_identity(setup, checkpoint)
@@ -101,8 +101,8 @@ def validate_prepared_provenance(cache: Path, metadata: dict, manifest: dict):
         raise ValueError('invalid prepared text population')
     current = {
         'catalog_sha256': file_hash(setup / layout.catalog),
-        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / 'input_manifest.json'),
-        'listings_sha256': file_hash(setup / layout.prepared_dir / 'listings.json'),
+        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / layout.input_manifest),
+        'listings_sha256': file_hash(setup / layout.prepared_dir / layout.listings),
     }
     for key, value in current.items():
         if expected.get(key) != value:

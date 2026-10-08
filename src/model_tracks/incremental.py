@@ -5,16 +5,11 @@ import os
 import shutil
 
 from core.archive_reader import archive_sidecar, archive_settings
+from core.bundle import bundle_spec
 from core.run_log import RunLogger
 from model_tracks.publish import persist_results
 
 _LOG = RunLogger(__name__)
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 def _publish(bundle, tag):
@@ -67,7 +62,7 @@ class ArtifactPublisher:
         with _LOG.section('incremental.archive', files=len(files), generation=generation):
             sealed = Bundle.seal_archive(
                 directory / f'{tag}.{archive_settings().format}', files,
-                role=BundleRole.result, metadata={_spec().run_tag_key: tag})
+                role=BundleRole.result, metadata={bundle_spec().run_tag_key: tag})
         # Ship the writer's handle, not its path: the background publisher reads
         # the transport digest and run tag from it without re-verifying bytes the
         # sealing writer already hashed while writing.

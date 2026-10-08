@@ -35,7 +35,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     perf = PerformanceRecorder('text')
     reports = output / 'text__reports'
     reports.mkdir(exist_ok=True)
-    listings = setup / 'prepared/listings.json'
+    listings = setup / layout.prepared_dir / layout.listings
     print(f"[text-phase] inputs start listings={listings} pairs={setup / 'prepared/pairs.csv'}", flush=True)
     records = load_records(listings)
     pairs = load_pairs(setup / 'prepared/pairs.csv', records)

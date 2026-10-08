@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 
+from core.bundle import bundle_spec
 from core.portable_archive import RuntimeSnapshot
 from core.progress import tracked
 from core.run_log import RunLogger
@@ -45,12 +46,6 @@ def _source_layout_key() -> str:
     """The declared source-code neighborhood (paths.yaml layouts block)."""
     from core.common import LAYOUTS
     return str(LAYOUTS['source_code_dir'].template)
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 def package_manifest() -> str:
@@ -206,11 +201,12 @@ def _prepare_graph_inputs(setup):
         # provisioning; selected weights are bound only by the GPU exporter.
         from graph_tracks.prepared_inputs import prepare_training
         from graph_tracks.config import load_config as load_graph_config
+        layout = _setup_layout()
         track_settings = [load_graph_config(setup/(track+'.yaml'), expected_track=track).model_dump() for track in GRAPH_TRACKS]
         sizes = {settings['inference_batch_size'] for settings in track_settings}
         if len(sizes) != 1:
             raise ValueError('shared prepared graph inference batch sizes must agree')
-        prepare_training(setup/'prepared/listings.json',setup/'prepared/pairs.csv',batch_size=sizes.pop())
+        prepare_training(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv',batch_size=sizes.pop())
 
 
 def _streamed_json_digest(value) -> str:
@@ -614,7 +610,7 @@ def _assert_recovery_contract(output: Path, files: dict[str, Path]) -> None:
     can never silently lose it.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
+    spec = bundle_spec()
     tree = Bundle.from_directory(output, BundleRole.result)
     selected = tree.selected_checkpoint_dirs()
     resume_state = []
@@ -650,7 +646,7 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
     selected away, and the sealed archive is verified once by its writer.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
+    spec = bundle_spec()
     output, destination = Path(output).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(destination)
@@ -684,7 +680,7 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
     tree is then materialized and published only after every digest passed.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
+    spec = bundle_spec()
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)

@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from model_tracks.package import package_member
 from core.archive_reader import archive_sidecar
+from core.bundle import bundle_spec
 
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
@@ -53,11 +54,6 @@ def trace():
 def flush_trace():
     """Commit this process's local-completion rows once; a no-op while empty."""
     return flush_stage_trace(_TRACE)
-
-
-def _spec():
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done: bool = False, destination: Path | None = None, bundle=None) -> Path:
@@ -111,7 +107,7 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
                 'publish', 'ablation',
                 reason='the suite recorded a deliberate ablation skip, so there are no exports to publish',
                 detail={'run_state': str(run_state), 'recorded_skip': True},
-                source=str(run_state / _spec().suite_events_file),
+                source=str(run_state / bundle_spec().suite_events_file),
             )
         else:
             from model_tracks.post_training_ablation import publish_saved
@@ -152,7 +148,7 @@ def _require_legacy_source_pin(inputs, settings: SuiteConfig) -> None:
     # minus the gitignored semantic-family registry: legacy mode pins the live
     # checkout's code/config/scripts and ablation config only.
     inventory = runtime_source_inventory(
-        inputs.manifest[_spec().files_key],
+        inputs.manifest[bundle_spec().files_key],
         ablation_config=settings.ablation_config, include_registry=False)
     for relative, expected in inventory.items():
         if file_hash(TRAIN_ROOT / relative) != expected:
@@ -186,7 +182,7 @@ def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity
         (destination / LOCAL_SOURCE_MARKER).write_text(json.dumps(identity))
     # The prepared inputs are inputs to the process, never deliverables: the
     # result member predicate drops them from any seal.
-    extract_prepared_inputs(inputs, destination / _spec().prepared_inputs_dir,
+    extract_prepared_inputs(inputs, destination / bundle_spec().prepared_inputs_dir,
                             package_member('suite_package_config'))
     trace().add(
         'complete', 'reused',
@@ -210,7 +206,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     from model_tracks.resume import validate_completed_suite_archive, validate_training_binding
     import yaml
 
-    spec = _spec()
+    spec = bundle_spec()
     training_archive, input_archive = Path(training_archive), Path(input_archive)
     # One integrity check per VM crossing: the two archives are verified here
     # and every later step reads the trusted handle.

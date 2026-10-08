@@ -496,8 +496,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             input_dir = output / name(cfg.track, "inputs")
             input_dir.mkdir(exist_ok=True)
             input_artifacts = {}
-            for key, stem in (("listings", "listings.json"), ("pairs", "pairs.csv"),
-                              ("text_cache", "text_embeddings.npz"), ("input_manifest", "input_manifest.json")):
+            for key, stem in (("listings", layout.listings), ("pairs", "pairs.csv"),
+                              ("text_cache", "text_embeddings.npz"), ("input_manifest", layout.input_manifest)):
                 if getattr(cfg, key):
                     target = input_dir / name(cfg.track, stem)
                     source = resolve(getattr(cfg, key))
@@ -508,8 +508,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         provenance.mkdir(exist_ok=True)
                         target = provenance / source.name
                         for relative in (layout.embedding_request, layout.catalog,
-                                         f'{layout.prepared_dir}/input_manifest.json',
-                                         f'{layout.prepared_dir}/listings.json'):
+                                         f'{layout.prepared_dir}/{layout.input_manifest}',
+                                         f'{layout.prepared_dir}/{layout.listings}'):
                             origin = source.parent / relative
                             copied = provenance / relative
                             copied.parent.mkdir(parents=True, exist_ok=True)

@@ -89,8 +89,8 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
         if key == 'text_cache':
             destination = base / 'text_provenance' / source.name
             for relative in (layout.embedding_request, layout.catalog,
-                             f'{layout.prepared_dir}/input_manifest.json',
-                             f'{layout.prepared_dir}/listings.json'):
+                             f'{layout.prepared_dir}/{layout.input_manifest}',
+                             f'{layout.prepared_dir}/{layout.listings}'):
                 files[(destination.parent / relative).as_posix()] = source.parent / relative
         files[destination.as_posix()] = source
         settings[key] = destination.as_posix()

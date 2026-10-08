@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.archive_reader import archive_sidecar
+from core.bundle import bundle_spec
 from model_tracks.config import SuiteConfig
 from model_tracks.post_training_ablation import ABLATION_TRACKS, SavedAblationReport
 from model_tracks.resume import (
@@ -30,12 +31,6 @@ from model_tracks.resume import (
 )
 
 VERIFICATION_SCHEMA = 'er-suite-verification-v1'
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 def report_member(track: str) -> str:
@@ -73,7 +68,7 @@ def verification_result(archive: Path, run_tag: str | None = None,
     """
     archive = Path(archive)
     run_tag = run_tag or archive_run_tag(archive)
-    spec = _spec()
+    spec = bundle_spec()
     result: dict = {
         'schema': VERIFICATION_SCHEMA,
         'verified_at': datetime.now(timezone.utc).isoformat(),

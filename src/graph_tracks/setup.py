@@ -592,7 +592,7 @@ def _record_artifacts(
             'listing_splits': int(len(assignments)),
             'supervised_pairs': int(len(pairs)),
             'prepared_listings': int(len(records)),
-            'listings_json': str(Path(listings).parent / 'listings.json'),
+            'listings_json': str(Path(listings).parent / layout.listings),
             'files': [
                 name for name in (
                     layout.catalog, layout.splits, layout.pairs,
@@ -696,7 +696,7 @@ def _write_track_configs(output: Path, templates: dict, listings: Path,
         cfg = templates[track].copy()
         cfg.update(listings=str(listings),
                    pairs=str(listings.parent / 'pairs.csv'),
-                   input_manifest=str(listings.parent / 'input_manifest.json'))
+                   input_manifest=str(listings.parent / _setup_layout().input_manifest))
         if report_test is not None:
             cfg['report_test'] = report_test
         if track == 'cascade':

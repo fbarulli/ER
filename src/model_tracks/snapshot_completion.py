@@ -23,6 +23,7 @@ import tempfile
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.bundle import bundle_spec
 from core.portable_archive import Digest
 from core.archive_reader import archive_sidecar
 from core.tracing import flush_stage_trace, stage_trace
@@ -50,11 +51,6 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def _spec():
-    from core.bundle import bundle_spec
-    return bundle_spec()
-
-
 class SnapshotCompletionReceipt(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
 
@@ -73,7 +69,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     from model_tracks.config import SuiteConfig
     import yaml
 
-    spec = _spec()
+    spec = bundle_spec()
     training_archive = Path(training_archive).resolve()
     input_archive = Path(input_archive).resolve()
     # Two boundary checks, one per archive; every later read is trusted.

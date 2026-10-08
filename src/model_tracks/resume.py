@@ -4,18 +4,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Literal
+from core.bundle import bundle_spec
 from core.portable_archive import (
     Digest, RuntimeSnapshot, cached_file_digest,
 )
 from core.step_trace import timed
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from model_tracks.config import SuiteConfig
-
-
-def _spec():
-    """The bundle contract from config (lazy import keeps the cycle open)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 def _setup_layout():
@@ -79,7 +74,7 @@ def _events_skip_ablation(text: str) -> bool:
     (bundle shipped no ablation templates); older/suite streams may use
     ``ablation``. The phases and status come from the bundle contract.
     """
-    spec = _spec()
+    spec = bundle_spec()
     for line in text.splitlines():
         try:
             event = json.loads(line)
@@ -97,7 +92,7 @@ def recorded_ablation_skip(output: Path) -> bool:
     The skip lives in the per-track ``worker_events.jsonl`` (the suite event
     stream carries no ablation phase), so scan those as well as the suite log.
     """
-    spec = _spec()
+    spec = bundle_spec()
     candidates = [output / spec.suite_events_file]
     candidates += sorted(output.glob(f"*/{spec.worker_events_file}"))
     return any(events.is_file() and _events_skip_ablation(events.read_text())
@@ -154,7 +149,7 @@ def validate_archived_track(source, manifest: dict[str, Any], track: Track,
     ``source`` is any verified reader over the archive (an open ``open_archive``
     reader or :meth:`core.bundle.Bundle.reader`); it is never re-verified here.
     """
-    spec = _spec()
+    spec = bundle_spec()
     inventory = TrackInventory.model_validate_json(
         source.read(f'{track}/' + spec.inventory_file))
     marker = TrackCompletion.model_validate_json(
@@ -181,7 +176,7 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
     """
     from core.bundle import Bundle, BundleRole
     from graph_tracks.report_manifest import TrackReportManifest, report_member
-    spec = _spec()
+    spec = bundle_spec()
     if bundle is None:
         bundle = Bundle.load(Path(archive), BundleRole.result)
     metadata = bundle.manifest
@@ -235,7 +230,7 @@ def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: di
     token.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
+    spec = bundle_spec()
     handle = Bundle.load(Path(archive), BundleRole.result)
     if handle.run_tag() != run_tag:
         raise ValueError('existing archive belongs to a different suite')
@@ -305,7 +300,7 @@ def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> di
 
 
 def validate_suite(output: Path, identity: dict[str, Any]) -> None:
-    spec = _spec()
+    spec = bundle_spec()
     path = output / spec.suite_manifest_file
     if not path.is_file():
         raise ValueError('resume requires an existing suite manifest')
@@ -332,7 +327,7 @@ def artifact_files(output: Path) -> list[Path]:
     only drops the per-track bookkeeping that must never inventory itself.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
+    spec = bundle_spec()
     tree = Bundle.from_directory(output, BundleRole.result)
     selected = tree.selected_checkpoint_dirs()
     markers = {spec.complete_file, spec.inventory_file, spec.worker_config_file,
@@ -346,7 +341,7 @@ def artifact_files(output: Path) -> list[Path]:
 
 @timed
 def record_completion(output: Path, track: Track, *, postprocess_complete: bool = True) -> None:
-    spec = _spec()
+    spec = bundle_spec()
     files = {path.relative_to(output).as_posix(): digest(path) for path in artifact_files(output)}
     if not files:
         raise ValueError(f'cannot complete empty track: {track}')
@@ -359,7 +354,7 @@ def record_completion(output: Path, track: Track, *, postprocess_complete: bool 
 
 @timed
 def completed_track(output: Path, track: Track, *, postprocess_complete: bool = True) -> bool:
-    spec = _spec()
+    spec = bundle_spec()
     marker = output / spec.complete_file
     if not marker.exists():
         return False
@@ -397,7 +392,7 @@ def graph_checkpoint(output: Path, track: Track, run_tag: str) -> Path | None:
     # Graph trainers isolate their own run inside the worker output root.
     # Retain flat-root compatibility for previously materialized trees.
     from graph_tracks.artifacts import name as artifact_name
-    spec = _spec()
+    spec = bundle_spec()
     roots = [output, output / f'{track}__{run_tag}']
     paths = [path for folder in roots
              for path in (folder / spec.checkpoint_dir / track / f'{run_tag}_f0').glob(

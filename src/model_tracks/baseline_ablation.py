@@ -237,7 +237,7 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
             raise ValueError('baseline report requires the frozen baseline ablation')
         layout = _setup_layout()
-        records_path, pairs_path = (setup/layout.prepared_dir/'listings.json',
+        records_path, pairs_path = (setup/layout.prepared_dir/layout.listings,
                                     setup/layout.prepared_dir/'pairs.csv')
         records = load_records(records_path)
         vectors_path, vectors, metadata = _saved_vectors(records, output)

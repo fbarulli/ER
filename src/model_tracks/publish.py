@@ -5,12 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from core.archive_reader import archive_sidecar
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
+from core.bundle import bundle_spec
 
 
 def push_artifacts(paths: list[Path], message: str) -> None:
@@ -87,7 +82,7 @@ def _selected_graph_checkpoint(tree, track: str) -> Path:
     """
     root = tree._root()
     track_root = root / track if (root / track).is_dir() else root
-    markers = sorted(track_root.rglob(_spec().best_checkpoint_glob))
+    markers = sorted(track_root.rglob(bundle_spec().best_checkpoint_glob))
     if len(markers) != 1:
         recorded = ', '.join(marker.relative_to(root).as_posix() for marker in markers) or 'none'
         raise ValueError(f'ambiguous selected checkpoint: {track} ({recorded})')
@@ -105,7 +100,7 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None)
     from graph_tracks.data import file_hash
     from model_tracks.resume import validate_completed_suite_archive
     import torch
-    spec = _spec()
+    spec = bundle_spec()
     # The boundary check happens once; the completion contract and the digest
     # both come off that handle (or the caller's already-verified one).
     handle = Bundle.load(Path(archive), BundleRole.result) if bundle is None else bundle

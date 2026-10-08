@@ -234,7 +234,7 @@ def _legacy_validation_sources() -> dict[str, Path]:
     setup = (TRAIN_ROOT / suite.setup_dir).resolve()
     layout = training_cfg().preparation.graph_setup
     catalog_path = setup / layout.catalog
-    input_manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
+    input_manifest = json.loads((setup / layout.prepared_dir / layout.input_manifest).read_text())
     if file_hash(catalog_path) != input_manifest['catalog_sha256']:
         raise ValueError('eligible catalog differs from prepared graph inputs')
     catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)

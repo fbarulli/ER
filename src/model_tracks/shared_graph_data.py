@@ -121,7 +121,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     layout = _setup_layout()
     setup = Path(setup)
     prepared = setup / layout.prepared_dir
-    manifest_path = prepared / 'input_manifest.json'
+    manifest_path = prepared / layout.input_manifest
     old_manifest = json.loads(manifest_path.read_text())
     if old_manifest.get('shared_training_data_sha256') == shared_hash:
         try:
@@ -138,7 +138,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     backup_root.mkdir(parents=True, exist_ok=True)
     backups = {setup / layout.catalog: backup_root / layout.catalog,
                setup / layout.splits: backup_root / layout.splits,
-               prepared / 'listings.json': backup_root / 'listings.json',
+               prepared / layout.listings: backup_root / layout.listings,
                prepared / 'pairs.csv': backup_root / 'pairs.csv',
                prepared / FILENAME: backup_root / FILENAME}
     for source, backup in backups.items():
@@ -146,7 +146,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
             shutil.copyfile(source, backup)
     clean_catalog = pd.read_csv(backup_root / layout.catalog, dtype=str, keep_default_na=False)
     catalog_rows = clean_catalog.to_dict('records')
-    records = load_records(backup_root / 'listings.json')
+    records = load_records(backup_root / layout.listings)
     by_id = {record['sku_id']: record for record in records}
     if set(by_id) != set(clean_catalog.sku_id):
         # TEMPORARY (owner order): the committed smoke bundle's clean backup
@@ -270,9 +270,9 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     splits = pd.DataFrame([{'sku_id': r['sku_id'], 'split': r['split']} for r in records])
     write_setup_frames(setup, catalog=catalog, splits=splits, pairs=pairs)
     pairs.to_csv(prepared / 'pairs.csv', index=False)
-    write_json(prepared / 'listings.json', {'schema': 'er-graph-listings-v1', 'listings': records})
+    write_json(prepared / layout.listings, {'schema': 'er-graph-listings-v1', 'listings': records})
     write_inputs(prepared, report_rows)
-    load_pairs(prepared / 'pairs.csv', load_records(prepared / 'listings.json'))
+    load_pairs(prepared / 'pairs.csv', load_records(prepared / layout.listings))
     bindings = {track: TrackTrainingBinding(track=track, shared_data_sha256=shared_hash,
                     example_ids=[row.example_id for row in shared.examples],
                     endpoint_indices=[row.payload_index for row in shared.endpoints])
@@ -281,7 +281,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         example_ids=[row.example_id for row in shared.examples],
         endpoint_indices=[row.payload_index for row in shared.endpoints], node_map=node_map,
         track_bindings=bindings, train_pair_rows=len(projected), train_pair_order_sha256=_hash_rows(projected),
-        virtual_counts=virtual_counts, listings_sha256=file_hash(prepared / 'listings.json'),
+        virtual_counts=virtual_counts, listings_sha256=file_hash(prepared / layout.listings),
         pairs_sha256=file_hash(prepared / 'pairs.csv'), clean_evaluation_pairs_sha256=evaluation_hash)
     write_json(setup / layout.shared_training_projection, projection.model_dump(mode='json', by_alias=True))
     # Bind graph provenance to the shared contract and the new catalog/features.
@@ -365,10 +365,10 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
         raise ValueError('shared graph training pair count mismatch')
     if _hash_rows(_pair_rows(pairs[pairs.split != 'train'])) != projection.clean_evaluation_pairs_sha256:
         raise ValueError('shared graph projection changed clean evaluation')
-    for name, expected_hash in [('listings.json', projection.listings_sha256), ('pairs.csv', projection.pairs_sha256)]:
+    for name, expected_hash in [(layout.listings, projection.listings_sha256), ('pairs.csv', projection.pairs_sha256)]:
         if file_hash(setup / layout.prepared_dir / name) != expected_hash:
             raise ValueError('shared graph projection input hash mismatch')
-    manifest = json.loads((setup / layout.prepared_dir / 'input_manifest.json').read_text())
+    manifest = json.loads((setup / layout.prepared_dir / layout.input_manifest).read_text())
     for key, path in [('catalog_sha256', setup / layout.catalog),
                       ('splits_sha256', setup / layout.splits),
                       ('report_attributes_sha256', setup / layout.prepared_dir / 'report_attributes.json')]:

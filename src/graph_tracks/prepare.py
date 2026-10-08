@@ -227,7 +227,8 @@ class PreparedManifest:
         from graph_tracks.report_attributes import FILENAME
         from graph_tracks.train import write_json
         from graph_tracks.data import RELATIONS, NUMERIC
-        write_json(self._listing_path.parent / 'input_manifest.json', {
+        layout = _setup_layout()
+        write_json(self._listing_path.parent / layout.input_manifest, {
             'schema': 'er-graph-inputs-v1', 'catalog_sha256': file_hash(self._catalog),
             'identity_policy_sha256': file_hash(self._policy_path),
             'identity_dimensions_sha256': file_hash(self._identity_dimensions),
@@ -253,6 +254,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_
     from graph_tracks.train import load_pairs, write_json
     from core.common import TRAIN_ROOT
     from core.identity_policy import POLICY_PATH, reviewed_row_mask
+    layout = _setup_layout()
     # ONE consolidated-trace writer for the stage; committed once at the end (and
     # once, before raising, on the quarantine exception, so the failure survives).
     trace = TraceRun(STAGE)
@@ -283,7 +285,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_
     _record_scrape(trace, frame, records, report_rows, catalog)
     with _LOG.section("graph_prepare.publish"):
         output.mkdir(parents=True, exist_ok=False)
-        listing_path = output / 'listings.json'
+        listing_path = output / layout.listings
         write_json(listing_path, {'schema': 'er-graph-listings-v1', 'listings': records})
         from graph_tracks.report_attributes import write_inputs
         write_inputs(output, report_rows)
@@ -316,11 +318,11 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_
             out_count=int(len(records)),
             reason="the er-graph-inputs-v1 manifest is written over the package's hashes",
             detail={
-                "path": str(listing_path.parent / 'input_manifest.json'),
+                "path": str(listing_path.parent / layout.input_manifest),
                 "listings": str(listing_path),
                 "report_attributes_rows": int(len(report_rows)),
             },
-            source=str(listing_path.parent / 'input_manifest.json'),
+            source=str(listing_path.parent / layout.input_manifest),
         )
         trace.add(
             "output",

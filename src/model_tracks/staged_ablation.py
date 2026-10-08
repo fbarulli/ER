@@ -116,8 +116,8 @@ def _frozen_support(setup):
     """The training-population support records and prepared vocabulary."""
     with _LOG.section('ablation_support.load'):
         layout = _setup_layout()
-        records = load_records(setup/layout.prepared_dir/'listings.json')
-        graph_plan,graph_arrays = load_plan(setup/layout.prepared_dir/'listings.json',setup/layout.prepared_dir/'pairs.csv')
+        records = load_records(setup/layout.prepared_dir/layout.listings)
+        graph_plan,graph_arrays = load_plan(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv')
         graph_arrays.close()
         support = [records[n] for n in graph_plan['populations']['train']]
         vocabulary = graph_plan['vocabulary']
@@ -128,7 +128,7 @@ def _frozen_support(setup):
                'before any model is trained',
         detail={'listing_records': len(records), 'train_support': len(support),
                 'vocabulary': len(vocabulary)},
-        source=source_name(setup / layout.prepared_dir / 'listings.json'),
+        source=source_name(setup / layout.prepared_dir / layout.listings),
     )
     return support,vocabulary
 
@@ -153,7 +153,7 @@ def _track_request(setup,checkpoint,track,*,cohort,frozen_config,baseline,compos
         layout = _setup_layout()
         path = prepare(cohort/'catalog.csv' if cohort else setup/layout.catalog,
             cohort/'pairs.csv' if cohort else setup/layout.prepared_dir/'pairs.csv',checkpoint,track=track,
-            listings=(cohort/'listings.json' if cohort else setup/layout.prepared_dir/'listings.json') if track != 'text' else None,
+            listings=(cohort/layout.listings if cohort else setup/layout.prepared_dir/layout.listings) if track != 'text' else None,
             text_checkpoint=None,config=frozen_config,
             composer=composer,token_cache=token_cache)
         request = json.loads(path.read_text())

@@ -10,6 +10,7 @@ import traceback
 import shlex
 import yaml
 
+from core.bundle import bundle_spec
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from model_tracks.config import load_config
@@ -47,12 +48,6 @@ def trace():
 def flush_trace():
     """Commit this process's worker rows once; a no-op while empty."""
     return flush_stage_trace(_TRACE)
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
 
 
 def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = False) -> dict:
@@ -265,7 +260,7 @@ def _run_cascade(cfg, setup: Path, output: Path, events):
     """The cascade lane: validate inputs, compose roles, report both roles."""
     from graph_tracks.report import report_cascade
     from model_tracks.resume import record_completion
-    spec = _spec()
+    spec = bundle_spec()
     lane = _cascade_lane(setup)
     events.emit('input_validation', 'configured', device=lane.device,
                 worker_config=str(setup / 'cascade.yaml'), trains_nothing=True)
@@ -335,7 +330,7 @@ def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
 
 def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     from core.common import TRAIN_ROOT
-    spec = _spec()
+    spec = bundle_spec()
     cfg = load_config(config)
     gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()

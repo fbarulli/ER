@@ -234,7 +234,7 @@ def prepare_cohort(setup, bundle):
         clean_pairs = pd.read_csv(clean / 'pairs.csv', dtype=str, keep_default_na=False)
         catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
         rows = catalog.set_index('sku_id', drop=False).to_dict('index')
-        records = {r['sku_id']: r for r in load_records(setup / layout.prepared_dir / 'listings.json')}
+        records = {r['sku_id']: r for r in load_records(setup / layout.prepared_dir / layout.listings)}
         canonical = pd.read_csv(io.BytesIO(bundle['canonical_records_csv']), dtype=str, keep_default_na=False)
         canonical_rows = canonical.set_index('gtin', drop=False).to_dict('index')
         gtins = sorted(canonical_rows)
@@ -446,7 +446,7 @@ def prepare_cohort(setup, bundle):
     with _LOG.section('ablation_cohort.persist'):
         frame.fillna('').to_csv(folder/'pairs.csv', index=False)
         pd.DataFrame(list(rows.values())).fillna('').to_csv(folder/'catalog.csv', index=False)
-        write(folder/'listings.json', {'schema':'er-graph-listings-v1','listings':list(records.values())})
+        write(folder/layout.listings, {'schema':'er-graph-listings-v1','listings':list(records.values())})
         write(folder/'coverage.json', coverage.model_dump(mode='json'))
         # ``coverage_contract.json`` was written by the adoption call above; the
         # row below records the member beside the four frozen artifacts.
@@ -458,7 +458,7 @@ def prepare_cohort(setup, bundle):
             detail={'pair_rows': len(frame), 'folder': source_name(folder),
                     'pairs': source_name(folder / 'pairs.csv'),
                     'catalog': source_name(folder / 'catalog.csv'),
-                    'listings': source_name(folder / 'listings.json'),
+                    'listings': source_name(folder / layout.listings),
                     'coverage': source_name(folder / 'coverage.json'),
                     'coverage_contract': source_name(folder / COHORT_CONTRACT_FILE),
                     'contract_records': contract.records_total},

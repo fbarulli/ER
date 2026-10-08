@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 from core.archive_reader import archive_sidecar
+from core.bundle import bundle_spec
 from core.run_log import RunLogger
 from core.tracing import (
     SCOPE_ENTITY,
@@ -51,12 +52,6 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import bundle_spec
-    return bundle_spec()
-
-
 def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Path:
     import fcntl
     output = output.resolve()
@@ -77,7 +72,7 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             raise FileNotFoundError('resume output directory does not exist')
         output.mkdir(parents=True, exist_ok=resume)
         from model_tracks.telemetry import WorkerEvents
-        spec = _spec()
+        spec = bundle_spec()
         events = WorkerEvents(output, 'suite', run_tag, filename=spec.suite_events_file)
         events.emit('suite', 'starting', resume=resume, config=str(config), output=str(output))
         from model_tracks.resource_profile import ResourceProfile
@@ -146,7 +141,7 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
 def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, events=None) -> Path:
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
-    spec = _spec()
+    spec = bundle_spec()
     cfg = load_config(config)
     gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
     # Structured training timings default into the run's output dir (owner

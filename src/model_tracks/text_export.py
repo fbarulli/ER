@@ -49,7 +49,7 @@ def prepare(setup, checkpoint, *, batch_size=None,composer=None,token_cache=None
     from core.model_input import model_input_composition
     layout = _setup_layout()
     ids,texts = compose_texts(setup/layout.catalog,composer=composer)
-    if set(ids) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/'listings.json')}:
+    if set(ids) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)}:
         raise ValueError('text export catalog/listing population differs')
     arrays = {}
     plan = prepare_tokens(checkpoint,texts,arrays,batch_size=batch_size,cache=token_cache)
@@ -58,7 +58,7 @@ def prepare(setup, checkpoint, *, batch_size=None,composer=None,token_cache=None
         np.savez_compressed(handle,**arrays)
     request = {'schema':'er-text-export-v1','ids':ids,'plan':plan,'tokens_sha256':file_hash(tokens),
         'catalog_sha256':file_hash(setup/layout.catalog),
-        'listings_sha256':file_hash(setup/layout.prepared_dir/'listings.json'),
+        'listings_sha256':file_hash(setup/layout.prepared_dir/layout.listings),
         'pairs_sha256':file_hash(setup/layout.prepared_dir/'pairs.csv'),
         'text_sha256':texts_hash(texts),'composition':model_input_composition().model_dump(mode='json'),
         'composition_implementation_sha256':composition_fingerprint(),
@@ -77,7 +77,7 @@ def forward(output,setup,*,device,return_model=False):
     tokens = setup/'prepared_text.npz'
     if file_hash(tokens) != request['tokens_sha256']:
         raise ValueError('text export tokens changed')
-    for key,path in [('catalog_sha256',setup/layout.catalog),('listings_sha256',setup/layout.prepared_dir/'listings.json'),('pairs_sha256',setup/layout.prepared_dir/'pairs.csv')]:
+    for key,path in [('catalog_sha256',setup/layout.catalog),('listings_sha256',setup/layout.prepared_dir/layout.listings),('pairs_sha256',setup/layout.prepared_dir/'pairs.csv')]:
         if file_hash(path) != request[key]:
             raise ValueError('text export source changed: '+key)
     checkpoint,_ = resolve_best_checkpoint(output)
@@ -98,10 +98,10 @@ def forward(output,setup,*,device,return_model=False):
 
 def validate(path,checkpoint,setup):
     layout = _setup_layout()
-    ids = [r['sku_id'] for r in load_records(setup/layout.prepared_dir/'listings.json')]
+    ids = [r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)]
     vectors,metadata = load_text_cache(path,ids)
     for key,expected in [('checkpoint_sha256',checkpoint_hash(checkpoint)),('catalog_sha256',file_hash(setup/layout.catalog)),
-            ('listings_sha256',file_hash(setup/layout.prepared_dir/'listings.json')),('pairs_sha256',file_hash(setup/layout.prepared_dir/'pairs.csv')),
+            ('listings_sha256',file_hash(setup/layout.prepared_dir/layout.listings)),('pairs_sha256',file_hash(setup/layout.prepared_dir/'pairs.csv')),
             ('request_sha256',file_hash(setup/layout.text_export_request))]:
         if metadata.get(key) != expected:
             raise ValueError('saved GPU text export mismatch: '+key)
