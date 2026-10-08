@@ -2644,6 +2644,50 @@ class _TrainerDriver:
             row["train_frac"] = args.train_frac
             all_rows.append(row)
         pd.DataFrame(all_rows).to_csv(out, index=False)
+        # Owner-requested fold/seed embedding ensemble (advanced.embedding_
+        # ensemble; default OFF). Encodes the payload with each ok fold's
+        # checkpoint and averages the vectors at publish.
+        _ee = common.training_cfg().advanced.embedding_ensemble
+        if _ee.enabled and not args.sample:
+            from training.restored_features import EmbeddingEnsemble
+
+            _ensemble = EmbeddingEnsemble(normalize=bool(_ee.normalize))
+            _fold_tag = args.model.rstrip("/").rsplit("/", 1)[-1]
+            for _row in all_rows:
+                if _row.get("status") != "ok":
+                    continue
+                try:
+                    _ckpt = common.artifact(
+                        "checkpoint_repo",
+                        {"model_tag": _fold_tag, "run_tag": run_tag,
+                         "fold": int(_row["fold"]), "step": 0},
+                    ).parent
+                    if not _ckpt.exists():
+                        _cands = sorted(_ckpt.glob("**/model.safetensors"))
+                        if not _cands:
+                            continue
+                        _ckpt = _cands[0].parent
+                    _fold_model = common.load_local_sentence_transformer(
+                        str(_ckpt), device="cpu"
+                    )
+                    _vectors = _fold_model.encode(
+                        list(payload), convert_to_numpy=True,
+                        normalize_embeddings=False, show_progress_bar=False,
+                    )
+                    _ensemble.add(_vectors)
+                except Exception as exc:  # ensemble is optional; never abort
+                    print(
+                        f"[embedding-ensemble] fold {_row.get('fold')} skipped: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+            if len(_ensemble):
+                _ens_path = RESULTS / f"ensemble_embeddings_{run_tag}.npy"
+                np.save(_ens_path, _ensemble.combine())
+                print(
+                    f"[embedding-ensemble] {len(_ensemble)} folds -> {_ens_path}",
+                    flush=True,
+                )
         # latest-run pointer for consumers that want one canonical name —
         # SAMPLE runs must not move it (same overwrite class as the collision
         # above: a 1k chain check replaced the full run's latest-metrics CSV)

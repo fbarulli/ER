@@ -3270,6 +3270,101 @@ class DvcCheckpointCallback(TrainerCallback):
         return control
 
 
+class _WeightEmaCallback(TrainerCallback):
+    """Owner-requested weight EMA (advanced.ema), shared text + GNN.
+
+    Maintains the shadow every epoch, writes ``ema_state.pt`` beside each
+    checkpoint and the run output (checkpointing the EMA model), and restores
+    the shadow on resume from the resumed checkpoint. ``train_one_config``
+    consumes ``tracker()`` post-train to EVALUATE the EMA weights and select
+    the better of {online, EMA} for the fold's published model.
+    """
+
+    def __init__(self, decay: float, warmup_updates: int = 0):
+        self._decay = float(decay)
+        self._warmup_updates = int(warmup_updates)
+        self._tracker = None
+
+    def tracker(self):
+        return self._tracker
+
+    def _unwrap(self, model):
+        return getattr(model, "module", model)
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        resume = getattr(args, "resume_from_checkpoint", None)
+        if not resume:
+            return control
+        candidate = Path(resume) / "ema_state.pt"
+        if candidate.is_file():
+            import torch
+            from training.advanced import EmaTracker
+
+            self._tracker = EmaTracker.from_state_dict(
+                torch.load(candidate, map_location="cpu", weights_only=False)
+            )
+        return control
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        if model is None or not state.is_world_process_zero:
+            return control
+        from training.advanced import EmaTracker
+
+        if self._tracker is None:
+            self._tracker = EmaTracker(
+                decay=self._decay, warmup_updates=self._warmup_updates
+            )
+        self._tracker.update(dict(self._unwrap(model).state_dict()))
+        return control
+
+    def _write(self, destination: Path) -> None:
+        if self._tracker is None:
+            return
+        import torch
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self._tracker.state_dict(), destination)
+
+    def on_save(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write(
+                Path(args.output_dir) / f"checkpoint-{state.global_step}" / "ema_state.pt"
+            )
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write(Path(args.output_dir) / "ema_state.pt")
+        return control
+
+
+class _SwaCaptureCallback(TrainerCallback):
+    """Owner-requested text checkpoint SWA: capture the last-k epoch states."""
+
+    def __init__(self, k: int):
+        self._k = max(1, int(k))
+        self._states: list[dict] = []
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        if model is None or not state.is_world_process_zero:
+            return control
+        current = getattr(model, "module", model)
+        self._states.append(
+            {name: value.detach().cpu().clone()
+             for name, value in current.state_dict().items()}
+        )
+        if len(self._states) > self._k:
+            del self._states[: -self._k]
+        return control
+
+    def average(self):
+        if not self._states:
+            return None
+        from training.advanced import average_state_dicts
+
+        return average_state_dicts(self._states)
+
+
 class FineTunedAnnRefreshCallback(TrainerCallback):
     """Refresh ANN negatives from the live fine-tuned model after saves.
 
@@ -6088,8 +6183,57 @@ def train_one_config(
                 if loss in {"contrastive", "mnrl"}:
                     if "pair_id" not in train_ds.column_names or list(train_ds["pair_id"]) != list(range(len(train_ds))):
                         raise ValueError("local objective pair IDs must map every training row in order; rebuild locally")
+                # Owner-requested curriculum (advanced.curriculum): reorder each
+                # epoch's FROZEN batches easy->hard from src/training/difficulty.
+                # The frozen plan forbids dropping rows, so this reorders batch
+                # PRESENTATION only (composition is untouched). Default OFF.
+                _cur_cfg = training_cfg().advanced.curriculum
+                _epochs_for_sampler = [list(b) for b in fixed_sampler["epochs"][: cfg["epochs"]]]
+                if _cur_cfg.enabled:
+                    from training.restored_features import (
+                        CurriculumPlanner, difficulty_rank,
+                    )
+                    from training.difficulty import DifficultyEndpoint, measure_pair
+
+                    _rows = len(train_ds)
+                    _s1 = (train_ds["sentence1"] if "sentence1" in train_ds.column_names
+                           else train_ds["anchor"])
+                    _s2 = (train_ds["sentence2"] if "sentence2" in train_ds.column_names
+                           else train_ds["positive"])
+                    _labels = (train_ds["label"] if "label" in train_ds.column_names
+                               else [1] * _rows)
+                    _row_rank = []
+                    for _i in range(_rows):
+                        _pd = measure_pair(
+                            DifficultyEndpoint.from_text(_s1[_i]),
+                            DifficultyEndpoint.from_text(_s2[_i]),
+                            int(_labels[_i]),
+                        )
+                        _row_rank.append(difficulty_rank(_pd.difficulty))
+                    _planner = CurriculumPlanner(
+                        str(_cur_cfg.schedule), float(_cur_cfg.warmup_fraction)
+                    )
+                    _reordered = []
+                    for _batches in _epochs_for_sampler:
+                        _ordered = sorted(
+                            _batches,
+                            key=lambda b, rr=_row_rank: sum(rr[int(r)] for r in b) / max(1, len(b)),
+                        )
+                        if _planner.schedule == "hard_to_easy":
+                            _ordered = _ordered[::-1]
+                        _reordered.append(_ordered)
+                    _epochs_for_sampler = _reordered
+                    # Mutate the plan the trainer's get_batch_sampler reads.
+                    fixed_sampler["epochs"] = _epochs_for_sampler + list(
+                        fixed_sampler["epochs"][cfg["epochs"]:]
+                    )
+                    print(
+                        f"    [curriculum] schedule={_cur_cfg.schedule} "
+                        f"reordered {len(_epochs_for_sampler)} epochs of frozen batches",
+                        flush=True,
+                    )
                 controlled_sampler = FrozenBatchSampler(
-                    fixed_sampler["epochs"], expected_rows=len(train_ds), batch_size=batch_size
+                    _epochs_for_sampler, expected_rows=len(train_ds), batch_size=batch_size
                 )
                 n_steps_per_epoch = max(1, len(controlled_sampler))  # micro-batches
                 # LOW audit fix: under gradient accumulation HF's warmup/eval
@@ -6554,6 +6698,19 @@ def train_one_config(
                             margin_base=float(_SSOT_MARGIN),
                         )
                     )
+                # Owner-requested EMA + text SWA (advanced.ema / advanced.swa).
+                _ema_callback = None
+                _ema_cfg = training_cfg().advanced.ema
+                if _ema_cfg.enabled:
+                    _ema_callback = _WeightEmaCallback(
+                        float(_ema_cfg.decay), int(_ema_cfg.warmup_updates)
+                    )
+                    callbacks.append(_ema_callback)
+                _swa_cap = None
+                _swa_cfg = training_cfg().advanced.swa
+                if _swa_cfg.enabled:
+                    _swa_cap = _SwaCaptureCallback(int(_swa_cfg.k))
+                    callbacks.append(_swa_cap)
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
                 # the collector never writes the trace itself (train_one_config
@@ -6647,6 +6804,66 @@ def train_one_config(
                     trainer.train(resume_from_checkpoint=resume_checkpoint)
                 finally:
                     training_profile.close()
+            # ── Owner-requested EMA selection + checkpoint SWA (default OFF) ──
+            # Both average the epoch-boundary snapshots captured by callbacks;
+            # the better of {online, EMA, SWA} becomes the fold's published
+            # model. EMA shadows persist/restore via ema_state.pt (resume-safe).
+            _ema_dev_ap = float("nan")
+            _swa_dev_ap = float("nan")
+            if _ema_callback is not None or _swa_cap is not None:
+                _online_state = {
+                    k: v.detach().clone() for k, v in model.state_dict().items()
+                }
+
+                def _flat_load(flat):
+                    model.load_state_dict(
+                        {
+                            k: torch.as_tensor(v).to(
+                                device=_online_state[k].device,
+                                dtype=_online_state[k].dtype,
+                            )
+                            for k, v in flat.items() if k in _online_state
+                        },
+                        strict=False,
+                    )
+
+                def _dev_ap():
+                    try:
+                        return float(evaluator(model, output_path=None)["cosine"]["ap"])
+                    except Exception as exc:  # never abort the fold on eval
+                        print(f"    [ema] fold {fold_i}: dev eval failed: {exc}",
+                              flush=True)
+                        return float("nan")
+
+                _online_ap = _dev_ap()
+                if _ema_callback is not None and _ema_callback.tracker() is not None:
+                    _flat_load(_ema_callback.tracker().shadow())
+                    _ema_dev_ap = _dev_ap()
+                    model.load_state_dict(_online_state)
+                if _swa_cap is not None:
+                    _swa_avg = _swa_cap.average()
+                    if _swa_avg:
+                        _flat_load(_swa_avg)
+                        _swa_dev_ap = _dev_ap()
+                        model.load_state_dict(_online_state)
+                _choice, _best = "online", _online_ap
+                if _ema_dev_ap == _ema_dev_ap and (
+                    _best != _best or _ema_dev_ap > _best
+                ):
+                    _choice, _best = "ema", _ema_dev_ap
+                if _swa_dev_ap == _swa_dev_ap and (
+                    _best != _best or _swa_dev_ap > _best
+                ):
+                    _choice, _best = "swa", _swa_dev_ap
+                if _choice == "ema":
+                    _flat_load(_ema_callback.tracker().shadow())
+                elif _choice == "swa":
+                    _flat_load(_swa_cap.average())
+                print(
+                    f"    [select] fold {fold_i}: {_choice} "
+                    f"(online={_online_ap:.4f} ema={_ema_dev_ap:.4f} swa={_swa_dev_ap:.4f})",
+                    flush=True,
+                )
             with trace_step('training.train_one_config.fold_telemetry'):
                 progress_callback = next(
                     callback
@@ -7513,6 +7730,8 @@ def train_one_config(
                     else float("nan"),
                     "final_train_loss": final_train_loss,
                     "best_dev_ap": best_dev_ap,
+                    "ema_dev_ap": _ema_dev_ap,
+                    "swa_dev_ap": _swa_dev_ap,
                     # full curves for the train-vs-val loss plot (json: csv-column-safe)
                     "train_loss_hist": json.dumps([round(x, 4) for x in train_losses]),
                     "train_epoch_hist": json.dumps(

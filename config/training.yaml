@@ -1163,9 +1163,27 @@ rerank:
 # reads the dev/calibration carve only; test stays report-only.
 #
 # Dial -> consumer:
-#   calibration / accel / telemetry / gradient_accumulation_steps -> text lane
-#   graph.{ema,calibration,focal,swa,arch,telemetry}              -> GNN lane
+#   ema / swa (shared text+GNN), calibration / accel / telemetry /
+#   gradient_accumulation_steps / adversarial / curriculum / rerank /
+#   distillation / embedding_ensemble -> text and/or GNN lanes
+#   graph.{calibration,focal,arch,telemetry} -> GNN lane
+#
+# ── OWNER-REQUESTED FEATURES, KEPT (2026-10-09) ────────────────────────────
+# An earlier audit deleted these as "dead" (commit 374e712); the owner
+# requested they be RESTORED and WIRED. They are intentionally kept — do not
+# delete again. Each now has a live consumer:
+#   ema             -> text _WeightEmaCallback + GNN selection (ONE home)
+#   adversarial     -> GNN train step (FGM, train-only)
+#   curriculum      -> text FrozenBatchSampler per-epoch batch order
+#   swa             -> text post-train averaging + GNN last-k averaging (ONE)
+#   rerank          -> src/training/rerank.py stage-2 tuning
+#   distillation    -> GNN scorer vs train-split-only text-embedding teacher
+#   embedding_ensemble -> text publish-time fold/seed averaging
 advanced:
+  ema:                       # weight EMA (shared text + GNN); eval/select/ckpt
+    enabled: false
+    decay: 0.999
+    warmup_updates: 0
   calibration:               # post-hoc temperature scaling + ECE/Brier/reliability
     enabled: false
     temperature_scaling: false
@@ -1182,11 +1200,33 @@ advanced:
   # NOTE: with the FrozenBatchSampler a step boundary is per optimizer step,
   # so accumulation must divide the per-epoch batch count evenly.
   gradient_accumulation_steps: 1
+  adversarial:               # FGM on embeddings (train-only; GNN step)
+    enabled: false
+    epsilon: 1.0e-3
+    norm: "l2"
+  curriculum:                # epoch-wise easy->hard on measured pair difficulty
+    enabled: false
+    schedule: "easy_to_hard"
+    warmup_fraction: 0.0
+  swa:                       # average last-k checkpoints post-train (text+GNN)
+    enabled: false
+    k: 3
+    use_best_k: false
+  rerank:                    # cross-encoder stage-2 tuning
+    enabled: false
+    model: null
+    learning_rate: 2.0e-5
+    epochs: 3
+    batch_size: 16
+  distillation:              # larger teacher encoder -> student (train split only)
+    enabled: false
+    teacher_model: null
+    temperature: 2.0
+    alpha: 0.5
+  embedding_ensemble:        # average embeddings across folds/seeds at publish
+    enabled: false
+    normalize: true
   graph:                     # GNN-lane overrides (all default OFF)
-    ema:
-      enabled: false
-      decay: 0.999
-      warmup_updates: 0
     calibration:
       enabled: false
       temperature_scaling: false
@@ -1198,10 +1238,6 @@ advanced:
       gamma: 2.0
       pos_weight: null
       alpha: null
-    swa:
-      enabled: false
-      k: 3
-      use_best_k: false
     arch:
       dropout: 0.0
       edge_dropout: 0.0

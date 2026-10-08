@@ -20,18 +20,24 @@ def test_all_advanced_features_default_off():
     assert advanced.accel.tf32 is False
     assert advanced.accel.compile is False
     assert advanced.telemetry.nvml is False
-    assert advanced.graph.ema.enabled is False
+    assert advanced.ema.enabled is False  # ONE ema home (text + GNN)
+    assert advanced.swa.enabled is False  # ONE swa home (text + GNN)
+    assert advanced.adversarial.enabled is False
+    assert advanced.curriculum.enabled is False
+    assert advanced.distillation.enabled is False
+    assert advanced.rerank.enabled is False
+    assert advanced.embedding_ensemble.enabled is False
     assert advanced.graph.calibration.enabled is False
     assert advanced.graph.focal.enabled is False
-    assert advanced.graph.swa.enabled is False
     assert advanced.graph.arch.two_hop is False
 
 
-def test_no_dead_dials_ship():
-    """Every advanced.* field must have a live consumer; the unread ones are gone."""
+def test_all_advanced_fields_have_a_live_consumer():
+    """Every advanced.* field is wired (owner-requested features kept 2026-10-09)."""
     fields = set(AdvancedSpec.model_fields)
     assert fields == {
-        "calibration", "accel", "telemetry",
+        "ema", "swa", "adversarial", "curriculum", "distillation", "rerank",
+        "embedding_ensemble", "calibration", "accel", "telemetry",
         "gradient_accumulation_steps", "graph",
     }
 

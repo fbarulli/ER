@@ -3320,7 +3320,7 @@ class PreparationSpec(BaseModel):
 
 
 class EmaSpec(BaseModel):
-    """Weight-EMA knobs (advanced.graph.ema) — default OFF."""
+    """Weight-EMA knobs (advanced.ema) — ONE home shared by text + GNN; OFF."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -3354,7 +3354,7 @@ class CalibrationSpec(BaseModel):
 
 
 class SwaSpec(BaseModel):
-    """SWA / top-k checkpoint averaging (advanced.graph.swa)."""
+    """SWA / top-k checkpoint averaging (advanced.swa) — shared text + GNN."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -3392,6 +3392,75 @@ class FocalSpec(BaseModel):
     alpha: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class AdversarialSpec(BaseModel):
+    """FGM adversarial embedding perturbation (advanced.adversarial); OFF.
+
+    Owner-requested (kept 2026-10-09): wired train-only in the GNN step.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    epsilon: float = Field(default=1.0e-3, ge=0.0)
+    norm: Literal["l2", "linf"] = "l2"
+
+
+class CurriculumSpec(BaseModel):
+    """Pair-difficulty curriculum (advanced.curriculum); train-side only.
+
+    Owner-requested (kept 2026-10-09): drives the text FrozenBatchSampler's
+    per-epoch batch order from src/training/difficulty.py.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    schedule: Literal["easy_to_hard", "hard_to_easy"] = "easy_to_hard"
+    warmup_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
+
+
+class RerankAdvancedSpec(BaseModel):
+    """Cross-encoder rerank tuning knobs (advanced.rerank); default OFF.
+
+    Owner-requested (kept 2026-10-09): wired into src/training/rerank.py.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    model: str | None = None
+    learning_rate: float = Field(default=2.0e-5, gt=0.0)
+    epochs: int = Field(default=3, ge=1)
+    batch_size: int = Field(default=16, ge=1)
+
+
+class DistillationSpec(BaseModel):
+    """Teacher->student distillation (advanced.distillation); default OFF.
+
+    Owner-requested (kept 2026-10-09): wired in the GNN scorer against the
+    train-split-only text-embedding teacher.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    teacher_model: str | None = None
+    temperature: float = Field(default=2.0, gt=0.0)
+    alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class EmbeddingEnsembleSpec(BaseModel):
+    """Seed/fold embedding averaging at publish (advanced.embedding_ensemble).
+
+    Owner-requested (kept 2026-10-09): wired at the text publish step.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    normalize: bool = True
+
+
 class GraphArchSpec(BaseModel):
     """GNN architecture additions (advanced.graph.arch); default OFF."""
 
@@ -3409,10 +3478,8 @@ class GraphAdvancedSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ema: EmaSpec = Field(default_factory=EmaSpec)
     calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
     focal: FocalSpec = Field(default_factory=FocalSpec)
-    swa: SwaSpec = Field(default_factory=SwaSpec)
     arch: GraphArchSpec = Field(default_factory=GraphArchSpec)
     telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
 
@@ -3425,15 +3492,28 @@ class AdvancedSpec(BaseModel):
     ``core.common.training_cfg().advanced``; the GNN lane reads
     ``advanced.graph``. Additive via default_factory so configs that predate
     the block still validate.
+
+    ``ema`` is the ONE weight-EMA home shared by BOTH lanes (unified
+    2026-10-09); the GNN lane reads ``advanced.ema``, never a second home.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    # Text + GNN shared.
+    ema: EmaSpec = Field(default_factory=EmaSpec)
     # Text-lane dials (each has a live consumer in training.py).
     calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
     accel: AccelSpec = Field(default_factory=AccelSpec)
     telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
     gradient_accumulation_steps: int = Field(default=1, ge=1)
+    adversarial: AdversarialSpec = Field(default_factory=AdversarialSpec)
+    curriculum: CurriculumSpec = Field(default_factory=CurriculumSpec)
+    swa: SwaSpec = Field(default_factory=SwaSpec)
+    rerank: RerankAdvancedSpec = Field(default_factory=RerankAdvancedSpec)
+    distillation: DistillationSpec = Field(default_factory=DistillationSpec)
+    embedding_ensemble: EmbeddingEnsembleSpec = Field(
+        default_factory=EmbeddingEnsembleSpec
+    )
     # GNN-lane dials (each has a live consumer in graph_tracks/train.py).
     graph: GraphAdvancedSpec = Field(default_factory=GraphAdvancedSpec)
 

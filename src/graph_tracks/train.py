@@ -373,6 +373,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         # TASK B advanced-graph knobs (config/training.yaml advanced.graph).
         from core.common import training_cfg as _training_cfg
         _adv = _training_cfg().advanced.graph
+        # Unified (owner-requested 2026-10-09): EMA and SWA have ONE home
+        # shared by both lanes (advanced.ema / advanced.swa).
+        _adv_root = _training_cfg().advanced
         model = AttributeGNN(
             vocabulary, cfg.hidden_dim, cfg.output_dim,
             text_dim, cfg.graph_enabled, cfg.aggregation_backend,
@@ -399,6 +402,21 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             NoDecayParamGroups as _NoDecay,
             OptimizerStatePrecision as _StatePrecision,
             RDropRegularizer as _RDrop,
+        )
+        from training.restored_features import (
+            DistillationRegularizer as _Distillation,
+            FGMAttack as _FGMAttack,
+        )
+        _fgm = _FGMAttack(
+            _training_cfg().advanced.adversarial.epsilon
+            if _training_cfg().advanced.adversarial.enabled else 0.0,
+            str(_training_cfg().advanced.adversarial.norm),
+        )
+        _distill = _Distillation(
+            temperature=float(_training_cfg().advanced.distillation.temperature),
+            alpha=float(_training_cfg().advanced.distillation.alpha)
+            if _training_cfg().advanced.distillation.enabled else 0.0,
+            teacher_model=_training_cfg().advanced.distillation.teacher_model,
         )
         _opt_cfg = _training_cfg().optimizer
         _reg_cfg = _training_cfg().regularization
@@ -641,7 +659,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 fit_temperature, reliability_diagram,
                 sigmoid_focal_bce_with_logits,
             )
-            _ema_cfg = _adv.ema
+            _ema_cfg = _adv_root.ema
             _ema_model = EmaTracker(
                 decay=float(_ema_cfg.decay), warmup_updates=int(_ema_cfg.warmup_updates)
             ) if _ema_cfg.enabled else None
@@ -696,6 +714,28 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         "auxiliary", float(cfg.metric_weight), epoch
                     )
                     loss = classification + _metric_weight * metric
+                    # Distillation (owner-requested): pull the student scorer
+                    # toward the train-split-only text-embedding teacher signal.
+                    if _distill.enabled and support_text is not None:
+                        _teacher_norm = F.normalize(support_text, dim=-1)
+                        _teacher = (
+                            _teacher_norm[train_pairs[:, 0]]
+                            * _teacher_norm[train_pairs[:, 1]]
+                        ).sum(-1)
+                        loss = loss + _distill.loss(
+                            scores.logits, _teacher, train_labels
+                        )
+                    # FGM (owner-requested): perturb the embeddings along the
+                    # classification gradient and add the adversarial loss
+                    # (train-only; default OFF).
+                    if _fgm.enabled and embeddings.requires_grad:
+                        _grad = torch.autograd.grad(
+                            classification, embeddings, retain_graph=True,
+                            create_graph=False, allow_unused=True,
+                        )[0]
+                        _adv = _fgm.perturb(embeddings, _grad)
+                        _adv_logits = scorer.score(_adv, train_pairs).logits
+                        loss = loss + _classify(_adv_logits)
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
                 with _LOG.section("graph.train_update", epoch=epoch):
@@ -898,13 +938,13 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         "model": _ema_model.state_dict(),
                         "scorer": _ema_scorer.state_dict(),
                     }
-                if _adv.swa.enabled:
+                if _adv_root.swa.enabled:
                     # Keep a bounded last-k window of CPU state snapshots.
                     _swa_states.append((
                         {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
                         {k: v.detach().cpu().clone() for k, v in scorer.state_dict().items()},
                     ))
-                    _keep = max(1, int(_adv.swa.k))
+                    _keep = max(1, int(_adv_root.swa.k))
                     if len(_swa_states) > _keep:
                         del _swa_states[:-_keep]
                 logger.info("[graph-checkpoint] write start epoch=%d path=%s selected=%s reason=%s dev_pr_auc=%.6f previous_best=%.6f",
@@ -964,7 +1004,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     )
                     break
             # ── TASK B item 9: SWA / last-k checkpoint averaging (re-eval) ──
-            if _adv.swa.enabled and _swa_states:
+            if _adv_root.swa.enabled and _swa_states:
                 from training.advanced import average_state_dicts
                 swa_model = average_state_dicts([s[0] for s in _swa_states])
                 swa_scorer = average_state_dicts([s[1] for s in _swa_states])

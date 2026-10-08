@@ -71,8 +71,12 @@ def rerank_stage(
     # was an inline 512 the config could not steer (audit, owner Q27).
     from core.common import runtime as _runtime
 
+    # Owner-requested rerank tuning knobs (advanced.rerank; default OFF).
+    from core.common import training_cfg as _tcfg
+    _rr = _tcfg().advanced.rerank
     ce = common.load_local_cross_encoder(
-        args.rerank, device=dev, max_length=int(_runtime("rerank_max_length"))
+        (_rr.model if _rr.enabled and _rr.model else args.rerank),
+        device=dev, max_length=int(_runtime("rerank_max_length")),
     )
 
     # rebuild the pair pools the same way the trainer did — now a plain
@@ -124,6 +128,23 @@ def rerank_stage(
         np.array([cos(a, b) for a, b, _ in dev_pairs]) if dev_pairs else np.empty(0)
     )
     dev_y = np.array([t for _, _, t in dev_pairs]) if dev_pairs else np.empty(0)
+
+    # Owner-requested stage-2 tuning (advanced.rerank): fine-tune the
+    # cross-encoder on the DEV pairs (the calibration carve, never test).
+    if _rr.enabled and len(dev_pairs):
+        from training.restored_features import RerankTuner
+
+        try:
+            _history = RerankTuner(
+                _rr.learning_rate, _rr.epochs, _rr.batch_size
+            ).fit(
+                ce,
+                [(payload[a], payload[b]) for a, b, _ in dev_pairs],
+                [t for _, _, t in dev_pairs],
+            )
+            print(f"[rerank] tuned cross-encoder: {_history}", flush=True)
+        except Exception as exc:  # tuning is optional; scoring still runs
+            print(f"[rerank] tuning skipped ({type(exc).__name__}: {exc})", flush=True)
 
     pairs = [(a, b, 1) for a, b in test_pos] + [(a, b, 0) for a, b in test_neg]
     bi_s = np.array([cos(a, b) for a, b, _ in pairs])
