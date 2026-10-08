@@ -1882,8 +1882,12 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             detached = loss.detach()
             total = detached if total is None else total + detached
             if config.log_every and n_steps % config.log_every == 0:
-                print("epoch %d/%d step %d" % (epoch + 1, config.epochs,
-                                               n_steps), flush=True)
+                # Per-step loss: ONE extra GPU sync every log_every steps
+                # (negligible); it was dropped when the loop switched to
+                # on-GPU accumulation, which left the log loss-less.
+                print("epoch %d/%d step %d loss %.4f" % (
+                    epoch + 1, config.epochs, n_steps,
+                    float(detached.item())), flush=True)
         mean = (float(total.item() / max(1, n_steps))
                 if total is not None else 0.0)
         # DDP already averages the gradients; report the rank-averaged scalar
