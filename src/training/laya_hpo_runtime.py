@@ -72,7 +72,7 @@ def finished_trial_count(study, finished_states):
 
 
 def objective_value(trial, run_fn, lease_store, champion_store,
-                    generation_id, model_key):
+                    generation_id, model_key, objective_mode=None):
     """One fenced HPO trial: lease -> run -> assert -> promote -> return.
 
     Maximizes the value returned by ``run_fn`` (the kernel returns DEV
@@ -80,11 +80,21 @@ def objective_value(trial, run_fn, lease_store, champion_store,
     issued for the trial number Optuna assigned, asserted current BEFORE any
     promotion (a zombie worker must never publish), and revoked on ANY failure
     so a replacement worker can re-issue the epoch.
+
+    ``objective_mode`` (optional) shapes a multi-objective return value while
+    the champion registry always promotes on the PRIMARY (dev accuracy).
+    ``run_fn`` returns ``(accuracy, dev_loss, artifact)`` or, when a secondary
+    objective is configured, ``(accuracy, dev_loss, artifact, secondary)``.
     """
     lease = lease_store.issue(generation_id=generation_id, model_key=model_key,
                               trial_number=int(trial.number))
     try:
-        accuracy, dev_loss, artifact = run_fn(trial)
+        result = run_fn(trial)
+        if len(result) == 4:
+            accuracy, dev_loss, artifact, secondary = result
+        else:
+            accuracy, dev_loss, artifact = result
+            secondary = None
         lease_store.assert_current(lease)
         trial.set_user_attr("dev_accuracy", float(accuracy))
         if dev_loss is not None:
@@ -94,13 +104,75 @@ def objective_value(trial, run_fn, lease_store, champion_store,
             generation_id=generation_id, model_key=model_key,
             trial_number=int(trial.number), value=float(accuracy),
             artifact_snapshot=str(artifact), lease_epoch=int(lease.epoch))
-        return float(accuracy)
+        value = float(accuracy)
+        if objective_mode is not None and objective_mode.multi:
+            metrics = {"dev_accuracy": float(accuracy)}
+            if secondary is not None:
+                metrics[objective_mode.secondary] = float(secondary)
+            value = objective_mode.value(metrics)
+        return value
     except BaseException:
         try:
             lease_store.revoke(lease)
-        except Exception:  # noqa: BLE001, S110 - best-effort; the primary error re-raises
+        except Exception:  # noqa: BLE001,S110 - best-effort; the primary error re-raises
             pass
         raise
+
+
+class FidelityReporter:
+    """Report per-epoch dev accuracy to the active Optuna trial and prune.
+
+    Wraps the perf patch's ``_dev_metrics`` (the per-epoch dev evaluation) so
+    the ASHA/Hyperband pruner sees the intermediate values it needs. Fail-soft:
+    a reporting error never fails training.
+    """
+
+    def __init__(self, trial, optuna_module, namespace):
+        self.trial = trial
+        self.optuna = optuna_module
+        self.namespace = namespace
+        self._original = None
+        self.step = 0
+
+    def install(self):
+        original = _namespace_get(self.namespace, "_dev_metrics")
+        if original is None or self.trial is None or self.optuna is None:
+            return self
+        self._original = original
+        trial = self.trial
+        optuna_module = self.optuna
+        state = self
+
+        def reported(*args, **kwargs):
+            result = original(*args, **kwargs)
+            try:
+                accuracy = result.get("accuracy")
+                if accuracy is not None:
+                    trial.report(float(accuracy), state.step)
+                    state.step += 1
+                    if trial.should_prune():
+                        raise optuna_module.TrialPruned(
+                            "pruned at fidelity stage " + str(state.step))
+            except optuna_module.TrialPruned:
+                raise
+            except Exception:  # noqa: BLE001,S110 - reporting is best-effort
+                pass
+            return result
+
+        _namespace_set(self.namespace, "_dev_metrics", reported)
+        return self
+
+    def uninstall(self):
+        if self._original is not None:
+            _namespace_set(self.namespace, "_dev_metrics", self._original)
+            self._original = None
+
+    def __enter__(self):
+        return self.install()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.uninstall()
+        return False
 
 
 # ── per-trial torch.profiler harness (fail-soft, bounded) ──────────────────

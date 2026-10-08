@@ -48,7 +48,13 @@ from cli import laya_lane
 from core.common import TRAIN_ROOT, training_cfg
 from core.laya_config import FinetuneSpec
 from core.manifest import atomic_write_json
-from training import hpo_champions, hpo_control_plane, hpo_fencing, laya_hpo_runtime
+from training import (
+    hpo_champions,
+    hpo_control_plane,
+    hpo_fencing,
+    laya_hpo_options,
+    laya_hpo_runtime,
+)
 from training.hpo_control_plane import (
     create_storage,
     generation_study_name,
@@ -166,6 +172,13 @@ def validate_space(space: dict[str, Any]) -> None:
             raise ValueError("laya HPO profiler.active must be >= 1")
         if profiler["top_ops"] < 1:
             raise ValueError("laya HPO profiler.top_ops must be >= 1")
+    # The option components own their own validation; assemble once so a bad
+    # parallelism/sampler/pruner/fidelity/warm-start/ensemble name fails at
+    # load, not mid-sweep.
+    try:
+        laya_hpo_options.build_option_set(space)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"laya HPO options invalid: {exc}") from exc
 
 
 def space_digest(space: dict[str, Any]) -> str:
@@ -252,7 +265,7 @@ def hpo_runtime_source() -> str:
     """
     chunks: list[str] = []
     for module in (hpo_control_plane, hpo_fencing, hpo_champions,
-                   laya_hpo_runtime):
+                   laya_hpo_runtime, laya_hpo_options):
         text = inspect.getsource(module)
         cleaned = "\n".join(
             line for line in text.splitlines()
@@ -439,6 +452,8 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
                    "seed": int(space["seed"]), "max_workers": _MAX_WORKERS},
         "objective": space["objective"],
         "profiler": space.get("profiler"),
+        "options": laya_hpo_options.build_option_set(
+            space, root="hpo_shared_cache").as_dict(),
         "optuna_storage": {
             "required_env": OPTUNA_URL_ENV,
             "injected_into_kernel": True,
@@ -484,8 +499,10 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
@@ -525,6 +542,11 @@ FINETUNE_CONTROL = {}
 FINETUNE_DEV_ROWS = None
 FINETUNE_OUTPUT_DIR = None
 FINETUNE_CONTROL_RESULT = None
+# The config-selected option components (training.laya_hpo_options), assembled
+# once from HPO_SPACE. Model-agnostic; every knob is config SSOT.
+OPTION_SET = None
+# Per-session shared-data cache manifests (auditable inventory).
+SHARED_CACHE_MANIFESTS = []
 
 
 def log(line):
@@ -713,8 +735,28 @@ def run_trial(trial, device, train_path, dev_path, base_model):
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    log("trial %d start device=%s dials=%s"
-        % (int(trial.number), device, json.dumps(dials, sort_keys=True)))
+
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    fidelity = options.fidelity
+    resource = fidelity.resource(int(trial.number))
+    if fidelity.dimension == "epochs":
+        config_dict["epochs"] = int(resource)
+    # Coarse-to-fine: freeze the encoder for `head_only_epochs`, then unfreeze
+    # (the perf patch already honours `unfreeze_after_epoch`).
+    frozen = fidelity.encoder_frozen_epochs()
+    if frozen > 0:
+        config_dict["freeze_encoder"] = True
+        control_dict["unfreeze_after_epoch"] = int(frozen)
+    # Shared-data: a fixed seed keeps every trial's mini-batch/option-order
+    # draws identical (fair comparisons); warm start picks the init source.
+    config_dict["seed"] = int(HPO_SPACE.get("seed", config_dict.get("seed", 0)))
+    start_model = options.warm_start.source() or base_model
+    trial_train = (subset_train_json(train_path, resource, fidelity.full)
+                   if fidelity.dimension == "subset" else train_path)
+
+    log("trial %d start device=%s resource=%s dim=%s freeze=%s warm=%s dials=%s"
+        % (int(trial.number), device, resource, fidelity.dimension, frozen,
+           options.warm_start.mode, json.dumps(dials, sort_keys=True)))
     rank0 = True
     try:
         rank0 = bool(globals()["is_rank0"]())
@@ -728,30 +770,148 @@ def run_trial(trial, device, train_path, dev_path, base_model):
         device_type=("cuda" if str(device).startswith("cuda") else "cpu"),
         laya_train=laya_train, namespace=globals(),
         logger=log, wandb_log=wandb_log_profiler, rank0=rank0)
+    # Fidelity reporting drives the ASHA/Hyperband pruner from the per-epoch
+    # dev accuracy (only meaningful when a pruner is configured).
+    reporter = None
+    if fidelity.enabled and options.pruner.kind != "none":
+        reporter = FidelityReporter(trial, globals().get("optuna"), globals())
+        reporter.install()
+    started = time.time()
     # Fail-soft: the profiler never fails the trial (its __exit__ returns
     # False), so a finetune error still propagates unchanged.
-    with profiler:
-        run_laya_finetune(train_path, dev_path, base_model, out_dir, device)
+    try:
+        with profiler:
+            run_laya_finetune(trial_train, dev_path, start_model, out_dir,
+                              device)
+    finally:
+        if reporter is not None:
+            reporter.uninstall()
+        _record_cache_manifest(options)
+    epoch_time = max(0.0, time.time() - started)
     result = globals().get("FINETUNE_CONTROL_RESULT") or {}
     accuracy = result.get("best_dev_accuracy")
     if accuracy is None:
         raise RuntimeError("trial %d produced no best_dev_accuracy"
                            % int(trial.number))
     dev_loss = dev_loss_from_report(out_dir)
-    log("trial %d done dev_accuracy=%s dev_loss=%s"
-        % (int(trial.number), accuracy, dev_loss))
-    return float(accuracy), dev_loss, out_dir
+    trial.set_user_attr("epoch_time_s", float(epoch_time))
+    trial.set_user_attr("fidelity_resource", int(resource))
+    log("trial %d done dev_accuracy=%s dev_loss=%s epoch_time_s=%.1f"
+        % (int(trial.number), accuracy, dev_loss, epoch_time))
+    return float(accuracy), dev_loss, out_dir, float(epoch_time)
+
+
+def subset_train_json(train_path, resource, full):
+    """Deterministic training-subset JSONL (cached per resource level)."""
+    if not full or int(resource) >= int(full):
+        return train_path
+    fraction = max(1, int(resource)) / float(full)
+    out = WORKING / ("subset_" + str(int(resource)) + ".jsonl")
+    if out.is_file():
+        return out
+    from laya import train as laya_train
+    rows = laya_train.read_jsonl(str(train_path))
+    keep = max(1, int(len(rows) * fraction))
+    with out.open("w", encoding="utf-8") as handle:
+        for row in rows[:keep]:
+            handle.write(json.dumps(row) + "\\n")
+    log("fidelity subset %d/%d rows -> %s" % (keep, len(rows), out.name))
+    return out
+
+
+def _record_cache_manifest(options):
+    """Record the shared-data cache manifest for the trial (auditable)."""
+    try:
+        global SHARED_CACHE_MANIFESTS
+        manifest = options.shared_data.manifest({
+            "tokenized": {"corpus_present": bool(TRAIN_JSONL)},
+            "embeddings": {"encoder_frozen": bool(FINETUNE_CONFIG.get(
+                "freeze_encoder"))},
+            "dev": {"dev_present": bool(DEV_JSONL)},
+        })
+        SHARED_CACHE_MANIFESTS.append(manifest)
+    except Exception as error:
+        log("cache manifest skipped: " + str(error)[:160])
 
 
 def make_objective(device, train_path, dev_path, base_model, lease_store,
                    champion_store):
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     def objective(trial):
         return objective_value(
             trial,
             lambda trial: run_trial(
                 trial, device, train_path, dev_path, base_model),
-            lease_store, champion_store, GENERATION_ID, MODEL_KEY)
+            lease_store, champion_store, GENERATION_ID, MODEL_KEY,
+            objective_mode=options.objective_mode)
     return objective
+
+
+def make_ddp_objective(options, lease_store, champion_store):
+    """DDP-per-trial objective: each trial is one torchrun subprocess whose
+    rank 0 writes the metric; only this controller calls study.tell."""
+    script = os.path.abspath(__file__)
+    runner = DdpTrialRunner(options.scheduler, script, result_dir=WORKING,
+                            logger=log)
+
+    def objective(trial):
+        def run_fn(t):
+            dials = sample_dials(t, HPO_SPACE)
+            return runner.run(int(t.number), {"dials": dials})
+        return objective_value(trial, run_fn, lease_store, champion_store,
+                               GENERATION_ID, MODEL_KEY,
+                               objective_mode=options.objective_mode)
+    return objective
+
+
+def run_ddp_trial(trial_number):
+    """One DDP trial on THIS rank (launched by torchrun via DdpTrialRunner)."""
+    ensure_optuna_url()
+    payload = json.loads(os.environ.get("ER_LAYA_HPO_DDP_PAYLOAD", "{}"))
+    import torch
+    from laya import train as laya_train
+    local_rank = int(os.environ.get("LOCAL_RANK") or "0")
+    device = ("cuda:" + str(local_rank)) if torch.cuda.is_available() else "cpu"
+    train_path = resolve_input(TRAIN_JSONL)
+    dev_path = resolve_input(DEV_JSONL)
+    base_model = extract_base_model(resolve_input(BASE_MODEL_ARCHIVE))
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    globals()["OPTION_SET"] = options
+    dials = payload.get("dials") or {}
+    config_dict, control_dict = route_dials(
+        BASE_FINETUNE_CONFIG, BASE_FINETUNE_CONTROL, dials, HPO_SPACE)
+    globals()["FINETUNE_CONFIG"] = config_dict
+    globals()["FINETUNE_CONTROL"] = control_dict
+    globals()["FINETUNE_CONTROL_RESULT"] = None
+    globals()["FINETUNE_DEV_ROWS"] = None
+    start_model = options.warm_start.source() or base_model
+    out_dir = WORKING / ("ddp_checkpoint_trial_" + str(int(trial_number)))
+    if is_rank0() and out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    profiler = TrialProfiler(
+        torch_module=torch, config=HPO_SPACE.get("profiler") or {},
+        trace_path=out_dir / "profiler" / ("trial_" + str(int(trial_number))
+                                           + ".json"),
+        device_type=("cuda" if device.startswith("cuda") else "cpu"),
+        laya_train=laya_train, namespace=globals(), logger=log,
+        wandb_log=wandb_log_profiler, rank0=True)
+    started = time.time()
+    init_distributed()
+    try:
+        with profiler:
+            run_laya_finetune(train_path, dev_path, start_model, out_dir, device)
+    finally:
+        destroy_if_distributed()
+    if is_rank0():
+        result = globals().get("FINETUNE_CONTROL_RESULT") or {}
+        data = {"accuracy": result.get("best_dev_accuracy"),
+                "dev_loss": dev_loss_from_report(out_dir),
+                "checkpoint": str(out_dir),
+                "epoch_time_s": max(0.0, time.time() - started)}
+        path = DdpTrialRunner(options.scheduler, os.path.abspath(__file__),
+                              result_dir=WORKING).result_path(trial_number)
+        path.write_text(json.dumps(data) + "\\n", encoding="utf-8")
 
 
 def run_worker(device):
@@ -761,17 +921,28 @@ def run_worker(device):
         pip_install_laya()
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
+    globals()["optuna"] = optuna
+    import torch
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    globals()["OPTION_SET"] = options
+    options.resource_caps.apply_torch(torch)
 
     storage_config = storage_from_environment()
     storage = create_storage(storage_config)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
+    sampler = options.sampler.create(optuna)
+    pruner = options.pruner.create(optuna)
+    directions = options.objective_mode.directions()
+    study_kwargs = ({"directions": directions} if isinstance(directions, list)
+                    else {"direction": directions})
     study = optuna.create_study(
         study_name=study_name,
-        direction=str(HPO_SPACE.get("objective", {}).get("direction", "maximize")),
-        sampler=optuna.samplers.TPESampler(seed=SEED),
+        sampler=sampler,
+        pruner=pruner,
         storage=storage,
-        load_if_exists=True)
+        load_if_exists=True,
+        **study_kwargs)
     fail_stale_trials(study)
     lease_store = TrialLeaseStore(storage_config.url)
     champion_store = ChampionStore(storage_config.url)
@@ -787,11 +958,20 @@ def run_worker(device):
     except Exception as error:
         log("wandb init failed: " + str(error)[:200])
 
-    objective = make_objective(device, train_path, dev_path, base_model,
-                               lease_store, champion_store)
+    if os.environ.get("ER_LAYA_HPO_DDP") == "1":
+        objective = make_ddp_objective(options, lease_store, champion_store)
+    else:
+        objective = make_objective(device, train_path, dev_path, base_model,
+                                   lease_store, champion_store)
     prior = finished_trial_count(study, ("COMPLETE", "PRUNED", "FAIL"))
     remaining = max(0, int(N_TRIALS) - prior)
-    per_worker = max(0, math.ceil(remaining / max(1, int(N_JOBS))))
+    # DDP serialises trials (torchrun fans each one out); slots parallelise.
+    if os.environ.get("ER_LAYA_HPO_DDP") == "1":
+        divisor = 1
+    else:
+        divisor = max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
+                             or N_JOBS))
+    per_worker = max(0, math.ceil(remaining / divisor))
     log("worker budget prior=%d remaining=%d per_worker=%d study=%s"
         % (prior, remaining, per_worker, study_name))
     if per_worker:
@@ -852,6 +1032,22 @@ def write_session_receipt():
         "published_pin": {"repository": REPOSITORY, "branch": BRANCH,
                           "revision": REVISION},
     }
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    receipt["options"] = options.as_dict()
+    # Ensemble: the top-k trials are directly comparable (fixed data).
+    ensemble_trials = options.ensembler.select(
+        [SimpleNamespace(
+            number=t["number"],
+            value=(t["value"][0] if isinstance(t["value"], (list, tuple))
+                   else t["value"]))
+         for t in trials])
+    receipt["ensemble"] = {
+        "enabled": options.ensembler.enabled,
+        "method": options.ensembler.method,
+        "top_k": options.ensembler.top_k,
+        "selected": [int(t.number) for t in ensemble_trials],
+    }
+    receipt["shared_data"] = {"manifests": SHARED_CACHE_MANIFESTS[-8:]}
     WORKING.mkdir(parents=True, exist_ok=True)
     path = WORKING / "laya-hpo.receipt.json"
     path.write_text(json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
@@ -865,20 +1061,38 @@ def main():
     pip_install_runtime()
     pip_install_laya()
     import torch
+    options = build_option_set(HPO_SPACE)
+    globals()["OPTION_SET"] = options
+    options.resource_caps.apply_torch(torch)
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    workers = max(1, min(int(N_JOBS), gpu_count or 1))
+    if options.scheduler.mode == "slots":
+        options.mps.start()
+    specs = options.scheduler.workers(gpu_count or 1)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
-    log("session gpus=%d workers=%d study=%s budget=%d"
-        % (gpu_count, workers, study_name, int(N_TRIALS)))
+    log("session gpus=%d mode=%s workers=%d study=%s budget=%d options=%s"
+        % (gpu_count, options.scheduler.mode, len(specs), study_name,
+           int(N_TRIALS), json.dumps(options.as_dict(), sort_keys=True)))
     script = os.path.abspath(__file__)
     processes = []
-    for index in range(workers):
+    for spec in specs:
         env = os.environ.copy()
-        env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:" + str(index)
+        env.update(spec.env)
         env["ER_LAYA_HPO_SKIP_INSTALL"] = "1"
+        env["ER_LAYA_HPO_WORKER_COUNT"] = str(len(specs))
+        if options.scheduler.mode == "slots":
+            # Pin the slot to ONE physical GPU (its own worker process).
+            env["CUDA_VISIBLE_DEVICES"] = str(spec.device_index)
+            env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:0"
+        else:
+            # DDP-per-trial: one controller process; each OBJECTIVE fans the
+            # trial out over torchrun and only rank 0 returns the metric.
+            env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:0"
+            env["ER_LAYA_HPO_DDP"] = "1"
         processes.append(subprocess.Popen([sys.executable, script], env=env))
     codes = [process.wait() for process in processes]
+    if options.scheduler.mode == "slots":
+        options.mps.stop()
     log("workers exited: " + str(codes))
     receipt = write_session_receipt()
     # Stage ONLY the champion checkpoint (the per-trial checkpoints would make
@@ -898,8 +1112,11 @@ def main():
 
 
 if __name__ == "__main__":
+    _ddp_trial = os.environ.get("ER_LAYA_HPO_DDP_TRIAL")
     _worker_device = os.environ.get("ER_LAYA_HPO_WORKER_DEVICE")
-    if _worker_device:
+    if _ddp_trial is not None:
+        run_ddp_trial(int(_ddp_trial))
+    elif _worker_device:
         run_worker(_worker_device)
     else:
         main()

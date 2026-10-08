@@ -53,6 +53,56 @@ profiler:
   repeat: 1
   top_ops: 15
 
+# ── HPO option set (every option is selected here; no code literals) ────────
+# See training/laya_hpo_options.py: one class per responsibility, a name->
+# builder registry per family, assembled by `build_option_set`.
+options:
+  # A) trial parallelism
+  parallelism: slots          # slots | ddp
+  slots_per_gpu: 1            # slots mode: worker PROCESSES per GPU
+  max_concurrent_trials: 2    # ceiling across all GPUs/slots
+  mps: false                  # CUDA Multi-Process Service (slots mode)
+  ddp:
+    nproc_per_node: 2         # ddp mode: ranks per trial
+    backend: nccl
+    master_port: 29500
+  resources:                  # per-worker CPU/CUDA fairness caps
+    omp_threads: 4
+    torch_threads: 4
+    dataloader_workers: 2
+    cuda_alloc_fraction: 0.45 # per-process CUDA memory fraction in slots mode
+  # B) search / scheduling
+  sampler:
+    kind: tpe                 # tpe | cmaes | random | gp | qmc
+  pruner:
+    kind: none                # none | median | successive_halving | hyperband
+    n_startup_trials: 5
+    n_warmup_steps: 1
+    min_resource: 1
+    reduction_factor: 3
+  fidelity:
+    enabled: false            # multi-fidelity (ASHA/Hyperband lever)
+    dimension: epochs         # epochs | subset
+    small: 1
+    full: 8
+    stages: 1
+  multi_objective: false      # maximize dev_accuracy, minimize secondary
+  multi_objective_secondary: epoch_time_s
+  staged:
+    enabled: false            # coarse-to-fine: head-only frozen-encoder warmup
+    head_only_epochs: 0
+  # C) exploit shared data
+  shared_data:
+    tokenized_cache: true     # pre-tokenize ONCE; all trials read the mmap
+    embedding_cache: true     # frozen-encoder embeddings reused across trials
+    dev_encoding_cache: true  # dev encodings cached for fast per-epoch eval
+  warm_start:
+    mode: base                # scratch | base | champion
+  ensemble:
+    enabled: false            # average the top-k trials (data is fixed)
+    top_k: 3
+    method: weights           # weights | predictions
+
 # The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune
 # kernel so an HPO push never clobbers a training push.
 kernel_slug: fbarulli/er-laya-hpo

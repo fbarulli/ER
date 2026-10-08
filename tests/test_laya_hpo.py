@@ -269,6 +269,53 @@ def test_finished_trial_count_counts_only_terminal_states():
         study, ("COMPLETE", "PRUNED", "FAIL")) == 3
 
 
+def test_objective_value_multi_objective_returns_tuple_and_promotes_primary():
+    trial = FakeTrial(number=9)
+    leases = FakeLeaseStore()
+    champions = FakeChampionStore()
+    mode = SimpleNamespace(multi=True, secondary="epoch_time_s",
+                           value=lambda metrics: (metrics["dev_accuracy"],
+                                                  metrics["epoch_time_s"]))
+    value = laya_hpo_runtime.objective_value(
+        trial, lambda t: (0.7, 0.2, Path("/ck"), 12.5),
+        leases, champions, "g", "laya", objective_mode=mode)
+    assert value == (0.7, 12.5)
+    assert champions.promotions[0]["value"] == 0.7  # primary only
+
+
+def test_fidelity_reporter_reports_per_epoch_and_prunes():
+    class _TrialPruned(Exception):
+        pass
+
+    class _Trial:
+        def __init__(self):
+            self.reports = []
+
+        def report(self, value, step):
+            self.reports.append((value, step))
+
+        def should_prune(self):
+            return len(self.reports) >= 2
+
+    calls = {"n": 0}
+
+    def dev_metrics(*args, **kwargs):
+        calls["n"] += 1
+        return {"accuracy": 0.5 + 0.1 * calls["n"]}
+
+    namespace = {"_dev_metrics": dev_metrics}
+    trial = _Trial()
+    reporter = laya_hpo_runtime.FidelityReporter(
+        trial, SimpleNamespace(TrialPruned=_TrialPruned), namespace)
+    reporter.install()
+    with pytest.raises(_TrialPruned):
+        namespace["_dev_metrics"]()  # step 0 (no prune)
+        namespace["_dev_metrics"]()  # step 1 -> prune
+    assert [step for _, step in trial.reports] == [0, 1]
+    reporter.uninstall()
+    assert namespace["_dev_metrics"] is dev_metrics
+
+
 # ── staged kernel composition + secret hygiene ─────────────────────────────
 def test_hpo_runtime_source_has_no_future_import_and_carries_primitives():
     source = laya_hpo.hpo_runtime_source()
@@ -361,6 +408,15 @@ def test_stage_kernel_embeds_profiler_harness(monkeypatch, tmp_path):
                    "PHASE_OPTIMIZER_STEP"):
         assert symbol in script, symbol
     assert receipt["profiler"]["top_ops"] == 15
+
+
+def test_stage_kernel_receipt_carries_the_option_set(monkeypatch, tmp_path):
+    receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    assert receipt["options"]["scheduler"]["mode"] == "slots"
+    assert receipt["options"]["sampler"]["kind"] == "tpe"
+    assert receipt["options"]["pruner"]["kind"] == "none"
+    assert receipt["options"]["warm_start"]["mode"] == "base"
+    assert receipt["options"]["shared_data"]["tokenized"] is True
 
 
 # ── per-trial profiler coverage (stubbed torch, no GPU) ────────────────────
