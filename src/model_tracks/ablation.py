@@ -21,6 +21,7 @@ import pandas as pd
 import torch
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from core.bundle import bundle_spec
 from core.common import TRAIN_ROOT, retrieval_ks
 from core.encoding_inputs import load_token_features, tokenization_policy
 from core.eval_trace import AttributeAttributionRow, decision_flip
@@ -35,6 +36,7 @@ from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIO
 from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 from model_tracks.embedding_forward import validate_embedding_device
+from model_tracks.resume import TRAINING_TRACKS
 from training.masking import field_of
 
 _LOG = RunLogger(__name__)
@@ -328,7 +330,7 @@ def _compose(row, composer):
 @timed
 def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
-    if track not in {'text', 'gnn_only'}:
+    if track not in set(TRAINING_TRACKS):
         raise ValueError('unknown track')
     if (track != 'text') != bool(listings):
         raise ValueError('graph tracks require listings; the text track must not pass any')
@@ -610,7 +612,7 @@ def _persist_prepared(request, cfg, token_cache):
                 raise ValueError('prepared tensors differ')
         else:
             prepared.replace(destination)
-        path = output/'request.json'
+        path = output/bundle_spec().ablation_request_file
         if path.exists() and json.loads(path.read_text()) != request:
             raise ValueError('existing request differs')
         write(path,request)
@@ -1282,7 +1284,7 @@ def _cli_parser():
     prep = sub.add_parser('prepare')
     for key in ('catalog','pairs','checkpoint'):
         prep.add_argument('--'+key,type=Path,required=True)
-    prep.add_argument('--track', choices=('text','gnn_only'),default='text')
+    prep.add_argument('--track', choices=TRAINING_TRACKS,default='text')
     for key in ('listings','config'):
         prep.add_argument('--'+key,type=Path)
     worker = sub.add_parser('encode')

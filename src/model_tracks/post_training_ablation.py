@@ -4,6 +4,7 @@ import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from core.bundle import bundle_spec
 from core.portable_archive import Digest
 from core.run_log import RunLogger
 from core.step_trace import timed
@@ -14,7 +15,7 @@ from model_tracks.config import SuiteConfig
 #: ``hybrid`` member, so they could neither accept the landed cascade lane nor
 #: stay in step with the rest of the codebase; importing the one Literal keeps
 #: the saved-artifact identity contract on the same set as every other surface.
-from model_tracks.resume import Track
+from model_tracks.resume import Track, TRAINING_TRACKS
 from pathlib import Path
 from core.common import TRAIN_ROOT
 from graph_tracks.artifacts import name
@@ -47,7 +48,7 @@ def flush_trace():
 
 #: Tracks that produce a post-training ablation export. The trained lanes do;
 #: the cascade trains nothing and ships no ablation, so it is excluded.
-ABLATION_TRACKS = ('text', 'gnn_only')
+ABLATION_TRACKS = TRAINING_TRACKS
 
 
 class AblationThresholdIdentity(BaseModel):
@@ -183,7 +184,7 @@ def _restored_dashboard(saved, document):
 def _publish_track(destination, track, archived, publisher):
     """Publish one track's frozen report bytes after archive identity checks."""
     folder = destination / track / 'ablation'
-    request, vectors = folder / 'request.json', folder / 'vectors.npz'
+    request, vectors = folder / bundle_spec().ablation_request_file, folder / 'vectors.npz'
     saved, binding = folder / 'report.json', folder / 'baseline_threshold.json'
     with _LOG.section('ablation.publish.track_identity'):
         _sealed_track(archived, destination, request, vectors, saved, binding)
@@ -212,7 +213,7 @@ def _calibration_source(destination, track):
     """The one non-interrupted calibration manifest for a track, or nothing."""
     import json
     from graph_tracks.report_manifest import TrackReportManifest
-    request = destination/track/'ablation/request.json'
+    request = destination/track/'ablation'/bundle_spec().ablation_request_file
     result = request.parent/'vectors.npz'
     if not request.is_file() or not result.is_file():
         raise ValueError('suite lacks prepared GPU ablation export: '+track)
@@ -318,7 +319,7 @@ def _trusted_saved_report(result, threshold, binding, previous, validated, docum
     """
     from graph_tracks.data import file_hash
     from model_tracks.ablation import request_context, validate_vectors
-    request = previous.parent/'request.json'
+    request = previous.parent/bundle_spec().ablation_request_file
     trusted = (validated and previous.with_suffix('.sha256').is_file()
                and previous.with_suffix('.sha256').read_text().strip() == file_hash(previous)
                and validated.get('request_sha256') == file_hash(request)
@@ -470,6 +471,6 @@ def run(archive, run_tag, suite, *, launcher=None, bundle=None):
     archive_metadata = (Bundle.load(archive, BundleRole.result)
                         if bundle is None else bundle)
     destination = archive.parent/run_tag
-    if any((destination/track/'ablation/request.json').exists() for track in ABLATION_TRACKS):
+    if any((destination/track/'ablation'/bundle_spec().ablation_request_file).exists() for track in ABLATION_TRACKS):
         return complete_saved(destination,suite,publisher=git_publisher(suite))
     raise ValueError('suite lacks staged GPU ablation exports; rebuild prepared inputs before training')

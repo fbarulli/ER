@@ -39,6 +39,7 @@ from graph_tracks.text_cache import checkpoint_hash
 from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors, file_hash, source_name
 from model_tracks.ablation_cohort import prepare_cohort
 from model_tracks.package import package_member
+from model_tracks.resume import TRAINING_TRACKS
 
 _LOG = RunLogger(__name__)
 
@@ -240,7 +241,7 @@ def _drop_staging(setup):
     # Generated content-addressed staging directories are temporary; retain one
     # fixed template per track and avoid shipping duplicate tensors.
     staging = [path for path in _templates_dir(setup).iterdir()
-               if path.is_dir() and path.name not in {'text','gnn_only'}]
+               if path.is_dir() and path.name not in set(TRAINING_TRACKS)]
     for path in _LOG.progress(staging,desc='ablation_staging_cleanup',unit='dir'):
         shutil.rmtree(path)
     trace().add(
@@ -248,7 +249,7 @@ def _drop_staging(setup):
         in_count=len(staging), out_count=0,
         reason='generated content-addressed staging dirs are removed; one fixed template per '
                'trained track is retained',
-        detail={'staging_dirs': len(staging), 'retained': ['text', 'gnn_only'],
+        detail={'staging_dirs': len(staging), 'retained': list(TRAINING_TRACKS),
                 'sample_removed': [source_name(path) for path in staging[:5]]},
         source=source_name(_templates_dir(setup)),
     )
@@ -272,7 +273,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     timing.mark('load_support_and_vocabulary')
     with _LOG.section('ablation_suite.track_templates'):
         common_cohort = None
-        tracks = ('text','gnn_only')
+        tracks = TRAINING_TRACKS
         graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
         for track in _LOG.progress(tracks,desc='ablation_templates',unit='track',total=len(tracks)):
             _LOG.info('ablation template building track=' + track)

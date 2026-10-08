@@ -15,6 +15,7 @@ from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from model_tracks.config import load_config
 from model_tracks.parallel import wait_for_start
+from model_tracks.resume import TRACKS
 
 _LOG = RunLogger(__name__)
 
@@ -494,8 +495,8 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                                'vectors are encoded for the saved ablation',
                         detail={'track': track, 'device': cfg.device,
                                 'checkpoint': str(checkpoint),
-                                'request': str(output/'ablation/request.json')},
-                        source=str(output/'ablation/request.json'),
+                                'request': str(output/'ablation'/spec.ablation_request_file)},
+                        source=str(output/'ablation'/spec.ablation_request_file),
                     )
             if track == 'text':
                 del selected_text_model
@@ -548,7 +549,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
-    parser.add_argument('--track', choices=['text', 'gnn_only', 'cascade'], required=True)
+    parser.add_argument('--track', choices=TRACKS, required=True)
     parser.add_argument('--run-tag', required=True)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()

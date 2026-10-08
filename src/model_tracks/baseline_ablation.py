@@ -235,7 +235,7 @@ def _persist_baseline(request_path, result):
 def complete(output: Path, setup: Path, *, config: Path | None = None):
     """Fit the untrained baseline threshold on dev; consume saved ablation only."""
     with _LOG.section('ablation.baseline.load'):
-        request_path = output/'ablation/request.json'
+        request_path = output/'ablation'/bundle_spec().ablation_request_file
         request = json.loads(request_path.read_text())
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
             raise ValueError('baseline report requires the frozen baseline ablation')
