@@ -311,6 +311,9 @@ class DdpTrialScheduler(TrialScheduler):
         ddp = dict(self.config.get("ddp") or {})
         self.nproc_per_node = max(1, int(ddp.get("nproc_per_node", 1)))
         self.backend = str(ddp.get("backend", "nccl"))
+        # master_port is a ``ddp`` sub-key (like nproc_per_node/backend), NOT a
+        # top-level option; reading it from the wrong level silently ignored it.
+        self.master_port = int(ddp.get("master_port", 29500))
         self.resource_caps = resource_caps
 
     def workers(self, gpu_count):
@@ -324,15 +327,14 @@ class DdpTrialScheduler(TrialScheduler):
     def torchrun_argv(self, script, extra=None):
         argv = ["torchrun", "--nproc_per_node", str(self.nproc_per_node),
                 "--nnodes", "1", "--node_rank", "0", "--master_addr",
-                "127.0.0.1", "--master_port", str(self.config.get(
-                    "master_port", 29500)), script]
+                "127.0.0.1", "--master_port", str(self.master_port), script]
         if extra:
             argv.extend(extra)
         return argv
 
     def as_dict(self):
         return {"mode": self.mode, "nproc_per_node": self.nproc_per_node,
-                "backend": self.backend}
+                "backend": self.backend, "master_port": self.master_port}
 
 
 class DdpTrialRunner:

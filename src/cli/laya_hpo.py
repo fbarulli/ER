@@ -1184,7 +1184,9 @@ def run_ddp_trial(trial_number):
         laya_train=laya_train, namespace=globals(), logger=log,
         wandb_log=wandb_log_profiler, rank0=True)
     started = time.time()
-    init_distributed()
+    # The DDP backend is config SSOT (options.ddp.backend); pass it through so a
+    # configured gloo/nccl choice is actually applied, not just recorded.
+    init_distributed(backend=getattr(options.scheduler, "backend", None))
     try:
         with profiler:
             run_laya_finetune(train_path, dev_path, start_model, out_dir, device)
