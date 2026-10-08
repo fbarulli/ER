@@ -190,6 +190,8 @@ FINETUNE_CONTROL_FIELDS = (
     # Phase 4 (default-OFF except log_grad_norm)
     "compile_model", "amp_dtype", "tf32", "log_grad_norm",
     "write_error_artifacts", "deterministic",
+    # torch.profiler (default-ON; auto-OFF without CUDA)
+    "profile", "profile_dir", "profile_schedule",
 )
 
 
@@ -2005,10 +2007,13 @@ def _select_epoch_items(control, items, epoch, config, seed):
 
 def _dev_metrics(laya_train, model, tok, dev_items, device, max_len,
                  head_max_len, parallel, control):
+    import torch
+
     batch_size = int(control.get("dev_batch_size") or 16)
-    records = laya_train.calibration_records(
-        model, tok, dev_items, device, max_len, head_max_len,
-        batch_size=batch_size, parallel=parallel)
+    with torch.profiler.record_function("calibration"):
+        records = laya_train.calibration_records(
+            model, tok, dev_items, device, max_len, head_max_len,
+            batch_size=batch_size, parallel=parallel)
     metrics = laya_train.evaluate_records(records)
     rate, coverage = derive_abstain_coverage(
         records, control.get("abstain_confidence", 0.5))
@@ -2027,9 +2032,13 @@ def _dev_metrics(laya_train, model, tok, dev_items, device, max_len,
 def _error_artifacts(laya_train, model, tok, dev_items, device, max_len,
                      head_max_len, parallel, control):
     """ECE/confusion (+ optional post-hoc temperature) on the dev records."""
-    records = laya_train.calibration_records(
-        model, tok, dev_items, device, max_len, head_max_len,
-        batch_size=int(control.get("dev_batch_size") or 16), parallel=parallel)
+    import torch
+
+    with torch.profiler.record_function("calibration"):
+        records = laya_train.calibration_records(
+            model, tok, dev_items, device, max_len, head_max_len,
+            batch_size=int(control.get("dev_batch_size") or 16),
+            parallel=parallel)
     metrics = laya_train.evaluate_records(records)
     confusion = {}
     for qtype, logits, target, k in records:
@@ -2060,6 +2069,95 @@ def _error_artifacts(laya_train, model, tok, dev_items, device, max_len,
         "confusion": confusion,
         "temperature": temperature,
     }
+
+
+def _profile_enabled(control, device):
+    # Owner default-ON, but only where a transcript is meaningful: CUDA on
+    # rank 0. CPU profiling is near-useless and slows training down.
+    if not control.get("profile"):
+        return False
+    if getattr(device, "type", "cpu") != "cuda":
+        return False
+    return is_rank0()
+
+
+def _profile_top_ops(torch, profiler, state, control):
+    # torch.profiler on_trace_ready: one chrome trace per profiled epoch plus
+    # a stdout key_averages() table (top ~15 by CUDA time) and a wandb table.
+    try:
+        output_dir = globals().get("FINETUNE_OUTPUT_DIR") or "."
+        profile_dir = os.path.join(str(output_dir),
+                                   str(control.get("profile_dir") or "profiler"))
+        os.makedirs(profile_dir, exist_ok=True)
+        epoch = int(state.get("epoch", 0))
+        trace_path = os.path.join(profile_dir, "epoch_%d.json" % epoch)
+        profiler.export_chrome_trace(trace_path)
+        print("[profiler] chrome trace -> " + trace_path, flush=True)
+        rows = []
+        events = list(profiler.key_averages())
+        try:
+            events.sort(
+                key=lambda event: float(
+                    getattr(event, "self_cuda_time_total", 0.0) or 0.0),
+                reverse=True)
+        except Exception:
+            pass
+        for event in events[:15]:
+            rows.append((
+                str(event.key),
+                float(getattr(event, "self_cuda_time_total", 0.0) or 0.0) / 1000.0,
+                float(getattr(event, "self_cpu_time_total", 0.0) or 0.0) / 1000.0,
+                int(getattr(event, "count", 0) or 0)))
+        print("[profiler] top ops by CUDA time (ms), epoch %d:" % epoch,
+              flush=True)
+        for key, cuda_ms, cpu_ms, count in rows:
+            print("  %-38s cuda=%8.3f cpu=%8.3f n=%d"
+                  % (key[:38], cuda_ms, cpu_ms, count), flush=True)
+        try:
+            if WANDB_RUN is not None:
+                import wandb
+                table = wandb.Table(
+                    columns=["op", "cuda_ms", "cpu_ms", "count"],
+                    data=[[key, cuda_ms, cpu_ms, count]
+                          for key, cuda_ms, cpu_ms, count in rows])
+                WANDB_RUN.log({"profile/top_ops": table, "profile/epoch": epoch})
+        except Exception:
+            pass
+    except Exception as error:
+        print("[profiler] trace handler skipped: " + type(error).__name__
+              + ": " + str(error)[:160], flush=True)
+
+
+def _make_profiler(torch, control, device, state):
+    # Bounded scheduled profiling: `wait`/`warmup` steps burn in, then
+    # `active` steps are recorded, `repeat` times. profile_memory on,
+    # with_stack/record_shapes off (bounded overhead). Fail-soft.
+    try:
+        activities = [torch.profiler.ProfilerActivity.CPU]
+        if getattr(device, "type", "cpu") == "cuda":
+            activities.append(torch.profiler.ProfilerActivity.CUDA)
+        schedule_cfg = control.get("profile_schedule") or {}
+        schedule = torch.profiler.schedule(
+            wait=int(schedule_cfg.get("wait", 1)),
+            warmup=int(schedule_cfg.get("warmup", 1)),
+            active=int(schedule_cfg.get("active", 1)),
+            repeat=int(schedule_cfg.get("repeat", 1)))
+        profiler = torch.profiler.profile(
+            activities=activities,
+            schedule=schedule,
+            on_trace_ready=lambda prof: _profile_top_ops(
+                torch, prof, state, control),
+            profile_memory=True,
+            with_stack=False,
+            record_shapes=False)
+        profiler.__enter__()
+        print("[profiler] enabled: schedule=" + json.dumps(
+            schedule_cfg, sort_keys=True), flush=True)
+        return profiler
+    except Exception as error:
+        print("[profiler] disabled (fail-soft): " + type(error).__name__
+              + ": " + str(error)[:160], flush=True)
+        return None
 
 
 def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
@@ -2194,9 +2292,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     best_state = None
     stopped = False
     stopped_epoch = None
+    profile_state = {"epoch": 0}
+    profiler = (_make_profiler(torch, control, device, profile_state)
+                if _profile_enabled(control, device) else None)
 
     for epoch in range(start_epoch, config.epochs):
         epoch_started = time.time()
+        profile_state["epoch"] = epoch + 1
         if gradual and epoch >= int(unfreeze_after):
             for p in model.encoder.parameters():
                 p.requires_grad_(True)
@@ -2220,45 +2322,50 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         for start in range(0, len(epoch_items), config.micro_batch):
             chunk_items = epoch_items[start:start + config.micro_batch]
             chunk = []
-            for it in chunk_items:
-                order = laya_train.draw_option_order(
-                    it, order_rng, config.shuffle_options)
-                key = (id(it), tuple(order) if order is not None else None,
-                       max_len, head_max_len, parallel)
-                encoded = cache.get(key)
-                if encoded is None:
-                    encoded = laya_train.encode_item(
-                        tok, it, max_len, head_max_len, order, parallel)
-                    cache[key] = encoded
+            with torch.profiler.record_function("data.encode"):
+                for it in chunk_items:
+                    order = laya_train.draw_option_order(
+                        it, order_rng, config.shuffle_options)
+                    key = (id(it), tuple(order) if order is not None else None,
+                           max_len, head_max_len, parallel)
+                    encoded = cache.get(key)
+                    if encoded is None:
+                        encoded = laya_train.encode_item(
+                            tok, it, max_len, head_max_len, order, parallel)
+                        cache[key] = encoded
+                    else:
+                        hits += 1
+                    lookups += 1
+                    chunk.append(encoded)
+            with torch.profiler.record_function("collate+batch_move"):
+                batch = laya_train.collate_items([chunk], tok.pad_token_id)
+                # (2) one device move for what the loop consumes; _forward's own
+                # .to(device) on the same device is then a no-op.
+                mask = batch["marker_mask"].to(device)
+                target = batch["target"].to(device)
+                qtype = batch["qtype"].to(device)
+            with torch.profiler.record_function("forward"):
+                logits = _forward_dtype(torch, laya_train, model, batch, device,
+                                        amp, config.freeze_encoder, amp_dtype)
+            with torch.profiler.record_function("loss"):
+                if config.loss == "rlcd":
+                    loss = laya_train.rlcd_loss(logits, target, mask, qtype,
+                                                sigma, config.rl_samples,
+                                                config.w_sph, config.w_rps)
+                elif class_weights is not None:
+                    loss = _weighted_soft_ce(torch, logits, target, mask,
+                                             class_weights)
                 else:
-                    hits += 1
-                lookups += 1
-                chunk.append(encoded)
-            batch = laya_train.collate_items([chunk], tok.pad_token_id)
-            # (2) one device move for what the loop consumes; _forward's own
-            # .to(device) on the same device is then a no-op.
-            mask = batch["marker_mask"].to(device)
-            target = batch["target"].to(device)
-            qtype = batch["qtype"].to(device)
-            logits = _forward_dtype(torch, laya_train, model, batch, device,
-                                    amp, config.freeze_encoder, amp_dtype)
-            if config.loss == "rlcd":
-                loss = laya_train.rlcd_loss(logits, target, mask, qtype, sigma,
-                                            config.rl_samples, config.w_sph,
-                                            config.w_rps)
-            elif class_weights is not None:
-                loss = _weighted_soft_ce(torch, logits, target, mask,
-                                         class_weights)
-            else:
-                loss = laya_train.soft_ce_loss(logits, target, mask)
+                    loss = laya_train.soft_ce_loss(logits, target, mask)
             window_start = (n_steps // config.grad_accum) * config.grad_accum
             window_size = min(config.grad_accum,
                               steps_per_epoch - window_start)
             scaled = loss / window_size
-            if scaler is not None:
-                scaler.scale(scaled).backward()
-            else:
-                scaled.backward()
+            with torch.profiler.record_function("backward"):
+                if scaler is not None:
+                    scaler.scale(scaled).backward()
+                else:
+                    scaled.backward()
             if adv_eps > 0.0:
                 # AWP: perturb trainable weights by eps along the grad
                 # direction, take an extra backward, then restore the weights.
@@ -2291,26 +2398,27 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             n_steps += 1
             if (n_steps % config.grad_accum == 0
                     or start + config.micro_batch >= len(epoch_items)):
-                if scaler is not None:
-                    scaler.unscale_(optimizer)
-                grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
-                if control.get("log_grad_norm") and grad_norm is not None:
-                    grad_norm_sum += min(float(grad_norm), config.grad_clip)
-                    grad_steps += 1
-                if scaler is not None:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-                if not plateau:
-                    scheduler.step()
-                if ema_state is not None:
-                    with torch.no_grad():
-                        for p in params:
-                            shadow = ema_state[id(p)]
-                            shadow.mul_(ema_decay).add_(
-                                p.detach(), alpha=1.0 - ema_decay)
-                optimizer.zero_grad(set_to_none=True)
+                with torch.profiler.record_function("optimizer_step"):
+                    if scaler is not None:
+                        scaler.unscale_(optimizer)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
+                    if control.get("log_grad_norm") and grad_norm is not None:
+                        grad_norm_sum += min(float(grad_norm), config.grad_clip)
+                        grad_steps += 1
+                    if scaler is not None:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+                    if not plateau:
+                        scheduler.step()
+                    if ema_state is not None:
+                        with torch.no_grad():
+                            for p in params:
+                                shadow = ema_state[id(p)]
+                                shadow.mul_(ema_decay).add_(
+                                    p.detach(), alpha=1.0 - ema_decay)
+                    optimizer.zero_grad(set_to_none=True)
             if hard_scores is not None:
                 per_row = _per_row_loss(torch, logits, target, mask)
                 for item, value in zip(chunk_items, per_row.tolist()):
@@ -2325,6 +2433,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 print("epoch %d/%d step %d loss %.4f" % (
                     epoch + 1, config.epochs, n_steps,
                     float(detached.item())), flush=True)
+            if profiler is not None:
+                # Bounded schedule: one profiler "step" per micro-batch.
+                try:
+                    profiler.step()
+                except Exception as error:
+                    print("[profiler] step skipped: " + type(error).__name__,
+                          flush=True)
         if hard_scores is not None:
             globals()["FINETUNE_HARD_SCORES"] = hard_scores
         mean = (float(total.item() / max(1, n_steps))
@@ -2349,8 +2464,10 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             # only rank 0 runs the forward.
             model.eval()
             if is_rank0():
-                dev = _dev_metrics(laya_train, model, tok, dev_items, device,
-                                   max_len, head_max_len, parallel, control)
+                with torch.profiler.record_function("dev_eval"):
+                    dev = _dev_metrics(laya_train, model, tok, dev_items,
+                                       device, max_len, head_max_len, parallel,
+                                       control)
             has_dev = 1.0 if dev is not None else 0.0
             payload = [has_dev,
                        float(dev["accuracy"]) if dev else 0.0,
@@ -2408,12 +2525,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         extra["select/best_dev_accuracy"] = best_acc
         extra["select/bad_epochs"] = bad_epochs
         wandb_log_epoch(epoch, mean, extra)
-        if on_epoch_end is not None:
-            on_epoch_end(epoch, mean)
-        if (control.get("save_each_epoch")
-                and (epoch + 1) % 1 == 0):
-            _save_control_checkpoint(torch, model, optimizer, scheduler,
-                                     epoch, best, bad_epochs)
+        with torch.profiler.record_function("checkpoint_save"):
+            if on_epoch_end is not None:
+                on_epoch_end(epoch, mean)
+            if (control.get("save_each_epoch")
+                    and (epoch + 1) % 1 == 0):
+                _save_control_checkpoint(torch, model, optimizer, scheduler,
+                                         epoch, best, bad_epochs)
         if swa_state is not None and epoch >= swa_start:
             with torch.no_grad():
                 for p in params:
@@ -2425,6 +2543,12 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             print("[perf-patch] early stop at epoch %d (%s=%s best=%s)"
                   % (epoch + 1, early_metric, metric_value, best), flush=True)
             break
+    if profiler is not None:
+        try:
+            profiler.__exit__(None, None, None)
+        except Exception as error:
+            print("[profiler] exit skipped: " + type(error).__name__,
+                  flush=True)
     # ── end-of-training weight selection (rank 0 only) ──────────────────
     if is_rank0():
         if control.get("keep_best") and best_state is not None:

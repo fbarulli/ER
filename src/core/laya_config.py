@@ -119,6 +119,35 @@ class FinetuneSpec(BaseModel):
     log_grad_norm: bool = True
     write_error_artifacts: bool = False
     deterministic: bool = False
+    # ── torch.profiler (default-ON per owner; auto-OFF without CUDA) ────────
+    # A bounded schedule profiles only a slice of an epoch; the chrome trace
+    # lands under `<output_dir>/<profile_dir>/epoch_<n>.json` (rank 0 only).
+    profile: bool = True
+    profile_dir: str = "profiler"
+    profile_schedule: dict[str, int] = Field(
+        default_factory=lambda: {"wait": 1, "warmup": 1, "active": 1,
+                                 "repeat": 1})
+
+    @model_validator(mode="after")
+    def _profile_dir_is_a_portable_name(self) -> "FinetuneSpec":
+        candidate = Path(self.profile_dir)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(
+                f"finetune.profile_dir must be a portable name: "
+                f"{self.profile_dir!r}")
+        allowed = {"wait", "warmup", "active", "repeat"}
+        extra = set(self.profile_schedule) - allowed
+        if extra:
+            raise ValueError(
+                f"finetune.profile_schedule carries unknown keys {sorted(extra)}; "
+                f"expected {sorted(allowed)}")
+        for key in allowed:
+            value = self.profile_schedule.get(key)
+            if value is not None and (not isinstance(value, int) or value < 0):
+                raise ValueError(
+                    f"finetune.profile_schedule.{key} must be a non-negative "
+                    f"int, got {value!r}")
+        return self
 
 
 class EvalCalibrationSpec(BaseModel):
