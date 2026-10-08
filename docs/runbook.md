@@ -79,22 +79,22 @@ PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
 
 ## CPU bundle prep lane
 
-Two cohorts, exactly two concurrent sessions. Run each under `systemd-run`.
+**Cohort policy: the full cohort only.** `dataset.csv` (71,623 rows, md5
+`0717235b57d059936d5937715b29a4da`) is the only cohort we train. `dataset_10k.csv`
+and `dataset_50pct.csv` stay in the repo as historical artifacts and are not
+training inputs. Never pass them to `--dataset-csv`.
+
+One session. Run under `systemd-run`.
 
 ```bash
-systemd-run --user --unit=er-prep-50pct --working-directory=$PWD \
-  env EUROMONITOR_COLAB_SESSION=er-prep-50pct \
-  $PWD/.venv/bin/python -m cli.colab --what bundle --gpu CPU --keep-alive \
-  --dataset-csv $PWD/dataset_50pct.csv
-
 systemd-run --user --unit=er-prep-full --working-directory=$PWD \
   env EUROMONITOR_COLAB_SESSION=er-prep-full \
   $PWD/.venv/bin/python -m cli.colab --what bundle --gpu CPU --keep-alive \
   --dataset-csv $PWD/dataset.csv
 ```
 
-Do not run any other Colab session while both are live. Stop a stuck launcher with
-`systemctl --user stop er-prep-50pct`.
+Do not run any other Colab session while it is live. Stop a stuck launcher with
+`systemctl --user stop er-prep-full`.
 
 ## Regenerating individual artifacts
 
