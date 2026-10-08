@@ -368,13 +368,20 @@ def _load_run_context(tracks_config: Path | None) -> _RunContext:
 
 
 def _load_preparation_configs(tracks_config):
-    """Read model_tracks.yaml + training.yaml afresh for long-lived callers."""
-    from core.common import TRAIN_ROOT, TRAINING_CONFIG_PATH, training_cfg
+    """Read model_tracks.yaml + training.yaml afresh for long-lived callers.
+
+    training.yaml goes through core.common.refresh_training_config() — the ONE
+    refresh helper — so the typed TrainingConfig AND the merged-dict caches
+    are re-read together; a private ``yaml.safe_load`` + ``model_validate``
+    here would refresh this caller's view while leaving every other
+    ``training_cfg()``/``runtime()`` reader on the stale one.
+    """
+    from core.common import TRAIN_ROOT, refresh_training_config
     from model_tracks.config import load_config as load_suite
     root = Path(TRAIN_ROOT)
     config_path = Path(tracks_config or _default_tracks_config(root)).resolve()
     suite = load_suite(config_path)
-    training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
+    training = refresh_training_config()
     return config_path, suite, training
 
 

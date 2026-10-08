@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from core.common import load_config, masking_cfg
+from core.common import SSOT_LOSS, masking_cfg, runtime
 from training.diet_coverage import folded_objectives, masked_positive_coverage
 from training.prepared_bundle import load_prepared_bundle
 
@@ -306,7 +306,7 @@ class DietGate:
                 row for row in data.get("hard_negative_mask_audit", [])
                 if str(row.get("population", "hard_negative")) == "hard_negative"
             ],
-            loss=str(load_config()["training"]["loss"]),
+            loss=str(SSOT_LOSS),
         )
 
     # ── phase: view counts ─────────────────────────────────────────────────
@@ -357,7 +357,7 @@ class DietGate:
                 )
                 dead_masked_pos = int(fold_coverage["never_trained"])
                 surviving_pos_views = pos_views - dead_masked_pos
-        easy_cfg = load_config()["training"]["random_easy_negatives"]
+        easy_cfg = runtime("random_easy_negatives")
         easy_enabled = bool(easy_cfg["enabled"])
         easy_ratio = float(easy_cfg["ratio_to_hard"])
         # Dynamic masking rewrites selected negative presentations IN PLACE
