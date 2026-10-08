@@ -234,6 +234,7 @@ def test_staged_kernel_bakes_controls_and_wandb_metrics():
     assert "FINETUNE_CONTROL = {" in script
     assert "FINETUNE_DEV_ROWS = None" in script
     assert "FINETUNE_OUTPUT_DIR = None" in script
+    assert 'print("epoch %d/%d dev_acc=%.4f dev_loss=%.4f"' in script
     for metric in ("train/mean_loss", "train/lr", "train/grad_norm",
                    "epoch_time_s", "dev/accuracy", "dev/loss",
                    "dev/abstain_rate", "dev/coverage",

@@ -2368,6 +2368,10 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 dev = {"accuracy": dev_acc, "loss": dev_loss,
                        "abstain_rate": None if dev_abstain < 0 else dev_abstain,
                        "coverage": None if dev_cov < 0 else dev_cov}
+                if is_rank0():
+                    print("epoch %d/%d dev_acc=%.4f dev_loss=%.4f"
+                          % (epoch + 1, config.epochs, dev_acc, dev_loss),
+                          flush=True)
             elif not is_rank0():
                 dev = None
         # ── best tracking + early stop + plateau + checkpointing ────────
