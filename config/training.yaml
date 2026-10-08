@@ -330,6 +330,23 @@ kaggle:
   logs_poll_seconds: 15.0
   logs_dir: "logs/kaggle"
   run_tag_prefix: "gpu_"
+# ── laya lane (decision + finetune, branch laya) ───────────────────────────
+# Additive: the block below only carries the laya route's NON-default
+# selections. The decision/finetune defaults stay in core.laya_config.LayaSpec
+# (SSOT). The CPU end-to-end smoke uses DEDICATED kernel/dataset slugs so a
+# smoke never trains on the production corpus nor overwrites the production
+# kernel.
+laya:
+  finetune_smoke:
+    kernel_slug: "fbarulli/er-laya-finetune-smoke"
+    dataset_slug: "fbarulli/er-laya-train-smoke"
+    corpus_dir: "results/laya_lane/smoke_corpus"
+    train_rows: 200
+    dev_rows: 100
+    test_rows: 100
+    epochs: 1
+    micro_batch: 1
+    grad_accum: 1
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
 # consumed ONLY by that lane and its thin passthroughs in cli.colab; no

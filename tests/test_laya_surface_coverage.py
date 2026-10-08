@@ -66,6 +66,7 @@ def render_finetune():
         "FINETUNE_CONTROL": repr(laya_lane.finetune_control(spec)),
         "FINETUNE_DEVICE": spec.finetune.device,
         "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
+        "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,

@@ -233,6 +233,35 @@ class EvalCalibrationSpec(BaseModel):
         return self
 
 
+class FinetuneSmokeSpec(BaseModel):
+    """laya.finetune_smoke — the CPU end-to-end smoke of the finetune kernel.
+
+    The NEW finetune kernel (dials + profiler + early-stop/dev-eval + the
+    fail-loud fetchers) only ever ran on a T4. This block selects the smallest
+    honest end-to-end validation: a tiny subset corpus, 1 epoch, micro-batch 1
+    / grad-accum 1, and DEDICATED dataset + kernel slugs so a smoke never
+    versions or overwrites the production corpus/kernel. Every dial is config,
+    never a code literal.
+
+    There is deliberately no ``enabled`` flag: the dedicated ``finetune-smoke``
+    decision kind IS the selector, so an illegal "smoke on the prod kind" state
+    cannot be expressed. A missing slug fails loud at staging.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kernel_slug: str | None = None
+    dataset_slug: str | None = None
+    # Where the tiny subsets are generated (TRAIN_ROOT-relative, gitignored).
+    corpus_dir: str = "results/laya_lane/smoke_corpus"
+    train_rows: int = Field(default=200, ge=1, le=5000)
+    dev_rows: int = Field(default=100, ge=1, le=5000)
+    test_rows: int = Field(default=100, ge=1, le=5000)
+    epochs: int = Field(default=1, ge=1, le=8)
+    micro_batch: int = Field(default=1, ge=1, le=64)
+    grad_accum: int = Field(default=1, ge=1, le=64)
+
+
 class LayaSpec(BaseModel):
     """training.laya — the laya decision lane's SSOT (additive).
 
@@ -332,6 +361,10 @@ class LayaSpec(BaseModel):
     holdout_eval_batch_size: int = Field(default=16, ge=1, le=256)
     holdout_eval_bootstrap: int = Field(default=2000, ge=0, le=100000)
     holdout_eval_threshold: float = 0.5
+    # The tiny CPU end-to-end smoke selection (dedicated slugs + dials; see
+    # FinetuneSmokeSpec). Off the production kind entirely: only the dedicated
+    # `finetune-smoke` decision kind reads it.
+    finetune_smoke: FinetuneSmokeSpec = Field(default_factory=FinetuneSmokeSpec)
     # The FULL `laya.train.TrainConfig` recipe the finetune kernel builds
     # (additive; defaults reproduce the landed recipe exactly). YAML-driven
     # so every trainer knob is SSOT config, never a code literal.

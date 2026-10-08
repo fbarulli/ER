@@ -102,11 +102,13 @@ def _hermetic_staging(monkeypatch, *, origin_tip: str = REVISION_PIN):
 # ── SSOT/additive contract ─────────────────────────────────────────────────
 def test_laya_spec_additive_and_yaml_unchanged():
     cfg_spec = common.training_cfg().laya
-    # committed YAML stays byte-identical: no `laya:` block is expected
-    # (the schema's default factory keeps the load value-additive).
+    # The committed YAML carries ONLY the smoke selection (dedicated slugs +
+    # dials); every production field still comes from the schema defaults, so
+    # the block stays additive and the prod lane is unchanged.
     raw = yaml.safe_load(
         (common.TRAIN_ROOT / "config/training.yaml").read_text())
-    assert "laya" not in raw
+    assert set(raw["laya"]) == {"finetune_smoke"}
+    assert raw["laya"]["finetune_smoke"]["epochs"] == 1
     assert cfg_spec.staging_dir == "results/laya_lane"
     assert cfg_spec.gpu == "T4"
     assert cfg_spec.checkpoint_hub == "convaiinnovations/laya"
@@ -616,7 +618,8 @@ def test_decision_kind_registry_contract():
 
     assert set(DECISION_BINDINGS) == {"attribute", "identity",
                                       "laya-cli-eval", "finetune",
-                                      "finetune-eval", "holdout-eval"}
+                                      "finetune-smoke", "finetune-eval",
+                                      "holdout-eval"}
     # every binding carries the class contract: header columns + state
     for entry in DECISION_BINDINGS.values():
         assert entry["wanted_columns"]

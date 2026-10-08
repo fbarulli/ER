@@ -69,7 +69,7 @@ from core import laya_controls
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
 GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune",
-             "finetune-eval", "holdout-eval")
+             "finetune-smoke", "finetune-eval", "holdout-eval")
 LANE_LOG_NAME = "lane.log"
 # One fresh lane.log per run: first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
@@ -99,6 +99,11 @@ BASE_MODEL_MANIFEST_FILE = "base_model_manifest.json"
 # inputs (and vice versa). The kernel wraps the REAL `laya-train` CLI on a
 # single T4 and tars the checkpoint back.
 FINETUNE_DECISION = "finetune"
+# The CPU end-to-end smoke kind: the SAME kernel template + staging +
+# push surface, but pinned to CPU, a tiny subset corpus and dedicated
+# slugs (laya.finetune_smoke), so a smoke never trains on the production
+# corpus nor overwrites the production kernel.
+FINETUNE_SMOKE_DECISION = "finetune-smoke"
 FINETUNE_CODE_FILE = "laya_finetune.py"
 FINETUNE_CORPUS_FILES = ("train.jsonl", "dev.jsonl", "test.jsonl")
 FINETUNE_CORPUS_RECEIPT = "receipt.json"
@@ -314,6 +319,17 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
         "description": ("fine-tune the convaiinnovations/laya checkpoint on "
                         "the verified-label JSONL corpus (state + identity "
                         "cases) via the real laya-train CLI on a single T4"),
+    },
+    "finetune-smoke": {
+        # The tiny CPU end-to-end validation of the SAME finetune kernel:
+        # corpus grain like `finetune`, but staged with the laya.finetune_smoke
+        # dials/slugs and enable_gpu=False.
+        "wanted_columns": ("state", "questions", "expected"),
+        "state_column": "state",
+        "record_columns": None,
+        "description": ("CPU end-to-end smoke of the finetune kernel: 1 epoch, "
+                        "micro-batch 1 on a tiny subset corpus, dedicated "
+                        "dataset/kernel slugs"),
     },
     "finetune-eval": {
         # Not a per-row decision CSV either: the eval-only kernel scores an
@@ -2859,6 +2875,9 @@ FINETUNE_CONTROL = @FINETUNE_CONTROL@
 HELD_OUT_BATCH = @HELD_OUT_BATCH@
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
+# The receipt member `collect_kaggle_result` requires: `laya_<kind>.receipt.json`
+# so the CPU smoke's kind and the prod kind each carry their own member.
+RECEIPT_NAME = "@RECEIPT_NAME@"
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
@@ -3248,7 +3267,7 @@ def _finetune_session(distributed, session):
         if isinstance(receipt.get("held_out"), dict):
             wandb_log_metrics({"after": receipt["held_out"].get("metrics", {})})
         wandb_finish()
-        (WORKING / "laya_finetune.receipt.json").write_text(
+        (WORKING / RECEIPT_NAME).write_text(
             json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
         with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
                           compresslevel=1) as tar:
@@ -3664,9 +3683,13 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
         raise RuntimeError(
             "--activate gate: no staged dataset payload at "
             f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
-    corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION)
+    corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_SMOKE_DECISION,
+                                    FINETUNE_EVAL_DECISION)
     if decision_kind == HOLDOUT_EVAL_DECISION:
         slug, key = _spec().holdout_dataset_slug, "holdout_dataset_slug"
+    elif decision_kind == FINETUNE_SMOKE_DECISION:
+        slug = _spec().finetune_smoke.dataset_slug
+        key = "finetune_smoke.dataset_slug"
     else:
         slug = (_spec().finetune_dataset_slug if corpus_kind
                 else _spec().dataset_slug)
@@ -3736,6 +3759,11 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         # per-row decision CSV: it has its own staging surface, reached
         # through the same `--decision` dispatch.
         return stage_finetune_kernel(revision=revision, run_tag=run_tag)
+    if decision_kind == FINETUNE_SMOKE_DECISION:
+        # The CPU smoke rides the SAME staging surface, pinned to CPU + the
+        # tiny corpus + the dedicated slugs (laya.finetune_smoke).
+        return stage_finetune_kernel(revision=revision, run_tag=run_tag,
+                                     smoke=True)
     if decision_kind == FINETUNE_EVAL_DECISION:
         # The eval-only kind is corpus- + checkpoint-driven: it has its
         # own staging surface, reached through the same `--decision`
@@ -3871,7 +3899,8 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
 
 def stage_finetune_dataset_payload(*, dataset_slug: str,
                                    corpus_dir: Path,
-                                   kind: str = FINETUNE_DECISION
+                                   kind: str = FINETUNE_DECISION,
+                                   title: str = "er laya train"
                                    ) -> dict[str, Any]:
     """Stage the fine-tune CORPUS as a kaggle dataset payload (dry-safe).
 
@@ -3879,8 +3908,10 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
     `dataset-metadata.json` + the three split JSONL + the builder receipt.
     Distinct from the decision datasets (spec.dataset_slug) so a corpus
     version never drops the decision inputs (and vice versa). `kind` names
-    the staging surface (`finetune` or the eval-only `finetune-eval`), so
-    each kernel's push gate finds its own `dataset_payload` beside it.
+    the staging surface (`finetune`, the CPU `finetune-smoke`, or the eval-only
+    `finetune-eval`), so each kernel's push gate finds its own
+    `dataset_payload` beside it. `title` lets the smoke dataset read
+    distinctly without a second metadata literal.
     """
     if not dataset_slug:
         raise RuntimeError(
@@ -3894,7 +3925,7 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
     # `files` inventory is the integrity token the kernel re-checks once the
     # dataset attaches.
     stage.mkdir(parents=True, exist_ok=True)
-    metadata = {"title": "er laya train", "id": dataset_slug,
+    metadata = {"title": title, "id": dataset_slug,
                 "licenses": [{"name": "other"}]}
     atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
     files = list(FINETUNE_CORPUS_FILES) + [FINETUNE_CORPUS_RECEIPT]
@@ -4348,33 +4379,52 @@ def stage_holdout_eval_kernel(*, revision: str | None = None,
     return receipt
 
 
+def _finetune_smoke_recipe(spec: Any) -> dict[str, Any]:
+    """The smoke's ``TrainConfig`` kwargs: the landed recipe with the smoke
+    dials overlaid from ``laya.finetune_smoke`` (SSOT), never a literal."""
+    smoke = spec.finetune_smoke
+    recipe = finetune_config(spec)
+    recipe.update({"epochs": smoke.epochs, "micro_batch": smoke.micro_batch,
+                   "grad_accum": smoke.grad_accum})
+    return recipe
+
+
 def stage_finetune_kernel(*, revision: str | None = None,
-                          run_tag: str | None = None) -> dict[str, Any]:
+                          run_tag: str | None = None,
+                          smoke: bool = False) -> dict[str, Any]:
     """Stage the kaggle fine-tune kernel payload (dry-safe).
 
-    Writes under results/laya_lane/kaggle/finetune/:
-      kernel-metadata.json + laya_finetune.py + finetune.receipt.json
+    Writes under results/laya_lane/kaggle/<kind>/ (``finetune``, or
+    ``finetune-smoke`` for the CPU smoke):
+      kernel-metadata.json + laya_finetune.py + <kind>.receipt.json
       (+ the staged corpus dataset payload).
     Fail-loud preconditions (no silent skip):
       * spec.laya_decision_epochs > 0 (0 = disabled, nothing may stage);
-      * spec.finetune_kernel_slug + spec.finetune_dataset_slug set;
-      * the corpus JSONL + receipt stage from data/laya (spec constant).
+      * the kind's kernel + dataset slugs set (prod or ``finetune_smoke``);
+      * the base_model_dataset set (the base archive never rides the Hub);
+      * the corpus JSONL + receipt stage (the smoke builds a tiny subset first).
     """
     spec = _spec()
     if spec.laya_decision_epochs <= 0:
         raise RuntimeError(
             "config laya.laya_decision_epochs <= 0: the laya lane is "
             "disabled (no payload may stage a GPU session)")
-    slug = spec.finetune_kernel_slug
+    smoke_spec = spec.finetune_smoke if smoke else None
+    kind = FINETUNE_SMOKE_DECISION if smoke else FINETUNE_DECISION
+    slug = smoke_spec.kernel_slug if smoke else spec.finetune_kernel_slug
     if not slug:
+        which = "laya.finetune_smoke.kernel_slug" if smoke \
+            else "laya.finetune_kernel_slug"
         raise RuntimeError(
-            "config laya.finetune_kernel_slug is unset; name the target "
-            "kernel (owner/slug) before staging")
-    dataset_slug = spec.finetune_dataset_slug
+            f"config {which} is unset; name the target kernel (owner/slug) "
+            "before staging")
+    dataset_slug = smoke_spec.dataset_slug if smoke else spec.finetune_dataset_slug
     if not dataset_slug:
+        which = "laya.finetune_smoke.dataset_slug" if smoke \
+            else "laya.finetune_dataset_slug"
         raise RuntimeError(
-            "config laya.finetune_dataset_slug is unset; the corpus travels "
-            "as that dataset (owner/slug) — name it before staging")
+            f"config {which} is unset; the corpus travels as that dataset "
+            "(owner/slug) — name it before staging")
     base_dataset = spec.base_model_dataset
     if not base_dataset:
         raise RuntimeError(
@@ -4389,10 +4439,18 @@ def stage_finetune_kernel(*, revision: str | None = None,
     from core import runtime_inputs
     tip = runtime_inputs.require_published_tip_match(
         revision, repository, branch)
+    corpus_dir = TRAIN_ROOT / spec.finetune_corpus_dir
+    if smoke:
+        from cli.laya_smoke import FinetuneSmokeCorpus
+
+        corpus_dir = TRAIN_ROOT / smoke_spec.corpus_dir
+        FinetuneSmokeCorpus(smoke_spec, source_dir=TRAIN_ROOT
+                            / spec.finetune_corpus_dir,
+                            dest_dir=corpus_dir).build(seed=spec.finetune.seed)
     dataset_receipt = stage_finetune_dataset_payload(
-        dataset_slug=dataset_slug,
-        corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir)
-    stage = staging_dir() / "kaggle" / FINETUNE_DECISION
+        dataset_slug=dataset_slug, corpus_dir=corpus_dir, kind=kind,
+        title="er laya train smoke" if smoke else "er laya train")
+    stage = staging_dir() / "kaggle" / kind
     stage.mkdir(parents=True, exist_ok=True)
     tag = run_tag or spec.run_tag_prefix + decision_tag()
     metadata: dict[str, Any] = {
@@ -4401,20 +4459,21 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "code_file": FINETUNE_CODE_FILE,
         "language": "python",
         "kernel_type": "script",
-        "enable_gpu": True,
-        # single T4: the payload never requests the double accelerator;
-        # the script itself pins CUDA_VISIBLE_DEVICES=0.
+        # the CPU smoke pins enable_gpu=False; the prod kind keeps the single
+        # T4 (the script pins CUDA_VISIBLE_DEVICES=0 either way).
+        "enable_gpu": not smoke,
         "enable_internet": True,
         # THE CORPUS + THE BASE CHECKPOINT TRAVEL AS DATASETS: kernels push
-        # does NOT ship the co-located JSONL files, and the 647 MB base
-        # checkpoint cannot ride git — attach the corpus slug AND the
-        # base-model archive dataset (er-laya-base).
+        # does NOT ship the co-located JSONL files, and the base checkpoint
+        # cannot ride git — attach the corpus slug AND the base-model archive
+        # dataset (a smoke uses its own tiny corpus slug).
         "dataset_sources": [dataset_slug, base_dataset],
         "kernel_sources": [],
         "competition_sources": [],
         "is_private": True,
     }
-    recipe = finetune_config(spec)
+    recipe = _finetune_smoke_recipe(spec) if smoke else finetune_config(spec)
+    device = "cpu" if smoke else spec.finetune.device
     values = {
         "LAYA_PACKAGE": spec.finetune_package,
         "BASE_MODEL_ARCHIVE": spec.base_model_archive,
@@ -4429,8 +4488,9 @@ def stage_finetune_kernel(*, revision: str | None = None,
         # The training controls ride a SEPARATE repr literal (TrainConfig
         # rejects unknown kwargs): the perf patch reads this global.
         "FINETUNE_CONTROL": repr(finetune_control(spec)),
-        "FINETUNE_DEVICE": spec.finetune.device,
+        "FINETUNE_DEVICE": device,
         "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
+        "RECEIPT_NAME": f"laya_{kind}.receipt.json",
         # wandb mirror: the key is read from .env at staging and baked in
         # (never committed); empty key -> the kernel logs nothing.
         "WANDB_API_KEY": _env_value("WANDB_API_KEY") or "",
@@ -4454,8 +4514,8 @@ def stage_finetune_kernel(*, revision: str | None = None,
     (stage / FINETUNE_CODE_FILE).write_text(script, encoding="utf-8")
     receipt = {
         "kernel": slug,
-        "kind": FINETUNE_DECISION,
-        "gpu": "T4 (single)",
+        "kind": kind,
+        "gpu": "CPU (smoke)" if smoke else "T4 (single)",
         "run_tag": tag,
         "staged": str(stage),
         "code_file": FINETUNE_CODE_FILE,
@@ -4470,14 +4530,15 @@ def stage_finetune_kernel(*, revision: str | None = None,
                        "dir": spec.base_model_dir},
         "recipe": recipe,
         "control": finetune_control(spec),
-        "device": spec.finetune.device,
-        "corpus_dir": str(TRAIN_ROOT / spec.finetune_corpus_dir),
+        "device": device,
+        "smoke": smoke,
+        "corpus_dir": str(corpus_dir),
         "published_pin": {"repository": repository, "branch": branch,
                           "revision": revision},
         "published_tip": tip,
     }
-    atomic_write_json(receipt, stage / f"{FINETUNE_DECISION}.receipt.json")
-    _log_lane(f"staged kaggle finetune kernel ({spec.gpu}) run_tag={tag} "
+    atomic_write_json(receipt, stage / f"{kind}.receipt.json")
+    _log_lane(f"staged kaggle finetune kernel ({receipt['gpu']}) run_tag={tag} "
               f"-> {stage}")
     return receipt
 
@@ -4730,14 +4791,18 @@ def kernel_slug(decision_kind: str) -> str:
     loud when the knob is unset — never guess an account.
     """
     spec = _spec()
-    if decision_kind in _KIND_KERNEL_SLUG_ATTR:
+    if decision_kind == FINETUNE_SMOKE_DECISION:
+        slug = spec.finetune_smoke.kernel_slug
+        attr = "finetune_smoke.kernel_slug"
+    elif decision_kind in _KIND_KERNEL_SLUG_ATTR:
         attr = _KIND_KERNEL_SLUG_ATTR[decision_kind]
+        slug = getattr(spec, attr, None)
     elif decision_kind in DECISION_BINDINGS:
         attr = "export_dataset_slug"
+        slug = getattr(spec, attr, None)
     else:
         raise ValueError(f"unknown decision kind: {decision_kind!r}; "
                          f"expected {list(DECISION_BINDINGS)}")
-    slug = getattr(spec, attr, None)
     if not slug:
         raise RuntimeError(
             f"config laya.{attr} is unset; name the target kernel (owner/slug) "
