@@ -1590,7 +1590,8 @@ class NegativeSupply(BaseModel):
                 coverage_share=round(covered_total / max(anchors_total, 1), 4),
             )
             manifest = self._manifest(run_tag, coverage, frame, folder)
-            (folder / "manifest.json").write_text(
+            from core.common import training_cfg
+            (folder / training_cfg().preparation.manifest_file).write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n"
             )
             # The stage's rows into the ONE consolidated trace, committed after

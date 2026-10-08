@@ -34,6 +34,14 @@ def checkout_members(extra=(), *, lane="bundle") -> tuple[str, ...]:
     # Bundle starts from the raw export and regenerates derived inputs.
     # Training consumes the committed prepared data (or its verified overlay).
     lane_members = ('dataset.csv',) if lane == 'bundle' else ('data', 'dataset.csv')
+    # This member list deliberately OVERLAPS but is NOT the same as
+    # ``training_cfg().colab.checkout_paths``: that block is the Colab sparse-
+    # checkout cone (trailing-slash directory entries plus files such as
+    # ``model_tracks_package.json``), while this surface names every tree/file
+    # ``git ls-files`` must stage for BOTH the bundle and training lanes
+    # (``requirements/``, the models dir, the smoke dir, the evidence members,
+    # and the lane's ``dataset.csv``/``data``). Deriving from one would drop the
+    # other's members, so the two stay separate SSOT lists by design.
     members = ('src', 'scripts', 'config', 'requirements', 'artifacts/wheels',
                'artifacts/evidence', load_config()['paths']['models_dir'],
                training_cfg().preparation.smoke_dir,

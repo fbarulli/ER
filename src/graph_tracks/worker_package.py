@@ -71,7 +71,7 @@ def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[st
 
 def package(config: Path, output: Path, *, device: str = 'cuda',
             run_tag: str | None = None) -> Path:
-    from core.common import TRAIN_ROOT
+    from core.common import TRAIN_ROOT, training_cfg
     from graph_tracks.config import load_config
     cfg = load_config(config)
     checks = preflight(config, check_device=False)
@@ -116,7 +116,8 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
                               capture_output=True, text=True, check=True).stdout.strip()
     from graph_tracks.config import GraphConfig
     configuration = yaml.safe_dump(GraphConfig.model_validate(settings).model_dump(), sort_keys=False)
-    config_target = (base / 'worker.yaml').as_posix()
+    worker_config_file = training_cfg().bundle.worker_config_file
+    config_target = (base / worker_config_file).as_posix()
     manifest = {'schema': 'er-graph-worker-package-v1', 'base_git_revision': revision,
                 'track': cfg.track, 'local_preflight': checks,
                 'target_device': device, 'target_runtime_verified': False,
@@ -131,9 +132,9 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
         'Verify files before use:\n'
         f'PYTHONPATH=src python -m graph_tracks.worker_package --verify {base}/package_manifest.json\n'
         'Validate the target runtime before starting a worker:\n'
-        f'PYTHONPATH=src python -m graph_tracks.preflight --config {base}/worker.yaml\n'
+        f'PYTHONPATH=src python -m graph_tracks.preflight --config {base}/{worker_config_file}\n'
         'When training is authorized:\n'
-        f'PYTHONPATH=src python -m graph_tracks.train --config {base}/worker.yaml --run-tag YOUR_RUN_TAG\n'
+        f'PYTHONPATH=src python -m graph_tracks.train --config {base}/{worker_config_file} --run-tag YOUR_RUN_TAG\n'
         'Collect the complete result ZIP before VM teardown using graph_tracks.bundle.\n'
         'This package does not provision a VM or start training. No credentials are included.\n')
     inline = {config_target: configuration, (base / 'README.txt').as_posix(): readme}
