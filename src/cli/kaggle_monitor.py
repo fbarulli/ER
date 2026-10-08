@@ -78,14 +78,16 @@ class KaggleMonitor:
 
         spec = lane._spec()
         resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
-        slugs = {"cpu": spec.cpu_kernel_slug, "gpu": spec.gpu_kernel_slug,
-                 "embed": spec.embedding_kernel_slug}
-        slug = slug or slugs.get(which)
+        # One registry resolves which->slug, the watcher kind and the receipt
+        # identity (the finalize job shares the CPU slug but keeps its own kind).
+        identity = lane.kernel_identity(which, spec)
+        configured_slug = identity.slug(spec)
+        slug = slug or configured_slug
         if not slug:
             raise RuntimeError(
-                f"config kaggle.{which}_kernel_slug is unset; name the {which} "
+                f"config kaggle.{identity.slug_attr} is unset; name the {which} "
                 "kernel in config before autowatch")
-        kind = {"cpu": "bundle", "gpu": "train", "embed": "embed"}[which]
+        kind = identity.kind
         plan: dict[str, Any] = {
             "mode": "executed" if execute else "dry-run",
             "kernel": slug,
@@ -115,7 +117,7 @@ class KaggleMonitor:
         plan.update(lane.KernelLifecycle.harvest_and_stop(
             kind=kind, slug=slug, which=which, status=status["status"],
             fetch_output=lane.fetch_kernel_output, fetch_failure=lane.fetch_failed_kernel_log,
-            stop=lane.stop_kernel, configured_slug=slugs[which]))
+            stop=lane.stop_kernel, configured_slug=configured_slug))
         follower.join(timeout=spec.limits.stream_join_seconds)
         receipt = lane.staging_dir() / lane._spec().files.autowatch_receipt.format(kind=kind)
         try:
@@ -146,11 +148,11 @@ class KaggleMonitor:
 
         spec = lane._spec()
         resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
-        slugs = {
-            "bundle": spec.cpu_kernel_slug,
-            "train": spec.gpu_kernel_slug,
-            "embed": spec.embedding_kernel_slug,
-        }
+        # One registry (config SSOT) resolves every kind's slug and watcher
+        # identity; the finalize job shares the CPU slug but keeps its own
+        # watcher kind so the two CPU steps' receipts stay distinct.
+        identities = lane.kernel_identities(spec)
+        slugs = {kind: identity.slug(spec) for kind, identity in identities.items()}
         unknown = [kind for kind in kinds if kind not in slugs]
         if unknown:
             raise RuntimeError(f"unknown supervise kind(s): {unknown}")
@@ -195,7 +197,7 @@ class KaggleMonitor:
                     outstanding.remove(kind)
                     handled = lane.KernelLifecycle.harvest_and_stop(
                         kind=kind, slug=slugs[kind],
-                        which={"bundle": "cpu", "train": "gpu", "embed": "embed"}[kind],
+                        which=identities[kind].which,
                         status=status["status"], fetch_output=lane.fetch_kernel_output,
                         fetch_failure=lane.fetch_failed_kernel_log, stop=lane.stop_kernel,
                         configured_slug=slugs[kind])
@@ -258,27 +260,35 @@ class KaggleMonitor:
         destination.parent.mkdir(parents=True, exist_ok=True)
         plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
         session_id: int | None = None
-        persisted_lines = 0
-        attempt_lines = 0
+        # Raw stream characters already persisted (the decoded ``data`` payload
+        # text, NOT the transformed lines) and how many the current reconnected
+        # attempt must still drop. A dropped SSE connection re-attaches at the
+        # session's FIRST line and replays a byte-exact prefix, so the follower
+        # skips exactly that many raw characters. Counting transformed lines
+        # (3c6d048) drifted as soon as ``progress_frames_to_lines``
+        # re-partitioned ``\r`` frames across different chunk boundaries: it
+        # duplicated the prefix and then swallowed the live tail — the tqdm
+        # regression this fixes.
+        written_raw_chars = 0
+        replay_remaining = 0
 
         def emit(text: str) -> None:
-            """Append one chunk as logical lines, skipping replayed prefix.
-
-            The midtier SSE proxy replays from the session's first line on a
-            reconnect; persisted_lines counts lines already written so each new
-            attempt drops the prefix instead of duplicating it.
-            """
-            nonlocal persisted_lines, attempt_lines
             if not text.endswith("\n"):
                 text += "\n"
-            for piece in text.splitlines(keepends=True):
-                if attempt_lines < persisted_lines:
-                    attempt_lines += 1
-                    continue
-                log_handle.write(piece)
-                attempt_lines += 1
-                persisted_lines += 1
+            log_handle.write(text)
             log_handle.flush()
+
+        def route_stream(data: str) -> None:
+            """Persist one decoded ``data`` payload, dropping the replay prefix."""
+            nonlocal written_raw_chars, replay_remaining
+            if replay_remaining:
+                if replay_remaining >= len(data):
+                    replay_remaining -= len(data)
+                    return
+                data = data[replay_remaining:]
+                replay_remaining = 0
+            written_raw_chars += len(data)
+            emit(progress_frames_to_lines(data))
 
         def append_progress(payload_text: str | None, raw: str) -> None:
             """Append one captured chunk as grep-able, post-processed lines.
@@ -290,12 +300,11 @@ class KaggleMonitor:
             if payload_text is None:
                 emit(raw)
                 return
-            emit(progress_frames_to_lines(payload_text or ""))
+            route_stream(payload_text or "")
         with destination.open("a", encoding="utf-8") as log_handle:
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
             while True:
-                attempt_lines = 0
                 try:
                     request = ApiGetKernelSessionLogsStreamRequest()
                     request.user_name = owner
@@ -347,8 +356,9 @@ class KaggleMonitor:
                 except (ProtocolError, requests.exceptions.RequestException) as error:
                     # The midtier SSE proxy drops live connections mid-run; a
                     # replayed stream re-attaches at the session's FIRST line.
-                    # persisted_lines already holds the prefix, so the next
-                    # attempt appends only what emit has not seen.
+                    # replay_remaining carries the raw prefix already persisted,
+                    # so the next attempt appends only the characters it has
+                    # not seen (no line-count drift, no swallowed tail).
                     attempts += 1
                     if attempts > lane._spec().limits.stream_retries:
                         # Server-side drops exhaust the cap; visibility only —
@@ -359,6 +369,9 @@ class KaggleMonitor:
                         break
                     lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
                               f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
+                    # The next attempt replays from line 0: drop exactly the raw
+                    # characters already persisted (see route_stream).
+                    replay_remaining = written_raw_chars
                     time.sleep(lane._spec().limits.retry_seconds * attempts)
         plan["session_id"] = session_id
         return plan

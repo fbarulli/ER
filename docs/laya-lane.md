@@ -73,6 +73,75 @@ python laya_backend.py --kind colab --decision identity
 python laya_backend.py --kind kaggle --decision attribute --execute
 ```
 
+## Stop
+
+First-class teardown; dry-run by default, `--execute` cancels. The kernel is
+resolved from `--decision` (or an explicit `--slug`), never a borrowed
+`cpu`/`gpu` label:
+
+```bash
+# what it would stop (--decision finetune resolves fbarulli/er-laya-finetune)
+python laya_backend.py --kind kaggle --decision finetune --stop
+
+# cancel the running session
+python laya_backend.py --kind kaggle --decision finetune --stop --execute
+```
+
+Every push records the kernel session id **at launch**
+(`logs/kaggle/<kernel>.session_id`, via `capture_kernel_session_id`), so the
+stop cancels the EXACT session through the SDK (`cancel_kernel_session`); with
+no recorded id it falls back to the version-replace stub. The stop stages under
+`results/kaggle_lane/laya_stop` — the `which='laya'` label, never `cpu`.
+
+## Preflight (ducks in a row, before `--execute`)
+
+Every item, and how to re-verify it (all read-only except the launch):
+
+| duck | check |
+|---|---|
+| credentials | `~/.kaggle/kaggle.json` present; **no** `~/.kaggle/access_token` (the 403 trap) |
+| tip gate | staged `<decision>.receipt.json` `published_tip == HEAD == origin/main` (`require_published_tip_match`, laya_lane.py:2174) |
+| corpus (full) | `data/laya/{train,dev,test}.jsonl` + `receipt.json`, staged into `results/laya_lane/kaggle/<kind>/dataset_payload/` |
+| base-model dataset | `kaggle datasets status fbarulli/er-laya-base` -> `ready` (the fine-tune attaches it; no Hub fetch) |
+| corpus dataset | `kaggle datasets status fbarulli/er-laya-train` -> `ready` (versioned on `--execute`) |
+| kernel | `kaggle kernels status fbarulli/er-laya-finetune`; metadata `enable_gpu:true`, `enable_internet:true`, `dataset_sources: [er-laya-train, er-laya-base]` |
+| recipe | `config/training.yaml` `laya:` (or schema defaults): epochs 8, micro_batch 8, grad_accum 8, seed 1729, base `convaiinnovations/laya` |
+
+The full-cohort corpus is built by `scripts/laya_build_dataset.py` from the full
+prepared bundle (`data/prepared/full/worker_1_baseline.pkl.gz`); there is no
+partial-corpus variant.
+
+The fine-tune kernel is a **standalone pushed script**: it clones no repo, so a
+dirty working tree does not block it — only the tip gate (the commit) matters.
+The base model and corpus travel as attached datasets, never the git checkout.
+
+```bash
+# full-corpus fine-tune (single T4): version the corpus dataset, push, follow logs
+python laya_backend.py --kind kaggle --decision finetune --execute
+
+# fetch the checkpoint + receipt back (sha-verified)
+python laya_backend.py --kind kaggle --decision finetune --fetch \
+  --slug fbarulli/er-laya-finetune --execute
+```
+
+## Validation (default-on)
+
+Every `--decision finetune` run now scores the just-trained checkpoint on the
+**held-out `test` split** inside the kernel, so the receipt always carries the
+honest generalization number — the training-time eval is the `dev` split and
+overlaps training/calibration (`is_held_out: false`).
+
+- result: `receipt["held_out"]` + `checkpoint/held_out_report.json`
+  (`{"eval_mode":"held_out","is_held_out":true,"eval_split":"test",
+  "metrics":{accuracy,loss,ece,brier,…}}`)
+- opt out: `ER_LAYA_HELD_OUT=0` (then the training eval is the only number)
+- a held-out failure is recorded as `receipt["held_out_error"]` and never
+  discards the trained checkpoint
+
+This bakes the old two-step flow (fine-tune, then a separate
+`--decision finetune-eval`) into every run; the eval-only kind still exists for
+scoring an arbitrary fetched checkpoint against an arbitrary split.
+
 ## Config (SSOT: `config/training.yaml` -> `laya:`)
 
 `staging_dir` (results/laya_lane), `question_schema`
@@ -86,10 +155,17 @@ disables the lane entirely**), `laya_decision_max_rows` (2500),
 `laya_evals_enabled` toggles, `checkpoint_hub` (`convaiinnovations/laya`),
 `laya_package` (`laya`).
 
+Fine-tune surface: `finetune_kernel_slug` (`fbarulli/er-laya-finetune`),
+`finetune_dataset_slug` (`fbarulli/er-laya-train`), `base_model_dataset`
+(`fbarulli/er-laya-base`, the attached base checkpoint — no Hub fetch),
+`finetune_ckpt_dataset` (`fbarulli/er-laya-finetune-ckpt`, for the eval-only
+kind), and the `finetune:` recipe block (epochs 8, micro_batch 8, grad_accum 8,
+seed 1729, loss `soft-ce`).
+
 The committed config/training.yaml does NOT carry a `laya:` block yet —
-the schema default factory keeps the load byte-identical (additive
-contract; the same one `kaggle:` rode at its landing). Add the block when
-the owner names the dataset slugs.
+the schema default factory (`src/core/laya_config.py`) supplies the slugs and
+recipe above and keeps the load byte-identical (additive contract; the same one
+`kaggle:` rode at its landing). Add the block only to override a default.
 
 ## Logging convention + artifact paths
 
@@ -108,6 +184,8 @@ the owner names the dataset slugs.
 | `results/laya_lane/kaggle/<decision>/` | staged payload: kernel-metadata.json + laya_decision.py (or laya_evals.py) + laya.question.json + decision csv + `<decision>.receipt.json` |
 | `results/laya_lane/colab/<decision>/` | colab delivery payload: laya_decision_colab.py + receipt (no session call) |
 | `results/laya_lane/fetch/<decision>/` | fetched-back `kaggle kernels output` payload (verified) |
+| `logs/kaggle/<kernel>.session_id` | launch-recorded session id — the SDK `cancel_kernel_session` target `--stop` uses |
+| `results/kaggle_lane/laya_stop/` | stop stub staging (only used when no session id was recorded -> version replace) |
 
 ## What does X run now? (intent -> command -> surface -> artifacts)
 

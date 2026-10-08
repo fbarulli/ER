@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,7 +36,25 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from core.bundle import Bundle, BundleRole
 from core.common import TRAIN_ROOT, training_cfg
+from core.coverage_contracts import UNKNOWN_DIMENSION_VALUE
+from core.eval_trace import (
+    AbstentionBlock,
+    CORE_RECORD_DIMENSIONS,
+    EvalProvenance,
+    EvalRowKey,
+    MetricBlock,
+    MinConfidenceKey,
+    Share,
+    TaggedRecord,
+    TraceabilityCoverage,
+    TraceabilityReport,
+    derived_dimension_policies,
+    derived_record_census,
+    write_report,
+)
+from core.laya_config import LayaSpec
 from core.manifest import atomic_write_json, sha256_file
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
@@ -46,8 +65,6 @@ LANE_LOG_NAME = "lane.log"
 # One fresh lane.log per run: first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
 _LANE_LOG_STARTED = False
-DEFAULT_GPU = "T4"  # single T4; NEVER "2xT4" (no double accelerator)
-STAGE_ROOT = "results/laya_lane"
 
 DECISION_KERNEL_CODE_FILE = "laya_decision.py"
 EVAL_KERNEL_CODE_FILE = "laya_evals.py"
@@ -59,6 +76,11 @@ QUESTION_SCHEMA_FILE = "laya.question.json"
 DATASET_PAYLOAD_DIR = "dataset_payload"
 DATASET_METADATA_FILE = "dataset-metadata.json"
 DATASET_CSV_NAME = "dataset.csv"  # DECISION_CSV resolves THIS name
+# The base-model archive travels as a sealed `inputs` Bundle: this is the
+# surface-owned role manifest name (the graph bundlers own theirs the same way
+# via graph_tracks.artifacts.name); `Bundle.seal_archive` writes it as the one
+# container manifest and verifies the archive as it seals.
+BASE_MODEL_MANIFEST_FILE = "base_model_manifest.json"
 
 # ── fine-tune kind (owner: "lets run laya") ────────────────────────────────
 # The JSONL corpus built by scripts/laya_build_dataset.py (data/laya/
@@ -69,7 +91,6 @@ DATASET_CSV_NAME = "dataset.csv"  # DECISION_CSV resolves THIS name
 # single T4 and tars the checkpoint back.
 FINETUNE_DECISION = "finetune"
 FINETUNE_CODE_FILE = "laya_finetune.py"
-FINETUNE_CORPUS_DIR = "data/laya"
 FINETUNE_CORPUS_FILES = ("train.jsonl", "dev.jsonl", "test.jsonl")
 FINETUNE_CORPUS_RECEIPT = "receipt.json"
 
@@ -93,7 +114,10 @@ FINETUNE_EVAL_SPLIT_FILES = {
 }
 # `pip install laya`; pin laya>=0.3.29 (the version the flags were verified
 # against: /tmp/opc/laya_pkg329/bin/laya-train --help).
-FINETUNE_LAYA_PACKAGE = "laya>=0.3.29"
+# Deprecated module alias (the ``laya_package`` template value the legacy
+# tests/test_lane_fixes.py renderer passes). The SSOT is
+# ``laya.finetune_package``; every staged payload resolves it from the spec.
+FINETUNE_LAYA_PACKAGE = LayaSpec().finetune_package
 # The FULL `laya.train.TrainConfig` field surface the finetune kernel
 # builds from `laya.finetune` (SSOT): every trainer knob is YAML-driven,
 # never a code literal. `eval_data` is supplied by the kernel (the attached
@@ -123,102 +147,61 @@ def finetune_config(spec: Any | None = None) -> dict[str, Any]:
     config["shuffle_options"] = tuple(config["shuffle_options"])
     return config
 
-PUBLISHED_RUNTIME_FILES = (
-    'artifacts/evidence/attribute_universe_census.json', 'artifacts/evidence/semantics/family_registry.json', 'artifacts/evidence/semantics/tau_sweep.json', 'artifacts/evidence/semantics/value_universe.json',
-    'artifacts/models/all-MiniLM-L6-v2/1_Pooling/config.json', 'artifacts/models/all-MiniLM-L6-v2/README.md', 'artifacts/models/all-MiniLM-L6-v2/config.json', 'artifacts/models/all-MiniLM-L6-v2/config_sentence_transformers.json',
-    'artifacts/models/all-MiniLM-L6-v2/data_config.json', 'artifacts/models/all-MiniLM-L6-v2/model.safetensors', 'artifacts/models/all-MiniLM-L6-v2/modules.json', 'artifacts/models/all-MiniLM-L6-v2/sentence_bert_config.json',
-    'artifacts/models/all-MiniLM-L6-v2/special_tokens_map.json', 'artifacts/models/all-MiniLM-L6-v2/tokenizer.json', 'artifacts/models/all-MiniLM-L6-v2/tokenizer_config.json', 'artifacts/models/all-MiniLM-L6-v2/train_script.py',
-    'artifacts/models/all-MiniLM-L6-v2/vocab.txt', 'artifacts/wheels/hnswlib-0.8.0-cp313-cp313-linux_x86_64.whl', 'colab_backend.py', 'config/attribute_ablation.yaml',
-    'config/graph_tracks_gnn.yaml', 'config/graph_tracks_hybrid.yaml', 'config/identity_dimensions.yaml', 'config/identity_reviews.json',
-    'config/laya.question.json', 'config/model_tracks.yaml', 'config/paths.yaml', 'config/text_track.yaml',
-    'config/training.yaml', 'config/training_ANN.yaml', 'config/vocabulary.json', 'data/canonical_records.csv',
-    'data/dataset_deduped.csv', 'data/final_validation.csv', 'data/gate_results.csv', 'data/labeled_pairs.csv',
-    'data/number_tokens_reference.csv', 'data/prepared/full/worker_1_baseline.pkl.gz', 'data/prepared/full/worker_1_baseline.pkl.gz.json', 'data/prepared/smoke_200/gnn_only.yaml',
-    'data/prepared/smoke_200/hybrid.yaml', 'data/prepared/smoke_200/prepared/graph_plan.json', 'data/prepared/smoke_200/prepared/input_manifest.json', 'data/prepared/smoke_200/prepared/listings.json',
-    'data/prepared/smoke_200/prepared/report_attributes.json', 'data/prepared/smoke_200/setup_manifest.json', 'data/prepared/smoke_200/shared_training_data.json', 'data/prepared/smoke_200/suite.yaml',
-    'data/prepared/smoke_200/text.yaml', 'data/prepared/smoke_200/text_export_request.json', 'data/prepared/smoke_200/text_prepared.pkl.gz', 'data/prepared/smoke_200/text_prepared.pkl.gz.json',
-    'data/prepared/smoke_200/text_training_binding.json', 'data/prepared/smoke_200__clean_shared_inputs/listings.json', 'data/prepared/smoke_200__clean_shared_inputs/report_attributes.json', 'data/prepared/smoke_500/gnn_only.yaml',
-    'data/prepared/smoke_500/hybrid.yaml', 'data/prepared/smoke_500/prepared/input_manifest.json', 'data/prepared/smoke_500/prepared/listings.json', 'data/prepared/smoke_500/prepared/report_attributes.json',
-    'data/prepared/smoke_500/setup_manifest.json', 'data/prepared/smoke_500/suite.yaml', 'data/prepared/smoke_500/text_prepared.pkl.gz', 'data/prepared/smoke_500/text_prepared.pkl.gz.json',
-    'data/sku_to_rep.csv', 'dataset.csv', 'pyproject.toml', 'requirements.txt',
-    'requirements/graph_tracks.txt', 'scripts/__init__.py', 'scripts/analyze_brand_matching.py', 'scripts/analyze_human_review_features.py',
-    'scripts/analyze_incorrect_predictions.py', 'scripts/analyze_model_input.py', 'scripts/apply_bundle_scope_holds.py', 'scripts/apply_identity_review_exclusions.py',
-    'scripts/apply_reading_verdicts.py', 'scripts/attribute_capture_audit.py', 'scripts/attribute_probes.py', 'scripts/attribute_universe_census.py',
-    'scripts/audit_added_sugar.py', 'scripts/audit_attribute_readings.py', 'scripts/audit_feature_capture.py', 'scripts/audit_gtin_discovery_followup.py',
-    'scripts/audit_identity_context.py', 'scripts/audit_identity_dimensions.py', 'scripts/audit_local_identity_evidence.py', 'scripts/audit_resume_state.py',
-    'scripts/augment_catalog.py', 'scripts/benchmarks/graph_pooling_cpu.py', 'scripts/brand_differentiation_audit.py', 'scripts/build_attribute_semantics.py',
-    'scripts/build_field_slice.py', 'scripts/build_gtin_less_linkage.py', 'scripts/build_stratified_holdout.py', 'scripts/build_validation_slice_sample.py',
-    'scripts/census_bundle_scope.py', 'scripts/check_proceed_precision.py', 'scripts/colab_tailscale_userspace.sh', 'scripts/collapse_probe.py',
-    'scripts/compare_item_pair_sets.py', 'scripts/compute_strata.py', 'scripts/count_evidence.py', 'scripts/dedupe_invalid_gtin_groups.py',
-    'scripts/dedupe_predicate_scorecard.py', 'scripts/diet_manifest.py', 'scripts/encode_prepared_embeddings.py', 'scripts/evaluate_gate_logic.py',
-    'scripts/evaluate_jev_identity_fixes.py', 'scripts/export_atlas_embeddings.py', 'scripts/fallback_adjudication.py', 'scripts/feed_reliability.py',
-    'scripts/finalize_full_evidence_rebuild.py', 'scripts/flip_validity_audit.py', 'scripts/format_submission.py', 'scripts/fresh_feature_gate_report.py',
-    'scripts/install_hpo_connectivity_deps.sh', 'scripts/investigate_identity_residuals.py', 'scripts/kaggle_auth_sync.py', 'scripts/mask_sensitivity_probe.py',
-    'scripts/material_carbonation_verdicts.py', 'scripts/measure_gate_regex_fixes.py', 'scripts/measure_pair_difficulty.py', 'scripts/minimal_flip_slice.py',
-    'scripts/negative_local_checks.py', 'scripts/negative_missing_probe.py', 'scripts/negative_supply_discriminator.py', 'scripts/permutation_census.py',
-    'scripts/profile_colab_setup.py', 'scripts/pseudo_gtin_census.py', 'scripts/raw_tcp_listener.sh', 'scripts/rebuild_balanced_augmentation.py',
-    'scripts/rebuild_training_handoff.py', 'scripts/regex_capture_review.py', 'scripts/regex_miss_evidence.py', 'scripts/regex_miss_review.py',
-    'scripts/regex_residual_audit.py', 'scripts/render_gtin_repair_results.py', 'scripts/render_identity_fixes.py', 'scripts/repair_augmented_features.py',
-    'scripts/repair_reviewed_catalog.py', 'scripts/replay_identity_residuals.py', 'scripts/report_jev_rebuild.py', 'scripts/review_source_consistency.py',
-    'scripts/run_colab_ablation.py', 'scripts/run_colab_bundle.sh', 'scripts/run_colab_embeddings.py', 'scripts/run_colab_smoke.sh',
-    'scripts/run_full_training.sh', 'scripts/run_raw_tcp_bridge_probe.py', 'scripts/sample_dataset_10k.py', 'scripts/seed_brand_aliases.py',
-    'scripts/show_model_input_comparison.py', 'scripts/sid_graph_eval.py', 'scripts/sid_hybrid_eval.py', 'scripts/sid_phase0_report.py',
-    'scripts/slice_scale_ladder.py', 'scripts/smoke_graph_tracks.py', 'scripts/triage_remaining_gtin_flavors.py', 'scripts/untrusted_resid_remeasure.py',
-    'scripts/validate_postgres_optuna_bridge.py', 'scripts/verdict_biggest_merges.py', 'scripts/verify_suite_archive.py', 'src/__init__.py',
-    'src/cli/__init__.py', 'src/cli/colab.py', 'src/cli/colab_bundle.py', 'src/cli/colab_cli_entry.py',
-    'src/cli/colab_data_bundle_prep.py', 'src/cli/colab_lane.py', 'src/cli/colab_retention.py', 'src/cli/colab_self_watch.py',
-    'src/cli/kaggle_chain.py', 'src/cli/kaggle_cli.py', 'src/cli/kaggle_datasets.py', 'src/cli/kaggle_kernel_templates.py',
-    'src/cli/kaggle_kernels.py', 'src/cli/kaggle_lane.py', 'src/cli/kaggle_lifecycle.py', 'src/cli/kaggle_monitor.py',
-    'src/cli/kaggle_outputs.py', 'src/cli/kaggle_runtime.py', 'src/cli/laya_lane.py', 'src/cli/log_capture.py',
-    'src/core/__init__.py', 'src/core/ann_config.py', 'src/core/archive_reader.py', 'src/core/attribute_conflicts.py',
-    'src/core/attribute_decision.py', 'src/core/attribute_universe.py', 'src/core/attribute_vocabulary.py', 'src/core/audit_guard.py',
-    'src/core/audit_json.py', 'src/core/blocking.py', 'src/core/bootstrap_ci.py', 'src/core/columns.py',
-    'src/core/common.py', 'src/core/coverage_contracts.py', 'src/core/critical_attributes.py', 'src/core/date_evidence.py',
-    'src/core/declared_identity.py', 'src/core/deduplication.py', 'src/core/disjoint_sets.py', 'src/core/encoding_inputs.py',
-    'src/core/execution_policy.py', 'src/core/gpu_execution.py', 'src/core/graph_diagnostics.py', 'src/core/gtin.py',
-    'src/core/hard_negatives.py', 'src/core/identity_policy.py', 'src/core/manifest.py', 'src/core/model_input.py',
-    'src/core/nlp.py', 'src/core/pair_policy.py', 'src/core/performance.py', 'src/core/portable_archive.py',
-    'src/core/product_context.py', 'src/core/product_dimensions.py', 'src/core/product_selection.py', 'src/core/progress.py',
-    'src/core/project_root.py', 'src/core/ranking_metrics.py', 'src/core/record_linkage.py', 'src/core/runtime_inputs.py',
-    'src/core/schemas.py', 'src/core/sku_identity.py', 'src/core/step_trace.py', 'src/core/structured_features.py',
-    'src/core/sweetener_values.py', 'src/core/text.py', 'src/core/timing.py', 'src/core/tracing.py',
-    'src/core/training_profiler.py', 'src/core/unit_canonicalization.py', 'src/core/url_evidence.py', 'src/core/volume_verified.py',
-    'src/core/wandb_ctx.py', 'src/core/worker_telemetry.py', 'src/graph_tracks/README.md', 'src/graph_tracks/__init__.py',
-    'src/graph_tracks/artifacts.py', 'src/graph_tracks/benchmark.py', 'src/graph_tracks/bundle.py', 'src/graph_tracks/config.py',
-    'src/graph_tracks/data.py', 'src/graph_tracks/dvc.py', 'src/graph_tracks/infer.py', 'src/graph_tracks/model.py',
-    'src/graph_tracks/pooling.py', 'src/graph_tracks/preflight.py', 'src/graph_tracks/prepare.py', 'src/graph_tracks/prepared_inputs.py',
-    'src/graph_tracks/report.py', 'src/graph_tracks/report_attributes.py', 'src/graph_tracks/report_manifest.py', 'src/graph_tracks/report_slices.py',
-    'src/graph_tracks/setup.py', 'src/graph_tracks/text_cache.py', 'src/graph_tracks/tracking.py', 'src/graph_tracks/train.py',
-    'src/graph_tracks/worker_package.py', 'src/model_tracks/__init__.py', 'src/model_tracks/ablation.py', 'src/model_tracks/ablation_cohort.py',
-    'src/model_tracks/ablation_inputs.py', 'src/model_tracks/ablation_retrieval.py', 'src/model_tracks/archive_verification.py', 'src/model_tracks/baseline_ablation.py',
-    'src/model_tracks/baseline_export.py', 'src/model_tracks/colab.py', 'src/model_tracks/config.py', 'src/model_tracks/data_gate.py',
-    'src/model_tracks/embedding_forward.py', 'src/model_tracks/embedding_staging.py', 'src/model_tracks/incremental.py', 'src/model_tracks/live_logs.py',
-    'src/model_tracks/local_complete.py', 'src/model_tracks/package.py', 'src/model_tracks/parallel.py', 'src/model_tracks/portable_layout.py',
-    'src/model_tracks/post_training_ablation.py', 'src/model_tracks/preflight.py', 'src/model_tracks/publish.py', 'src/model_tracks/resource_profile.py',
-    'src/model_tracks/resume.py', 'src/model_tracks/run.py', 'src/model_tracks/run_history.py', 'src/model_tracks/run_retention.py',
-    'src/model_tracks/shared_graph_data.py', 'src/model_tracks/smoke_inputs.py', 'src/model_tracks/snapshot_completion.py', 'src/model_tracks/staged_ablation.py',
-    'src/model_tracks/telemetry.py', 'src/model_tracks/text_export.py', 'src/model_tracks/text_report.py', 'src/model_tracks/training_data.py',
-    'src/model_tracks/worker.py', 'src/ner/__init__.py', 'src/ner/colab_ner.py', 'src/ner/config_loader.py',
-    'src/ner/ner.py', 'src/ner/ner_product_attributes.py', 'src/pipeline.py', 'src/predict_items.py',
-    'src/training/__init__.py', 'src/training/ann_refresh.py', 'src/training/artifact_store.py', 'src/training/attestation.py',
-    'src/training/attribute_agreement_audit.py', 'src/training/attribute_separation.py', 'src/training/attrition.py', 'src/training/audit_identity_retention.py',
-    'src/training/balanced_augmentation.py', 'src/training/base_data.py', 'src/training/blocking_audit.py', 'src/training/build_ann_index.py',
-    'src/training/build_final_validation.py', 'src/training/build_reference.py', 'src/training/build_second04_pairs.py', 'src/training/build_title_attribute_evidence.py',
-    'src/training/cluster_quality_plot.py', 'src/training/complete_colab_worker.py', 'src/training/composition_plot.py', 'src/training/data_prep.py',
-    'src/training/data_quality_audit.py', 'src/training/dedupe.py', 'src/training/difficulty.py', 'src/training/dvc_store.py',
-    'src/training/evaluate_models.py', 'src/training/folds.py', 'src/training/gate_replay.py', 'src/training/generate_rand_stratum_sweep.py',
-    'src/training/generate_rand_truth.py', 'src/training/generate_training_report.py', 'src/training/handoff.py', 'src/training/hnsw_index.py',
-    'src/training/hpo.py', 'src/training/hpo_champions.py', 'src/training/hpo_control_plane.py', 'src/training/hpo_fencing.py',
-    'src/training/hpo_metrics.py', 'src/training/hpo_persistence.py', 'src/training/labeled_pairs.py', 'src/training/losses.py',
-    'src/training/masking.py', 'src/training/negative_supply.py', 'src/training/package_gate_impact_audit.py', 'src/training/plots.py',
-    'src/training/preparation_run.py', 'src/training/prepare_all.py', 'src/training/prepare_all_trace.py', 'src/training/prepare_embeddings.py',
-    'src/training/prepare_tokens.py', 'src/training/prepared_bundle.py', 'src/training/prioritize_false_merge_components.py', 'src/training/rand_matching.py',
-    'src/training/report_plots.py', 'src/training/report_rows.py', 'src/training/rerank.py', 'src/training/robust_validation.py',
-    'src/training/run_plan.py', 'src/training/sample_balanced_pairs.py', 'src/training/sampler.py', 'src/training/selftest.py',
-    'src/training/semantic_ids.py', 'src/training/sid_graph.py', 'src/training/sid_hybrid.py', 'src/training/strip_audit.py',
-    'src/training/token_inputs.py', 'src/training/train.py', 'src/training/train_prepared.py', 'src/training/training.py',
-    'src/training/uniformity.py', 'src/training/validation_inference.py', 'src/training/zero_shot_sims.py',
+
+# The `EvalCalibrationSpec` surface the held-out eval kernels consume: the
+# per-type temperature fit + the optional abstention (`min_confidence`) fit.
+# One tuple, so the shadowing lint (`finetune_config` precedent) proves every
+# declared knob reaches the baked literal.
+EVAL_CALIBRATION_FIELDS = (
+    "temperature", "abstention", "target_error", "min_abstain_n",
+    "min_confidence",
 )
+
+
+def eval_calibration_config(spec: Any | None = None) -> dict[str, Any]:
+    """The `laya.eval_calibration` selection the eval kernels bake (SSOT).
+
+    Never a second registry: the field list above names exactly the
+    `EvalCalibrationSpec` surface. The defaults reproduce the landed eval
+    exactly (temperature fit on, abstention fit off, no pinned scalar).
+    """
+    ec = (spec or _spec()).eval_calibration
+    return {name: getattr(ec, name) for name in EVAL_CALIBRATION_FIELDS}
+
+
+def fit_eval_calibration(laya_train: Any, records, calibration: dict) -> dict:
+    """Fit laya's OWN calibration for the held-out eval path (SSOT selection).
+
+    The CPU `--local-eval` twin of the `finetune-eval` kernel's
+    `fit_eval_calibration` (the kernel is a staged string and cannot import
+    this module — keep the two in lockstep). Consumes laya's
+    `fit_temperature_map` / `fit_abstention_thresholds`, never reimplementing
+    either; the defaults reproduce the landed eval exactly.
+    """
+    level = calibration or {}
+    temperature = temperature_by_options = n_by_bucket = None
+    if level.get("temperature", True):
+        fitted = laya_train.fit_temperature_map(records)
+        temperature = fitted.get("temperature")
+        temperature_by_options = fitted.get("temperature_by_options")
+        n_by_bucket = fitted.get("n_by_bucket")
+    thresholds: dict[str, float] = {}
+    if level.get("abstention"):
+        thresholds = dict(laya_train.fit_abstention_thresholds(
+            records, temperature, temperature_by_options or {},
+            target_error=level.get("target_error", 0.10),
+            min_bucket_n=level.get("min_abstain_n", 10)) or {})
+    min_confidence = level.get("min_confidence")
+    if min_confidence is not None:
+        thresholds["default"] = min_confidence
+    return {
+        "temperature": temperature,
+        "temperature_by_options": temperature_by_options,
+        "n_by_bucket": n_by_bucket,
+        "abstention_thresholds": thresholds,
+        "min_confidence": min_confidence,
+    }
+
 
 # Per decision kind: the required header columns, the state column the
 # decision state is built from, and what the run decides. THE CSV BINDING
@@ -228,6 +211,8 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
     "attribute": {
         "wanted_columns": ("sku_id", "sku_name_eng", "attribute"),
         "state_column": "attribute",
+        # The columns that address one row (the kernel's ``_row`` tags).
+        "record_columns": ("sku_id", "sku_name_eng"),
         "description": ("attribute-channel typed decision over the export's "
                         "attribute text. NOT a replacement for the frozen "
                         "SKU_ITEM/GTIN attribution path — it asks whether "
@@ -237,6 +222,7 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
     "identity": {
         "wanted_columns": ("gtin1", "gtin2", "true_label"),
         "state_column": "attribute_pairs",
+        "record_columns": ("gtin1", "gtin2"),
         "description": ("identity typed decision over the frozen P0 "
                         "validation population. NOT a replacement for the "
                         "candidate-generation + gate + ann/rerank path — "
@@ -247,6 +233,7 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
     "laya-cli-eval": {
         "wanted_columns": ("gtin1", "gtin2", "true_label"),
         "state_column": "attribute_pairs",
+        "record_columns": ("gtin1", "gtin2"),
         "description": ("the laya-evals harness score over the same "
                         "identity decision samples, verifying the shared "
                         "transport + recall identity"),
@@ -257,6 +244,9 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
         # `--decision finetune` rides the lane's existing binding surface.
         "wanted_columns": ("state", "questions", "expected"),
         "state_column": "state",
+        # Not a per-row decision CSV: the corpus row is the unit, so no
+        # decision record columns exist (the corpus adapter owns this grain).
+        "record_columns": None,
         "description": ("fine-tune the convaiinnovations/laya checkpoint on "
                         "the verified-label JSONL corpus (state + identity "
                         "cases) via the real laya-train CLI on a single T4"),
@@ -267,6 +257,7 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
         # corpus row keys are the contract (mirrors the finetune entry).
         "wanted_columns": ("state", "questions", "expected"),
         "state_column": "state",
+        "record_columns": None,
         "description": ("HELD-OUT eval-only score of an attached fine-tuned "
                         "laya checkpoint on the corpus test split: loads the "
                         "checkpoint, runs calibration_records + "
@@ -293,6 +284,546 @@ def decision_binding(decision_kind: str) -> str:
             f"{decision_kind!r}; name the config/paths.yaml files: binding "
             "before staging")
     return binding
+
+
+# ── evaluation traceability adapters (lane-side; core owns the vocabulary) ──
+# core.eval_trace owns the contract; THIS lane owns its row shapes, the
+# record-id derivations and the corpus skip census. Every adapter is offline: it
+# consumes the dict the kernel already wrote, so a fetched report is validated
+# without laya installed and without re-deriving a single number.
+
+# The one decision kind whose report is the laya-evals harness (its cases are the
+# per-row grain); the rest of the decision CSV kinds report through the staged
+# decision CSV itself.
+_DECISION_EVAL_SOURCE = {"laya-cli-eval": "laya_cli_eval"}
+# The kernel members that carry an evaluate_records payload.
+_CORPUS_REPORT_NAMES = ("eval_report.json", "train_report.json")
+
+# ── the FETCHED per-row grain (the record adapters' production caller) ──────
+# `--fetch` is the one production path that sees both the remote run's own
+# artifacts and this box's staged inputs, so it is where the per-row identity
+# decision CSV and the laya.evals case list are built into the shared contract
+# by ``decision_csv_records`` / ``eval_case_records`` / ``records_traceability``
+# and WRITTEN through the declared ``traceability_report`` layout by
+# ``emit_traceability`` (before this path those three adapters had zero
+# production callers). A grain the fetched archive does not carry is recorded as
+# an explicit ``not_applicable`` entry with its reason, never skipped; a grain it
+# DOES carry but cannot be stamped or addressed fails loud.
+_DECISION_ROWS_SUFFIX = ".decisions.jsonl"
+_EVALS_DECISION_KIND = "laya-cli-eval"
+_EVALS_REPORT_MEMBER = "report.json"
+_RECORD_GRAIN_KEY = "record_grain"
+_NOT_APPLICABLE = "not_applicable"
+#: Every mandatory ``MetricBlock`` field: an aggregate block is only coerced into
+#: one when it exposes the whole surface (see :func:`metric_block_or_none`).
+_METRIC_BLOCK_FIELDS = ("items", "loss", "accuracy", "mean_confidence", "ece",
+                        "brier", "brier_top1")
+
+
+class RecordGrainGap(RuntimeError):
+    """The fetched archive carries no per-row grain to validate (not an error in
+    the run: an explicit ``not_applicable`` reason travels instead)."""
+
+
+def decision_record_columns(decision_kind: str) -> tuple[str, ...]:
+    """The columns that address one decision row (the kernel's ``_row`` tags).
+
+    The kernel attaches ``{k: v for k, v in row.items() if k != STATE_COLUMN}``
+    as ``answer['_row']``; the binding's declared ``record_columns`` are the
+    subset of those that identify the row. Corpus kinds declare none: their grain
+    is the corpus row, owned by the corpus adapter.
+    """
+    binding = DECISION_BINDINGS.get(decision_kind)
+    if binding is None:
+        raise ValueError(f"unknown decision kind: {decision_kind!r}; "
+                         f"expected {list(DECISION_BINDINGS)}")
+    columns = binding.get("record_columns")
+    if not columns:
+        raise ValueError(
+            f"decision kind {decision_kind!r} is not a per-row decision CSV; "
+            "its grain is the corpus row (see corpus_traceability)")
+    return tuple(columns)
+
+
+def decision_row_tags(row: dict) -> dict:
+    """A decision row's tags: the kernel's ``_row`` when present, else the row."""
+    tags = row.get("_row")
+    return tags if isinstance(tags, dict) else row
+
+
+def decision_source(decision_kind: str) -> str:
+    """The eval source a per-row decision kind reports through."""
+    decision_record_columns(decision_kind)  # fail loud on unknown/corpus kinds
+    return _DECISION_EVAL_SOURCE.get(decision_kind, "identity_decision_csv")
+
+
+def decision_csv_records(decision_kind: str, rows: list[dict], *,
+                         split: str, population: str,
+                         questions: dict[str, dict]) -> tuple[list, list]:
+    """The ``identity_decision_csv`` grain: one TaggedRecord per CSV row, one
+    EvalRowKey per (row, qid) the question schema declares.
+
+    No identity is invented: the row id is the join of the binding's own
+    ``record_columns`` over the ``_row`` tags the kernel already attaches, so a
+    decision row that cannot be addressed fails loud instead of collapsing onto
+    a neighbour.
+    """
+    columns = decision_record_columns(decision_kind)
+    source = decision_source(decision_kind)
+    qtypes = {qid: question["type"] for qid, question in questions.items()}
+    records: list[TaggedRecord] = []
+    keys: list[EvalRowKey] = []
+    seen: set[str] = set()
+    for row in rows:
+        tags = decision_row_tags(row)
+        record_id = "|".join(str(tags.get(column, "")) for column in columns)
+        if record_id in seen:
+            raise ValueError(f"duplicate decision record id {record_id!r}")
+        seen.add(record_id)
+        records.append(TaggedRecord(
+            record_id=record_id, source=source, split=split,
+            population=population, difficulty="unknown",
+            difficulty_reason="the decision CSV carries no difficulty axis"))
+        for qid, qtype in qtypes.items():
+            keys.append(EvalRowKey(record_id=record_id, question_id=qid,
+                                   question_type=qtype))
+    return records, keys
+
+
+def eval_case_records(cases: list[dict], *, split: str, population: str,
+                      questions: dict[str, dict]) -> tuple[list, list]:
+    """The ``laya_cli_eval`` grain: the ``laya.evals`` ``EvalReport.cases`` list.
+
+    The harness carries no row id, so the case ordinal is the only stable
+    identity; its free dimensions (language, model, tags) become slices.
+    """
+    qtypes = {qid: question["type"] for qid, question in questions.items()}
+    records: list[TaggedRecord] = []
+    keys: list[EvalRowKey] = []
+    for index, case in enumerate(cases):
+        record_id = f"case-{index:05d}"
+        records.append(TaggedRecord(
+            record_id=record_id, source="laya_cli_eval", split=split,
+            population=population,
+            slices=tuple(str(tag) for tag in (case.get("tags") or ())),
+            difficulty="unknown",
+            difficulty_reason="the evals harness carries no difficulty axis"))
+        qid = str(case["qid"])
+        keys.append(EvalRowKey(record_id=record_id, question_id=qid,
+                               question_type=qtypes[qid]))
+    return records, keys
+
+
+def corpus_skip_census(report: dict) -> dict[str, int]:
+    """``items_from_rows``' skip census: labelled questions that could not become
+    items, counted by reason."""
+    skipped = report.get("skipped") or {}
+    if not isinstance(skipped, dict):
+        raise ValueError(
+            f"skipped census must be a mapping, got {type(skipped).__name__}")
+    return {str(reason): int(count) for reason, count in skipped.items()}
+
+
+def abstention_thresholds(mapping: dict | None) -> dict[str, float]:
+    """Validate a fitted ``abstention_thresholds`` map.
+
+    Keyed by ``temp_bucket`` plus the runtime ``default`` sentinel, so a scalar
+    ``min_confidence`` cannot represent it.
+    """
+    from pydantic import TypeAdapter
+
+    return dict(TypeAdapter(dict[MinConfidenceKey, Share]).validate_python(
+        mapping or {}))
+
+
+# The two shapes the finetune note uses to name the train/eval overlap:
+# "10/1259 items overlap training data" and "10 items overlap".
+_OVERLAP_PATTERNS = (r"(\d+)\s*/\s*(\d+)\s+items?", r"(\d+)\s+items?\s+overlap")
+
+
+def overlap_items(note: Any) -> int | None:
+    """The train/eval overlap count the finetune report names in its note."""
+    text = str(note or "")
+    for pattern in _OVERLAP_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+# The unknown policy per CARRIED core dimension. Each one cites the explicit
+# unknown value, because the census reports it: the shared contract refuses a
+# policy that leaves the explicit value unexplained.
+_CARRIED_UNKNOWN_POLICIES: dict[str, str] = {
+    "source": ("the producer tags every record with the eval source it was "
+               "measured under; 'unknown' is never a source a producer assigns"),
+    "split": ("every record declares exactly one split; a record without one is "
+              "tagged 'unknown' rather than omitted from the census"),
+    "population": ("every record declares the population it was drawn from; a "
+                   "record without one is tagged 'unknown', never dropped"),
+    "slice": ("a record carrying no slice is counted under 'unknown' so the "
+              "membership census still accounts for the whole population"),
+    "difficulty": ("difficulty is measured per record; a record with no "
+                   "measurement keeps 'unknown' and carries its own "
+                   "difficulty_reason, never an invented easy/hard label"),
+}
+
+
+def coverage_from_records(records, *, items_total: int,
+                          split: str | None = None) -> TraceabilityCoverage:
+    """The carried-record coverage: EVERY census COUNTED from the records.
+
+    ``records_total``, ``by_source``, the five core strata (source/split/
+    population/slice/difficulty) and each dimension's multiplicity are DERIVED
+    from the records here, and the report validator re-derives the same numbers
+    from the same records, so a declared census no record supports cannot pass.
+    ``items_total`` is the metric grain (one record may score several questions)
+    and is checked against the carried keys by the report. ``split`` is optional:
+    when a producer still names it, it must be the split the records actually
+    carry.
+    """
+    records = tuple(records)
+    if not records:
+        raise ValueError("coverage_from_records needs the records it censuses")
+    derived = derived_record_census(records)
+    policies = derived_dimension_policies(records)
+    dimensions = {name: derived[name] for name in CORE_RECORD_DIMENSIONS}
+    carried_splits = set(dimensions["split"])
+    if split is not None and carried_splits != {split}:
+        raise ValueError(
+            f"declared split {split!r} is not the split the carried records "
+            f"hold ({sorted(carried_splits)})")
+    return TraceabilityCoverage(
+        records_total=len(records), items_total=items_total,
+        by_source=dimensions["source"],
+        dimension_values={name: set(counts) for name, counts in dimensions.items()},
+        dimension_multiplicity={name: policies[name] for name in dimensions},
+        by_dimension=dimensions,
+        unknown_policy=dict(_CARRIED_UNKNOWN_POLICIES),
+        slice_coverage=policies["slice"])
+
+
+def records_traceability(source: str, records, keys, *, model_id: str,
+                         digests: dict, overall: MetricBlock | None = None,
+                         split: str | None = None,
+                         **provenance) -> TraceabilityReport:
+    """A report whose identity is CARRIED and whose coverage is derived from it.
+
+    ``overall`` is optional because the per-row decision grain measures no metrics
+    of its own: an IDENTITY-ONLY report then carries the records and their keys,
+    and its item count is the number of carried keys (derived, never a second
+    declared number). When ``overall`` is given, its ``items`` must equal the key
+    count, so the two can never disagree silently.
+    """
+    records, keys = tuple(records), tuple(keys)
+    if not records:
+        raise ValueError(
+            "records_traceability needs the records it reports; an aggregate-only "
+            "report is built by corpus_traceability, never here")
+    carried_sources = {record.source for record in records}
+    if carried_sources != {source}:
+        raise ValueError(
+            f"report source {source!r} is not what the carried records hold "
+            f"({sorted(carried_sources)})")
+    if not keys:
+        raise ValueError(
+            "carried records must carry their row keys: the item grain is the "
+            "key population, never a declared number")
+    items_total = len(keys) if overall is None else overall.items
+    return TraceabilityReport(
+        provenance=EvalProvenance(source=source, model_id=model_id,
+                                  digests=digests, **provenance),
+        overall=overall,
+        by_type=dict(overall.by_type) if overall else {},
+        records=records, keys=keys,
+        coverage=coverage_from_records(records, items_total=items_total,
+                                       split=split))
+
+
+def corpus_traceability(report: dict, *, model_id: str, digests: dict,
+                        split: str | None = None,
+                        records: tuple = (), keys: tuple = ()) -> TraceabilityReport:
+    """The fine-tune corpus producer -> the traceability contract.
+
+    ``before``/``after`` are the ``evaluate_records`` blocks; ``rows``/``items``/
+    ``skipped`` come from ``items_from_rows``; ``is_held_out`` and the overlap
+    note are the traceability facts that matter most for a fine-tune eval.
+
+    Two modes, and the report SAYS which one it is:
+
+    * ``records`` + ``keys`` carried: every census is re-derived from them, and
+      the aggregate numbers must agree with the carried population.
+    * neither carried: the report is AGGREGATE-ONLY, declares why
+      (``aggregate_reason``), and keeps the producer's own measured numbers; it
+      does not pretend to a record-grain census (``slice`` is ``not_applicable``
+      with a reason).
+    """
+    metrics = dict(report.get("after") or report.get("before") or {})
+    if not metrics:
+        raise ValueError("corpus report carries no before/after metric block")
+    overall = MetricBlock.model_validate(metrics)
+    rows = int(report.get("rows", report.get("eval_items", overall.items)))
+    items = int(report.get("items", overall.items))
+    if split is None:
+        split = (report.get("eval_split")
+                 or Path(str(report.get("eval_source") or "")).stem
+                 or UNKNOWN_DIMENSION_VALUE)
+    if bool(records) != bool(keys):
+        raise ValueError(
+            "the corpus grain carries its records and their keys together, or "
+            "neither: rows=" + str(len(records)) + " keys=" + str(len(keys)))
+    thresholds = abstention_thresholds(report.get("abstention_thresholds"))
+    census = report.get("abstention")
+    # The eval path may pin the runtime scalar explicitly (`min_confidence`);
+    # otherwise the fitted map's "default" sentinel is the gate. Additive: a
+    # report carrying neither keeps provenance.min_confidence None as before.
+    min_confidence = report.get("min_confidence")
+    if min_confidence is None:
+        min_confidence = thresholds.get("default")
+    if records:
+        coverage = coverage_from_records(records, items_total=items, split=split)
+    else:
+        # Aggregate-only: the declared numbers are the producer's own measured
+        # aggregates and the reason is mandatory, so this mode is never silent.
+        coverage = TraceabilityCoverage(
+            records_total=rows, items_total=items,
+            by_source={"finetune_corpus": rows},
+            dimension_values={"split": {split}},
+            dimension_multiplicity={"split": "partition"},
+            by_dimension={"split": {split: rows}},
+            unknown_policy={"split": (
+                f"the corpus split is declared by the producer ({split!r}); "
+                f"a report that declares none is reported as "
+                f"{UNKNOWN_DIMENSION_VALUE!r} rather than guessed")},
+            slice_coverage="not_applicable",
+            slice_coverage_reason=("the corpus producer reports aggregates; "
+                                   "per-slice rows are not emitted yet"),
+            aggregate_reason=("the corpus receipt carries measured aggregate "
+                              "counts and no per-row population; the record-grain "
+                              "census arrives only when the rows are carried"))
+    return TraceabilityReport(
+        provenance=EvalProvenance(
+            source="finetune_corpus", model_id=model_id, digests=digests,
+            is_held_out=report.get("is_held_out"),
+            eval_overlap_items=overlap_items(report.get("note")),
+            min_confidence=min_confidence,
+            batch_size=int(report.get("batch_size") or 0)),
+        overall=overall,
+        by_type=dict(overall.by_type),
+        skipped=corpus_skip_census(report),
+        abstention=(AbstentionBlock.model_validate(census) if census else None),
+        records=tuple(records),
+        keys=tuple(keys),
+        coverage=coverage)
+
+
+def corpus_digest(receipt: dict) -> str:
+    """The corpus digest a fetched lane receipt carries.
+
+    The finetune receipt keys ``corpus_sha256`` by corpus file name; the eval-only
+    receipt names the scored held-out split directly.
+    """
+    corpus = receipt.get("corpus_sha256")
+    if isinstance(corpus, dict):
+        for name in FINETUNE_CORPUS_FILES:
+            if isinstance(corpus.get(name), str):
+                return corpus[name]
+    if isinstance(corpus, str):
+        return corpus
+    for key in ("eval_jsonl_sha256", "eval_data_sha256"):
+        value = receipt.get(key)
+        if isinstance(value, str):
+            return value
+    raise KeyError("receipt carries no corpus digest (corpus_sha256 / "
+                   "eval_jsonl_sha256 / eval_data_sha256)")
+
+
+def metric_block_or_none(payload: dict) -> MetricBlock | None:
+    """The harness's aggregate block, ONLY when the whole surface is there.
+
+    The evals harness may report cases without a metric block; an aggregate that
+    exposes every ``MetricBlock`` field is validated as one (and fails loud when
+    it disagrees with itself), while a partial block is NOT coerced: the report
+    then carries its records alone, and the artifact says so (``overall: null``)
+    instead of shipping a half-filled metric surface.
+    """
+    fields = {name: (payload or {})[name] for name in MetricBlock.model_fields
+              if name in (payload or {})}
+    if not set(_METRIC_BLOCK_FIELDS) <= set(fields):
+        return None
+    return MetricBlock.model_validate(fields)
+
+
+def read_decision_rows(body: bytes) -> list[dict]:
+    """The kernel's ``<kind>.decisions.jsonl`` bytes -> the per-row answer dicts."""
+    rows: list[dict] = []
+    for number, line in enumerate(body.decode("utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"decision row {number} is a {type(payload).__name__}, not an object")
+        rows.append(payload)
+    return rows
+
+
+def staged_question_schema() -> dict:
+    """The ``questions`` dict of the schema THIS BOX staged, never re-derived.
+
+    A fetched kernel ships no question schema: the lane staged
+    ``laya.question.json`` (``stage_question_schema``) before the push, so the
+    local staged copy is the schema the remote run was fed. Absent => fail loud,
+    because neither the ``(row, qid)`` keys nor the question TYPES can be derived
+    without it, and a guessed qtype would silently satisfy the key contract.
+    """
+    for kind in KINDS:
+        path = staging_dir() / kind / "question" / QUESTION_SCHEMA_FILE
+        if not path.is_file():
+            continue
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        questions = schema.get("questions")
+        if not isinstance(questions, dict) or not questions:
+            raise ValueError(
+                f"staged question schema {path} carries no 'questions' dict")
+        return questions
+    raise FileNotFoundError(
+        f"no staged {QUESTION_SCHEMA_FILE} under {staging_dir()}; stage the payload "
+        "before fetching, or the per-row grain cannot be addressed")
+
+
+def record_grain_traceability(decision_kind: str, *, receipt: dict,
+                              reports: dict, decision_rows=(), questions=None
+                              ) -> TraceabilityReport:
+    """Build the PER-ROW report from the fetched grain (identity CSV / evals cases).
+
+    * every per-row decision kind: the kernel's ``<kind>.decisions.jsonl`` rows
+      are the grain (``decision_csv_records``) and the report is IDENTITY-ONLY
+      (``overall=None``), so its item count IS the carried key count;
+    * ``laya-cli-eval``: the ``laya.evals`` report's ``cases`` list is the grain
+      (``eval_case_records``), and the harness's aggregate block rides along when
+      it exposes the full metric surface.
+
+    Both go through ``records_traceability``, so every census is re-derived from
+    the fetched rows, and the digest the receipt names is stamped as provenance.
+    A grain the fetched archive does not carry raises :class:`RecordGrainGap`
+    (the caller records the explicit ``not_applicable`` reason); anything the
+    archive DOES carry but cannot be addressed or stamped fails loud.
+    """
+    binding = DECISION_BINDINGS.get(decision_kind)
+    if binding is None:
+        raise ValueError(f"unknown decision kind: {decision_kind!r}")
+    if not binding.get("record_columns"):
+        raise RecordGrainGap(
+            f"decision kind {decision_kind!r} reports through the corpus grain, "
+            "not a per-row decision CSV (see corpus_traceability)")
+    source = decision_source(decision_kind)
+    digests = {key: receipt[key] for key in
+               ("decision_csv_sha256", "evals_dataset_sha256")
+               if isinstance(receipt.get(key), str)}
+    # What the receipt can name, and the explicit unknown when it names nothing:
+    # a guessed 'test' split would be a fabricated tag.
+    split = str(receipt.get("split") or receipt.get("eval_split")
+                or UNKNOWN_DIMENSION_VALUE)
+    population = str(receipt.get("population") or decision_kind)
+    model_id = str(receipt.get("checkpoint") or receipt.get("checkpoint_hub")
+                   or receipt.get("output_dir") or receipt.get("gpu_kind")
+                   or decision_kind)
+    if decision_kind == _EVALS_DECISION_KIND:
+        payload = reports.get(_EVALS_REPORT_MEMBER)
+        cases = payload.get("cases") if isinstance(payload, dict) else None
+        if not isinstance(cases, list) or not cases:
+            raise RecordGrainGap(
+                f"the fetched {_EVALS_REPORT_MEMBER} carries no 'cases' list, so the "
+                "laya.evals per-case grain cannot be validated")
+        records, keys = eval_case_records(
+            cases, split=split, population=population,
+            questions=questions or staged_question_schema())
+        overall = metric_block_or_none(payload)
+    else:
+        if not decision_rows:
+            raise RecordGrainGap(
+                f"the fetched archive carries no {decision_kind}"
+                f"{_DECISION_ROWS_SUFFIX}, so the per-row decision grain cannot be "
+                "validated")
+        records, keys = decision_csv_records(
+            decision_kind, list(decision_rows), split=split,
+            population=population, questions=questions or staged_question_schema())
+        overall = None
+    return records_traceability(
+        source, records, keys, model_id=model_id, digests=digests,
+        overall=overall, split=split,
+        batch_size=int(receipt.get("batch_size") or 0))
+
+
+def fetched_traceability(receipt: dict, reports: dict, *,
+                         decision_kind: str | None = None,
+                         decision_rows=(), questions=None
+                         ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate a fetched kernel's reports and EMIT the per-row grain it carries.
+
+    Never silent (falsified 2026-10-08: a receipt naming no digest returned ``{}``
+    and a member without a before/after block was skipped without trace):
+
+    * a member that IS an ``evaluate_records`` payload but whose receipt names no
+      corpus digest RAISES: its provenance cannot be stamped, so "validating" it
+      would be a fiction;
+    * a member that carries no such block is recorded as an explicit
+      ``{'not_applicable': reason}`` entry;
+    * when the fetched decision kind reports a per-row grain, it is built by
+      :func:`record_grain_traceability` from the fetched rows, WRITTEN through the
+      declared ``traceability_report`` layout (``emit_traceability``) and listed
+      in the returned artifacts; when the archive does not carry that grain, the
+      entry states ``not_applicable`` and why.
+
+    Returns ``(documents, artifacts)``: JSON-ready documents keyed by member name
+    (``_RECORD_GRAIN_KEY`` for the per-row grain) and emitted artifact paths.
+    """
+    model_id = str(receipt.get("output_dir") or receipt.get("checkpoint")
+                   or receipt.get("gpu_kind") or "laya")
+    documents: dict[str, Any] = {}
+    metric_members = {
+        name: payload for name, payload in reports.items()
+        if isinstance(payload, dict) and (payload.get("before") or payload.get("after"))}
+    if metric_members:
+        try:
+            digest = corpus_digest(receipt)
+        except KeyError as error:
+            raise KeyError(
+                f"fetched members {sorted(metric_members)} are evaluate_records "
+                f"payloads but the receipt names no corpus digest, so their "
+                f"provenance cannot be stamped: {error}") from error
+        for name in sorted(metric_members):
+            documents[name] = corpus_traceability(
+                metric_members[name], model_id=model_id,
+                digests={"corpus_sha256": digest}).model_dump(mode="json")
+    else:
+        for name in _CORPUS_REPORT_NAMES:
+            if isinstance(reports.get(name), dict):
+                documents[name] = {_NOT_APPLICABLE: (
+                    f"{name} carries no before/after evaluate_records block to "
+                    "validate")}
+    artifacts: dict[str, Any] = {}
+    if decision_kind is not None:
+        try:
+            document = record_grain_traceability(
+                decision_kind, receipt=receipt, reports=reports,
+                decision_rows=decision_rows, questions=questions)
+        except RecordGrainGap as gap:
+            documents[_RECORD_GRAIN_KEY] = {_NOT_APPLICABLE: str(gap)}
+        else:
+            artifacts[_RECORD_GRAIN_KEY] = str(
+                emit_traceability(decision_kind, document))
+            documents[_RECORD_GRAIN_KEY] = document.model_dump(mode="json")
+    return documents, artifacts
+
+
+def emit_traceability(track: str, document: TraceabilityReport, *,
+                      lane: str = "laya_lane") -> Path:
+    """Write a lane traceability document to the layout ``traceability_report``
+    resolves (core.common owns the template; core.eval_trace stamps the write)."""
+    return write_report("traceability_report", {"lane": lane, "track": track},
+                        document)
 
 
 def staging_dir() -> Path:
@@ -1237,6 +1768,7 @@ BASE_MODEL_ARCHIVE = "@BASE_MODEL_ARCHIVE@"
 BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
 FINETUNE_DEVICE = "@FINETUNE_DEVICE@"
 FINETUNE_CONFIG = @FINETUNE_CONFIG@
+HELD_OUT_BATCH = @HELD_OUT_BATCH@
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
@@ -1370,6 +1902,47 @@ def sha256_of(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def evaluate_held_out(test_path, checkpoint, device):
+    """Score the just-trained checkpoint on the HELD-OUT test split.
+
+    DEFAULT-ON (owner order): the training-time eval is the dev split and
+    overlaps training/calibration, so this is the run's honest generalization
+    number. The raw (uncalibrated) metrics are reported — the calibration was
+    already fitted on the calibration split during training. Opt out with
+    ER_LAYA_HELD_OUT=0.
+    """
+    import torch
+    from laya import train as laya_train
+
+    model, tok, cfg = laya_train.load_checkpoint(str(checkpoint))
+    model = model.to(torch.device(device)).eval()
+    max_len = int(cfg.get("max_len", 512))
+    head_max_len = int(cfg.get("head_max_len", 192))
+    parallel = laya_train.uses_parallel_layout(cfg)
+    rows = laya_train.read_jsonl(str(test_path))
+    items, skipped = laya_train.items_from_rows(
+        tok, rows, max_len, head_max_len, label_smoothing=0.0)
+    if not items:
+        raise SystemExit(
+            "held-out split " + test_path.name + " produced no usable items "
+            "(skipped: " + repr(skipped) + ")")
+    log("held-out rows " + str(len(rows)) + " -> items " + str(len(items)))
+    records = laya_train.calibration_records(
+        model, tok, items, device, max_len, head_max_len,
+        batch_size=HELD_OUT_BATCH, parallel=parallel)
+    return {
+        "eval_mode": "held_out",
+        "is_held_out": True,
+        "eval_source": test_path.name,
+        "eval_split": "test",
+        "rows": len(rows),
+        "items": len(items),
+        "skipped": skipped,
+        "checkpoint": str(checkpoint),
+        "metrics": laya_train.evaluate_records(records),
+    }
+
+
 def main():
     pip_install_laya()
     device = pick_device()
@@ -1412,6 +1985,24 @@ def main():
     report = out_dir / "train_report.json"
     if report.is_file():
         receipt["train_report"] = json.loads(report.read_text())
+    # DEFAULT-ON held-out validation (owner order): every fine-tune also
+    # scores the just-trained checkpoint on the held-out `test` split, so the
+    # receipt always carries the honest generalization number. Opt out with
+    # ER_LAYA_HELD_OUT=0; a failure never discards the trained checkpoint.
+    if os.environ.get("ER_LAYA_HELD_OUT", "1").strip().lower() not in (
+            "0", "false", "off", "no"):
+        try:
+            held_out = evaluate_held_out(test, out_dir, device)
+            (out_dir / "held_out_report.json").write_text(
+                json.dumps(held_out, indent=2) + "\\n", encoding="utf-8")
+            receipt["held_out"] = held_out
+            log("held-out " + held_out["eval_source"] + " items="
+                + str(held_out["items"]) + " accuracy="
+                + str(held_out["metrics"].get("accuracy")))
+        except Exception as error:  # keep the checkpoint; surface the failure
+            receipt["held_out_error"] = (
+                type(error).__name__ + ": " + str(error)[:400])
+            log("held-out evaluation FAILED: " + receipt["held_out_error"])
     (WORKING / "laya_finetune.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
     with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz") as tar:
@@ -1455,6 +2046,11 @@ EVAL_SPLIT = "@EVAL_SPLIT@"
 CKPT_DIR_HINT = "@CKPT_DIR@"
 CHECKPOINT_PATH = "@CHECKPOINT_PATH@"
 BATCH_SIZE = @BATCH_SIZE@
+# The YAML-driven calibration/abstention selection (`laya.eval_calibration`):
+# `temperature` fits laya's per-type temperature map (on by default), the
+# opt-in `abstention` fits the per-bucket `min_confidence` gate, and
+# `min_confidence` pins the runtime scalar. Baked as ONE repr literal.
+EVAL_CALIBRATION = @EVAL_CALIBRATION@
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
@@ -1524,6 +2120,40 @@ def sha256_of(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def fit_eval_calibration(laya_train, records):
+    """Fit laya's OWN calibration per the baked `EVAL_CALIBRATION` (SSOT).
+
+    Consumes `fit_temperature_map` (per-type temperature sequence + the
+    per-bucket map) and, opt-in, `fit_abstention_thresholds` (the per-bucket
+    `min_confidence` gate); nothing is reimplemented here. The kernel sets
+    `default` on the thresholds map only when `min_confidence` is pinned,
+    because an explicit operator pin beats the fit's implied default.
+    """
+    level = EVAL_CALIBRATION or {}
+    temperature = temperature_by_options = n_by_bucket = None
+    if level.get("temperature", True):
+        fitted = laya_train.fit_temperature_map(records)
+        temperature = fitted.get("temperature")
+        temperature_by_options = fitted.get("temperature_by_options")
+        n_by_bucket = fitted.get("n_by_bucket")
+    thresholds = {}
+    if level.get("abstention"):
+        thresholds = dict(laya_train.fit_abstention_thresholds(
+            records, temperature, temperature_by_options or {},
+            target_error=level.get("target_error", 0.10),
+            min_bucket_n=level.get("min_abstain_n", 10)) or {})
+    min_confidence = level.get("min_confidence")
+    if min_confidence is not None:
+        thresholds["default"] = min_confidence
+    return {
+        "temperature": temperature,
+        "temperature_by_options": temperature_by_options,
+        "n_by_bucket": n_by_bucket,
+        "abstention_thresholds": thresholds,
+        "min_confidence": min_confidence,
+    }
+
+
 def main():
     pip_install_laya()
     device = pick_device()
@@ -1550,10 +2180,10 @@ def main():
         model, tok, items, device, max_len, head_max_len,
         batch_size=BATCH_SIZE, parallel=parallel)
     before = laya_train.evaluate_records(records)
-    fitted = laya_train.fit_temperature_map(records)
+    calibration = fit_eval_calibration(laya_train, records)
     after = laya_train.evaluate_records(
-        records, fitted.get("temperature"),
-        fitted.get("temperature_by_options"))
+        records, calibration["temperature"],
+        calibration["temperature_by_options"])
     comparison = {
         "delta_accuracy": round(
             after["accuracy"] - before["accuracy"], 4),
@@ -1579,9 +2209,17 @@ def main():
         "before": before,
         "after": after,
         "comparison": comparison,
-        "temperature": fitted.get("temperature"),
-        "temperature_by_options": fitted.get("temperature_by_options"),
+        "temperature": calibration["temperature"],
+        "temperature_by_options": calibration["temperature_by_options"],
     }
+    # Additive: the opt-in knobs alone add keys, so a default config keeps the
+    # landed report shape byte-for-byte.
+    if EVAL_CALIBRATION.get("abstention") or calibration["min_confidence"] is not None:
+        report["n_by_bucket"] = calibration["n_by_bucket"] or {}
+    if calibration["abstention_thresholds"]:
+        report["abstention_thresholds"] = calibration["abstention_thresholds"]
+    if calibration["min_confidence"] is not None:
+        report["min_confidence"] = calibration["min_confidence"]
     WORKING.mkdir(parents=True, exist_ok=True)
     report_path = WORKING / "eval_report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\\n",
@@ -1598,6 +2236,7 @@ def main():
         "is_held_out": True,
         "eval_jsonl_sha256": sha256_of(eval_path),
         "checkpoint": str(checkpoint),
+        "eval_calibration": EVAL_CALIBRATION,
         "report_sha256": sha256_of(report_path),
     }
     (WORKING / "laya_finetune-eval.receipt.json").write_text(
@@ -1624,6 +2263,13 @@ def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
     payload shape) + copies of the staged laya.question.json and the
     staged decision CSV RENAMED to dataset.csv (the DECISION_CSV name the
     kernel resolves via INPUTS.rglob once the dataset attaches).
+
+    Boundary (deliberately NOT a `Bundle`): a kaggle dataset payload is a
+    DIRECTORY, so there is no single container to carry a Bundle manifest;
+    integrity is the receipt's `files` inventory (the same name -> sha256
+    shape `Bundle`'s manifest uses), re-verified by the consumer after the
+    dataset attaches. Forcing an archive here would change what kaggle
+    versions and what the kernel resolves by name.
     """
     if not dataset_slug:
         raise RuntimeError(
@@ -1652,20 +2298,25 @@ def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
 def package_base_model(*, source_dir: Path, dataset_slug: str,
                        archive_name: str, member_name: str,
                        output_dir: Path | None = None) -> dict[str, Any]:
-    """Package the local base checkpoint tree as a `.tar.zst` dataset payload.
+    """Package the local base checkpoint tree as a sealed `.tar.zst` dataset payload.
 
     The fine-tune base checkpoint is 647 MB (plain git caps at 100 MB), so
     it ships the way the project ships large payloads: a zstd tar attached
-    as a kaggle dataset. Streams `source_dir`'s whole tree under ONE
+    as a kaggle dataset. The archive seals with every source under ONE
     top-level member named `member_name`, so extraction yields a dir
     carrying `rl_agent_config.json` (exactly what laya's
-    resolve_checkpoint_dir needs to take the local-dir branch). Uses the
-    project's zstd tar writer (core.archive_reader.tar_archive) and lands
-    the kaggle `dataset-metadata.json` beside the archive. Results live
-    under results/laya_lane/base_model (never committed).
-    """
-    from core.archive_reader import tar_archive
+    resolve_checkpoint_dir needs to take the local-dir branch).
 
+    Sealing goes through `Bundle.seal_archive` (the shared writer): it hashes
+    each source once while writing, verifies the written bytes, and returns
+    the whole-file digest on the handle, so the receipt's integrity token is
+    the boundary token — no second read of the 647 MB archive. The extra
+    `BASE_MODEL_MANIFEST_FILE` member is the Bundle role manifest;
+    `extract_base_model` resolves the model dir by `rl_agent_config.json`, so
+    the manifest never disturbs extraction. The kaggle
+    `dataset-metadata.json` lands beside the archive. Results live under
+    results/laya_lane/base_model (never committed).
+    """
     source_dir = Path(source_dir)
     if not (source_dir / "rl_agent_config.json").is_file():
         raise FileNotFoundError(
@@ -1679,8 +2330,16 @@ def package_base_model(*, source_dir: Path, dataset_slug: str,
     archive_path = stage / archive_name
     if archive_path.exists():
         archive_path.unlink()
-    with tar_archive(archive_path, "w") as archive:
-        archive.add(str(source_dir), arcname=member_name, recursive=True)
+    files = {f"{member_name}/{path.relative_to(source_dir).as_posix()}": path
+             for path in sorted(source_dir.rglob("*")) if path.is_file()}
+    if not files:
+        raise FileNotFoundError(
+            f"base-model source {source_dir} carries no files to package")
+    sealed = Bundle.seal_archive(
+        archive_path, files, role=BundleRole.inputs,
+        manifest_name=BASE_MODEL_MANIFEST_FILE,
+        metadata={"schema": "er-laya-base-model-v1", "member": member_name,
+                  "source": str(source_dir)})
     metadata = {"title": "er laya base", "id": dataset_slug,
                 "licenses": [{"name": "other"}]}
     atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
@@ -1690,8 +2349,10 @@ def package_base_model(*, source_dir: Path, dataset_slug: str,
         "archive": archive_name,
         "member": member_name,
         "source": str(source_dir),
+        "bundle_role": BundleRole.inputs.value,
+        "manifest": BASE_MODEL_MANIFEST_FILE,
         "bytes": archive_path.stat().st_size,
-        "sha256": sha256_file(archive_path),
+        "sha256": sealed.digest,
         "metadata": metadata,
     }
     atomic_write_json(receipt, stage / "base_model.receipt.json")
@@ -1951,6 +2612,11 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
             "dataset (owner/slug) before staging")
     corpus_dir = Path(corpus_dir)
     stage = staging_dir() / "kaggle" / kind / DATASET_PAYLOAD_DIR
+    # Boundary (deliberately NOT a `Bundle`): like the decision payload, this
+    # is a kaggle dataset DIRECTORY (the corpus JSONL + the corpus receipt),
+    # not a sealed archive - kaggle versions the directory, so the receipt's
+    # `files` inventory is the integrity token the kernel re-checks once the
+    # dataset attaches.
     stage.mkdir(parents=True, exist_ok=True)
     metadata = {"title": "er laya train", "id": dataset_slug,
                 "licenses": [{"name": "other"}]}
@@ -2018,7 +2684,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
         revision, repository, branch)
     dataset_receipt = stage_finetune_dataset_payload(
         dataset_slug=dataset_slug,
-        corpus_dir=TRAIN_ROOT / FINETUNE_CORPUS_DIR)
+        corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir)
     stage = staging_dir() / "kaggle" / FINETUNE_DECISION
     stage.mkdir(parents=True, exist_ok=True)
     tag = run_tag or spec.run_tag_prefix + decision_tag()
@@ -2043,7 +2709,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
     }
     recipe = finetune_config(spec)
     values = {
-        "LAYA_PACKAGE": FINETUNE_LAYA_PACKAGE,
+        "LAYA_PACKAGE": spec.finetune_package,
         "BASE_MODEL_ARCHIVE": spec.base_model_archive,
         "BASE_MODEL_DIR": spec.base_model_dir,
         "RUN_TAG": tag,
@@ -2054,6 +2720,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
         # the kernel constructs `TrainConfig(**FINETUNE_CONFIG)` directly.
         "FINETUNE_CONFIG": repr(recipe),
         "FINETUNE_DEVICE": spec.finetune.device,
+        "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
@@ -2081,7 +2748,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "dataset": {"slug": dataset_slug,
                     "payload": dataset_receipt["payload"],
                     "files": dataset_receipt["files"]},
-        "laya_package": FINETUNE_LAYA_PACKAGE,
+        "laya_package": spec.finetune_package,
         # The base checkpoint is the attached er-laya-base dataset archive,
         # extracted in-kernel; the Hub id is NOT passed as --base anymore.
         "base_model": {"dataset": base_dataset,
@@ -2089,7 +2756,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
                        "dir": spec.base_model_dir},
         "recipe": recipe,
         "device": spec.finetune.device,
-        "corpus_dir": str(TRAIN_ROOT / FINETUNE_CORPUS_DIR),
+        "corpus_dir": str(TRAIN_ROOT / spec.finetune_corpus_dir),
         "published_pin": {"repository": repository, "branch": branch,
                           "revision": revision},
         "published_tip": tip,
@@ -2156,7 +2823,7 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
         revision, repository, branch)
     dataset_receipt = stage_finetune_dataset_payload(
         dataset_slug=dataset_slug,
-        corpus_dir=TRAIN_ROOT / FINETUNE_CORPUS_DIR,
+        corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir,
         kind=FINETUNE_EVAL_DECISION)
     stage = staging_dir() / "kaggle" / FINETUNE_EVAL_DECISION
     stage.mkdir(parents=True, exist_ok=True)
@@ -2182,14 +2849,19 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
         "is_private": True,
     }
     eval_jsonl = FINETUNE_EVAL_SPLIT_FILES[split]
+    calibration = eval_calibration_config(spec)
     values = {
-        "LAYA_PACKAGE": FINETUNE_LAYA_PACKAGE,
+        "LAYA_PACKAGE": spec.finetune_package,
         "RUN_TAG": tag,
         "EVAL_JSONL": eval_jsonl,
         "EVAL_SPLIT": split,
         "CKPT_DIR": spec.finetune_ckpt_dir,
         "CHECKPOINT_PATH": str(checkpoint_path) if checkpoint_path else "",
         "BATCH_SIZE": str(spec.finetune_eval_batch_size),
+        # The eval path's calibration/abstention selection rides one
+        # repr-baked literal (the FINETUNE_CONFIG precedent), so every knob
+        # is YAML-driven and the kernel never re-derives a default.
+        "EVAL_CALIBRATION": repr(calibration),
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
@@ -2218,7 +2890,8 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
         "checkpoint_dir_hint": spec.finetune_ckpt_dir,
         "eval_split": split,
         "eval_jsonl": eval_jsonl,
-        "laya_package": FINETUNE_LAYA_PACKAGE,
+        "eval_calibration": calibration,
+        "laya_package": spec.finetune_package,
         "published_pin": {"repository": repository, "branch": branch,
                           "revision": revision},
         "published_tip": tip,
@@ -2326,6 +2999,52 @@ def _staged_laya_push_preflight(stage_dir: Path) -> None:
 
 
 # ── the executed ops (fail-loud, --execute gated) ─────────────────────────
+#: decision kind -> the LayaSpec attribute holding its pushed kernel slug.
+_KIND_KERNEL_SLUG_ATTR = {
+    FINETUNE_DECISION: "finetune_kernel_slug",
+    FINETUNE_EVAL_DECISION: "finetune_eval_kernel_slug",
+}
+
+
+def kernel_slug(decision_kind: str) -> str:
+    """The pushed Kaggle kernel slug a decision kind runs on (stop target).
+
+    Decision kinds publish to ``export_dataset_slug`` (their kernel id IS the
+    export slug); the two fine-tune kinds carry dedicated kernel slugs. Fail
+    loud when the knob is unset — never guess an account.
+    """
+    spec = _spec()
+    if decision_kind in _KIND_KERNEL_SLUG_ATTR:
+        attr = _KIND_KERNEL_SLUG_ATTR[decision_kind]
+    elif decision_kind in DECISION_BINDINGS:
+        attr = "export_dataset_slug"
+    else:
+        raise ValueError(f"unknown decision kind: {decision_kind!r}; "
+                         f"expected {list(DECISION_BINDINGS)}")
+    slug = getattr(spec, attr, None)
+    if not slug:
+        raise RuntimeError(
+            f"config laya.{attr} is unset; name the target kernel (owner/slug) "
+            f"before addressing {decision_kind!r}")
+    return slug
+
+
+def stop_kaggle_kernel(slug: str, *, execute: bool,
+                       wait: bool = True) -> dict[str, Any]:
+    """First-class teardown of a pushed laya kernel's running session.
+
+    Delegates to the kaggle lane's verified stop: the session id the push
+    recorded (see ``push_kaggle_kernel``) feeds the SDK's in-place
+    ``cancel_kernel_session``; with no recorded id it falls back to the
+    version-replace stub. ``which='laya'`` only names the staging dir — the
+    slug addresses the kernel, so the stop label is honest (never ``cpu``).
+    """
+    from cli.kaggle_kernels import KaggleKernels
+
+    return KaggleKernels.stop_kernel(slug, which="laya", execute=execute,
+                                     wait=wait)
+
+
 def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
                        activate: bool = True) -> dict[str, Any]:
     """`kaggle kernels push` a staged payload, `--execute`-gated.
@@ -2350,6 +3069,13 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
             f"{stage_dir} (kernel-metadata.json is missing); stage first "
             "(--what stage-kernel)")
     _staged_laya_push_preflight(Path(stage_dir))
+    from cli import kaggle_lane as lane
+
+    slug = json.loads(metadata_file.read_text(encoding="utf-8"))["id"]
+    # Record the session id at launch (the capture point the verified stop
+    # reads): a later stop then cancels the EXACT session via the SDK instead
+    # of a blind version replace. Drop any stale id first.
+    lane.clear_kernel_session_id(slug)
     result = subprocess.run(argv, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
     output = result.stdout or ""
@@ -2361,7 +3087,14 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
             f"kaggle command failed (rc={rc}): {' '.join(argv)}\n"
             f"--- kaggle output ---\n{tail}")
     plan["pushed"] = True
-    _log_lane(f"pushed kernel payload: {' '.join(argv)} rc=0")
+    try:
+        captured = lane.capture_kernel_session_id(slug)
+        plan["session_id"] = captured.get("session_id")
+    except Exception as error:  # noqa: BLE001 - best-effort launch aid
+        plan["session_id"] = None
+        _log_lane(f"[{slug}] session-id capture skipped: {error}")
+    _log_lane(f"pushed kernel payload: {' '.join(argv)} rc=0 "
+              f"session_id={plan.get('session_id')}")
     return plan
 
 
@@ -2369,10 +3102,27 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
                           execute: bool = False) -> dict[str, Any]:
     """`kaggle kernels output` for a staged/decided kernel.
 
-    Dry run: returns the plan only. Executed: pulls the payload and
-    verifies the receipt (laya_<decision_kind>.receipt.json inside the
-    archive) against the locally staged receipt — fail-loud on a sha256
-    mismatch. Results install under results/laya_lane/fetch/<decision>/.
+    Dry run: returns the plan only. Executed: pulls the kernel's output
+    archive and requires the receipt member
+    (laya_<decision_kind>.receipt.json) — fail-loud when it is absent. The
+    JSON report members land beside it, and the receipt's corpus digest feeds
+    the traceability contract. Results install under
+    results/laya_lane/fetch/<decision>/.
+
+    Boundary (deliberately NOT a `Bundle`): the kernel stages a plain
+    `*.tar.gz` of /kaggle/working, so there is no per-role manifest member and
+    `Bundle.load` could never accept it. The integrity contract is the
+    in-archive receipt itself (written last by the kernel, like the NER
+    artifact manifest); `plan["traceability"]` carries the JSON form of each
+    validated report so the returned plan is exactly what is printed.
+
+    Traceability is not read-only any more: when the fetched decision kind
+    carries its PER-ROW grain (``<kind>.decisions.jsonl`` / the ``laya.evals``
+    case list), that grain is validated against the shared contract AND written
+    through the declared ``traceability_report`` layout, and
+    ``plan["traceability_artifacts"]["record_grain"]`` names the artifact. A
+    member that carries no grain is reported as an explicit ``not_applicable``
+    entry, never skipped.
     """
     plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
                             "decision_kind": decision_kind, "slug": slug}
@@ -2407,22 +3157,43 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
                              .read().decode())
         # Extract the JSON payloads the kernel wrote (eval_report.json and
         # siblings) into the fetch dir so the report path is reproducible
-        # offline: the returned plan carries them keyed by member name.
+        # offline: the returned plan carries them keyed by member name. The
+        # per-row decision kernel writes ``<kind>.decisions.jsonl``, which is
+        # NOT a JSON member: it is read here because the record grain has no
+        # other production source.
+        decision_rows: list[dict] = []
         for member in members:
             name = Path(member).name
-            if not name.endswith(".json") or name == receipt_name:
+            if name == receipt_name:
                 continue
-            body = tar.extractfile(member).read()
-            (stage / name).write_bytes(body)
-            try:
-                reports[name] = json.loads(body.decode())
-            except (ValueError, UnicodeDecodeError):
-                continue
+            if name.endswith(".json"):
+                body = tar.extractfile(member).read()
+                (stage / name).write_bytes(body)
+                try:
+                    reports[name] = json.loads(body.decode())
+                except (ValueError, UnicodeDecodeError):
+                    continue
+            elif name == f"{decision_kind}{_DECISION_ROWS_SUFFIX}":
+                body = tar.extractfile(member).read()
+                (stage / name).write_bytes(body)
+                decision_rows = read_decision_rows(body)
     plan.update({"archive": str(archives[0]), "members": members,
                  "receipt": payload, "reports": reports})
+    if decision_rows:
+        plan["decision_rows"] = len(decision_rows)
+    # Validate the fetched reports against the shared traceability contract and
+    # EMIT the per-row grain through the declared layout. Store the JSON form:
+    # this plan is the printed `--fetch` document, so a pydantic model left in it
+    # would make json.dumps raise TypeError.
+    documents, artifacts = fetched_traceability(
+        payload, reports, decision_kind=decision_kind,
+        decision_rows=decision_rows)
+    plan["traceability"] = documents
+    if artifacts:
+        plan["traceability_artifacts"] = artifacts
     _log_lane(f"fetched kernel output for {slug}: "
               f"archive={archives[0].name} members={len(members)} "
-              f"reports={sorted(reports)}")
+              f"reports={sorted(reports)} rows={len(decision_rows)}")
     return plan
 
 
@@ -2453,7 +3224,7 @@ def local_eval_checkpoint(checkpoint_dir: Path, *,
         raise FileNotFoundError(
             f"checkpoint {checkpoint_dir} carries no rl_agent_config.json")
     if eval_data is None:
-        eval_data = (TRAIN_ROOT / FINETUNE_CORPUS_DIR
+        eval_data = (TRAIN_ROOT / spec.finetune_corpus_dir
                      / FINETUNE_EVAL_SPLIT_FILES[split])
     eval_data = Path(eval_data)
     if not eval_data.is_file():
@@ -2489,10 +3260,10 @@ def local_eval_checkpoint(checkpoint_dir: Path, *,
         model, tok, items, device, max_len, head_max_len,
         batch_size=batch_size, parallel=parallel)
     before = laya_train.evaluate_records(records)
-    fitted = laya_train.fit_temperature_map(records)
+    calibration = eval_calibration_config(spec)
+    fitted = fit_eval_calibration(laya_train, records, calibration)
     after = laya_train.evaluate_records(
-        records, fitted.get("temperature"),
-        fitted.get("temperature_by_options"))
+        records, fitted["temperature"], fitted["temperature_by_options"])
     report = {
         "eval_mode": "held_out",
         "is_held_out": True,
@@ -2505,9 +3276,17 @@ def local_eval_checkpoint(checkpoint_dir: Path, *,
         "checkpoint": str(checkpoint_dir),
         "before": before,
         "after": after,
-        "temperature": fitted.get("temperature"),
-        "temperature_by_options": fitted.get("temperature_by_options"),
+        "temperature": fitted["temperature"],
+        "temperature_by_options": fitted["temperature_by_options"],
     }
+    # Additive: the opt-in knobs alone add keys, so a default config keeps the
+    # landed report shape byte-for-byte (mirrors the eval kernel).
+    if calibration.get("abstention") or fitted["min_confidence"] is not None:
+        report["n_by_bucket"] = fitted["n_by_bucket"] or {}
+    if fitted["abstention_thresholds"]:
+        report["abstention_thresholds"] = fitted["abstention_thresholds"]
+    if fitted["min_confidence"] is not None:
+        report["min_confidence"] = fitted["min_confidence"]
     atomic_write_json(report, out_dir / FINETUNE_EVAL_REPORT_FILE)
     receipt = {
         "gpu_kind": FINETUNE_EVAL_DECISION,
@@ -2518,6 +3297,7 @@ def local_eval_checkpoint(checkpoint_dir: Path, *,
         "eval_data": str(eval_data),
         "eval_data_sha256": sha256_file(eval_data),
         "checkpoint": str(checkpoint_dir),
+        "eval_calibration": calibration,
         "report": str(out_dir / FINETUNE_EVAL_REPORT_FILE),
     }
     atomic_write_json(receipt, out_dir / FINETUNE_EVAL_RECEIPT_FILE)
@@ -2589,12 +3369,15 @@ def _spawn_stream_follower(slug: str) -> None:
         "from cli.kaggle_lane import stream_kernel_logs\n"
         f"stream_kernel_logs({slug!r}, log_path=Path({str(log)!r}))\n"
     )
-    with log.open("ab") as handle:
-        subprocess.Popen(
-            [sys.executable, "-c", code], cwd=TRAIN_ROOT,
-            stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            env={**os.environ, "PYTHONPATH": str(TRAIN_ROOT / "src")},
-            start_new_session=True)
+    # The follower writes the transcript itself (``log_path``); discard its own
+    # stdout/stderr so its console echo cannot double-write every line into the
+    # same lane.log (the duplicate `[stream ...]` prefix regression).
+    subprocess.Popen(
+        [sys.executable, "-c", code], cwd=TRAIN_ROOT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "PYTHONPATH": str(TRAIN_ROOT / "src")},
+        start_new_session=True)
 
 
 def main() -> None:
@@ -2616,7 +3399,12 @@ def main() -> None:
                              "with --decision + --slug and --execute")
     parser.add_argument("--slug", default=None,
                         help="the pushed kernel slug (owner/slug) for "
-                             "--fetch")
+                             "--fetch / --stop (default: the config slug "
+                             "for --decision)")
+    parser.add_argument("--stop", action="store_true",
+                        help="tear down the running session for --decision's "
+                             "kernel (kaggle only); the launch-recorded "
+                             "session id feeds the SDK cancel")
     parser.add_argument("--local-eval", action="store_true",
                         help="run the CPU held-out eval of a fetched "
                              "fine-tuned checkpoint instead of staging")
@@ -2655,6 +3443,16 @@ def main() -> None:
         plan = collect_kaggle_result(args.decision, args.slug,
                                      execute=args.execute)
         print(json.dumps(plan, indent=2), flush=True)
+        return
+
+    if args.stop:
+        # First-class teardown: resolve the kernel the decision ran on (or an
+        # explicit --slug), then cancel its running session. Dry-run by default.
+        if args.kind != "kaggle":
+            parser.error("--stop is a kaggle-lane operation")
+        slug = args.slug or kernel_slug(args.decision)
+        plan = stop_kaggle_kernel(slug, execute=args.execute)
+        print(json.dumps(plan, indent=2, default=str), flush=True)
         return
 
     lane = LayaLane(args.kind)

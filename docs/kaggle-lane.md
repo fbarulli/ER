@@ -43,7 +43,7 @@ locally.** The GPU session only trains.
 |---|---|
 | Package + upload the raw cohort export | local (this lane) |
 | Bundle generation: `prepare_all` → prepared inputs | Kaggle CPU kernel |
-| Training + embedding forwards (text / gnn_only / hybrid) | Kaggle GPU kernel (tracked, later run) |
+| Training + embedding forwards (text / gnn_only; the cascade composes post-training) | Kaggle GPU kernel (tracked, later run) |
 
 ## Auth standard (2026-10-07)
 
@@ -132,6 +132,37 @@ trip (kaggle_lane.py:407–415). Ablation staging lives in the CPU data bundle:
 per-track `ablation_templates/` on the prep machine, so the bundle ships them
 and every training suite session (CPU or GPU) forwards from the shipped
 templates instead of staging on the accelerator.
+
+## Sparse checkout (remote kernels)
+
+Every pushed kernel clones the configured branch at the pinned revision with
+`--filter=blob:none --no-checkout`, then sets `--no-cone` sparse patterns —
+never a full tree:
+
+- **bundle kernel**: launch `kaggle_kernel_templates.py:110–121`; patterns
+  `checkout_members((*kaggle.checkout_paths, cohort_dataset))`
+  (`cli/kaggle_kernels.py:218`).
+- **train/embed kernels**: `clone_pinned()`
+  `kaggle_kernel_templates.py:219–233`; patterns
+  `checkout_members(kaggle.checkout_paths, lane="training")`
+  (`cli/kaggle_kernels.py:373`).
+
+`core.runtime_inputs.checkout_members` (`src/core/runtime_inputs.py:22`) is
+the SSOT: `src scripts config requirements artifacts/wheels artifacts/evidence
+<models_dir> <smoke_dir> pyproject.toml requirements.txt colab_backend.py` plus
+the evidence members, then the lane members — `('dataset.csv',)` for
+`lane="bundle"` or `('data', 'dataset.csv')` for `lane="training"` (so the
+training checkout carries the whole `data/` tree, `data/laya` included).
+
+Branch is `kaggle.branch` (`config/training.yaml:292`, currently `main`): the
+kernel clones that branch and fails loud if the tip moved off the pinned
+revision (`regenerate the kernel`), so push before staging and re-stage on
+drift.
+
+**laya exception.** The laya payloads never clone: `src/cli/laya_lane.py` rides
+attached Kaggle datasets (base model, corpus, decisions) and its only git
+dependency is the `require_published_tip_match` gate (`laya_lane.py:2174`) that
+pins `HEAD == origin/<branch>` before it stages.
 
 ## Config (SSOT: `config/training.yaml` → `kaggle:`)
 

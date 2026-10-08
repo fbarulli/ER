@@ -486,6 +486,51 @@ def test_kernel_slugs_tracked_in_config():
     assert cfg.kaggle.gpu_kernel_slug == "fbarulli/er-train-gpu"
 
 
+def test_kernel_identities_resolve_every_kind_from_config(tmp_path, monkeypatch):
+    """Finding 1: ONE registry resolves each kind's slug, code file and result.
+
+    Every surface that used to rebuild a kind->slug (or kind->code-file) table
+    reads this instead, so the finalize job's identity shares the CPU slug while
+    keeping its own kind, watcher identity, code file and result name.
+    """
+    spec = _kernel_spec(tmp_path, monkeypatch,
+                        gpu_kernel_slug="owner/er-train-gpu",
+                        embedding_kernel_slug="owner/er-embed-gpu")
+    identities = kaggle_lane.kernel_identities(spec)
+    assert set(identities) == {"bundle", "train", "embed", "finalize"}
+    assert {kind: identity.slug(spec) for kind, identity in identities.items()} == {
+        "bundle": "owner/er-bundle-cpu", "train": "owner/er-train-gpu",
+        "embed": "owner/er-embed-gpu", "finalize": "owner/er-bundle-cpu"}
+    assert {kind: identity.which for kind, identity in identities.items()} == {
+        "bundle": "cpu", "train": "gpu", "embed": "embed", "finalize": "finalize"}
+    # values come from kaggle.files, not per-surface literals (bundle names its
+    # own manifest+archive pair; the others template the result name)
+    assert identities["train"].code_file == spec.files.code_files["train"]
+    assert identities["embed"].result_name == spec.files.result_names["embed"]
+    assert identities["finalize"].result_name == kaggle_lane.FINALIZE_RESULT_NAME
+    assert identities["finalize"].bundle_role == "result"
+    assert identities["bundle"].bundle_role == "inputs"
+    assert identities["bundle"].manifest_name(spec.files) == spec.files.bundle_receipt
+    assert identities["finalize"].manifest_name(spec.files) == \
+        spec.files.result_manifest.format(kind=kaggle_lane.FINALIZE_RESULT_NAME)
+    # push_kernel reverse-maps a staged code file back to ONE kind
+    code_files = [identity.code_file for identity in identities.values()]
+    assert len(set(code_files)) == len(code_files) == 4
+    # a renaming in the config flows through the registry (no baked literals)
+    spec.files.code_files["bundle"] = "renamed_cpu.py"
+    assert kaggle_lane.kernel_identity("bundle", spec).code_file == "renamed_cpu.py"
+    # a watcher alias resolves to the kind it watches
+    assert kaggle_lane.kernel_identity("cpu", spec).kind == "bundle"
+    assert kaggle_lane.kernel_identity("finalize", spec).kind == "finalize"
+    assert kaggle_lane.AUTOWATCH_WHICH["finalize"] == "finalize"
+
+
+def test_fetch_kernel_output_rejects_an_unknown_kind(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="unknown kernel output kind"):
+        kaggle_lane.fetch_kernel_output(kind="bogus", execute=False)
+
+
 def test_kernel_status_resolves_gpu_slug(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     calls = []
@@ -587,13 +632,17 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
 
         def iter_lines(self):
             pulls.append(1)
+            if self.state["dropped"]:
+                # The midtier SSE proxy re-sends the WHOLE session from line 0
+                # on a reconnect; the follower must rewrite, never duplicate.
+                for frame in frames:
+                    yield frame
+                return
             yield frames[0]
             yield frames[1]
-            if not self.state["dropped"]:
-                self.state["dropped"] = True
-                raise requests.exceptions.ChunkedEncodingError(
-                    "Response ended prematurely")
-            yield frames[2]
+            self.state["dropped"] = True
+            raise requests.exceptions.ChunkedEncodingError(
+                "Response ended prematurely")
 
     fake_api = types.SimpleNamespace(
         get_kernel_session_logs_stream=lambda request: Stream())
@@ -612,7 +661,7 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
     assert [line for line in content
             if line.startswith(("+ git", "[timing]", "phase"))] == \
         ["+ git clone", "[timing] mark 1s", "phase complete"], \
-        "decoded data payloads must be written as plain lines"
+        "a whole-session replay must be rewritten exactly once, never duplicated"
     assert any("reconnect attempt 1" in line for line in content), \
         "the reconnect status line shares the same transcript"
     assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
@@ -736,13 +785,15 @@ def test_stamp_matches_paris_local_format():
 # ── train-kernel bundle install: pinned checkout stays authoritative ─────────
 
 def _train_install_loop_source() -> str:
-    """The exact with verified_archive(...) install block from the template.
+    """The exact Bundle-boundary install block from the template.
 
     Sliced out so this pin runs the shipped source, not a re-typed copy: a
     regression that drops the config/scripts skip must fail the test below.
+    The boundary load itself (exactly ONE ``Bundle.load`` per crossing) is
+    pinned by test_train_kernel_verifies_the_attached_bundle_exactly_once.
     """
     body = kaggle_lane.TRAIN_KERNEL_BODY
-    start = body.index("with verified_archive(")
+    start = body.index("with inputs_bundle.reader() as archive:")
     end = body.index("package_manifest = root /", start)
     return body[start:end]
 
@@ -787,11 +838,17 @@ def test_train_install_loop_skips_code_and_config_keeps_data(tmp_path):
                       "package_manifest": "model_tracks_package.json"}}
 
     @contextlib.contextmanager
-    def fake_verified_archive(path, manifest_name):
+    def _reader(path):
         with zipfile.ZipFile(path) as archive:
-            yield archive, {"files": {}}
+            yield archive
 
-    namespace = {"verified_archive": fake_verified_archive,
+    class _InputsBundle:
+        """The trusted handle the boundary load returns on the VM."""
+
+        def reader(self):
+            return _reader(archive_path)
+
+    namespace = {"inputs_bundle": _InputsBundle(),
                  "archive_path": archive_path, "LANE": lane, "root": root}
     exec(compile(source, "<train-kernel-install>", "exec"), namespace)
 
@@ -1257,3 +1314,343 @@ def test_stop_kernel_wait_true_version_replace_fails_loud(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="stop did not reach a terminal state"):
         kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
     assert sleeps == [15.0], "verify polls run logs_poll_seconds apart"
+
+
+# ── finalize lane job (bundle_steps role=result, remote CPU) ────────────────
+
+def _finalize_spec(tmp_path, monkeypatch, **updates):
+    values = {"gpu_kernel_slug": "owner/er-train-gpu",
+              "bundle_dataset_slug": "owner/er-10k-bundle"}
+    values.update(updates)
+    return _kernel_spec(tmp_path, monkeypatch, **values)
+
+
+def test_stage_finalize_kernel_pins_revision_and_attaches_both_bundles(tmp_path, monkeypatch):
+    spec = _finalize_spec(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    _fake_published_tip(monkeypatch, "abc123def")
+    receipt = kaggle_lane.stage_finalize_kernel(revision="abc123def", run_tag="gpu_x")
+    stage = tmp_path / "kaggle_stage" / "finalize_kernel"
+    metadata = json.loads((stage / "kernel-metadata.json").read_text())
+    # the finalize job is a second version of the BUNDLING CPU kernel slug
+    assert metadata["id"] == "owner/er-bundle-cpu"
+    assert metadata["code_file"] == "finalize_cpu.py"
+    assert metadata["enable_gpu"] is False and metadata["enable_internet"] is True
+    # both verified inputs attach: the published inputs bundle + the trained result
+    assert metadata["dataset_sources"] == ["owner/er-10k-bundle"]
+    assert metadata["kernel_sources"] == ["owner/er-train-gpu"]
+    script = (stage / "finalize_cpu.py").read_text()
+    assert 'REVISION = "abc123def"' in script
+    assert "Bundle.load(" in script and "BundlePipeline" in script
+    assert '"result"' in script and "expected_digest=" in script
+    assert "finalized_bundle" in script
+    assert "sparse-checkout" in script and "--no-cone" in script
+    assert receipt["kind"] == "finalize" and receipt["role"] == "result"
+    assert receipt["gpu"] is False and receipt["revision"] == "abc123def"
+    assert receipt["published_tip"] == "abc123def"
+    assert receipt["bundle_dataset"] == "owner/er-10k-bundle"
+    assert receipt["result_kernel"] == "owner/er-train-gpu"
+
+
+def test_stage_finalize_kernel_refuses_stale_published_tip(tmp_path, monkeypatch):
+    _finalize_spec(tmp_path, monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    _fake_published_tip(monkeypatch, "fed321cba9")
+    with pytest.raises(RuntimeError, match="pull or push"):
+        kaggle_lane.stage_finalize_kernel()
+
+
+def test_finalize_kernel_runs_bundling_from_a_verified_sparse_checkout(tmp_path, monkeypatch):
+    """Item 3: the finalize job's sparse checkout must carry everything the
+    bundling step reads — verified against the REAL repo inventory (no fakes:
+    `checkout_members`/`checkout_inventory` run their git ls-files), so an
+    untracked or missing finalize input fails this test instead of the VM."""
+    import ast
+
+    from core import runtime_inputs
+
+    spec = _finalize_spec(tmp_path, monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    # The published-tip guard is exercised by its own tests; here the REAL
+    # `git ls-files` inventory must run, so only the tip lookup is faked
+    # (patching subprocess.run would break check_output's ls-files).
+    monkeypatch.setattr(runtime_inputs, "published_tip", lambda repository, branch: "abc123def")
+    kaggle_lane.stage_finalize_kernel(revision="abc123def")
+    script = (tmp_path / "kaggle_stage" / "finalize_kernel" / "finalize_cpu.py").read_text()
+    literals = {}
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                        "CHECKOUT_PATHS", "_runtime_files"}:
+                    literals[target.id] = ast.literal_eval(node.value)
+    assert tuple(literals["CHECKOUT_PATHS"]) == runtime_inputs.checkout_members(
+        spec.checkout_paths, lane="bundle"), \
+        "the staged sparse selection must be the shared runtime selection"
+    selection = set(literals["CHECKOUT_PATHS"])
+    # every neighborhood the finalize step reads (src model_tracks/graph_tracks,
+    # config incl. the ablation config, the wheels/evidence artifacts, the
+    # git-shipped models, the prepared smoke tree, the repo metadata)
+    assert {"src", "scripts", "config", "requirements", "artifacts/wheels",
+            "artifacts/evidence", "artifacts/models", "pyproject.toml",
+            "requirements.txt", "colab_backend.py", "dataset.csv"} <= selection
+    # ... and the inventory the job verifies BEFORE it installs dependencies
+    inventory = set(literals["_runtime_files"])
+    assert tuple(literals["_runtime_files"]) == runtime_inputs.checkout_inventory(
+        spec.checkout_paths, lane="bundle")
+    assert {"src/model_tracks/bundle_steps.py", "src/core/bundle.py",
+            "config/model_tracks.yaml"} <= inventory
+    # the step itself is told the sparse selection it runs from (item 3)
+    assert "sparse_paths=tuple(CHECKOUT_PATHS)" in script
+
+
+def test_chain_plan_places_the_finalize_step_after_train(tmp_path, monkeypatch):
+    _finalize_spec(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    _isolate_credentials(tmp_path, monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    plan = kaggle_lane.run_chain(cohort="10k", with_finalize=True, execute=False)
+    assert plan["with_finalize"] is True and plan["mode"] == "dry-run"
+    assert list(plan["steps"]) == ["bundle", "train", "finalize"], \
+        "the finalize job is the last step and only runs when asked for"
+    assert plan["slugs"]["finalize"] == "owner/er-bundle-cpu"
+    finalize = plan["steps"]["finalize"]
+    assert finalize["stage"]["kernel"] == "owner/er-bundle-cpu"
+    assert finalize["role"] == "result"
+    assert finalize["mount"] == {
+        "dataset_sources": ["owner/er-10k-bundle/<fresh version>"],
+        "kernel_sources": ["owner/er-train-gpu"],
+    }
+    assert not list(tmp_path.rglob("kernel-metadata.json")), \
+        "a dry-run chain stages nothing at all"
+
+
+def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch):
+    _finalize_spec(tmp_path, monkeypatch,
+                   embedding_kernel_slug="owner/er-embed-gpu",
+                   embedding_dataset_slug="owner/er-embed-requests")
+    _isolate_credentials(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+
+    def fake_run(command, **kwargs):
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123def", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="complete", stderr="")
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    spawns: list[str] = []
+
+    def fake_spawn(watcher):
+        watcher = kaggle_lane.AUTOWATCH_WHICH.get(watcher, watcher)
+        spawns.append(watcher)
+        kind = {"cpu": "bundle", "gpu": "train", "embed": "embed",
+                "finalize": "finalize"}[watcher]
+        receipt = tmp_path / "kaggle_stage" / f"autowatch_{kind}.receipt.json"
+        receipt.write_text(json.dumps({
+            "status": "complete", "polls": 2,
+            "fetch": {"verified": True, "archive_sha256": "d" * 64, "cohort": "10k",
+                      "publish": ({"published": True, "slug": "owner/er-10k-bundle",
+                                   "dataset_version": 12} if kind == "bundle" else {})},
+            "stop": {"stopped": True},
+        }))
+        return {"autowatch": "spawned", "kernel": watcher, "log": str(receipt)}
+
+    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch", fake_spawn)
+    plan = kaggle_lane.run_chain(cohort="10k", with_finalize=True, execute=True)
+    assert spawns == ["cpu", "gpu", "finalize"], \
+        "one watcher per pushed kernel, the finalize job included"
+    finalize = plan["steps"]["finalize"]
+    assert finalize["stage"]["kind"] == "finalize"
+    assert finalize["stage"]["role"] == "result"
+    assert finalize["fetched_sha256"] == "d" * 64
+    assert finalize["push"]["kernel"] == "finalize"
+    metadata = json.loads((tmp_path / "kaggle_stage" / "finalize_kernel"
+                           / "kernel-metadata.json").read_text())
+    assert metadata["dataset_sources"] == ["owner/er-10k-bundle/12"], \
+        "the finalize job attaches the version this chain published"
+    assert metadata["kernel_sources"] == ["owner/er-train-gpu"]
+    staged = (tmp_path / "kaggle_stage" / "finalize_kernel" / "finalize_cpu.py").read_text()
+    assert "sparse-checkout" in staged and "BundlePipeline" in staged
+
+
+def test_train_kernel_verifies_the_attached_bundle_exactly_once(tmp_path, monkeypatch):
+    """Item 1a (Kaggle): the GPU kernel's install does ONE integrity check of
+    the attached inputs Bundle at its boundary — no second whole-archive hash,
+    no per-member re-verification."""
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                 bundle_dataset_slug="owner/er-10k-bundle")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
+    script = (tmp_path / "kaggle_stage" / "train_kernel" / "train_gpu.py").read_text()
+    assert script.count("Bundle.load(") == 1
+    assert 'expected_digest=receipt.get("archive_sha256")' in script
+    assert "verified_archive" not in script
+    assert "sha256_file(archive_path)" not in script
+
+
+def test_fetch_finalize_output_identifies_the_sealed_result_bundle(tmp_path, monkeypatch):
+    """Item 1a (Kaggle fetch): the fetched sealed result bundle is named by the
+    ONE boundary load, so the operator box gets a trusted run-tagged handle."""
+    import hashlib
+
+    from core.bundle import Bundle
+
+    _finalize_spec(tmp_path, monkeypatch)
+    member = tmp_path / "member.txt"
+    member.write_text("sealed", encoding="utf-8")
+    sealed = Bundle.seal_archive(tmp_path / "sealed.tar.zst", {"tracks/a.txt": member},
+                                 role="result", metadata={"run_tag": "gpu_test"})
+    archive_bytes = (tmp_path / "sealed.tar.zst").read_bytes()
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        bundle = stage / "bundle"
+        bundle.mkdir(parents=True)
+        (bundle / "finalized_bundle.tar.zst").write_bytes(archive_bytes)
+        (bundle / "finalized_bundle.tar.zst.sha256").write_text(sealed.digest + "\n")
+        (bundle / "finalized_bundle.manifest.json").write_text(json.dumps({
+            "kind": "finalized_bundle", "role": "result", "run_tag": "gpu_test",
+            "cohort": "10k", "archive": "finalized_bundle.tar.zst",
+            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    plan = kaggle_lane.fetch_kernel_output(kind="finalize", execute=True)
+    assert plan["verified"] is True and plan["cohort"] == "10k"
+    assert plan["bundle"] == {"identified": True, "role": "result",
+                              "sha256": sealed.digest, "members": 2,
+                              "run_tag": "gpu_test"}, \
+        "the sealed tree's one member plus the container manifest"
+    installed = tmp_path / "kaggle_stage" / "10k" / "finalize" / "finalized_bundle.tar.zst"
+    assert installed.read_bytes() == archive_bytes
+
+
+def test_role_archive_fetch_hashes_the_archive_exactly_once(tmp_path, monkeypatch):
+    """Finding 2: a bundle-role fetch performs ONE whole-archive integrity read.
+
+    The role's boundary load verifies the archive digest AND its member
+    inventory in a single pass, so the fetch must not hash the archive again
+    itself — a second ``sha256_file`` here would be the redundant read the audit
+    flagged.
+    """
+    import hashlib
+
+    from core.bundle import Bundle
+
+    _finalize_spec(tmp_path, monkeypatch)
+    member = tmp_path / "member.txt"
+    member.write_text("sealed", encoding="utf-8")
+    sealed = Bundle.seal_archive(tmp_path / "sealed.tar.zst", {"tracks/a.txt": member},
+                                 role="result", metadata={"run_tag": "gpu_test"})
+    archive_bytes = (tmp_path / "sealed.tar.zst").read_bytes()
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        bundle = stage / "bundle"
+        bundle.mkdir(parents=True)
+        (bundle / "finalized_bundle.tar.zst").write_bytes(archive_bytes)
+        (bundle / "finalized_bundle.tar.zst.sha256").write_text(sealed.digest + "\n")
+        (bundle / "finalized_bundle.manifest.json").write_text(json.dumps({
+            "kind": "finalized_bundle", "role": "result", "run_tag": "gpu_test",
+            "cohort": "10k", "archive": "finalized_bundle.tar.zst",
+            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "sha256_file",
+                        lambda path: pytest.fail(f"redundant archive hash of {path}"))
+    plan = kaggle_lane.fetch_kernel_output(kind="finalize", execute=True)
+    assert plan["verified"] is True
+    assert plan["archive_sha256"] == sealed.digest
+    assert plan["bundle"]["identified"] is True
+
+
+def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monkeypatch):
+    """The complement: a train/embed output has no bundle role, so the fetch's
+    own digest IS its single integrity check (one read, no boundary load)."""
+    import hashlib
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                 bundle_dataset_slug="owner/er-10k-bundle")
+    archive_bytes = b"fake train result archive bytes"
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        out = stage / "train"
+        out.mkdir(parents=True)
+        (out / "result_bundle.tar.zst").write_bytes(archive_bytes)
+        (out / "result_bundle.manifest.json").write_text(json.dumps({
+            "kind": "result_bundle", "cohort": "10k",
+            "archive": "result_bundle.tar.zst",
+            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    real_sha256_file = kaggle_lane.sha256_file
+    hashed: list[str] = []
+
+    def counting_sha256(path):
+        hashed.append(str(path))
+        return real_sha256_file(path)
+
+    monkeypatch.setattr(kaggle_lane, "sha256_file", counting_sha256)
+    plan = kaggle_lane.fetch_kernel_output(kind="train", execute=True)
+    assert plan["verified"] is True
+    assert len(hashed) == 1, "exactly one whole-archive digest for a non-role kind"
+    assert plan["bundle"] == {"identified": False, "role": None,
+                              "note": "fetched 'train' output is not a bundle role archive"}
+
+
+# ── the embed objective: explicit, never silently absent ────────────────────
+
+def test_embed_objective_absent_is_explicit_and_never_silent(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, cpu_kernel_slug="owner/er-bundle-cpu",
+                 embedding_kernel_slug=None, embedding_dataset_slug=None)
+    verdict = kaggle_lane.embed_objective(execute=False)
+    assert verdict["configured"] is False and verdict["available"] is False
+    assert "embedding_kernel_slug" in verdict["reason"]
+    with pytest.raises(RuntimeError) as error:
+        kaggle_lane.require_embed_objective(execute=False)
+    # the two named fixes: push the kernel, or drop the step (never skip it)
+    assert "--what embed-kernel --execute" in str(error.value)
+    assert "never silently skipped" in str(error.value)
+
+
+def test_embed_objective_configured_but_missing_on_the_account(tmp_path, monkeypatch):
+    """The phantom-kernel case: config names fbarulli/er-embed-gpu, the account
+    has no such kernel, and the step must fail loud (not disappear)."""
+    _kernel_spec(tmp_path, monkeypatch,
+                 embedding_kernel_slug="owner/er-embed-gpu",
+                 embedding_dataset_slug="owner/er-embed-requests")
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+
+    def fail(command):
+        raise RuntimeError("kaggle command failed (rc=1): kernels status owner/er-embed-gpu")
+
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle", fail)
+    verdict = kaggle_lane.embed_objective(execute=True)
+    assert verdict["configured"] is True and verdict["available"] is False
+    assert "could not be reached on the account" in verdict["reason"]
+    with pytest.raises(RuntimeError, match="embed objective unavailable"):
+        kaggle_lane.require_embed_objective(execute=True)
+    # a dry run never probes the account, so it reports the unknown state instead
+    assert kaggle_lane.embed_objective(execute=False)["available"] is None
+
+
+def test_chain_with_embed_refuses_an_unconfigured_objective(tmp_path, monkeypatch):
+    """`--with-embed` with a half-configured objective (kernel named, request
+    dataset missing) fails loud naming the objective, never skipping the step."""
+    _finalize_spec(tmp_path, monkeypatch,
+                   embedding_kernel_slug="owner/er-embed-gpu",
+                   embedding_dataset_slug=None)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    with pytest.raises(RuntimeError, match="embed objective"):
+        kaggle_lane.run_chain(cohort="10k", with_embed=True, execute=False)
+

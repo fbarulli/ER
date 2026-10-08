@@ -193,6 +193,18 @@ anything missing or unpushed fails loud with the path and the fix instead of a
 `FileNotFoundError` mid-recovery on the VM. The list is covered by
 `tests/test_colab_sparse_checkout.py`.
 
+The patterns are built by `runtime_checkout_paths()`
+(`src/cli/colab_runtime.py:174–185`) and applied in `prepare_remote_layout()`
+(`:222`, the `git sparse-checkout set --no-cone` call at `:255`). Per-lane
+extras are appended by the caller: the CPU bundle lane adds the resolved
+base-model directory + `data/prepared/smoke_200` + the committed export
+(`colab_lane_cpu_provision.py:51`), the prepared-train lane adds the suite
+archive + resolved text-model directory. Branch is `colab.branch`
+(`config/training.yaml:347`, currently `main`) — the VM clones `origin/main`,
+so committed-and-pushed is the only state the checkout ever sees, and it is the
+same branch the Kaggle kernels' sparse checkout fetches (`docs/kaggle-lane.md`
+§ Sparse checkout).
+
 A regression to remember: `e1fc9e0` committed the bundle manifest
 `model_tracks_package.json` at the repo root assuming "sparse checkout is
 disabled"; the prepared lane has always sparse-checked out
