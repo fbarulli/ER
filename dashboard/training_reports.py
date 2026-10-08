@@ -11,13 +11,14 @@ import zipfile
 import tarfile
 from core.archive_reader import open_archive, archive_sidecar
 from core.bundle import bundle_spec
+from core.project_root import find_project_root
 from model_tracks import archive_verification
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 
 router = APIRouter()
-PROJECT = Path(__file__).resolve().parents[1]
+PROJECT = find_project_root(Path(__file__).resolve())
 REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError, RuntimeError, EOFError)
 METRIC_SUFFIXES = (
     'model_evaluation_summary.csv',

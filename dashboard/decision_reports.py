@@ -13,7 +13,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
-from core.common import F, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, prepared_setup_layout
+from core.common import F, RESULTS, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, prepared_setup_layout
 from core.bundle import bundle_spec
 from core.columns import read_column
 from core.schemas import CANONICAL_RECORDS_COLUMNS
@@ -195,12 +195,11 @@ def tracking_attributes():
 
 @lru_cache(maxsize=1)
 def _raw_frame(mtime_ns: int):
-    """The raw export the whole audit population comes from (repo-root
-    dataset.csv, 13 original columns, as exported). Parsed once per source
-    modification time; the configured files.dataset binding is a 35-row
-    hand-made fixture and is not the population the ledger describes."""
+    """The raw export the whole audit population comes from: the configured
+    files.dataset binding (repo:dataset.csv, core.common.DATA_PATH), 13 original
+    columns as exported. Parsed once per source modification time."""
     import pandas as pd
-    path = TRAIN_ROOT / 'dataset.csv'
+    path = DATA_PATH
     if not path.is_file():
         return None
     return pd.read_csv(path, dtype=str, keep_default_na=False, low_memory=False)
@@ -213,7 +212,7 @@ def _visibility(mtime_ns: int):
 
 @lru_cache(maxsize=1)
 def _bundle_header(mtime_ns: int):
-    headers = list((F['decision_visibility'].parent / 'training_prep').glob('*.pkl.gz.json'))
+    headers = list((RESULTS / training_cfg().preparation.run_dir_base).glob('*.pkl.gz.json'))
     if not headers:
         return {}, None
     newest = max(headers, key=lambda p: p.stat().st_mtime)
@@ -246,7 +245,7 @@ def capture_example():
     by_gtin = defaultdict(list)
     for row in rows:
         by_gtin[row['gtin']].append(row)
-    raw = _raw_frame((TRAIN_ROOT / 'dataset.csv').stat().st_mtime_ns) if (TRAIN_ROOT / 'dataset.csv').is_file() else None
+    raw = _raw_frame(DATA_PATH.stat().st_mtime_ns) if DATA_PATH.is_file() else None
     if raw is None:
         return {}
     gtins = set(raw.gtin[raw.gtin.str.isdigit()])
@@ -564,7 +563,7 @@ def _controlled_report(path, attribute=''):
 def controlled_influence(attribute=''):
     pointer = F['decision_ablation_report']
     paths = sorted(pointer.parent.glob('*/report.json')) if pointer.parent.is_dir() else []
-    paths.extend(sorted((TRAIN_ROOT/'results/model_tracks').glob('*/*/ablation/report.json')))
+    paths.extend(sorted(RESULTS.glob('model_tracks/*/ablation/report.json')))
     if pointer.is_file():
         paths.append(pointer)
     if not paths:

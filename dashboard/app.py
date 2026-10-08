@@ -23,7 +23,10 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 from catalog import lookup
 from fastapi.staticfiles import StaticFiles
-from core.common import DATA_PATH, F, data_cfg, load_dataset
+from core.common import (DATA_PATH, F, RESULTS, TRAIN_ROOT, TRAINING_RESULTS,
+                         data_cfg, load_dataset, training_cfg)
+
+log = logging.getLogger(__name__)
 
 app.title = 'ER discovery'
 from training_reports import router as training_reports_router
@@ -127,7 +130,13 @@ def exact_title_variants():
 # element holding the verbatim evidence excerpt (capped) with its source path,
 # and a one-line verdict. No raw blobs inline.
 
-_results = ROOT.parent / 'results'
+# Every results-tree read below goes through core.common.RESULTS, which honors
+# EUROMONITOR_RESULTS_DIR (a Colab worker's results root is NOT the repo's), so
+# this page can never quietly read the wrong tree.
+
+def _prep_root():
+    """RESULTS/<preparation.run_dir_base> — the prepared-run tree (config SSOT)."""
+    return RESULTS / training_cfg().preparation.run_dir_base
 
 # ── Finding-01 rendering helpers (shared with /gate and /graphs) ─────────────
 _FINDING_STYLE = (
@@ -160,6 +169,12 @@ def _fcompare(rows):
     return ('<table><tr><th>Original / pre-change</th><th>Current / resolved</th>'
             '<th>Outcome</th></tr>' + body + '</table>')
 
+def _ftable(headers, rows):
+    """A standalone table; cells are already-escaped HTML fragments."""
+    return ('<table><tr>' + ''.join(f'<th>{escape(header)}</th>' for header in headers) + '</tr>'
+            + ''.join('<tr>' + ''.join(f'<td>{cell}</td>' for cell in row) + '</tr>' for row in rows)
+            + '</table>')
+
 def _fevidence(path, excerpt, cap=900):
     text = str(excerpt)
     if len(text) > cap:
@@ -167,15 +182,128 @@ def _fevidence(path, excerpt, cap=900):
     return (f'<details><summary>Raw evidence · source <code>{escape(path)}</code></summary>'
             f'<pre>{escape(text)}</pre></details>')
 
-def _ffinding(number, name, outcome, metrics, compare, evidence, verdict):
+def _ffinding(number, name, outcome, metrics, compare, evidence, verdict, extra=''):
     return (f'<section><h2 style="font-size:1.15rem">Finding {number:02d} — {escape(name)}&#160;{_fbadge(outcome)}</h2>'
-            f'<div class="metrics">{metrics}</div>{compare}{evidence}'
+            f'<div class="metrics">{metrics}</div>{compare}{extra}{evidence}'
             f'<p><strong>Verdict:</strong> {verdict}</p></section>')
+
+
+# ── Finding-05 census budget (measured datagen headroom) ─────────────────────
+# The census is written by scripts/attribute_universe_census.py as
+# ``{'census':…, 'datagen_budget':…, 'baseline':…}`` and is declared twice:
+# ``files.decision_attribute_census`` (results tree) and the tracked evidence
+# member core.runtime_inputs.evidence_members() (artifacts/evidence/…, the copy
+# the producer writes today). This view reads the first declared address that
+# exists and says so when neither is on disk — it never invents a third path.
+_CENSUS_HEADROOM_FLOOR = 0.13   # below this the minting headroom is already spent
+_CENSUS_PENDING_LIMIT = 8
+# Member NAME to pick out of the tracked evidence set: evidence_members() also
+# carries the semantic family registry, which is not a census.
+_CENSUS_EVIDENCE_MEMBER = 'attribute_universe_census.json'
+
+
+def census_sources():
+    """Declared addresses of the attribute-universe census, in read order."""
+    from core.runtime_inputs import evidence_members
+    sources = [F['decision_attribute_census']]
+    sources += [TRAIN_ROOT / member for member in evidence_members()
+                if Path(member).name == _CENSUS_EVIDENCE_MEMBER]
+    return tuple(dict.fromkeys(sources))
+
+
+def census_budget_rows(census, *, min_headroom=_CENSUS_HEADROOM_FLOOR, limit=_CENSUS_PENDING_LIMIT):
+    """Ranked datagen-budget rows with unspent same-GTIN conflict headroom.
+
+    Rows are (dimension, rows_populated|None, conflict_rate, registry kind,
+    veto_candidate). Ranked by measured conflict rate, highest first; the
+    headroom floor keeps already-saturated dimensions off the minting list.
+    Returns [] for a census without a budget — never raises on a measured dict.
+    """
+    budget = (census or {}).get('datagen_budget') or {}
+    eligible = [(key, stats) for key, stats in budget.items()
+                if isinstance(stats, dict) and stats.get('headroom_share', 0) >= min_headroom]
+    eligible.sort(key=lambda item: -item[1].get('conflict_rate', 0))
+    rows = []
+    for key, stats in eligible[:limit]:
+        populated = stats.get('rows_populated')
+        rows.append((key, int(populated) if populated is not None else None,
+                     float(stats.get('conflict_rate') or 0.0), stats.get('kind', ''),
+                     bool(stats.get('veto_candidate'))))
+    return rows
+
+
+def census_pending_table(census):
+    """The ranked pending-capture table, or '' when no dimension clears the floor."""
+    rows = census_budget_rows(census)
+    if not rows:
+        return ''
+    return ('<p class="muted">Ranked minting shortlist — budgets measured on the live '
+            f'corpus, headroom ≥ {_CENSUS_HEADROOM_FLOOR:.0%}; capture for these is still pending.</p>'
+            + _ftable(['Dimension', 'Rows populated', 'Same-GTIN conflict', 'Registry kind', 'Status'],
+                      [(escape(key), f'{populated:,}' if populated is not None else '?',
+                        f'{rate:.1%}', escape(kind or '?'),
+                        _fbadge('OPEN') + ' veto-grade' if veto else 'candidate')
+                       for key, populated, rate, kind, veto in rows]))
+
+
+def _census_payload():
+    """(parsed census, source path) from the first declared address on disk."""
+    for path in census_sources():
+        if path.is_file():
+            return json.loads(path.read_text()), path
+    return None, None
+
+
+def _census_label(path=None):
+    """The evidence-source label: one resolved path, or every declared address."""
+    def show(value):
+        return str(value.relative_to(TRAIN_ROOT)) if value.is_relative_to(TRAIN_ROOT) else str(value)
+    if path is not None:
+        return show(path)
+    return ' · '.join(show(path) for path in census_sources())
+
+
+def census_finding():
+    """Finding 05 — the attribute-universe census, rendered from measured data.
+
+    A census that is present but unreadable is logged AND named in the panel;
+    the broad ``except Exception`` this replaces swallowed a NameError in the
+    budget row builder and rendered an empty finding instead.
+    """
+    try:
+        census, census_path = _census_payload()
+    except (OSError, ValueError) as exc:
+        log.warning('attribute-universe census unreadable: %s', exc)
+        return _ffinding(5, 'AttributeUniverse census — unreadable', 'OPEN', '', _fcompare([]),
+                         _fevidence(_census_label(), f'census present but unreadable: {exc!r}'),
+                         f"census present but unreadable in this view: <code>{escape(str(exc))}</code>.")
+    if census is None:
+        return _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', '', _fcompare([]),
+                         _fevidence(_census_label(), 'census JSON not yet written (AttributeUniverse build in flight — renders here when it lands)'),
+                         'census not yet on disk.')
+    budget = census.get('datagen_budget') or {}
+    census_metrics = ''.join([
+        _fmetric(len(census), 'census top-level keys'),
+        _fmetric(len(census.get('baseline') or {}), 'dimensions in baseline census'),
+        _fmetric(len(budget), 'datagen-budget dimensions'),
+        _fmetric(len(census_budget_rows(census)), 'dimensions with unspent conflict headroom'),
+    ])
+    census_compare = _fcompare([
+        ('<code>Pack Material Type</code> prose only', '51,703 rows (72%), 5 value-sets, 13.8% same-GTIN conflict — veto-grade, currently review-lane only', 'OPEN'),
+        ('Water type / Made from / Juice features / health claims', '14.9% · 21.2% · 31.9% · 33.9% same-GTIN conflict still unparsed', 'OPEN'),
+        ('Juice content', '63,117 rows (88%) still prose, not a numeric band field', 'OPEN'),
+    ])
+    return _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', census_metrics,
+                     census_compare,
+                     _fevidence(_census_label(census_path),
+                                json.dumps({'baseline_keys': sorted(census.get('baseline') or {})}, indent=1)),
+                     "<span class='badge badge-open'>OPEN</span> — censused and scoped, capture pending; this is the next multiplier.",
+                     extra=census_pending_table(census))
 
 
 def _manifest():
     try:
-        return json.loads((_results / 'manifests' / 'dedupe.json').read_text())
+        return json.loads((RESULTS / 'manifests' / 'dedupe.json').read_text())
     except Exception:
         return {}
 
@@ -192,17 +320,17 @@ def datagen_track():
             return None
     w1, w2 = worker('worker_1_baseline.pkl.gz.json'), worker('worker_2_baseline.pkl.gz.json')
     try:
-        dp = json.loads((_results / 'manifests' / 'data_prep.json').read_text())
+        dp = json.loads((RESULTS / 'manifests' / 'data_prep.json').read_text())
         dpa = dp.get('row_accounting', {})
         fl = dpa.get('flags_census', {})
     except Exception:
         dp, dpa, fl = {}, {}, {}
     try:
-        lp = json.loads((_results / 'manifests' / 'labeled_pairs.json').read_text())['row_accounting']
+        lp = json.loads((RESULTS / 'manifests' / 'labeled_pairs.json').read_text())['row_accounting']
     except Exception:
         lp = {}
     try:
-        fv = json.loads((_results / 'manifests' / 'final_validation.json').read_text())
+        fv = json.loads((RESULTS / 'manifests' / 'final_validation.json').read_text())
     except Exception:
         fv = {}
     teacher_conflicts = sum(v for k, v in fl.items() if str(k).startswith('description_conflict')) or None
@@ -213,7 +341,7 @@ def datagen_track():
     # published beside the run tree, so the newest published header wins when
     # no per-worker manifest is on disk; no external version store.
     published = (list((ROOT.parent / 'data' / 'prepared' / 'full').glob('*.pkl.gz.json'))
-                 + list((_results / 'training_prep').glob('*.pkl.gz.json')))
+                 + list(_prep_root().glob('*.pkl.gz.json')))
     bundle_path = max(published, key=lambda p: p.stat().st_mtime, default=None)
     bundle, bundle_source = w1 or {}, 'data/prepared/full/worker_1_baseline.pkl.gz.json'
     if not bundle.get('augmentation_coverage'):
@@ -227,7 +355,7 @@ def datagen_track():
     ratio = bundle.get('effective_train_ratio')
     ratio = '—' if ratio in (None, '') else f'{float(ratio):.3f}'
     try:
-        run_dirs = sorted(p for p in (_results / 'training_prep').glob('2*') if p.is_dir())
+        run_dirs = sorted(p for p in _prep_root().glob('2*') if p.is_dir())
         latest = run_dirs[-1] if run_dirs else None
         try:
             hq = json.loads((latest / 'handoff.json').read_text()) if latest else None
@@ -357,43 +485,8 @@ def datagen_track():
                                 'brand_aliases_provenance:\n' + json.dumps(prov, indent=1))
     f04 = _ffinding(4, 'Brand alias fold (veto-asymmetry)', 'PASS', brand_metrics, brand_compare,
                     brand_evidence, f"<span class='badge badge-pass'>PASS</span> — folds add, never swap; declined groups keep their named reasons.")
-    # Finding 05 — attribute universe census
-    budget_html = ''
-    # migrated 2026-10-05: fail-loud tracked evidence lives in artifacts/evidence/
-    census_path = ROOT.parent / 'artifacts' / 'evidence' / 'attribute_universe_census.json'
-    if census_path.exists():
-        try:
-            cu = json.loads(census_path.read_text())
-            census_budget = cu.get('datagen_budget', {})
-            pending_rows = ''.join(
-                f'<tr><td>{escape(k)}</td><td>{v.get("rows_populated", "?"):,}</td>'
-                f'<td>{v.get("conflict_rate", 0):.1%}</td><td>{"veto-grade" if v.get("veto_candidate") else "candidate"}</td><td>{_fbadge("OPEN")}</td></tr>'
-                for k, v in sorted(census_budget.items(), key=lambda kv: -kv[1].get('conflict_rate', 0))
-                if kv[1].get('headroom_share', 0) >= 0.13)[:8]
-            census_metrics = ''.join([
-                _fmetric(len(cu), 'census top-level keys'),
-                _fmetric(len(cu.get('baseline', {})), 'dimensions in baseline census'),
-                _fmetric(len(census_budget), 'datagen-budget dimensions'),
-                _fmetric('open', 'capture still pending (next multiplier)'),
-            ])
-            census_compare = _fcompare([
-                ('<code>Pack Material Type</code> prose only', '51,703 rows (72%), 5 value-sets, 13.8% same-GTIN conflict — veto-grade, currently review-lane only', 'OPEN'),
-                ('Water type / Made from / Juice features / health claims', '14.9% · 21.2% · 31.9% · 33.9% same-GTIN conflict still unparsed', 'OPEN'),
-                ('Juice content', '63,117 rows (88%) still prose, not a numeric band field', 'OPEN'),
-            ])
-            f05 = _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', census_metrics,
-                            census_compare,
-                            _fevidence('artifacts/evidence/attribute_universe_census.json',
-                                       json.dumps({'baseline_keys': sorted(cu.get('baseline', {}))}, indent=1)),
-                            "<span class='badge badge-open'>OPEN</span> — censused and scoped, capture pending; this is the next multiplier.")
-        except Exception:
-            f05 = _ffinding(5, 'AttributeUniverse census', 'OPEN', '', _fcompare([]),
-                            _fevidence('artifacts/evidence/attribute_universe_census.json', 'census file present but not parseable'),
-                            'census unreadable in this view.')
-    else:
-        f05 = _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', '', _fcompare([]),
-                        _fevidence('artifacts/evidence/attribute_universe_census.json', 'census JSON not yet written (AttributeUniverse build in flight — renders here when it lands)'),
-                        'census not yet on disk.')
+    # Finding 05 — attribute universe census (measured datagen headroom)
+    f05 = census_finding()
     # Finding 06 — training-data preparation · offline bundle lane (current blocker)
     bundle_metrics = ''.join([
         _fmetric(lp.get('output_rows', 8_736), 'labeled pairs (1,023 pos · 7,713 hard-neg)'),
@@ -440,7 +533,7 @@ def datagen_track():
     # Finding 07 — same-GTIN duplicate variation (measured, feeds augmentation design)
     var, dvc = {}, {}
     try:
-        dvc = json.loads((_results / 'duplicate_variation_census.json').read_text())
+        dvc = json.loads((RESULTS / 'duplicate_variation_census.json').read_text())
         var = dvc.get('column_varies_pct', {})
         conf_rows = ''.join(f'<tr><td>{escape(k)}</td><td>{v:,} groups</td></tr>'
                             for k, v in sorted(dvc.get('top_same_gtin_attribute_conflicts', {}).items(),
@@ -474,7 +567,7 @@ def datagen_track():
                     "<span class='badge badge-open'>OPEN</span> — measured 2026-10-01; four augmentation principles follow from it: (1) masking extent sampled near the real distribution, (2) declaration-dropout lane emulating partial attribute cells, (3) cross-retailer donor bias, (4) twin weights matched to measured conflict rates. Wiring pending — replaces the earlier weakspot-quota shares those measurements supersede.")
     # Finding 08 — augmentation targets + masking-reachable quota shares
     try:
-        plan = json.loads((_results / 'augmentation_plan.json').read_text())
+        plan = json.loads((RESULTS / 'augmentation_plan.json').read_text())
     except Exception:
         plan = {}
     try:
@@ -567,7 +660,7 @@ def datagen_track():
 # file modification time, mirroring dashboard/catalog.py.
 
 _gate_dir = ROOT / 'evidence' / 'datagen'
-_gate_results_path = ROOT.parent / 'data' / 'gate_results.csv'
+_gate_results_path = F['gate_results']
 _GATE_BUCKETS = ('proceed', 'hard_no', 'fallback')
 # These fallback pages show the ENTIRE original entry — all 13 raw-export
 # columns in RAW-export header names (dashboard rule: original columns, as
@@ -1007,7 +1100,7 @@ def graphs_track():
                     f"<span class='badge {'badge-pass' if cfg_ok else 'badge-open'}'>{'PASS' if cfg_ok else 'OPEN'}</span> — "
                     "lane settings fixed in config; tractable catalogs skip.")
     # Finding 02 — checkpoint / DVC snapshot lifecycle
-    snips = sorted((ROOT.parent / 'results').glob('graph_tracks/*'))[:8]
+    snips = sorted(RESULTS.glob('graph_tracks/*'))[:8]
     pubs = sorted((ROOT.parent / 'dvc_refs').glob('*'))[:8]
     lifecycle_metrics = ''.join([
         _fmetric(len(snips), 'local graph_tracks snapshots'),
@@ -1027,9 +1120,7 @@ def graphs_track():
                     _fevidence('results/graph_tracks/* + dvc_refs/* (directory listing, capped)', listing, cap=600),
                     f"<span class='badge {'badge-pass' if pubs else 'badge-open'}'>{'PASS' if pubs else 'OPEN'}</span> — lifecycle logic landed in commit 5001027{' ; published refs present' if pubs else ' ; no published refs yet'}.")
     # Finding 03 — sequencing (waiting-on)
-    # migrated 2026-10-05: fail-loud tracked evidence lives in artifacts/evidence/
-    census_path = ROOT.parent / 'artifacts' / 'evidence' / 'attribute_universe_census.json'
-    census_landed = census_path.exists()
+    census_landed = any(path.is_file() for path in census_sources())
     wait_metrics = ''.join([
         _fmetric('landed' if census_landed else 'in flight', 'AttributeUniverse census (feeds graph node relations)'),
         _fmetric('open', 'P1/P2 items from TODO.md (owner DEAD LAST ruling)'),
@@ -1076,8 +1167,8 @@ def _run_status_badge(status):
 
 
 def _runs_roots():
-    from core.common import TRAIN_ROOT
-    return TRAIN_ROOT / 'results' / 'training_prep', TRAIN_ROOT / 'training_results'
+    """(prepared-run tree, verified training-results root) — both config-owned."""
+    return _prep_root(), TRAINING_RESULTS
 
 
 def _runs_table(prep_root, training_root):

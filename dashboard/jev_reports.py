@@ -1,23 +1,47 @@
 """Live, read-only views of staged JEV samples and saved checkpoints."""
 import html
 import json
-from collections import Counter
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 
-PROJECT = Path(__file__).resolve().parents[1]
+from core.common import F, TRAIN_ROOT
+from core.project_root import find_project_root
+
 router = APIRouter()
 e = lambda value: html.escape(str(value), quote=True)
 
+# ── evidence addresses (config SSOT) ────────────────────────────────────────
+# files.decision_ledger owns the ledger's address (repo:jev/sample_ledger.json).
+# This module takes only its REPO-RELATIVE parent and resolves that against the
+# discovered project root, so the whole evidence tree follows
+# EUROMONITOR_PROJECT_ROOT (and a test that redirects PROJECT) instead of
+# pinning an import-time absolute path.
+PROJECT = find_project_root(Path(__file__).resolve())
+_LEDGER_BINDING = Path(F['decision_ledger'])
+_LEDGER_NAME = _LEDGER_BINDING.name
+_EVIDENCE_REL = _LEDGER_BINDING.relative_to(TRAIN_ROOT).parent
+# Sibling evidence written by the jev/ scripts, with NO config binding (reported
+# as binding gaps rather than spelled as paths): the saved verification roll-up,
+# the frozen-run comparison (one file per controlled-repeat round) and the two
+# audit documents.
+_VERIFICATION_RESULTS = 'verification_results.json'
+_FROZEN_COMPARISON = 'control_comparison_{round}.json'
+_EVIDENCE_DOCS = ('SAMPLE_LEDGER.md', 'VERIFICATION.md')
+
+
+def evidence_dir() -> Path:
+    """The JEV evidence directory (files.decision_ledger's parent)."""
+    return PROJECT / _EVIDENCE_REL
+
 
 def load(name, default):
-    path = PROJECT / 'jev' / name
+    path = evidence_dir() / name
     return json.loads(path.read_text()) if path.exists() else default
 
 
 def checkpoint(name):
-    path = PROJECT / 'jev' / name
+    path = evidence_dir() / name
     rows = []
     if path.exists():
         for line in path.read_text().splitlines():
@@ -26,13 +50,37 @@ def checkpoint(name):
     return rows
 
 
+def controlled_repeat_round(ledger):
+    """The round holding the deliberate repeat, or None — the round OWNING the
+    frozen control comparison, so no filename has to hardcode a round number."""
+    return next((item['round'] for item in ledger if item.get('kind') == 'controlled_repeat'), None)
+
+
+def artifact_names():
+    """Every downloadable JEV artifact name, derived from the ledger + bindings.
+
+    The set is built from the config-bound ledger's own entries (samples,
+    checkpoints, per-round summaries/runs) instead of a hand-maintained list
+    that drifts the moment a round is staged.
+    """
+    names = {_LEDGER_NAME, _VERIFICATION_RESULTS, *_EVIDENCE_DOCS}
+    for item in load(_LEDGER_NAME, []):
+        number = item['round']
+        names.update((Path(item['sample']).name, Path(item['checkpoint']).name,
+                      f'audit_run_{number}.json', f'sample_{number}_summary.json',
+                      f'input_states_{number}.json', f'paired_comparison_{number}.json',
+                      f'inspection_{number}.json', f'INSPECTION_{number}.md',
+                      f'audit_errors_{number}.jsonl', _FROZEN_COMPARISON.format(round=number)))
+    return names
+
+
 def table(headers, rows):
     return '<table><thead><tr>' + ''.join(f'<th>{e(x)}</th>' for x in headers) + '</tr></thead><tbody>' + ''.join('<tr>' + ''.join(f'<td>{e(x)}</td>' for x in row) + '</tr>' for row in rows) + '</tbody></table>'
 
 
 @router.get('/jev', response_class=HTMLResponse)
 def jev(round: int | None = None, stratum: str = ''):
-    ledger = load('sample_ledger.json', [])
+    ledger = load(_LEDGER_NAME, [])
     if round is None:
         round = max((x['round'] for x in ledger if x.get('kind') != 'controlled_repeat'), default=0)
     selected = next((x for x in ledger if x['round'] == round), None)
@@ -76,15 +124,15 @@ def jev(round: int | None = None, stratum: str = ''):
     preview_label = 'Pair/input cases' if selected.get('kind') in {'paired_comparison','controlled_repeat'} else 'Pairs'
     body += f'<h3>{preview_label} ({len(filtered)})</h3><p>Preview shows up to 100 pairs. Download the sample for all pairs and both orders.</p>'
     body += table(['GTIN A','GTIN B','Input','Stratum','Gate','Similarity','Attribute states'], [[x['gtin1'],x['gtin2'],x.get('input_scope','first source listing'),x['stratum'],x.get('gate',''),x['similarity'], '; '.join(f'{k}: {v}' for k,v in x.get('attribute_states',{}).items())] for x in filtered[:100]])
-    body += f'<p><a href="/jev/artifact?name={e(Path(selected["sample"]).name)}">Download sample</a> · <a href="/jev/artifact?name=sample_ledger.json">Download ledger</a></p>'
+    body += f'<p><a href="/jev/artifact?name={e(Path(selected["sample"]).name)}">Download sample</a> · <a href="/jev/artifact?name={_LEDGER_NAME}">Download ledger</a></p>'
     checkpoint_name = Path(selected['checkpoint']).name
-    if (PROJECT/'jev'/checkpoint_name).exists():
+    if (evidence_dir()/checkpoint_name).exists():
         body += f'<p><a href="/jev/artifact?name={e(checkpoint_name)}">Download completed results</a></p>'
     run_name = f'audit_run_{round}.json'
-    if (PROJECT/'jev'/run_name).exists():
+    if (evidence_dir()/run_name).exists():
         run = load(run_name, {})
         body += '<p>Adapter: ' + e(run.get('adapter','')) + '; model: ' + e(run.get('model','')) + '; completed: ' + e(run.get('completed_utc','')) + '.</p><p><a href="/jev/artifact?name=' + e(run_name) + '">Download run metadata</a></p>'
-    reports = load('verification_results.json', [])
+    reports = load(_VERIFICATION_RESULTS, [])
     body += '<h2>Verified rounds</h2>' + table(['Checkpoint','Pairs','Low-score proceeds','High-score rejections','Decision order differences'], [[x['checkpoint'],x['unique_pairs'],len(x['low_score_proceeds']),len(x['high_score_rejections']),len(x['gate_asymmetries'])] for x in reports])
     selected_report = next((x for x in reports if x['checkpoint'] == checkpoint_name), None)
     paired_report = load(f'paired_comparison_{round}.json', None)
@@ -100,25 +148,21 @@ def jev(round: int | None = None, stratum: str = ''):
         body += '<h3>Inspected judgment changes</h3>' + table(['Pair','Gate','Finding','Evidence','Next step'], [[x['gtin1'] + ' / ' + x['gtin2'],x['gate'],x['finding'],x.get('observation', x.get('evidence','')),x.get('next_step','')] for x in inspected])
         body += '<p>' + e(inspection['limitations']) + '</p>'
         body += f'<p><a href="/jev/artifact?name=INSPECTION_{round}.md">Download inspection report</a> · <a href="/jev/artifact?name=inspection_{round}.json">Download evidence details</a></p>'
-    control = load('control_comparison_5.json', {})
+    repeat_round = controlled_repeat_round(ledger)
+    control = load(_FROZEN_COMPARISON.format(round=repeat_round), {}) if repeat_round is not None else {}
     if control:
         body += '<h3>Same-pair input comparison</h3><p>' + e(' ↔ '.join(control['pair'])) + '</p>'
         body += table(['Input','Original order score','Swapped order score'], [[scope,v['a_order'],v['b_swapped']] for scope,v in control['input_scores'].items()])
         body += '<p>' + e(control['interpretation']) + '</p>'
     body += '<p>Low-score proceeds have JEV scores below 0.2 in both orders; high-score rejections score above 0.8 in both. These are saved replay findings, not a live replay of future gate changes. Rounds 1–3 used the first source listing. Round 4 compares merged gate evidence with all original listings. Balanced discovery samples do not measure population accuracy.</p>'
-    body += '<p><a href="/jev/artifact?name=verification_results.json">Download verification details</a></p>'
+    body += '<p><a href="/jev/artifact?name=' + _VERIFICATION_RESULTS + '">Download verification details</a></p>'
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JEV audits</title><style>body{font:15px system-ui;color:#222;margin:2rem}table{border-collapse:collapse;width:100%;margin:1rem 0}td,th{border:1px solid #ddd;padding:.5rem;text-align:left;overflow-wrap:anywhere}th{background:#f3f4f6}details,form{margin:1rem 0}a{color:#2563eb}</style></head><body>' + body + '</body></html>'
 
 
 @router.get('/jev/artifact')
 def artifact(name: str):
-    allowed = {'sample_ledger.json','sample_3_summary.json','verification_results.json','SAMPLE_LEDGER.md','VERIFICATION.md','audit_run_3.json','audit_errors_3.jsonl','control_comparison_5.json'}
-    for item in load('sample_ledger.json',[]):
-        allowed.update((Path(item['sample']).name,Path(item['checkpoint']).name))
-    for item in load('sample_ledger.json',[]):
-        n=item['round']
-        allowed.update((f'audit_run_{n}.json',f'sample_{n}_summary.json',f'input_states_{n}.json',f'paired_comparison_{n}.json',f'inspection_{n}.json',f'INSPECTION_{n}.md'))
-    path = PROJECT/'jev'/name
-    if name not in allowed or not path.is_file() or path.is_symlink():
+    names = artifact_names()
+    path = evidence_dir()/name
+    if name not in names or not path.is_file() or path.is_symlink():
         raise HTTPException(404, 'Artifact not found')
     return FileResponse(path, filename=name)
