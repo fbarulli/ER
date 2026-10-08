@@ -22,7 +22,7 @@ Design boundaries:
   absent, and the URL is baked ONLY into the (gitignored) staged kernel script
   so the remote process can reach the DB. It is NEVER written to the receipt,
   the kernel metadata, the search-space YAML or any other stored manifest
-  (``_assert_secret_absent`` guards the receipt).
+  (``assert_secret_absent`` guards the receipt).
 
 The objective maximizes DEV accuracy and records dev loss as a secondary
 ``trial.set_user_attr``. The held-out/test split is never an HPO signal.
@@ -335,7 +335,7 @@ def _optuna_env_script(url: str) -> str:
     return f"os.environ[{OPTUNA_URL_ENV!r}] = {url!r}\n"
 
 
-def _assert_secret_absent(payload: Any, secret: str) -> None:
+def assert_secret_absent(payload: Any, secret: str) -> None:
     """Fail-loud guard: a secret must never reach a stored manifest."""
     if not secret:
         return
@@ -641,7 +641,7 @@ class LayaHpoStager:
         receipt = (self._stage_kaggle(plan) if self.lane == "kaggle"
                    else self._stage_colab(plan))
         # The one hard guarantee: the URL is not in the stored receipt.
-        _assert_secret_absent(receipt, plan.url)
+        assert_secret_absent(receipt, plan.url)
         atomic_write_json(receipt, plan.stage_dir / HPO_RECEIPT_FILE)
         laya_lane._log_lane(
             f"staged {plan.lane} laya-hpo run_tag={plan.tag} "
@@ -1557,6 +1557,7 @@ __all__ = [
     "OPTUNA_URL_ENV",
     "STAGE_DISPATCH",
     "apply_dials",
+    "assert_secret_absent",
     "finished_trial_count",
     "hpo_runtime_source",
     "kernel_slug",

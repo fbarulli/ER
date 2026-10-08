@@ -444,8 +444,8 @@ def test_hpo_runtime_source_has_no_future_import_and_carries_primitives():
 def test_assert_secret_absent_raises_on_leak():
     secret = "postgresql://u:p@host:5432/db"
     with pytest.raises(RuntimeError, match="refusing to persist"):
-        laya_hpo._assert_secret_absent({"nested": {"url": secret}}, secret)
-    laya_hpo._assert_secret_absent({"ok": True}, secret)  # no raise
+        laya_hpo.assert_secret_absent({"nested": {"url": secret}}, secret)
+    laya_hpo.assert_secret_absent({"ok": True}, secret)  # no raise
 
 
 def _stage(monkeypatch, tmp_path, url):
