@@ -381,6 +381,22 @@ layouts:
     owner: dashboard.model_comparison
     template: "model_tracks/{run_tag}/model_comparison/{name}"
     fields: {run_tag: str, name: str}
+  # The project dataset's two declared TREE roots (owner: core.dataset). Bound
+  # here, not spelled in code, so ``core.dataset`` resolves them through the
+  # same phone book every other generated artifact uses (common.artifact()).
+  # ``dataset_prepared`` holds the sealed prepared-input bundles the dataset
+  # derives (prepared/*); ``dataset_track_setup`` holds the graph-track setup
+  # inputs derived from the same catalog (track_setup/*).
+  dataset_prepared:
+    root: repo
+    owner: core.dataset
+    template: "data/prepared"
+    fields: {}
+  dataset_track_setup:
+    root: repo
+    owner: core.dataset
+    template: "data/track_setup"
+    fields: {}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 # SSOT for EVERY column name in the project (owner ruling 2026-10-01).

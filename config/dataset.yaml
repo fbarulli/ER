@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# dataset.yaml — the project dataset's MEMBER DECLARATION (owner: core.dataset).
+#
+# This file does NOT hold paths. Every entry names a binding that already lives
+# in the phone book (config/paths.yaml ``files:`` / ``layouts:``), and
+# src/core/dataset.py resolves it through the SAME accessors every other module
+# uses (core.common.F / core.common.artifact). It is a declaration of WHICH
+# bindings are the dataset's surface — the source export, the derived CSVs, the
+# canonical/prepared layout — not a second copy of their addresses. A binding
+# that is not declared in paths.yaml fails loud in Dataset.from_config.
+#
+# It is deliberately NOT a registry or a versioning tool: there are no hashes,
+# no revisions and no freshness verdicts here. The only integrity surface the
+# class offers is a content DIGEST computed on demand (Dataset.identity()).
+#
+# Validated by DatasetSpec (src/core/dataset.py) through
+# core.common.load_validated_yaml at first use; a malformed or unknown member
+# crashes with the file named rather than silently dropping a member.
+#
+# ``source``  the ONE inspected raw export the dataset is derived from.
+# ``members`` the line-item artifacts (the digest surface): each resolves to a
+#             ``files:`` binding and is loaded through the shared read spec
+#             (config/paths.yaml ``dataset_csv_read``).
+# ``layout``  the declared TREE roots that hold the dataset's derived, bundled
+#             outputs (prepared/* and track_setup/*); resolved through
+#             ``layouts:`` and NOT part of the line-item digest.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: er-product-identity
+
+source: {via: files, key: dataset}
+
+members:
+  dataset_deduped: {via: files, key: dataset_deduped}
+  sku_to_rep: {via: files, key: sku_to_rep}
+  canonical_records: {via: files, key: canonical_records}
+  gate_results: {via: files, key: gate_results}
+  labeled_pairs: {via: files, key: labeled_pairs}
+  final_validation: {via: files, key: final_validation}
+  number_tokens_reference: {via: files, key: number_reference}
+
+layout:
+  prepared: {via: layouts, key: dataset_prepared}
+  track_setup: {via: layouts, key: dataset_track_setup}

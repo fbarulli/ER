@@ -68,7 +68,8 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
-from core.common import DATA_PATH, SEED, F, data_cfg, ensure_parent, load_dataset
+from core.common import SEED, F, data_cfg, ensure_parent, load_dataset
+from core.dataset import dataset
 from core.deduplication import collapse_representatives
 from core.gtin import gtin_validity
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
@@ -88,8 +89,10 @@ _LOG = RunLogger(__name__)
 CSV_SUMMARY = F["dedupe_summary"]
 CSV_OFFERS = F["ambiguous_offer_groups"]
 CSV_REMOVALS = F["removals"]
-DEDUPED_PATH = F["dataset_deduped"]
-SKU_TO_REP_PATH = F["sku_to_rep"]
+# The two dataset rows this stage PRODUCES: owned by the project Dataset (the
+# files.* bindings resolved through it), not re-spelled here.
+DEDUPED_PATH = dataset().member("dataset_deduped")
+SKU_TO_REP_PATH = dataset().member("sku_to_rep")
 CSV_CONFLICTS = F["dedupe_conflicts"]
 
 HELPERS = ["_price", "_complete", "_has_bc", "_t2_bc", "_bc_valid", "_ident"]
@@ -904,7 +907,7 @@ def main() -> None:
     # raw export is hashed now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed (lib.common.SEED); the
     # tiered collapse below is deterministic, no RNG is consumed.
-    manifest = begin_manifest("dedupe", inputs=[DATA_PATH], seed=SEED)
+    manifest = begin_manifest("dedupe", inputs=[dataset().member("source")], seed=SEED)
     # ONE consolidated-trace writer for the stage, committed once before the
     # manifest is published (so a shipped manifest pins the trace it describes).
     trace = TraceRun(STAGE)
@@ -941,7 +944,7 @@ def main() -> None:
                  CSV_REMOVALS, CSV_CONFLICTS],
         row_accounting=row_accounting,
         expected_outputs=[
-            F["dataset_deduped"].name, F["sku_to_rep"].name,
+            DEDUPED_PATH.name, SKU_TO_REP_PATH.name,
             F["dedupe_summary"].name, F["ambiguous_offer_groups"].name,
             F["removals"].name, F["dedupe_conflicts"].name,
         ],

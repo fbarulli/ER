@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from core.common import DATA_PATH, SEED, F, CONFIG_PATH, VOCABULARY_CONFIG_PATH, load_raw_export
+from core.common import SEED, CONFIG_PATH, VOCABULARY_CONFIG_PATH, load_raw_export
+from core.dataset import dataset
 from core.manifest import begin_manifest, finish_manifest
 from core.run_log import RunLogger
 from core.step_trace import timed
@@ -179,7 +180,8 @@ def _stage_outputs() -> tuple[list, list[str]]:
     stage die with FileNotFoundError after all the work was done. The name
     now comes from the layout that owns it (core.tracing → training_trace).
     """
-    outputs = [F["canonical_records"], F["gate_results"], trace_path()]
+    outputs = [dataset().member("canonical_records"),
+               dataset().member("gate_results"), trace_path()]
     return outputs, [path.name for path in outputs]
 
 
@@ -192,7 +194,12 @@ def main() -> None:
     # raw export is hashed now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed; the pipeline is
     # deterministic, no RNG is consumed.
-    manifest = begin_manifest(STAGE, inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
+    manifest = begin_manifest(
+        STAGE,
+        inputs=[dataset().member("source"), CONFIG_PATH, VOCABULARY_CONFIG_PATH,
+                dataset().member("number_tokens_reference")],
+        seed=SEED,
+    )
     timing.mark("manifest_begin")
     with log.section("data_prep.pipeline"):
         df = _load_raw()
