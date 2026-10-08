@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.common import training_cfg
 from core.run_log import RunLogger
 from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import (
@@ -27,6 +28,10 @@ from cli.colab_lane_contracts import (
     RESUME_STATE_UPLOAD_TIMEOUT_SECONDS,
     _stamp,
 )
+
+#: The preparation run-directory base (config SSOT); the delivery and resume
+#: segments spell no path literal.
+_RUN_DIR_BASE = training_cfg().preparation.run_dir_base
 
 _LOG = RunLogger(__name__)
 
@@ -47,11 +52,11 @@ class ColabCPULaneDelivery:
 
         return f"""
 # delivery: run dir + regenerated data artifacts (list from the 8ddc614 lane).
-run_dir = sorted(glob.glob(root + "/results/training_prep/*"))[-1]
+run_dir = sorted(glob.glob(root + "/results/" + {_RUN_DIR_BASE!r} + "/*"))[-1]
 delivery = root + "/{DELIVERY_ARCHIVE_NAME}"
 from core.archive_reader import tar_archive
 with tar_archive(delivery, "w") as tar:
-    tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
+    tar.add(run_dir, arcname={_RUN_DIR_BASE!r} + "/" + os.path.basename(run_dir))
     for rel in {DELIVERY_DATA_MEMBERS!r}:
         if os.path.exists(root + "/" + rel):
             tar.add(root + "/" + rel, arcname=rel)
@@ -145,14 +150,14 @@ with tar_archive(delivery, "w") as tar:
         """The prepare launcher continuing one frozen run, announced."""
         script = self.launch_prepare_script().replace(
             "LAUNCH_ARGS_LIST",
-            ', "--run-dir", root + "/results/training_prep/@RESUME_RUN_ID@",'
+            f', "--run-dir", root + "/results/{_RUN_DIR_BASE}/@RESUME_RUN_ID@",'
             ' "--resume-from", "@RESUME_FROM@"'
         ).replace("@RESUME_RUN_ID@", resume_run_id).replace(
             "@RESUME_FROM@", resume_from).replace("@COHORT_EXPORT@", source.name)
         print(
             _stamp(),
             f"[bundle] resume: prepare_all --run-dir "
-            f"{self.remote_root}/results/training_prep/{resume_run_id} "
+            f"{self.remote_root}/results/{_RUN_DIR_BASE}/{resume_run_id} "
             f"--resume-from {resume_from}",
             flush=True,
         )

@@ -29,8 +29,9 @@ from core.archive_reader import open_archive
 from core.portable_archive import source_inventory, verify_archive_digest
 
 #: The epoch-checkpoint directory name prefix (``checkpoint-281``); the role
-#: contract and the layout walks below share this one literal.
-_CHECKPOINT_PREFIX = "checkpoint-"
+#: contract, the best-checkpoint resolver, and the layout walks share this one
+#: literal. Public so lanes (cli.colab, graph_tracks.train) never re-spell it.
+CHECKPOINT_PREFIX = "checkpoint-"
 
 
 def _bundle_spec():
@@ -48,6 +49,66 @@ def bundle_spec():
     importing a private helper across the package boundary.
     """
     return _bundle_spec()
+
+
+def resolve_best_checkpoint(
+    root: Path,
+    *,
+    under_checkpoint_root: bool = True,
+    raise_on_missing: bool = True,
+) -> tuple[Path, dict[str, Any]] | None:
+    """The ONE trainer-selected best-checkpoint resolver (config SSOT).
+
+    Scans every materialized ``trainer_state.json`` under ``root``, reads the
+    trainer-recorded best (``trainer_best_key``), re-locates it by name beside
+    the run that recorded it, and returns the best by
+    ``(trainer_metric_key, trainer_step_key, path)`` -- the exact ranking
+    ``training.validation_inference.resolve_best_checkpoint`` shipped before
+    this resolver existed, so every consumer stays byte-identical.
+
+    ``under_checkpoint_root`` anchors the walk at ``checkpoint_dir`` (the
+    ``_checkpoints/**/checkpoint-*/trainer_state.json`` shape); ``False`` walks
+    a root that already sits at a track/repo (``Bundle.checkpoint`` and
+    ``Bundle.selected_checkpoint_dirs``). ``raise_on_missing`` raises
+    ``FileNotFoundError`` (inference surfaces); ``False`` returns ``None`` so a
+    caller can apply its own fallback (markers, highest-surviving checkpoint).
+
+    Returns ``(checkpoint_dir, trainer_state)`` or ``None``.
+    """
+    spec = _bundle_spec()
+    if under_checkpoint_root:
+        state_paths = sorted(root.glob(
+            f"{spec.checkpoint_dir}/**/{CHECKPOINT_PREFIX}*/{spec.trainer_state_file}"))
+    else:
+        state_paths = sorted(root.rglob(
+            f"{CHECKPOINT_PREFIX}*/{spec.trainer_state_file}"))
+    best: tuple[tuple[float, int, str], Path, dict[str, Any]] | None = None
+    for state_path in state_paths:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        recorded = state.get(spec.trainer_best_key)
+        if not recorded:
+            continue
+        candidate = state_path.parent.parent / Path(str(recorded)).name
+        if not candidate.is_dir():
+            continue
+        rank = (
+            float(state.get(spec.trainer_metric_key, float("-inf"))),
+            int(state.get(spec.trainer_step_key, 0)),
+            candidate.as_posix(),
+        )
+        if best is None or rank > best[0]:
+            best = (rank, candidate, state)
+    if best is None:
+        if raise_on_missing:
+            raise FileNotFoundError(
+                f"no materialized trainer-recorded best checkpoint under "
+                f"{root / spec.checkpoint_dir}"
+            )
+        return None
+    return best[1], best[2]
 
 
 class BundleRole(str, Enum):
@@ -81,7 +142,7 @@ def _epoch_dirs(names) -> list[str]:
         for index, part in enumerate(parts):
             # A *directory* component (never the last, file-bearing part) named
             # ``checkpoint-N`` under the configured checkpoint root.
-            if (index < len(parts) - 1 and part.startswith(_CHECKPOINT_PREFIX)
+            if (index < len(parts) - 1 and part.startswith(CHECKPOINT_PREFIX)
                     and spec.checkpoint_dir in parts[:index]):
                 found.add(PurePosixPath(*parts[:index + 1]).as_posix())
     return sorted(found)
@@ -353,24 +414,10 @@ class Bundle(BaseModel):
         spec = _bundle_spec()
         root = self._root()
         track_root = self._track_root(root, track)
-        best: tuple[tuple[float, int], Path] | None = None
-        for state_path in sorted(track_root.rglob(_CHECKPOINT_PREFIX + "*/" + spec.trainer_state_file)):
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            recorded = state.get(spec.trainer_best_key)
-            if not recorded:
-                continue
-            candidate = state_path.parent.parent / Path(str(recorded)).name
-            if not candidate.is_dir():
-                continue
-            rank = (float(state.get(spec.trainer_metric_key, float("-inf"))),
-                    int(state.get(spec.trainer_step_key, 0)))
-            if best is None or rank > best[0]:
-                best = (rank, candidate)
-        if best is not None:
-            return best[1]
+        resolved = resolve_best_checkpoint(
+            track_root, under_checkpoint_root=False, raise_on_missing=False)
+        if resolved is not None:
+            return resolved[0]
         for marker in sorted(track_root.rglob(spec.best_checkpoint_glob)):
             try:
                 recorded = Path(str(json.loads(marker.read_text(encoding="utf-8"))
@@ -409,7 +456,7 @@ class Bundle(BaseModel):
         checkpoint_dir = self._track_root(self._root(), track) / spec.checkpoint_dir
         if not checkpoint_dir.is_dir():
             return []
-        return sorted(p for p in checkpoint_dir.rglob(_CHECKPOINT_PREFIX + "*") if p.is_dir())
+        return sorted(p for p in checkpoint_dir.rglob(CHECKPOINT_PREFIX + "*") if p.is_dir())
 
     def selected_checkpoint_dirs(self) -> frozenset[str]:
         """Posix dirs (relative to this bundle's root) of selected checkpoints.
@@ -425,24 +472,10 @@ class Bundle(BaseModel):
         spec = _bundle_spec()
         root = self._root()
         selected: set[str] = set()
-        best: tuple[tuple[float, int], Path] | None = None
-        for state_path in sorted(root.rglob(_CHECKPOINT_PREFIX + "*/" + spec.trainer_state_file)):
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            recorded = state.get(spec.trainer_best_key)
-            if not recorded:
-                continue
-            directory = state_path.parent.parent / Path(str(recorded)).name
-            if not directory.is_dir():
-                continue
-            rank = (float(state.get(spec.trainer_metric_key, float("-inf"))),
-                    int(state.get(spec.trainer_step_key, 0)))
-            if best is None or rank > best[0]:
-                best = (rank, directory)
-        if best is not None:
-            selected.add(best[1].relative_to(root).as_posix())
+        resolved = resolve_best_checkpoint(
+            root, under_checkpoint_root=False, raise_on_missing=False)
+        if resolved is not None:
+            selected.add(resolved[0].relative_to(root).as_posix())
         for marker in sorted(root.rglob(spec.best_checkpoint_glob)):
             try:
                 recorded = Path(str(json.loads(marker.read_text(encoding="utf-8"))

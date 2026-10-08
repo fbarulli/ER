@@ -37,6 +37,7 @@ from core.common import (
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
+from core.bundle import CHECKPOINT_PREFIX, resolve_best_checkpoint
 from core.run_log import RunLogger
 from core.step_trace import send, timed, trace_step
 from training.folds import component_folds, derive_holdout
@@ -2456,26 +2457,18 @@ class _TrainerDriver:
                 # fired (verified on the real run: best=checkpoint-20,
                 # highest=checkpoint-21). trainer_state.json records the best
                 # checkpoint path; when the recorded best was pruned (limit=2)
-                # fall back to the highest surviving checkpoint.
+                # fall back to the highest surviving checkpoint. Resolution is
+                # core.bundle.resolve_best_checkpoint (the ONE trainer-selected
+                # resolver), with the highest-numbered checkpoint kept as the
+                # pruned-record fallback.
                 _ckpts = sorted(
-                    _best.glob("checkpoint-*"),
+                    _best.glob(f"{CHECKPOINT_PREFIX}*"),
                     key=lambda p: int(p.name.split("-")[1]),
                 )
-                _src = _ckpts[-1] if _ckpts else _best
-                for _c in _ckpts:
-                    _ts = _c / "trainer_state.json"
-                    if not _ts.exists():
-                        continue
-                    try:
-                        _bm = json.loads(_ts.read_text()).get("best_model_checkpoint")
-                    except (ValueError, OSError):
-                        continue
-                    if not _bm:
-                        continue
-                    _cand = _best / Path(_bm).name
-                    if _cand.exists():
-                        _src = _cand
-                        break
+                _resolved = resolve_best_checkpoint(
+                    _best, under_checkpoint_root=False, raise_on_missing=False)
+                _src = _resolved[0] if _resolved is not None else (
+                    _ckpts[-1] if _ckpts else _best)
                 print(f"[mask-effect] scoring model from {_src}", flush=True)
                 _model = load_local_sentence_transformer(str(_src), device="cpu")
                 _texts = [m["masked_text"] for m in mask_audit]

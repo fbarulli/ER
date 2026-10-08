@@ -34,6 +34,7 @@ from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.tracking import GraphWandb
 from graph_tracks.data import census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
+from core.bundle import CHECKPOINT_PREFIX
 from core.perf_switches import perf_enabled
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, TraceRun
@@ -55,6 +56,18 @@ def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
     from core.common import prepared_setup_layout
     return prepared_setup_layout()
+
+
+def _bundle_spec():
+    """The bundle checkpoint layout (config SSOT); graph writes spell none."""
+    from core.common import training_cfg
+    return training_cfg().bundle
+
+
+def _colab_spec():
+    """The colab checkpoint-marker name (config SSOT)."""
+    from core.common import training_cfg
+    return training_cfg().colab
 
 
 def flush_graph_trace(trace: TraceRun, logger: logging.Logger) -> None:
@@ -470,7 +483,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             if checkpoint_track(best_path) != cfg.track:
                 raise ValueError("selected resume checkpoint track mismatch")
             # Collect the selected model inside this run even if no new epoch wins.
-            selected_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / best_path.parent.name
+            selected_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / best_path.parent.name
             if selected_dir.resolve() != best_path.parent.resolve():
                 shutil.copytree(best_path.parent, selected_dir, dirs_exist_ok=True)
             best_path = selected_dir / name(cfg.track, "graph_model.pt")
@@ -640,7 +653,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 metrics["early_stopping_bad_epochs"] = bad_epochs
                 previous_best = best_metric
                 improved = metrics["dev_pr_auc"] > best_metric
-                checkpoint_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / f"checkpoint-{epoch}"
+                checkpoint_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / f"{CHECKPOINT_PREFIX}{epoch}"
                 checkpoint_dir.mkdir(parents=True)
                 checkpoint = checkpoint_dir / name(cfg.track, "graph_model.pt")
                 if improved:
@@ -712,11 +725,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                             metrics['dev_pr_auc'], previous_best)
                 with _LOG.section("graph.checkpoint_write", epoch=epoch):
                     profiler.call('graph/checkpoint_write',torch.save,payload,checkpoint)
-                write_json(checkpoint_dir / name(cfg.track, "trainer_state.json"), {
+                write_json(checkpoint_dir / name(cfg.track, _bundle_spec().trainer_state_file), {
                     "global_step": epoch, "best_metric": best_metric,
-                    "best_model_checkpoint": str(best_path.parent)})
+                    _bundle_spec().trainer_best_key: str(best_path.parent)})
                 # Completion marker is written LAST, matching worker conventions.
-                write_json(checkpoint_dir / name(cfg.track, "checkpoint_manifest.json"), {
+                write_json(checkpoint_dir / name(cfg.track, _colab_spec().checkpoint_manifest_name), {
                     "schema": "er-graph-checkpoint-v1", "files": {checkpoint.name: file_hash(checkpoint)},
                     "epoch": epoch, "track": cfg.track})
                 write_json(output / name(cfg.track, "best_checkpoint.json"), {"path": str(best_path), "metric": best_metric})
@@ -861,7 +874,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             artifacts = [output / name(cfg.track, stem) for stem in
                 ("run_manifest.json", layout.census, "epoch_metrics.jsonl", "best_checkpoint.json",
                  "listing_usage.csv", "gradient_metrics.jsonl")]
-            artifacts.append(output / "_checkpoints" / cfg.track)
+            artifacts.append(output / _bundle_spec().checkpoint_dir / cfg.track)
             if cfg.include_inputs:
                 artifacts.append(input_dir)
             if completion:

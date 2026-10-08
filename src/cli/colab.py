@@ -83,6 +83,7 @@ from core.common import (
     training_cfg,
 )
 from core.manifest import sha256_file
+from core.bundle import CHECKPOINT_PREFIX
 from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
 from training.prepare_all_trace import timed
@@ -91,6 +92,7 @@ from cli.colab_lane import (
     DELIVERY_PREPARED_DIRS,
     DELIVERY_TRACKED_DIRS,
 )
+from cli.colab_lane_contracts import _stamp as _lane_stamp
 from cli.log_capture import lane_log, progress_frames_to_lines
 
 _LOG = RunLogger(__name__)
@@ -111,6 +113,10 @@ _RERANK_MODEL = str(sweep_cfg()["rerank_model"])
 
 _COLAB = training_cfg().colab
 _SIMS_MODEL = str(_COLAB.sims_model)
+# Preparation / bundle archive names (config SSOT); the remote delivery and
+# prepared-package discovery spell no path/archive literal.
+_PREP_RUN_DIR_BASE = training_cfg().preparation.run_dir_base
+_BUNDLE_ARCHIVE = training_cfg().kaggle.files.bundle_archive
 REPOSITORY = _COLAB.repository
 BRANCH = _COLAB.branch
 GIT_REMOTE_NAME = _COLAB.git_remote_name
@@ -172,7 +178,9 @@ _CHECKPOINT_MANIFEST_NAME = _COLAB.checkpoint_manifest_name
 # wandb trees grow -- an unbounded walk is what timed out on T4.
 _CHECKPOINT_LISTING_DEPTH = 4
 # The directory holding every checkpoint of a run, directly under a worker.
-_CHECKPOINT_ROOT_NAME = "_checkpoints"
+_CHECKPOINT_ROOT_NAME = training_cfg().bundle.checkpoint_dir
+# The ``checkpoint-*/trainer_state.json`` glob fragment (config SSOT).
+_CHECKPOINT_STATE_GLOB = f"{CHECKPOINT_PREFIX}*/{training_cfg().bundle.trainer_state_file}"
 # Bookkeeping written beside a locally retained checkpoint, recording which
 # remote checkpoint it is and the score that won it the slot.
 _LATEST_BEST_MARKER = _COLAB.latest_best_marker
@@ -366,7 +374,7 @@ def training_lifecycle_preflight(
 
 def _stamp() -> str:
     """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
-    return (f"[colab {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+    return _lane_stamp("colab", now=datetime.now(ZoneInfo('Europe/Paris')))
 
 
 class _Tee:
@@ -670,7 +678,7 @@ for number in range(1, {workers} + 1):
                     raise FileNotFoundError(f"resume worker input missing: {{source}}")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
-        checkpoints = list(out.rglob("checkpoint-*/trainer_state.json"))
+        checkpoints = list(out.rglob({_CHECKPOINT_STATE_GLOB!r}))
         if not checkpoints:
             raise FileNotFoundError(f"[resume-preflight] worker {{number}} has no local checkpoint; restore downloaded checkpoint files before resuming")
     else:
@@ -1511,14 +1519,14 @@ rc = subprocess.run(
 ).returncode
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
-run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/training_prep/*"))[-1]
+run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/" + {_PREP_RUN_DIR_BASE!r} + "/*"))[-1]
 # FIXED delivery name: a rerun on a live VM overwrites the previous archive;
 # acceptable because the launcher consumes it per invocation and keeps a
 # per-run timestamped copy under TRAINING_RESULTS/colab_bundle_<run_id>/.
 delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.zst"
 from core.archive_reader import tar_archive
 with tar_archive(delivery, "w") as tar:
-    tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
+    tar.add(run_dir, arcname={_PREP_RUN_DIR_BASE!r} + "/" + os.path.basename(run_dir))
     for rel in {DELIVERY_DATA_MEMBERS!r}:
         if os.path.exists({REMOTE_ROOT!r} + "/" + rel):
             tar.add({REMOTE_ROOT!r} + "/" + rel, arcname=rel)
@@ -2160,12 +2168,12 @@ def prepared_package_candidates() -> list[tuple[Path, dict]]:
     if kaggle_root.is_dir():
         for install in sorted(p for p in kaggle_root.iterdir() if p.is_dir()):
             bundle = install / 'bundle'
-            add(bundle / 'all_tracks_inputs.tar.zst', bundle / 'bundle.receipt.json')
-    prep_root = RESULTS / 'training_prep'
+            add(bundle / _BUNDLE_ARCHIVE, bundle / 'bundle.receipt.json')
+    prep_root = RESULTS / _PREP_RUN_DIR_BASE
     if prep_root.is_dir():
         for run in sorted(p for p in prep_root.iterdir() if p.is_dir()):
-            add(run / 'all_tracks_inputs.tar.zst', run / 'manifest.json')
-            add(run / 'before' / 'all_tracks_inputs.tar.zst', None)
+            add(run / _BUNDLE_ARCHIVE, run / 'manifest.json')
+            add(run / 'before' / _BUNDLE_ARCHIVE, None)
     tracks_root = RESULTS / 'model_tracks'
     if tracks_root.is_dir():
         for archive in sorted(tracks_root.glob('*__inputs.tar.zst')):
@@ -2195,7 +2203,7 @@ def resolve_prepared_input_package(value: Path) -> Path:
                 raise ValueError(f'unreadable bundle receipt {receipt_path}: {exc}') from exc
             if archive_name and (value / archive_name).is_file():
                 return value / archive_name
-        canonical = value / 'all_tracks_inputs.tar.zst'
+        canonical = value / _BUNDLE_ARCHIVE
         if canonical.is_file():
             return canonical
     listing = '\n'.join(

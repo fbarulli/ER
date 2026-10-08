@@ -46,6 +46,9 @@ from core.archive_reader import tar_archive
 # implementation the local side verifies with (``core.manifest.sha256_file``
 # -> ``core.portable_archive``), never by a second copy of the algorithm.
 from core.manifest import sha256_file
+# The ONE best-checkpoint selection (core.bundle.resolve_best_checkpoint),
+# never a second copy of the trainer_state scan.
+from core.bundle import resolve_best_checkpoint
 
 base = pathlib.Path({remote_base!r})
 archive_path = base / {archive_name!r}
@@ -61,27 +64,8 @@ excluded = []
 # the same choice training restores at the end -- so keep that one directory
 # per worker and drop the rest.
 def _best_checkpoint(worker_root):
-    best = None
-    pattern = "_checkpoints/**/checkpoint-*/trainer_state.json"
-    for state_path in sorted(worker_root.glob(pattern)):
-        try:
-            state = json.loads(state_path.read_text())
-        except (OSError, ValueError):
-            continue
-        recorded = state.get("best_model_checkpoint")
-        if not recorded:
-            continue
-        selected = state_path.parent.parent / pathlib.Path(str(recorded)).name
-        if not selected.is_dir():
-            continue
-        metric = state.get("best_metric")
-        rank = (
-            float(metric) if metric is not None else float("-inf"),
-            int(state.get("global_step") or 0),
-        )
-        if best is None or rank > best[0]:
-            best = (rank, selected)
-    return best[1] if best is not None else None
+    best = resolve_best_checkpoint(worker_root, raise_on_missing=False)
+    return best[0] if best is not None else None
 
 for worker in range(1, {workers + 1}):
     worker_root = base / f"worker_{{worker}}"

@@ -38,8 +38,6 @@ config/training.yaml colab.cpu_data_bundle_lane is true.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import os
 from pathlib import Path
 
@@ -47,6 +45,7 @@ from core.common import F, training_cfg
 
 import cli.colab as colab
 from cli.colab_lane import ColabCPULane, cohort_label as _canonical_cohort_label
+from cli.colab_lane_contracts import _stamp as _lane_stamp
 
 _LANES: dict[str, ColabCPULane] = {}
 
@@ -92,7 +91,7 @@ def _qualify_session_transcripts(session: str) -> None:
 
 def _stamp() -> str:
     """Bracketed Europe/Paris (CET/CEST) wall-clock prefix."""
-    return (f"[colab-data-bundle-prep {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+    return _lane_stamp("colab-data-bundle-prep")
 
 
 

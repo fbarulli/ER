@@ -98,8 +98,12 @@ class KaggleRuntime:
     def _stamp() -> str:
         """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
         from cli import kaggle_lane as lane
+        from cli.colab_lane_contracts import _stamp as _lane_stamp
 
-        return (f"[kaggle-lane {lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}]")
+        return _lane_stamp(
+            "kaggle-lane",
+            now=lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)),
+        )
 
     @staticmethod
     def _log_lane(line: str) -> None:

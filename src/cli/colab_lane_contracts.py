@@ -42,9 +42,15 @@ RESUME_STATE_UPLOAD_TIMEOUT_SECONDS = 3600
 MAX_PARALLEL_PREP_SESSIONS = 2
 
 
-def _stamp() -> str:
-    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
-    return (f"[colab-lane {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+def _stamp(label: str = "colab-lane", *, now: datetime | None = None) -> str:
+    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output.
+
+    The ONE stamp formatter every lane imports. ``label`` names the emitting
+    lane; ``now`` is an optional pre-computed wall-clock so a caller that keeps
+    its own ``datetime`` patched in tests passes it through.
+    """
+    now = now or datetime.now(ZoneInfo("Europe/Paris"))
+    return f"[{label} {now:%Y-%m-%dT%H:%M:%S %Z}]"
 
 
 class ColabLaneBase:
