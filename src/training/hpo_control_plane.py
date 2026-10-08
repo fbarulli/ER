@@ -12,6 +12,22 @@ from dataclasses import dataclass
 
 _HEARTBEAT_SECONDS = 60
 _GRACE_SECONDS = 180
+# A lease is renewed by the owning worker (``TrialLeaseStore.heartbeat``); if it
+# is not renewed for this long it is stale and ``assert_current`` fails closed.
+_LEASE_TTL_SECONDS = 300
+
+
+class HpoInfrastructureError(BaseException):
+    """A control-plane failure that must ABORT loud, never be a trial failure.
+
+    It deliberately derives from ``BaseException`` (NOT ``Exception``): every
+    worker runs ``study.optimize(..., catch=(Exception,))`` so that an individual
+    trial that blows up (OOM, CUDA error, bad dials) is recorded FAIL and the
+    sweep continues.  A broken lease/champion/budget/DB must NOT be swallowed
+    that way — it would silently consume the whole budget as FAIL trials.  Being
+    outside ``Exception`` means Optuna's ``catch`` cannot catch it and it
+    propagates to abort the worker.
+    """
 
 
 @dataclass(frozen=True)
@@ -21,6 +37,7 @@ class HpoStorage:
     url: str
     heartbeat_seconds: int = _HEARTBEAT_SECONDS
     grace_seconds: int = _GRACE_SECONDS
+    lease_ttl_seconds: int = _LEASE_TTL_SECONDS
 
 
 def storage_from_environment() -> HpoStorage:
@@ -56,11 +73,44 @@ def create_storage(config: HpoStorage):
     )
 
 
+def ensure_tables(engine, metadata) -> None:
+    """Create every table idempotently (``CREATE TABLE IF NOT EXISTS``).
+
+    ``MetaData.create_all`` checks existence then creates, so two workers
+    starting concurrently on a fresh database can both pass the check and race
+    the ``CREATE TABLE``.  Emitting ``if_not_exists`` DDL removes the race: the
+    loser of the race is a no-op rather than a hard ``DuplicateTable`` error.
+    """
+    from sqlalchemy.schema import CreateTable
+
+    with engine.begin() as conn:
+        for table in metadata.sorted_tables:
+            conn.execute(CreateTable(table, if_not_exists=True))
+
+
 def fail_stale_trials(study) -> None:
     """Mark heartbeat-expired RUNNING trials failed before scheduling work."""
     import optuna
 
     optuna.storages.fail_stale_trials(study)
+
+
+def reap_stale_trials_for_study(study_name: str, storage) -> bool:
+    """Reap stale RUNNING trials ONCE per session, before any worker starts.
+
+    Every worker used to call ``fail_stale_trials`` at startup, so a worker
+    could race a sibling's freshly-started trial.  A session's parent calls this
+    once instead.  Returns ``False`` when the study does not exist yet (nothing
+    to reap); a real storage error propagates loud.
+    """
+    import optuna
+
+    try:
+        study = optuna.load_study(study_name=study_name, storage=storage)
+    except (KeyError, ValueError):
+        return False
+    fail_stale_trials(study)
+    return True
 
 
 def generation_study_name(*, generation_id: str, model_key: str) -> str:

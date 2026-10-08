@@ -14,7 +14,23 @@ pinned without a real PostgreSQL or a GPU.
 from __future__ import annotations
 
 import math
+import time
+from contextlib import nullcontext
 from pathlib import Path
+
+
+def _shared(name: str):
+    """Resolve a symbol defined by the earlier injected control-plane module.
+
+    In the staged kernel every injected module shares one namespace, so the
+    symbol is a global; on the host the modules are importable packages.
+    """
+    symbol = globals().get(name)
+    if symbol is not None:
+        return symbol
+    from training import hpo_control_plane
+
+    return getattr(hpo_control_plane, name)
 
 
 def sample_dials(trial, space):
@@ -88,6 +104,29 @@ def finished_trial_count(study, finished_states):
     return sum(1 for trial in study.trials if trial.state.name in states)
 
 
+def trial_primary_value(trial):
+    """The comparable PRIMARY scalar of a trial's value.
+
+    Single-objective Optuna trials expose ``.value``; multi-objective trials
+    expose ``.values`` (a list) and a ``.value`` of ``None``.  Ranking must use
+    the primary element either way, otherwise every multi-objective trial is
+    dropped (the old bug).
+    """
+    values = getattr(trial, "values", None)
+    if values:
+        return values[0]
+    return getattr(trial, "value", None)
+
+
+def trial_full_value(trial):
+    """The full value vector as a list (``[scalar]`` for single-objective)."""
+    values = getattr(trial, "values", None)
+    if values:
+        return list(values)
+    value = getattr(trial, "value", None)
+    return None if value is None else [value]
+
+
 def per_worker_budget(remaining, workers):
     """Split the remaining trial budget across the worker processes.
 
@@ -101,40 +140,45 @@ def per_worker_budget(remaining, workers):
 
 def objective_value(trial, run_fn, lease_store, champion_store,
                     generation_id, model_key, objective_mode=None):
-    """One fenced HPO trial: lease -> run -> assert -> promote -> return.
+    """One fenced HPO trial: issue lease -> run -> assert -> record value.
 
     Maximizes the value returned by ``run_fn`` (the kernel returns DEV
     accuracy). The held-out/test split is never consulted here. A lease is
-    issued for the trial number Optuna assigned, asserted current BEFORE any
-    promotion (a zombie worker must never publish), and revoked on ANY failure
-    so a replacement worker can re-issue the epoch.
+    issued for the trial number Optuna assigned and a heartbeat renews it while
+    ``run_fn`` executes; ``assert_current`` is checked BEFORE the result is
+    recorded (an expired/zombie worker is fenced), and the lease is revoked on
+    ANY failure so a replacement can re-issue the epoch.
+
+    The champion is deliberately NOT promoted here: promotion may only happen
+    AFTER Optuna commits the trial COMPLETE (see ``promote_committed_trial``),
+    otherwise a failure between an inline promotion and the commit would record
+    the trial FAIL while the registry already pointed at it.
+
+    Control-plane failures (lease issue/assert) are raised as
+    ``HpoInfrastructureError`` so ``study.optimize(catch=(Exception,))`` cannot
+    swallow them as an ordinary trial failure; ``run_fn`` failures stay normal
+    exceptions and are recorded FAIL.
 
     ``objective_mode`` (optional) shapes a multi-objective return value while
     the champion registry always promotes on the PRIMARY (dev accuracy).
-    ``run_fn`` returns ``(accuracy, dev_loss, artifact)`` or, when a secondary
-    objective is configured, ``(accuracy, dev_loss, artifact, secondary)``.
     """
-    lease = (lease_store.issue(generation_id=generation_id, model_key=model_key,
-                               trial_number=int(trial.number))
-             if lease_store is not None else None)
+    lease = _issue_lease(lease_store, generation_id, model_key, int(trial.number))
     try:
-        result = run_fn(trial)
+        with _lease_heartbeat(lease_store, lease):
+            result = run_fn(trial)
         if len(result) == 4:
             accuracy, dev_loss, artifact, secondary = result
         else:
             accuracy, dev_loss, artifact = result
             secondary = None
         if lease_store is not None:
-            lease_store.assert_current(lease)
+            _assert_lease(lease_store, lease)
         trial.set_user_attr("dev_accuracy", float(accuracy))
         if dev_loss is not None:
             trial.set_user_attr("dev_loss", float(dev_loss))
         trial.set_user_attr("checkpoint", str(artifact))
-        if champion_store is not None:
-            champion_store.promote(
-                generation_id=generation_id, model_key=model_key,
-                trial_number=int(trial.number), value=float(accuracy),
-                artifact_snapshot=str(artifact), lease_epoch=int(lease.epoch))
+        if lease is not None:
+            trial.set_user_attr("hpo_lease_epoch", int(lease.epoch))
         value = float(accuracy)
         if objective_mode is not None and objective_mode.multi:
             metrics = {"dev_accuracy": float(accuracy)}
@@ -143,12 +187,169 @@ def objective_value(trial, run_fn, lease_store, champion_store,
             value = objective_mode.value(metrics)
         return value
     except BaseException:
-        if lease_store is not None:
+        if lease_store is not None and lease is not None:
             try:
                 lease_store.revoke(lease)
-            except Exception:  # noqa: BLE001,S110 - best-effort; the primary error re-raises
+            except Exception:  # noqa: BLE001,S110 - best-effort; primary error re-raises
                 pass
         raise
+
+
+def _issue_lease(lease_store, generation_id, model_key, trial_number):
+    if lease_store is None:
+        return None
+    try:
+        return lease_store.issue(generation_id=generation_id,
+                                 model_key=model_key, trial_number=trial_number)
+    except BaseException as error:
+        if isinstance(error, Exception):
+            raise _shared("HpoInfrastructureError")(
+                f"lease issue failed for {model_key}/trial {trial_number}: "
+                f"{error}") from error
+        raise
+
+
+def _assert_lease(lease_store, lease):
+    try:
+        lease_store.assert_current(lease)
+    except BaseException as error:
+        if isinstance(error, Exception):
+            raise _shared("HpoInfrastructureError")(str(error)) from error
+        raise
+
+
+def _lease_heartbeat(lease_store, lease):
+    if lease_store is None or lease is None:
+        return nullcontext()
+    factory = getattr(lease_store, "heartbeat", None)
+    if factory is None:
+        return nullcontext()
+    return factory(lease)
+
+
+def promote_committed_trial(champion_store, trial, *, generation_id, model_key):
+    """Promote a trial's champion candidate only AFTER Optuna committed it.
+
+    Returns the promoted ``Champion`` (or the still-best champion) or ``None``
+    when there is nothing to promote.  A trial without a fencing lease epoch is
+    never published (no unfenced champion); a non-COMPLETE trial is skipped.
+    """
+    if champion_store is None or trial is None:
+        return None
+    state = getattr(trial, "state", None)
+    state_name = getattr(state, "name", None)
+    if state_name is not None and state_name != "COMPLETE":
+        return None
+    attrs = getattr(trial, "user_attrs", None) or {}
+    epoch = attrs.get("hpo_lease_epoch")
+    if epoch is None:
+        return None
+    return champion_store.promote(
+        generation_id=generation_id, model_key=model_key,
+        trial_number=int(trial.number),
+        value=float(attrs["dev_accuracy"]),
+        artifact_snapshot=str(attrs["checkpoint"]),
+        lease_epoch=int(epoch))
+
+
+def resolve_champion_artifact(champion_store, *, generation_id, model_key,
+                              mode):
+    """The champion checkpoint to warm-start from, or ``None``.
+
+    Reads the shared champion registry — the read side that used to be missing,
+    which made ``warm_start: champion`` silently fall back to the base model.
+    Returns the champion's artifact path, or ``None`` when there is no champion
+    yet (so the caller falls back to the base model).  Non-champion modes never
+    read the registry.
+    """
+    if mode != "champion" or champion_store is None:
+        return None
+    champion = champion_store.read(generation_id=generation_id,
+                                   model_key=model_key)
+    if champion is None:
+        return None
+    return str(champion.artifact_snapshot)
+
+
+class ReservedTrialLoop:
+    """Run one atomically-reserved Optuna trial at a time.
+
+    Each iteration: reserve one slot from the shared ``ledger`` (a no-op-return
+    when another worker/session holds the budget), run exactly one trial, observe
+    it ONCE after commit, then charge it COMPLETE or release it.  A FAIL/PRUNED
+    trial releases its slot, so it cannot starve the budget; an
+    ``HpoInfrastructureError`` releases the slot and aborts loud.
+    """
+
+    def __init__(self, study, objective, ledger, *, optimize=None,
+                 optimize_kwargs=None, observer=None, champion_store=None,
+                 generation_id=None, model_key=None, timeout_s=0,
+                 clock=time.monotonic, log=None):
+        self._study = study
+        self._objective = objective
+        self._ledger = ledger
+        self._optimize = optimize
+        self._optimize_kwargs = dict(optimize_kwargs or {})
+        self._observer = observer
+        self._champion_store = champion_store
+        self._generation_id = generation_id
+        self._model_key = model_key
+        self._timeout_s = int(timeout_s or 0)
+        self._clock = clock
+        self._log = log or (lambda line: None)
+
+    def _run_one(self):
+        if self._optimize is not None:
+            self._optimize()
+            return
+        self._study.optimize(self._objective, n_trials=1,
+                             **self._optimize_kwargs)
+
+    def _newest(self, before):
+        trials = self._study.trials
+        return trials[before] if len(trials) > before else None
+
+    @staticmethod
+    def _state(trial):
+        return getattr(getattr(trial, "state", None), "name", None)
+
+    def _observe(self, trial):
+        if self._observer is None:
+            return
+        try:
+            self._observer.observe(trial)
+        except Exception as error:  # noqa: BLE001 - observability is best-effort
+            self._log("observer skipped: " + str(error)[:160])
+
+    def run(self):
+        deadline = (self._clock() + self._timeout_s
+                    if self._timeout_s > 0 else None)
+        while True:
+            if deadline is not None and self._clock() >= deadline:
+                self._log("reserved loop: wall-clock timeout reached")
+                return "timeout"
+            if self._ledger.reserve(1) != 1:
+                self._log("reserved loop: shared budget exhausted")
+                return "budget_exhausted"
+            before = len(self._study.trials)
+            try:
+                self._run_one()
+            except BaseException:
+                # Never leave a slot pinned when the worker aborts loud.
+                self._ledger.release(1)
+                raise
+            trial = self._newest(before)
+            if trial is None:
+                self._ledger.release(1)
+                continue
+            self._observe(trial)
+            if self._state(trial) == "COMPLETE":
+                self._ledger.complete(1)
+                promote_committed_trial(
+                    self._champion_store, trial,
+                    generation_id=self._generation_id, model_key=self._model_key)
+            else:
+                self._ledger.release(1)
 
 
 class FidelityReporter:

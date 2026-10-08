@@ -40,6 +40,10 @@ class FakeTrial:
     def set_user_attr(self, key, value):
         self.attrs[key] = value
 
+    @property
+    def user_attrs(self):
+        return self.attrs
+
 
 class FakeLeaseStore:
     def __init__(self, *, stale: bool = False):
@@ -312,7 +316,7 @@ def test_resolve_study_config_uses_shared_control_plane(monkeypatch):
 
 
 # ── objective wiring / failure paths ───────────────────────────────────────
-def test_objective_value_leases_fences_and_promotes():
+def test_objective_value_leases_fences_and_records_candidate():
     trial = FakeTrial(number=7)
     leases = FakeLeaseStore()
     champions = FakeChampionStore()
@@ -323,9 +327,14 @@ def test_objective_value_leases_fences_and_promotes():
     assert trial.attrs["dev_accuracy"] == pytest.approx(0.912)
     assert trial.attrs["dev_loss"] == pytest.approx(0.31)
     assert trial.attrs["checkpoint"] == "/kaggle/working/ckpt_7"
+    assert trial.attrs["hpo_lease_epoch"] == 3
     assert leases.issued[0][:3] == ("gen-1", "laya", 7)
     assert leases.asserted and not leases.revoked
-    assert len(champions.promotions) == 1
+    # F3: NOT promoted before Optuna commits the trial.
+    assert champions.promotions == []
+    promoted = laya_hpo_runtime.promote_committed_trial(
+        champions, trial, generation_id="gen-1", model_key="laya")
+    assert promoted is not None
     promotion = champions.promotions[0]
     assert promotion["trial_number"] == 7
     assert promotion["value"] == pytest.approx(0.912)
@@ -356,11 +365,13 @@ def test_objective_value_revokes_lease_on_failure():
     assert champions.promotions == []
 
 
-def test_objective_value_fences_a_stale_lease_before_promotion():
+def test_objective_value_fences_a_stale_lease_before_recording():
+    from training.hpo_control_plane import HpoInfrastructureError
+
     trial = FakeTrial(number=5)
     leases = FakeLeaseStore(stale=True)
     champions = FakeChampionStore()
-    with pytest.raises(RuntimeError, match="stale"):
+    with pytest.raises(HpoInfrastructureError, match="stale"):
         laya_hpo_runtime.objective_value(
             trial, lambda t: (0.99, 0.01, Path("/ckpt")),
             leases, champions, "gen", "laya")
@@ -384,7 +395,7 @@ def test_per_worker_budget_splits_the_remaining_trials():
     assert laya_hpo_runtime.per_worker_budget(24, 0) == 24  # guards /0
 
 
-def test_objective_value_multi_objective_returns_tuple_and_promotes_primary():
+def test_objective_value_multi_objective_returns_tuple_and_records_primary():
     trial = FakeTrial(number=9)
     leases = FakeLeaseStore()
     champions = FakeChampionStore()
@@ -395,6 +406,9 @@ def test_objective_value_multi_objective_returns_tuple_and_promotes_primary():
         trial, lambda t: (0.7, 0.2, Path("/ck"), 12.5),
         leases, champions, "g", "laya", objective_mode=mode)
     assert value == (0.7, 12.5)
+    assert champions.promotions == []  # promotion is post-commit
+    laya_hpo_runtime.promote_committed_trial(
+        champions, trial, generation_id="g", model_key="laya")
     assert champions.promotions[0]["value"] == 0.7  # primary only
 
 
@@ -437,7 +451,11 @@ def test_hpo_runtime_source_has_no_future_import_and_carries_primitives():
     assert "from __future__ import" not in source
     for symbol in ("def storage_from_environment", "class TrialLeaseStore",
                    "class ChampionStore", "def objective_value",
-                   "def generation_study_name", "def fail_stale_trials"):
+                   "def generation_study_name", "def fail_stale_trials",
+                   "class WorkLedger", "class BudgetCounter",
+                   "class ReservedTrialLoop", "class HpoInfrastructureError",
+                   "def ensure_tables", "def promote_committed_trial",
+                   "def resolve_champion_artifact"):
         assert symbol in source, symbol
 
 
