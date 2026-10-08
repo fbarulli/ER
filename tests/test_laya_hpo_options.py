@@ -42,23 +42,47 @@ def _fake_optuna():
 
 
 # ── A) parallelism / resource caps ─────────────────────────────────────────
-def test_resource_caps_env_and_apply_torch():
+def test_resource_caps_env_and_apply_torch(monkeypatch):
     caps = opt.ResourceCaps({"omp_threads": 3, "torch_threads": 2,
-                             "dataloader_workers": 1, "cuda_alloc_fraction": 0.4})
+                             "cuda_alloc_fraction": 0.4})
     env = caps.env()
     assert env["OMP_NUM_THREADS"] == "3" and env["MKL_NUM_THREADS"] == "3"
-    assert env["ER_LAYA_DATALOADER_WORKERS"] == "1"
+    # No dead knob: the dataloader env var is gone (nothing read it).
+    assert "ER_LAYA_DATALOADER_WORKERS" not in env
     recorded = {}
-
-    def set_num_threads(n):
-        recorded["threads"] = n
-
     torch_stub = SimpleNamespace(
-        set_num_threads=set_num_threads,
+        set_num_threads=lambda n: recorded.update(threads=n),
         cuda=SimpleNamespace(is_available=lambda: True,
                              set_per_process_memory_fraction=lambda f: recorded.update(fraction=f)))
     caps.apply_torch(torch_stub)
     assert recorded == {"threads": 2, "fraction": 0.4}
+    # A per-slot override (lone worker on a GPU) wins over the raw config.
+    monkeypatch.setenv(opt.ResourceCaps.CUDA_FRACTION_ENV, "1.0")
+    recorded.clear()
+    caps.apply_torch(torch_stub)
+    assert recorded == {"threads": 2, "fraction": 1.0}
+
+
+def test_resource_caps_split_fraction_across_gpu_slots():
+    caps = opt.ResourceCaps({"cuda_alloc_fraction": 1.0})
+    assert caps.per_process_cuda_fraction(1) == 1.0
+    assert caps.per_process_cuda_fraction(2) == 0.5
+    assert caps.per_process_cuda_fraction(4) == 0.25
+    off = opt.ResourceCaps({"cuda_alloc_fraction": 0.0})
+    assert off.per_process_cuda_fraction(2) == 0.0
+
+
+def test_worker_pool_emits_per_process_cuda_fraction():
+    pool = opt.WorkerPool(
+        slots_per_gpu=2, max_concurrent_trials=4,
+        resource_caps=opt.ResourceCaps({"cuda_alloc_fraction": 1.0}))
+    specs = pool.plan(gpu_count=2)
+    assert all(s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] == "0.5"
+               for s in specs)
+    lone = opt.WorkerPool(
+        slots_per_gpu=1, max_concurrent_trials=1,
+        resource_caps=opt.ResourceCaps({"cuda_alloc_fraction": 1.0})).plan(1)
+    assert lone[0].env[opt.ResourceCaps.CUDA_FRACTION_ENV] == "1.0"
 
 
 def test_mps_controller_commands_and_lifecycle():
@@ -106,28 +130,98 @@ def test_ddp_torchrun_argv_has_rendezvous():
     assert "29511" in argv and argv[-2:] == ["--trial", "3"]
 
 
+def test_ddp_nproc_clamped_to_devices_and_free_port():
+    ddp = opt.DdpTrialScheduler({"parallelism": "ddp",
+                                 "ddp": {"nproc_per_node": 8,
+                                         "master_port": 0}})
+    assert len(ddp.workers(1)) == 1          # one controller, as always
+    argv = ddp.torchrun_argv("s.py")
+    assert argv[argv.index("--nproc_per_node") + 1] == "1"  # clamped to 1 GPU
+    port = int(argv[argv.index("--master_port") + 1])
+    assert 1 <= port <= 65535
+    ddp.workers(2)
+    assert ddp.torchrun_argv("s.py")[
+        ddp.torchrun_argv("s.py").index("--nproc_per_node") + 1] == "2"
+
+
+class _FakeProcess:
+    """Minimal Popen stand-in for the streaming runner tests."""
+
+    def __init__(self, *, exit_code=0):
+        self._done = exit_code is not None
+        self.exit_code = exit_code
+        self.terminated = 0
+
+    def poll(self):
+        return self.exit_code if self._done else None
+
+    def terminate(self):
+        self.terminated += 1
+        self._done = True
+
+    def kill(self):
+        self._done = True
+
+    def wait(self, timeout=None):
+        self._done = True
+        return self.exit_code
+
+
 def test_ddp_trial_runner_launches_torchrun_and_reads_rank0_result(tmp_path):
     ddp = opt.DdpTrialScheduler({"parallelism": "ddp",
                                  "ddp": {"nproc_per_node": 2}})
     calls = []
 
-    def runner(argv, env=None, check=False):
+    def popener(argv, env=None):
         calls.append((argv, env))
         (tmp_path / "ddp_trial_3.json").write_text(
             json.dumps({"accuracy": 0.88, "dev_loss": 0.2,
                         "checkpoint": "/ck", "epoch_time_s": 5.0}),
             encoding="utf-8")
+        return _FakeProcess()
 
     trial_runner = opt.DdpTrialRunner(
-        ddp, "/kaggle/working/laya_hpo.py", runner=runner,
-        result_dir=tmp_path, logger=lambda line: None)
+        ddp, "/kaggle/working/laya_hpo.py", popener=popener,
+        result_dir=tmp_path, logger=lambda line: None, poll_interval=0.0)
     result = trial_runner.run(3, {"dials": {"encoder_lr": 1.0e-5}})
     assert result == (0.88, 0.2, "/ck", 5.0)
     argv, env = calls[0]
     assert argv[0] == "torchrun" and argv[-2:] == ["--ddp-trial", "3"]
     assert env[opt.DdpTrialRunner.DDP_TRIAL_ENV] == "3"
+    assert env[ddp.BACKEND_ENV] == "nccl"
     assert json.loads(env[opt.DdpTrialRunner.DDP_PAYLOAD_ENV])["dials"][
         "encoder_lr"] == 1.0e-5
+
+
+def test_ddp_trial_runner_streams_epochs_and_terminates_on_prune(tmp_path):
+    ddp = opt.DdpTrialScheduler({"parallelism": "ddp",
+                                 "ddp": {"nproc_per_node": 1}})
+    seen = []
+
+    def popener(argv, env=None):
+        (tmp_path / "ddp_trial_5.epochs.jsonl").write_text(
+            json.dumps({"step": 0, "value": 0.5}) + "\n", encoding="utf-8")
+        return process
+
+    process = _FakeProcess(exit_code=None)
+    trial_runner = opt.DdpTrialRunner(
+        ddp, "s.py", popener=popener, result_dir=tmp_path, poll_interval=0.0)
+    with pytest.raises(opt.TrialPrunedSignal):
+        trial_runner.run(5, {"dials": {}},
+                         on_epoch=lambda step, value: seen.append((step, value)),
+                         should_stop=lambda: True)
+    assert seen == [(0, 0.5)]
+    assert process.terminated == 1
+
+
+def test_ddp_trial_runner_fails_loud_on_nonzero_exit(tmp_path):
+    ddp = opt.DdpTrialScheduler({"parallelism": "ddp",
+                                 "ddp": {"nproc_per_node": 1}})
+    trial_runner = opt.DdpTrialRunner(
+        ddp, "s.py", popener=lambda argv, env=None: _FakeProcess(exit_code=1),
+        result_dir=tmp_path, poll_interval=0.0)
+    with pytest.raises(RuntimeError, match="failed"):
+        trial_runner.run(7, {"dials": {}})
 
 
 # ── B) sampler / pruner / fidelity / objective ─────────────────────────────
@@ -187,24 +281,10 @@ def test_objective_mode_single_and_multi():
     assert multi.value({"dev_accuracy": 0.8, "epoch_time_s": 12.0}) == (0.8, 12.0)
 
 
-# ── C) shared-data strategies ──────────────────────────────────────────────
-def test_shared_data_cache_paths_and_manifest(tmp_path):
-    cache = opt.SharedDataCache({"tokenized_cache": True,
-                                 "embedding_cache": True,
-                                 "dev_encoding_cache": False}, tmp_path)
-    sig = {"corpus_sha256": "abc", "max_len": 512}
-    token_path = cache.path("tokenized", sig)
-    assert token_path.parent.name == "tokenized"
-    assert not cache.is_ready("tokenized", sig)
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_bytes(b"x")
-    assert cache.is_ready("tokenized", sig)
-    assert not cache.is_ready("dev", sig)  # disabled
-    manifest = cache.manifest({"tokenized": sig})
-    assert manifest["tokenized"]["ready"] is True
-    assert manifest["tokenized"]["key"] == cache.key("tokenized", sig)
-    # different signature -> different cache slot
-    assert cache.key("tokenized", sig) != cache.key("tokenized", {"x": 1})
+# ── C) warm start / ensembling ─────────────────────────────────────────────
+def test_shared_data_cache_family_is_removed():
+    """The advertised-but-absent caches must not come back."""
+    assert not hasattr(opt, "SharedDataCache")
 
 
 def test_warm_start_policy_modes():
@@ -235,9 +315,9 @@ def test_trial_ensembler_select_and_average():
 
 
 # ── assembly / SSOT ────────────────────────────────────────────────────────
-def test_build_option_set_reads_the_config_block(tmp_path):
+def test_build_option_set_reads_the_config_block():
     space = laya_hpo.load_space()
-    options = opt.build_option_set(space, root=tmp_path, base_model="/base")
+    options = opt.build_option_set(space, base_model="/base")
     assert isinstance(options, opt.OptionSet)
     assert options.scheduler.mode == "slots"
     assert options.sampler.kind == "tpe"
@@ -247,9 +327,11 @@ def test_build_option_set_reads_the_config_block(tmp_path):
     assert options.objective_mode.multi is False
     assert options.warm_start.mode == "base"
     assert options.session.processes_only is True
-    assert options.core_allocator.threads_per_worker == 1
+    assert options.resource_caps.cuda_alloc_fraction == 1.0
     payload = options.as_dict()
     assert payload["scheduler"]["mode"] == "slots"
+    assert "core_allocator" not in payload
+    assert "shared_data" not in payload
     json.dumps(payload)  # JSON-serializable
 
 
@@ -259,8 +341,8 @@ def test_space_declares_the_options_block():
     assert options["sampler"]["kind"] in opt.SAMPLER_KINDS
     assert options["pruner"]["kind"] in opt.PRUNER_KINDS
     assert options["warm_start"]["mode"] in opt.WARM_START_MODES
-    assert set(options["shared_data"]) == {"tokenized_cache", "embedding_cache",
-                                           "dev_encoding_cache"}
+    assert "shared_data" not in options        # no dead cache toggles
+    assert "dataloader_workers" not in options["resources"]
 
 
 def test_validate_space_rejects_bad_option_values():
@@ -283,16 +365,6 @@ def test_threads_per_worker_defaults_every_blas_pool():
         set_num_threads=lambda n: recorded.update(t=n),
         cuda=SimpleNamespace(is_available=lambda: False)))
     assert recorded == {"t": 1}
-
-
-def test_core_allocator_regimes_match_optuna_guidance():
-    allocator = opt.CoreAllocator(threads_per_worker=1)
-    many = allocator.regime(16)
-    assert many == {"regime": "many_small_trials", "n_workers": 16,
-                    "threads_per_worker": 1}
-    big = allocator.regime(16, big_trials=True)
-    assert big == {"regime": "big_trials", "n_workers": 1,
-                   "threads_per_worker": 16}
 
 
 def test_session_policy_processes_only_and_timeout():

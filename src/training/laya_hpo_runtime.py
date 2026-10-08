@@ -152,52 +152,96 @@ def objective_value(trial, run_fn, lease_store, champion_store,
 
 
 class FidelityReporter:
-    """Report per-epoch dev accuracy to the active Optuna trial and prune.
+    """Report the per-epoch dev metric to Optuna so ASHA/Hyperband can prune.
 
-    Wraps the perf patch's ``_dev_metrics`` (the per-epoch dev evaluation) so
-    the ASHA/Hyperband pruner sees the intermediate values it needs. Fail-soft:
-    a reporting error never fails training.
+    The REAL per-epoch dev evaluation in the staged kernel is the perf patch's
+    ``DevEvaluator.metrics`` (a staticmethod returning a ``DevReport`` with an
+    ``accuracy`` attribute). This class wraps that seam — never an invented
+    ``_dev_metrics`` name — so ``trial.report``/``should_prune`` actually fire.
+    The legacy ``_dev_metrics`` callable is still accepted for hosts that keep
+    a dict-returning hook.
+
+    Two modes:
+      * direct (slots): ``trial``/``optuna_module`` are set; each epoch reports
+        and ``should_prune`` can raise ``TrialPruned`` in-process.
+      * streaming (DDP rank): ``sink(step, value)`` is called instead; the DDP
+        controller owns the trial and reports what the rank streams.
     """
 
-    def __init__(self, trial, optuna_module, namespace):
+    # In priority order: the real kernel seam first, then the legacy hook.
+    DEV_METRICS_CANDIDATES = ("DevEvaluator.metrics", "_dev_metrics")
+
+    def __init__(self, trial, optuna_module, namespace, sink=None):
         self.trial = trial
         self.optuna = optuna_module
         self.namespace = namespace
+        self.sink = sink
         self._original = None
+        self._parent = None
+        self._attr = None
         self.step = 0
+        self.installed = False
+
+    @staticmethod
+    def _accuracy_of(result):
+        """The accuracy on a ``DevReport`` or on a legacy dict hook."""
+        if result is None:
+            return None
+        value = getattr(result, "accuracy", None)
+        if value is None and isinstance(result, dict):
+            value = result.get("accuracy")
+        return value
 
     def install(self):
-        original = _namespace_get(self.namespace, "_dev_metrics")
-        if original is None or self.trial is None or self.optuna is None:
+        if self.sink is None and (self.trial is None or self.optuna is None):
             return self
-        self._original = original
+        for path in self.DEV_METRICS_CANDIDATES:
+            parent, attr = _resolve_path(self.namespace, path)
+            if parent is None:
+                continue
+            original = _namespace_get(parent, attr)
+            if original is None:
+                continue
+            self._parent, self._attr, self._original = parent, attr, original
+            break
+        if self._original is None:
+            return self
         trial = self.trial
         optuna_module = self.optuna
         state = self
 
         def reported(*args, **kwargs):
-            result = original(*args, **kwargs)
+            result = self._original(*args, **kwargs)
             try:
-                accuracy = result.get("accuracy")
+                accuracy = state._accuracy_of(result)
                 if accuracy is not None:
-                    trial.report(float(accuracy), state.step)
-                    state.step += 1
-                    if trial.should_prune():
-                        raise optuna_module.TrialPruned(
-                            "pruned at fidelity stage " + str(state.step))
-            except optuna_module.TrialPruned:
-                raise
-            except Exception:  # noqa: BLE001,S110 - reporting is best-effort
-                pass
+                    if state.sink is not None:
+                        state.sink(state.step, float(accuracy))
+                        state.step += 1
+                    else:
+                        trial.report(float(accuracy), state.step)
+                        state.step += 1
+                        if trial.should_prune():
+                            raise optuna_module.TrialPruned(
+                                "pruned at fidelity stage " + str(state.step))
+            except Exception as error:
+                if optuna_module is not None and isinstance(
+                        error, optuna_module.TrialPruned):
+                    raise
+                # reporting is best-effort; a real training error still escapes
             return result
 
-        _namespace_set(self.namespace, "_dev_metrics", reported)
+        _namespace_set(self._parent, self._attr, reported)
+        self.installed = True
         return self
 
     def uninstall(self):
         if self._original is not None:
-            _namespace_set(self.namespace, "_dev_metrics", self._original)
+            _namespace_set(self._parent, self._attr, self._original)
             self._original = None
+            self._parent = None
+            self._attr = None
+            self.installed = False
 
     def __enter__(self):
         return self.install()
@@ -210,8 +254,8 @@ class FidelityReporter:
 # ── per-trial torch.profiler harness (fail-soft, bounded) ──────────────────
 # The major phases of a trial, annotated with torch.profiler.record_function.
 # The remote kernel monkeypatches the phase callables it can reach (the laya
-# train functions, the perf-patch helpers in the kernel namespace, and the
-# optimizer instance handed back by `_make_optimizer`) so the annotations land
+# train functions, the perf-patch's DevEvaluator.metrics, and the optimizer
+# instance handed back by TrainingOptimizer.make) so the annotations land
 # WITHOUT editing laya or cli.laya_lane's perf patch.
 PHASE_ENCODE = "data.encode"
 PHASE_FORWARD = "forward"
@@ -263,6 +307,26 @@ def _namespace_set(namespace, attr, value):
         setattr(namespace, attr, value)
 
 
+def _resolve_path(namespace, path):
+    """Resolve a dotted attribute path to ``(parent, attr)`` or ``(None, None)``.
+
+    The first segment is looked up on ``namespace`` (a dict or a module-like
+    object); the rest are ordinary attributes. This lets a hook target the REAL
+    kernel seam (e.g. ``DevEvaluator.metrics`` on the injected perf patch)
+    without the pure runtime importing torch/laya.
+    """
+    parts = str(path).split(".")
+    parent = namespace
+    for part in parts[:-1]:
+        parent = _namespace_get(parent, part)
+        if parent is None:
+            return None, None
+    attr = parts[-1]
+    if _namespace_get(parent, attr) is None:
+        return None, None
+    return parent, attr
+
+
 def _wrapped_phase(fn, record_function, name, on_call=None):
     """Wrap one callable in a record_function annotation (fail-soft caller)."""
     def wrapper(*args, **kwargs):
@@ -277,7 +341,8 @@ def _wrapped_phase(fn, record_function, name, on_call=None):
 
 
 def _wrapped_optimizer_factory(fn, record_function, name, on_call=None):
-    """Wrap `_make_optimizer` so the RETURNED optimizer's step() is annotated.
+    """Wrap `TrainingOptimizer.make` so the RETURNED optimizer's step() is
+    annotated (and the bounded schedule advances once per optimizer step).
 
     Optimizer subclasses override `step`, so patching a base class would miss
     them; patching the bound instance (AdamW/LAMB/Adafactor all allow it) is the
@@ -312,26 +377,39 @@ def install_phase_hooks(*, torch_module, record_function, laya_train, namespace,
     """
     restores = []
 
+    def patch_path(root, candidates, name, on_call=None, factory=False):
+        """Patch the first resolvable dotted candidate on ``root``."""
+        for path in candidates:
+            target, attr = _resolve_path(root, path)
+            if target is None:
+                continue
+            original = _namespace_get(target, attr)
+            wrapped = (_wrapped_optimizer_factory(
+                original, record_function, name, on_call) if factory else
+                _wrapped_phase(original, record_function, name, on_call))
+            _namespace_set(target, attr, wrapped)
+            restores.append((target, attr, original))
+            return True
+        return False
+
     def patch(target, attr, name, on_call=None, factory=False):
-        original = _namespace_get(target, attr)
-        if original is None:
-            return
-        wrapped = (_wrapped_optimizer_factory(
-            original, record_function, name, on_call) if factory else
-            _wrapped_phase(original, record_function, name, on_call))
-        _namespace_set(target, attr, wrapped)
-        restores.append((target, attr, original))
+        return patch_path(target, (attr,), name, on_call, factory)
 
     try:
         patch(laya_train, "encode_item", PHASE_ENCODE)
         patch(laya_train, "soft_ce_loss", PHASE_LOSS)
         patch(laya_train, "rlcd_loss", PHASE_LOSS)
         patch(laya_train, "fit_temperature_map", PHASE_CALIBRATION)
-        patch(namespace, "_forward_dtype", PHASE_FORWARD)
-        patch(namespace, "_dev_metrics", PHASE_DEV_EVAL)
-        patch(namespace, "_save_control_checkpoint", PHASE_CHECKPOINT_SAVE)
-        patch(namespace, "_make_optimizer", PHASE_OPTIMIZER_STEP,
-              on_optimizer_step, factory=True)
+        # REAL kernel seams: the perf patch's DevEvaluator.metrics and
+        # TrainingOptimizer.make. The old `_forward_dtype`,
+        # `_save_control_checkpoint` and `_make_optimizer` names never existed
+        # in the injected sources, so those annotations silently vanished and
+        # `TrialProfiler.step()` was never driven (empty trace). Prefer the real
+        # seams, keep the legacy names as a fallback for older stages.
+        patch_path(namespace, ("DevEvaluator.metrics", "_dev_metrics"),
+                   PHASE_DEV_EVAL)
+        patch_path(namespace, ("TrainingOptimizer.make", "_make_optimizer"),
+                   PHASE_OPTIMIZER_STEP, on_optimizer_step, factory=True)
         if torch_module is not None:
             patch(torch_module.Tensor, "backward", PHASE_BACKWARD)
     except BaseException:
