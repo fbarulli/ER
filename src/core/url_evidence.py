@@ -286,7 +286,7 @@ def _short_code_pattern(letters: int) -> re.Pattern:
     return re.compile(rf"^(?:[a-z]{{1,{letters}}}\d+|\d+[a-z]{{1,{letters}}})$")
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=262144)
 def _is_noise(token: str) -> bool:
     """True when ``token`` is storefront scaffolding rather than product text.
 
@@ -347,7 +347,19 @@ def _is_noise(token: str) -> bool:
     return False
 
 
-def _has_unit_suffix(token: str, spec) -> bool:
+def _has_unit_suffix(token: str, spec=None) -> bool:
+    """True when ``token`` is a SIZE token: a declared unit, with a quantity.
+
+    Memoized on ``token`` alone (PERF opt-url-evidence attempt 3): the unit
+    table is fixed at import and ``spec`` is accepted for API compatibility
+    but never consulted by the body.  The slug vocabulary recurs across rows
+    (162k calls over the lane cohort), so the repeat rate is high.
+    """
+    return _has_unit_suffix_cached(token)
+
+
+@lru_cache(maxsize=262144)
+def _has_unit_suffix_cached(token: str) -> bool:
     """True when ``token`` is a SIZE token: a declared unit, with a quantity.
 
     Recognises the three shapes that actually appear in listing slugs:
@@ -383,7 +395,7 @@ def _has_unit_suffix(token: str, spec) -> bool:
         if len(parts) > 1 and all(
             part.isdigit()
             or _NUMERIC_FULL.fullmatch(part) is not None
-            or _has_unit_suffix(part, spec)
+            or _has_unit_suffix_cached(part)
             for part in parts
         ):
             return True
