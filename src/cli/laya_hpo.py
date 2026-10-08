@@ -584,6 +584,12 @@ def ensure_optuna_url():
         raise SystemExit(
             "[laya-hpo] OPTUNA_STORAGE_URL is missing; the shared PostgreSQL "
             "Optuna study cannot be reached. Re-stage with the secret set.")
+    # SQLAlchemy's bare postgresql:// defaults to the psycopg2 driver; the
+    # session ships psycopg3 (psycopg[binary]), so pin the driver explicitly
+    # for BOTH Optuna's RDBStorage and the fencing/champion engines.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+        os.environ["OPTUNA_STORAGE_URL"] = url
     return url
 
 
@@ -830,13 +836,18 @@ def main():
         processes.append(subprocess.Popen([sys.executable, script], env=env))
     codes = [process.wait() for process in processes]
     log("workers exited: " + str(codes))
-    write_session_receipt()
+    receipt = write_session_receipt()
+    # Stage ONLY the champion checkpoint (the per-trial checkpoints would make
+    # the archive enormous); the receipt is the decision trail.
     WORKING.mkdir(parents=True, exist_ok=True)
     with tarfile.open(WORKING / "laya_hpo.tar.gz", "w:gz",
                       compresslevel=1) as tar:
-        for item in sorted(WORKING.iterdir()):
-            if item.name not in ("laya_hpo.tar.gz", "base_model"):
-                tar.add(item, arcname=item.name)
+        tar.add(WORKING / "laya-hpo.receipt.json",
+                arcname="laya-hpo.receipt.json")
+        champion = ((receipt.get("best") or {}).get("checkpoint") or "")
+        if champion and Path(champion).is_dir():
+            tar.add(champion, arcname="champion")
+            log("staged champion checkpoint " + champion)
     log("staged laya_hpo.tar.gz + receipt in /kaggle/working")
     if any(code != 0 for code in codes):
         raise SystemExit("laya HPO worker failure: exit codes " + str(codes))
