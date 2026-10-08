@@ -24,6 +24,9 @@ Contract + evidence: tests/test_laya_lane.py (offline, no network).
 from __future__ import annotations
 
 import argparse
+import ast
+import csv
+import hashlib
 import json
 import os
 import re
@@ -31,10 +34,14 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from collections import Counter
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+_PARIS = ZoneInfo("Europe/Paris")  # build once, not per log line
 
 from core.bundle import Bundle, BundleRole
 from core.common import TRAIN_ROOT, training_cfg
@@ -424,16 +431,15 @@ def corpus_skip_census(report: dict) -> dict[str, int]:
     return {str(reason): int(count) for reason, count in skipped.items()}
 
 
-def abstention_thresholds(mapping: dict | None) -> dict[str, float]:
-    """Validate a fitted ``abstention_thresholds`` map.
-
-    Keyed by ``temp_bucket`` plus the runtime ``default`` sentinel, so a scalar
-    ``min_confidence`` cannot represent it.
-    """
+@lru_cache(maxsize=1)
+def _threshold_adapter():
     from pydantic import TypeAdapter
 
-    return dict(TypeAdapter(dict[MinConfidenceKey, Share]).validate_python(
-        mapping or {}))
+    return TypeAdapter(dict[MinConfidenceKey, Share])
+
+
+def abstention_thresholds(mapping: dict | None) -> dict[str, float]:
+    return dict(_threshold_adapter().validate_python(mapping or {}))
 
 
 # The two shapes the finetune note uses to name the train/eval overlap:
@@ -844,7 +850,7 @@ def _stamp() -> str:
     phrasing in the relaunch brief predates that convention.
     """
     return (f"[laya-lane "
-            f"{datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+            f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}]")
 
 
 def _log_lane(line: str) -> None:
@@ -857,7 +863,7 @@ def _log_lane(line: str) -> None:
     never allowed to mask the operation's own outcome.
     """
     global _LANE_LOG_STARTED
-    stamp = f"{datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}"
+    stamp = f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}"
     print(f"[laya-lane {stamp}] {line}", flush=True)
     try:
         log_dir = lane_logs_dir()
@@ -943,6 +949,57 @@ def _metric_expectation(path: Path, columns: list[str]) -> dict[str, Any]:
     }
 
 
+def _census_csv(path: Path, wanted_columns: tuple[str, ...],
+                label_column: str = "true_label") -> dict[str, Any]:
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"decision input not found: {path}")
+    digest = hashlib.sha256()
+    labels: Counter = Counter()
+    with path.open("rb") as handle:
+        def lines():
+            for raw in handle:
+                digest.update(raw)
+                yield raw.decode("utf-8")
+
+        reader = csv.reader(lines())
+        header = next(reader, None)
+        if header is None:
+            raise ValueError(f"decision input has no header row: {path}")
+        missing = [column for column in wanted_columns if column not in header]
+        if missing:
+            raise ValueError(
+                f"decision input {path.name} is missing columns {missing} "
+                f"(header: {header})")
+        label_at = header.index(label_column) if label_column in header else None
+        rows = 0
+        for record in reader:
+            rows += 1
+            if label_at is not None and record:
+                labels[record[label_at] if label_at < len(record) else ""] += 1
+    if rows == 0:
+        raise ValueError(f"decision input has no data rows: {path}")
+    expectation: dict[str, Any] = {}
+    if label_at is not None:
+        unknown = sorted(set(labels) - {"0", "1"})
+        if unknown:
+            raise ValueError(
+                f"decision input {path.name} carries true_label values "
+                f"outside {{0, 1}}: {unknown}")
+        expectation = {
+            "expected_rows": sum(labels.values()),
+            "expected_label_distribution": {
+                label: labels[label] for label in sorted(labels)},
+            "metric_expectation": {
+                "accuracy_gold": "label",
+                "f1_gold": "identity_claim-vs-true_label",
+            },
+        }
+    return {"rows": rows, "columns": list(header),
+            "sha256": digest.hexdigest(), "bytes": path.stat().st_size,
+            "expectation": expectation}
+
+
 def stage_decision_input(kind: str, *, decision_kind: str,
                          override: Path | None = None) -> dict[str, Any]:
     """Stage ONE decision CSV under results/laya_lane/<kind>/<decision>/.
@@ -960,7 +1017,7 @@ def stage_decision_input(kind: str, *, decision_kind: str,
     source = Path(override) if override else F[decision_binding(decision_kind)]
     stage = staging_dir() / kind / decision_kind
     stage.mkdir(parents=True, exist_ok=True)
-    census = _measure_csv(source, entry["wanted_columns"])
+    census = _census_csv(source, entry["wanted_columns"])
     destination = stage / source.name
     shutil.copy2(source, destination)
     receipt = {
@@ -970,7 +1027,7 @@ def stage_decision_input(kind: str, *, decision_kind: str,
         "rows": census["rows"], "columns": census["columns"],
         "sha256": census["sha256"], "bytes": census["bytes"],
         "description": entry["description"],
-        **_metric_expectation(source, census["columns"]),
+        **census["expectation"],
     }
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     _log_lane(f"staged decision input [{kind}/{decision_kind}] "
@@ -1105,49 +1162,42 @@ laya_runtime_preflight()
 
 
 # ── kernel / notebook payload composition ──────────────────────────────────
-def _kernel_script_gate(script: str) -> None:
-    """Staging-time AST gate (kaggle_lane._kernel_script_gate mirror):
-    never stage an unparseable payload or one that references an undeclared
-    UPPER_CASE template constant (the v4 NameError error class)."""
-    import ast
+@lru_cache(maxsize=8)
+def _parse(script: str) -> ast.Module:
+    return ast.parse(script)
 
-    parsed = ast.parse(script)
-    defined = {node.id for stmt in ast.walk(parsed)
-               if isinstance(stmt, ast.Assign)
-               for node in stmt.targets if isinstance(node, ast.Name)}
-    undeclared = {expr.id for expr in ast.walk(parsed)
-                  if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load)
-                  and expr.id.isupper() and expr.id not in defined}
+
+def _kernel_script_gate(script: str) -> None:
+    defined: set[str] = set()
+    loaded: set[str] = set()
+    for node in ast.walk(_parse(script)):
+        if isinstance(node, ast.Assign):
+            defined.update(t.id for t in node.targets
+                           if isinstance(t, ast.Name))
+        elif (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+              and node.id.isupper()):
+            loaded.add(node.id)
+    undeclared = loaded - defined
     if undeclared:
         raise ValueError(f"staged kernel uses undeclared constants: "
                          f"{sorted(undeclared)}; regenerate the template")
 
 
 def _module_scope_gate(script: str) -> None:
-    """Post-substitution module-scope AST scan (regression pin for the
-    BUG-1 NameError class: a template substitution emitting an undefined
-    TOP-LEVEL load — e.g. `_runtime_root = Path(root)` — can never stage
-    again). Every name Loaded at module scope (compound statements
-    recurse; function/class bodies are their own scopes and skipped) must
-    be a builtin, an import binding, a def/class name, or a bound target.
-    Raise loud (never a silent payload) BEFORE the atomic writes.
-    """
-    import ast
     import builtins
 
-    compile(script, "<laya-payload>", "exec")
-    tree = ast.parse(script)
+    tree = _parse(script)  # shared with _kernel_script_gate (cache hit)
+    compile(tree, "<laya-payload>", "exec")
     bound = set(dir(builtins))
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
                              ast.ClassDef)):
             bound.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                if isinstance(node, ast.Import):
-                    bound.add(alias.asname or alias.name.split(".")[0])
-                elif alias.name != "*":
-                    bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            bound.update(a.asname or a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            bound.update(a.asname or a.name for a in node.names
+                         if a.name != "*")
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             bound.add(node.id)
     loaded = {node.id
@@ -1235,7 +1285,7 @@ def log(line):
 def pip_upgrade_laya():
     """laya installs over pip; torch must already be 2.14 cu13x."""
     command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
-               LAYA_PACKAGE]
+               "--disable-pip-version-check", LAYA_PACKAGE]
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, check=True)
 
@@ -1294,8 +1344,7 @@ def main():
     WORKING.mkdir(parents=True, exist_ok=True)
     out = WORKING / (DECISION_KIND + ".decisions.jsonl")
     with out.open("w", encoding="utf-8") as handle:
-        for item in results:
-            handle.write(json.dumps(item) + "\\n")
+        handle.write("".join(json.dumps(item) + "\\n" for item in results))
     log("wrote " + str(out) + " (" + str(len(results)) + " decisions)")
     receipt = {
         "gpu_kind": DECISION_KIND,
@@ -1312,7 +1361,8 @@ def main():
     }
     (WORKING / "laya_decision.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_decision.tar.gz", "w:gz") as tar:
+    with tarfile.open(WORKING / "laya_decision.tar.gz", "w:gz",
+                      compresslevel=1) as tar:
         for item in sorted(WORKING.iterdir()):
             if item.name != "laya_decision.tar.gz":
                 tar.add(item, arcname=item.name)
@@ -1371,7 +1421,8 @@ def resolve_input(name):
 
 def main():
     subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                    "--no-input", LAYA_PACKAGE], check=True)
+                    "--no-input", "--disable-pip-version-check",
+                    LAYA_PACKAGE], check=True)
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
     questions_path = resolve_input(QUESTION_SCHEMA_FILE)
     questions = json.loads(questions_path.read_text())["questions"]
@@ -1554,7 +1605,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             "params": [p for n, p in model.named_parameters()
                        if n.startswith("encoder.") and p.requires_grad],
             "lr": config.encoder_lr})
-    optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay)
+    optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay,
+                                 fused=(device.type == "cuda"))
     steps_per_epoch = math.ceil(len(items) / config.micro_batch)
     updates = max(1, math.ceil(steps_per_epoch / config.grad_accum)
                   * config.epochs)
@@ -1658,45 +1710,30 @@ def apply_perf_patch():
 
 
 def start_gpu_sampler():
-    # 1 Hz nvidia-smi sampler -> /kaggle/working/gpu_usage.log (rides the
-    # fetch-back tar). No-op when the flag is off, nvidia-smi is absent, or
-    # the box is CPU-only.
     if not perf_patch_enabled():
         return None
     if shutil.which("nvidia-smi") is None:
         log("gpu sampler: nvidia-smi absent; skipping")
         return None
     path = WORKING / "gpu_usage.log"
-    stop = threading.Event()
-    query = ["nvidia-smi",
-             "--query-gpu=utilization.gpu,memory.used,memory.total",
-             "--format=csv,noheader"]
-
-    def _loop():
-        while not stop.is_set():
-            try:
-                proc = subprocess.run(query, capture_output=True, text=True,
-                                      timeout=5)
-                if proc.returncode == 0 and proc.stdout.strip():
-                    line = proc.stdout.strip().splitlines()[0]
-                    with path.open("a", encoding="utf-8") as handle:
-                        handle.write(line + "\\n")
-            except (OSError, subprocess.SubprocessError):
-                pass
-            stop.wait(1.0)
-
-    thread = threading.Thread(target=_loop, name="gpu-sampler", daemon=True)
-    thread.start()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        ["nvidia-smi",
+         "--query-gpu=utilization.gpu,memory.used,memory.total",
+         "--format=csv,noheader", "-l", "1", "-f", str(path)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     log("gpu sampler: 1 Hz -> " + str(path))
-    return stop, thread
+    return proc
 
 
-def stop_gpu_sampler(handle):
-    if not handle:
+def stop_gpu_sampler(proc):
+    if not proc:
         return
-    stop, thread = handle
-    stop.set()
-    thread.join(timeout=5)
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def summarize_gpu_usage(path):
@@ -1755,7 +1792,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1791,7 +1827,7 @@ def log(line):
 def pip_install_laya():
     """laya installs over pip, pinned; torch is already on the session."""
     command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
-               LAYA_PACKAGE]
+               "--disable-pip-version-check", LAYA_PACKAGE]
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, check=True)
 
@@ -1841,7 +1877,8 @@ def open_zstd(path):
     except ImportError:
         pass
     subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                    "--no-input", "zstandard"], check=True)
+                    "--no-input", "--disable-pip-version-check",
+                    "zstandard"], check=True)
     import zstandard
     return zstandard.ZstdDecompressor().stream_reader(open(path, "rb"))
 
@@ -1899,7 +1936,11 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
 
 
 def sha256_of(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def evaluate_held_out(test_path, checkpoint, device):
@@ -1944,6 +1985,15 @@ def evaluate_held_out(test_path, checkpoint, device):
 
 
 def main():
+    # Self-report the container session identity so the host-side log follower
+    # can persist logs/kaggle/<kernel>.session_id for the verified in-place
+    # stop. The log-stream URL is generic (carries no session id), so this is
+    # the only reliable source; KAGGLE_KERNEL_RUN_ID is the run/session id
+    # Kaggle injects into the kernel environment.
+    _session = {key: os.environ.get(key, "") for key in (
+        "KAGGLE_KERNEL_RUN_ID", "KAGGLE_SESSION_ID", "HOSTNAME")}
+    print("[kaggle-session] " + " ".join(
+        key + "=" + str(value) for key, value in _session.items()), flush=True)
     pip_install_laya()
     device = pick_device()
     train = resolve_input(TRAIN_JSONL)
@@ -1964,6 +2014,7 @@ def main():
     receipt = {
         "gpu_kind": "finetune",
         "gpu": "T4 (single)",
+        "session_env": _session,
         "run_tag": RUN_TAG,
         "laya_package": LAYA_PACKAGE,
         "base_model": str(base_model),
@@ -2005,9 +2056,10 @@ def main():
             log("held-out evaluation FAILED: " + receipt["held_out_error"])
     (WORKING / "laya_finetune.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz") as tar:
+    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
+                      compresslevel=1) as tar:
         for item in sorted(WORKING.iterdir()):
-            if item.name != "laya_finetune.tar.gz":
+            if item.name not in ("laya_finetune.tar.gz", "base_model"):
                 tar.add(item, arcname=item.name)
     log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
 
@@ -2069,7 +2121,7 @@ def log(line):
 def pip_install_laya():
     """laya installs over pip, pinned; torch is already on the session."""
     command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
-               LAYA_PACKAGE]
+               "--disable-pip-version-check", LAYA_PACKAGE]
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, check=True)
 
@@ -2117,7 +2169,11 @@ def resolve_checkpoint():
 
 
 def sha256_of(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def fit_eval_calibration(laya_train, records):
@@ -2241,7 +2297,8 @@ def main():
     }
     (WORKING / "laya_finetune-eval.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_finetune_eval.tar.gz", "w:gz") as tar:
+    with tarfile.open(WORKING / "laya_finetune_eval.tar.gz", "w:gz",
+                      compresslevel=1) as tar:
         for item in sorted(WORKING.iterdir()):
             if item.name != "laya_finetune_eval.tar.gz":
                 tar.add(item, arcname=item.name)
@@ -3147,36 +3204,45 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
                            f"under {stage} (slug {slug})")
     receipt_name = f"laya_{decision_kind}.receipt.json"
     reports: dict[str, Any] = {}
-    with tarfile.open(archives[0], "r:*") as tar:
-        members = tar.getnames()
-        if receipt_name not in members:
-            raise RuntimeError(
-                f"fetched archive {archives[0].name} carries no "
-                f"{receipt_name}; the kernel receipt contract failed")
-        payload = json.loads(tar.extractfile(receipt_name)
-                             .read().decode())
-        # Extract the JSON payloads the kernel wrote (eval_report.json and
-        # siblings) into the fetch dir so the report path is reproducible
-        # offline: the returned plan carries them keyed by member name. The
-        # per-row decision kernel writes ``<kind>.decisions.jsonl``, which is
-        # NOT a JSON member: it is read here because the record grain has no
-        # other production source.
-        decision_rows: list[dict] = []
-        for member in members:
-            name = Path(member).name
-            if name == receipt_name:
+    # ONE streaming pass: `r|*` never seeks, so the receipt, every JSON report
+    # member and the per-row `<kind>.decisions.jsonl` member are consumed in a
+    # single forward walk. The JSON payloads the kernel wrote (eval_report.json
+    # and siblings) land in the fetch dir so the report path is reproducible
+    # offline: the returned plan carries them keyed by member name. The per-row
+    # decision kernel writes ``<kind>.decisions.jsonl``, which is NOT a JSON
+    # member: it is read here because the record grain has no other production
+    # source. Bodies are buffered so a missing receipt still fails loud BEFORE
+    # any report lands (the pre-streaming order).
+    members: list[str] = []
+    decision_rows: list[dict] = []
+    payload: Any = None
+    pending: list[tuple[str, bytes]] = []
+    with tarfile.open(archives[0], "r|*") as tar:
+        for member in tar:
+            members.append(member.name)
+            if member.name == receipt_name:
+                payload = json.loads(tar.extractfile(member).read().decode())
                 continue
+            if not member.isfile():
+                continue
+            name = Path(member.name).name
             if name.endswith(".json"):
                 body = tar.extractfile(member).read()
-                (stage / name).write_bytes(body)
+                pending.append((name, body))
                 try:
                     reports[name] = json.loads(body.decode())
                 except (ValueError, UnicodeDecodeError):
                     continue
             elif name == f"{decision_kind}{_DECISION_ROWS_SUFFIX}":
                 body = tar.extractfile(member).read()
-                (stage / name).write_bytes(body)
+                pending.append((name, body))
                 decision_rows = read_decision_rows(body)
+    if payload is None:
+        raise RuntimeError(
+            f"fetched archive {archives[0].name} carries no "
+            f"{receipt_name}; the kernel receipt contract failed")
+    for name, body in pending:
+        (stage / name).write_bytes(body)
     plan.update({"archive": str(archives[0]), "members": members,
                  "receipt": payload, "reports": reports})
     if decision_rows:

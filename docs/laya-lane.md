@@ -150,6 +150,35 @@ This bakes the old two-step flow (fine-tune, then a separate
 `--decision finetune-eval`) into every run; the eval-only kind still exists for
 scoring an arbitrary fetched checkpoint against an arbitrary split.
 
+## Holdout + comparison (does laya compete?)
+
+`scripts/laya_holdout.py` builds the honest evaluation holdout — component-indexed
+(positive-pair union-find over `training.folds.normalize_gtin`) and drawn from
+real artifacts only:
+
+- `data/final_validation.csv` — P0 (`component_id`/`true_label`/`endpoint_in_train`)
+- `data/track_setup/listing_pairs.csv` — the real cross-retailer pairs
+- `data/gate_results.csv` — `proceed`/`fallback` as **label-less** difficulty
+  strata (`gate_hard_no` is excluded: pipeline-verified mass, not truth)
+
+Output `data/laya/holdout.csv` (gitignored; regenerate with the script) plus the
+committed census `data/laya/holdout.receipt.json`. Current: 1,758 rows /
+1,042 components; 604 labelled (568 pos / 36 neg); `gate_proceed` 22,
+`gate_fallback` 1,132, `p0_disjoint` 9.
+
+`scripts/laya_compare.py` joins each model's `gtin1,gtin2,score` predictions to
+the holdout and reports precision/recall/F1/PR-AUC with **component-clustered
+bootstrap CIs** (`src/core/holdout_eval.py`), overall and per gate-difficulty
+stratum. Gate verdicts are label-less, so they are reported as score summaries,
+never scored as truth:
+
+```bash
+python scripts/laya_compare.py \
+  --predictions laya=results/laya_lane/laya_holdout_scores.csv \
+  --predictions tracks=results/laya_lane/tracks_holdout_scores.csv \
+  --out results/laya_lane/compare.json
+```
+
 ## Config (SSOT: `config/training.yaml` -> `laya:`)
 
 `staging_dir` (results/laya_lane), `question_schema`
