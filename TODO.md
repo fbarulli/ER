@@ -2,7 +2,7 @@
 
 Status: `[ ]` open · `[~]` in progress · `[x]` done.
 Added 2026-10-08; refreshed after the consolidation audit (commits `5bc48c9`,
-`46811e9`). Anchors are approximate.
+`46811e9`, `aa899cc`, `e5bf511`). Anchors are approximate.
 
 ## Bundle refactor (artifact + process)
 - [~] `core/bundle.py` — `Bundle(role∈{inputs,recovery,result})` + `BundlePipeline` **class written**; single boundary verify via `verify_archive_digest`; accessors `checkpoint/checkpoints/track_inventory/track_complete/ablation_templates/ablation_skipped`; public `bundle_spec()` added (lanes no longer import the private `_bundle_spec`).
@@ -34,9 +34,9 @@ Added 2026-10-08; refreshed after the consolidation audit (commits `5bc48c9`,
 
 ## Prepared-layout SSOT (post-audit)
 - [x] `core.common.prepared_setup_layout()` — the single layout accessor; all 21 `_setup_layout()` shims delegate to it.
-- [~] `PreparationGraphSetupSpec.input_manifest`/`.listings` declared; the ~30 call-site literals (`input_manifest.json`, `listings.json`) still spell the names and should be repointed at the spec.
+- [x] `PreparationGraphSetupSpec.input_manifest`/`.listings` declared; every producer/consumer filesystem literal repointed at the spec (producer first) — no `input_manifest.json`/`listings.json` paths remain in code.
 - [x] Trace batch caps share `core.tracing.TRACE_BATCH_ROWS` / `TRACE_MAX_BATCH_ROWS` (per-stage graph sizes that genuinely differ stay local).
-- [~] The per-module `_spec()` wrapper (13 copies in `model_tracks/`) re-wraps `core.bundle.bundle_spec()`; collapse to direct calls.
+- [x] The per-module `_spec()` wrapper (11 copies in `model_tracks/`) collapsed to direct `core.bundle.bundle_spec()` calls.
 
 ## Eval balance / data coverage
 - [x] `config/model_tracks.yaml` — `report_test: true`.
