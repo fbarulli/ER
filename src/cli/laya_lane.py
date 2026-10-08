@@ -115,6 +115,13 @@ FINETUNE_EVAL_CODE_FILE = "laya_finetune_eval.py"
 FINETUNE_EVAL_REPORT_FILE = "eval_report.json"
 FINETUNE_EVAL_RECEIPT_FILE = "laya_finetune-eval.receipt.json"
 
+# ── fine-tune CKPT kind: publish the recovered checkpoint as a dataset ──────
+# The fine-tune kernel strands its checkpoint inside /kaggle/working (the JOB 1
+# regression). The recovery surface stages a locally recovered checkpoint dir
+# as the `finetune_ckpt_dataset` payload, so the eval/holdout kernels can
+# attach it instead of re-training.
+FINETUNE_CKPT_DECISION = "finetune-ckpt"
+
 # ── holdout-eval kind: component-disjoint verification, run on Kaggle ───────
 # Scores a fine-tuned checkpoint on the staged holdout (real pairs + P0 + gate
 # strata) in-session and writes the clustered, gate-stratified report, so the
@@ -3667,6 +3674,8 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
     corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION)
     if decision_kind == HOLDOUT_EVAL_DECISION:
         slug, key = _spec().holdout_dataset_slug, "holdout_dataset_slug"
+    elif decision_kind == FINETUNE_CKPT_DECISION:
+        slug, key = _spec().finetune_ckpt_dataset, "finetune_ckpt_dataset"
     else:
         slug = (_spec().finetune_dataset_slug if corpus_kind
                 else _spec().dataset_slug)
@@ -3914,6 +3923,58 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
     atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
     _log_lane(f"staged finetune dataset payload {dataset_slug} "
               f"files={files} -> {stage}")
+    return receipt
+
+
+def stage_finetune_ckpt_dataset_payload(*, dataset_slug: str,
+                                        checkpoint_dir: Path,
+                                        member: str = "checkpoint") -> dict[str, Any]:
+    """Stage a RECOVERED fine-tuned checkpoint as a kaggle dataset payload.
+
+    The fine-tune kernel strands its checkpoint inside `/kaggle/working`; the
+    recovery surface copies a locally recovered checkpoint dir (the ONE
+    `model.safetensors` + `encoder/` + `tokenizer/` + `rl_agent_config.json`)
+    under `dataset_payload/<member>/`, so the eval/holdout kernels' `rglob`
+    finds it where `finetune_ckpt_dir` expects. Fail-loud: an empty/unreadable
+    source or a missing `rl_agent_config.json` never stages a silent stub.
+    """
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.finetune_ckpt_dataset is unset; name the checkpoint "
+            "dataset (owner/slug) before staging")
+    checkpoint_dir = Path(checkpoint_dir)
+    if not (checkpoint_dir / "rl_agent_config.json").is_file():
+        raise FileNotFoundError(
+            f"checkpoint source {checkpoint_dir} carries no "
+            "rl_agent_config.json (recover the checkpoint dir first)")
+    stage = staging_dir() / "kaggle" / FINETUNE_CKPT_DECISION / DATASET_PAYLOAD_DIR
+    if stage.exists():
+        shutil.rmtree(stage)
+    target = stage / member
+    target.mkdir(parents=True)
+    files = sorted(path for path in checkpoint_dir.rglob("*") if path.is_file())
+    if not files:
+        raise FileNotFoundError(
+            f"checkpoint source {checkpoint_dir} carries no files")
+    for source in files:
+        destination = target / source.relative_to(checkpoint_dir)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    metadata = {"title": "er laya finetune ckpt", "id": dataset_slug,
+                "licenses": [{"name": "other"}]}
+    atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+    receipt = {
+        "dataset": dataset_slug,
+        "payload": str(stage),
+        "member": member,
+        "source": str(checkpoint_dir),
+        "metadata": metadata,
+        "files": {str(path.relative_to(stage)): sha256_file(path)
+                  for path in sorted(target.rglob("*")) if path.is_file()},
+    }
+    atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
+    _log_lane(f"staged finetune checkpoint payload {dataset_slug} "
+              f"member={member} files={len(files)} -> {stage}")
     return receipt
 
 
