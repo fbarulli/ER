@@ -230,3 +230,24 @@ def test_runtime_checkout_members_ask_the_one_shape_contract():
         with pytest.raises(ValueError, match='repository-relative'):
             runtime_inputs.checkout_members((refused,))
     assert 'run_1' in runtime_inputs.checkout_members(('run_1',))
+
+
+# ── the Colab checkout lists are config-owned (audit 2026-10-08) ─────────────
+# The two declared lists used to be hardcoded next to the contract; they now
+# come from config/training.yaml colab.checkout_paths. The Colab set
+# deliberately differs from kaggle.checkout_paths, which is why it got its own
+# config key instead of reusing the Kaggle lane's.
+
+def test_runtime_checkout_lists_come_from_config():
+    from cli import colab_runtime
+    from core.common import training_cfg
+
+    declared = tuple(training_cfg().colab.checkout_paths)
+    assert colab_runtime.RUNTIME_DIRECTORY_PATHS == tuple(
+        name for name in declared if name.endswith('/'))
+    assert colab_runtime.RUNTIME_REQUIRED_ROOT_FILES == tuple(
+        name for name in declared if not name.endswith('/'))
+    # The Colab set is deliberately not the Kaggle lane's checkout set.
+    assert set(name.rstrip('/') for name in declared) != \
+        set(training_cfg().kaggle.checkout_paths)
+

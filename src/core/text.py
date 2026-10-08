@@ -807,34 +807,3 @@ def attribute_field_value(cell: object, key: str) -> list[str]:
         for token in raw_value.split(",")
         if token.strip()
     ]
-
-
-# ---------------------------------------------------------------------------
-# Noise-probe patterns (used by 01c_sparsity_noise.py — probes, not extraction)
-# ---------------------------------------------------------------------------
-
-# Solid-weight units in a beverage catalog are semantic noise: a "1 kg" or
-# "10 lb" listing is a scraping/unit error or a non-beverage SKU. NOTES:
-# - "mg" is deliberately NOT here — "L-Carnitine 2000mg" is a DOSE, not net
-#   weight; including mg caused false-positive flags on supplement drinks.
-# - zero values are excluded — "0g Added Sugar" is nutrition prose, not a
-#   net weight; EU decimals like "0,5 kg" are still matched (0[.,]\d+).
-WEIGHT_UNIT_RE = re.compile(
-    r"\b(?:[1-9]\d*|0[.,]\d+)(?:[.,]\d+)?\s*"
-    r"(?:kg|kgs?|g|grams?|grammes?|lb|lbs?|pounds?|pound)\b",
-    re.IGNORECASE,
-)
-
-# MULTIPACK_RE REMOVED (audit round 2 F18, round 3): zero consumers —
-# the "single bottle > 10 L" multipack false-positive rule that used it is
-# retired with the rule above.
-
-# Raw-HTML / entity artifacts from scraping.
-NOISE_HTML_RE = re.compile(r"<[^>]+>|&nbsp;|&amp;|&quot;|&#\d+;", re.IGNORECASE)
-
-# Placeholder / dummy values that carry no product information.
-NOISE_PLACEHOLDER_RE = re.compile(
-    r"^\s*(?:n/?a|null|none|-|tbd|todo|to be updated|coming soon|"
-    r"description|not available|n\.a\.?)\s*$",
-    re.IGNORECASE,
-)

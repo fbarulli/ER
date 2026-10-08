@@ -180,11 +180,6 @@ if not os.path.exists(_FINAL_VALIDATION_CSV):
         f"{_FINAL_VALIDATION_CSV} is missing. Rebuild with "
         "`PYTHONPATH=src python -m src.training.build_final_validation`."
     )
-_final_val = pd.read_csv(
-    _FINAL_VALIDATION_CSV,
-    dtype={"gtin1": str, "gtin2": str},
-    keep_default_na=False,
-)
 if "true_label" not in df.columns:
     raise SystemExit("labeled census lost its `true_label` column")
 

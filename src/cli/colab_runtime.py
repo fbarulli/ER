@@ -165,20 +165,18 @@ def ensure_session() -> None:
 # contract -- the declared path lists, their emitted sparse patterns
 # (runtime_checkout_paths), their verifier (validate_runtime_checkout) and the
 # path-shape rule every consumer shares (is_checkout_relative_path, which the
-# lane's ColabLaneBase.checkout_relative_guard now delegates to). The Kaggle
-# lane declares its own, deliberately different list in the config SSOT
-# (config/training.yaml kaggle.checkout_paths: src/scripts/config/requirements/
-# artifacts/models, cone-mode root files via the clone); the Colab list is not
-# derivable from it (this lane needs artifacts/wheels + artifacts/evidence and
-# no requirements/artifacts/models), so unifying the two needs a
-# ``colab.checkout_paths`` config key -- reported, not invented here.
-RUNTIME_DIRECTORY_PATHS = (
-    'src/', 'config/', 'scripts/', 'artifacts/wheels/', 'artifacts/evidence/',
-)
-RUNTIME_REQUIRED_ROOT_FILES = (
-    'pyproject.toml', 'requirements.txt', 'colab_backend.py',
-    'model_tracks_package.json',
-)
+# lane's ColabLaneBase.checkout_relative_guard now delegates to). The DECLARED
+# values now come from the config SSOT (config/training.yaml
+# colab.checkout_paths), so the two lists below are derived, not spelled here.
+# The Colab list is deliberately NOT derivable from kaggle.checkout_paths (this
+# lane needs artifacts/wheels + artifacts/evidence and no
+# requirements/artifacts/models), which is why it has its own config key.
+_COLAB_CHECKOUT_PATHS = tuple(training_cfg().colab.checkout_paths)
+#: Directory entries carry a trailing slash; the rest are repo-root files.
+RUNTIME_DIRECTORY_PATHS = tuple(
+    name for name in _COLAB_CHECKOUT_PATHS if name.endswith('/'))
+RUNTIME_REQUIRED_ROOT_FILES = tuple(
+    name for name in _COLAB_CHECKOUT_PATHS if not name.endswith('/'))
 # Characters that can never appear in a repository-relative checkout path: a
 # newline/CR breaks the emitted git pathspec, a backslash escapes it, and
 # ``*?[]{}`` turned a declared path into a pattern/expansion in the old

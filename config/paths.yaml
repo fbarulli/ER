@@ -52,6 +52,39 @@ paths:
   # reference data. Results remain separate and are never inputs by default.
   training_data_dir: "data"
 
+# ── orchestration stage inventory (the trace-stage join SSOT) ───────────────
+# The preparation orchestrator names its stages one way and each child writes
+# trace rows under its own module's stage name, so a reader cannot join a
+# stage's manifest entry to its rows without a hand map. This block IS that
+# join: each KEY is an orchestration stage (in execution order) and each VALUE
+# is the trace stage name(s) its producer writes rows under; an empty list
+# marks a stage that writes NO trace rows today (a coverage gap, not a silent
+# success). `orchestration_lane_stages` names the stages the orchestrator
+# inserts only when a negative-supply run tag is requested.
+#
+# NOTE (config-SSOT audit 2026-10-08): the runtime registry still lives in
+# core/tracing.py (ORCHESTRATION_TRACE_STAGES / ORCHESTRATION_LANE_STAGES);
+# core/tracing.py is out of this task's scope, so this declaration is the
+# config home a follow-up wires the orchestrator to, kept in lockstep by
+# tests/test_config_section.py. Do not treat tracing.py as authoritative once
+# the orchestrator reads this block.
+orchestration_stages:
+  dedupe: [dedupe]
+  cross_country_pairs: [build_second04_pairs]
+  number_reference: [number_reference]
+  verify_reference: [verify_reference]
+  canonical_and_gates: [data_prep]
+  gate_census: []
+  labeled_pairs: [labeled_pairs]
+  negative_supply: [negative_supply]
+  discriminator: []
+  validation: [final_validation]
+  graph_inputs: [graph_setup, graph_prepare]
+  full_bundle: [full_bundle]
+  suite_inputs: [suite_inputs]
+  verify_handoff: [verify_handoff]
+orchestration_lane_stages: [negative_supply, discriminator]
+
 # ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
 files:
   decision_ledger: "repo:jev/sample_ledger.json"

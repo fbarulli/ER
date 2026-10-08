@@ -71,18 +71,3 @@ class PortableLayout(BaseModel):
         the file no matter what the local setup dir was named.
         """
         return str(cls.portable_clean_backup() / path.relative_to(from_local))
-
-
-def _verify_invariants() -> None:
-    """Self-test on any tree with the layout instantiated (call in tests)."""
-    layout = PortableLayout()
-    shared = layout.portable_setup()
-    assert shared.as_posix() == 'data/model_tracks/shared', shared
-    local = layout.local_clean_backup(Path('data/track_setup'))
-    assert local == Path('data/track_setup__clean_shared_inputs'), local
-    consumer = layout.consumer_clean_backup(shared)
-    assert consumer == layout.portable_clean_backup(), (consumer, layout.portable_clean_backup())
-    # ship key maps one local backup file onto the consumer's path
-    sample = local / 'pairs.csv'
-    key = layout.ship_key(sample, from_local=local)
-    assert Path(key) == consumer / 'pairs.csv', key

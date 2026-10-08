@@ -192,6 +192,10 @@ kaggle:
       bundle: bundle_cpu.py
       train: train_gpu.py
       embed: embed_gpu.py
+      # The finalize job (bundle_steps role=result, remote CPU) is a second
+      # version of the bundling CPU kernel slug; its code file and result name
+      # are config-owned here instead of lane literals.
+      finalize: finalize_cpu.py
     stop_stage: '{which}_stop'
     stop_code: cancel_stub.py
     fetch_stage: '{kind}_fetch'
@@ -207,6 +211,7 @@ kaggle:
     result_names:
       train: result_bundle
       embed: vectors
+      finalize: finalized_bundle
     failure_archive: failure.tar.zst
     failure_zip: failure.zip
     failure_manifest: failure.manifest.json
@@ -233,7 +238,11 @@ kaggle:
     dataset_metadata: dataset-metadata.json
     log_glob: "*.log"
     install_dir: "{kind}"
-    hash_suffix: ".sha256"
+    # NOTE: the archive sidecar suffix has ONE home in
+    # bundle.sha256_sidecar_suffix (see the bundle: block below). The rendered
+    # kernel LANE contract still carries a files.hash_suffix projection
+    # (TrainingConfig copies the bundle value into it), so this duplicate
+    # declaration is deleted.
   remote:
     working_dir: /kaggle/working
     input_dir: /kaggle/input
@@ -347,6 +356,22 @@ colab:
   branch: "main"
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
+  # Sparse-checkout contract for every prepared Colab runtime: the ONE home the
+  # runtime's declared directory lists + required root files read from. The
+  # Colab set deliberately differs from kaggle.checkout_paths (this lane needs
+  # artifacts/wheels + artifacts/evidence, no requirements/artifacts/models).
+  # A trailing slash marks a directory entry (emitted as a no-cone pattern);
+  # entries without one are repo-root files the VM must have.
+  checkout_paths:
+    - "src/"
+    - "config/"
+    - "scripts/"
+    - "artifacts/wheels/"
+    - "artifacts/evidence/"
+    - "pyproject.toml"
+    - "requirements.txt"
+    - "colab_backend.py"
+    - "model_tracks_package.json"
   session: "my-highram-session"
   # Full all-track launches default to GPU; the smoke script requests CPU.
   # GPU provisioning still requires the launcher's --allow-gpu flag.
@@ -1469,3 +1494,41 @@ bundle:
   ablation_request_file: "request.json"
   ablation_skip_phases: ["ablation", "attribute_ablation_export"]
   ablation_skip_status: "skipped"
+  # ── the remaining BundleSpec values, promoted from schema defaults to config
+  # (config-SSOT audit 2026-10-08): every name a sealing/verifying surface reads
+  # is now config-owned, not a code-side mirror. Values are the previous schema
+  # defaults, byte-for-byte.
+  suite_manifest_file: "suite_manifest.json"
+  result_excluded_dirs:
+    - ".dvc"
+    - ".dvc-cache"
+    - ".dvc-site-cache"
+    - ".git"
+    - ".resume"
+    - "_checkpoint_upload_staging"
+    - "wandb"
+    - "mlruns"
+    - "mps_pipe"
+    - "mps_log"
+    - "profiles"
+    - "resource_profile"
+  resume_only_filenames:
+    - "optimizer.pt"
+    - "scheduler.pt"
+    - "rng_state.pth"
+    - "training_args.bin"
+    - "scaler.pt"
+  deployment_ignored_filenames:
+    - "optimizer.pt"
+    - "scheduler.pt"
+    - "rng_state.pth"
+    - "training_args.bin"
+    - "scaler.pt"
+    - "trainer_state.json"
+  suite_config: "config/model_tracks.yaml"
+  worker_config_file: "worker.yaml"
+  prepared_inputs_dir: "local_inputs"
+  postprocess_location_local: "local CPU"
+  postprocess_location_bundle: "bundle finalize"
+  sha256_sidecar_suffix: ".sha256"
+  events_sidecar_suffix: ".events.jsonl"

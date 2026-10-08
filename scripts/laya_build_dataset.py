@@ -230,9 +230,6 @@ GATE_REASON_FAMILIES: dict[str, str] = {
     "Low raw pack confidence": "low_pack_confidence",
     "Known critical attributes compatible": "compatible",
 }
-GATE_VERDICTS = ("proceed", "hard_no", "fallback")
-DIFFICULTY_SLICES = ("all_same", "one_diff", "multi_diff", "insufficient",
-                     "single_state")
 
 
 def _field_same_label(side_one: dict[str, str], side_two: dict[str, str],

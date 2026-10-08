@@ -260,9 +260,18 @@ def test_cascade_worker_reports_both_roles_without_fusion(tmp_path, monkeypatch)
                             ranked=ranked, relevant=relevant, decisions=decisions,
                             out=out, kwargs=kwargs))
     monkeypatch.setattr(worker, '_cascade_lane', lambda setup: lane)
-    monkeypatch.setattr(worker, '_cascade_artifacts',
-                        lambda results_root, lane_: {'text_index': results / 'text__index',
-                                                     'gnn_checkpoint': results / 'gnn.json'})
+    # The real ``_cascade_artifacts`` contract has four members (see
+    # ``test_cascade_artifacts_require_text_ann_and_gnn_scorer``): the text ANN
+    # index, both trained catalog-vector exports, and the gnn scorer checkpoint.
+    # An under-specified stub here used to hide that the cascade worker records
+    # every consumed artifact.
+    artifacts = {
+        'text_index': results / 'text' / 'text__index',
+        'text_vectors': results / 'text' / 'text__vectors.npz',
+        'gnn_vectors': results / 'gnn_only' / 'gnn_only__vectors.npz',
+        'gnn_checkpoint': results / 'gnn_only' / 'gnn_only__graph_model.pt',
+    }
+    monkeypatch.setattr(worker, '_cascade_artifacts', lambda results_root, lane_: artifacts)
     monkeypatch.setattr(worker, 'load_records_from_setup', lambda setup, lane_: [])
     monkeypatch.setattr('graph_tracks.train.load_pairs', lambda path, records: {})
     monkeypatch.setattr(worker, '_cascade_roles',
@@ -277,8 +286,16 @@ def test_cascade_worker_reports_both_roles_without_fusion(tmp_path, monkeypatch)
     assert calls['ranked'] == 'RANKED'
     assert calls['decisions'] == 'DECISIONS'
     assert calls['kwargs']['track'] == 'cascade'
-    # No fused-weight vocabulary ever reaches the cascade report call.
+    # No fused-weight vocabulary ever reaches the cascade report call, and no
+    # fused text cache is part of the consumed-artifact contract.
     assert 'text_cosine_weight' not in repr(calls)
     assert 'graph_cosine_weight' not in repr(calls)
+    assert 'text_cache' not in repr(artifacts)
+    # The observed behavior is the full ordered lifecycle: inputs validated (both
+    # declared artifacts named), both roles composed, completion verified.
     phases = [a[0] for a, _ in events.emits]
-    assert 'cascade' in phases
+    assert phases == ['input_validation', 'input_validation', 'cascade', 'cascade', 'completion']
+    validated = [k for a, k in events.emits if a == ('input_validation', 'completed')]
+    assert validated == [{'text_index': str(artifacts['text_index']),
+                          'gnn_checkpoint': str(artifacts['gnn_checkpoint'])}]
+    assert [a[1] for a, _ in events.emits if a[0] == 'cascade'] == ['started', 'completed']

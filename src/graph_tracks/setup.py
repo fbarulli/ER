@@ -606,12 +606,6 @@ def _record_artifacts(
     )
 
 
-def _config_template_path(track_template: str) -> Path:
-    """A config-neighborhood template path (paths.yaml layouts)."""
-    from core.common import LAYOUTS, TRAIN_ROOT
-    return Path(TRAIN_ROOT) / str(LAYOUTS['config_dir'].template)
-
-
 def _load_setup_templates(train_root: Path) -> dict:
     """The per-track graph templates + the text track's declared contract."""
     from core.common import TRAIN_ROOT

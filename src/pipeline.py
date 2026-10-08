@@ -3191,8 +3191,6 @@ _NUTRIENT_RE = re.compile(
 )
 # ── product/retailer codes: 1-3 letters + 3+ digits (l9044, gp0027, u0026) ─
 _CODE_RE = re.compile(r"^[a-z]{0,3}\d{3,}[a-z]{0,3}$", re.IGNORECASE)
-# ── decade/short decade tails: 50s, 3h, 6m, 4er, 1c, 10liters, 12shots ──────
-_NUM_WORD_RE = re.compile(r"^\d+(?:\.\d+)?[a-z]{0,4}$", re.IGNORECASE)
 
 
 def _classify(tok: str) -> str:
@@ -3647,17 +3645,6 @@ class CanonicalCardPool:
 
 
 _CARD_POOL = CanonicalCardPool()
-
-
-def _canonical_worker_state_bind(global_idf: 'NgramIDF',
-                                 brand_idf_map: dict[str, 'NgramIDF']) -> None:
-    """Publish the per-run IDF state to the worker pool (fork COW share)."""
-    _CARD_POOL.bind(global_idf, brand_idf_map)
-
-
-def _canonical_record_task(task: tuple) -> dict:
-    """One canonical record, computed from pre-assembled group payload only."""
-    return _CARD_POOL.record_for_task(task)
 
 
 def _canonical_records_df(grouped: pd.DataFrame, global_idf: 'NgramIDF',

@@ -30,6 +30,22 @@ INVENTORY = TypeAdapter(dict[str, Digest])
 _DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
 
 
+def inventory_key_home() -> str:
+    """The ONE sealed-archive inventory key: config's ``bundle.files_key``.
+
+    Every archive writer/verifier below resolves its default ``inventory_key``
+    through here instead of the old hardcoded ``'files'``, so the key is
+    config-owned: changing ``bundle.files_key`` steers both the manifest a seal
+    writes and the key a boundary verify reads, and the two can never disagree.
+    ``core.common`` is imported lazily (it imports the config that declares the
+    value, so a module-level import would be circular); a caller that needs a
+    different key (a legacy manifest shape) still passes ``inventory_key``
+    explicitly, which wins.
+    """
+    from core.common import training_cfg
+    return training_cfg().bundle.files_key
+
+
 def raw_file_digest(path: Path | str) -> str:
     """The ONE uncached whole-file SHA256 implementation.
 
@@ -246,16 +262,18 @@ def _profile_sidecar(output: Path, timings: dict[str, float],
 @timed
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
-                  inventory_key: str = 'files', profile: bool = False,
+                  inventory_key: str | None = None, profile: bool = False,
                   digest=None) -> Path:
     """Publish one SHA256-inventoried archive (staging → verify → atomic link).
 
     ``digest`` (a ``hashlib``-style object) receives the sealed archive's
     whole-file SHA256 during the write, so the transport token costs no extra
-    read of the published bytes.
+    read of the published bytes. ``inventory_key`` defaults to the ONE config
+    home (``bundle.files_key``, see :func:`inventory_key_home`).
     """
     if output.exists():
         raise FileExistsError(output)
+    inventory_key = inventory_key or inventory_key_home()
     inline = inline or {}
     if set(files) & set(inline) or manifest_name in files or manifest_name in inline:
         raise ValueError('archive member collision')
@@ -345,8 +363,9 @@ def _check_inventory(metadata, actual, manifest_name, inventory_key):
     return metadata
 
 
-def verify_open_archive(archive, manifest_name: str, *, inventory_key: str = 'files') -> dict[str, Any]:
+def verify_open_archive(archive, manifest_name: str, *, inventory_key: str | None = None) -> dict[str, Any]:
     """Verify a caller-owned reader so subsequent reads need no second inflation."""
+    inventory_key = inventory_key or inventory_key_home()
     names = archive.namelist()
     if len(set(names)) != len(names):
         raise ValueError('duplicate archive members')
@@ -364,13 +383,14 @@ def verify_open_archive(archive, manifest_name: str, *, inventory_key: str = 'fi
 
 
 @contextmanager
-def verified_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files'):
+def verified_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None):
     """Keep the verified reader open for extraction or configuration inspection."""
+    inventory_key = inventory_key or inventory_key_home()
     with open_archive(path) as archive:
         yield archive, verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
 
 
-def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files',
+def verify_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None,
                    digest=None, names: list[str] | None = None) -> dict[str, Any]:
     """Verify an archive's manifest and member digests.
 
@@ -383,6 +403,7 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
     pass, so a boundary can hand a trusted member list to later stages instead
     of re-parsing (and for a tar, re-inflating) the archive.
     """
+    inventory_key = inventory_key or inventory_key_home()
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             metadata = verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
@@ -426,7 +447,7 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
 
 
 def verify_archive_digest(path: Path, manifest_name: str, *,
-                          inventory_key: str = 'files',
+                          inventory_key: str | None = None,
                           names: list[str] | None = None) -> tuple[dict[str, Any], str]:
     """Verify an archive and return its metadata plus whole-file SHA256."""
     digest = hashlib.sha256()

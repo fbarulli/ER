@@ -55,13 +55,11 @@ class ComparisonResult(Enum):
 
 
 # Nordic band tokens reuse attribute_universe's canonical band grammar.
-_NEGATION_PREFIXES: tuple[str, ...] = ("no ", "non ", "without ", "zero ")
 _POLAR_PAIRS: dict[str, str] = {
     "sweetened": "unsweetened",
     "carbonated": "still",
     "sugar": "sugar-free",
 }
-_UNPOLARIZED = {v: k for k, v in _POLAR_PAIRS.items()}
 
 
 @dataclass(frozen=True)
@@ -261,11 +259,6 @@ CONCEPT_FOLD_BY_KEY: dict[str, dict[str, str]] = {
 # co-occur — disjoint sets stay UNKNOWN unless the negation check fires
 # (class 2 dissolved; X vs no-X stays a hard veto). Unlisted keys default
 # EXCLUSIVE (a change of value is a change of claim).
-EXCLUSIVE_KEYS = frozenset({
-    "tea type", "water type", "carbonization", "pack type", "diets",
-    "roast type", "caffeine", "rtd coffee style", "sports ingredients",
-    "package type", "flavour",
-})
 ADDITIVE_KEYS = frozenset({
     "botanicals and functional ingredients", "contains minerals",
     "immune support ingredients", "made from", "health claims",

@@ -17,6 +17,12 @@ def _spec():
     from core.bundle import _bundle_spec
     return _bundle_spec()
 
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
 TRACKS = ('text', 'gnn_only', 'cascade')
 #: Tracks that train behind the shared start barrier. The cascade trains
 #: nothing: it composes the trained text ranker and gnn_only scorer after them.
@@ -269,8 +275,9 @@ def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> di
         if key in inputs:
             identity[key] = inputs[key]
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
-    frozen_names = {'eligible_catalog.csv', 'listing_splits.csv', 'listing_pairs.csv',
-                    'shared_minilm__embeddings.npz', 'setup_manifest.json'}
+    layout = _setup_layout()
+    frozen_names = {layout.catalog, layout.splits, layout.pairs,
+                    layout.shared_embeddings, layout.manifest}
     identity['setup'] = {path.relative_to(setup).as_posix(): digest(path)
                          for path in setup.rglob('*') if path.is_file()
                          and (path.parent == setup and path.name in frozen_names

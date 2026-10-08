@@ -33,6 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from core import common
@@ -101,3 +102,55 @@ def test_graph_lane_loaders_keep_their_sharp_messages(tmp_path):
 def test_the_dead_ner_config_loader_is_gone():
     """ner/config_loader.py had zero importers and duplicated the SSOT read."""
     assert importlib.util.find_spec('ner.config_loader') is None
+
+
+# ── orchestration stage inventory lives in config/paths.yaml (audit 2026-10-08) ──
+# herb's requested block: the trace-stage join. core/tracing.py still owns the
+# RUNTIME registry (it is out of this task's edit scope), so this pins the two
+# together until the orchestrator reads the config block.
+
+def test_orchestration_stages_config_matches_the_runtime_registry():
+    from core import tracing
+
+    merged = common.load_config()
+    declared = {stage: tuple(names)
+                for stage, names in merged['orchestration_stages'].items()}
+    assert declared == dict(tracing.ORCHESTRATION_TRACE_STAGES)
+    assert tuple(merged['orchestration_lane_stages']) == \
+        tuple(tracing.ORCHESTRATION_LANE_STAGES)
+    # the two row-free stages stay explicit (a coverage gap, not "no work")
+    assert declared['gate_census'] == () and declared['discriminator'] == ()
+
+
+# ── config/training.yaml bundle: block declares every BundleSpec value ──────
+# The audit found 11 BundleSpec keys were schema-default-only (no config value);
+# a name a sealing/verifying surface reads must be config-owned, not a mirror.
+
+def test_bundle_block_declares_every_bundle_spec_key():
+    from core.schemas import BundleSpec
+
+    raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
+    assert set(raw['bundle']) == set(BundleSpec.model_fields), (
+        'config/training.yaml bundle: must declare every BundleSpec field; '
+        f'missing {sorted(set(BundleSpec.model_fields) - set(raw["bundle"]))}')
+
+
+def test_bundle_block_matches_the_loaded_spec():
+    raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
+    spec = common.training_cfg().bundle
+    for key, value in raw['bundle'].items():
+        loaded = getattr(spec, key)
+        expected = tuple(value) if isinstance(loaded, tuple) else value
+        assert loaded == expected, key
+
+
+# ── the archive sidecar suffix has ONE home (audit 2026-10-08) ──────────────
+
+def test_the_kaggle_sidecar_suffix_is_a_projection_of_the_bundle_home():
+    cfg = common.training_cfg()
+    raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
+    # the duplicate kaggle.files.hash_suffix declaration is deleted ...
+    assert 'hash_suffix' not in raw['kaggle']['files']
+    # ... and the rendered LANE projection carries the ONE home's value.
+    assert cfg.kaggle.files.hash_suffix == cfg.bundle.sha256_sidecar_suffix
+

@@ -547,6 +547,13 @@ class DataConfig(BaseModel):
     paths: DataPathsSpec
     files: DataFilesSpec
     layouts: dict[str, LayoutSpec] = Field(default_factory=dict)
+    # The preparation's orchestration stage inventory (the trace-stage join):
+    # each KEY is a stage (in execution order), each VALUE the trace stage
+    # name(s) its producer writes rows under. Declared in config/paths.yaml
+    # (`orchestration_stages:` / `orchestration_lane_stages:`); optional so a
+    # paths.yaml that predates the block still validates (additive default).
+    orchestration_stages: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    orchestration_lane_stages: tuple[str, ...] = Field(default_factory=tuple)
     column_mapping: dict[str, str] = Field(min_length=1)
     dataset_csv_read: DatasetCsvReadSpec
     extraction: ExtractionPolicySpec
@@ -713,6 +720,20 @@ class DataConfig(BaseModel):
                 "from it (train.py --model default; no-fallback doctrine)"
             )
         return v
+
+    @model_validator(mode="after")
+    def _orchestration_lane_stages_are_declared(self) -> "DataConfig":
+        """A lane stage that is not a declared stage key is a join that can
+        never resolve; fail loud at load instead of mid-run."""
+        unknown = sorted(set(self.orchestration_lane_stages) - set(self.orchestration_stages))
+        if unknown:
+            raise ValueError(
+                "orchestration_lane_stages names undeclared orchestration "
+                f"stages: {unknown}; declared: {sorted(self.orchestration_stages)}"
+            )
+        if len(set(self.orchestration_lane_stages)) != len(self.orchestration_lane_stages):
+            raise ValueError("orchestration_lane_stages contains duplicates")
+        return self
 
     @model_validator(mode="after")
     def _embedding_models_are_registered(self) -> "DataConfig":
@@ -2587,6 +2608,13 @@ class ColabSpec(BaseModel):
     branch: str = Field(min_length=1)
     git_remote_name: str = Field(min_length=1)
     remote_root: str = Field(min_length=1)
+    # Sparse-checkout contract for every prepared Colab runtime: the ONE config
+    # home for the runtime's declared directory lists and required root files
+    # (cli.colab_runtime derives RUNTIME_DIRECTORY_PATHS / RUNTIME_REQUIRED_ROOT_FILES
+    # from it). The Colab set deliberately differs from kaggle.checkout_paths.
+    # A trailing slash marks a directory entry; entries without one are
+    # repository-root files the VM must have.
+    checkout_paths: tuple[str, ...] = Field(min_length=1)
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
     remote_data_prep: Literal[False] = False
@@ -2656,6 +2684,29 @@ class ColabSpec(BaseModel):
     def artifact_basename(cls, value):
         if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
             raise ValueError("Colab artifact names must be non-empty basenames")
+        return value
+
+    @field_validator("checkout_paths")
+    @classmethod
+    def _checkout_paths_are_portable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Every entry must be a portable repo-relative path, and the split
+        between directory and root-file entries must be unambiguous (at least
+        one of each, so the runtime pattern list can never silently come back
+        empty for either half)."""
+        if len(set(value)) != len(value):
+            raise ValueError("colab.checkout_paths contains duplicates")
+        if not any(entry.endswith("/") for entry in value):
+            raise ValueError(
+                "colab.checkout_paths needs at least one directory entry (trailing '/')")
+        if not any(not entry.endswith("/") for entry in value):
+            raise ValueError(
+                "colab.checkout_paths needs at least one repo-root file entry")
+        for entry in value:
+            name = entry.rstrip("/")
+            candidate = Path(name)
+            if not name or candidate.is_absolute() or ".." in candidate.parts:
+                raise ValueError(
+                    f"colab.checkout_paths must be repository-relative: {entry!r}")
         return value
 
 
@@ -2760,7 +2811,7 @@ class KaggleFilesSpec(BaseModel):
     kernel_stage: str = '{kind}_kernel'
     kernel_metadata: str = 'kernel-metadata.json'
     kernel_receipt: str = '{kind}_kernel.receipt.json'
-    code_files: dict[str, str] = Field(default_factory=lambda: {'bundle': 'bundle_cpu.py', 'train': 'train_gpu.py', 'embed': 'embed_gpu.py'})
+    code_files: dict[str, str] = Field(default_factory=lambda: {'bundle': 'bundle_cpu.py', 'train': 'train_gpu.py', 'embed': 'embed_gpu.py', 'finalize': 'finalize_cpu.py'})
     stop_stage: str = '{which}_stop'
     stop_code: str = 'cancel_stub.py'
     fetch_stage: str = '{kind}_fetch'
@@ -2771,7 +2822,7 @@ class KaggleFilesSpec(BaseModel):
     bundle_sidecars: tuple[str, ...] = ('manifest.json', 'timings.json')
     result_archive: str = '{kind}.tar.zst'
     result_manifest: str = '{kind}.manifest.json'
-    result_names: dict[str, str] = Field(default_factory=lambda: {'train': 'result_bundle', 'embed': 'vectors'})
+    result_names: dict[str, str] = Field(default_factory=lambda: {'train': 'result_bundle', 'embed': 'vectors', 'finalize': 'finalized_bundle'})
     failure_archive: str = 'failure.tar.zst'
     failure_zip: str = 'failure.zip'
     failure_manifest: str = 'failure.manifest.json'
@@ -2801,6 +2852,13 @@ class KaggleFilesSpec(BaseModel):
     dataset_metadata: str = 'dataset-metadata.json'
     log_glob: str = "*.log"
     install_dir: str = "{kind}"
+    #: Archive sidecar suffix. NOT an independent declaration: the ONE home is
+    #: ``bundle.sha256_sidecar_suffix`` and TrainingConfig copies that value in
+    #: (see ``_sidecar_suffix_has_one_home``). The field survives only because
+    #: the rendered kernel LANE contract (cli.kaggle_kernel_templates) and
+    #: cli.kaggle_outputs read ``spec.files.hash_suffix`` for every kind; the
+    #: literal below is the fallback for a stand-alone ``KaggleSpec()``, which
+    #: no production path builds (they read ``training_cfg().kaggle``).
     hash_suffix: str = ".sha256"
 
 
@@ -2966,10 +3024,24 @@ class KaggleSpec(BaseModel):
                 or len(set(self.cohort_tags)) != len(self.cohort_tags)
                 or self.default_cohort not in self.cohort_tags):
             raise ValueError("kaggle cohort_tags must pair with export_csvs and include default_cohort")
-        if set(self.files.code_files) != {"bundle", "train", "embed"}:
-            raise ValueError("kaggle.files.code_files requires bundle, train, embed")
-        if set(self.files.result_names) != {"train", "embed"}:
-            raise ValueError("kaggle.files.result_names requires train, embed")
+        # The bundle/train/embed (and train/embed) keys are REQUIRED; the
+        # finalize job is an OPTIONAL extra so a config that predates the
+        # remote finalize lane still validates (backward compatible). Anything
+        # else is still a loud typo, never a silent extra kernel.
+        required_code_files = {"bundle", "train", "embed"}
+        optional_code_files = {"finalize"}
+        if (not required_code_files <= set(self.files.code_files)
+                or set(self.files.code_files) - required_code_files - optional_code_files):
+            raise ValueError(
+                "kaggle.files.code_files requires bundle, train, embed "
+                "(optional: finalize)")
+        required_result_names = {"train", "embed"}
+        optional_result_names = {"finalize"}
+        if (not required_result_names <= set(self.files.result_names)
+                or set(self.files.result_names) - required_result_names - optional_result_names):
+            raise ValueError(
+                "kaggle.files.result_names requires train, embed "
+                "(optional: finalize)")
         if len(self.submission_id_columns) != 2 or len(set(self.submission_id_columns)) != 2:
             raise ValueError("kaggle.submission_id_columns must be two distinct column names")
         return self
@@ -3272,6 +3344,23 @@ class TrainingConfig(BaseModel):
                 f"{self.collapse_guardrail.profile!r} not in "
                 f"{sorted(self.collapse_guardrail_profiles)}"
             )
+        return self
+
+
+    @model_validator(mode="after")
+    def _sidecar_suffix_has_one_home(self) -> TrainingConfig:
+        """The archive sidecar suffix has ONE home: bundle.sha256_sidecar_suffix.
+
+        ``KaggleFilesSpec.hash_suffix`` is a PROJECTION, not an independent
+        declaration (its config/training.yaml copy is deleted). The rendered
+        kernel LANE contract (cli.kaggle_kernel_templates) and cli.kaggle_outputs
+        read ``spec.files.hash_suffix`` at runtime and are out of this task's
+        scope, so the field cannot be dropped yet; the bundle value is copied
+        into it here, so changing bundle.sha256_sidecar_suffix steers every
+        Kaggle sidecar name. A stand-alone ``KaggleSpec()`` (no production path
+        builds one) keeps the field's own fallback.
+        """
+        self.kaggle.files.hash_suffix = self.bundle.sha256_sidecar_suffix
         return self
 
 

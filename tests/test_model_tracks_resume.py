@@ -56,6 +56,26 @@ def test_graph_resume_finds_trainer_nested_worker_output(tmp_path):
     assert graph_checkpoint(tmp_path, 'gnn_only', 'run-gnn_only') == checkpoint
 
 
+def test_frozen_setup_filenames_come_from_the_declared_layout():
+    """``suite_identity`` freezes the DECLARED prepared-setup filenames.
+
+    The five top-level frozen names used to be spelled inline; they now come
+    from ``training.preparation.graph_setup`` — the same declaration the
+    producers (``graph_tracks.setup`` / ``model_tracks.package``) write. A
+    drifted literal would freeze a file nobody writes and miss the real one, so
+    the declaration must still name exactly those files.
+    """
+    from core.common import training_cfg
+    from model_tracks import resume
+
+    layout = resume._setup_layout()
+    assert layout == training_cfg().preparation.graph_setup
+    assert {layout.catalog, layout.splits, layout.pairs,
+            layout.shared_embeddings, layout.manifest} == {
+        'eligible_catalog.csv', 'listing_splits.csv', 'listing_pairs.csv',
+        'shared_minilm__embeddings.npz', 'setup_manifest.json'}
+
+
 def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, monkeypatch):
     import core.common
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)

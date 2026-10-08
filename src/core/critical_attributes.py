@@ -359,27 +359,6 @@ SUGAR_CLAIM_RE = re.compile(
 _SODA_DRY_PRODUCT_RE = re.compile(
     r"\b(?:syrup|concentrate|cordial|drink mix|powder)\b"
 )
-# Precompiled once at import: extract_critical_claims runs these on every one
-# of its ~65k calls per 10k cohort.  Passing the pattern string to re.search
-# re-enters the module-level _compile cache lookup for each call; holding the
-# Pattern here removes that per-call overhead without changing a single match.
-_CAFFEINE_POSITIVE_RE = re.compile(r"\s*(\d+)")
-_MADE_FROM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
-    (phrase, re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"))
-    for phrase in MADE_FROM_PHRASES
-)
-_DECLARED_FLAVOR_SPLIT_RE = re.compile(r"[,/;&]")
-_DIET_RE = re.compile(r"\bdiet\b")
-_NON_CARBONATED_RE = re.compile(
-    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b"
-)
-_NON_CARBONATED_STRIP_RE = re.compile(
-    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b"
-)
-_BAKING_SODA_RE = re.compile(r"\b(?:baking|washing) soda\b")
-_STILL_RE = re.compile(r"\bstill\b")
-_CARBONATED_RE = re.compile(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b")
-_SODA_RE = re.compile(r"\bsoda\b")
 _EFFERVESCENT_RE = re.compile(r"\beffervescent\b")
 _EFFERVESCENT_TABLET_RE = re.compile(
     r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b"

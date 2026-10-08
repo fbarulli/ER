@@ -8,6 +8,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from core.archive_reader import archive_sidecar
+
 
 
 class KaggleOutputs:
@@ -34,6 +36,7 @@ class KaggleOutputs:
         SSOT target; train/embed outputs record a skip note (no SSOT dataset).
         """
         from cli import kaggle_lane as lane
+        from cli.kaggle_kernels import KaggleKernels
 
         spec = lane._spec()
         # One registry (config SSOT) resolves the slug, the bundle role, and the
@@ -62,7 +65,7 @@ class KaggleOutputs:
             retained = stage.with_name(f"{stage.name}.{time.time_ns()}")
             stage.rename(retained)
         stage.mkdir(parents=True)
-        command = [executable, "kernels", "output", slug, "-p", str(stage)]
+        command = KaggleKernels.kernels_output_argv([executable], slug, stage)
         _, _ = lane._run_kaggle(command)
         failure = lane.KernelLifecycle.failure_output(stage)
         if failure:
@@ -89,13 +92,13 @@ class KaggleOutputs:
             raise FileNotFoundError(
                 f"kernel output manifest names {archive_name} but it is missing "
                 f"under {manifest_dir}")
-        sidecar = manifest_dir / (archive_name + spec.files.hash_suffix)
+        sidecar = archive_sidecar(manifest_dir / archive_name, spec.files.hash_suffix)
         expected = (sidecar.read_text().strip() if sidecar.is_file()
                     else manifest.get("archive_sha256"))
         if not expected:
             raise RuntimeError(
                 f"fetched {kind} output records no sha256 for {archive_name} "
-                f"(neither {archive_name + spec.files.hash_suffix} nor the "
+                f"(neither {sidecar.name} nor the "
                 "manifest carries one)")
         # ONE read of the archive. A bundle role is named by its boundary load,
         # which verifies the whole-archive sha256 against the recorded receipt
@@ -119,7 +122,7 @@ class KaggleOutputs:
         installed = {}
         shutil.copy2(archive, destination / archive.name)
         installed[archive_name] = str(destination / archive.name)
-        sidecar_names = [manifest_name, (archive_name + spec.files.hash_suffix)]
+        sidecar_names = [manifest_name, sidecar.name]
         if kind == "bundle":
             sidecar_names += list(spec.files.bundle_sidecars)
         for name in sidecar_names:

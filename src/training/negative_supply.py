@@ -69,7 +69,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import ClassVar, Literal, Mapping
+from typing import Literal, Mapping
 
 import numpy as np
 import pandas as pd
@@ -867,7 +867,6 @@ class NegativeSupply(BaseModel):
     pairs: pd.DataFrame = Field(default=None, repr=False, exclude=True)
     funnel: dict = Field(default_factory=dict, repr=False, exclude=True)
 
-    RESULT_DIR: ClassVar[str] = "results/negative_supply"
     _canonical_index: CanonicalIndex | None = PrivateAttr(default=None)
     _anchors: AnchorIndex | None = PrivateAttr(default=None)
     _texts: pd.Series | None = PrivateAttr(default=None)

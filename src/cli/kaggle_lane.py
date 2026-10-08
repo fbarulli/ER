@@ -85,14 +85,12 @@ ACCESS_TOKEN_PATH = Path.home() / training_cfg().kaggle.files.access_token_file
 
 #: The finalize job is the second bundle_steps role and runs as a second version
 #: of the SAME bundling CPU kernel slug (one Kaggle kernel; Kaggle mounts one
-#: code file per pushed version). Its two names cannot live in
-#: ``kaggle.files`` today — ``core.schemas.KaggleSpec`` pins ``code_files`` to
-#: exactly {bundle, train, embed} and ``result_names`` to exactly {train,
-#: embed} — so the lane declares them ONCE here; every surface resolves them
-#: through ``kernel_identity`` below (never a second literal).
+#: code file per pushed version). Its two names are config-owned
+#: (``kaggle.files.code_files.finalize`` / ``kaggle.files.result_names.finalize``;
+#: the KaggleSpec validators require the base keys and accept finalize as the
+#: optional extra), so this lane spells no literal and every surface resolves
+#: them through ``kernel_identity`` below.
 FINALIZE_KERNEL_KIND = "finalize"
-FINALIZE_KERNEL_CODE_FILE = "finalize_cpu.py"
-FINALIZE_RESULT_NAME = "finalized_bundle"
 
 
 class KernelIdentity(BaseModel):
@@ -152,8 +150,8 @@ def _kernel_identities(files: Any) -> dict[str, KernelIdentity]:
         FINALIZE_KERNEL_KIND: KernelIdentity(
             kind=FINALIZE_KERNEL_KIND, which="finalize",
             slug_attr="cpu_kernel_slug",
-            code_file=FINALIZE_KERNEL_CODE_FILE,
-            result_name=FINALIZE_RESULT_NAME,
+            code_file=files.code_files["finalize"],
+            result_name=files.result_names["finalize"],
             bundle_role="result"),
     }
 

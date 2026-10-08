@@ -64,8 +64,6 @@ STAGE = "build_second04_pairs"
 _BATCH_GTINS = 4096
 _MAX_BATCH_ROWS = 16
 
-MANIFEST_COLUMNS = CROSS_COUNTRY_PAIR_COLUMNS
-
 REQUIRED_COLUMNS = ("sku_id", "gtin", "country")
 
 
@@ -373,16 +371,6 @@ class CrossCountryPairs:
                 source="dataset_deduped gtin groups",
             )
         return rows
-
-
-def _country_positions(records: list[dict]) -> dict[str, list[int]]:
-    """Record positions bucketed by country (see :class:`CrossCountryPairs`)."""
-    return CrossCountryPairs.country_positions(records)
-
-
-def _cross_country_pairs(records: list[dict]) -> list[tuple[dict, dict]]:
-    """(left, right) record pairs with different countries."""
-    return CrossCountryPairs.differing_country_pairs(records)
 
 
 def _pair_rows(

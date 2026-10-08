@@ -92,9 +92,27 @@ def tar_archive(path, mode='r', *, settings=None, digest=None):
         yield reader.archive
 
 
+#: The compressed-archive endings the ONE sidecar rule strips before appending
+#: a companion suffix. Every real companion on disk is the stripped shape --
+#: ``results/model_tracks/<run_tag>.sha256`` sits beside ``<run_tag>.tar.zst``
+#: -- never ``<run_tag>.tar.zst.sha256``.
+ARCHIVE_ENDINGS = ('.tar.zst', '.zip')
+
+
 def archive_sidecar(path, suffix):
+    """THE sidecar path rule: the ONE home for an archive's companion name.
+
+    A companion of ``<name>.tar.zst`` (or ``.zip``) is ``<name><suffix>``:
+    the declared archive ending (``ARCHIVE_ENDINGS``) is STRIPPED and ``suffix``
+    appended in its place (``<run_tag>.tar.zst`` -> ``<run_tag>.sha256``). A
+    name with no declared ending keeps its stem and replaces any other suffix
+    (``Path.with_suffix``). Lanes, transports, kernel scripts and the
+    fetched-output reader all import this rather than re-deriving
+    ``name + suffix``, because the append shape names a file that exists
+    beside no real archive.
+    """
     path = Path(path)
-    for ending in ('.tar.zst', '.zip'):
+    for ending in ARCHIVE_ENDINGS:
         if path.name.endswith(ending):
             return path.with_name(path.name[:-len(ending)] + suffix)
     return path.with_suffix(suffix)

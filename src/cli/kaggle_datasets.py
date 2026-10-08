@@ -298,6 +298,25 @@ class KaggleDatasets:
         return plan
 
     @staticmethod
+    def dataset_publish_commands(executable, payload: Path, *, message: str,
+                                 dir_mode_args: list[str]) -> dict[str, list[str]]:
+        """The ``kaggle datasets create`` / ``version`` argv (ONE home).
+
+        The create-vs-version DECISION belongs to the caller (version when the
+        slug already has a remote version); the ARGV SHAPE lives here so the
+        laya lane's publish and the bundle publish never re-spell it.
+        ``dir_mode_args`` is the caller's own ``-r`` form (the laya lane passes
+        ``["-r", "zip"]``; the bundle publish keeps its historical
+        ``["-r", "--dir-mode", "skip"]``), a parameter because the two
+        surfaces pin different directory modes.
+        """
+        return {
+            "create": [executable, "datasets", "create", "-p", str(payload)],
+            "version": [executable, "datasets", "version", *dir_mode_args,
+                        "-m", message, "-p", str(payload)],
+        }
+
+    @staticmethod
     def publish_bundle_dataset(kind: str, *, execute: bool) -> dict[str, Any]:
         """Publish-default building block: build the bundle dataset stage dir
         from a VERIFIED install and run `kaggle datasets version` via _run_kaggle.
@@ -377,9 +396,9 @@ class KaggleDatasets:
                            f"revision={receipt.get('revision') or 'unknown'} "
                            f"archive_sha256={observed[:12]}")
         executable = lane._require_kaggle_executable(spec.kaggle_executable)
-        plan["command"] = [executable, "datasets", "version", "-r",
-                           "--dir-mode", "skip", "-m", version_message,
-                           "-p", str(stage)]
+        plan["command"] = KaggleDatasets.dataset_publish_commands(
+            executable, stage, message=version_message,
+            dir_mode_args=["-r", "--dir-mode", "skip"])["version"]
         _, _ = lane._run_kaggle(plan["command"])
         plan["version_message"] = version_message
         # The train stage never needs a hand-invoke after this: its unpinned

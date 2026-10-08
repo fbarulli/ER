@@ -8,6 +8,7 @@ manifest, so that gap is pinned here rather than silently bypassed.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -256,3 +257,37 @@ def test_ner_config_expansion_is_the_pinned_copy(monkeypatch):
     assert ner._resolve_config_value('${unknown}/z') == '${unknown}/z'
     monkeypatch.setenv('ER_NER_PROBE', 'expanded')
     assert ner._resolve_config_value('$ER_NER_PROBE') == '$ER_NER_PROBE'
+
+
+def test_worker_package_ships_the_declared_pair_lineage_name(tmp_path):
+    """The packaged pair lineage member IS the declared layout name.
+
+    ``worker_package.package`` used to spell ``pair_lineage.json``; it now comes
+    from ``training.preparation.graph_setup`` (the same declaration
+    ``graph_tracks.prepare`` already reads for the file it writes). The ZIP
+    member must carry the declared name, so the packaged worker and the
+    prepared-tree producer can never name two different lineage files.
+    """
+    import zipfile
+
+    from core.common import training_cfg
+    from graph_tracks.worker_package import package
+
+    layout = training_cfg().preparation.graph_setup
+    # The declared provenance/lineage names are the historical literals. (The
+    # ``text_cache`` provenance branch is currently unreachable: GraphConfig
+    # rejects ``text_cache`` for every live track — the retired hybrid was its
+    # only consumer — so the names are pinned here until a track re-enables it.)
+    assert (layout.embedding_request, layout.catalog, layout.pair_lineage,
+            layout.prepared_dir) == ('embedding_inputs.json',
+                                     'eligible_catalog.csv',
+                                     'pair_lineage.json', 'prepared')
+
+    config = _graph_worker_config(tmp_path)
+    prepared = Path(yaml.safe_load(config.read_text())['listings']).parent
+    (prepared / layout.pair_lineage).write_text('{}')
+
+    archive = package(config, tmp_path / 'worker.zip')
+    with zipfile.ZipFile(archive) as saved:
+        members = set(saved.namelist())
+    assert f'data/graph_worker/gnn_only/{layout.pair_lineage}' in members

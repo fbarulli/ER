@@ -30,9 +30,11 @@ def stage_result_archive(output, *, kind, extra):
     Redefines the shared tree-tar helper for the train kernel so the fetched
     artifact carries the role manifest the finalize boundary verifies, and the
     manifest records the archive's whole-file sha256 (the transport token the
-    fetch and the finalize boundary pin).
+    fetch and the finalize boundary pin). The companion lands on the ONE
+    sidecar rule (``core.archive_reader.archive_sidecar``).
     """
     import yaml as _yaml
+    from core.archive_reader import archive_sidecar
     from model_tracks.config import SuiteConfig as _SuiteConfig
     config_path = Path(SUITE_CONFIG)
     if not config_path.is_absolute():
@@ -45,7 +47,7 @@ def stage_result_archive(output, *, kind, extra):
     result_archive = WORKING / LANE["files"]["result_archive"].format(kind=kind)
     shutil.copy2(sealed_archive, result_archive)
     digest = sha256_file(result_archive)
-    (WORKING / (result_archive.name + LANE["files"]["hash_suffix"])).write_text(
+    archive_sidecar(result_archive, LANE["files"]["hash_suffix"]).write_text(
         digest + "\\n", encoding="utf-8")
     (WORKING / LANE["files"]["result_manifest"].format(kind=kind)).write_text(
         json.dumps({"kind": kind, "run_tag": RUN_TAG, "revision": REVISION,
@@ -82,6 +84,48 @@ class KaggleKernels:
         return (os.environ.get("WANDB_API_KEY")
                 or lane._env_dot_value("WANDB_API_KEY", repository_root)
                 or KaggleKernels._bake_wandb_key_missing())
+
+    @staticmethod
+    def kernel_metadata(slug: str, code_file: str, *, enable_gpu: bool,
+                        dataset_sources: list[str] | None = None,
+                        kernel_sources: list[str] | None = None) -> dict[str, Any]:
+        """The ``kernel-metadata.json`` document every staged kernel ships.
+
+        ONE home for the key shape the Kaggle CLI requires: the id-derived
+        title, ``language``/``kernel_type``, the internet flag and the empty
+        ``competition_sources`` are never re-spelled per stage (the kaggle lane
+        AND the laya lane both stage through here); only the GPU flag and the
+        attached sources vary. Key order is the JSON order, so it is fixed
+        here once.
+        """
+        return {
+            "id": slug,
+            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
+            "code_file": code_file,
+            "language": "python",
+            "kernel_type": "script",
+            "enable_gpu": enable_gpu,
+            "enable_internet": True,
+            "dataset_sources": list(dataset_sources or ()),
+            "kernel_sources": list(kernel_sources or ()),
+            "competition_sources": [],
+            "is_private": True,
+        }
+
+    @staticmethod
+    def kernels_push_argv(prefix, stage_dir) -> list[str]:
+        """The ``kaggle kernels push`` argv (ONE home for the token shape).
+
+        ``prefix`` is how the CLI is addressed (the resolved executable for the
+        kaggle lane, ``[sys.executable, "-m", "kaggle"]`` for the laya lane), so
+        both lanes emit byte-identical arguments for the same stage dir.
+        """
+        return [*prefix, "kernels", "push", "-p", str(stage_dir)]
+
+    @staticmethod
+    def kernels_output_argv(prefix, slug, stage_dir) -> list[str]:
+        """The ``kaggle kernels output`` argv (ONE home for the token shape)."""
+        return [*prefix, "kernels", "output", slug, "-p", str(stage_dir)]
 
     @staticmethod
     def _kernel_script_gate(script: str) -> None:
@@ -245,19 +289,8 @@ class KaggleKernels:
         cohort_dataset = lane.cohort_export_csv(cohort)
         stage = lane.staging_dir() / lane._spec().files.kernel_stage.format(kind=identity.kind)
         stage.mkdir(parents=True, exist_ok=True)
-        metadata = {
-            "id": slug,
-            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": identity.code_file,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": False,
-            "enable_internet": True,
-            "dataset_sources": [],
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        metadata = KaggleKernels.kernel_metadata(
+            slug, identity.code_file, enable_gpu=False)
         script = (lane.BUNDLE_KERNEL_SCRIPT
                   .replace("@REPOSITORY@", spec.repository)
                   .replace("@BRANCH@", spec.branch)
@@ -291,25 +324,43 @@ class KaggleKernels:
         return receipt
 
     @staticmethod
+    def push_with_session_capture(slug: str, push) -> dict[str, Any]:
+        """Run ONE kernel push with the launch-aid session capture around it.
+
+        ONE home for the sequence every kernel push shares (the kaggle lane and
+        the laya lane): a push invalidates any prior session, so the stale id is
+        cleared FIRST, the caller's ``push`` callable runs, and the new session
+        id is captured best-effort afterwards (the autowatch stream follower is
+        the backup writer and must never gate the launch). ``push`` owns the
+        actual network call and its exact argv; this helper returns the capture
+        result so the caller can record it.
+        """
+        from cli import kaggle_lane as lane
+
+        lane.clear_kernel_session_id(slug)
+        push()
+        try:
+            return lane.capture_kernel_session_id(slug)
+        except Exception as error:  # noqa: BLE001 - best-effort launch aid
+            lane._log_lane(f"[{slug}] session-id capture skipped: {error}")
+            return {"session_id": None}
+
+    @staticmethod
     def _push_and_record_session(stage_dir: Path, slug: str) -> None:
         """Push a staged kernel and record its session id for in-place cancel.
 
         Every live push gets its own session id written to
         ``logs/kaggle/<kernel>.session_id`` so ``stop`` can use the SDK's
         in-place ``cancel_kernel_session`` instead of a version-replace stub.
-        The stale id is cleared first (a push invalidates any prior session),
-        and capture is best-effort — the autowatch stream follower is the
-        backup writer and must never gate the launch.
+        The clear/push/capture sequence is the shared
+        :meth:`push_with_session_capture`.
         """
         from cli import kaggle_lane as lane
 
         executable = lane._require_kaggle_executable(lane._spec().kaggle_executable)
-        lane.clear_kernel_session_id(slug)
-        lane._run_kaggle([executable, "kernels", "push", "-p", str(stage_dir)])
-        try:
-            lane.capture_kernel_session_id(slug)
-        except Exception as error:  # noqa: BLE001 - best-effort launch aid
-            lane._log_lane(f"[{slug}] session-id capture skipped: {error}")
+        KaggleKernels.push_with_session_capture(
+            slug, lambda: lane._run_kaggle(
+                KaggleKernels.kernels_push_argv([executable], stage_dir)))
 
     @staticmethod
     def push_bundle_kernel(stage_dir: Path) -> dict[str, Any]:
@@ -382,19 +433,8 @@ class KaggleKernels:
         resolved_checkpoint = checkpoint or spec.checkpoint
         stage = lane.staging_dir() / lane._spec().files.kernel_stage.format(kind=kind)
         stage.mkdir(parents=True, exist_ok=True)
-        metadata: dict[str, Any] = {
-            "id": resolved_slug,
-            "title": resolved_slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": code_file,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": True,
-            "enable_internet": True,
-            "dataset_sources": [],
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
+            resolved_slug, code_file, enable_gpu=True)
         if kind == "embed":
             request_dataset = spec.embedding_dataset_slug
             if not request_dataset:
@@ -519,19 +559,10 @@ class KaggleKernels:
         bundle_dataset_entry = bundle_dataset
         if bundle_dataset_version:
             bundle_dataset_entry = f"{bundle_dataset}/{bundle_dataset_version}"
-        metadata: dict[str, Any] = {
-            "id": resolved_slug,
-            "title": resolved_slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": code_file,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": False,
-            "enable_internet": True,
-            "dataset_sources": [bundle_dataset_entry],
-            "kernel_sources": [train_slug],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
+            resolved_slug, code_file, enable_gpu=False,
+            dataset_sources=[bundle_dataset_entry],
+            kernel_sources=[train_slug])
         checkout = list(checkout_paths or spec.checkout_paths)
         template = lane.TRAIN_KERNEL_SHARED + lane.FINALIZE_KERNEL_BODY
         script = (template
@@ -697,25 +728,15 @@ class KaggleKernels:
         if "cancel_method" not in plan:
             # Fallback: version replace — the stub push tears the session down.
             stage.mkdir(parents=True, exist_ok=True)
-            title = resolved.rsplit("/", 1)[-1].replace("-", " ").title()
-            lane.atomic_write_json({
-                "id": resolved,
-                "title": title,
-                "code_file": lane._spec().files.stop_code,
-                "language": "python",
-                "kernel_type": "script",
-                "enable_gpu": False,
-                "enable_internet": True,
-                "dataset_sources": [],
-                "kernel_sources": [],
-                "competition_sources": [],
-                "is_private": True,
-            }, stage / lane._spec().files.kernel_metadata)
+            lane.atomic_write_json(
+                KaggleKernels.kernel_metadata(
+                    resolved, lane._spec().files.stop_code, enable_gpu=False),
+                stage / lane._spec().files.kernel_metadata)
             (stage / lane._spec().files.stop_code).write_text(
                 'print("[kaggle-lane] run cancelled by owner; session released")\n',
                 encoding="utf-8")
             executable = lane._require_kaggle_executable(spec.kaggle_executable)
-            command = [executable, "kernels", "push", "-p", str(stage)]
+            command = KaggleKernels.kernels_push_argv([executable], stage)
             lane._run_kaggle(command)
             plan["cancel_method"] = "version_replace"
         if not wait:

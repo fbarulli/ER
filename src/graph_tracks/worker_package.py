@@ -31,6 +31,12 @@ def _legacy_inventory_key() -> str:
     return f"{training_cfg().bundle.files_key}_sha256"
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def _package_base(track: str) -> Path:
     """The packaged worker's portable member root (``paths.yaml`` layout).
 
@@ -72,6 +78,7 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
     if output.exists():
         raise FileExistsError(output)
     base = _package_base(cfg.track)
+    layout = _setup_layout()
     settings = cfg.model_dump()
     files = {}
     for key in ('listings', 'pairs', 'input_manifest', 'text_cache'):
@@ -81,8 +88,9 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
         destination = base / f'{key}{source.suffix}'
         if key == 'text_cache':
             destination = base / 'text_provenance' / source.name
-            for relative in ('embedding_inputs.json', 'eligible_catalog.csv',
-                             'prepared/input_manifest.json', 'prepared/listings.json'):
+            for relative in (layout.embedding_request, layout.catalog,
+                             f'{layout.prepared_dir}/input_manifest.json',
+                             f'{layout.prepared_dir}/listings.json'):
                 files[(destination.parent / relative).as_posix()] = source.parent / relative
         files[destination.as_posix()] = source
         settings[key] = destination.as_posix()
@@ -92,7 +100,7 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
     # second declaration that silently overrides a retuned lane.
     settings.update(device=device)
     from graph_tracks.prepared_inputs import PLAN, ARRAYS
-    for filename in (PLAN, ARRAYS, 'pair_lineage.json'):
+    for filename in (PLAN, ARRAYS, layout.pair_lineage):
         source = (TRAIN_ROOT / cfg.listings).resolve().parent / filename
         if source.is_file():
             files[(base / filename).as_posix()] = source

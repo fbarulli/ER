@@ -232,12 +232,13 @@ def _legacy_validation_sources() -> dict[str, Path]:
     suite_preflight(config)
     suite = load_suite(config)
     setup = (TRAIN_ROOT / suite.setup_dir).resolve()
-    catalog_path = setup / 'eligible_catalog.csv'
+    layout = training_cfg().preparation.graph_setup
+    catalog_path = setup / layout.catalog
     input_manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
     if file_hash(catalog_path) != input_manifest['catalog_sha256']:
         raise ValueError('eligible catalog differs from prepared graph inputs')
     catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
-    splits = pd.read_csv(setup / 'listing_splits.csv', dtype=str, keep_default_na=False)
+    splits = pd.read_csv(setup / layout.splits, dtype=str, keep_default_na=False)
     if catalog.sku_id.duplicated().any() or splits.sku_id.duplicated().any():
         raise ValueError('component listing IDs must be unique')
     if set(catalog.sku_id) != set(splits.sku_id):
@@ -260,7 +261,7 @@ def _legacy_validation_sources() -> dict[str, Path]:
         raise ValueError('component inference catalog contains reviewed exclusions')
     folder = TRAIN_ROOT / 'results/prepared_training/component_validation'
     folder.mkdir(parents=True, exist_ok=True)
-    sources = {'source': folder / 'eligible_catalog.csv',
+    sources = {'source': folder / layout.catalog,
                'training': folder / 'component_train.csv',
                'sample': folder / 'component_holdout.csv'}
     for key, frame in [('source', catalog), ('training', training), ('sample', holdout)]:
@@ -280,8 +281,9 @@ def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
     from core.common import SEED
     suite = load_suite(TRAIN_ROOT / 'config/model_tracks.yaml')
     setup = TRAIN_ROOT / suite.setup_dir
-    catalog = pd.read_csv(setup / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
-    assignments = pd.read_csv(setup / 'listing_splits.csv', dtype=str).set_index('sku_id').split
+    layout = training_cfg().preparation.graph_setup
+    catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
+    assignments = pd.read_csv(setup / layout.splits, dtype=str).set_index('sku_id').split
     for path in bundles:
         _, data = load_prepared_bundle(path)
         populations = prepared_holdout(data, dict(training_cfg().split), seed=SEED)

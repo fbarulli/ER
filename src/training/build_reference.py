@@ -375,21 +375,6 @@ class ReferenceVerifier:
             trace.write()
 
 
-def _verdict_mismatches(committed: pd.DataFrame, rebuilt: pd.DataFrame) -> pd.DataFrame:
-    """Rows whose verdict drifts (see :class:`ReferenceVerifier`)."""
-    return ReferenceVerifier.missing(committed, rebuilt)
-
-
-def _require_committed_csv(path: Path) -> pd.DataFrame:
-    """Load the committed reference (see :class:`ReferenceVerifier`)."""
-    return ReferenceVerifier.committed(path)
-
-
-def _rebuilt_reference(trace: TraceRun | None = None) -> pd.DataFrame:
-    """The rebuilt reference (see :class:`ReferenceVerifier`)."""
-    return ReferenceVerifier.rebuilt(trace)
-
-
 def _verify(
     committed: pd.DataFrame,
     rebuilt: pd.DataFrame,
@@ -438,11 +423,6 @@ class ReferencePublisher:
             )
         _LOG.info(f"wrote {path} ({len(ref):,} rows)")
         _LOG.info(f"  verdict mix: {dict(ref['verdict'].value_counts())}")
-
-
-def _register_in_preparation(ref: pd.DataFrame) -> None:
-    """Publish the fresh frame to a live run (see :class:`ReferencePublisher`)."""
-    ReferencePublisher.register(ref)
 
 
 def _write_reference(

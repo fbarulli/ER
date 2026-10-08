@@ -417,26 +417,6 @@ def _protect_untrusted_title_conflicts(frame: pd.DataFrame) -> pd.DataFrame:
     return FrameWorkbook.protect_untrusted_title_conflicts(frame)
 
 
-def _load_work_frame() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """The raw export under identity links, plus its tier-ready work copy."""
-    return FrameWorkbook.load()
-
-
-def _ambiguous_offer_audit(work: pd.DataFrame) -> pd.DataFrame:
-    """retailer+title groups with >1 row and >1 price (see FrameWorkbook)."""
-    return FrameWorkbook.ambiguous_offer_audit(work)
-
-
-def _stage_trusted_gtins(work: pd.DataFrame) -> tuple[pd.DataFrame, set[str]]:
-    """Checksum staging + trusted-identity partition (see FrameWorkbook)."""
-    return FrameWorkbook.stage_trusted_gtins(work)
-
-
-def _partition_by_gtin_trust(work: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split by gtin trust (see :class:`FrameWorkbook`)."""
-    return FrameWorkbook.partition_by_gtin_trust(work)
-
-
 # ── the tiers + representative bookkeeping ──────────────────────────────────
 class TieredCollapse:
     """The four collapse tiers and the representative pointers they update.

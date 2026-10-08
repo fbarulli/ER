@@ -83,12 +83,6 @@ class ListingSplits:
     def split_of(self, sku_id: str) -> str:
         return self.map[sku_id]
 
-    def listing_record(self, sku_id: str, identity, relations, numeric) -> dict:
-        """One graph listing record for a scraped identity."""
-        return {'sku_id': sku_id, 'split': self.split_of(sku_id),
-                'attribute': {key: sorted(getattr(identity, key)) for key in relations},
-                'numeric': {key: sorted(getattr(identity, key)) for key in numeric}}
-
 
 class ListingScraper:
     """Catalog rows -> graph listings + report-attribute rows (shared extractor).

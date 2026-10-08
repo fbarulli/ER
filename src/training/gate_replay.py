@@ -252,12 +252,6 @@ def _current_gate(gr: pd.DataFrame, moved: pd.DataFrame) -> pd.DataFrame:
     return current
 
 
-def _fired_stage(reason: str) -> str:  # local alias kept for the --fired filter
-    return fired_stage(reason)
-
-
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--fired", default="", help="show only moved pairs whose old or new reason fired this gate")

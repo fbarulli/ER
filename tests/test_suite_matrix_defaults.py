@@ -32,7 +32,7 @@ def _setup_dir(tmp_path: Path, *, device: str = "cpu") -> Path:
             f"device: {device}\n"
         ),
         "gnn_only.yaml": f"track: gnn_only\ndevice: {device}\n",
-        "hybrid.yaml": f"track: hybrid\ndevice: {device}\n",
+        "cascade.yaml": f"track: cascade\ndevice: {device}\n",
         "text.yaml": "track: text\n",
         "prepared/input_manifest.json": "{}",
     }
@@ -82,7 +82,7 @@ def test_a_cpu_suite_flips_automatically(suite_paths, tmp_path):
     flipped = flip_path.read_text(encoding="utf-8")
     assert "device: cuda" in flipped
     assert "setup_dir: data/prepared/smoke_200" in flipped
-    for name in ("gnn_only.yaml", "hybrid.yaml", "text.yaml"):
+    for name in ("gnn_only.yaml", "cascade.yaml", "text.yaml"):
         assert (flip_path.parent / name).is_file()
     assert all(path.suffix == ".yaml" for path in flip_path.parent.iterdir()), \
         "copying ONLY the yamls invites device flips"

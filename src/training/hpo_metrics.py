@@ -52,9 +52,6 @@ CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED = 0
 # Compatibility aliases for callers that use the owned reason constants.  The
 # enum above is the single source of the string values.
 CALIBRATION_REASON_EMPTY_SPLIT = CalibrationUnavailableReasonCode.EMPTY_SPLIT.value
-CALIBRATION_REASON_EVALUATOR_FAILED = (
-    CalibrationUnavailableReasonCode.EVALUATOR_FAILED.value
-)
 
 
 class CalibrationMetricRow(BaseModel):

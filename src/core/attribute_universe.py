@@ -96,11 +96,6 @@ from pydantic import dataclasses as pyd_dataclasses
 NUMERIC_KINDS = frozenset({"SET_NUMERIC", "NUMERIC_BAND"})
 NON_YIELD_KINDS = frozenset({"CONSTANT"})
 
-# The 5 committed Pack Material Type enum values (lowercased), measured on the
-# 51,703 populated rows. Out-of-enum values are KEPT (no silent drop) and
-# counted separately in the census for the review lane.
-PACK_MATERIAL_ENUM = frozenset({"glass", "metal", "paper / carton", "plastic", "flexible pack"})
-
 # Veto band (measured origin): the existing vetoed dimensions sit at 2.5%
 # (volume) through 13.8% (pack material) same-GTIN conflict rate. This is an
 # advisory historical candidate band, not a measure of between-product

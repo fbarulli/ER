@@ -294,9 +294,6 @@ class Bundle(BaseModel):
             return False
         return marker.get("status") == spec.complete_status
 
-    def track_dir(self, track: str) -> Path:
-        return self._root() / track
-
     # ----------------------------------------------------------- checkpoints
     @staticmethod
     def _recorded_members(track_root: Path, recorded: Path) -> list[Path]:

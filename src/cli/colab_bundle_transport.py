@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.archive_reader import archive_sidecar
 from core.common import training_cfg
 from core.manifest import sha256_file
 
@@ -41,9 +42,13 @@ def digest_suffix() -> str:
 
 
 def digest_sidecar(archive: Path | str) -> Path:
-    """``<archive><suffix>`` — where a crossing's whole-archive token lives."""
-    archive = Path(archive)
-    return archive.with_name(archive.name + digest_suffix())
+    """``<archive><suffix>`` — where a crossing's whole-archive token lives.
+
+    The ONE sidecar rule (``core.archive_reader.archive_sidecar``): the
+    archive's compressed ending is stripped, so ``bundle_delivery.tar.zst``
+    records its token at ``bundle_delivery.sha256``.
+    """
+    return archive_sidecar(archive, digest_suffix())
 
 
 def record_digest_script(archive_expression: str, *, label: str) -> str:
@@ -53,7 +58,9 @@ def record_digest_script(archive_expression: str, *, label: str) -> str:
     writer side of the transport token has exactly one implementation.
     ``archive_expression`` is either a remote variable name (the delivery
     segment passes one) or a literal path, which is quoted here so a caller
-    can never emit invalid remote source.
+    can never emit invalid remote source. The token's path is resolved by the
+    ONE sidecar rule (``core.archive_reader.archive_sidecar``), imported by
+    the emitted source, never re-spelled as ``path + suffix``.
     """
     suffix = digest_suffix()
     expression = (archive_expression if archive_expression.isidentifier()
@@ -65,7 +72,8 @@ def record_digest_script(archive_expression: str, *, label: str) -> str:
         "    for _transport_chunk in iter(lambda: _transport_handle.read(1024 * 1024), b''):\n"
         "        _transport_digest.update(_transport_chunk)\n"
         "_transport_token = _transport_digest.hexdigest()\n"
-        f"with open({expression} + {suffix!r}, 'w', encoding='utf-8') as _transport_handle:\n"
+        "from core.archive_reader import archive_sidecar as _transport_sidecar\n"
+        f"with open(str(_transport_sidecar({expression}, {suffix!r})), 'w', encoding='utf-8') as _transport_handle:\n"
         "    _transport_handle.write(_transport_token + '\\n')\n"
         f"print({('[' + label + '] digest sha256=')!r} + _transport_token, flush=True)\n"
     )

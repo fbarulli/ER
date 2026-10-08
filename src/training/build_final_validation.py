@@ -826,10 +826,6 @@ class ValidationRowAssembler:
     def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
         return self.assemble_with_reason(g1, g2, label)[0]
 
-    def assemble_all(self, labeled: pd.DataFrame) -> pd.DataFrame:
-        """Run the census through :meth:`assemble` with the pipeline's bar."""
-        return self.assemble_all_with_trace(labeled, None)[0]
-
     def assemble_all_with_trace(
         self, labeled: pd.DataFrame, trace: TraceRun | None
     ) -> tuple[pd.DataFrame, list[dict[str, object]]]:

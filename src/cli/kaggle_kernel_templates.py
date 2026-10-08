@@ -247,11 +247,15 @@ def clone_pinned():
     return root
 
 def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
-    """Manifest-backed tar.zst + .sha256 sidecar (colab result-archive mirror)."""
+    """Manifest-backed tar.zst + .sha256 companion (colab result-archive mirror).
+
+    The companion lands on the ONE sidecar rule
+    (``core.archive_reader.archive_sidecar``).
+    """
     result_archive = WORKING / LANE["files"]["result_archive"].format(kind=kind)
     files = sorted(p for p in output.rglob("*") if p.is_file())
     root_name = output.name
-    from core.archive_reader import tar_archive
+    from core.archive_reader import archive_sidecar, tar_archive
     with tar_archive(result_archive, "w") as tar:
         for path in files:
             arcname = Path(root_name) / path.relative_to(output)
@@ -271,7 +275,7 @@ def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
     (WORKING / LANE["files"]["result_manifest"].format(kind=kind)).write_text(
         json.dumps(result_manifest, indent=2), encoding="utf-8")
     digest = sha256_file(result_archive)
-    (WORKING / (LANE["files"]["result_archive"].format(kind=kind) + LANE["files"]["hash_suffix"])).write_text(digest + "\\n", encoding="utf-8")
+    archive_sidecar(result_archive, LANE["files"]["hash_suffix"]).write_text(digest + "\\n", encoding="utf-8")
     print(f"[{kind}] staged: {result_archive} sha256={digest}", flush=True)
     return digest
 '''
@@ -374,6 +378,7 @@ inputs_receipt = json.loads((inputs_dir / BUNDLE_RECEIPT).read_text(encoding="ut
 root = clone_pinned()
 sys.path.insert(0, str(root / LANE["files"]["source_dir"]))
 from core.bundle import Bundle, BundlePipeline
+from core.archive_reader import archive_sidecar
 
 # The single boundary check for the result bundle: the receipt digest the train
 # kernel recorded while sealing is the transport token, and the handle it
@@ -408,7 +413,7 @@ receipt = {
 }
 (WORKING / manifest_name).write_text(json.dumps(receipt, indent=2) + "\\n",
                                      encoding="utf-8")
-(WORKING / (output.name + LANE["files"]["hash_suffix"])).write_text(
+archive_sidecar(output, LANE["files"]["hash_suffix"]).write_text(
     str(sealed.digest) + "\\n", encoding="utf-8")
 print("[finalize] sealed " + str(output) + " run_tag=" + str(sealed.run_tag())
       + " members=" + str(len(sealed.members())) + " sha256=" + str(sealed.digest),
@@ -445,6 +450,19 @@ stage_result_archive(output, kind=LANE["files"]["result_names"]["embed"], extra=
 '''
 
 
+    @staticmethod
+    def substitute(script, values):
+        """Replace every ``@TOKEN@`` in ``script`` from ``values`` (ONE home).
+
+        The shared payload substitution: the laya lane's ``_template`` is this
+        same loop, and ``render_runtime`` is the runtime-specific caller. A
+        token absent from a caller's mapping is left untouched, so a caller may
+        substitute in passes (the laya two-pass preflight bake) as before.
+        """
+        for token, replacement in values.items():
+            script = script.replace(f"@{token}@", replacement)
+        return script
+
     @classmethod
     def render_runtime(cls, script, spec):
         """Freeze the lane and shared path/archive SSOT into a standalone worker."""
@@ -454,9 +472,11 @@ stage_result_archive(output, kind=LANE["files"]["result_names"]["embed"], extra=
         payload = spec.model_dump(mode="json")
         payload["paths"] = data_cfg().paths.model_dump(mode="json")
         payload["archives"] = training_cfg().archives.model_dump(mode="json")
-        return (script.replace("@COMMAND_RUNNER@", cls.REMOTE_COMMAND_RUNNER)
-                .replace("@SHA256_HELPER@", cls.SHA256_HELPER)
-                .replace("@LANE_JSON@", repr(json.dumps(payload))))
+        return cls.substitute(script, {
+            "COMMAND_RUNNER": cls.REMOTE_COMMAND_RUNNER,
+            "SHA256_HELPER": cls.SHA256_HELPER,
+            "LANE_JSON": repr(json.dumps(payload)),
+        })
 
 
 REMOTE_COMMAND_RUNNER = KernelTemplates.REMOTE_COMMAND_RUNNER

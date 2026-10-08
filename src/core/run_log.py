@@ -107,11 +107,6 @@ class RunLogger:
         self.event(f'[timing] prepare.{stage} state={state}{suffix}',
                    path=log_path)
 
-    def class_timing(self, label: str, *fields: str) -> str:
-        """Build one '<label> key=value' fragment pair for section labels."""
-        detail = ' '.join(fields)
-        return f'{label} {detail}'.strip()
-
 
 def bound_timing_path() -> Path | None:
     """The timing log bound in this process, if any (read-only lookup)."""

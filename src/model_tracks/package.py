@@ -379,23 +379,6 @@ def _collect_package_sources(cfg, setup: Path, bundle_path: Path) -> dict[str, P
     return files
 
 
-def _collect_clean_backup_files(setup: Path, files: dict) -> None:
-    """Ship the unprojected clean-gates backup whenever it exists.
-
-    The CPU bundle carries the unprojected clean-gates input set for
-    downstream workers: the projected setup overrides plain gates, so the
-    immutable clean backup ships by NAME WHICHEVER lane consumes it (the
-    suite_inputs projection in shared_graph_data prepares it; the CPU
-    package forwards it unprojected).
-    """
-    clean_backup = setup.parent / (setup.name + '__clean_shared_inputs')
-    if not clean_backup.is_dir():
-        return
-    for path in _LOG.progress((p for p in sorted(clean_backup.rglob('*')) if p.is_file()),
-                              desc='package.clean_backup', unit='file'):
-        files[str(_target() / path.relative_to(setup.parent))] = path
-
-
 @timed
 def package(config: Path, output: Path) -> Path:
     """Publish the immutable suite package: stage, preflight, collect, write."""

@@ -823,7 +823,6 @@ LAYOUTS: dict[str, LayoutSpec] = {
     name: LayoutSpec.model_validate(spec)
     for name, spec in (_CFG.get("layouts") or {}).items()
 }
-_UNSET = object()
 
 
 def _require_layout(key: str):

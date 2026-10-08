@@ -250,28 +250,6 @@ def _similarity_thresholds() -> tuple[float, float]:
     return SimilarityThresholds.load()
 
 
-def _load_gate_csv(path) -> pd.DataFrame:
-    """gate_results.csv under its pinned string-dtype contract."""
-    return GateSplit.load_gate_csv(path)
-
-
-def _gate_partition_masks(
-    g: pd.DataFrame, pos_sim: float, neg_sim: float
-) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
-    """The gate row masks (see :class:`GateSplit`)."""
-    return GateSplit.partition_masks(g, pos_sim, neg_sim)
-
-
-def _labeled_frame(g: pd.DataFrame, pos_mask, neg_mask) -> pd.DataFrame:
-    """pos + hard-neg gate rows projected to the labeled contract."""
-    return GateSplit.labeled_frame(g, pos_mask, neg_mask)
-
-
-def _dropped_buckets(g: pd.DataFrame, is_fallback, is_kept) -> dict[str, int]:
-    """The exact four-bucket partition (see :class:`SplitLedger`)."""
-    return SplitLedger.dropped_buckets(g, is_fallback, is_kept)
-
-
 def _row_accounting(
     g: pd.DataFrame,
     out: pd.DataFrame,
@@ -282,16 +260,6 @@ def _row_accounting(
 ) -> dict:
     """Capture-only row accounting (see :class:`SplitLedger`)."""
     return SplitLedger.row_accounting(g, out, is_fallback, is_kept, pos_sim, neg_sim)
-
-
-def _write_labeled_csv(out: pd.DataFrame) -> None:
-    """Write under the FRAME CONTRACT (see :class:`LabeledWriter`)."""
-    LabeledWriter.labeled_csv(out)
-
-
-def _log_closure(manifest_path, row_accounting: dict, out: pd.DataFrame) -> None:
-    """The stage's completion lines (see :class:`LabeledWriter`)."""
-    LabeledWriter.closure(manifest_path, row_accounting, out)
 
 
 @timed
