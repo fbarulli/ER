@@ -1742,11 +1742,17 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     if is_distributed():
         local_rank, rank, world_size = dist_env()
         ddp_sampler = build_distributed_sampler(items, config.seed)
+        # find_unused_parameters=True: laya's model has parameters that do not
+        # contribute to every loss (frozen encoder / unused head paths), so the
+        # default reduction bucket never completes and DDP raises "Expected to
+        # have finished reduction in the prior iteration".
         if device.type == "cuda":
             model = torch.nn.parallel.DistributedDataParallel(
-                model, device_ids=[local_rank], output_device=local_rank)
+                model, device_ids=[local_rank], output_device=local_rank,
+                find_unused_parameters=True)
         else:
-            model = torch.nn.parallel.DistributedDataParallel(model)
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, find_unused_parameters=True)
         print("[perf-patch] ddp: rank %d/%d, %d local items"
               % (rank, world_size, len(ddp_sampler)), flush=True)
     epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
