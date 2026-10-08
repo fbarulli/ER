@@ -183,5 +183,49 @@ def test_session_artifacts_build_a_verified_snapshot(tmp_path):
     assert (snapshot / "READY").is_file()
 
 
+def test_snapshot_builder_public_api(tmp_path):
+    from training import hpo_persistence
+
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "a.txt").write_text("a", encoding="utf-8")
+    builder = hpo_persistence.SnapshotBuilder(generation=work, sequence=3)
+    snapshot = builder.build([work / "a.txt"])
+    hpo_persistence.verify_snapshot(snapshot)
+    assert snapshot.name == "3" and (snapshot / "READY").is_file()
+    # A same-sequence rebuild reserves a distinct slot.
+    assert hpo_persistence.SnapshotBuilder(
+        generation=work, sequence=3).final != snapshot
+
+
+def test_objective_ranker_public_api():
+    assert obs.ObjectiveRanker().key(0.5) == (-0.5,)
+    assert obs.ObjectiveRanker("minimize").key(0.5) == (0.5,)
+    assert obs.rank_key([0.9, 9.0], "maximize") == (-0.9, -9.0)
+    ranker = obs.ObjectiveRanker(["maximize", "minimize"])
+    assert ranker.key([0.9, 9.0]) == (-0.9, 9.0)
+    rows = [{"v": [0.9, 9.0]}, {"v": [0.9, 1.0]}, {"v": [0.5, 0.0]}]
+    assert ranker.best(rows, value_of=lambda r: r["v"])["v"] == [0.9, 1.0]
+    assert ranker.best([], value_of=lambda r: r["v"]) is None
+
+
+def test_jsonl_store_is_idempotent_locked_and_drop_counted(tmp_path):
+    store = obs.JsonlStore(tmp_path / "rows.jsonl")
+    assert store.append_once({"event_id": "a", "x": 1}) is True
+    assert store.append_once({"event_id": "a", "x": 2}) is False  # idempotent
+    assert len(store.read()) == 1
+    assert store.read_ids() == {"a"}
+    assert store.dropped == 0
+    # An unwritable path drops the row (never raises) and counts it.
+    bad = obs.JsonlStore("/proc/definitely-not-here/rows.jsonl")
+    assert bad.append_once({"event_id": "b"}) is None
+    assert bad.dropped == 1
+
+
+def test_file_lock_is_a_context_manager(tmp_path):
+    with obs.FileLock(tmp_path / "rows.jsonl"):
+        pass
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
