@@ -896,6 +896,17 @@ def test_staged_slug_override_is_registered_for_dispatch(monkeypatch, tmp_path):
         laya_lane.EXTERNAL_KIND_SLUGS.update(original)
 
 
+def test_kernel_slug_registry_public_api():
+    original = dict(laya_lane.EXTERNAL_KIND_SLUGS)
+    try:
+        registry = laya_hpo.KernelSlugRegistry()
+        assert registry.register("owner/custom-hpo") == "owner/custom-hpo"
+        assert registry.resolve() == "owner/custom-hpo"
+    finally:
+        laya_lane.EXTERNAL_KIND_SLUGS.clear()
+        laya_lane.EXTERNAL_KIND_SLUGS.update(original)
+
+
 def test_receipt_cache_root_and_worker_cap_are_deterministic(monkeypatch,
                                                              tmp_path):
     """#8: shared_data.root is a literal and max_workers is the GPU-capped plan."""
@@ -937,8 +948,17 @@ def test_staged_kernel_observes_once_after_commit_and_falls_back(monkeypatch,
     assert "falling back to the offline" in script
     assert "def offline_active" in script and "def mark_offline" in script
     assert "verify_snapshot(snapshot)" in script
-    worker = script.split("def run_worker(", 1)[1].split("\ndef ", 1)[0]
-    assert worker.index("if offline:") < worker.index("ensure_optuna_url()")
+    # The single-purpose classes the kernel exposes.
+    for cls in ("StorageResolver", "WorkerSession", "SessionReceiptWriter",
+                "SessionArchive", "SessionOrchestrator", "SnapshotBuilder",
+                "JsonlStore", "ObjectiveRanker"):
+        assert "class " + cls in script, cls
+    assert "def run_worker(device):" in script
+    # StorageResolver picks the offline branch BEFORE touching the URL.
+    resolver = script.split("class StorageResolver", 1)[1]
+    resolver = resolver.split("\nclass ", 1)[0]
+    assert resolver.index("if self.offline:") < resolver.index(
+        "ensure_optuna_url()")
 
 
 if __name__ == "__main__":
