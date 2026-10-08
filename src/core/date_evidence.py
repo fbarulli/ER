@@ -1,5 +1,6 @@
 """Source dates are stock/review context, not product-identity contradictions."""
 from datetime import date
+from functools import lru_cache
 import re
 
 
@@ -70,9 +71,22 @@ def extract_date_evidence(text: object) -> list[dict]:
 
     No scrape timestamp is available, so historical expiry text cannot prove
     that a present listing is expired. Different batches can share a GTIN.
+
+    Memoized on the ``str`` fast path: the scan is a pure function of the
+    text and each column's cell is re-read by the date ledger and the
+    consumer-token phase. Entries are read-only at every call site.
     """
     if not isinstance(text, str):
         return []
+    return list(_extract_date_evidence_cached(text))
+
+
+@lru_cache(maxsize=65536)
+def _extract_date_evidence_cached(text: str) -> list[dict]:
+    return _extract_date_evidence_impl(text)
+
+
+def _extract_date_evidence_impl(text: str) -> list[dict]:
     found = []
     occupied = []
     has_digit = _HAS_DIGIT(text) is not None

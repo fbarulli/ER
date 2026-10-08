@@ -72,16 +72,7 @@ def unicode_casefold(value: object) -> str:
     return "".join([char for char in text if not combining(char)])
 
 
-def normalize_text(text: str) -> str:
-    """Lowercase a string to ``[a-z0-9. ]``, collapsing runs of space.
-
-    LIVES HERE now: it used to live in pipeline.normalize_text, which meant
-    every ``core`` module needing it imported the top-level pipeline module
-    (and the pipeline import pulled the whole ML stack into tests that only
-    wanted the cleaner). core.url_evidence must not import pipeline for the
-    same reason: core <-> pipeline has to stay one-directional
-    (pipeline imports core). One definition, three import paths.
-    """
+def _normalize_text_impl(text: str) -> str:
     if text is None:
         return ""
     if isinstance(text, float) and text != text:  # NaN without pandas  # noqa: PLR0124
@@ -92,6 +83,30 @@ def normalize_text(text: str) -> str:
     text = text.replace("\u00d7", "x")
     text = _NORM_KEEP_RE.sub(" ", text)
     return _SPACE_RUN_RE.sub(" ", text).strip()
+
+
+@lru_cache(maxsize=131072)
+def _normalize_text_cached(text: str) -> str:
+    return _normalize_text_impl(text)
+
+
+def normalize_text(text: str) -> str:
+    """Lowercase a string to ``[a-z0-9. ]``, collapsing runs of space.
+
+    LIVES HERE now: it used to live in pipeline.normalize_text, which meant
+    every ``core`` module needing it imported the top-level pipeline module
+    (and the pipeline import pulled the whole ML stack into tests that only
+    wanted the cleaner). core.url_evidence must not import pipeline for the
+    same reason: core <-> pipeline has to stay one-directional
+    (pipeline imports core). One definition, three import paths.
+
+    Memoized on the str fast path only (the pure per-value result is a str,
+    so a cached return cannot be mutated); non-str inputs keep the exact
+    original coercion path.
+    """
+    if isinstance(text, str):
+        return _normalize_text_cached(text)
+    return _normalize_text_impl(text)
 
 
 def normalized_attribute_text(*values: object) -> str:
@@ -621,20 +636,39 @@ class _VolumeEvidenceReader:
         return candidates
 
 
+@lru_cache(maxsize=65536)
+def _extract_volume_evidence_cached(text: str) -> list[dict]:
+    return _VolumeEvidenceReader(text).read()
+
+
 def extract_volume_evidence(text: str) -> list[dict]:
     """Keep measurement roles and original spans before punctuation cleanup —
-    one phase-ordered scan on :class:`_VolumeEvidenceReader`."""
+    one phase-ordered scan on :class:`_VolumeEvidenceReader`.
+
+    Memoized: the phase-ordered scan is a pure function of the text, and the
+    same column string is re-scanned by several lanes within one listing's
+    extraction. The returned entries are read-only at every call site (spread
+    with ``**entry`` or field-read), so handing back the cached list preserves
+    both bytes and semantics.
+    """
     if not isinstance(text, str):
         return []
-    return _VolumeEvidenceReader(text).read()
+    return _extract_volume_evidence_cached(text)
+
+
+@lru_cache(maxsize=65536)
+def _extract_volume_match_cached(text: str) -> tuple:
+    for candidate in _extract_volume_evidence_cached(text):
+        if candidate['role'] == 'package_volume':
+            return tuple(candidate[key] for key in ('value', 'unit', 'ambiguous', 'raw_match'))
+    return None, None, False, ''
 
 
 def extract_volume_match(text: str) -> tuple:
     """Select liquid package evidence, preserving non-package candidates separately."""
-    for candidate in extract_volume_evidence(text):
-        if candidate['role'] == 'package_volume':
-            return tuple(candidate[key] for key in ('value', 'unit', 'ambiguous', 'raw_match'))
-    return None, None, False, ''
+    if not isinstance(text, str):
+        return None, None, False, ''
+    return _extract_volume_match_cached(text)
 
 
 @lru_cache(maxsize=1)

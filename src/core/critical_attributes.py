@@ -412,6 +412,7 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
         return _extract_critical_claims_impl(*values)
     return dict(cached)
 
+
 @lru_cache(maxsize=131072)
 def _extract_critical_claims_cached(values: tuple[object, ...]) -> dict[str, frozenset[str]]:
     return _extract_critical_claims_impl(*values)

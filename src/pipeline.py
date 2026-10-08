@@ -28,6 +28,7 @@ import os
 import re
 from functools import lru_cache
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -523,14 +524,27 @@ class _PackEvidenceReader:
         return self.evidence
 
 
-def extract_pack_evidence(title: str) -> list[dict]:
-    """Retain physical-unit and outer-package quantities with original spans —
-    see _PackEvidenceReader.read (phases, order, output bytes identical)."""
+@lru_cache(maxsize=65536)
+def _extract_pack_evidence_cached(title: str) -> list[dict]:
     return _PackEvidenceReader(title).read()
 
 
-def extract_pack_from_title(title: str) -> tuple:
-    evidence = extract_pack_evidence(title)
+def extract_pack_evidence(title: str) -> list[dict]:
+    """Retain physical-unit and outer-package quantities with original spans —
+    see _PackEvidenceReader.read (phases, order, output bytes identical).
+
+    Memoized: the scan is a pure function of ``title`` and the same column is
+    re-scanned by several phases (volume resolution, evidence ledger). Callers
+    only read/spread the entries, so the cached list is safe to share.
+    """
+    if not isinstance(title, str):
+        return _PackEvidenceReader(title).read()
+    return _extract_pack_evidence_cached(title)
+
+
+@lru_cache(maxsize=65536)
+def _extract_pack_from_title_cached(title: str) -> tuple:
+    evidence = _extract_pack_evidence_cached(title)
     units = [entry for entry in evidence if entry["role"] == "unit_count"]
     if units:
         return units[0]["count"], units[0]["confidence"]
@@ -549,6 +563,12 @@ _ATTR_VOLUME_RE = re.compile(
 _ATTR_VOLUME_NUMBER_RE = re.compile(r"\d+(?:[.,]\s*\d+)?")
 _ATTR_COUNT_PER_UNIT_RE = re.compile(r"Count per Unit:\s*(\d+)(?!\d|[.,/]\s*\d)", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
+
+
+def extract_pack_from_title(title: str) -> tuple:
+    if not isinstance(title, str):
+        return _extract_pack_from_title_cached(str(title))
+    return _extract_pack_from_title_cached(title)
 
 
 def parse_attribute_volume_pack(

@@ -77,7 +77,29 @@ def _flavor_probe(flavor: str) -> "re.Pattern":
     return re.compile(r'\b' + re.escape(flavor) + r'\b')
 
 
+@lru_cache(maxsize=65536)
+def _listing_identity_cached(title: str, attributes: str, description: str) -> tuple:
+    facts = _listing_identity_impl(title, attributes, description)
+    return tuple((key, tuple(values)) for key, values in facts.items())
+
+
 def listing_identity(title: str, attributes: str = '', description: str = '') -> dict[str, list[str]]:
+    """Memoized view of :func:`_listing_identity_impl`.
+
+    The declaration scan is pure in its three source cells and the same
+    listing is re-walked by the extraction ledger and the identity lane. A
+    fresh dict of fresh lists is returned so no caller can mutate the cached
+    value.
+    """
+    key = (title, attributes, description)
+    try:
+        cached = _listing_identity_cached(*key)
+    except TypeError:
+        return _listing_identity_impl(*key)
+    return {dimension: list(values) for dimension, values in cached}
+
+
+def _listing_identity_impl(title: str, attributes: str = '', description: str = '') -> dict[str, list[str]]:
     from core.product_selection import selected_identity_inputs
     selected_title, selected_attributes, selected_variant = selected_identity_inputs(title, attributes)
     title_text = normalized_attribute_text(selected_title)
