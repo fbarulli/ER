@@ -208,6 +208,12 @@ def test_recipe_defaults_reproduced_from_config(tmp_path, monkeypatch):
     assert "TrainConfig(**FINETUNE_CONFIG" in script
     assert "laya_train.finetune(" in script
     assert "train_cli" not in script
+    # the SEPARATE control block (never a TrainConfig kwarg) rides the
+    # receipt and the staged kernel: every declared dial is baked.
+    assert set(receipt["control"]) == set(laya_lane.FINETUNE_CONTROL_FIELDS)
+    assert receipt["control"]["profile"] is True
+    assert "FINETUNE_CONTROL = {" in script
+    assert not __import__("re").search(r"@[A-Z][A-Z0-9_]*@", script)
     # the patch is a faithful copy: the recipe-critical schedule lines stay
     assert "window_start = (n_steps // config.grad_accum) * config.grad_accum" in script
     assert "torch.nn.utils.clip_grad_norm_(params, config.grad_clip)" in script
@@ -305,6 +311,10 @@ def test_rendered_finetune_eval_kernel_is_eval_only(tmp_path, monkeypatch):
     assert "train_model(" not in script
     assert "train_cli" not in script
     assert "laya-train" not in script
+    # every @TOKEN@ was substituted (a missing value would leak a marker)
+    import re
+
+    assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
 
 
 def test_finetune_eval_kernel_fails_loud_without_checkpoint_source(
@@ -589,3 +599,21 @@ def test_kernel_and_lane_calibration_helpers_stay_in_lockstep(
             "n_by_bucket": {"noul:2": 1},
             "abstention_thresholds": {"noul:2": 0.85, "default": 0.75},
             "min_confidence": 0.75}
+
+
+def test_staged_finetune_kernel_bakes_wandb_key_and_never_leaks_it(
+        tmp_path, monkeypatch):
+    """Env/secret injection: the WANDB key is read at STAGE time and baked into
+    the kernel only; the receipt MUST NOT carry it."""
+    _spec(tmp_path, monkeypatch)
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(laya_lane, "_env_value",
+                        lambda name: "sekret" if name == "WANDB_API_KEY" else None)
+    monkeypatch.setattr(laya_lane, "_wandb_project", lambda: "e-r")
+    receipt = laya_lane.stage_finetune_kernel(run_tag="laya_test")
+    script = (Path(receipt["staged"]) / "laya_finetune.py").read_text()
+    assert 'WANDB_API_KEY = "sekret"' in script
+    assert 'WANDB_PROJECT = "e-r"' in script
+    # the secret is baked into the staged kernel, never into the receipt
+    assert "sekret" not in json.dumps(receipt)
