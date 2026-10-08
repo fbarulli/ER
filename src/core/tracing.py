@@ -132,6 +132,12 @@ raises when one does not close:
 It is RUN-SCOPED: the file holds up to TRACE_RUN_HISTORY runs, so the default
 run is the one the artifacts on disk resolve to (the writers' own rule), never
 "the last matching row in the file" — see :func:`_rows_of_run`.
+
+ENFORCED IN PRODUCTION: :meth:`TraceRun.write` (the boundary every stage flush
+commits through) calls :func:`_enforce_write_accounting` before the atomic
+write. It raises only when a run's STATED identity does not close — a genuine
+mismatch — and never on a partial run that has no identity terms to close, so a
+green run is never broken. The strict contract stays in :func:`accounting`.
 """
 
 from __future__ import annotations
@@ -300,11 +306,13 @@ def orchestration_trace_stages() -> dict[str, tuple[str, ...]]:
     module holds no copy of them. Keys are orchestration stages in execution
     order, values the trace stage name(s) their producers write. An empty tuple
     means the stage writes no trace rows today (a coverage gap, not a silent
-    success).
+    success). Read through the TYPED accessor (``data_cfg().orchestration_stages``)
+    so the join is a real attribute access on the loaded config, not a string-key
+    ``.get`` that a static reader-audit cannot distinguish from a dead key.
     """
     from core import common
 
-    declared = common.load_config().get("orchestration_stages", {})
+    declared = common.data_cfg().orchestration_stages
     return {str(stage): tuple(names) for stage, names in declared.items()}
 
 
@@ -314,11 +322,12 @@ def orchestration_lane_stages() -> tuple[str, ...]:
     These are the stages the orchestrator inserts (before ``validation``) only
     when a negative-supply run tag is requested, and the ones ``prepare_all``
     excludes when it needs the base stage list (state validation, resume
-    arithmetic).
+    arithmetic). Read through the typed accessor (``data_cfg()``), the same
+    real-attribute-access SSOT :func:`orchestration_trace_stages` uses.
     """
     from core import common
 
-    return tuple(common.load_config().get("orchestration_lane_stages", ()))
+    return tuple(common.data_cfg().orchestration_lane_stages)
 
 
 def trace_stages_for(orchestration_stage: str) -> tuple[str, ...]:
@@ -505,12 +514,18 @@ def _canonical_accounting(row, result: dict[str, object]) -> None:
         result[term] = None if value is None else int(float(value))
 
 
-def _enforce_row_identity(result: dict[str, object]) -> None:
+def _enforce_row_identity(result: dict[str, object], *, require_stated: bool = True) -> None:
     """The two documented row closures, or a loud failure.
 
         guard.in  == rows_retained + gtin_missing_or_nan + gs1_checksum_failed
                                   + identity_review_quarantined
         guard.out == canonical.out + collapsed_same_gtin
+
+    ``require_stated=False`` is the WRITE boundary's conservative mode: a term
+    the row does not STATE is not "zero of those", and a partial run (a smoke
+    fixture, a lane that writes a bare guard row before its canonical row
+    exists) has nothing to close, so it is skipped rather than failed. The
+    strict contract (the default) is :func:`accounting`, which the readers call.
 
     LIVE EVIDENCE for the quarantine term (results/logs/training_trace.csv, all
     three runs in it — read off the guard row's detail and the canonical row):
@@ -530,11 +545,13 @@ def _enforce_row_identity(result: dict[str, object]) -> None:
         return  # no guard row in scope: nothing to close (e.g. a pairs-only frame)
     unstated = [term for term in GUARD_IDENTITY_TERMS if result.get(term) is None]
     if unstated:
-        raise ValueError(
-            f"the gtin-guard row does not state {unstated}, so the row identity "
-            f"({GUARD_STEP[1]}) cannot be checked; an absent drop population is "
-            f"NOT zero and must be named on the row"
-        )
+        if require_stated:
+            raise ValueError(
+                f"the gtin-guard row does not state {unstated}, so the row identity "
+                f"({GUARD_STEP[1]}) cannot be checked; an absent drop population is "
+                f"NOT zero and must be named on the row"
+            )
+        return
     accounted = result["rows_retained"] + sum(
         result[term] for term in GUARD_IDENTITY_TERMS
     )
@@ -550,10 +567,12 @@ def _enforce_row_identity(result: dict[str, object]) -> None:
     if "canonical_records" not in result:
         return
     if result.get("collapsed_same_gtin") is None:
-        raise ValueError(
-            f"the canonical row ({CANONICAL_STEP[1]}) does not state "
-            f"collapsed_same_gtin, so the guard-out identity cannot be checked"
-        )
+        if require_stated:
+            raise ValueError(
+                f"the canonical row ({CANONICAL_STEP[1]}) does not state "
+                f"collapsed_same_gtin, so the guard-out identity cannot be checked"
+            )
+        return
     collapsed = result["canonical_records"] + result["collapsed_same_gtin"]
     if result["rows_retained"] != collapsed:
         raise ValueError(
@@ -627,6 +646,16 @@ def _census_accounting(
     }
 
 
+def _row_for_step(scoped: pd.DataFrame, step: tuple[str, str]) -> pd.Series | None:
+    """The last row of ``scoped`` for one (stage, step), or ``None``."""
+    stage, name = step
+    hit = scoped[
+        scoped["stage"].astype(str).eq(stage)
+        & scoped["step"].astype(str).eq(name)
+    ]
+    return None if hit.empty else hit.iloc[-1]
+
+
 def accounting(
     frame: pd.DataFrame, *, run_id: str | None = None
 ) -> dict[str, object]:
@@ -654,20 +683,12 @@ def accounting(
     """
     scoped, resolved = _rows_of_run(frame, run_id)
 
-    def row(step: tuple[str, str]) -> pd.Series | None:
-        stage, name = step
-        hit = scoped[
-            scoped["stage"].astype(str).eq(stage)
-            & scoped["step"].astype(str).eq(name)
-        ]
-        return None if hit.empty else hit.iloc[-1]
-
     result: dict[str, object] = {
         "run_id": resolved,
         "rows_in_scope": int(len(scoped)),
     }
-    _row_accounting(row(GUARD_STEP), result)
-    _canonical_accounting(row(CANONICAL_STEP), result)
+    _row_accounting(_row_for_step(scoped, GUARD_STEP), result)
+    _canonical_accounting(_row_for_step(scoped, CANONICAL_STEP), result)
     _enforce_row_identity(result)
     decisions = _census_accounting(scoped, "gate.decision_", run_id=resolved)
     if decisions:
@@ -678,6 +699,26 @@ def accounting(
         result["label_destiny"] = labels
         result["label_pairs"] = sum(labels.values())
     return result
+
+
+def _enforce_write_accounting(frame: pd.DataFrame, *, run_id: str) -> None:
+    """The write boundary's accounting enforcement (conservative).
+
+    This is the PRODUCTION wiring of :func:`accounting`: every stage flush
+    commits through :meth:`TraceRun.write`, so a run whose STATED identity does
+    not close fails here instead of publishing a trace its readers reject. Only
+    the closures are enforced -- a term the guard/canonical row does not STATE
+    is not "zero of those", and a partial run (a smoke fixture, a lane that
+    writes a bare guard row before its canonical row exists) has nothing to
+    close, so failing it would wedge the pipeline on an incomplete census. The
+    strict contract (including the "does not state a term" error) stays in
+    :func:`accounting`, which readers and tests call explicitly.
+    """
+    scoped, _ = _rows_of_run(frame, run_id)
+    result: dict[str, object] = {}
+    _row_accounting(_row_for_step(scoped, GUARD_STEP), result)
+    _canonical_accounting(_row_for_step(scoped, CANONICAL_STEP), result)
+    _enforce_row_identity(result, require_stated=False)
 
 
 def _raw_detail_text(detail: object) -> str:
@@ -1556,6 +1597,7 @@ class TraceRun:
                 path=f"{target} (run {self.run_id!r})",
             )
             _report_other_runs(frame, target=target, run_id=self.run_id)
+            _enforce_write_accounting(frame, run_id=self.run_id)
             atomic_write_csv(frame, target, index=False)
         return target
 

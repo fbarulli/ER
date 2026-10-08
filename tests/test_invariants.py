@@ -346,7 +346,13 @@ def _config_drift(repo_root: Path) -> dict[str, list]:
             else:
                 leaves[(config_path.name, ".".join(path))] = node
 
-    attribute_names: set[str] = set()
+    # A leaf counts as READ only when some src AST node is a REAL attribute
+    # access onto it (``loaded_config.<key>`` -- the typed config models and
+    # their nested spec fields). A bare identifier named like the key and a
+    # string literal that merely CONTAINS the key are coincidences, not reads:
+    # that is exactly how a dead ``orchestration_stages``-style block looked
+    # clean while its only mentions were a docstring / ``.get("...")`` literal.
+    attribute_reads: set[str] = set()
     literals: dict[str, set[str]] = {}
     for source in sorted((repo_root / "src").rglob("*.py")):
         relative = source.relative_to(repo_root).as_posix()
@@ -356,17 +362,14 @@ def _config_drift(repo_root: Path) -> dict[str, list]:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute):
-                attribute_names.add(node.attr)
-            elif isinstance(node, ast.Name):
-                attribute_names.add(node.id)
+                attribute_reads.add(node.attr)
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                 literals.setdefault(node.value, set()).add(relative)
 
     unread, duplicated, mirrored = [], [], []
     for (config_name, path), value in leaves.items():
         key = path.rsplit(".", 1)[-1]
-        if not key.startswith("[") and key not in attribute_names \
-                and not any(key in literal for literal in literals):
+        if not key.startswith("[") and key not in attribute_reads:
             unread.append(f"{config_name}:{path}")
         if not (isinstance(value, str) and len(value) >= 6
                 and (value.endswith(_ARTIFACT_SUFFIX) or "/" in value)):
@@ -385,9 +388,12 @@ def _config_drift(repo_root: Path) -> dict[str, list]:
 def test_config_leaves_have_readers_and_no_literal_duplicate_values():
     """Every config leaf is read, and no code literal respells a config value.
 
-    The scan is static (yaml leaves vs src AST), so a key consumed wholesale by
-    a generic loader still counts as read; the drift it reports is the one the
-    audit asked for.
+    The scan is static (yaml leaves vs src AST). A leaf is "read" only when
+    code performs a REAL attribute access on the loaded config
+    (``data_cfg().column_mapping``, ``training_cfg().bundle...``); a bare
+    identifier or a string literal that merely mentions the key is a
+    coincidence, not a reader, so a dead block can no longer hide behind its
+    own name. The drift this reports is the one the audit asked for.
     """
     drift = _config_drift(Path(__file__).parents[1])
     if drift["unread"] or drift["duplicated"]:

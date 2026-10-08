@@ -2799,6 +2799,33 @@ PREPARATION_REUSABLE_KEYS = (
 )
 
 
+#: The archive-sidecar suffix's typed fallback. The ONE runtime home is
+#: ``bundle.sha256_sidecar_suffix`` (config/training.yaml, via
+#: ``core.common.training_cfg``); this module-level constant is the schema
+#: default both :class:`BundleSpec` and :class:`KaggleFilesSpec` fall back to
+#: while ``TrainingConfig`` is itself mid-load (the projection then overwrites
+#: the Kaggle field with the real value). It is a single mirror, not a second
+#: source of truth.
+_SHA256_SIDECAR_SUFFIX = ".sha256"
+
+
+def _bundle_sidecar_suffix() -> str:
+    """The ONE archive-sidecar-suffix home, for KaggleFilesSpec's default.
+
+    ``KaggleFilesSpec.hash_suffix`` is a PROJECTION of
+    ``bundle.sha256_sidecar_suffix``, never an independent declaration. Reading
+    it lazily here (rather than restating the literal) means a stand-alone
+    ``KaggleSpec()`` carries the SSOT's suffix. During ``TrainingConfig``'s OWN
+    first validation the singleton is still being built, so the typed fallback
+    above stands in and the projection overwrites it immediately after.
+    """
+    try:
+        from core.common import training_cfg
+        return str(training_cfg().bundle.sha256_sidecar_suffix)
+    except (ImportError, NameError, AttributeError):
+        return _SHA256_SIDECAR_SUFFIX
+
+
 class KaggleFilesSpec(BaseModel):
     """Configured Kaggle files contract."""
 
@@ -2856,10 +2883,10 @@ class KaggleFilesSpec(BaseModel):
     #: ``bundle.sha256_sidecar_suffix`` and TrainingConfig copies that value in
     #: (see ``_sidecar_suffix_has_one_home``). The field survives only because
     #: the rendered kernel LANE contract (cli.kaggle_kernel_templates) and
-    #: cli.kaggle_outputs read ``spec.files.hash_suffix`` for every kind; the
-    #: literal below is the fallback for a stand-alone ``KaggleSpec()``, which
-    #: no production path builds (they read ``training_cfg().kaggle``).
-    hash_suffix: str = ".sha256"
+    #: cli.kaggle_outputs read ``spec.files.hash_suffix`` for every kind; its
+    #: default derives from the bundle SSOT (``_bundle_sidecar_suffix``) so a
+    #: stand-alone ``KaggleSpec()`` is not a second source of truth.
+    hash_suffix: str = Field(default_factory=_bundle_sidecar_suffix)
 
 
 class KaggleRemoteSpec(BaseModel):
@@ -3182,7 +3209,7 @@ class BundleSpec(BaseModel):
     postprocess_location_bundle: str = "bundle finalize"
     # Transport sidecars: the whole-archive digest token and the retained
     # failure-path event log (success folds the events into the result archive).
-    sha256_sidecar_suffix: str = ".sha256"
+    sha256_sidecar_suffix: str = _SHA256_SIDECAR_SUFFIX
     events_sidecar_suffix: str = ".events.jsonl"
 
 

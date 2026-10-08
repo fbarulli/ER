@@ -316,3 +316,19 @@ def test_lane_package_manifest_is_the_bundle_inputs_manifest():
 
     assert config.kaggle.files.package_manifest == 'renamed_package.json'
     assert config.kaggle.files.package_manifest == config.bundle.manifest_inputs
+
+
+def test_kaggle_files_hash_suffix_derives_from_the_bundle_home():
+    """A stand-alone ``KaggleSpec()`` carries the bundle SSOT's sidecar suffix.
+
+    ``KaggleFilesSpec.hash_suffix`` is a PROJECTION, not a second literal: its
+    default reads ``bundle.sha256_sidecar_suffix``, so a spec built outside a
+    full ``TrainingConfig`` (no production path does, but the field must not be
+    a second source of truth) still agrees with the ONE home.
+    """
+    from core.common import training_cfg
+    from core.schemas import KaggleSpec
+
+    spec = KaggleSpec()
+    assert spec.files.hash_suffix == training_cfg().bundle.sha256_sidecar_suffix
+    assert spec.files.hash_suffix == ".sha256"

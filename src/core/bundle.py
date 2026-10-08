@@ -222,13 +222,24 @@ class Bundle(BaseModel):
     @classmethod
     def from_directory(cls, directory: Path | str, role: BundleRole | str, *,
                        manifest_name: str | None = None) -> "Bundle":
-        """Wrap an already-unpacked tree (no archive to verify)."""
+        """Wrap an already-unpacked tree (no archive to verify).
+
+        A tree that carries the role's own canonical manifest declares itself a
+        sealed bundle boundary, so it is role-checked exactly like :meth:`load`
+        (see :func:`_refuse_role_violation`): a result tree that still carries
+        every epoch is refused instead of trusted. A raw working tree (no
+        manifest member) is the selection precursor -- it is wrapped
+        permissively and the role contract is enforced when it is sealed.
+        """
         role = BundleRole(role)
         directory = Path(directory)
         name = manifest_name or globals()["manifest_name"](role)
         manifest_path = directory / name
         manifest = (json.loads(manifest_path.read_text(encoding="utf-8"))
                     if manifest_path.is_file() else {})
+        if name == globals()["manifest_name"](role) and manifest_path.is_file():
+            names = _DirectoryReader(directory).namelist()
+            _refuse_role_violation(role, names, where=f"bundle tree {directory}")
         return cls(role=role, path=directory, manifest_name=name,
                    manifest=manifest, digest=None, local=directory)
 
@@ -574,10 +585,20 @@ class Bundle(BaseModel):
     @classmethod
     def trusted(cls, path: Path | str, role: BundleRole | str, manifest: dict[str, Any], *,
                 manifest_name: str | None = None) -> "Bundle":
-        """Wrap a boundary that was just verified by its writer (no re-check)."""
+        """Wrap a boundary that was just verified by its writer (no re-check).
+
+        The role membership contract is still enforced: the manifest's member
+        inventory is the same name set the verified boundary produced, so
+        checking it reads NO member bytes and costs nothing. A manifest that
+        names a role-violating member set is refused, never trusted.
+        """
         role = BundleRole(role)
-        return cls(role=role, path=Path(path),
-                   manifest_name=manifest_name or globals()["manifest_name"](role),
+        name = manifest_name or globals()["manifest_name"](role)
+        if name == globals()["manifest_name"](role):
+            spec = _bundle_spec()
+            names = list(manifest.get(spec.files_key, {}))
+            _refuse_role_violation(role, names, where=f"bundle {path}")
+        return cls(role=role, path=Path(path), manifest_name=name,
                    manifest=manifest, digest=None)
 
     @staticmethod

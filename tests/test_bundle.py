@@ -8,6 +8,7 @@ none), and a result seal that ships the selected-only member set.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -212,6 +213,38 @@ def test_seal_result_requires_result_role(tmp_path: Path) -> None:
     _write(tree / "data/model_tracks/shared/listings.json", "{}")
     with pytest.raises(ValueError):
         Bundle.from_directory(tree, BundleRole.inputs).seal_result(tmp_path / "x.tar.zst")
+
+
+def test_from_directory_refuses_a_result_tree_that_still_carries_every_epoch(
+        tmp_path: Path) -> None:
+    """A tree that declares itself a sealed result (its canonical manifest is
+    present) must be result-only: a raw working tree has no manifest and stays
+    permissive (the selection precursor), but a manifest-bearing multi-epoch
+    tree is refused, exactly like the archive boundary."""
+    spec = _spec()
+    tree = tmp_path / "result"
+    _result_tree(tree)
+    _write(tree / spec.manifest_result, json.dumps({spec.run_tag_key: "r-tag"}))
+    with pytest.raises(ValueError, match="result bundle role contract"):
+        Bundle.from_directory(tree, BundleRole.result)
+
+
+def test_trusted_refuses_a_role_violating_manifest(tmp_path: Path) -> None:
+    """The no-re-check wrapper still enforces the role contract from the
+    manifest's own member inventory (no member bytes are re-read)."""
+    spec = _spec()
+    violating = {
+        "text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors": "d" * 64,
+        "text/_checkpoints/m/r-t_f0/checkpoint-562/model.safetensors": "d" * 64,
+    }
+    with pytest.raises(ValueError, match="result bundle role contract"):
+        Bundle.trusted(tmp_path / "result.tar.zst", BundleRole.result,
+                       {spec.run_tag_key: "r-tag", spec.files_key: violating})
+    # a result-only inventory is trusted unchanged
+    selected = {"text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors": "d" * 64}
+    handle = Bundle.trusted(tmp_path / "result.tar.zst", BundleRole.result,
+                            {spec.run_tag_key: "r-tag", spec.files_key: selected})
+    assert handle.role is BundleRole.result
 
 
 def test_pipeline_steps_are_wired() -> None:
