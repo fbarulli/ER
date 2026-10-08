@@ -304,7 +304,12 @@ class KaggleMonitor:
                 emit(raw)
                 return
             emit(progress_frames_to_lines(payload_text or ""))
-        with destination.open("w", encoding="utf-8") as log_handle:
+        with destination.open("a", encoding="utf-8") as log_handle:
+            # This follower owns only the section after the run's status lines
+            # (the pusher's _log_lane writes those first). On a reconnect the
+            # whole replay is rewritten into that section.
+            log_handle.seek(0, os.SEEK_END)
+            section_start = log_handle.tell()
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
             while True:
@@ -375,11 +380,13 @@ class KaggleMonitor:
                     attempts += 1
                     lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
                               f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
-                    # The next attempt replays from line 0: drop this transcript
-                    # and rewrite it from the replay (no dedup, no drift).
+                    # The next attempt replays from line 0: drop this follower's
+                    # section (not the run's status lines) and rewrite it from
+                    # the replay (no dedup, no drift).
                     log_handle.flush()
-                    log_handle.seek(0)
+                    log_handle.seek(section_start)
                     log_handle.truncate()
+                    log_handle.seek(0, os.SEEK_END)
                     time.sleep(min(lane._spec().limits.retry_seconds * attempts,
                                    60.0))
         plan["session_id"] = session_id
