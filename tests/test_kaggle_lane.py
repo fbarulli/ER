@@ -507,7 +507,7 @@ def test_kernel_identities_resolve_every_kind_from_config(tmp_path, monkeypatch)
     # own manifest+archive pair; the others template the result name)
     assert identities["train"].code_file == spec.files.code_files["train"]
     assert identities["embed"].result_name == spec.files.result_names["embed"]
-    assert identities["finalize"].result_name == kaggle_lane.FINALIZE_RESULT_NAME
+    assert identities["finalize"].result_name == "finalized_bundle"
     assert identities["finalize"].bundle_role == "result"
     assert identities["bundle"].bundle_role == "inputs"
     # The train kernel ships the suite's own sealed result Bundle, so its fetched
@@ -517,7 +517,7 @@ def test_kernel_identities_resolve_every_kind_from_config(tmp_path, monkeypatch)
     assert identities["embed"].bundle_role is None
     assert identities["bundle"].manifest_name(spec.files) == spec.files.bundle_receipt
     assert identities["finalize"].manifest_name(spec.files) == \
-        spec.files.result_manifest.format(kind=kaggle_lane.FINALIZE_RESULT_NAME)
+        spec.files.result_manifest.format(kind=identities["finalize"].result_name)
     # push_kernel reverse-maps a staged code file back to ONE kind
     code_files = [identity.code_file for identity in identities.values()]
     assert len(set(code_files)) == len(code_files) == 4
