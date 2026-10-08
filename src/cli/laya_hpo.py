@@ -49,6 +49,7 @@ from core.common import TRAIN_ROOT, training_cfg
 from core.laya_config import FinetuneSpec
 from core.manifest import atomic_write_json
 from training import (
+    hpo_budget,
     hpo_champions,
     hpo_control_plane,
     hpo_fencing,
@@ -68,6 +69,8 @@ from training.laya_hpo_runtime import (
     objective_value,
     route_dials,
     sample_dials,
+    trial_full_value,
+    trial_primary_value,
 )
 
 # ── staging surface ────────────────────────────────────────────────────────
@@ -319,7 +322,7 @@ def hpo_runtime_source() -> str:
     stripped because the script has exactly one, at the top.
     """
     chunks: list[str] = []
-    for module in (hpo_control_plane, hpo_fencing, hpo_champions,
+    for module in (hpo_control_plane, hpo_fencing, hpo_budget, hpo_champions,
                    laya_hpo_runtime, laya_hpo_options, hpo_observability,
                    hpo_registry, hpo_persistence):
         text = inspect.getsource(module)
@@ -1107,16 +1110,6 @@ def _record_cache_manifest(options):
         log("cache manifest skipped: " + str(error)[:160])
 
 
-def _observe(trial):
-    """Fan one committed trial out to the control-plane observer (best-effort)."""
-    try:
-        observer = globals().get("OBSERVER")
-        if observer is not None:
-            observer.observe(trial)
-    except Exception as error:
-        log("observer skipped: " + str(error)[:160])
-
-
 def make_objective(device, train_path, dev_path, base_model, lease_store,
                    champion_store):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
@@ -1127,7 +1120,6 @@ def make_objective(device, train_path, dev_path, base_model, lease_store,
                 trial, device, train_path, dev_path, base_model),
             lease_store, champion_store, GENERATION_ID, MODEL_KEY,
             objective_mode=options.objective_mode)
-        _observe(trial)
         return value
     return objective
 
@@ -1146,7 +1138,6 @@ def make_ddp_objective(options, lease_store, champion_store):
         value = objective_value(trial, run_fn, lease_store, champion_store,
                                 GENERATION_ID, MODEL_KEY,
                                 objective_mode=options.objective_mode)
-        _observe(trial)
         return value
     return objective
 
@@ -1252,16 +1243,30 @@ def run_worker(device):
         storage=storage,
         **options.session.study_kwargs(),
         **study_kwargs)
-    if not offline:
-        fail_stale_trials(study)
     # Warm start: enqueue known-good seed configs so TPE starts from them.
     for seed_config in options.warm_start.enqueued_trials():
         try:
             study.enqueue_trial(seed_config)
         except Exception as error:
             log("enqueue_trial skipped: " + str(error)[:160])
-    lease_store = None if offline else TrialLeaseStore(storage_config.url)
+    lease_store = None if offline else TrialLeaseStore(
+        storage_config.url, ttl_seconds=storage_config.lease_ttl_seconds)
     champion_store = None if offline else ChampionStore(storage_config.url)
+    if not offline and options.warm_start.mode == "champion":
+        # Read the shared champion registry (the read side that used to be
+        # missing) and warm start from it when its checkpoint is present on
+        # this machine; otherwise fall back to the base model, loudly.
+        champion_artifact = resolve_champion_artifact(
+            champion_store, generation_id=GENERATION_ID, model_key=MODEL_KEY,
+            mode=options.warm_start.mode)
+        if champion_artifact is None:
+            log("warm_start=champion: no champion yet; falling back to the "
+                "base model")
+        else:
+            log("warm_start=champion: seeding from " + champion_artifact)
+        options = build_option_set(HPO_SPACE,
+                                   champion_artifact=champion_artifact)
+        globals()["OPTION_SET"] = options
 
     train_path = resolve_input(TRAIN_JSONL)
     dev_path = resolve_input(DEV_JSONL)
@@ -1279,21 +1284,34 @@ def run_worker(device):
     else:
         objective = make_objective(device, train_path, dev_path, base_model,
                                    lease_store, champion_store)
-    prior = finished_trial_count(study, ("COMPLETE", "PRUNED", "FAIL"))
-    remaining = max(0, int(N_TRIALS) - prior)
-    # DDP serialises trials (torchrun fans each one out); slots parallelise.
-    if os.environ.get("ER_LAYA_HPO_DDP") == "1":
-        divisor = 1
+    optimize_kwargs = options.session.optimize_kwargs()
+    if offline:
+        # Offline fallback: one SQLite study, no shared coordination, so the
+        # local remaining-budget split still applies.
+        prior = finished_trial_count(study, ("COMPLETE", "PRUNED", "FAIL"))
+        remaining = max(0, int(N_TRIALS) - prior)
+        divisor = (1 if os.environ.get("ER_LAYA_HPO_DDP") == "1"
+                   else max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
+                                   or N_JOBS)))
+        per_worker = per_worker_budget(remaining, divisor)
+        log("offline worker budget prior=%d remaining=%d per_worker=%d study=%s"
+            % (prior, remaining, per_worker, study_name))
+        if per_worker:
+            study.optimize(objective, n_trials=per_worker, **optimize_kwargs)
     else:
-        divisor = max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
-                             or N_JOBS))
-    per_worker = per_worker_budget(remaining, divisor)
-    log("worker budget prior=%d remaining=%d per_worker=%d study=%s timeout=%s"
-        % (prior, remaining, per_worker, study_name,
-           options.session.timeout_s or "none"))
-    if per_worker:
-        study.optimize(objective, n_trials=per_worker,
-                       **options.session.optimize_kwargs())
+        # Shared, atomic reservation: reserve ONE trial at a time so the TOTAL
+        # COMPLETE count across every worker/session cannot exceed N_TRIALS,
+        # and a FAIL/PRUNED trial releases its slot instead of starving the run.
+        ledger = WorkLedger(storage_config.url, generation_id=GENERATION_ID,
+                            model_key=MODEL_KEY, budget=int(N_TRIALS))
+        log("worker shared budget=%d remaining=%d study=%s timeout=%s"
+            % (int(N_TRIALS), ledger.snapshot().remaining(), study_name,
+               options.session.timeout_s or "none"))
+        ReservedTrialLoop(
+            study, objective, ledger, optimize_kwargs=optimize_kwargs,
+            observer=observer, champion_store=champion_store,
+            generation_id=GENERATION_ID, model_key=MODEL_KEY,
+            timeout_s=options.session.timeout_s, log=log).run()
     wandb_finish()
 
 
@@ -1319,21 +1337,34 @@ def write_session_receipt():
     study = optuna.load_study(study_name=study_name, storage=storage)
     complete = [trial for trial in study.trials
                 if trial.state == optuna.trial.TrialState.COMPLETE
-                and trial.value is not None]
-    best = max(complete, key=lambda trial: trial.value) if complete else None
+                and trial_primary_value(trial) is not None]
+    best = (max(complete, key=trial_primary_value) if complete else None)
+
+    def _receipt_value(trial):
+        full = trial_full_value(trial)
+        if not full:
+            return None
+        return full[0] if len(full) == 1 else full
+
     trials = [{
         "number": int(trial.number),
         "state": trial.state.name,
-        "value": trial.value,
+        "value": _receipt_value(trial),
+        "values": trial_full_value(trial),
         "params": trial.params,
         "dev_accuracy": trial.user_attrs.get("dev_accuracy"),
         "dev_loss": trial.user_attrs.get("dev_loss"),
     } for trial in study.trials]
-    # Control-plane observability: CDC events + local study mirror + offline
-    # ledger, rebuilt from the authoritative study at session end.
+    # Control-plane observability, emitted EXACTLY ONCE per trial, after commit:
+    # online the worker ``ReservedTrialLoop`` already emitted the CDC event when
+    # the trial committed, so here we only rebuild the authoritative mirror;
+    # offline there is no worker loop, so rebuild everything from the study.
     observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
     for trial in study.trials:
-        observer.observe(trial)
+        if offline:
+            observer.observe(trial)
+        else:
+            observer.mirror.record(trial)
     observer.flush()
     receipt = {
         "kernel": "laya-hpo",
@@ -1348,7 +1379,8 @@ def write_session_receipt():
         "trials": trials,
         "best": None if best is None else {
             "number": int(best.number),
-            "value": best.value,
+            "value": _receipt_value(best),
+            "values": trial_full_value(best),
             "params": best.params,
             "dev_loss": best.user_attrs.get("dev_loss"),
             "checkpoint": best.user_attrs.get("checkpoint"),
@@ -1402,6 +1434,13 @@ def main():
     specs = options.scheduler.workers(gpu_count or 1)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
+    if not offline:
+        # Reap stale RUNNING trials ONCE, before ANY worker starts, so a worker
+        # cannot race a sibling's freshly-started trial.  A storage error is
+        # loud (never silently skipped).
+        storage = create_storage(storage_from_environment())
+        reaped = reap_stale_trials_for_study(study_name, storage)
+        log("stale-trial reap: " + ("reaped" if reaped else "no study yet"))
     log("session gpus=%d cores=%d mode=%s workers=%d study=%s budget=%d "
         "threads_per_worker=%d timeout=%s"
         % (gpu_count, os.cpu_count() or 1, options.scheduler.mode, len(specs),
@@ -1572,5 +1611,6 @@ __all__ = [
     "stage_laya_hpo_colab",
     "stage_laya_hpo_kernel",
     "study_identity",
-    "validate_space",
+    "trial_full_value",
+    "trial_primary_value",
 ]
