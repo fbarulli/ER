@@ -113,9 +113,12 @@ class LrSchedulerFactory:
         self.onecycle_pct_start = float(onecycle_pct_start)
         self.is_plateau = self.kind == "plateau"
         if self.is_plateau and self.warmup > 0:
-            raise ValueError(
-                "lr_scheduler='plateau' does not support warmup (it steps on "
-                "the per-epoch dev metric); set warmup_steps/warmup_frac to 0")
+            # ReduceLROnPlateau steps on the per-epoch dev metric, so a
+            # per-update linear warmup is meaningless. An HPO draw may pair
+            # plateau with warmup_frac>0; ignoring the warmup keeps every
+            # plateau trial runnable instead of failing it (the alternative
+            # would silently burn the trial budget).
+            self.warmup = 0
 
     @classmethod
     def from_control(cls, control, optimizer, total_updates, min_lr,
@@ -406,7 +409,8 @@ class LossWeightSchedule:
 
     ``mode == "laya"`` reproduces ``laya.train.sigma_at`` exactly (linear sigma,
     constant weights) so a default run is byte-identical; ``linear``/``cosine``
-    interpolate every term with the same curve (never double-scheduled).
+    interpolate every term with the same curve (never double-scheduled);
+    ``constant`` holds every term at its start value (curve 0 for all epochs).
     """
 
     def __init__(self, mode, epochs, sigma_start, sigma_end, w_sph, w_sph_end,
@@ -437,6 +441,8 @@ class LossWeightSchedule:
 
     @staticmethod
     def _curve(frac, mode):
+        if mode == "constant":
+            return 0.0
         if mode == "cosine":
             return 0.5 * (1.0 - math.cos(math.pi * frac))
         return frac

@@ -319,10 +319,11 @@ class DdpTrialScheduler(TrialScheduler):
         ddp = dict(self.config.get("ddp") or {})
         self.nproc_per_node = max(1, int(ddp.get("nproc_per_node", 1)))
         self.backend = str(ddp.get("backend", "nccl"))
+        # master_port is a ``ddp`` sub-key (like nproc_per_node/backend), NOT a
+        # top-level option; reading it from the wrong level silently ignored it.
         # 0/absent means "allocate a free ephemeral port per trial"; a pinned
         # port is honoured only when explicitly configured.
-        self.master_port = int(ddp.get("master_port",
-                                       self.config.get("master_port", 0)) or 0)
+        self.master_port = int(ddp.get("master_port", 0) or 0)
         self.resource_caps = resource_caps
         # Resolved against the session's real device count by workers().
         self.resolved_nproc = self.nproc_per_node

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import copy
 import importlib
-import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,10 +33,20 @@ _TRACK_TUNABLES = {
     "cascade": ("hnsw_m", "hnsw_ef_construction", "hnsw_ef_search"),
 }
 _TRACK_OBJECTIVES = {
-    "text": ("recall_at_k", "maximize", "model_tracks.run:run"),
-    "gnn": ("pair_auc", "maximize", "graph_tracks.train:train"),
-    "cascade": ("cascade_recall", "maximize", "graph_tracks.report:report_cascade"),
+    "text": ("recall_at_k", "maximize", "model_tracks.run:run",
+             "training.hpo_objectives:TextObjective"),
+    "gnn": ("pair_auc", "maximize", "graph_tracks.train:train",
+            "training.hpo_objectives:GnnObjective"),
+    "cascade": ("cascade_recall", "maximize",
+                "graph_tracks.report:report_cascade",
+                "training.hpo_objectives:CascadeObjective"),
 }
+# The per-trial objective adapter (``module:attr``) for each family. The adapter
+# validates its runner's signature at construction; the backbone runner is a
+# sweep driver and fails loud there rather than yielding an objective that
+# crashes (or returns None) when invoked.
+_ADAPTER_BACKBONE = "training.hpo_objectives:BackboneObjective"
+_ADAPTER_LAYA = "training.hpo_objectives:LayaObjective"
 
 
 def project_root() -> Path:
@@ -51,15 +60,30 @@ def ssot_model_keys() -> list[str]:
     return list(load_config()["models"])
 
 
+def training_fixed_params() -> dict:
+    """The 0-width ``hpo.tpe_space`` entries: fixed values, never sampled.
+
+    ``epochs: [10, 10]`` is a fixed budget, not a dial; sampling it yields an
+    inert zero-width dimension. It is reported here instead so metadata stays
+    complete without pretending it is searchable.
+    """
+    from core.common import hpo_cfg
+    return {name: lo for name, (lo, hi) in hpo_cfg()["tpe_space"].items()
+            if lo == hi}
+
+
 def training_hpo_space() -> dict:
     """The main training HPO space from ``config/training.yaml hpo.tpe_space``.
 
     The SSOT already carries ranges; only the type/log flag is inferred from the
-    values (int vs float; log for learning-rate-style knobs).
+    values (int vs float; log for learning-rate-style knobs). A zero-width
+    (``lo == hi``) entry is a fixed param, not a dial, and is skipped.
     """
     from core.common import hpo_cfg
     out = {}
     for name, (lo, hi) in hpo_cfg()["tpe_space"].items():
+        if lo == hi:
+            continue
         is_int = isinstance(lo, int) and isinstance(hi, int)
         spec = {"type": "int" if is_int else "float",
                 "lo": int(lo) if is_int else float(lo),
@@ -115,28 +139,26 @@ def laya_space() -> dict:
 class TrialObjective:
     """A real ``(trial, context=None) -> float`` objective for one model.
 
-    ``evaluator`` is a callable ``(dials: dict, context: dict) -> metric``. The
-    contract is validated at construction (it must accept exactly the two
-    arguments) so a bare runner with the wrong signature can never masquerade as
-    an objective.
+    ``adapter`` is a :class:`training.hpo_objectives.ModelObjective` whose
+    constructor validated the wrapped RUNNER's signature (fail loud), so a bare
+    runner with the wrong contract can never masquerade as an objective. This
+    dataclass owns only sampling + the public ``(trial, context)`` entrypoint.
     """
 
     model_key: str
     space: dict
     metric: str
     direction: str
-    evaluator: object
+    adapter: object
     lower_is_better: bool = False
 
     def __post_init__(self):
-        if not callable(self.evaluator):
-            raise TypeError(f"{self.model_key}: evaluator must be callable")
-        try:
-            inspect.signature(self.evaluator).bind({}, {})
-        except TypeError as exc:
+        if not callable(self.adapter):
+            raise TypeError(f"{self.model_key}: objective adapter must be callable")
+        if not callable(getattr(self.adapter, "score", None)):
             raise TypeError(
-                f"{self.model_key}: evaluator must accept (dials, context): "
-                f"{exc}") from exc
+                f"{self.model_key}: objective adapter must expose score("
+                "trial, dials, context)")
 
     def sample(self, trial) -> dict:
         from training.laya_hpo_runtime import sample_dials
@@ -144,7 +166,7 @@ class TrialObjective:
 
     def __call__(self, trial, context=None) -> float:
         dials = self.sample(trial)
-        return float(self.evaluator(dials, dict(context or {})))
+        return float(self.adapter(trial, dials, dict(context or {})))
 
     def as_dict(self):
         return {"model_key": self.model_key, "metric": self.metric,
@@ -162,7 +184,7 @@ class ObjectiveDescriptor:
     runner: str
     space: dict = field(default_factory=dict)
     lower_is_better: bool = False
-    evaluator: str = ""
+    adapter: str = ""
 
     def resolve_runner(self):
         """Import and return the model's real runner callable."""
@@ -178,46 +200,22 @@ class ObjectiveDescriptor:
                 f"objective runner {self.runner!r} is not defined") from exc
 
     def objective(self) -> TrialObjective:
-        """The real objective callable wrapping the evaluator adapter."""
-        evaluator = _resolve_evaluator(self.evaluator) if self.evaluator else None
-        if evaluator is None:
-            evaluator = _runner_evaluator(self.runner, self.metric)
+        """The real objective: an adapter validated against the real runner."""
+        from training.hpo_objectives import CallableObjective, resolve_runner
+        adapter_cls = (resolve_runner(self.adapter) if self.adapter
+                       else CallableObjective)
+        runner = resolve_runner(self.runner)
+        adapter = adapter_cls(runner, metric=self.metric)
         return TrialObjective(
             model_key=self.model_key, space=copy.deepcopy(self.space),
             metric=self.metric, direction=self.direction,
-            evaluator=evaluator, lower_is_better=self.lower_is_better)
+            adapter=adapter, lower_is_better=self.lower_is_better)
 
     def as_dict(self):
         return {"model_key": self.model_key, "metric": self.metric,
                 "direction": self.direction, "runner": self.runner,
                 "lower_is_better": self.lower_is_better,
                 "dials": sorted(self.space)}
-
-
-def _resolve_evaluator(reference: str):
-    if ":" not in reference:
-        raise ValueError(f"evaluator must be 'module:attr', got {reference!r}")
-    module_name, _, attr = reference.partition(":")
-    module = importlib.import_module(module_name)
-    try:
-        return getattr(module, attr)
-    except AttributeError as exc:
-        raise RuntimeError(
-            f"objective evaluator {reference!r} is not defined") from exc
-
-
-def _runner_evaluator(runner_ref: str, metric: str):
-    """A real evaluator that calls the model runner and extracts the metric.
-
-    The runner contract is ``runner(dials, context) -> mapping`` (or a scalar).
-    """
-    def evaluate(dials, context):
-        runner = _resolve_evaluator(runner_ref)
-        result = runner(dials, context)
-        if isinstance(result, dict):
-            return float(result[metric])
-        return float(result)
-    return evaluate
 
 
 @dataclass(frozen=True)
@@ -230,7 +228,7 @@ class ModelHpoSpec:
     direction: str
     runner: str
     lower_is_better: bool = False
-    evaluator: str = ""
+    adapter: str = ""
 
     def search_space(self):
         space = self.space() if callable(self.space) else self.space
@@ -241,7 +239,7 @@ class ModelHpoSpec:
             model_key=self.model_key, metric=self.metric,
             direction=self.direction, runner=self.runner,
             space=self.search_space(), lower_is_better=self.lower_is_better,
-            evaluator=self.evaluator)
+            adapter=self.adapter)
 
     def as_dict(self):
         return {"model_key": self.model_key, "metric": self.metric,
@@ -308,23 +306,27 @@ def model_keys(*, root: Path | None = None) -> list[str]:
 def default_registry(*, root: Path | None = None) -> HpoModelRegistry:
     """The SSOT-sourced registry (no parallel key list, no re-declared bounds)."""
     registry = HpoModelRegistry()
-    # Every project model backbone shares the training HPO space/objective.
+    # Every project model backbone shares the training HPO space/objective. The
+    # backbone objective adapter fails loud at construction (run_hpo is a sweep
+    # driver, not a per-trial objective).
     for key in ssot_model_keys():
         registry.register(ModelHpoSpec(
             model_key=key, space=training_hpo_space, metric="rand_index_proxy",
-            direction="maximize", runner="training.training:run_hpo"))
+            direction="maximize", runner="training.training:run_hpo",
+            adapter=_ADAPTER_BACKBONE))
     # The laya lane's own key.
     from cli.laya_hpo import load_space
     laya_key = load_space()["model_key"]
     registry.register(ModelHpoSpec(
         model_key=laya_key, space=laya_space, metric="dev_accuracy",
         direction="maximize",
-        runner="training.laya_hpo_runtime:objective_value"))
+        runner="training.laya_hpo_runtime:objective_value",
+        adapter=_ADAPTER_LAYA))
     # The track keys, spaces read from their SSOT YAMLs.
-    for track, (metric, direction, runner) in _TRACK_OBJECTIVES.items():
+    for track, (metric, direction, runner, adapter) in _TRACK_OBJECTIVES.items():
         registry.register(ModelHpoSpec(
             model_key=track, space=(lambda t=track: track_space(t, root=root)),
-            metric=metric, direction=direction, runner=runner))
+            metric=metric, direction=direction, runner=runner, adapter=adapter))
     return registry
 
 
@@ -338,5 +340,6 @@ __all__ = [
     "model_keys",
     "ssot_model_keys",
     "track_space",
+    "training_fixed_params",
     "training_hpo_space",
 ]

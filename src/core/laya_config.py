@@ -155,8 +155,9 @@ class FinetuneSpec(BaseModel):
     batch_ramp_start_frac: float = Field(default=0.25, gt=0.0, le=1.0)
     batch_ramp_epochs: int = Field(default=2, ge=0)
     # loss_schedule: ONE schedule for sigma/w_sph/w_rps/margin. "laya"
-    # reproduces laya.train.sigma_at exactly (byte-identical default).
-    loss_schedule: Literal["laya", "linear", "cosine"] = "laya"
+    # reproduces laya.train.sigma_at exactly (byte-identical default);
+    # "constant" holds every term at its start value (no schedule).
+    loss_schedule: Literal["laya", "linear", "cosine", "constant"] = "laya"
     w_sph_end: float | None = Field(default=None, ge=0.0)
     w_rps_end: float | None = Field(default=None, ge=0.0)
     contrastive_margin: float = Field(default=0.0, ge=0.0)

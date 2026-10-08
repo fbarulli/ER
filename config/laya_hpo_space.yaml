@@ -208,6 +208,11 @@ dials:
     lo: 8
     hi: 128
     log: true
+    # NOTE: base_batch is only read when lr_scaling is linear/sqrt, but the
+    # `when` gate expresses a single equality (not "!= none"), so it cannot be
+    # gated off for lr_scaling=none without a second equality form. It stays
+    # sampled; the extra dimension is the documented cost (not a correctness
+    # bug — LrScaler.factor short-circuits to 1.0 when none).
   r_drop:                     # gate
     type: categorical
     target: control
@@ -226,7 +231,7 @@ dials:
     type: float
     target: control
     lo: 0.0
-    hi: 1.0
+    hi: 0.9                # FinetuneSpec requires lt=1.0; a 1.0 rate drops all paths
     when: {dial: drop_path, equals: true}
   drop_path_schedule:
     type: categorical
@@ -241,6 +246,7 @@ dials:
     type: categorical
     target: control
     choices: [8, 16, 32, 64]
+    when: {dial: dynamic_padding, equals: true}
   batch_size_ramp:            # gate
     type: categorical
     target: control
@@ -248,7 +254,7 @@ dials:
   batch_ramp_start_frac:
     type: float
     target: control
-    lo: 0.0
+    lo: 0.01               # FinetuneSpec requires gt=0.0
     hi: 1.0
     when: {dial: batch_size_ramp, equals: true}
   batch_ramp_epochs:

@@ -1532,8 +1532,9 @@ def run_ddp_trial(trial_number):
         reporter.install()
     started = time.time()
     finished = started
-    backend = os.environ.get(options.scheduler.BACKEND_ENV) or None
-    init_distributed(backend)
+    # The DDP backend is config SSOT (options.ddp.backend); pass it through so a
+    # configured gloo/nccl choice is actually applied, not just recorded.
+    init_distributed(backend=getattr(options.scheduler, "backend", None))
     try:
         with profiler:
             run_laya_finetune(trial_train, dev_path, start_model, out_dir,

@@ -121,13 +121,16 @@ def test_trial_scheduler_registry_selects_slots_and_ddp():
 
 
 def test_ddp_torchrun_argv_has_rendezvous():
+    # master_port is a ``ddp`` sub-key (SSOT), not a top-level option: reading
+    # it from the wrong level silently ignored the configured port.
     ddp = opt.DdpTrialScheduler({"parallelism": "ddp",
-                                 "ddp": {"nproc_per_node": 2},
-                                 "master_port": 29511})
+                                 "ddp": {"nproc_per_node": 2,
+                                         "master_port": 29511}})
     argv = ddp.torchrun_argv("laya_hpo.py", ["--trial", "3"])
     assert argv[0] == "torchrun"
     assert argv[argv.index("--nproc_per_node") + 1] == "2"
-    assert "29511" in argv and argv[-2:] == ["--trial", "3"]
+    assert argv[argv.index("--master_port") + 1] == "29511"
+    assert argv[-2:] == ["--trial", "3"]
 
 
 def test_ddp_nproc_clamped_to_devices_and_free_port():
@@ -333,6 +336,23 @@ def test_build_option_set_reads_the_config_block():
     assert "core_allocator" not in payload
     assert "shared_data" not in payload
     json.dumps(payload)  # JSON-serializable
+
+
+def test_build_option_set_reads_ddp_backend_and_master_port():
+    # Both ddp.backend (applied to init_distributed) and ddp.master_port (passed
+    # to torchrun) are nested SSOT keys; the option set must surface them.
+    space = {"options": {"parallelism": "ddp",
+                         "ddp": {"nproc_per_node": 2, "backend": "gloo",
+                                 "master_port": 29600}},
+             "seed": 1}
+    options = opt.build_option_set(space)
+    scheduler = options.scheduler
+    assert isinstance(scheduler, opt.DdpTrialScheduler)
+    assert scheduler.backend == "gloo"
+    assert scheduler.master_port == 29600
+    assert scheduler.as_dict()["backend"] == "gloo"
+    assert scheduler.as_dict()["master_port"] == 29600
+    assert "29600" in scheduler.torchrun_argv("s.py")
 
 
 def test_space_declares_the_options_block():
