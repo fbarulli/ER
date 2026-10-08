@@ -43,8 +43,12 @@ masking:
     mask_extent: 0.15
   profile: baseline
   frac: 0.80          # fraction of positive anchors masked when enabled
-  mask_hard_negatives: false  # OFF for now: on-the-fly masking is non-deterministic; baked views carry it
-  hard_negative_frac: 0.0    # dynamic layer zeroed (owner ruling 2026-10-05); re-enable after evidence
+  mask_hard_negatives: true   # ON (TASK A): dynamic per-presentation masking of hard negatives
+  hard_negative_frac: 0.15    # conservative non-zero default: 15% of hard negatives get a
+                              # dynamic masked view (band hard_negative_mask_lo..hi). Kept
+                              # BELOW the TIER-3 sweep band (0.20-0.33) so the shipped
+                              # baseline stays the low end of the dynamic layer and the
+                              # sweep remains the evidence path for a higher value.
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
@@ -992,7 +996,9 @@ training:
   # Switchable through er-colab --loss. contrastive = OnlineContrastiveLoss
   # over labeled (pos=1/neg=0) hard pairs; mnrl =
   # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
-  loss: "mnrl"
+  # TASK A default turned ON: contrastive is the shipped objective; mnrl stays
+  # selectable via `er-colab --loss mnrl`.
+  loss: "contrastive"
   # ── MNRL subset monitoring + twin warmup (EXP-03) ─────────────────────────
   # Monitoring records per-population (twin/masked/base) mean loss per epoch to
   # mnrl_subset_loss_by_epoch_fold{i}.csv. Observability only: without it no
@@ -1002,7 +1008,7 @@ training:
   mnrl_monitoring:
     enabled: true
   twin_loss_warmup:
-    enabled: false
+    enabled: true           # TASK A: ramp twin-population loss weight over the first epochs
     warmup_epochs: 2
     twin_weight: 0.25
   contrastive_margin: 0.1     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
@@ -1227,16 +1233,18 @@ mining:
   # Each miner has an independent switch and parameter set. Masking is
   # configured separately above.
   ann:
-    # Safe default: ANN mining requires an explicit mining_enabled profile.
-    # masking_only and ordinary training runs must not turn it on implicitly.
-    enabled: false
+    # TASK A: ANN mining enabled as the shipped default. The earlier
+    # "masking_only profiles must not turn it on implicitly" caution is
+    # superseded by the explicit owner turn-on; profiles can still override
+    # this per experiment (mining_profiles.*).
+    enabled: true
     target: 20000             # maximum generic hard/eval pairs per lane
     band: "0.45-0.80"        # cosine band for ANN candidates
     band_mode: "adaptive_quantile" # fixed | adaptive_quantile | intersection
     k: 40                     # top ANN candidates per row
     chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
     exclude_conflicting: true # drop known conflicting-barcode label errors
-    refresh_enabled: false    # ANN stays off unless an explicit experiment enables it
+    refresh_enabled: true     # TASK A: per-epoch fine-tuned ANN refresh (contrastive training)
     refresh_every_epochs: 1   # checkpoint refresh cadence in completed epochs
     candidate_multiplier: 4    # broad candidates retained for score calibration
     score_quantiles: "0.10-0.90" # fine-tuned candidate quantiles inside band
