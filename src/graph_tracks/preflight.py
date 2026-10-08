@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from graph_tracks.config import load_config
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import file_hash, load_records
 from graph_tracks.train import load_pairs
 
 
@@ -86,18 +86,12 @@ def load_inputs(cfg, *, verify_inputs=None):
     pairs = load_pairs(resolve(cfg.pairs), records)
     vectors, metadata = None, None
     if cfg.text_cache:
-        vectors, metadata = load_text_cache(resolve(cfg.text_cache), [r['sku_id'] for r in records])
-        if verify_inputs and manifest is not None:
-            from core.model_input import model_input_composition
-            if metadata.get('composition') != model_input_composition().model_dump(mode='json'):
-                raise ValueError('text cache composition differs from active model input')
-            if cfg.text_checkpoint_sha256 and metadata.get('checkpoint_sha256') != cfg.text_checkpoint_sha256:
-                raise ValueError('text cache checkpoint mismatch')
-            for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):
-                if manifest is not None and metadata.get(key) != manifest.get(key):
-                    raise ValueError(f'text cache/prepared input mismatch: {key}')
-            from training.prepare_embeddings import validate_prepared_provenance
-            validate_prepared_provenance(resolve(cfg.text_cache), metadata, manifest)
+        # Unreachable: GraphConfig rejects text_cache for both tracks
+        # (config.py:131-132), so no graph config reaching load_inputs can
+        # declare a fused text cache. Keep the retired hybrid's cache-load and
+        # provenance contract here as a fail-closed guard rather than letting a
+        # future text-cache track silently skip the provenance checks.
+        raise AssertionError('text_cache is retired: no graph track may declare it')
     return manifest, records, pairs, vectors, metadata
 
 

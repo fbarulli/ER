@@ -1,6 +1,5 @@
 """Shared SHA256 inventories for prepared-input and result archives."""
 from __future__ import annotations
-from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -12,7 +11,7 @@ from pathlib import Path
 import zipfile
 from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
-from core.archive_reader import open_archive, zstd_module, archive_sidecar, archive_settings, tar_archive
+from core.archive_reader import zstd_module, archive_sidecar, archive_settings, tar_archive
 from core.perf_switches import perf_enabled
 from core.progress import tracked
 from core.step_trace import timed, trace_step
@@ -110,20 +109,6 @@ class RuntimeSnapshot(BaseModel):
 
     def inventory(self) -> dict[str, str]:
         return {relative: cached_file_digest(path) for relative, path in self.files.items()}
-
-
-def is_result_archive_member(relative: str,
-                             selected_checkpoints: frozenset[str] = frozenset()) -> bool:
-    """Whether a checkpoint-relative path belongs in the RESULT archive.
-
-    Thin compatibility re-export over :meth:`core.bundle.Bundle.is_result_member`
-    (the predicate now lives with the bundle role it enforces). Imported by
-    :mod:`model_tracks.resume`, :mod:`model_tracks.run` and
-    :mod:`model_tracks.local_complete`; the lazily imported delegation avoids
-    the ``core.bundle`` <-> ``core.portable_archive`` import cycle.
-    """
-    from core.bundle import Bundle
-    return Bundle.is_result_member(relative, selected_checkpoints=selected_checkpoints)
 
 
 # Recompressing these containers wastes CPU and rarely saves meaningful space.
@@ -380,14 +365,6 @@ def verify_open_archive(archive, manifest_name: str, *, inventory_key: str | Non
             with archive.open(name) as handle:
                 actual[name] = hashlib.file_digest(handle, 'sha256').hexdigest()
     return _check_inventory(metadata, actual, manifest_name, inventory_key)
-
-
-@contextmanager
-def verified_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None):
-    """Keep the verified reader open for extraction or configuration inspection."""
-    inventory_key = inventory_key or inventory_key_home()
-    with open_archive(path) as archive:
-        yield archive, verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
 
 
 def verify_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None,

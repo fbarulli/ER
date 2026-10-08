@@ -10,33 +10,33 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.portable_archive import is_result_archive_member
+from core.bundle import Bundle
 from model_tracks.resume import selected_checkpoint_dirs
 
 
 def test_profiling_data_is_dropped() -> None:
-    assert not is_result_archive_member('text/profiles/r-t/fold0/training_trace.json')
-    assert not is_result_archive_member('hybrid/profiles/x/fold0/training_trace.json')
-    assert not is_result_archive_member('resource_profile/gpu.csv')
+    assert not Bundle.is_result_member('text/profiles/r-t/fold0/training_trace.json')
+    assert not Bundle.is_result_member('hybrid/profiles/x/fold0/training_trace.json')
+    assert not Bundle.is_result_member('resource_profile/gpu.csv')
 
 
 def test_resume_only_filenames_dropped_even_when_selected() -> None:
     selected = frozenset({'text/_checkpoints/m/r-t_f0/checkpoint-281'})
     for name in ('optimizer.pt', 'scheduler.pt', 'rng_state.pth', 'training_args.bin', 'scaler.pt'):
-        assert not is_result_archive_member(
+        assert not Bundle.is_result_member(
             f'text/_checkpoints/m/r-t_f0/checkpoint-281/{name}',
             selected_checkpoints=selected)
 
 
 def test_only_selected_checkpoint_kept() -> None:
     selected = frozenset({'text/_checkpoints/m/r-t_f0/checkpoint-281'})
-    assert is_result_archive_member(
+    assert Bundle.is_result_member(
         'text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors',
         selected_checkpoints=selected)
-    assert is_result_archive_member(
+    assert Bundle.is_result_member(
         'text/_checkpoints/m/r-t_f0/checkpoint-281/trainer_state.json',
         selected_checkpoints=selected)
-    assert not is_result_archive_member(
+    assert not Bundle.is_result_member(
         'text/_checkpoints/m/r-t_f0/checkpoint-562/model.safetensors',
         selected_checkpoints=selected)
 
@@ -44,15 +44,15 @@ def test_only_selected_checkpoint_kept() -> None:
 def test_no_selection_drops_all_checkpoints() -> None:
     # Fail-closed: without a resolved selection no checkpoint member ships, so a
     # broken selection can never silently ship every epoch's weights.
-    assert not is_result_archive_member('text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors')
+    assert not Bundle.is_result_member('text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors')
 
 
 def test_ordinary_members_kept() -> None:
-    assert is_result_archive_member('text/text__vectors.npz')
-    assert is_result_archive_member('suite_events.jsonl')
-    assert is_result_archive_member('baseline/shared_minilm__embeddings.npz')
-    assert not is_result_archive_member('.env')
-    assert not is_result_archive_member('wandb/run-1/files/config.yaml')
+    assert Bundle.is_result_member('text/text__vectors.npz')
+    assert Bundle.is_result_member('suite_events.jsonl')
+    assert Bundle.is_result_member('baseline/shared_minilm__embeddings.npz')
+    assert not Bundle.is_result_member('.env')
+    assert not Bundle.is_result_member('wandb/run-1/files/config.yaml')
 
 
 def test_selected_checkpoint_dirs_text_and_graph(tmp_path: Path) -> None:
