@@ -1,0 +1,117 @@
+# config/laya_hpo_space.yaml — the laya fine-tune HPO search space (SSOT).
+#
+# The SINGLE source of truth for the laya Optuna/TPE lane (`cli.laya_hpo`).
+# No bound, choice, type or target appears in code: `sample_dials` dispatches
+# purely from the `dials:` block below, and `apply_dials` routes each sampled
+# value to the channel named by `target`.
+#
+#   target: config   -> a `laya.train.TrainConfig` kwarg (the staged
+#                       FINETUNE_CONFIG block; `finetune_config()`).
+#   target: control  -> a staged training-control kwarg (the FINETUNE_CONTROL
+#                       block `finetune_control()`; never a TrainConfig kwarg).
+#
+# Every `dials.<name>` MUST name a `core.laya_config.FinetuneSpec` field once
+# the laya training-dials branch lands; `validate_space` asserts it TODAY, so a
+# dial rename in the dials branch fails the loader loudly instead of silently
+# sampling a key no trainer reads.
+#
+# This file carries BOUNDS/CHOICES only — NEVER a secret. The shared
+# PostgreSQL Optuna URL lives exclusively in the runtime secret store
+# (`OPTUNA_STORAGE_URL`) and is injected into the staged kernel, never here.
+
+space_version: 1
+
+# The shared-study identity (the model boundary; kept distinct from the
+# generation boundary, which is runtime environment).
+model_key: laya
+
+# TPE budget/sampler. `n_trials` is the CLUSTER budget for the generation
+# (shared across every worker and Kaggle session on this study name); each
+# worker splits the remaining budget so sessions do not multiply it.
+n_trials: 24
+n_jobs: 2          # one GPU worker per visible T4 (2xT4 in a Kaggle session)
+seed: 1729
+
+# The objective contract (rank trials on DEV only; never touch test).
+objective:
+  direction: maximize
+  primary: dev_accuracy
+  secondary: dev_loss      # recorded as a trial user attr, never the ranker
+  forbidden: test          # the held-out split is NEVER an HPO signal
+
+# The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune
+# kernel so an HPO push never clobbers a training push.
+kernel_slug: fbarulli/er-laya-hpo
+
+# The searchable dials. `type` selects the generic `trial.suggest_*` call:
+#   int          -> suggest_int(name, lo, hi)
+#   float        -> suggest_float(name, lo, hi, log=log)
+#   categorical  -> suggest_categorical(name, choices)
+dials:
+  early_stop_patience:
+    type: int
+    target: control
+    lo: 0
+    hi: 6
+  warmup_frac:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 0.1
+  lr_scheduler:
+    type: categorical
+    target: control
+    choices: [cosine, linear, constant, onecycle, plateau]
+  encoder_lr:
+    type: float
+    target: config
+    lo: 1.0e-05
+    hi: 1.0e-04
+    log: true
+  head_lr:
+    type: float
+    target: config
+    lo: 1.0e-04
+    hi: 1.0e-03
+    log: true
+  weight_decay:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 0.1
+  micro_batch:
+    type: categorical
+    target: config
+    choices: [4, 8, 16]
+  grad_accum:
+    type: categorical
+    target: config
+    choices: [4, 8, 16]
+  label_smoothing:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 0.2
+  sigma_start:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 1.0
+  sigma_end:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 0.5
+  ema:
+    type: categorical
+    target: control
+    choices: [false, true]
+  swa:
+    type: categorical
+    target: control
+    choices: [false, true]
+  layer_decay:
+    type: float
+    target: control
+    lo: 0.5
+    hi: 1.0
