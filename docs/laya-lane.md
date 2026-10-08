@@ -23,6 +23,16 @@ receipt records `gpu: "T4 (single)"`, and `LayaSpec.gpu` is a
 `Literal["T4"]` — `gpu: 2xT4` fails validation at config load, never on a
 session.
 
+**Distributed fine-tune (2xT4, GPU count driven).** The finetune **kernel**
+(only) now uses both visible T4s: when `torch.cuda.device_count() > 1` its
+`main()` launches one process per device with `torch.multiprocessing.spawn`
+(`spawn`, never `fork`), each rank initialises `nccl`, wraps the model in
+`DistributedDataParallel` and shards the training items with a per-rank
+`DistributedSampler` (`sampler.set_epoch(epoch)`). On a single GPU / CPU it
+falls back to the original one-process path byte-for-byte. `ER_LAYA_DDP=0`
+forces the single-process fallback; `ER_LAYA_PERF_PATCH=0` also disables the
+distributed loop (the sharded loop lives in the perf patch).
+
 **One class, two kinds.** `LayaLane(kind)` accepts only `kaggle` or
 `colab`; anything else fails loud. `kind=colab` is a DELIVERY CONTRACT
 (payload + receipt text) and nothing else: no `cli.colab` import, no
@@ -81,25 +91,36 @@ python laya_backend.py --kind colab --decision identity
 python laya_backend.py --kind kaggle --decision attribute --execute
 ```
 
-## Stop
+## Stop + session id
 
 First-class teardown; dry-run by default, `--execute` cancels. The kernel is
 resolved from `--decision` (or an explicit `--slug`), never a borrowed
 `cpu`/`gpu` label:
 
 ```bash
+# the launch-recorded session id (offline, no network)
+python laya_backend.py --kind kaggle --decision finetune --session-id
+
 # what it would stop (--decision finetune resolves fbarulli/er-laya-finetune)
 python laya_backend.py --kind kaggle --decision finetune --stop
 
-# cancel the running session
+# cancel (SDK in-place cancel when an id is recorded, else version-replace stub)
 python laya_backend.py --kind kaggle --decision finetune --stop --execute
 ```
 
-Every push records the kernel session id **at launch**
-(`logs/kaggle/<kernel>.session_id`, via `capture_kernel_session_id`), so the
-stop cancels the EXACT session through the SDK (`cancel_kernel_session`); with
-no recorded id it falls back to the version-replace stub. The stop stages under
-`results/kaggle_lane/laya_stop` — the `which='laya'` label, never `cpu`.
+**Where the session id comes from.** Kaggle injects **no**
+`KAGGLE_KERNEL_RUN_ID`/`KAGGLE_SESSION_ID` into the container (probed live);
+the only per-run id is the numeric suffix of `KAGGLE_CONTAINER_NAME`
+(`kaggle_<token>-<session_id>-webtier`). The finetune kernel prints it at boot
+(`[kaggle-session] session_id=…`), the log follower persists it to
+`logs/kaggle/<kernel>.session_id`, and `stop` feeds it to the SDK
+`cancel_kernel_session` (verified: the endpoint accepts this id; the kernel
+`id_no` is rejected). With no recorded id, `stop` falls back to the
+version-replace stub. The first-class parsers/readers are
+`container_session_id()` and `recorded_session_id()` (src/cli/laya_lane.py);
+the follower side is `_reported_session_id()` (src/cli/kaggle_monitor.py). The
+stop stages under `results/kaggle_lane/laya_stop` — the `which='laya'` label,
+never `cpu`.
 
 ## Preflight (ducks in a row, before `--execute`)
 
@@ -149,6 +170,36 @@ overlaps training/calibration (`is_held_out: false`).
 This bakes the old two-step flow (fine-tune, then a separate
 `--decision finetune-eval`) into every run; the eval-only kind still exists for
 scoring an arbitrary fetched checkpoint against an arbitrary split.
+
+## Distributed fine-tune (2xT4, both GPUs)
+
+The finetune kernel runs data-parallel over every visible CUDA device. The
+wiring lives in the embedded kernel templates (`FINETUNE_PERF_PATCH_SOURCE`
+for the loop, `FINETUNE_KERNEL_SCRIPT` for the launch):
+
+| step | where | behaviour |
+|---|---|---|
+| launch | `main()` -> `launch_finetune` | `resolve_nprocs()` = `torch.cuda.device_count()` when DDP + perf patch are on and `>1`; `spawn(..., start_method="spawn")` otherwise single process |
+| detect | `dist_env()` / `is_distributed()` | `LOCAL_RANK`/`RANK`/`WORLD_SIZE`; `WORLD_SIZE<=1` is the legacy single-device path |
+| init | `init_distributed()` | `nccl` + `torch.cuda.set_device(local_rank)`; defaults `MASTER_ADDR`/`MASTER_PORT` for plain spawn |
+| model | `_perf_train_model()` | `DistributedDataParallel(model, device_ids=[local_rank])` (DDP averages the per-rank gradients) |
+| items | `build_distributed_sampler()` | `DistributedSampler(..., seed=config.seed)` per rank, `set_epoch(epoch)` each epoch |
+| loss | `_perf_train_model()` | epoch mean `all_reduce`d (`SUM/world_size`) so every rank logs the same number |
+| rank 0 | `run_on_rank0()` | `barrier()` then rank 0 ONLY: per-epoch/final checkpoint, held-out eval, receipt, `tar.gz`. Other ranks get `save_checkpoint = no-op` and a private `checkpoint.rankN` scratch dir |
+| teardown | `finetune_worker()` | `destroy_process_group()` in `finally` |
+
+Opt-outs / fallbacks: `ER_LAYA_DDP=0` forces single process; a single GPU or a
+CPU session falls back to the original loop unchanged; `ER_LAYA_PERF_PATCH=0`
+disables both the perf patch and the distributed loop (the sharded loop lives
+in the perf patch). The receipt records `ddp` + `world_size`.
+
+Correctness caveat: `DistributedSampler` pads the index list to keep every
+rank's step count equal (required — DDP's `allreduce` needs matching backward
+counts). When the training-item count is not divisible by `world_size` a few
+items are therefore duplicated across ranks in that epoch rather than strictly
+disjoint; a divisible count shards exactly once per epoch. This is only
+unverified without a real 2xT4 session (see `tests/test_laya_ddp.py` for the
+CPU/`gloo` proof of the wiring).
 
 ## Holdout + comparison (does laya compete?)
 

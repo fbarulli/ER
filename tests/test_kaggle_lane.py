@@ -1716,7 +1716,7 @@ def test_stream_kernel_logs_persists_reported_session_id(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     frames = [
         'data: {"stream_name":"stdout","time":1,"data":"[kaggle-session] '
-        'KAGGLE_KERNEL_RUN_ID=123456789 KAGGLE_SESSION_ID= HOSTNAME=x\\n"}',
+        'session_id=123456789 container=kaggle_x-123456789-webtier\\n"}',
     ]
 
     class Stream:

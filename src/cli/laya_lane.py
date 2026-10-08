@@ -1559,9 +1559,12 @@ def apply_device_patch():
 #   (3) encode_item is memoized per (item id, option order) so steady-state
 #       epochs skip re-tokenizing (train.py:665). draw_option_order is still
 #       called in the same per-step order, so the RNG stream is identical.
-# The recipe flags, grad-accum window, clipping, scheduler and seed paths are
-# byte-for-byte the stock loop. Opt out (patch AND sampler) with
-# ER_LAYA_PERF_PATCH=0. Injected at the `@PERF_PATCH@` marker.
+# The SINGLE-PROCESS path is byte-for-byte the stock loop (ITEM order included);
+# when WORLD_SIZE>1 the same loop additionally DDP-wraps the model and shards
+# the items via `build_distributed_sampler` (see the DDP helpers below). The
+# recipe flags, grad-accum window, clipping, scheduler and seed paths are
+# unchanged. Opt out (patch AND sampler) with ER_LAYA_PERF_PATCH=0; force the
+# single-process fallback with ER_LAYA_DDP=0. Injected at `@PERF_PATCH@`.
 FINETUNE_PERF_PATCH_SOURCE = '''\
 PERF_PATCH_ENV = "ER_LAYA_PERF_PATCH"
 
@@ -1570,6 +1573,130 @@ def perf_patch_enabled():
     # one env flag disables BOTH the movement patch and the GPU sampler.
     return os.environ.get(PERF_PATCH_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
+
+
+# Distributed-data-parallel wiring (2xT4). `finetune` is a black box that
+# calls train_model once per rank, so the wrap + the per-rank shard live IN
+# the patched loop (DDP averages the gradients for us). One env flag forces
+# the single-process fallback: ER_LAYA_DDP=0.
+DDP_ENV = "ER_LAYA_DDP"
+
+
+def ddp_enabled():
+    return os.environ.get(DDP_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def dist_env():
+    # LOCAL_RANK drives the per-rank CUDA device; RANK the global rank; the
+    # spawn/torchrun launcher sets both (world_size <= 1 => single process).
+    world_size = int(os.environ.get("WORLD_SIZE") or "1")
+    rank = int(os.environ.get("RANK") or os.environ.get("LOCAL_RANK") or "0")
+    local_rank = int(os.environ.get("LOCAL_RANK") or "0")
+    return local_rank, rank, world_size
+
+
+def is_distributed():
+    return ddp_enabled() and dist_env()[2] > 1
+
+
+def is_rank0():
+    return dist_env()[1] == 0
+
+
+def build_distributed_sampler(items, seed):
+    # One disjoint shard per rank, reseeded every epoch via set_epoch(). The
+    # pad-to-even behaviour keeps every rank's step count equal (the DDP
+    # allreduce needs matching backward counts); a corpus whose item count
+    # divides world_size then covers every item exactly once per epoch.
+    import torch
+    local_rank, rank, world_size = dist_env()
+    return torch.utils.data.DistributedSampler(
+        items, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
+
+
+def init_distributed(backend=None):
+    # nccl on the T4 pair, gloo for the CPU test; idempotent per process.
+    if not is_distributed():
+        return False
+    import torch
+    import torch.distributed as dist
+    local_rank, rank, world_size = dist_env()
+    if backend is None:
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+    if backend == "nccl":
+        torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        # env:// rendezvous needs a master; torchrun sets these, plain
+        # torch.multiprocessing.spawn does not (single box => localhost).
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        torch.distributed.init_process_group(backend)
+    return True
+
+
+def barrier_if_distributed():
+    if not is_distributed():
+        return
+    import torch.distributed as dist
+    if dist.is_initialized():
+        dist.barrier()
+
+
+def destroy_if_distributed():
+    if not is_distributed():
+        return
+    import torch.distributed as dist
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def run_on_rank0(fn):
+    # rank 0 ONLY stages: the barrier first guarantees every rank finished
+    # training before the single writer touches /kaggle/working.
+    barrier_if_distributed()
+    if is_rank0():
+        return fn()
+    return None
+
+
+def resolve_nprocs():
+    # 2 ranks only when DDP AND the perf loop are on and 2+ cuda devices
+    # exist; an already-launched torchrun-style WORLD_SIZE is honoured as-is.
+    if not (ddp_enabled() and perf_patch_enabled()):
+        return 1
+    env_world = int(os.environ.get("WORLD_SIZE", "0") or "0")
+    if env_world > 1:
+        return env_world
+    try:
+        import torch
+    except Exception:
+        return 1
+    try:
+        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            return torch.cuda.device_count()
+    except Exception:
+        return 1
+    return 1
+
+
+def launch_finetune(worker):
+    # Already launched torchrun-style (WORLD_SIZE>1): this process IS a rank,
+    # run it directly. Otherwise spawn one process per visible device (nccl);
+    # the caller falls back to the in-process single-device session when this
+    # returns 1. spawn (not fork) because resolve_nprocs touched CUDA.
+    if is_distributed():
+        _, rank, world_size = dist_env()
+        worker(rank, world_size)
+        return world_size
+    nprocs = resolve_nprocs()
+    if nprocs > 1:
+        import torch.multiprocessing as mp
+        print("[perf-patch] distributed launch: %d ranks (nccl)" % nprocs,
+              flush=True)
+        mp.spawn(worker, args=(nprocs,), nprocs=nprocs, join=True,
+                 start_method="spawn")
+    return nprocs
 
 
 def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
@@ -1607,7 +1734,23 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             "lr": config.encoder_lr})
     optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay,
                                  fused=(device.type == "cuda"))
-    steps_per_epoch = math.ceil(len(items) / config.micro_batch)
+    # DDP: wrap the model (grads averaged across ranks) and shard the items
+    # with a per-rank DistributedSampler. The shard length is equal on every
+    # rank (pad-to-even), so the grad-accum window and the optimizer steps
+    # stay in lockstep across the DDP allreduce.
+    ddp_sampler = None
+    if is_distributed():
+        local_rank, rank, world_size = dist_env()
+        ddp_sampler = build_distributed_sampler(items, config.seed)
+        if device.type == "cuda":
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, device_ids=[local_rank], output_device=local_rank)
+        else:
+            model = torch.nn.parallel.DistributedDataParallel(model)
+        print("[perf-patch] ddp: rank %d/%d, %d local items"
+              % (rank, world_size, len(ddp_sampler)), flush=True)
+    epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
+    steps_per_epoch = math.ceil(epoch_len / config.micro_batch)
     updates = max(1, math.ceil(steps_per_epoch / config.grad_accum)
                   * config.epochs)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -1622,8 +1765,14 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     cache = {}
     hits = lookups = 0
     for epoch in range(config.epochs):
-        epoch_items = list(items)
-        random.Random(config.seed + epoch).shuffle(epoch_items)
+        if ddp_sampler is not None:
+            # Per-epoch reseed: every rank shuffles identically then takes a
+            # disjoint stride slice, so no item is trained twice per epoch.
+            ddp_sampler.set_epoch(epoch)
+            epoch_items = [items[i] for i in ddp_sampler]
+        else:
+            epoch_items = list(items)
+            random.Random(config.seed + epoch).shuffle(epoch_items)
         sigma = laya_train.sigma_at(epoch, config.epochs, config.sigma_start,
                                     config.sigma_end)
         total, n_steps = None, 0
@@ -1687,6 +1836,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                                                n_steps), flush=True)
         mean = (float(total.item() / max(1, n_steps))
                 if total is not None else 0.0)
+        # DDP already averages the gradients; report the rank-averaged scalar
+        # too so every rank logs the same honest epoch loss.
+        if is_distributed():
+            import torch.distributed as dist
+            mean_tensor = torch.tensor(mean, device=device)
+            dist.all_reduce(mean_tensor, op=dist.ReduceOp.SUM)
+            mean = float(mean_tensor.item()) / dist_env()[2]
         history.append(mean)
         print("epoch %d/%d mean loss %.4f (encode memo hits %d/%d)"
               % (epoch + 1, config.epochs, mean, hits, lookups), flush=True)
@@ -1769,17 +1925,21 @@ def summarize_gpu_usage(path):
 FINETUNE_KERNEL_SCRIPT = '''\
 """ER laya fine-tune on a Kaggle GPU session (cli.laya_lane).
 
-Single T4 per owner ruling (2xT4 -> 1xT4; never requests the double
-accelerator): pins one CUDA device, installs laya over pip (pinned
-`laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test +
-receipt, the er-laya-train dataset), extracts the attached base-model
+Distributed data-parallel over the 2xT4 pair: when two CUDA devices are
+visible `main()` spawns one process per device (nccl), wraps the model in
+`DistributedDataParallel` and shards the training items with a per-rank
+`DistributedSampler`; a single GPU / CPU falls back to the original
+one-process path unchanged (opt out with ER_LAYA_DDP=0). Installs laya over
+pip (pinned `laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test
++ receipt, the er-laya-train dataset), extracts the attached base-model
 archive (the er-laya-base dataset; the shipped convaiinnovations/laya
 checkpoint) to a local dir, builds the FULL `laya.train.TrainConfig` from
 the YAML-driven `FINETUNE_CONFIG` (every trainer knob is config SSOT), and
 calls `laya.train.finetune(...)` directly with the extracted DIRECTORY as
 the base -- so `resolve_checkpoint_dir` takes the isdir branch and NEVER
-calls the Hub. It writes the checkpoint + a receipt into /kaggle/working
-for hash-verified fetch-back.
+calls the Hub. Rank 0 alone scores the held-out split, writes the receipt
+and stages the checkpoint tar into /kaggle/working for hash-verified
+fetch-back.
 """
 from __future__ import annotations
 
@@ -1984,18 +2144,29 @@ def evaluate_held_out(test_path, checkpoint, device):
     }
 
 
-def main():
+def session_env():
     # Self-report the container session identity so the host-side log follower
     # can persist logs/kaggle/<kernel>.session_id for the verified in-place
-    # stop. The log-stream URL is generic (carries no session id), so this is
-    # the only reliable source; KAGGLE_KERNEL_RUN_ID is the run/session id
-    # Kaggle injects into the kernel environment.
-    _session = {key: os.environ.get(key, "") for key in (
-        "KAGGLE_KERNEL_RUN_ID", "KAGGLE_SESSION_ID", "HOSTNAME")}
-    print("[kaggle-session] " + " ".join(
-        key + "=" + str(value) for key, value in _session.items()), flush=True)
-    pip_install_laya()
-    device = pick_device()
+    # stop. Kaggle sets NO KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID in the
+    # container; the only per-run id is the numeric suffix of
+    # KAGGLE_CONTAINER_NAME ("kaggle_<token>-<session_id>-webtier"), which the
+    # SDK cancel_kernel_session accepts.
+    _container = os.environ.get("KAGGLE_CONTAINER_NAME", "")
+    _parts = _container.rsplit("-", 2)
+    _session_id = (_parts[1] if len(_parts) == 3 and _parts[1].isdigit()
+                   else "")
+    print("[kaggle-session] session_id=" + _session_id
+          + " container=" + _container, flush=True)
+    return {"KAGGLE_CONTAINER_NAME": _container, "session_id": _session_id}
+
+
+def _finetune_session(distributed, session):
+    if distributed:
+        local_rank, rank, world_size = dist_env()
+        device = "cuda"
+        log("rank %d/%d on cuda:%d (DDP)" % (rank, world_size, local_rank))
+    else:
+        device = pick_device()
     train = resolve_input(TRAIN_JSONL)
     dev = resolve_input(DEV_JSONL)
     test = resolve_input(TEST_JSONL)
@@ -2006,62 +2177,98 @@ def main():
     base_model = extract_base_model(archive)
     log("base model: " + str(base_model))
     out_dir = WORKING / "checkpoint"
-    gpu_handle = start_gpu_sampler()
+    if distributed and not is_rank0():
+        # Non-rank-0 ranks must NEVER write the canonical checkpoint: suppress
+        # laya's per-epoch + final save_checkpoint and send any incidental
+        # byte to a private scratch dir (never /kaggle/working/checkpoint).
+        from laya import train as laya_train
+        laya_train.save_checkpoint = lambda *args, **kwargs: None
+        out_dir = WORKING / ("checkpoint.rank" + str(dist_env()[1]))
+    gpu_handle = start_gpu_sampler() if is_rank0() else None
     try:
         summary = run_laya_finetune(train, dev, base_model, out_dir, device)
     finally:
         stop_gpu_sampler(gpu_handle)
-    receipt = {
-        "gpu_kind": "finetune",
-        "gpu": "T4 (single)",
-        "session_env": _session,
-        "run_tag": RUN_TAG,
-        "laya_package": LAYA_PACKAGE,
-        "base_model": str(base_model),
-        "base_model_archive": str(archive),
-        "device": device,
-        "perf_patch_enabled": perf_patch_enabled(),
-        "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
-        "recipe": FINETUNE_CONFIG,
-        "output_dir": str(out_dir),
-        "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
-                          DEV_JSONL: sha256_of(dev),
-                          TEST_JSONL: sha256_of(test)},
-    }
-    if isinstance(summary, dict):
-        for key in ("train_items", "calibration_items", "eval_items",
-                    "temperature", "epoch_loss"):
-            if key in summary:
-                receipt[key] = summary[key]
-    report = out_dir / "train_report.json"
-    if report.is_file():
-        receipt["train_report"] = json.loads(report.read_text())
-    # DEFAULT-ON held-out validation (owner order): every fine-tune also
-    # scores the just-trained checkpoint on the held-out `test` split, so the
-    # receipt always carries the honest generalization number. Opt out with
-    # ER_LAYA_HELD_OUT=0; a failure never discards the trained checkpoint.
-    if os.environ.get("ER_LAYA_HELD_OUT", "1").strip().lower() not in (
-            "0", "false", "off", "no"):
-        try:
-            held_out = evaluate_held_out(test, out_dir, device)
-            (out_dir / "held_out_report.json").write_text(
-                json.dumps(held_out, indent=2) + "\\n", encoding="utf-8")
-            receipt["held_out"] = held_out
-            log("held-out " + held_out["eval_source"] + " items="
-                + str(held_out["items"]) + " accuracy="
-                + str(held_out["metrics"].get("accuracy")))
-        except Exception as error:  # keep the checkpoint; surface the failure
-            receipt["held_out_error"] = (
-                type(error).__name__ + ": " + str(error)[:400])
-            log("held-out evaluation FAILED: " + receipt["held_out_error"])
-    (WORKING / "laya_finetune.receipt.json").write_text(
-        json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
-                      compresslevel=1) as tar:
-        for item in sorted(WORKING.iterdir()):
-            if item.name not in ("laya_finetune.tar.gz", "base_model"):
-                tar.add(item, arcname=item.name)
-    log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+
+    def rank0_work():
+        receipt = {
+            "gpu_kind": "finetune",
+            "gpu": "T4 (single)",
+            "session_env": session,
+            "run_tag": RUN_TAG,
+            "laya_package": LAYA_PACKAGE,
+            "base_model": str(base_model),
+            "base_model_archive": str(archive),
+            "device": device,
+            "perf_patch_enabled": perf_patch_enabled(),
+            "ddp": distributed,
+            "world_size": dist_env()[2],
+            "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
+            "recipe": FINETUNE_CONFIG,
+            "output_dir": str(WORKING / "checkpoint"),
+            "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
+                              DEV_JSONL: sha256_of(dev),
+                              TEST_JSONL: sha256_of(test)},
+        }
+        if isinstance(summary, dict):
+            for key in ("train_items", "calibration_items", "eval_items",
+                        "temperature", "epoch_loss"):
+                if key in summary:
+                    receipt[key] = summary[key]
+        report = WORKING / "checkpoint" / "train_report.json"
+        if report.is_file():
+            receipt["train_report"] = json.loads(report.read_text())
+        # DEFAULT-ON held-out validation (owner order): every fine-tune also
+        # scores the just-trained checkpoint on the held-out `test` split, so
+        # the receipt always carries the honest generalization number. Opt out
+        # with ER_LAYA_HELD_OUT=0; a failure never discards the checkpoint.
+        if os.environ.get("ER_LAYA_HELD_OUT", "1").strip().lower() not in (
+                "0", "false", "off", "no"):
+            try:
+                held_out = evaluate_held_out(test, WORKING / "checkpoint",
+                                             device)
+                (WORKING / "checkpoint" / "held_out_report.json").write_text(
+                    json.dumps(held_out, indent=2) + "\\n", encoding="utf-8")
+                receipt["held_out"] = held_out
+                log("held-out " + held_out["eval_source"] + " items="
+                    + str(held_out["items"]) + " accuracy="
+                    + str(held_out["metrics"].get("accuracy")))
+            except Exception as error:  # keep the checkpoint; surface failure
+                receipt["held_out_error"] = (
+                    type(error).__name__ + ": " + str(error)[:400])
+                log("held-out evaluation FAILED: " + receipt["held_out_error"])
+        (WORKING / "laya_finetune.receipt.json").write_text(
+            json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+        with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
+                          compresslevel=1) as tar:
+            for item in sorted(WORKING.iterdir()):
+                if item.name not in ("laya_finetune.tar.gz", "base_model"):
+                    tar.add(item, arcname=item.name)
+        log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+
+    # Barrier + rank-0-only gate: only rank 0 evaluates the held-out split,
+    # writes the receipt and tars /kaggle/working; every rank then tears the
+    # process group down.
+    run_on_rank0(rank0_work)
+
+
+def finetune_worker(rank, world_size):
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    init_distributed()
+    try:
+        _finetune_session(distributed=True, session=session_env())
+    finally:
+        destroy_if_distributed()
+
+
+def main():
+    session = session_env()
+    pip_install_laya()
+    if launch_finetune(finetune_worker) > 1:
+        return
+    _finetune_session(distributed=False, session=session)
 
 
 if __name__ == "__main__":
@@ -3086,6 +3293,41 @@ def kernel_slug(decision_kind: str) -> str:
     return slug
 
 
+def container_session_id(container: str) -> int | None:
+    """The kernel session id inside ``KAGGLE_CONTAINER_NAME``.
+
+    Kaggle sets NO ``KAGGLE_KERNEL_RUN_ID``/``KAGGLE_SESSION_ID`` in the
+    container; the only per-run id is the numeric suffix of
+    ``kaggle_<token>-<session_id>-webtier``, which the SDK
+    ``cancel_kernel_session`` accepts (verified live). Returns ``None`` for an
+    absent/malformed name.
+    """
+    parts = str(container or "").rsplit("-", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+def recorded_session_id(slug: str) -> int | None:
+    """The launch-recorded session id for a pushed kernel (``None`` if none).
+
+    The stream follower persists the kernel's self-reported id at
+    ``logs/kaggle/<kernel>.session_id``; this is the first-class reader the
+    verified in-place stop (and ``--session-id``) shares.
+    """
+    from cli import kaggle_lane as lane
+
+    kernel = slug.rpartition("/")[2]
+    if not kernel:
+        raise ValueError(f"slug must be owner/slug, got {slug!r}")
+    path = (lane.lane_logs_dir()
+            / lane._spec().files.session_id_file.format(kernel=kernel))
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def stop_kaggle_kernel(slug: str, *, execute: bool,
                        wait: bool = True) -> dict[str, Any]:
     """First-class teardown of a pushed laya kernel's running session.
@@ -3471,6 +3713,9 @@ def main() -> None:
                         help="tear down the running session for --decision's "
                              "kernel (kaggle only); the launch-recorded "
                              "session id feeds the SDK cancel")
+    parser.add_argument("--session-id", action="store_true",
+                        help="print the launch-recorded kernel session id for "
+                             "--decision's kernel (or --slug); no network")
     parser.add_argument("--local-eval", action="store_true",
                         help="run the CPU held-out eval of a fetched "
                              "fine-tuned checkpoint instead of staging")
@@ -3509,6 +3754,15 @@ def main() -> None:
         plan = collect_kaggle_result(args.decision, args.slug,
                                      execute=args.execute)
         print(json.dumps(plan, indent=2), flush=True)
+        return
+
+    if args.session_id:
+        # First-class reader of the launch-recorded session id (the verified
+        # in-place stop's target); offline, no network.
+        slug = args.slug or kernel_slug(args.decision)
+        print(json.dumps({"kernel": slug,
+                          "session_id": recorded_session_id(slug)},
+                         indent=2), flush=True)
         return
 
     if args.stop:

@@ -13,10 +13,11 @@ from typing import Any, Sequence
 from cli.log_capture import progress_frames_to_lines
 
 
-#: A kernel self-reports its session id on stdout (Kaggle injects
-#: KAGGLE_KERNEL_RUN_ID); the log-stream URL carries no id, so this line is the
-#: only source the follower can persist for the verified in-place stop.
-_SESSION_MARKER_RE = re.compile(r"\[kaggle-session\][^\n]*?KAGGLE_KERNEL_RUN_ID=(\d+)")
+#: A kernel self-reports its session id on stdout (the numeric suffix of
+#: KAGGLE_CONTAINER_NAME, which cancel_kernel_session accepts); the log-stream
+#: URL carries no id, so this line is the only source the follower can persist
+#: for the verified in-place stop.
+_SESSION_MARKER_RE = re.compile(r"\[kaggle-session\][^\n]*?session_id=(\d+)")
 
 
 def _reported_session_id(text: str) -> int | None:

@@ -298,12 +298,24 @@ def _prepare_exports(cfg, setup, bundle):
     with trace_step('package.ablation_suite'):
         # Ablation staging lives in the CPU data bundle: prepare_suite mints the
         # per-track templates (tokens/tensors/frozen requests) the training
-        # suite later forwards from, so no accelerator session stages them.
-        # Deactivate with ER_PERF_BUNDLE_ABLATION_STAGING=0 (or ER_PERF_LEGACY=1).
-        from core.perf_switches import perf_enabled
-        if cfg.post_training_ablation and perf_enabled('bundle.ablation_staging'):
+        # suite forwards from on the GPU, so no accelerator session stages them.
+        #
+        # UNCONDITIONAL when post_training_ablation is on: a bundle without the
+        # templates makes the GPU worker emit attribute_ablation_export/skipped
+        # (worker.py) and push the ablation to a local/CPU run. That is exactly
+        # the regression we must not reintroduce, so the perf opt-out
+        # (ER_PERF_BUNDLE_ABLATION_STAGING / ER_PERF_LEGACY) may NOT drop this
+        # staging, and the bundle is verified to actually carry the templates.
+        if cfg.post_training_ablation:
             from model_tracks.staged_ablation import prepare_suite
             prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
+            missing = [track for track in ('text','gnn_only')
+                       if not (setup/'ablation_templates'/track/'request.json').is_file()]
+            if missing:
+                raise RuntimeError(
+                    'ablation templates missing from the prepared bundle for '
+                    f'{missing}; the GPU session would skip ablation and push it '
+                    'to a local CPU run (owner order: ablation is GPU inference)')
     with trace_step('package.baseline_export'):
         from model_tracks.baseline_export import prepare as prepare_baseline
         prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)
