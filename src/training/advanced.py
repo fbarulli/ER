@@ -649,7 +649,7 @@ _GPU_QUERY_FIELDS: tuple[tuple[str, str], ...] = (
     ("clocks.sm", "sm_clock_mhz"),
     ("clocks.mem", "mem_clock_mhz"),
     ("temperature.gpu", "temperature_c"),
-    ("memory.used", "memory_used_mb"),
+    ("memory.used", "gpu_memory_used_mb"),
 )
 
 
@@ -703,7 +703,7 @@ def collect_nvml_telemetry() -> dict[str, float]:
                 "sm_clock_mhz": float(sm),
                 "mem_clock_mhz": float(mem),
                 "temperature_c": float(temp),
-                "memory_used_mb": float(used),
+                "gpu_memory_used_mb": float(used),
             }
         finally:
             pynvml.nvmlShutdown()

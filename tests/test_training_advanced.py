@@ -271,7 +271,7 @@ def test_parse_gpu_query_maps_fields():
     assert parsed["gpu_util_pct"] == 42.0
     assert parsed["power_w"] == pytest.approx(70.5)
     assert parsed["sm_clock_mhz"] == 1410.0
-    assert parsed["memory_used_mb"] == 1200.0
+    assert parsed["gpu_memory_used_mb"] == 1200.0
 
 
 def test_parse_gpu_query_drops_na_and_empty():
