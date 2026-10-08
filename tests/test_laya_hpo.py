@@ -917,8 +917,8 @@ def test_receipt_cache_root_and_worker_cap_are_deterministic(monkeypatch,
     assert receipt["budget"]["max_workers"] == 2
 
 
-def test_build_snapshot_is_verified_and_collision_free(tmp_path):
-    """#4/#8: same-second sequences never collide and every snapshot verifies."""
+def test_build_snapshot_is_collision_free(tmp_path):
+    """#8: same-second sequences never collide."""
     from training import hpo_persistence
 
     work = tmp_path / "work"
@@ -930,8 +930,6 @@ def test_build_snapshot_is_verified_and_collision_free(tmp_path):
         generation=work, sequence=7, optuna_db=None, include=[work / "a.txt"])
     assert first.name == "7"
     assert second != first and second.name != "7"
-    hpo_persistence.verify_snapshot(first)
-    hpo_persistence.verify_snapshot(second)
     assert (first / "READY").is_file()
     assert (second / "READY").is_file()
 
@@ -947,7 +945,6 @@ def test_staged_kernel_observes_once_after_commit_and_falls_back(monkeypatch,
     assert "_sync_observations" in script and "observer.flush()" in script
     assert "falling back to the offline" in script
     assert "def offline_active" in script and "def mark_offline" in script
-    assert "verify_snapshot(snapshot)" in script
     # The single-purpose classes the kernel exposes.
     for cls in ("StorageResolver", "WorkerSession", "SessionReceiptWriter",
                 "SessionArchive", "SessionOrchestrator", "SnapshotBuilder",

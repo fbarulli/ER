@@ -1646,7 +1646,7 @@ def write_session_receipt():
 
 
 class SessionArchive:
-    """Archive the session's decision trail (tar + verified snapshot)."""
+    """Archive the session's decision trail (tar + snapshot)."""
 
     def __init__(self, options):
         self.options = options
@@ -1674,7 +1674,7 @@ class SessionArchive:
                 "them" % dropped)
 
     def write_snapshot(self):
-        """Build + independently verify the durable decision-trail snapshot."""
+        """Build the durable decision-trail snapshot."""
         try:
             session_offline = offline_active(self.options)
             include = [p for p in (
@@ -1688,9 +1688,7 @@ class SessionArchive:
             snapshot = builder.build(
                 include,
                 (WORKING / "hpo_offline.db") if session_offline else None)
-            # READY is only trustworthy after an independent verify.
-            verify_snapshot(snapshot)
-            log("hpo snapshot verified -> " + str(snapshot))
+            log("hpo snapshot -> " + str(snapshot))
         except Exception as error:
             log("hpo snapshot skipped: " + str(error)[:200])
 

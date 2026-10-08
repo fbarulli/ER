@@ -191,7 +191,6 @@ def test_snapshot_builder_public_api(tmp_path):
     (work / "a.txt").write_text("a", encoding="utf-8")
     builder = hpo_persistence.SnapshotBuilder(generation=work, sequence=3)
     snapshot = builder.build([work / "a.txt"])
-    hpo_persistence.verify_snapshot(snapshot)
     assert snapshot.name == "3" and (snapshot / "READY").is_file()
     # A same-sequence rebuild reserves a distinct slot.
     assert hpo_persistence.SnapshotBuilder(

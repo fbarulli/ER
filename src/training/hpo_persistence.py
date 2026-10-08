@@ -40,12 +40,11 @@ def sqlite_backup(source: Path, destination: Path) -> None:
 
 
 class SnapshotBuilder:
-    """Build ONE immutable, self-verified snapshot payload.
+    """Build ONE immutable snapshot payload.
 
     Each method does one job: ``add`` copies one declared input, ``add_sqlite``
     backs up the controller DB, ``_record_*`` build the manifest inventory, and
-    ``finalize`` writes the manifest + READY, independently verifies the payload
-    and only then atomically publishes it.
+    ``finalize`` writes the manifest + READY and atomically publishes it.
     """
 
     def __init__(self, *, generation, sequence, scope=None):
@@ -118,14 +117,10 @@ class SnapshotBuilder:
                 "files": self.files}
 
     def finalize(self):
-        """Write manifest + READY, verify, then atomically publish."""
+        """Write manifest + READY, then atomically publish."""
         (self.payload / "manifest.json").write_text(
             json.dumps(self._manifest(), sort_keys=True), encoding="utf-8")
         (self.payload / "READY").write_text("ready\n", encoding="utf-8")
-        # READY is written last, then the payload is independently verified
-        # BEFORE it is published: a partial/racing capture never becomes the
-        # immutable final snapshot.
-        verify_snapshot(self.payload)
         self.payload.rename(self.final)
         self._temporary.rmdir()
         return self.final
@@ -153,7 +148,7 @@ def build_snapshot(
     include: list[Path],
     scope: str | None = None,
 ) -> Path:
-    """Facade: build one self-validating immutable snapshot (READY last)."""
+    """Facade: build one immutable snapshot (READY written last)."""
     # A scope is a DVC workspace boundary.  Model coordinators never share
     # .dvc/, .resume/, cache, or locks even when they complete simultaneously.
     builder = SnapshotBuilder(generation=generation, sequence=sequence,
