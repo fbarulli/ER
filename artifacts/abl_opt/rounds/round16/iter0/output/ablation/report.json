@@ -337538,6 +337538,6 @@
     "sha256": "d6a5c5c8725b840b2254eb9c062f71bcd16d5820b52a0c9518c883cf17f3cbd4",
     "track": "text"
   },
-  "threshold_source": "/tmp/opc/ER-reg2-A/artifacts/abl_opt/rounds/round16/iter0/output/ablation/baseline_threshold.json",
+  "threshold_source": "/tmp/opc/ER-reg2-B/artifacts/abl_opt/rounds/round16/iter0/output/ablation/baseline_threshold.json",
   "track": "text"
 }

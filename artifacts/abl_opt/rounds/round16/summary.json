@@ -1,18 +1,18 @@
 {
   "fixture": {
-    "suite": "/tmp/opc/ER-reg2-A/artifacts/abl_opt/baseline",
+    "suite": "/tmp/opc/ER-reg2-B/artifacts/abl_opt/baseline",
     "checkpoint": "all-MiniLM-L6-v2",
     "cohort": "smoke_500"
   },
   "note": "baseline smoke_500 cohort recorded 2026-10-07: catalog = first 500 reviewed unique-sku_id rows of dataset_10k.csv sorted by sku_id; gtin duplicate-product groups (sorted by gtin), group 0 -> dev with the rest -> train; positive pairs are consecutive gtin matches (label 1), negatives are consecutive sorted neighbors with differing gtins (label 0), 32 per split; sampled sample_pairs=32 split=dev; slice_columns=[]; retrieval_catalog=full; real MiniLM checkpoint",
   "iterations": 3,
   "wall_seconds": [
-    30.305,
-    22.774,
-    22.964
+    28.075,
+    21.104,
+    22.991
   ],
-  "wall_cold": 30.305,
-  "wall_warm_mean": 22.869,
+  "wall_cold": 28.075,
+  "wall_warm_mean": 22.047,
   "forward_seconds_logged": null,
   "complete_seconds_logged": null,
   "fingerprint_chain": [

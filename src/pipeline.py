@@ -26,6 +26,7 @@ import json
 import math
 import os
 import re
+from functools import lru_cache
 from collections import Counter
 from pathlib import Path
 
@@ -170,12 +171,84 @@ def extract_volume_from_title(title: str) -> dict:
                 "parse_status": "no_volume_mention"}
     # "0.98 if the value was written as a decimal" — read the numeric prefix,
     # not the whole match, so a '.' inside a unit cannot trip it.
-    has_decimal = bool(re.match(r"\s*\d+(?:[.,]\d)", raw))
+    has_decimal = bool(_DECIMAL_PREFIX_RE.match(raw))
     confidence = entry.confidence
     if has_decimal and entry.decimal_confidence is not None:
         confidence = entry.decimal_confidence
     return {"volume_ml": ml, "confidence": confidence, "raw_match": raw,
             "parse_status": entry.family}
+
+
+# ── pack-evidence scan vocabulary ──────────────────────────────────────────
+# Every pattern _PackEvidenceReader scans with is a constant: the count/number
+# vocabulary, the container and measurement tails, the phase patterns built
+# from them, and the word-count table. Compiling them once at import keeps the
+# ~1.25M re.finditer/re.search/re.match calls this family issues on a 10k
+# catalog (per text field, per row) out of the module-level `re` wrapper and
+# its per-call cache lookup, and drops the per-call pattern rebuilding in
+# prepare(). Only the pattern OBJECTS move: the pattern source text is
+# unchanged, so every match, span, raw_match and evidence record is unchanged.
+_DECIMAL_PREFIX_RE = re.compile(r"\s*\d+(?:[.,]\d)")
+
+_PACK_COUNT_TOKEN = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
+_PACK_NUMBER = r"(?<![\w$€£])(?<!\d[.,])" + _PACK_COUNT_TOKEN
+_PACK_CONTAINERS = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
+# The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
+# container word), never any letter, and one descriptive word may sit between
+# the count and a MEASUREMENT unit: "12x1 mineralwasser"/"12x1 pet" emitted the
+# false raw spans `12x1 m`/`12x1 p`, '12x1 pet bottles' is not a recognized
+# span, and '6x20 organic cl' is.
+_PACK_MEASUREMENT_TAIL = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
+_PACK_MULTIPLIER_TAIL = (rf"(?:\s*(?:{_PACK_MEASUREMENT_TAIL}|{_PACK_CONTAINERS})\b"
+                         rf"|\s+[a-z]+\s*{_PACK_MEASUREMENT_TAIL})")
+_PACK_PATTERNS = tuple(
+    (kind, re.compile(pattern, re.I), role) for kind, pattern, role in (
+        ("nested", rf"{_PACK_NUMBER}\s*[x×]\s*(\d+)\s*(?:{_PACK_CONTAINERS}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{_PACK_MULTIPLIER_TAIL}", "unit_count"),
+        ("multiplier", rf"{_PACK_NUMBER}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{_PACK_MULTIPLIER_TAIL}", "unit_count"),
+        # Retail titles also use a terminal count without a unit size:
+        # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
+        # a suffix; model codes and unfinished size multipliers stay unknown.
+        ("multiplier", rf"{_PACK_NUMBER}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
+        ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{_PACK_COUNT_TOKEN}\b", "unit_count"),
+        ("pack_of", rf"\bcases?\s+of\s*{_PACK_COUNT_TOKEN}\b", "unit_count"),
+        ("count", rf"{_PACK_NUMBER}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
+        ("compact", rf"\bpack\s*[- ]?\s*{_PACK_COUNT_TOKEN}\b", "unit_count"),
+        ("container", rf"{_PACK_NUMBER}\s*(?:glass\s*)?{_PACK_CONTAINERS}\b", "unit_count"),
+        ("count", rf"{_PACK_NUMBER}\s*cases?\b", "outer_count"),
+    ))
+_PACK_CURRENCY_TAIL_RE = re.compile(r"[$€£]\s*$")
+_PACK_WEIGHT_TAIL_RE = re.compile(r"(?:gross\s+)?weight\W*$", re.I)
+_PACK_PREFIX_MULTIPLIER_RE = re.compile(rf"{_PACK_NUMBER}\s*[x×]\s+(?=[a-z])", re.I)
+_PACK_DOSE_BETWEEN_RE = re.compile(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", re.I)
+_PACK_SET_OF_RE = re.compile(rf"\b(?:set|bundle)\s+of\s*{_PACK_COUNT_TOKEN}\b", re.I)
+_PACK_SET_LIST_RE = re.compile(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", re.I)
+_PACK_UNIT_COUNT_RE = re.compile(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", re.I)
+_PACK_WORD_COUNTS = dict(zip(
+    ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
+    range(1, 13), strict=True,
+))
+_PACK_WORD_PACKS_RE = re.compile(r"\b(" + "|".join(_PACK_WORD_COUNTS) + r")\s*[- ]\s*packs?\b", re.I)
+_PACK_STICKS_PER_BOX_RE = re.compile(rf"(?<![\d.,]){_PACK_COUNT_TOKEN}\s*sticks?\s+per\s+box\b", re.I)
+_PACK_BOXES_RE = re.compile(rf"{_PACK_NUMBER}\s*boxes\b", re.I)
+_PACK_TOTAL_PREFIX_RE = re.compile(rf"{_PACK_NUMBER}\s+$")
+_PACK_TOTAL_WORD_RE = re.compile(r"[ .()]*total\s*", re.I)
+_PACK_OUTER_RE = re.compile(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){_PACK_COUNT_TOKEN}\s*\)", re.I)
+# Counts are parsed by deleting the metric decimal/thousands separators; a
+# str.translate table is the same deletion as re.sub(r'[.,]', '', ...) without
+# a regex call (this runs on every recognized match).
+_PACK_DIGITS_STRIP = str.maketrans("", "", ".,")
+
+
+@lru_cache(maxsize=8)
+def _bulk_container_re(terms: tuple[str, ...]) -> re.Pattern[str]:
+    """`\\b(?:term|...)\\b` over the configured bulk-container vocabulary.
+
+    The vocabulary is config-owned and constant for the process, so the
+    alternation, the escaping of every term and the pattern compilation are
+    built once instead of on every fused row (11,441 calls on the 10k cohort).
+    """
+    escaped = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in terms)
+    return re.compile(r"\b(?:" + escaped + r")\b", re.I)
 
 
 class _PackEvidenceReader:
@@ -212,41 +285,17 @@ class _PackEvidenceReader:
         confidence = data_cfg().extraction.pack_confidence
         # Count tokens must include their entire number: decimal and price tails
         # cannot masquerade as integer quantities. Grouped thousands are counts.
-        count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
-        number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
-        containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
-        # The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
-        # container word), never any letter. `12x1 mineralwasser`/`12x1 pet`
-        # (SKUs 935970386, 935979247, 955514786) emitted false raw spans
-        # `12x1 m`/`12x1 p` — the unit word's first letter. One descriptive
-        # word may sit between the count and a MEASUREMENT unit ('6x20 organic
-        # cl'); a bare container word may not be reached THROUGH material words
-        # ('12x1 pet bottles' is not a recognized span).
-        measurement_tail = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
-        multiplier_tail = (rf"(?:\s*(?:{measurement_tail}|{containers})\b"
-                           rf"|\s+[a-z]+\s*{measurement_tail})")
-        patterns = (
-            ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
-            ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
-            # Retail titles also use a terminal count without a unit size:
-            # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
-            # a suffix; model codes and unfinished size multipliers stay unknown.
-            ("multiplier", rf"{number}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
-            ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
-            ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
-            ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
-            ("compact", rf"\bpack\s*[- ]?\s*{count_token}\b", "unit_count"),
-            ("container", rf"{number}\s*(?:glass\s*)?{containers}\b", "unit_count"),
-            ("count", rf"{number}\s*cases?\b", "outer_count"),
-        )
+        # The vocabulary and its patterns are module-level constants (_PACK_*):
+        # they are identical for every title, so they are compiled once at
+        # import instead of being rebuilt (9 f-strings) per title.
         return {
             "text": text,
             "measurements": measurements,
             "package_measurements": [m for m in measurements if m['role'] == 'package_volume'],
             "confidence": confidence,
-            "count_token": count_token,
-            "number": number,
-            "patterns": patterns,
+            "count_token": _PACK_COUNT_TOKEN,
+            "number": _PACK_NUMBER,
+            "patterns": _PACK_PATTERNS,
         }
 
     # ── phase: the family scan ──────────────────────────────────────────────
@@ -256,9 +305,12 @@ class _PackEvidenceReader:
         text = ctx["text"]
         measurements = ctx["measurements"]
         confidence = ctx["confidence"]
+        occupied = self.occupied
+        evidence = self.evidence
         for kind, pattern, role in ctx["patterns"]:
-            for match in re.finditer(pattern, text, re.I):
-                if any(start <= match.start() < end for start, end in self.occupied):
+            for match in pattern.finditer(text):
+                start = match.start()
+                if occupied and any(a <= start < b for a, b in occupied):
                     continue
                 if kind == "compact" and any(
                     entry["start"] == match.start(1) for entry in measurements
@@ -271,28 +323,32 @@ class _PackEvidenceReader:
                     # A quantity carrying a volume unit cannot be a pack count.
                     continue
                 if kind == "compact" and text[match.end():].startswith(")") and re.search(
-                    rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
+                    rf"\b{int(match.group(1).translate(_PACK_DIGITS_STRIP)) + 1}\)",
                     text[match.end() + 1:],
                 ):
                     # "Combo Pack - 1) product A & 2) product B" is a list.
                     continue
                 # Currency followed by whitespace still denotes a price.
-                if re.search(r"[$€£]\s*$", text[:match.start()]):
+                # MEASURED NEGATIVE (r17): bounding these end-anchored readers
+                # with search(text, 0, start) instead of search(text[:start])
+                # was 1.675 s -> 1.724 s on bench_pipeline (2000 rows), so the
+                # prefix slice stays.
+                if _PACK_CURRENCY_TAIL_RE.search(text[:start]):
                     continue
                 # GDSN weight declarations ("gross weight: 527 unit (specific) …
                 # centiliters") are prose measurements, not a retail bundle: a
                 # count immediately preceded by a weight label is skipped.
-                if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
+                if _PACK_WEIGHT_TAIL_RE.search(text[:start]):
                     continue
-                count = int(re.sub(r"[.,]", "", match.group(1)))
+                count = int(match.group(1).translate(_PACK_DIGITS_STRIP))
                 if kind == "nested":
                     count *= int(match.group(2))
                 if count <= 0:
                     continue
-                self.occupied.append(match.span())
-                self.evidence.append({"count": count, "confidence": confidence[kind],
-                                      "role": role, "raw_match": match.group(0),
-                                      "start": match.start(), "end": match.end(), "rule": kind})
+                occupied.append(match.span())
+                evidence.append({"count": count, "confidence": confidence[kind],
+                                 "role": role, "raw_match": match.group(0),
+                                 "start": start, "end": match.end(), "rule": kind})
 
     # ── phase: multiplier before the product name ───────────────────────────
 
@@ -302,25 +358,27 @@ class _PackEvidenceReader:
         Require a physical-package measurement after it and reject dosage-only
         text; bare model codes and unproved whitespace counts stay unknown."""
         text = ctx["text"]
-        number = ctx["number"]
         confidence = ctx["confidence"]
         package_measurements = ctx["package_measurements"]
-        for match in re.finditer(rf"{number}\s*[x×]\s+(?=[a-z])", text, re.I):
-            if any(start <= match.start() < end for start, end in self.occupied):
+        occupied = self.occupied
+        evidence = self.evidence
+        for match in _PACK_PREFIX_MULTIPLIER_RE.finditer(text):
+            start = match.start()
+            if occupied and any(a <= start < b for a, b in occupied):
                 continue
             following = next((m for m in package_measurements
                               if match.end() <= m['start'] and m['start'] - match.end() <= 100), None)
             if following is None:
                 continue
             between = text[match.end():following['start']]
-            if re.search(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", between, re.I):
+            if _PACK_DOSE_BETWEEN_RE.search(between):
                 continue
             end = following['end']
-            self.evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
-                                  'confidence': confidence['multiplier'], 'role': 'unit_count',
-                                  'raw_match': text[match.start():end], 'start': match.start(),
-                                  'end': end, 'rule': 'multiplier'})
-            self.occupied.append((match.start(), end))
+            evidence.append({'count': int(match.group(1).translate(_PACK_DIGITS_STRIP)),
+                             'confidence': confidence['multiplier'], 'role': 'unit_count',
+                             'raw_match': text[start:end], 'start': start,
+                             'end': end, 'rule': 'multiplier'})
+            occupied.append((start, end))
 
     # ── phase: set/bundle + retail counts + word counts + sticks hierarchy ──
 
@@ -329,36 +387,31 @@ class _PackEvidenceReader:
         lane, word-count lane, and the sticks-per-box hierarchy (deterministic
         append order)."""
         text = ctx["text"]
-        number = ctx["number"]
-        count_token = ctx["count_token"]
         confidence = ctx["confidence"]
+        evidence = self.evidence
         if ctx["package_measurements"]:
-            for match in re.finditer(rf"\b(?:set|bundle)\s+of\s*{count_token}\b", text, re.I):
-                if re.match(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", text[match.end():], re.I):
+            for match in _PACK_SET_OF_RE.finditer(text):
+                if _PACK_SET_LIST_RE.match(text[match.end():]):
                     continue
-                self.evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
-                                      'confidence': confidence['pack_of'], 'role': 'unit_count',
-                                      'raw_match': match.group(0), 'start': match.start(),
-                                      'end': match.end(), 'rule': 'pack_of'})
+                evidence.append({'count': int(match.group(1).translate(_PACK_DIGITS_STRIP)),
+                                 'confidence': confidence['pack_of'], 'role': 'unit_count',
+                                 'raw_match': match.group(0), 'start': match.start(),
+                                 'end': match.end(), 'rule': 'pack_of'})
         # Retail metadata is count evidence only when its unit is Count, not
         # fluid ounces or a mass; decimal .00 is an integer count here.
-        for match in re.finditer(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", text, re.I):
+        for match in _PACK_UNIT_COUNT_RE.finditer(text):
             if int(match.group(1)):
-                self.evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
-                                      'role': 'unit_count', 'raw_match': match.group(0),
-                                      'start': match.start(), 'end': match.end(), 'rule': 'count'})
-        word_counts = dict(zip(
-            ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
-            range(1, 13), strict=True,
-        ))
-        for match in re.finditer(r"\b(" + "|".join(word_counts) + r")\s*[- ]\s*packs?\b", text, re.I):
-            self.evidence.append({"count": word_counts[match.group(1).lower()],
-                                  "confidence": confidence["count"], "role": "unit_count",
-                                  "raw_match": match.group(0), "start": match.start(),
-                                  "end": match.end(), "rule": "count"})
-        inner = re.search(rf"(?<![\d.,]){count_token}\s*sticks?\s+per\s+box\b", text, re.I)
+                evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
+                                 'role': 'unit_count', 'raw_match': match.group(0),
+                                 'start': match.start(), 'end': match.end(), 'rule': 'count'})
+        for match in _PACK_WORD_PACKS_RE.finditer(text):
+            evidence.append({"count": _PACK_WORD_COUNTS[match.group(1).lower()],
+                             "confidence": confidence["count"], "role": "unit_count",
+                             "raw_match": match.group(0), "start": match.start(),
+                             "end": match.end(), "rule": "count"})
+        inner = _PACK_STICKS_PER_BOX_RE.search(text)
         if inner:
-            inner_count = int(re.sub(r"[.,]", "", inner.group(1)))
+            inner_count = int(inner.group(1).translate(_PACK_DIGITS_STRIP))
             self.evidence.append({"count": inner_count, "confidence": confidence["count"],
                                   "role": "inner_count", "raw_match": inner.group(0),
                                   "start": inner.start(), "end": inner.end(), "rule": "count"})
@@ -372,10 +425,10 @@ class _PackEvidenceReader:
                                           "role": "derived_inner_total", "hierarchy_ambiguous": True,
                                           "raw_match": text[start:end], "start": start, "end": end,
                                           "rule": "nested"})
-            outer = re.search(rf"{number}\s*boxes\b", text, re.I)
+            outer = _PACK_BOXES_RE.search(text)
             if outer:
                 start, end = min(outer.start(), inner.start()), max(outer.end(), inner.end())
-                self.evidence.insert(0, {"count": inner_count * int(re.sub(r"[.,]", "", outer.group(1))),
+                self.evidence.insert(0, {"count": inner_count * int(outer.group(1).translate(_PACK_DIGITS_STRIP)),
                                          "confidence": confidence["nested"], "role": "unit_count",
                                          "raw_match": text[start:end], "start": start, "end": end,
                                          "rule": "nested"})
@@ -391,14 +444,15 @@ class _PackEvidenceReader:
         text = ctx["text"]
         confidence = ctx["confidence"]
         measurements = ctx["measurements"]
+        occupied = self.occupied
         for unit_entry, total_entry in zip(measurements, measurements[1:]):
-            prefix = re.search(rf"{ctx['number']}\s+$", text[:unit_entry["start"]])
+            prefix = _PACK_TOTAL_PREFIX_RE.search(text[:unit_entry["start"]])
             between = text[unit_entry["end"]:total_entry["start"]]
-            if prefix is None or not re.fullmatch(r"[ .()]*total\s*", between, re.I):
+            if prefix is None or not _PACK_TOTAL_WORD_RE.fullmatch(between):
                 continue
-            if any(start <= prefix.start() < end for start, end in self.occupied):
+            if occupied and any(start <= prefix.start() < end for start, end in occupied):
                 continue
-            count = int(re.sub(r"[.,]", "", prefix.group(1)))
+            count = int(prefix.group(1).translate(_PACK_DIGITS_STRIP))
             unit_volume = canonical_volume_ml(unit_entry["value"], unit_entry["unit"])
             total_volume = canonical_volume_ml(total_entry["value"], total_entry["unit"])
             if count > 0 and unit_volume > 0 and math.isclose(count * unit_volume, total_volume):
@@ -434,14 +488,13 @@ class _PackEvidenceReader:
         # "4 x 250ml (Pack of 2)" describes two inner four-packs. Preserve
         # levels and a proven physical-unit total instead of picking inner four.
         text = ctx["text"]
-        count_token = ctx["count_token"]
         confidence = ctx["confidence"]
-        outer = re.search(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){count_token}\s*\)", text, re.I)
+        outer = _PACK_OUTER_RE.search(text)
         inner_units = [e for e in self.evidence if e['role'] == 'unit_count' and e['rule'] == 'multiplier'
                        and (outer is None or e['end'] <= outer.start())]
         if outer and inner_units:
             inner = inner_units[0]
-            outer_count = int(re.sub(r'[.,]', '', outer.group(1)))
+            outer_count = int(outer.group(1).translate(_PACK_DIGITS_STRIP))
             start, end = inner['start'], outer.end()
             for entry in self.evidence:
                 if entry['role'] == 'unit_count':
@@ -488,6 +541,16 @@ def extract_pack_from_title(title: str) -> tuple:
     return 1, 0.0
 
 
+# Attribute-cell readers are called once per row; their patterns are constant,
+# so they are compiled once here instead of through the module-level `re`
+# wrapper (and its per-call cache lookup) on every row.
+_ATTR_VOLUME_RE = re.compile(
+    r"\bVolume:\s*(.*?)(?=;|\n|\s+[A-Za-z][A-Za-z ]*:|$)", re.IGNORECASE)
+_ATTR_VOLUME_NUMBER_RE = re.compile(r"\d+(?:[.,]\s*\d+)?")
+_ATTR_COUNT_PER_UNIT_RE = re.compile(r"Count per Unit:\s*(\d+)(?!\d|[.,/]\s*\d)", re.IGNORECASE)
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
 def parse_attribute_volume_pack(
     attr_str: str,
 ) -> tuple[float, float, int, float]:  # (vol_ml, vol_conf, pack_qty, pack_conf)
@@ -500,24 +563,21 @@ def parse_attribute_volume_pack(
     if not attr_str or attr_str == "nan":
         return vol_ml, vol_conf, pack_qty, pack_conf
     from core.text import extract_volume_evidence
-    m_vol = re.search(
-        r"\bVolume:\s*(.*?)(?=;|\n|\s+[A-Za-z][A-Za-z ]*:|$)",
-        attr_str, re.IGNORECASE,
-    )
+    m_vol = _ATTR_VOLUME_RE.search(attr_str)
     if m_vol:
         declared = m_vol.group(1).strip()
         measurements = extract_volume_evidence(declared)
         if measurements and measurements[0]["start"] == 0:
             entry = measurements[0]
             vol_ml = canonical_volume_ml(entry["value"], entry["unit"])
-        elif re.fullmatch(r"\d+(?:[.,]\s*\d+)?", declared):
+        elif _ATTR_VOLUME_NUMBER_RE.fullmatch(declared):
             # Historical export convention: unitless declared Volume is ml.
-            number = re.sub(r"\s+", "", declared)
+            number = _WHITESPACE_RE.sub("", declared)
             if float(number.replace(",", ".")) > 0:
                 vol_ml = canonical_volume_ml(number, "ml")
         if vol_ml > 0:
             vol_conf = 0.9
-    m_pack = re.search(r"Count per Unit:\s*(\d+)(?!\d|[.,/]\s*\d)", attr_str, re.IGNORECASE)
+    m_pack = _ATTR_COUNT_PER_UNIT_RE.search(attr_str)
     if m_pack and int(m_pack.group(1)) > 0:
         # zero-guard: export noise remains unknown rather than a count.
         pack_qty = canonical_pack_count(m_pack.group(1))
@@ -1179,8 +1239,8 @@ class ListingCardBuilder:
         # does not make an implausible per-package size legitimate; named bulk
         # containers use the separately configured ceiling.
         extraction_policy = data_cfg().extraction
-        bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
-        bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{self._sku_name_eng} {self._attribute}", re.I))
+        bulk_container = bool(_bulk_container_re(tuple(extraction_policy.bulk_container_terms)).search(
+            f"{self._sku_name_eng} {self._attribute}"))
         volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
         if self.volume_ml > 0 and not extraction_policy.volume_min_ml <= self.volume_ml <= volume_max:
             self.flags.add("ambiguous_volume")

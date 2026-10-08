@@ -271,18 +271,21 @@ def alias_fold(tokens: Iterable[str], *, qualifiers: bool = False) -> frozenset[
     deliberately NOT applied to package/carbonation dimensions.
     """
     out: set[str] = set()
+    add = out.add
     concepts = concept_folds()
+    concepts_get = concepts.get
+    flatten_get = FLAVOR_ALIASES.get
     for token in tokens:
         token = str(token).strip().lower()
         if not token:
             continue
-        out.add(token)
-        singular = FLAVOR_ALIASES.get(token)
+        add(token)
+        singular = flatten_get(token)
         if singular:
-            out.add(singular)
-        concept = concepts.get(token)
+            add(singular)
+        concept = concepts_get(token)
         if concept:
-            out.add(concept)
+            add(concept)
         if qualifiers:
             out |= QUALIFIER_ALIASES.get(token, frozenset())
     return frozenset(out)
@@ -319,10 +322,14 @@ def completeness(row: Mapping[str, Any] | Any) -> int:
     get = (lambda k: row.get(k, "")) if isinstance(row, Mapping) else (
         lambda k: getattr(row, k, "")
     )
-    return sum(
-        1 for col in DESCRIPTOR_COLUMNS
-        if not pd.isna(get(col)) and str(get(col)).strip()
-    )
+    # One read per column: the two-access form read and stringified every
+    # descriptor cell twice for a boolean.
+    populated = 0
+    for col in DESCRIPTOR_COLUMNS:
+        value = get(col)
+        if value is not None and not pd.isna(value) and str(value).strip():
+            populated += 1
+    return populated
 
 
 def completeness_frame(frame: pd.DataFrame) -> pd.Series:
@@ -339,13 +346,25 @@ def completeness_frame(frame: pd.DataFrame) -> pd.Series:
     return scores
 
 
+@lru_cache(maxsize=32)
+def _attr_token_re(key: str) -> re.Pattern[str]:
+    """`<key>\s*:\s*([^;]+)` compiled once per key.
+
+    The key is the caller's field pattern (`flavou?r`, `roast\s*type`,
+    `pack\s*material\s*type`), so the source text is constant per key: a
+    per-key cache keeps the module-level `re.search` wrapper — and its string
+    cache lookup — out of every row's attribute-cell scan.
+    """
+    return re.compile(key + r"\s*:\s*([^;]+)", re.I)
+
+
 def attr_token_set(attr: object, key: str) -> frozenset[str]:
     """`Key: value; ...` cell -> token set, normalized THEN tokenized.
 
     Order matters: normalizing first is what makes "coffee, vanilla" and
     "vanilla coffee" the same set.
     """
-    match = re.search(key + r"\s*:\s*([^;]+)", str(attr or ""), re.I)
+    match = _attr_token_re(key).search(str(attr or ""))
     if not match:
         return frozenset()
     return frozenset(_TOKEN_RE.findall(normalize_text(match.group(1))))
