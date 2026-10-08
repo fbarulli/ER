@@ -17,6 +17,22 @@ import math
 from pathlib import Path
 
 
+def _sample_one(trial, name, spec):
+    """One ``trial.suggest_*`` call, dispatched by the SSOT dial type."""
+    kind = spec["type"]
+    if kind == "int":
+        return trial.suggest_int(
+            name, int(spec["lo"]), int(spec["hi"]),
+            log=bool(spec.get("log", False)))
+    if kind == "float":
+        return trial.suggest_float(
+            name, float(spec["lo"]), float(spec["hi"]),
+            log=bool(spec.get("log", False)))
+    if kind == "categorical":
+        return trial.suggest_categorical(name, list(spec["choices"]))
+    raise ValueError("unknown laya HPO dial type: " + repr(kind))
+
+
 def sample_dials(trial, space):
     """Sample every dial with the generic ``trial.suggest_*`` dispatch.
 
@@ -25,35 +41,37 @@ def sample_dials(trial, space):
     — deliberately, and visibly.
 
     A dial may declare a conditional gate ``when: {dial: <gate>, equals: <v>}``:
-    it is sampled ONLY when the already-sampled gate matches. An off gate skips
-    the dependent dials entirely, so they keep their SSOT default in the base
-    control block (default-OFF, reproducible) and no trials are spent on
-    flag-off combinations.
+    it is sampled ONLY when its gate matches. An off gate skips the dependent
+    dials entirely, so they keep their SSOT default in the base control block
+    (default-OFF, reproducible). A dependent whose gate is declared LATER is
+    deferred and resolved once the gate is sampled, so a reordered spec still
+    resolves its dependents instead of silently dropping them.
     """
     sampled = {}
+    deferred = []
     for name, spec in space.get("dials", {}).items():
         gate = spec.get("when")
         if gate is not None:
             gate_name = gate["dial"]
             if gate_name not in sampled:
-                # Gate must be declared (and sampled) before its dependents.
+                deferred.append((name, spec))
                 continue
             if sampled[gate_name] != gate.get("equals", True):
                 continue
-        kind = spec["type"]
-        if kind == "int":
-            sampled[name] = trial.suggest_int(
-                name, int(spec["lo"]), int(spec["hi"]),
-                log=bool(spec.get("log", False)))
-        elif kind == "float":
-            sampled[name] = trial.suggest_float(
-                name, float(spec["lo"]), float(spec["hi"]),
-                log=bool(spec.get("log", False)))
-        elif kind == "categorical":
-            sampled[name] = trial.suggest_categorical(
-                name, list(spec["choices"]))
-        else:
-            raise ValueError("unknown laya HPO dial type: " + repr(kind))
+        sampled[name] = _sample_one(trial, name, spec)
+    progress = True
+    while deferred and progress:
+        progress = False
+        pending = []
+        for name, spec in deferred:
+            gate_name = spec["when"]["dial"]
+            if gate_name in sampled:
+                if sampled[gate_name] == spec["when"].get("equals", True):
+                    sampled[name] = _sample_one(trial, name, spec)
+                progress = True
+            else:
+                pending.append((name, spec))
+        deferred = pending
     return sampled
 
 
@@ -68,7 +86,15 @@ def route_dials(base_config, base_control, dials, space):
     control = dict(base_control)
     specs = space.get("dials", {})
     for name, value in dials.items():
-        target = specs[name].get("target", "config")
+        spec = specs[name]
+        # Respect a conditional gate: a dependent dial is routed ONLY when its
+        # gate is present AND matches. This keeps a warm-start seed (which may
+        # carry a dependent without its gate) from setting a flag-off value.
+        gate = spec.get("when")
+        if gate is not None and dials.get(gate["dial"]) != gate.get("equals",
+                                                                  True):
+            continue
+        target = spec.get("target", "config")
         if target == "config":
             config[name] = value
         elif target == "control":
