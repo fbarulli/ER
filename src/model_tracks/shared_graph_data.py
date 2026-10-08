@@ -36,7 +36,7 @@ def _setup_layout():
 #: Tracks that consume the shared graph projection. Only the trained gnn_only
 #: lane does; the cascade declares no shared projection (it composes trained
 #: artifacts), and text has its own objective.
-TRACKS = ('gnn_only',)
+from model_tracks.resume import GNN_ONLY_TRACKS as TRACKS
 
 
 class SharedGraphProjection(BaseModel):

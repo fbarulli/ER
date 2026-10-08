@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from core.portable_archive import Digest
 from core.step_trace import timed
 from graph_tracks.data import file_hash
+from model_tracks.resume import GNN_ONLY_TRACKS
 
 class GraphExportManifest(BaseModel):
     """Saved catalog forward provenance shared by exporter and CPU reporter."""
@@ -35,7 +36,7 @@ class GraphForwardManifest(GraphExportManifest):
     forward_only: Literal[True]
 
 
-TRACKS = {'gnn_only'}
+TRACKS = set(GNN_ONLY_TRACKS)
 #: ``cascade`` is a nameable lane (it writes ``cascade__cascade_report.json``)
 #: but never trains or exports a graph model, so it is not a checkpoint track.
 _NAME_TRACKS = TRACKS | {'text', 'cascade'}
@@ -54,7 +55,8 @@ def name(track: str, stem: str) -> str:
 
 def _verified_track(checkpoint: Path, track: str) -> str:
     """Accept `checkpoint` as `track`'s model file, or raise with the reason."""
-    marker = checkpoint.parent / name(track, 'checkpoint_manifest.json')
+    from core.common import training_cfg
+    marker = checkpoint.parent / name(track, training_cfg().colab.checkpoint_manifest_name)
     if not marker.is_file():
         raise ValueError('checkpoint missing completion marker')
     metadata = json.loads(marker.read_text())

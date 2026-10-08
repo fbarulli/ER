@@ -48,6 +48,12 @@ _OFFENDER_TOP = 5
 _STAGE_REGRESSION_FLOOR_SECONDS = 1.0
 
 
+def _preparation():
+    """The config-owned preparation run contract (name/path SSOT)."""
+    from core.common import training_cfg
+    return training_cfg().preparation
+
+
 class StageFacts(BaseModel):
     """One preparation stage as the run's manifest recorded it."""
 
@@ -265,7 +271,7 @@ def _stage_facts(manifest: dict, run_dir: Path) -> list[StageFacts]:
     if isinstance(seconds, dict) and seconds:
         return [StageFacts(name=name, seconds=value)
                 for name, value in sorted(seconds.items())]
-    timings_path = run_dir / "timings.json"
+    timings_path = run_dir / _preparation().timings_file
     if timings_path.exists():
         stages = _read_json(timings_path).get("stages", {})
         return [
@@ -283,7 +289,7 @@ def _stage_facts(manifest: dict, run_dir: Path) -> list[StageFacts]:
 def _census_facts(manifest: dict, run_dir: Path) -> CensusFacts | None:
     raw = manifest.get("gate_census")
     if not isinstance(raw, dict):
-        census_path = run_dir / "gate_census.json"
+        census_path = run_dir / _preparation().gate_census_file
         if not census_path.exists():
             return None
         raw = _read_json(census_path)
@@ -308,7 +314,7 @@ def _labeled_facts(run_dir: Path) -> LabeledPairCounts | None:
 
 
 def _minted_rows(run_dir: Path) -> int | None:
-    discriminator_path = run_dir / "discriminator.json"
+    discriminator_path = run_dir / _preparation().discriminator_file
     if discriminator_path.exists():
         value = _read_json(discriminator_path).get("minted_rows")
         return int(value) if value is not None else None
@@ -343,7 +349,7 @@ def _offenders(run_dir: Path) -> tuple[list[OffenderFacts], int]:
     the report log carried but this reader could not decode — recorded, not
     silently dropped.
     """
-    log_path = run_dir / "timing_offenders.log"
+    log_path = run_dir / _preparation().offender_report
     if log_path.exists():
         offenders = []
         skipped = 0
@@ -360,7 +366,7 @@ def _offenders(run_dir: Path) -> tuple[list[OffenderFacts], int]:
             # The run's own offender report exists but carries nothing
             # decodable: recorded absence, never a guessed value.
             return [], skipped
-    timings_path = run_dir / "timings.json"
+    timings_path = run_dir / _preparation().timings_file
     if timings_path.exists():
         stages = _read_json(timings_path).get("stages", {})
         ranked = sorted(
@@ -373,7 +379,7 @@ def _offenders(run_dir: Path) -> tuple[list[OffenderFacts], int]:
 
 
 def _handoff(run_dir: Path) -> HandoffSummary | None:
-    handoff_path = run_dir / "handoff.json"
+    handoff_path = run_dir / _preparation().handoff_file
     if not handoff_path.exists():
         return None
     report = _read_json(handoff_path)
@@ -456,7 +462,7 @@ def training_run_facts(run_dir: Path) -> RunFacts:
 def _default_prep_roots() -> list[Path]:
     from core.common import TRAIN_ROOT
 
-    return [TRAIN_ROOT / "results" / "training_prep"]
+    return [TRAIN_ROOT / "results" / _preparation().run_dir_base]
 
 
 def _default_training_roots() -> list[Path]:

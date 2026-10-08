@@ -56,7 +56,7 @@ def package_manifest() -> str:
 
 
 RECOVERY_SCHEMA = 'er-suite-recovery-v1'
-GRAPH_TRACKS = ('gnn_only',)
+from model_tracks.resume import GNN_ONLY_TRACKS as GRAPH_TRACKS
 #: Lane configs inlined into the package: the trained graph lane plus the
 #: cascade combinator (which consumes those trained artifacts).
 PACKAGED_LANES = (GRAPH_TRACKS + ('cascade',))

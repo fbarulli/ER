@@ -6,7 +6,7 @@ import subprocess
 import pandas as pd
 
 from model_tracks.config import load_config
-from model_tracks.resume import TRAINING_TRACKS
+from model_tracks.resume import TRAINING_TRACKS, TRACKS
 
 
 def _payload_digest(payload):
@@ -212,7 +212,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
         validate_projection(root, shared, track=track)
     shared_summary = {'sha256': shared.fingerprint, 'examples': len(shared.examples),
                       'endpoints': len(shared.endpoints), 'graph_pair_rows': 2 * len(shared.examples),
-                      'tracks': ['text', 'gnn_only', 'cascade']}
+                      'tracks': list(TRACKS)}
     del shared, text_binding
     from core.schemas import DataTuple
     DataTuple(n_df=len(bundle['df']), **{key: bundle[key] for key in

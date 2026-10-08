@@ -24,6 +24,11 @@ TRACKS = ('text', 'gnn_only', 'cascade')
 TRAINING_TRACKS = ('text', 'gnn_only')
 #: Tracks that run after training by composing trained artifacts (no barrier).
 POSTPROCESS_TRACKS = ('cascade',)
+#: The single trained graph lane. Graph trainers export a model and the
+#: cascade composes it, so graph consumers (shared projection, packaged lanes,
+#: checkpoint artifacts) name only ``gnn_only``; keep it here so none of them
+#: re-derive their own ``{'gnn_only'}`` set.
+GNN_ONLY_TRACKS = ('gnn_only',)
 
 
 Track = Literal['text', 'gnn_only', 'cascade']

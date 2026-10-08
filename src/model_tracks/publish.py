@@ -94,7 +94,7 @@ def _selected_graph_checkpoint(tree, track: str) -> Path:
 
 def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None) -> Path:
     from core.bundle import Bundle, BundleRole
-    from core.common import TRAIN_ROOT
+    from core.common import TRAIN_ROOT, training_cfg
     from core.portable_archive import cached_file_digest
     from graph_tracks.artifacts import name
     from graph_tracks.data import file_hash
@@ -140,7 +140,7 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None)
                 folder.mkdir()
                 model = folder/name(track,'graph_model.pt')
                 torch.save(deployed,model)
-                (folder/name(track,'checkpoint_manifest.json')).write_text(json.dumps({
+                (folder/name(track, training_cfg().colab.checkpoint_manifest_name)).write_text(json.dumps({
                     'schema':'er-graph-checkpoint-v1','track':track,'files':{model.name:file_hash(model)},
                     'inference_only':True,'source_checkpoint_sha256':file_hash(selected)},indent=2)+'\n')
             inventory = {str(p.relative_to(staged)):file_hash(p) for p in staged.rglob('*') if p.is_file()}
