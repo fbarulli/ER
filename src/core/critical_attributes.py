@@ -57,6 +57,20 @@ FLAVOR_ALIASES: dict[str, str] = {
     str(key): str(value) for key, value in (_VOCAB.get("flavor_aliases") or {}).items()
 }
 FLAVOR_LEXICON: frozenset[str] = frozenset(_VOCAB.get("flavor_lexicon") or ())
+# Precomputed token -> emitted-canonical dispatch table.  Reproduces the exact
+# predicate "FLAVOR_ALIASES.get(token, token) in FLAVOR_LEXICON" (which used to
+# call .get TWICE per whitespace token, ~194k calls per 10k cohort) in a single
+# dict lookup.  A token that is an alias key whose value is NOT in the lexicon
+# is deliberately absent (the alias wins over the raw token), and a lexicon
+# token that is not an alias maps to itself.
+_FLAVOR_TOKEN_MAP: dict[str, str] = {
+    token: canonical
+    for token, canonical in FLAVOR_ALIASES.items()
+    if canonical in FLAVOR_LEXICON
+}
+_FLAVOR_TOKEN_MAP.update(
+    {token: token for token in FLAVOR_LEXICON if token not in FLAVOR_ALIASES}
+)
 # Field-bound: only honored inside an explicit Flavour/Flavor declaration.
 DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset(
     _VOCAB.get("declared_flavor_lexicon") or ()
@@ -275,14 +289,13 @@ def flavor_tokens_from_text(text: str) -> frozenset[str]:
     pay to fold it again — that re-fold was 116k wasted calls over full titles.
     """
     return frozenset(
-        alias
+        _FLAVOR_TOKEN_MAP[token]
         for token in text.split()
-        if (alias := FLAVOR_ALIASES.get(token, token)) in FLAVOR_LEXICON
+        if token in _FLAVOR_TOKEN_MAP
     )
 
 
-def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
-    """Accept reviewed flavor values only when the catalog declares the field."""
+def _extract_declared_flavor_tokens_impl(*values: object) -> frozenset[str]:
     found: set[str] = set()
     for value in values:
         raw = str(value or "")
@@ -294,6 +307,26 @@ def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
                 if candidate in DECLARED_FLAVOR_LEXICON:
                     found.add(candidate)
     return frozenset(found)
+
+
+@lru_cache(maxsize=131072)
+def _extract_declared_flavor_tokens_cached(values: tuple[object, ...]) -> frozenset[str]:
+    return _extract_declared_flavor_tokens_impl(*values)
+
+
+def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
+    """Accept reviewed flavor values only when the catalog declares the field.
+
+    Memoized: the corpus repeats the same attribute cell across endpoints,
+    variants and identity parsing, and the function is pure (it returns an
+    immutable frozenset, so a cached result is safe to share).  Non-hashable
+    arguments fall back to the uncached path unchanged.
+    """
+    try:
+        key = tuple(values)
+        return _extract_declared_flavor_tokens_cached(key)
+    except TypeError:
+        return _extract_declared_flavor_tokens_impl(*values)
 
 
 # Explicit negative-sugar surfaces only.  A typo is accepted only in the
@@ -326,17 +359,76 @@ SUGAR_CLAIM_RE = re.compile(
 _SODA_DRY_PRODUCT_RE = re.compile(
     r"\b(?:syrup|concentrate|cordial|drink mix|powder)\b"
 )
+# Precompiled once at import: extract_critical_claims runs these on every one
+# of its ~65k calls per 10k cohort.  Passing the pattern string to re.search
+# re-enters the module-level _compile cache lookup for each call; holding the
+# Pattern here removes that per-call overhead without changing a single match.
+_CAFFEINE_POSITIVE_RE = re.compile(r"\s*(\d+)")
+_MADE_FROM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (phrase, re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"))
+    for phrase in MADE_FROM_PHRASES
+)
+_DECLARED_FLAVOR_SPLIT_RE = re.compile(r"[,/;&]")
+_DIET_RE = re.compile(r"\bdiet\b")
+_NON_CARBONATED_RE = re.compile(
+    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b"
+)
+_NON_CARBONATED_STRIP_RE = re.compile(
+    r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b"
+)
+_BAKING_SODA_RE = re.compile(r"\b(?:baking|washing) soda\b")
+_STILL_RE = re.compile(r"\bstill\b")
+_CARBONATED_RE = re.compile(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b")
+_SODA_RE = re.compile(r"\bsoda\b")
+_EFFERVESCENT_RE = re.compile(r"\beffervescent\b")
+_EFFERVESCENT_TABLET_RE = re.compile(
+    r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b"
+)
+_NO_PULP_RE = re.compile(r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b")
+_WITH_PULP_RE = re.compile(
+    r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
+    r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b"
+)
+_JUICE_RE = re.compile(r"\bjuice\b")
+_WITH_BITS_RE = re.compile(r"\bwith bits\b")
+_NO_BITS_RE = re.compile(r"\b(?:no bits|without bits)\b")
+_SMOOTH_JUICE_RE = re.compile(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b")
+_ORGANIC_RE = re.compile(r"\b(?:organic|luomu)\b")
 
 
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     """Extract explicit non-numeric critical claims from source text.
 
-    ``no added sugar`` is retained separately: it does not prove that a
-    product contains no naturally occurring sugar.  ``diet`` is compatible
-    with ``no_sugar`` but conflicts with an explicit ``sugar`` claim.
+    Memoized over ``values``: every check runs at most once per distinct input
+    tuple, and the result is returned as a FRESH dict each call (the pipeline
+    mutates the dict it receives, so the cached dict itself must never leak).
+    The values are frozensets, so sharing them is safe.  Non-hashable
+    arguments fall back to the uncached path with identical semantics.
     """
-    text = normalized_attribute_text(*values)
+    try:
+        key = tuple(values)
+        cached = _extract_critical_claims_cached(key)
+    except TypeError:
+        return _extract_critical_claims_impl(*values)
+    return dict(cached)
 
+@lru_cache(maxsize=131072)
+def _extract_critical_claims_cached(values: tuple[object, ...]) -> dict[str, frozenset[str]]:
+    return _extract_critical_claims_impl(*values)
+
+
+@lru_cache(maxsize=131072)
+def _non_flavor_claims_from_text(text: str) -> dict[str, frozenset[str]]:
+    """The four non-flavor dimensions, keyed by ALREADY normalized text.
+
+    Two raw value tuples can fold to the same text (a trailing mode_flavor
+    column, a different column split), and the description lane and the
+    title+attribute lane both consume this text.  Caching these ~15 pure
+    regex scans on the folded text shares them across every such caller; the
+    returned frozensets are immutable, so the cached dict can be copied out.
+    The literal `in` gates below are the r17 pre-filters, so even a cold
+    cache miss skips every scan whose required literal is absent.
+    """
     # Every sugar/diet pattern requires the literal "sugar", the accepted
     # "dugar" typo, or "diet", so two `in` tests prove the whole block is a
     # no-op. Measured: the four searches cost 0.0889s per 4,000 rows against
@@ -434,7 +526,6 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     )
 
     return {
-        "flavor": flavor_tokens_from_text(text) | extract_declared_flavor_tokens(*values),
         "carbonation": frozenset(carbonation),
         "sweetener": frozenset(sweetener),
         "pulp": frozenset(pulp),
@@ -442,13 +533,44 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     }
 
 
+def _extract_critical_claims_impl(
+    *values: object, _with_flavor: bool = True
+) -> dict[str, frozenset[str]]:
+    """Extract explicit non-numeric critical claims from source text.
+
+    ``no added sugar`` is retained separately: it does not prove that a
+    product contains no naturally occurring sugar.  ``diet`` is compatible
+    with ``no_sugar`` but conflicts with an explicit ``sugar`` claim.
+    """
+    text = normalized_attribute_text(*values)
+    base = _non_flavor_claims_from_text(text)
+    if _with_flavor:
+        # Key order is preserved exactly (flavor first) for callers that
+        # serialize the mapping; the non-flavor four follow from the cache.
+        return {
+            "flavor": flavor_tokens_from_text(text)
+            | extract_declared_flavor_tokens(*values),
+            **base,
+        }
+    return dict(base)
+
+
+@lru_cache(maxsize=131072)
+def _extract_description_claims_cached(description: str) -> dict[str, frozenset[str]]:
+    return _extract_critical_claims_impl(description, _with_flavor=False)
+
+
 def extract_description_claims(description: object) -> dict[str, frozenset[str]]:
     """Extract only explicit match-relevant claims from catalog descriptions.
 
     Flavor is omitted: a long description can mention ingredients that are
-    not the product's declared flavor.
+    not the product's declared flavor.  The flavor branch is therefore never
+    run here (it used to be computed and discarded), and the result is
+    memoized on the description text; both are pure and re-returned as a
+    fresh dict.
     """
-    found = extract_critical_claims(str(description or ""))
+    text = str(description or "")
+    found = _extract_description_claims_cached(text)
     return {key: found[key] for key in ("carbonation", "sweetener", "pulp", "organic")}
 
 
