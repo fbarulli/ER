@@ -287,6 +287,63 @@ def reliability_diagram(
     }
 
 
+def calibration_report(
+    dev_scores: Sequence[float],
+    dev_labels: Sequence[int],
+    test_scores: Sequence[float],
+    test_labels: Sequence[int],
+    *,
+    n_bins: int = 15,
+    min_temperature: float = 0.05,
+    max_temperature: float = 50.0,
+    fit: bool = True,
+) -> dict[str, Any]:
+    """Fit a temperature on DEV and report ECE/Brier on DEV and TEST.
+
+    Leakage contract: the temperature is fitted on the dev/calibration carve
+    ONLY. Test scores are never used to fit; they are only scored with the
+    dev-fitted temperature, and the reliability artifact is built on test
+    probabilities for reporting.
+    """
+    dev_scores = np.asarray(dev_scores, dtype=np.float64).reshape(-1)
+    dev_labels = np.asarray(dev_labels, dtype=np.float64).reshape(-1)
+    test_scores = np.asarray(test_scores, dtype=np.float64).reshape(-1)
+    test_labels = np.asarray(test_labels, dtype=np.float64).reshape(-1)
+    temperature = 1.0
+    if fit and dev_scores.size:
+        temperature = fit_temperature(
+            dev_scores,
+            dev_labels,
+            min_temperature=min_temperature,
+            max_temperature=max_temperature,
+        )
+    dev_probs = apply_temperature(dev_scores, temperature) if dev_scores.size else dev_scores
+    test_probs = (
+        apply_temperature(test_scores, temperature) if test_scores.size else test_scores
+    )
+    return {
+        "temperature": float(temperature),
+        "dev_ece": expected_calibration_error(dev_probs, dev_labels, n_bins=n_bins)
+        if dev_scores.size
+        else float("nan"),
+        "dev_brier": brier_score(dev_probs, dev_labels)
+        if dev_scores.size
+        else float("nan"),
+        "test_ece": expected_calibration_error(test_probs, test_labels, n_bins=n_bins)
+        if test_scores.size
+        else float("nan"),
+        "test_brier": brier_score(test_probs, test_labels)
+        if test_scores.size
+        else float("nan"),
+        "test_raw_ece": expected_calibration_error(test_scores, test_labels, n_bins=n_bins)
+        if test_scores.size
+        else float("nan"),
+        "reliability": reliability_diagram(
+            test_probs, test_labels, n_bins=n_bins, temperature=temperature
+        ),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Focal / class-weighted BCE (graph scorer loss)
 # ─────────────────────────────────────────────────────────────────────────────

@@ -70,13 +70,22 @@ def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.
 class AttributeGNN(nn.Module):
     def __init__(self, vocabulary: dict[str, list[str]], hidden: int = 64,
                  output: int = 128, text_dim: int = 0, graph_enabled: bool = True,
-                 aggregation_backend: AggregationBackend = 'index_add'):
+                 aggregation_backend: AggregationBackend = 'index_add',
+                 dropout: float = 0.0, edge_dropout: float = 0.0,
+                 residual: bool = False, two_hop: bool = False,
+                 gated_pool: bool = False):
         if aggregation_backend not in {'index_add', 'segment', 'cuda_segment'}:
             raise ValueError('unknown graph aggregation backend')
+        if not 0.0 <= dropout < 1.0 or not 0.0 <= edge_dropout < 1.0:
+            raise ValueError('dropout and edge_dropout must be in [0, 1)')
         super().__init__()
         self.aggregation_backend = aggregation_backend
         self.graph_enabled = graph_enabled
         self.text_dim = text_dim
+        # TASK B architecture switches (all default OFF -> today's bytes).
+        self.edge_dropout = float(edge_dropout)
+        self.two_hop = bool(two_hop)
+        self.gated_pool = bool(gated_pool)
         # Aggregation backend is fixed per device type for the whole run; the
         # cached operation avoids re-resolving the string policy every call.
         self._pool_operations: dict[str, object] = {}
@@ -85,8 +94,33 @@ class AttributeGNN(nn.Module):
         self.input = nn.Linear(len(NUMERIC) * 3 + len(RELATIONS) * hidden + text_dim, hidden)
         self.to_attribute = nn.ModuleDict({r: nn.Linear(hidden, hidden) for r in RELATIONS})
         self.to_listing = nn.ModuleDict({r: nn.Linear(hidden, hidden, bias=False) for r in RELATIONS})
+        # 2-hop second listing transform (only materialised when enabled).
+        self.to_listing2 = (
+            nn.ModuleDict({r: nn.Linear(hidden, hidden, bias=False) for r in RELATIONS})
+            if two_hop else None
+        )
+        # Gated attention pooling: a per-edge scalar gate on the message.
+        self.gate = nn.Linear(hidden, 1) if gated_pool else None
         self.output = nn.Linear(hidden * 2, output)
+        # Residual path (hidden -> output) only when enabled.
+        self.residual = nn.Linear(hidden, output) if residual else None
         self.norm = nn.LayerNorm(hidden)
+        self.dropout = nn.Dropout(float(dropout)) if dropout > 0.0 else None
+
+    def _apply_dropout(self, value: torch.Tensor) -> torch.Tensor:
+        return value if self.dropout is None else self.dropout(value)
+
+    def _drop_edges(self, values: torch.Tensor):
+        """Drop a fraction of edges by zeroing their contribution (train only).
+
+        The dropped edges keep their listing index, so the mean-pool denominator
+        still counts them: the message simply shrinks. This is a regularization
+        knob and never runs in eval, so inference is unchanged when it is off.
+        """
+        if self.edge_dropout <= 0.0 or not self.training or values.shape[0] == 0:
+            return values
+        keep = torch.rand(values.shape[0], device=values.device) >= self.edge_dropout
+        return values * keep.to(values.dtype).unsqueeze(1)
 
     def pool(self, values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
         if not _POOL_BACKEND_CACHE:
@@ -145,13 +179,15 @@ class AttributeGNN(nn.Module):
 
     def _context_impl(self, support: GraphBatch, text: torch.Tensor | None = None, *, initial=None) -> dict:
         h = self.initial(support, text) if initial is None else initial
+        h = self._apply_dropout(h)
         states = {}
         for relation in RELATIONS:
             listing, value, sizes = topology(
                 support, relation, attribute=True,
                 count=self.tokens[relation].num_embeddings, dtype=h.dtype)
+            messages = self._drop_edges(h[listing])
             states[relation] = F.relu(self.to_attribute[relation](self.pool(
-                h[listing], value, sizes)))
+                messages, value, sizes)))
             # An unknown attribute is not a shared relation.
             states[relation] = states[relation] * (torch.arange(
                 len(states[relation]), device=h.device) != 0).unsqueeze(1)
@@ -166,10 +202,20 @@ class AttributeGNN(nn.Module):
     def _encode_impl(self, batch: GraphBatch, states: dict,
                      text: torch.Tensor | None = None, *, initial=None) -> torch.Tensor:
         h = self.initial(batch, text) if initial is None else initial
+        h = self._apply_dropout(h)
         message = None
         for relation in RELATIONS if self.graph_enabled else ():
             value, listing, sizes = topology(batch, relation, dtype=h.dtype)
             transformed = self.to_listing[relation](states[relation][value])
+            if self.to_listing2 is not None:
+                # 2-hop: a second typed transform of the same attribute states.
+                transformed = transformed + self.to_listing2[relation](
+                    states[relation][value]
+                )
+            if self.gate is not None:
+                # Gated attention pooling: per-edge sigmoid gate.
+                transformed = transformed * torch.sigmoid(self.gate(transformed))
+            transformed = self._drop_edges(transformed)
             # Autocast may change the linear output dtype. Keep the original
             # pooling arithmetic in that dtype as well.
             pooled = self.pool(transformed, listing, sizes.to(transformed.dtype))
@@ -187,7 +233,10 @@ class AttributeGNN(nn.Module):
             message = message / float(len(RELATIONS))
         elif message is not None:
             message = torch.stack(message).mean(0)
-        return F.normalize(self.output(torch.cat([h, message], dim=-1)), dim=-1)
+        fused = self.output(torch.cat([h, message], dim=-1))
+        if self.residual is not None:
+            fused = fused + self.residual(h)
+        return F.normalize(fused, dim=-1)
 
 
 class PairScorer(nn.Module):

@@ -107,6 +107,26 @@ def test_fit_temperature_rejects_empty_and_mismatched():
         adv.fit_temperature([0.1], [1, 0])
 
 
+def test_calibration_report_fits_on_dev_only():
+    rng = np.random.default_rng(1)
+    dev = rng.normal(size=500)
+    dev_y = (dev > 0).astype(int)
+    test = rng.normal(size=500)
+    test_y = (test > 0).astype(int)
+    report = adv.calibration_report(dev, dev_y, test, test_y, n_bins=5)
+    assert set(report) >= {"temperature", "dev_ece", "test_ece", "test_brier", "reliability"}
+    assert report["reliability"]["temperature"] == report["temperature"]
+    # fitting is a pure function of dev: changing test scores cannot change T
+    report2 = adv.calibration_report(dev, dev_y, test * 10.0, test_y, n_bins=5)
+    assert report2["temperature"] == pytest.approx(report["temperature"])
+
+
+def test_calibration_report_handles_empty_dev():
+    report = adv.calibration_report([], [], [0.2, 0.8], [0, 1])
+    assert report["temperature"] == 1.0
+    assert math.isnan(report["dev_ece"])
+
+
 # ── focal loss ──────────────────────────────────────────────────────────────
 
 def test_focal_gamma_zero_equals_bce():
