@@ -496,6 +496,7 @@ def extract_volume_match(text: str) -> tuple:
     return None, None, False, ''
 
 
+@lru_cache(maxsize=1)
 def _volume_spelling_index() -> dict:
     """post-norm_unit spelling -> the config entry declaring it.
 
