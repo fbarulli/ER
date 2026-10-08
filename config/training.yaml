@@ -298,7 +298,7 @@ kaggle:
   # Environment variable holding the API token — never the token itself.
   api_key_env: "KAGGLE_API_KEY"
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "laya"
+  branch: "main"
   cpu_kernel_slug: "fbarulli/er-bundle-cpu"
   # GPU training kernel — the second half of the same ruling: it attaches
   # the CPU kernel output as a kernel_source, restores the package into the

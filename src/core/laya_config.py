@@ -89,6 +89,8 @@ class FinetuneSpec(BaseModel):
     warmup_frac: float = Field(default=0.0, ge=0.0, le=1.0)
     warmup_steps: int = Field(default=0, ge=0)
     plateau_patience: int = Field(default=2, ge=0, le=64)
+    plateau_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
+    onecycle_pct_start: float = Field(default=0.3, gt=0.0, lt=1.0)
     # Confidence cut used only to derive the dev abstain_rate/coverage wandb
     # metrics (laya's evaluate_records emits neither).
     abstain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -119,6 +121,67 @@ class FinetuneSpec(BaseModel):
     log_grad_norm: bool = True
     write_error_artifacts: bool = False
     deterministic: bool = False
+    # ── torch.profiler (default-ON per owner; auto-OFF without CUDA) ────────
+    # A bounded schedule profiles only a slice of an epoch; the chrome trace
+    # lands under `<output_dir>/<profile_dir>/epoch_<n>.json` (rank 0 only).
+    profile: bool = True
+    profile_dir: str = "profiler"
+    profile_schedule: dict[str, int] = Field(
+        default_factory=lambda: {"wait": 1, "warmup": 1, "active": 1,
+                                 "repeat": 1})
+    # ── extended knobs (all default-OFF; HPO-searchable dials) ──────────────
+    # no_decay_bias_norm: exclude bias/norm (ndim<=1) params from weight_decay.
+    no_decay_bias_norm: bool = False
+    # optim_state_dtype: bf16 optimizer states/master weights (composes with
+    # amp_dtype, which only governs the forward compute).
+    optim_state_dtype: Literal["fp32", "bf16"] = "fp32"
+    # lr_scaling: scale the peak LR from effective batch (micro*accum*world)
+    # over base_batch; explicit encoder_lr/head_lr win when "none".
+    lr_scaling: Literal["none", "linear", "sqrt"] = "none"
+    base_batch: int = Field(default=0, ge=0)
+    # r_drop: two dropout-masked forwards + alpha*KL (auto-off without dropout).
+    r_drop: bool = False
+    r_drop_alpha: float = Field(default=0.5, ge=0.0)
+    # drop_path: stochastic depth over the head's transformer blocks.
+    drop_path: bool = False
+    drop_path_rate: float = Field(default=0.1, ge=0.0, lt=1.0)
+    drop_path_schedule: Literal["constant", "linear"] = "linear"
+    # dynamic_padding: round the collated batch length to pad_to_multiple
+    # (laya already pads to the batch longest; max_len only truncates).
+    dynamic_padding: bool = False
+    pad_to_multiple: int = Field(default=8, ge=0)
+    # batch_size_ramp: linearly ramp grad_accum (rank-symmetric) to target.
+    batch_size_ramp: bool = False
+    batch_ramp_start_frac: float = Field(default=0.25, gt=0.0, le=1.0)
+    batch_ramp_epochs: int = Field(default=2, ge=0)
+    # loss_schedule: ONE schedule for sigma/w_sph/w_rps/margin. "laya"
+    # reproduces laya.train.sigma_at exactly (byte-identical default).
+    loss_schedule: Literal["laya", "linear", "cosine"] = "laya"
+    w_sph_end: float | None = Field(default=None, ge=0.0)
+    w_rps_end: float | None = Field(default=None, ge=0.0)
+    contrastive_margin: float = Field(default=0.0, ge=0.0)
+    contrastive_margin_end: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _profile_dir_is_a_portable_name(self) -> "FinetuneSpec":
+        candidate = Path(self.profile_dir)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(
+                f"finetune.profile_dir must be a portable name: "
+                f"{self.profile_dir!r}")
+        allowed = {"wait", "warmup", "active", "repeat"}
+        extra = set(self.profile_schedule) - allowed
+        if extra:
+            raise ValueError(
+                f"finetune.profile_schedule carries unknown keys {sorted(extra)}; "
+                f"expected {sorted(allowed)}")
+        for key in allowed:
+            value = self.profile_schedule.get(key)
+            if value is not None and (not isinstance(value, int) or value < 0):
+                raise ValueError(
+                    f"finetune.profile_schedule.{key} must be a non-negative "
+                    f"int, got {value!r}")
+        return self
 
 
 class EvalCalibrationSpec(BaseModel):

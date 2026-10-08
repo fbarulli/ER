@@ -616,7 +616,7 @@ def test_decision_kind_registry_contract():
 
     assert set(DECISION_BINDINGS) == {"attribute", "identity",
                                       "laya-cli-eval", "finetune",
-                                      "finetune-eval"}
+                                      "finetune-eval", "holdout-eval"}
     # every binding carries the class contract: header columns + state
     for entry in DECISION_BINDINGS.values():
         assert entry["wanted_columns"]
