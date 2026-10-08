@@ -563,7 +563,10 @@ def _controlled_report(path, attribute=''):
 def controlled_influence(attribute=''):
     pointer = F['decision_ablation_report']
     paths = sorted(pointer.parent.glob('*/report.json')) if pointer.parent.is_dir() else []
-    paths.extend(sorted(RESULTS.glob('model_tracks/*/ablation/report.json')))
+    # Reports live at results/model_tracks/<run_tag>/<track>/ablation/report.json
+    # (two levels under model_tracks); the RESULTS root is the config/SSOT
+    # parent so EUROMONITOR_RESULTS_DIR is honored instead of TRAIN_ROOT.
+    paths.extend(sorted(RESULTS.glob('model_tracks/*/*/ablation/report.json')))
     if pointer.is_file():
         paths.append(pointer)
     if not paths:

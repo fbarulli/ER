@@ -24,6 +24,11 @@ def reports(tmp_path, monkeypatch):
     paths = {k:tmp_path / (k + '.json') for k in module.F}
     monkeypatch.setattr(module, 'F', paths)
     monkeypatch.setattr(module, 'TRAIN_ROOT', tmp_path)
+    # controlled_influence/_bundle_header discover artifacts under
+    # core.common.RESULTS (config-owned, EUROMONITOR_RESULTS_DIR-aware); the
+    # dashboard binds it at import, so isolate it to this tmp tree or real
+    # results/model_tracks artifacts leak into these assertions.
+    monkeypatch.setattr(module, 'RESULTS', tmp_path / 'results')
     monkeypatch.setattr(module, 'runs', lambda: {})
     paths['decision_suite_config'].write_text('setup_dir: setup\ntext_bundle: unused\n')
     paths['decision_ledger'].parent.mkdir(exist_ok=True)

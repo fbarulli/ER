@@ -299,6 +299,11 @@ def test_controlled_influence_discovers_portable_report(portable_ablation, monke
 
     monkeypatch.setattr(module, 'F', {**module.F, 'decision_ablation_report': pointer})
     monkeypatch.setattr(module, 'TRAIN_ROOT', portable_ablation['tmp_path'])
+    # core.common.RESULTS is resolved once at import from
+    # EUROMONITOR_RESULTS_DIR or TRAIN_ROOT/'results'; the dashboard imports
+    # it by value, so re-point it at the simulated clean clone's results tree.
+    monkeypatch.setattr(module, 'RESULTS',
+                        portable_ablation['tmp_path'] / 'results')
 
     # controlled_influence discovers reports from results/model_tracks/*/*/ablation/report.json
     # or from the pointer's glob pattern. Place a copy at the expected discovery path.
