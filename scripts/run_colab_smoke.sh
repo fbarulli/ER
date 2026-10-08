@@ -12,4 +12,4 @@ args=(--what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu "${
 if [ "${COLAB_GPU:-CPU}" != "CPU" ]; then
   args+=(--allow-gpu)
 fi
-exec python -u colab_backend.py "${args[@]}"
+PYTHONPATH=src exec .venv/bin/python -u colab_backend.py "${args[@]}"
