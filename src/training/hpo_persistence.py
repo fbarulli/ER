@@ -56,7 +56,14 @@ def build_snapshot(
     if scope:
         outbox /= scope
     outbox.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{sequence}-", dir=outbox))
+    # Reserve a collision-free sequence directory up front: two snapshots built
+    # in the same second must not fight over the same outbox slot.
+    final = outbox / str(sequence)
+    bump = 1
+    while final.exists():
+        final = outbox / f"{sequence}-{bump}"
+        bump += 1
+    temporary = Path(tempfile.mkdtemp(prefix=f".{final.name}-", dir=outbox))
     snapshot = temporary / "payload"
     snapshot.mkdir()
     files: list[dict[str, str | int]] = []
@@ -86,13 +93,16 @@ def build_snapshot(
         manifest = {
             "generation": generation.name,
             "scope": scope,
-            "sequence": sequence,
+            "sequence": final.name,
             "created_at": time.time(),
             "files": files,
         }
         (snapshot / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
         (snapshot / "READY").write_text("ready\n", encoding="utf-8")
-        final = outbox / str(sequence)
+        # READY is written last, then the payload is independently verified
+        # BEFORE it is published: a partial/racing capture never becomes the
+        # immutable final snapshot.
+        verify_snapshot(snapshot)
         snapshot.rename(final)
         temporary.rmdir()
         return final
