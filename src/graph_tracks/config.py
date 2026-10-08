@@ -12,6 +12,18 @@ def _default_ann_recall_ks() -> tuple[int, ...]:
     return ann_retrieval_ks()
 
 
+def _default_seed() -> int:
+    """Resolve the run seed from the ONE seed (core.common.SEED).
+
+    The graph lane trains under the same seed as every other lane: the single
+    ``config/paths.yaml`` ``seed:`` read once into ``core.common.SEED``. An
+    explicit ``seed:`` in a lane YAML remains an intentional override, exactly
+    like ``retrieval_ks`` above.
+    """
+    from core.common import SEED
+    return int(SEED)
+
+
 class RetrievalConfig(BaseModel):
     """Shared validated ANN/index contract; explicit lane overrides are allowed."""
     model_config = ConfigDict(extra="forbid", validate_default=True)
@@ -107,7 +119,7 @@ class GraphConfig(RetrievalConfig):
     lr_patience: int = Field(default=1, ge=0)
     lr_factor: float = Field(default=0.5, gt=0, lt=1)
     min_lr: float = Field(default=0.00001, ge=0)
-    seed: int = Field(default=1337, ge=0)
+    seed: int = Field(default_factory=_default_seed, ge=0)
     device: Literal["cpu", "cuda"] = "cpu"
     graph_enabled: bool = True
     metric_weight: float = Field(default=1., ge=0)

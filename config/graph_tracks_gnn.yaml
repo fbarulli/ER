@@ -17,7 +17,8 @@ lr_scheduler: plateau
 lr_patience: 1
 lr_factor: 0.5
 min_lr: 0.00001
-seed: 1337
+# seed defaults to the ONE run seed (config/paths.yaml `seed`, read via
+# core.common.SEED). Declare it here only for an intentional lane override.
 device: cpu
 graph_enabled: true
 metric_weight: 1.0

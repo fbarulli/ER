@@ -32,7 +32,7 @@ from sklearn.metrics import average_precision_score, precision_recall_curve
 from graph_tracks.config import load_config
 from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.tracking import GraphWandb
-from graph_tracks.data import census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
+from graph_tracks.data import SPLITS, census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
 from core.bundle import CHECKPOINT_PREFIX
 from core.perf_switches import perf_enabled
@@ -123,7 +123,6 @@ class SupervisedPairs:
     """
 
     COLUMNS = {"sku_id1", "sku_id2", "label", "split"}
-    SPLITS = ("train", "dev", "test")
 
     def __init__(self, path: Path, records: list[dict]):
         self._frame = pd.read_csv(path, dtype=str, keep_default_na=False)
@@ -132,7 +131,7 @@ class SupervisedPairs:
         self._ids = {r["sku_id"]: i for i, r in enumerate(records)}
         self._seen: dict[tuple[int, int], tuple[str, bool]] = {}
         self._example_ids: set[str] = set()
-        self._rows = {s: ([], []) for s in self.SPLITS}
+        self._rows = {s: ([], []) for s in SPLITS}
 
     @classmethod
     def from_csv(cls, path: Path, records: list[dict]) -> "SupervisedPairs":
