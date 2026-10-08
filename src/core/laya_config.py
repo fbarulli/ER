@@ -205,6 +205,18 @@ class LayaSpec(BaseModel):
     # the fine-tune trains on train and evaluates/calibrates on dev.
     finetune_eval_split: Literal["train", "dev", "test"] = "test"
     finetune_eval_batch_size: int = Field(default=16, ge=1, le=256)
+    # ── holdout-eval path (component-disjoint verification ON Kaggle) ──────
+    # Scores a fine-tuned checkpoint on the component-disjoint holdout (real
+    # pairs + P0 + gate strata; scripts/laya_holdout.py) IN-SESSION and writes
+    # the clustered, gate-stratified report, so verification never runs
+    # locally. Attaches the staged holdout dataset (holdout_dataset_slug) + the
+    # checkpoint dataset (finetune_ckpt_dataset).
+    holdout_eval_kernel_slug: str | None = "fbarulli/er-laya-holdout-eval"
+    holdout_dataset_slug: str | None = "fbarulli/er-laya-holdout"
+    holdout_csv: str = "data/laya/holdout.csv"
+    holdout_eval_batch_size: int = Field(default=16, ge=1, le=256)
+    holdout_eval_bootstrap: int = Field(default=2000, ge=0, le=100000)
+    holdout_eval_threshold: float = 0.5
     # The FULL `laya.train.TrainConfig` recipe the finetune kernel builds
     # (additive; defaults reproduce the landed recipe exactly). YAML-driven
     # so every trainer knob is SSOT config, never a code literal.
