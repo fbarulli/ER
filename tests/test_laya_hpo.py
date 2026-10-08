@@ -826,5 +826,120 @@ def test_profiler_disabled_for_non_rank0(tmp_path):
     assert torch_module.profiler.calls == 0
 
 
+# ── observability / offline / dispatch / persistence fixes ─────────────────
+def _write_space(tmp_path, mutate):
+    import yaml
+
+    space = json.loads(json.dumps(laya_hpo.load_space()))
+    mutate(space)
+    path = tmp_path / "laya_hpo_space.yaml"
+    path.write_text(yaml.safe_dump(space, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
+                kernel_slug=None):
+    """Stage the Kaggle payload with the network/git/tip deps stubbed."""
+    monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-obs")
+    monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
+    monkeypatch.setattr(laya_lane, "_git_revision", lambda: "a" * 40)
+    monkeypatch.setattr(laya_lane, "_env_value",
+                        lambda name: url if name == laya_hpo.OPTUNA_URL_ENV
+                        else None)
+    monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
+    monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
+                        lambda **kwargs: {"payload": str(tmp_path / "ds"),
+                                          "files": {}})
+    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
+    from core import runtime_inputs
+    monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
+                        lambda rev, repo, branch: rev)
+    return laya_hpo.stage_laya_hpo_kernel(space_config=space_config,
+                                          kernel_slug=kernel_slug)
+
+
+def test_offline_staging_needs_no_url(monkeypatch, tmp_path):
+    """#2: an offline space stages without OPTUNA_STORAGE_URL and bakes none."""
+    space_config = _write_space(
+        tmp_path, lambda s: s["options"]["session"].update(offline=True))
+    monkeypatch.setattr(laya_lane, "_env_value", lambda name: None)
+    receipt = _stage_with(monkeypatch, tmp_path, None, space_config=space_config)
+    assert receipt["observability"]["mode"] == "offline"
+    assert receipt["observability"]["ledger_active"] is True
+    assert receipt["optuna_storage"]["offline"] is True
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    assert "OPTUNA_STORAGE_URL'] =" not in script  # no URL line baked
+    compile(script, "offline-kernel", "exec")
+
+
+def test_offline_receipt_reports_the_real_session_mode(monkeypatch, tmp_path):
+    """#6: the receipt's observability block follows session.offline."""
+    space_config = _write_space(
+        tmp_path, lambda s: s["options"]["session"].update(offline=True))
+    monkeypatch.setattr(laya_lane, "_env_value", lambda name: None)
+    receipt = _stage_with(monkeypatch, tmp_path, None, space_config=space_config)
+    assert receipt["observability"]["mode"] == "offline"
+    assert receipt["observability"]["ledger_active"] is True
+
+
+def test_staged_slug_override_is_registered_for_dispatch(monkeypatch, tmp_path):
+    """#3: kernel_slug() resolves the override that was actually staged."""
+    original = dict(laya_lane.EXTERNAL_KIND_SLUGS)
+    try:
+        receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db",
+                              kernel_slug="someone/er-laya-hpo-x")
+        assert receipt["kernel"] == "someone/er-laya-hpo-x"
+        assert laya_lane.kernel_slug("laya-hpo") == "someone/er-laya-hpo-x"
+    finally:
+        laya_lane.EXTERNAL_KIND_SLUGS.clear()
+        laya_lane.EXTERNAL_KIND_SLUGS.update(original)
+
+
+def test_receipt_cache_root_and_worker_cap_are_deterministic(monkeypatch,
+                                                             tmp_path):
+    """#8: shared_data.root is a literal and max_workers is the GPU-capped plan."""
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    assert receipt["options"]["shared_data"]["root"] == \
+        laya_hpo.HPO_SHARED_CACHE_ROOT
+    # slots mode: 2 GPUs (n_jobs) x 1 slot, capped at max_concurrent_trials=2.
+    assert receipt["budget"]["max_workers"] == 2
+
+
+def test_build_snapshot_is_verified_and_collision_free(tmp_path):
+    """#4/#8: same-second sequences never collide and every snapshot verifies."""
+    from training import hpo_persistence
+
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.txt").write_text("a", encoding="utf-8")
+    first = hpo_persistence.build_snapshot(
+        generation=work, sequence=7, optuna_db=None, include=[work / "a.txt"])
+    second = hpo_persistence.build_snapshot(
+        generation=work, sequence=7, optuna_db=None, include=[work / "a.txt"])
+    assert first.name == "7"
+    assert second != first and second.name != "7"
+    hpo_persistence.verify_snapshot(first)
+    hpo_persistence.verify_snapshot(second)
+    assert (first / "READY").is_file()
+    assert (second / "READY").is_file()
+
+
+def test_staged_kernel_observes_once_after_commit_and_falls_back(monkeypatch,
+                                                                 tmp_path):
+    """#1/#2/#5: the staged worker syncs post-commit, has an RDB-outage
+    fallback, and flushes the mirror (no in-objective pre-commit observe)."""
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    assert "_observe(trial)" not in script  # never observed before commit
+    assert "_sync_observations" in script and "observer.flush()" in script
+    assert "falling back to the offline" in script
+    assert "def offline_active" in script and "def mark_offline" in script
+    assert "verify_snapshot(snapshot)" in script
+    worker = script.split("def run_worker(", 1)[1].split("\ndef ", 1)[0]
+    assert worker.index("if offline:") < worker.index("ensure_optuna_url()")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

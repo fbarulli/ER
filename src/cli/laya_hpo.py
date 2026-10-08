@@ -83,6 +83,9 @@ TYPES = ("int", "float", "categorical")
 # keeps its defaults (runtime env, never code).
 COLAB_WORKING = "/content/laya_hpo/working"
 COLAB_INPUT_ROOT = "/content/laya_hpo/input"
+# The shared-data cache root baked into the receipt. A fixed literal (not
+# ``Path.cwd()``) keeps the stored receipt deterministic across hosts.
+HPO_SHARED_CACHE_ROOT = "hpo_shared_cache"
 
 # The optuna env var the shared control plane reads. One name, one place.
 OPTUNA_URL_ENV = "OPTUNA_STORAGE_URL"
@@ -501,8 +504,16 @@ class LayaHpoStager:
                 "travels as that dataset (owner/slug) — name it before staging")
         return dataset_slug, base_dataset
 
-    def _optuna_env_script(self) -> str | None:
-        """The lane's URL line: Colab reuses colab_runtime; Kaggle bakes the URL."""
+    def _optuna_env_script(self, offline: bool) -> str | None:
+        """The lane's URL line, or ``""`` when the study runs offline.
+
+        Colab reuses ``colab_runtime`` to resolve/validate the URL; Kaggle lets
+        the shared composer bake ``require_optuna_url``'s value. An offline
+        study needs no URL at all: the token is replaced with the empty string
+        so the staged kernel never carries a secret it will not use.
+        """
+        if offline:
+            return ""
         if self.lane == "colab":
             return _colab_optuna_env_line()
         return None
@@ -510,7 +521,17 @@ class LayaHpoStager:
     def plan(self) -> HpoStagePlan:
         spec = training_cfg().laya
         space = load_space(self.space_config)
-        url = require_optuna_url()
+        budget_trials = int(self.n_trials if self.n_trials is not None
+                            else space["n_trials"])
+        budget_jobs = int(self.n_jobs if self.n_jobs is not None
+                          else space["n_jobs"])
+        # Build the option set early: its ``session.offline`` decides whether a
+        # shared PostgreSQL URL is required at all (and fixes the cache root so
+        # the receipt is deterministic).
+        options = laya_hpo_options.build_option_set(
+            space, root=HPO_SHARED_CACHE_ROOT)
+        offline = bool(options.session.offline)
+        url = "" if offline else require_optuna_url()
         generation, key, study_name = study_identity(
             space=space, generation_id=self.generation_id)
         dataset_slug, base_dataset = self._dataset_slugs(spec)
@@ -535,16 +556,11 @@ class LayaHpoStager:
         stage_dir.mkdir(parents=True, exist_ok=True)
         tag = self.run_tag or (
             spec.run_tag_prefix + "hpo_" + laya_lane.decision_tag())
-        budget_trials = int(self.n_trials if self.n_trials is not None
-                            else space["n_trials"])
-        budget_jobs = int(self.n_jobs if self.n_jobs is not None
-                          else space["n_jobs"])
-        options = laya_hpo_options.build_option_set(space)
         script = _compose_hpo_script(
             spec=spec, space=space, generation=generation, key=key, tag=tag,
             budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
             repository=repository, branch=branch, revision=revision,
-            optuna_env_script=self._optuna_env_script())
+            optuna_env_script=self._optuna_env_script(offline))
         return HpoStagePlan(
             lane=self.lane, spec=spec, space=space, options=options, url=url,
             generation=generation, key=key, study_name=study_name,
@@ -556,10 +572,14 @@ class LayaHpoStager:
 
     # ── receipt (one shape; each lane adds only its envelope keys) ─────────
     def _budget(self, plan: HpoStagePlan) -> dict[str, Any]:
-        pool = getattr(plan.options.scheduler, "pool", None)
+        # The GPU-capped worker plan, not the raw pool ceiling: ``n_jobs`` is
+        # the in-session GPU worker count (one worker per visible T4), so the
+        # scheduler caps the plan exactly as it will at runtime.
+        gpu_count = max(1, int(plan.budget_jobs))
+        workers = plan.options.scheduler.workers(gpu_count)
         return {"n_trials": plan.budget_trials, "n_jobs": plan.budget_jobs,
                 "seed": int(plan.space["seed"]),
-                "max_workers": int(getattr(pool, "max_concurrent_trials", 1))}
+                "max_workers": len(workers)}
 
     def _receipt_common(self, plan: HpoStagePlan) -> dict[str, Any]:
         space = plan.space
@@ -581,9 +601,11 @@ class LayaHpoStager:
             "options": plan.options.as_dict(),
             "registry": hpo_registry.default_registry().describe(),
             "observability": hpo_observability.TrialObserver(
-                hpo_observability.OBSERVABILITY_DIR).as_dict(),
+                hpo_observability.OBSERVABILITY_DIR,
+                offline=bool(plan.options.session.offline)).as_dict(),
             "optuna_storage": {"required_env": OPTUNA_URL_ENV,
                                "injected_into_kernel": True,
+                               "offline": bool(plan.options.session.offline),
                                "url_persisted_to_manifest": False},
             "published_pin": {"repository": plan.repository,
                               "branch": plan.branch, "revision": plan.revision},
@@ -640,6 +662,11 @@ class LayaHpoStager:
         plan = self.plan()
         receipt = (self._stage_kaggle(plan) if self.lane == "kaggle"
                    else self._stage_colab(plan))
+        # Thread the STAGED kernel slug into the shared dispatch hook so a
+        # later `kernel_slug("laya-hpo")` / stop addresses the very kernel this
+        # receipt staged (an override wins over the space SSOT).
+        if plan.lane == "kaggle" and plan.kernel:
+            register_dispatch(plan.kernel)
         # The one hard guarantee: the URL is not in the stored receipt.
         assert_secret_absent(receipt, plan.url)
         atomic_write_json(receipt, plan.stage_dir / HPO_RECEIPT_FILE)
@@ -900,7 +927,9 @@ def pip_install_laya():
 def ensure_optuna_url():
     url = os.environ.get(OPTUNA_URL_ENV, "").strip()
     if not url:
-        raise SystemExit(
+        # RuntimeError (not SystemExit) so the caller can catch it and fall
+        # back to the single-process SQLite study instead of hard-failing.
+        raise RuntimeError(
             "[laya-hpo] " + OPTUNA_URL_ENV + " is missing; the shared "
             "PostgreSQL Optuna study cannot be reached. Re-stage with the "
             "secret set.")
@@ -911,6 +940,31 @@ def ensure_optuna_url():
         url = "postgresql+psycopg://" + url[len("postgresql://"):]
         os.environ[OPTUNA_URL_ENV] = url
     return url
+
+
+def offline_marker_path():
+    """The sentinel a fallback worker writes so the session end knows to read
+    the SQLite study and write the offline ledger."""
+    return WORKING / OBSERVABILITY_DIR / "offline.marker"
+
+
+def mark_offline(reason):
+    try:
+        path = offline_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(reason), encoding="utf-8")
+    except Exception:  # noqa: BLE001,S110 - the marker is best-effort
+        pass
+
+
+def offline_active(options):
+    """Configured-offline OR a runtime RDB-outage fallback fired this session."""
+    try:
+        if bool(options.session.offline):
+            return True
+    except Exception:  # noqa: BLE001,S110
+        pass
+    return offline_marker_path().is_file()
 
 
 def resolve_input(name):
@@ -1107,28 +1161,36 @@ def _record_cache_manifest(options):
         log("cache manifest skipped: " + str(error)[:160])
 
 
-def _observe(trial):
-    """Fan one committed trial out to the control-plane observer (best-effort)."""
+def _sync_observations(study):
+    """Observe every COMMITTED trial once (idempotent); return the counts.
+
+    Called after ``study.optimize`` so a trial is never observed before Optuna
+    has committed its terminal state, and a resumed session/parallel worker
+    cannot re-emit history.
+    """
+    observer = globals().get("OBSERVER")
+    if observer is None:
+        return {"written": 0, "skipped": 0}
     try:
-        observer = globals().get("OBSERVER")
-        if observer is not None:
-            observer.observe(trial)
+        result = observer.sync(study.trials)
+        observer.flush()
+        log("observer %s" % json.dumps(result))
+        return result
     except Exception as error:
         log("observer skipped: " + str(error)[:160])
+        return {"written": 0, "skipped": 0}
 
 
 def make_objective(device, train_path, dev_path, base_model, lease_store,
                    champion_store):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     def objective(trial):
-        value = objective_value(
+        return objective_value(
             trial,
             lambda trial: run_trial(
                 trial, device, train_path, dev_path, base_model),
             lease_store, champion_store, GENERATION_ID, MODEL_KEY,
             objective_mode=options.objective_mode)
-        _observe(trial)
-        return value
     return objective
 
 
@@ -1143,11 +1205,9 @@ def make_ddp_objective(options, lease_store, champion_store):
         def run_fn(t):
             dials = sample_dials(t, HPO_SPACE)
             return runner.run(int(t.number), {"dials": dials})
-        value = objective_value(trial, run_fn, lease_store, champion_store,
-                                GENERATION_ID, MODEL_KEY,
-                                objective_mode=options.objective_mode)
-        _observe(trial)
-        return value
+        return objective_value(trial, run_fn, lease_store, champion_store,
+                               GENERATION_ID, MODEL_KEY,
+                               objective_mode=options.objective_mode)
     return objective
 
 
@@ -1202,7 +1262,6 @@ def run_ddp_trial(trial_number):
 
 
 def run_worker(device):
-    ensure_optuna_url()
     if MODEL_KEY != "laya":
         # The registry carries a real search space + objective for every model
         # key, but THIS lane's remote worker executes only the laya objective.
@@ -1224,20 +1283,17 @@ def run_worker(device):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     globals()["OPTION_SET"] = options
     options.resource_caps.apply_torch(torch)
+    # Read the session policy BEFORE touching the URL: an offline study needs
+    # no shared PostgreSQL at all.
     offline = bool(options.session.offline)
     observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
     globals()["OBSERVER"] = observer
 
-    if offline:
-        # Offline fallback: a single-process local SQLite study + the offline
-        # ledger. No shared control plane, so no leases/champions.
+    def _sqlite_storage():
         WORKING.mkdir(parents=True, exist_ok=True)
-        storage_config = None
-        storage = optuna.storages.RDBStorage(
+        return optuna.storages.RDBStorage(
             "sqlite:///" + str(WORKING / "hpo_offline.db"))
-    else:
-        storage_config = storage_from_environment()
-        storage = create_storage(storage_config)
+
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
     sampler = options.sampler.create(optuna)
@@ -1245,13 +1301,34 @@ def run_worker(device):
     directions = options.objective_mode.directions()
     study_kwargs = ({"directions": directions} if isinstance(directions, list)
                     else {"direction": directions})
-    study = optuna.create_study(
-        study_name=study_name,
-        sampler=sampler,
-        pruner=pruner,
-        storage=storage,
-        **options.session.study_kwargs(),
-        **study_kwargs)
+
+    def _build_study(storage):
+        return optuna.create_study(
+            study_name=study_name, sampler=sampler, pruner=pruner,
+            storage=storage, **options.session.study_kwargs(), **study_kwargs)
+
+    storage_config = None
+    if offline:
+        # Offline: a single-process local SQLite study + the offline ledger.
+        # No shared control plane, so no leases/champions.
+        study = _build_study(_sqlite_storage())
+    else:
+        try:
+            ensure_optuna_url()
+            storage_config = storage_from_environment()
+            study = _build_study(create_storage(storage_config))
+        except Exception as error:
+            # Graceful RDB outage: fall back to the SQLite study + offline
+            # ledger instead of losing the whole session. The marker tells the
+            # session end to read SQLite and write hpo_trials.jsonl.
+            log("shared Postgres unavailable (%s); falling back to the offline "
+                "SQLite study + hpo_trials ledger" % str(error)[:160])
+            offline = True
+            mark_offline(str(error)[:200])
+            observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=True)
+            globals()["OBSERVER"] = observer
+            storage_config = None
+            study = _build_study(_sqlite_storage())
     if not offline:
         fail_stale_trials(study)
     # Warm start: enqueue known-good seed configs so TPE starts from them.
@@ -1294,6 +1371,9 @@ def run_worker(device):
     if per_worker:
         study.optimize(objective, n_trials=per_worker,
                        **options.session.optimize_kwargs())
+    # Observe the committed study ONCE (idempotent across workers/sessions) and
+    # flush every worker's mirror so a worker that exits never loses it.
+    _sync_observations(study)
     wandb_finish()
 
 
@@ -1308,19 +1388,35 @@ def sha256_of(path):
 def write_session_receipt():
     import optuna
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
-    offline = bool(options.session.offline)
+    # Configured offline OR a runtime RDB-outage fallback flagged by a worker.
+    offline = offline_active(options)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
-    if offline:
-        storage = optuna.storages.RDBStorage(
+
+    def _sqlite_storage():
+        WORKING.mkdir(parents=True, exist_ok=True)
+        return optuna.storages.RDBStorage(
             "sqlite:///" + str(WORKING / "hpo_offline.db"))
+
+    if offline:
+        storage = _sqlite_storage()
     else:
-        storage = create_storage(storage_from_environment())
+        try:
+            storage = create_storage(storage_from_environment())
+        except Exception as error:
+            log("shared Postgres unavailable at session end (%s); reading the "
+                "offline SQLite study" % str(error)[:160])
+            offline = True
+            storage = _sqlite_storage()
     study = optuna.load_study(study_name=study_name, storage=storage)
+    directions = options.objective_mode.directions()
     complete = [trial for trial in study.trials
                 if trial.state == optuna.trial.TrialState.COMPLETE
                 and trial.value is not None]
-    best = max(complete, key=lambda trial: trial.value) if complete else None
+    # Multi-objective-safe: rank by the configured per-objective directions.
+    best = (min(complete,
+                key=lambda trial: rank_key(_trial_value(trial), directions))
+            if complete else None)
     trials = [{
         "number": int(trial.number),
         "state": trial.state.name,
@@ -1330,10 +1426,9 @@ def write_session_receipt():
         "dev_loss": trial.user_attrs.get("dev_loss"),
     } for trial in study.trials]
     # Control-plane observability: CDC events + local study mirror + offline
-    # ledger, rebuilt from the authoritative study at session end.
+    # ledger, synced ONCE from the authoritative study (idempotent).
     observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
-    for trial in study.trials:
-        observer.observe(trial)
+    observer.sync(study.trials)
     observer.flush()
     receipt = {
         "kernel": "laya-hpo",
@@ -1360,7 +1455,6 @@ def write_session_receipt():
         "published_pin": {"repository": REPOSITORY, "branch": BRANCH,
                           "revision": REVISION},
     }
-    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     receipt["options"] = options.as_dict()
     # Ensemble: the top-k trials are directly comparable (fixed data).
     ensemble_trials = options.ensembler.select(
@@ -1441,8 +1535,15 @@ def main():
             tar.add(champion, arcname="champion")
             log("staged champion checkpoint " + champion)
     log("staged laya_hpo.tar.gz + receipt in /kaggle/working")
-    # Durable, self-validating snapshot of the session's decision trail.
+    observability = receipt.get("observability") or {}
+    if observability.get("events_dropped"):
+        log("WARNING observability dropped %s event(s); the snapshot omits them"
+            % observability.get("events_dropped"))
+    # Durable, self-validating snapshot of the session's decision trail. The
+    # effective offline state includes any worker RDB-outage fallback, so the
+    # SQLite study travels too.
     try:
+        session_offline = offline_active(options)
         include = [p for p in (
             WORKING / "laya-hpo.receipt.json",
             WORKING / OBSERVABILITY_DIR / "trial_events.jsonl",
@@ -1451,9 +1552,12 @@ def main():
         ) if p.exists()]
         snapshot = build_snapshot(
             generation=WORKING, sequence=int(time.time()),
-            optuna_db=(WORKING / "hpo_offline.db" if offline else None),
+            optuna_db=(WORKING / "hpo_offline.db" if session_offline else None),
             include=include)
-        log("hpo snapshot -> " + str(snapshot))
+        # READY is only trustworthy after an independent verify (never mark a
+        # best-effort/partial capture as durable).
+        verify_snapshot(snapshot)
+        log("hpo snapshot verified -> " + str(snapshot))
     except Exception as error:
         log("hpo snapshot skipped: " + str(error)[:200])
     if any(code != 0 for code in codes):
@@ -1520,16 +1624,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def register_dispatch() -> str | None:
+def register_dispatch(slug: str | None = None) -> str | None:
     """Register the HPO kind with the laya lane's `kernel_slug` dispatch.
 
     The HPO slug lives in the HPO space SSOT, not LayaSpec, so we push it into
-    `laya_lane.EXTERNAL_KIND_SLUGS` instead of duplicating it.
+    `laya_lane.EXTERNAL_KIND_SLUGS` instead of duplicating it. ``slug`` threads
+    a staged override through so `kernel_slug("laya-hpo")` resolves the SAME
+    kernel that was staged; when omitted the space SSOT is used (import-time
+    registration).
     """
-    slug = load_space().get("kernel_slug")
-    if slug:
-        laya_lane.EXTERNAL_KIND_SLUGS[HPO_DECISION] = slug
-    return slug
+    effective = slug or load_space().get("kernel_slug")
+    if effective:
+        laya_lane.EXTERNAL_KIND_SLUGS[HPO_DECISION] = effective
+    return effective
 
 
 def kernel_slug(decision_kind: str = HPO_DECISION) -> str:
