@@ -26,7 +26,6 @@ import json
 import math
 import os
 import re
-from functools import lru_cache
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -71,6 +70,8 @@ from core.critical_attributes import (
     volumes_compatible,
 )
 from core.tracing import (
+    CENSUS_TOP_N,
+    DETAIL_CELL_CHARS,
     ENTITY_ROW_CAP,
     ENTITY_SAMPLE_PER_REASON,
     trace_path,
@@ -91,7 +92,7 @@ CANONICAL_DATASET_REQUIRED_COLUMNS = CANONICAL_DATASET_REQUIRED_COLUMNS_REQUIRED
 ENTITY_PER_REASON = ENTITY_SAMPLE_PER_REASON
 ENTITY_TOTAL_CAP = ENTITY_ROW_CAP
 
-# ── bounded trace cells (pipeline-owned) ───────────────────────────────────
+# ── bounded trace cells ────────────────────────────────────────────────────
 # The consolidated trace is a READABLE census, not a dump. Two shapes had grown
 # unbounded here and blew the file up to ~12 MB for three runs (the contract's
 # own justification is ~1.5 MB):
@@ -105,8 +106,13 @@ ENTITY_TOTAL_CAP = ENTITY_ROW_CAP
 # So: bucket by category, list the top-N values, and state the remainder as
 # NUMBERS (`distinct` / `others_buckets` / `others`) — nothing is hidden, but a
 # wide distribution costs two integers instead of a megabyte.
-CENSUS_TOP_N = 24
-CENSUS_CELL_BYTES = 4096
+#
+# The two CAPS live once, in core.tracing (CENSUS_TOP_N / DETAIL_CELL_CHARS,
+# imported at the top of this module): the pipeline reads them instead of
+# re-spelling the literals, so the census caps can never drift between the two
+# producers. CENSUS_CELL_BYTES is this module's historical name for the
+# detail-cell byte cap, kept as an alias for its call sites and the tests.
+CENSUS_CELL_BYTES = DETAIL_CELL_CHARS
 REASON_LABEL_CHARS = 96
 
 
@@ -762,7 +768,7 @@ def extract_packaging_level(title: str) -> set[str]:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STRUCTURED EVIDENCE SECTION — attribute-cell capture (measured high-yield
-# rows, results/attribute_universe_census.json): pack material type 51,703
+# rows, layouts.attribute_universe_census): pack material type 51,703
 # rows / 5 value-sets / 9.64% same-GTIN conflict (inside the VETO BAND
 # 2.5%-15%, census-verified); juice content 63,117 rows / 27 numeric bands;
 # carbonization 56,125 rows (prose claims already flow through
@@ -1455,40 +1461,6 @@ class ListingCardBuilder:
         self.resolve_product_type()
         self.resolve_volume_and_pack()
         return self.assemble_card()
-# ============================================================================
-# CARD SURFACE
-# ============================================================================
-def surface_card(extracted: dict) -> str:
-    """One listing's card as text: the card fill, then evidence one by one.
-
-    ``extracted`` is an extract_all() result dict. The fill is what the card
-    actually carries (winners from the precedence chain); the ledger beneath
-    repeats EVERY claim any column yielded, winner or loser, with its source.
-    """
-    lines = [
-        f"PRODUCT  {extracted.get('type', '') or '?'}"
-        f"  flavor={extracted.get('flavor', '') or '?'}",
-        f"VOLUME   {extracted.get('volume_ml', 0.0) or '?'} ml"
-        f"  (conf {extracted.get('volume_confidence', 0.0):.2f},"
-        f" {extracted.get('volume_status', '')}; raw: {extracted.get('volume_raw', '')})",
-        f"PACK     {extracted.get('pack_qty', 1)}"
-        f"  (conf {extracted.get('pack_confidence', 0.0):.2f})",
-    ]
-    for value in extracted.get("package_types") or []:
-        if isinstance(value, str) and value:
-            lines.append(f"PKG-TYPE {value}")
-    for value in extracted.get("package_materials") or []:
-        lines.append(f"PKG-MAT  {value}")
-    flags = extracted.get("attribute_consistency_flags") or []
-    for flag in sorted(flags):
-        lines.append(f"FLAG     {flag}")
-    lines.append("EVIDENCE (one per source claim)")
-    for item in extracted.get("evidence_ledger") or []:
-        lines.append(
-            f"  [{item['column']}] {item['field']}"
-            f" = {item['value']} (conf {item.get('confidence', '')})"
-        )
-    return "\n".join(lines)
 
 
 # ============================================================================
@@ -3417,15 +3389,6 @@ _VERDICTS_LOADED = False
 _UNSEEN_TOKEN_TOTAL = 0
 
 
-def load_verdicts() -> dict[str, str] | None:
-    """token -> verdict map from the reference CSV — see _NUMBERS.verdicts.
-
-    The module-level cache attributes are the pinned external interface
-    (prepare_all resets them to force a per-stage fresh read).
-    """
-    return _NUMBERS.verdicts()
-
-
 # Pure-numeric BRAND values are year-styled names ("1642", "1724") — the
 # products spell them out in their own titles ("SEVENTEEN ginger beer").
 # Owner rule: numeric brand names get SPELLED OUT everywhere (brand string
@@ -3912,7 +3875,7 @@ class _PipelineSteering:
         """Attribute-gate doctrine evidence rows (read-only census + config)."""
         # ── CONSOLIDATED TRACE: attribute-gate evidence sections (owner ruling
         # 2026-10-01, "ALL ATTRIBUTES are used to make ALL DECISIONS") ──────
-        # The registry census (results/attribute_universe_census.json) measured
+        # The registry census (layouts.attribute_universe_census) measured
         # every raw key; the decision layer (core.attribute_conflicts
         # full_attribute_evaluation) now evaluates ALL of them per pair with each
         # field's own measured conflict semantics, while the VETO still votes only

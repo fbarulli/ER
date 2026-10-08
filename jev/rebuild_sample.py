@@ -11,7 +11,9 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 
 
 def pair_key(row):

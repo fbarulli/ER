@@ -2,7 +2,9 @@
 import json
 from collections import defaultdict
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1]
+
+from core.project_root import find_project_root
+ROOT = find_project_root(Path(__file__))
 
 def bucket(scores):
     return 'low' if max(scores)<.2 else 'high' if min(scores)>.8 else 'uncertain'

@@ -1,7 +1,9 @@
 """Freeze the deliberately repeated round-4 variant pair in both input formats."""
 import hashlib,json,sys
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1]
+
+from core.project_root import find_project_root
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0,str(ROOT/'src'))
 from training.gate_replay import canonical_records_from_csv
 from prepare_input_split import clean

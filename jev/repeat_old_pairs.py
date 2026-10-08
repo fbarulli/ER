@@ -5,7 +5,9 @@ import random
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 DIRECTORY = ROOT / 'jev'
 
 def digest(path):

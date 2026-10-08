@@ -3,7 +3,10 @@ import hashlib,json,sys
 from datetime import datetime,timezone
 from pathlib import Path
 from collections import defaultdict
-ROOT=Path(__file__).resolve().parents[1]
+
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0,str(ROOT/'jev'))
 from client import ADAPTERS,build_questions,_extract_noul
 

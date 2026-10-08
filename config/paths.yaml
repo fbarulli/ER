@@ -193,6 +193,15 @@ layouts:
     owner: core.attribute_decision
     template: "artifacts/evidence/semantics/family_registry.json"
     fields: {}
+  # The tracked measured-evidence census (owner: core.runtime_inputs): the
+  # attribute-universe census the GPU lanes verify at runtime. NOTE:
+  # files.decision_attribute_census is a DIFFERENT artifact — a results-tree
+  # census the dashboard watches — and must not be confused with this one.
+  attribute_universe_census:
+    root: repo
+    owner: core.runtime_inputs
+    template: "artifacts/evidence/attribute_universe_census.json"
+    fields: {}
   # The bundling pipeline's own source/config neighborhoods (one owner each,
   # declared once so no pipeline module spells a top-level directory name).
   source_code_dir:

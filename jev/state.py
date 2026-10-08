@@ -9,7 +9,9 @@ from pathlib import Path
 
 from typing import Iterable
 
-ER_ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ER_ROOT = find_project_root(Path(__file__))
 RECORDS_CSV = ER_ROOT / "data" / "canonical_records.csv"
 PAIRS_CSV = ER_ROOT / "data" / "labeled_pairs.csv"
 

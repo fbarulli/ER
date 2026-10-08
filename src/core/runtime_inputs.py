@@ -3,12 +3,21 @@ from pathlib import Path
 
 
 def evidence_members() -> tuple[str, ...]:
+    """The repo-relative measured-evidence members both transport surfaces ship.
+
+    Addresses are bound once in config/paths.yaml (``layouts.*``); this module
+    no longer spells any leaf. Both members are static repository inputs, so a
+    layout that is not repo-rooted or that declares placeholder fields is a
+    config bug and crashes here.
+    """
     from core.common import LAYOUTS
 
-    registry = LAYOUTS['semantic_family_registry']
-    if registry.root != 'repo' or registry.fields:
-        raise ValueError('semantic family registry must be a static repository input')
-    return ('artifacts/evidence/attribute_universe_census.json', registry.template)
+    specs = {name: LAYOUTS[name] for name in (
+        'attribute_universe_census', 'semantic_family_registry')}
+    for name, spec in specs.items():
+        if spec.root != 'repo' or spec.fields:
+            raise ValueError(f'{name} must be a static repository input')
+    return tuple(spec.template for spec in specs.values())
 
 
 def evidence_files(root: Path) -> dict[str, Path]:
