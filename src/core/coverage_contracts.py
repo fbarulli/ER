@@ -29,8 +29,10 @@ WHICH CONTRACT DOES A NEW PRODUCER USE? (the single decision rule)
    does NOT consume ``ReportCoverageContract``.
 
 Consumers of :class:`ReportCoverageContract` today:
-``training.attribute_separation`` (the track pair/attribute census) and
-``model_tracks.ablation_cohort`` (the ablation cohort's dimensions).
+``training.attribute_separation`` (the track pair/attribute census),
+``model_tracks.ablation_cohort`` (the ablation cohort's dimensions), and
+``graph_tracks.report.cascade_traceability_coverage`` (the cascade report's
+``not_applicable`` slice/attribute claim over the scored-query population).
 """
 from __future__ import annotations
 

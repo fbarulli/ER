@@ -43,6 +43,7 @@ STAGE = 'verify_handoff'
 CHECK_ORDER: tuple[str, ...] = (
     'provenance', 'bundle_load', 'frozen_csvs', 'graph_manifest',
     'worker_settings', 'loss_batch', 'package_verify', 'smoke', 'inventory',
+    'manifest_verify',
 )
 
 #: ``reason`` cells are NOT capped by core.tracing (only ``detail`` is), so the
@@ -453,6 +454,42 @@ def _final_inventory(reusable_paths, full_bundle, text_bundle,
     ])
 
 
+def _manifest_directory(root: str | Path) -> Path:
+    """The audit manifest directory, resolved under the run root.
+
+    Stages publish their per-stage manifests into ``audit.manifest_dir``
+    (relative to the repo root). This boundary runs inside the same
+    preparation, so it re-checks the SAME directory; resolving it under
+    ``root`` rather than ``core.common._path`` keeps the check hermetic
+    under test roots that override the repo layout.
+    """
+    from core.common import training_cfg
+    manifest_dir = Path(training_cfg().audit.manifest_dir)
+    return manifest_dir if manifest_dir.is_absolute() else Path(root) / manifest_dir
+
+
+def _verify_published_manifests(manifest_dir: str | Path) -> dict[str, list[str]]:
+    """Re-verify every published stage manifest against the files on disk.
+
+    Walks the audit registry (``audit.manifest_stages``) and re-checks each
+    stage whose manifest this run actually published through
+    ``core.manifest.verify_manifest`` (outputs present and hash-matching,
+    expected outputs produced, row accounting closed, no ``.tmp-*`` residue).
+    A stage whose manifest is absent is left alone: at this boundary a missing
+    marker means the stage never published one (later lanes such as
+    ``evaluate_models``/``zero_shot_sims`` run after the handoff), not that a
+    PUBLISHED marker drifted — only that drift fails loud here.
+    """
+    from core.common import training_cfg
+    from core.manifest import verify_manifest
+    verified: list[str] = []
+    for stage in training_cfg().audit.manifest_stages:
+        if (Path(manifest_dir) / f'{stage}.json').exists():
+            verify_manifest(stage, manifest_dir=manifest_dir)
+            verified.append(stage)
+    return {'verified_stages': verified}
+
+
 def verify_training_loads(*, root, suite, suite_config_path, checkpoint,
                           setup_dir, full_bundle, text_bundle, suite_archive,
                           provenance, smoke_dir, smoke_original, reusable_paths,
@@ -567,6 +604,13 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
         'inventory',
         detail={'artifacts': len(final_inventory)},
         source='training.prepare_all.file_inventory (the resume contract)')
+    with timing.section('manifest_verify'):
+        manifest_summary = _verify_published_manifests(_manifest_directory(root))
+    trace.check(
+        'manifest_verify',
+        detail={'verified_stages': manifest_summary['verified_stages']},
+        source=('core.manifest.verify_manifest re-checked over the published '
+                'audit.manifest_stages markers'))
 
     checks: dict[str, Any] = {
         'provenance': 'stable (src/scripts/config/raw inputs/checkpoint re-hashed)',
@@ -580,6 +624,7 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
         'graph_worker_settings': settings_summary,
         'suite_package': package_checks,
         'smoke_unchanged': True,
+        'manifest_verify': manifest_summary['verified_stages'],
     }
     if attestation is None:
         checks['loss_batch_correctness'] = token_checks
