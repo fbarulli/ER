@@ -29,6 +29,15 @@ def _spec(tmp_path, monkeypatch, **updates):
     })
     monkeypatch.setattr(laya_lane, "_spec", lambda: cfg_spec)
     monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    # Hermetic branch: the real config may carry a local branch pin (e.g.
+    # `kaggle.branch: laya` while running from a feature branch); these tests
+    # pin the main-branch contract, so force it regardless of the checkout.
+    from core.common import training_cfg as _tcfg
+
+    _base = _tcfg()
+    _forced = _base.model_copy(update={
+        "kaggle": _base.kaggle.model_copy(update={"branch": "main"})})
+    monkeypatch.setattr(laya_lane, "training_cfg", lambda: _forced)
     return cfg_spec
 
 

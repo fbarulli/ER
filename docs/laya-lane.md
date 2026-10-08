@@ -129,7 +129,7 @@ Every item, and how to re-verify it (all read-only except the launch):
 | duck | check |
 |---|---|
 | credentials | `~/.kaggle/kaggle.json` present; **no** `~/.kaggle/access_token` (the 403 trap) |
-| tip gate | staged `<decision>.receipt.json` `published_tip == HEAD == origin/main` (`core.runtime_inputs.require_published_tip_match`; called from the laya staging path) |
+| tip gate | staged `<decision>.receipt.json` `published_tip == HEAD == origin/<kaggle.branch>` (`core.runtime_inputs.require_published_tip_match`; called from the laya staging path) |
 | corpus (full) | `data/laya/{train,dev,test}.jsonl` + `receipt.json`, staged into `results/laya_lane/kaggle/<kind>/dataset_payload/` |
 | base-model dataset | `kaggle datasets status fbarulli/er-laya-base` -> `ready` (the fine-tune attaches it; no Hub fetch) |
 | corpus dataset | `kaggle datasets status fbarulli/er-laya-train` -> `ready` (versioned on `--execute`) |
@@ -143,6 +143,12 @@ partial-corpus variant.
 The fine-tune kernel is a **standalone pushed script**: it clones no repo, so a
 dirty working tree does not block it — only the tip gate (the commit) matters.
 The base model and corpus travel as attached datasets, never the git checkout.
+
+**Running from a feature branch.** The tip gate compares `HEAD` to
+`origin/<kaggle.branch>` (default `main`). To stage from a feature branch,
+pin `kaggle.branch` to that pushed branch (`config/training.yaml` →
+`kaggle.branch: <branch>`) — a local, uncommitted edit is fine since the kernel
+ships datasets, not the checkout. Revert the pin when back on `main`.
 
 ```bash
 # full-corpus fine-tune (single T4): version the corpus dataset, push, follow logs
