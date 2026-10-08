@@ -156,6 +156,12 @@ files:
   # to find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
+  # The consolidated post-run training metric report (report_version 3). The
+  # producer (training.generate_training_report) resolves BOTH the leaf name and
+  # its default output directory from this binding, and the dashboard reads the
+  # report back through the same key, so neither side spells "report.json" or a
+  # results subpath itself.
+  training_report: "results:report.json"
   # One fresh per-run Colab lane transcript (owner order 2026-10-07): the
   # system stdout/stderr tee, the trainer/worker view, and setup timing all
   # fold into this single file. Both legacy keys are kept for the tests and

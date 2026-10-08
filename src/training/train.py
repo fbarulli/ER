@@ -2728,6 +2728,8 @@ class _TrainerDriver:
                         sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_random_easy_scores.csv")),
                         data_path=F["dataset_deduped"],
                         canonical_path=F["canonical_records"],
+                        # report plots are optional now; this run asked for them
+                        plots=bool(args.plot),
                     )
                     robust = report_payload.get("robust_validation", {})
                     robust_metrics: dict[str, float] = {}

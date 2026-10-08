@@ -11,6 +11,7 @@ import zipfile
 import tarfile
 from core.archive_reader import open_archive, archive_sidecar
 from core.bundle import bundle_spec
+from core.common import F
 from core.project_root import find_project_root
 from model_tracks import archive_verification
 
@@ -19,6 +20,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, Streamin
 
 router = APIRouter()
 PROJECT = find_project_root(Path(__file__).resolve())
+# The consolidated post-run training metric report is config-owned
+# (``files.training_report`` in config/paths.yaml). This reader resolves the
+# SAME binding the producer writes, so neither side spells ``report.json``.
+BOUND_REPORT = F['training_report']
 REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError, RuntimeError, EOFError)
 METRIC_SUFFIXES = (
     'model_evaluation_summary.csv',
@@ -508,6 +513,71 @@ def render_report(report):
                       for key in keys) + '</table>')
 
 
+def _keyed_table(mapping, caption):
+    """Render a ``{key: flat-dict}`` report section as a table."""
+    if not isinstance(mapping, dict) or not mapping:
+        return ''
+    rows = []
+    for key in sorted(mapping, key=str):
+        value = mapping[key]
+        row = {'key': key}
+        if isinstance(value, dict):
+            row.update({str(inner): inner_value for inner, inner_value in value.items()})
+        elif value is not None:
+            row['value'] = value
+        rows.append(row)
+    return (f'<h3>{escape(caption)}</h3><div class="scroll">'
+            + table(_csv_frame(json.dumps(rows))) + '</div>')
+
+
+def _consolidated_report_html(report):
+    """Render the basic metric results of the consolidated report.
+
+    Deliberately metrics-only: the review plots that live beside this report are
+    out of scope for the dashboard wiring.
+    """
+    out = []
+    summary = [(key, report.get(key)) for key in ('report_version', 'folds')
+               if key in report]
+    if summary:
+        out.append('<table><caption>Run summary</caption>'
+                   '<tr><th>Field</th><th>Value</th></tr>'
+                   + ''.join(f'<tr><td>{escape(str(key))}</td>'
+                             f'<td>{escape(_cell(value))}</td></tr>'
+                             for key, value in summary)
+                   + '</table>')
+    for key, caption in (
+        ('aggregate', 'Aggregate metrics'),
+        ('metrics', 'Per-fold metrics'),
+        ('confusion', 'Confusion matrices'),
+        ('threshold_sweep', 'Threshold sweep'),
+        ('ranking', 'Retrieval ranking'),
+        ('random_easy', 'Random/easy score distributions'),
+        ('score_overlap', 'Score overlap'),
+        ('attribute_errors', 'Attribute error rates'),
+    ):
+        out.append(_keyed_table(report.get(key), caption))
+    return ''.join(out)
+
+
+def bound_report_html():
+    """Load and render the config-bound consolidated metric report.
+
+    The location comes from ``files.training_report`` (config/paths.yaml): the
+    dashboard neither globs for the report nor spells its filename. A missing
+    file means "not produced yet", not an error.
+    """
+    path = BOUND_REPORT
+    if not path.is_file():
+        return ''
+    heading = '<h2>Consolidated metric report</h2>'
+    try:
+        report = json.loads(path.read_text(encoding='utf-8'))
+    except REPORT_ERRORS:
+        return heading + f'<p>{escape(path.name)} could not be read.</p>'
+    return heading + f'<p>{escape(str(path))}</p>' + _consolidated_report_html(report)
+
+
 def _manifest_html(report):
     """Render a track report/completion manifest: the honesty contract."""
     out = ['<h3>Report manifest</h3>', _honesty_html(report)]
@@ -804,4 +874,7 @@ def training(run: str | None = None):
                      f'<pre style="overflow:auto;max-height:30rem;white-space:pre-wrap">{escape(preview)}</pre></details>')
         if not logs:
             body += '<p>No saved training logs in this run.</p>'
+    # The consolidated report comes from config (files.training_report), not from
+    # a run folder, so it renders independently of the selected run.
+    body += bound_report_html()
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER training reports</title><style>body{font-family:system-ui;margin:2rem;color:#222}select{max-width:75vw}.plots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));gap:1rem}figure{margin:0;border:1px solid #ddd;padding:1rem}img{width:100%;height:auto}figcaption{overflow-wrap:anywhere;margin-bottom:.5rem}.scroll{overflow:auto}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:.5rem}details{margin:1rem 0}</style></head><body><p><a href="/">Home</a> · <a href="/graphs">Graph tracks</a></p>' + body + '</body></html>'

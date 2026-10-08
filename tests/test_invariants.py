@@ -463,6 +463,7 @@ _CONFIG_SSOT_BASELINE_UNREAD = frozenset({
     'paths.yaml:files.title_attribute_evidence',
     'paths.yaml:files.title_attribute_summary',
     'paths.yaml:files.title_removed_tokens',
+    'paths.yaml:files.training_report',
     'paths.yaml:files.validation_fold_map',
     'paths.yaml:layouts.attribute_universe_census.owner',
     'paths.yaml:layouts.balanced_pairs.owner',

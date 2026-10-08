@@ -186,6 +186,10 @@ class DataFilesSpec(BaseModel):
     # gold-pair manifest (src/core/volume_verified); declared SSOT-side.
     second04_pairs_positive: str
     results_pointer: str
+    # The consolidated post-run training metric report. A binding (not a bare
+    # name) so the producer and the dashboard resolve the SAME
+    # root:results/report.json location instead of each spelling it.
+    training_report: str
     colab_live_log: str
     colab_training_log: str
 

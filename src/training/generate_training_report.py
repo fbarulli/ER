@@ -1,10 +1,17 @@
-"""Generate post-run holdout metrics and plots from downloaded artifacts.
+"""Generate the post-run holdout metric report from downloaded artifacts.
 
 The training lane already writes the metric histories and a scored test-pair
-CSV.  This report keeps those values together and adds the plots that are
-useful for review: loss curves, ranking metrics, operating metrics, ROC/PR,
-score distributions, and confusion matrices at both the DEV-fit Youden
-threshold and the configured fixed threshold.
+CSV.  This report keeps those values together in ``report.json`` and its metric
+CSVs: per-fold metrics, histories, aggregates, datapoint coverage, attribute
+separation, confusion matrices, threshold sweep, ranking and score overlap.
+
+Plots are OPTIONAL and OFF by default (``--plots`` turns them back on): they are
+a review extra, and a Colab worker should be able to produce the basic metric
+results without any matplotlib artifacts.
+
+The report location is config-owned (``config/paths.yaml``
+``files.training_report``); the leaf name and the default output directory both
+resolve from that ONE binding rather than a literal here.
 
 Example::
 
@@ -21,9 +28,9 @@ import ast
 import json
 from pathlib import Path
 
-# Keep local report generation visible and workspace-local; never fall back to
-# the read-only home cache (or an implicit /tmp matplotlib cache).
-from core.common import TRAIN_ROOT
+# core.common owns the config bindings (F) and keeps matplotlib's cache
+# workspace-local; importing it must not fall back to the read-only home cache.
+from core.common import F
 
 import matplotlib
 
@@ -47,6 +54,18 @@ from core.common import (
     report_thresholds,
     retrieval_ks,
 )
+
+# The consolidated report's location and leaf name come from the config binding
+# (``files.training_report`` in config/paths.yaml): the producer writes
+# ``<out-dir>/<REPORT_NAME>`` and, with no ``--out-dir``, defaults to
+# ``REPORT_PATH.parent`` so the default destination IS the bound path.
+REPORT_PATH = F["training_report"]
+REPORT_NAME = REPORT_PATH.name
+
+# Plot generation is OPTIONAL and OFF by default. When disabled, ``_subplots``
+# hands the existing plotting code inert artists and ``_save`` writes nothing,
+# so no figure is allocated and report.json carries no matplotlib artifacts.
+_PLOTS_ENABLED = False
 
 # 05-03/06-3: the recall-tied fold-metric column follows the config SSOT
 # (rand_matching.target_recall) with the producer's own helper — a hardcoded
@@ -376,7 +395,40 @@ def _run_robust_validation(
     )
 
 
+class _NullArtist:
+    """Inert Figure/Axes stand-in used while plot generation is disabled.
+
+    Attribute access, calls and indexing all return the SAME object, so the
+    existing plot blocks run unchanged (``fig.tight_layout()``,
+    ``ax.set(...)``, ``axes[i].plot(...)``, ``fig.colorbar(...)``) without ever
+    allocating a figure or touching the filesystem.
+    """
+
+    def __getattr__(self, _name):
+        return self
+
+    def __call__(self, *_args, **_kwargs):
+        return self
+
+    def __getitem__(self, _key):
+        return self
+
+    def __iter__(self):
+        # ``zip(axes, panels, strict=True)`` iterates the axes container; the
+        # plot code always pairs it with a two-panel list.
+        return iter((self, self))
+
+
+def _subplots(*args, **kwargs):
+    """``plt.subplots`` when plots are on, two inert artists otherwise."""
+    if not _PLOTS_ENABLED:
+        return _NullArtist(), _NullArtist()
+    return plt.subplots(*args, **kwargs)
+
+
 def _save(fig: plt.Figure, path: Path) -> None:
+    if not _PLOTS_ENABLED:
+        return
     fig.savefig(path, dpi=plot_dpi(), bbox_inches="tight")
     plt.close(fig)
     print(f"[report] {path}", flush=True)
@@ -862,15 +914,24 @@ def _print_datapoint_coverage(section: dict[str, object]) -> None:
 def generate_report(
     metrics_path: str | Path,
     pair_paths: list[str | Path],
-    out_dir: str | Path,
+    out_dir: str | Path | None = None,
     train_score_paths: list[str | Path] | None = None,
     random_score_paths: list[str | Path] | None = None,
     data_path: str | Path | None = None,
     canonical_path: str | Path | None = None,
     uniformity_summary: dict | None = None,
+    plots: bool = False,
 ) -> dict:
+    """Write the metric report (and, only with ``plots=True``, the PNGs).
+
+    ``out_dir`` defaults to the config-bound ``files.training_report`` parent so
+    the default destination IS that binding; the report file itself is always
+    named ``REPORT_NAME`` (also read from the binding).
+    """
+    global _PLOTS_ENABLED
+    _PLOTS_ENABLED = bool(plots)
     metrics_path = Path(metrics_path)
-    out = Path(out_dir)
+    out = Path(out_dir) if out_dir is not None else REPORT_PATH.parent
     out.mkdir(parents=True, exist_ok=True)
     metrics = pd.read_csv(metrics_path)
     ok = metrics[metrics["status"].eq("ok")].copy()
@@ -919,7 +980,7 @@ def generate_report(
     threshold_sweep = _threshold_sweep(pairs)
     threshold_sweep.to_csv(out / "threshold_sweep.csv", index=False)
     if not threshold_sweep.empty:
-        fig, ax = plt.subplots(figsize=(8.5, 4.8))
+        fig, ax = _subplots(figsize=(8.5, 4.8))
         for metric, color in (
             ("precision", "#4c72b0"),
             ("recall", "#55a868"),
@@ -961,7 +1022,7 @@ def generate_report(
             2 * tuning["precision"] * tuning["recall"]
             / (tuning["precision"] + tuning["recall"]).replace(0, np.nan)
         ).fillna(0.0)
-        fig, ax = plt.subplots(figsize=(8.5, 4.8))
+        fig, ax = _subplots(figsize=(8.5, 4.8))
         for metric, color in (
             ("precision", "#4c72b0"),
             ("recall", "#55a868"),
@@ -1007,7 +1068,7 @@ def generate_report(
     )
 
     # Training and DEV validation loss histories.
-    fig, axes = plt.subplots(
+    fig, axes = _subplots(
         1, len(ok), figsize=(4.5 * len(ok), 3.8), squeeze=False
     )
     for i, (_, row) in enumerate(ok.iterrows()):
@@ -1036,7 +1097,7 @@ def generate_report(
     # Same curves on an epoch axis. The trainer records the fractional epoch
     # for every loss/evaluation event; fall back to event index for older CSVs
     # that predate the explicit epoch histories.
-    fig, axes = plt.subplots(
+    fig, axes = _subplots(
         1, len(ok), figsize=(4.5 * len(ok), 3.8), squeeze=False
     )
     for i, (_, row) in enumerate(ok.iterrows()):
@@ -1064,7 +1125,7 @@ def generate_report(
 
     # Ranking quality over training. AP is the evaluator's PR/ranking signal;
     # AUC, precision and recall are plotted when the evaluator emitted them.
-    fig, axes = plt.subplots(
+    fig, axes = _subplots(
         1, len(ok), figsize=(4.5 * len(ok), 3.8), squeeze=False
     )
     for i, (_, row) in enumerate(ok.iterrows()):
@@ -1099,7 +1160,7 @@ def generate_report(
     operating += [c for c in (f1_col, precision_col, recall_col) if c]
     operating = [c for c in operating if c in ok.columns]
     if operating:
-        fig, ax = plt.subplots(figsize=(8, 4.8))
+        fig, ax = _subplots(figsize=(8, 4.8))
         x = np.arange(len(operating))
         width = 0.8 / max(len(ok), 1)
         for i, (_, row) in enumerate(ok.iterrows()):
@@ -1117,7 +1178,7 @@ def generate_report(
     ranking_rows = []
     if not pairs.empty:
         pairs["fold"] = pairs["fold"].astype(int)
-        fig, axes = plt.subplots(1, len(ok), figsize=(4.5 * len(ok), 4), squeeze=False)
+        fig, axes = _subplots(1, len(ok), figsize=(4.5 * len(ok), 4), squeeze=False)
         for i, (_, row) in enumerate(ok.iterrows()):
             fold = int(row["fold"])
             part = pairs[pairs["fold"].eq(fold)]
@@ -1237,7 +1298,7 @@ def generate_report(
                     values[f"precision_at_{k}"] = float(hit["precision_at_k"])
                     values[f"recall_at_{k}"] = float(hit["recall_at_k"])
                 plot_rows.append((int(fold), values))
-            fig, ax = plt.subplots(figsize=(9, 4.8), constrained_layout=True)
+            fig, ax = _subplots(figsize=(9, 4.8), constrained_layout=True)
             x = np.arange(len(rank_names))
             width = 0.8 / max(len(plot_rows), 1)
             for i, (fold, values) in enumerate(plot_rows):
@@ -1260,7 +1321,7 @@ def generate_report(
             ax.legend()
             _save(fig, out / "holdout_ranking_metrics.png")
 
-            fig, ax = plt.subplots(figsize=(7.5, 4.5), constrained_layout=True)
+            fig, ax = _subplots(figsize=(7.5, 4.5), constrained_layout=True)
             for fold, group in ranking_df.groupby("fold", sort=True):
                 ax.plot(
                     group["k"], group["recall_at_k"], marker="o",
@@ -1278,7 +1339,7 @@ def generate_report(
             _save(fig, out / "candidate_recall_at_k.png")
 
         # ROC, PR and class score distributions use only the scored TEST pairs.
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+        fig, axes = _subplots(1, 2, figsize=(11, 4.5))
         for fold, part in pairs.groupby("fold", sort=True):
             y = part["label"].to_numpy(dtype=int)
             scores = part["score"].to_numpy(dtype=float)
@@ -1297,7 +1358,7 @@ def generate_report(
         fig.tight_layout()
         _save(fig, out / "holdout_roc_pr_curves.png")
 
-        fig, ax = plt.subplots(figsize=(8, 4.5))
+        fig, ax = _subplots(figsize=(8, 4.5))
         for label, color in ((1, "#4c72b0"), (0, "#c44e52")):
             values = pairs.loc[pairs["label"].eq(label), "score"]
             ax.hist(values, bins=30, alpha=0.55, color=color, label=f"label {label} (n={len(values):,})")
@@ -1317,7 +1378,7 @@ def generate_report(
         # noisy/insufficient features.
         distributions = [("train", train_scores), ("holdout", pairs)]
         overlap_rows = []
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True, sharey=True)
+        fig, axes = _subplots(1, 2, figsize=(11, 4.5), sharex=True, sharey=True)
         for ax, (split_name, frame) in zip(axes, distributions, strict=True):
             if frame.empty:
                 ax.set_title(f"{split_name.title()} scores unavailable")
@@ -1375,8 +1436,11 @@ def generate_report(
             breakdown.to_csv(out / "attribute_error_breakdown.csv", index=False)
             plot_data = breakdown.pivot(index="attribute_bucket", columns="label", values="error_rate").fillna(0)
             plot_data = plot_data.rename(columns={0: "label 0 error rate", 1: "label 1 error rate"})
-            fig, ax = plt.subplots(figsize=(8, 4.8))
-            plot_data.plot(kind="bar", ax=ax, color=["#c44e52", "#4c72b0"])
+            fig, ax = _subplots(figsize=(8, 4.8))
+            # pandas drives matplotlib internally, so it must not receive the
+            # inert artist; the surrounding labels are harmless either way.
+            if _PLOTS_ENABLED:
+                plot_data.plot(kind="bar", ax=ax, color=["#c44e52", "#4c72b0"])
             ax.set_xlabel("attribute conflict type")
             ax.set_ylabel("error rate at DEV-fit Youden threshold")
             ax.set_title("Holdout error breakdown by volume / pack / flavor conflict")
@@ -1442,7 +1506,7 @@ def generate_report(
     random_easy_csv = out / "random_easy_metrics.csv"
     if not random_scores.empty:
         rows = []
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True, sharey=True)
+        fig, axes = _subplots(1, 2, figsize=(11, 4.5), sharex=True, sharey=True)
         hard_positive = pairs.loc[pairs["label"].eq(1), "score"].to_numpy(dtype=float)
         hard_negative = pairs.loc[pairs["label"].eq(0), "score"].to_numpy(dtype=float)
         random_positive = random_scores.loc[
@@ -1508,7 +1572,7 @@ def generate_report(
     if {"auc", "encode_s"}.issubset(ok.columns):
         pareto = ok[["fold", "auc", "encode_s"]].dropna()
         if not pareto.empty:
-            fig, ax = plt.subplots(figsize=(7.5, 4.8))
+            fig, ax = _subplots(figsize=(7.5, 4.8))
             ax.scatter(pareto["encode_s"], pareto["auc"], s=70, color="#4c72b0")
             for _, row in pareto.iterrows():
                 ax.annotate(f"fold {int(row['fold'])}", (row["encode_s"], row["auc"]), xytext=(5, 5), textcoords="offset points")
@@ -1639,7 +1703,7 @@ def generate_report(
             ),
         },
     }
-    (out / "report.json").write_text(
+    (out / REPORT_NAME).write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return report
@@ -1653,7 +1717,17 @@ def main() -> None:
     ap.add_argument("--random-scores", nargs="*", default=None, help="fold*_random_easy_scores.csv files")
     ap.add_argument("--data", default=None, help="dataset_deduped.csv for legacy pair attribute enrichment")
     ap.add_argument("--canonicals", default=None, help="canonical_records.csv for legacy pair attribute enrichment")
-    ap.add_argument("--out-dir", required=True, help="report output directory")
+    ap.add_argument(
+        "--out-dir",
+        default=None,
+        help="report output directory (default: the directory of the "
+             "config-bound files.training_report)",
+    )
+    ap.add_argument(
+        "--plots",
+        action="store_true",
+        help="also write the review PNGs (default: metrics only)",
+    )
     args = ap.parse_args()
     metrics = Path(args.metrics)
     pairs = [Path(p) for p in args.pairs] if args.pairs else sorted(metrics.parent.glob("*fold*_pairs.csv"))
@@ -1675,6 +1749,7 @@ def main() -> None:
         random_scores,
         args.data,
         args.canonicals,
+        plots=args.plots,
     )
 
 
