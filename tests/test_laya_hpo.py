@@ -352,5 +352,231 @@ def test_stage_kernel_script_has_no_unreplaced_tokens(monkeypatch, tmp_path):
     assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
 
 
+def test_stage_kernel_embeds_profiler_harness(monkeypatch, tmp_path):
+    receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    for symbol in ("class TrialProfiler", "def install_phase_hooks",
+                   "def profiler_schedule", "def wandb_log_profiler",
+                   "PHASE_OPTIMIZER_STEP"):
+        assert symbol in script, symbol
+    assert receipt["profiler"]["top_ops"] == 15
+
+
+# ── per-trial profiler coverage (stubbed torch, no GPU) ────────────────────
+_RECORDED: list[str] = []
+
+
+class _FakeRecordFunction:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        _RECORDED.append(self.name)
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeProfilerSession:
+    def __init__(self):
+        self.started = False
+        self.steps = 0
+        self.stopped = False
+        self.exports: list[str] = []
+
+    def start(self):
+        self.started = True
+
+    def step(self):
+        self.steps += 1
+
+    def stop(self):
+        self.stopped = True
+
+    def export_chrome_trace(self, path):
+        self.exports.append(path)
+        Path(path).write_text("{}", encoding="utf-8")
+
+    def key_averages(self):
+        return SimpleNamespace(table=lambda **kwargs: "TOP OPS")
+
+
+class _FakeProfilerModule:
+    class ProfilerActivity:
+        CPU = "cpu"
+        CUDA = "cuda"
+
+    record_function = _FakeRecordFunction
+
+    def __init__(self, *, fail: bool = False):
+        self.session = _FakeProfilerSession()
+        self.fail = fail
+        self.calls = 0
+        self.schedule_kwargs = None
+        self.profile_kwargs = None
+
+    def schedule(self, **kwargs):
+        self.schedule_kwargs = kwargs
+        return "SCHEDULE"
+
+    def profile(self, **kwargs):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("profiler unavailable")
+        self.profile_kwargs = kwargs
+        return self.session
+
+
+class _FakeTensor:
+    def backward(self):
+        return None
+
+
+class _FakeOptimizer:
+    def step(self):
+        return None
+
+
+class _FakeTorch:
+    def __init__(self, *, fail: bool = False):
+        self.Tensor = _FakeTensor
+        self.profiler = _FakeProfilerModule(fail=fail)
+
+
+class _FakeLayaTrain:
+    def encode_item(self):
+        return 1
+
+    def soft_ce_loss(self):
+        return 2
+
+    def rlcd_loss(self):
+        return 3
+
+    def fit_temperature_map(self):
+        return 4
+
+
+def _fake_namespace():
+    return {
+        "_forward_dtype": lambda: 5,
+        "_dev_metrics": lambda: 6,
+        "_save_control_checkpoint": lambda: 7,
+        "_make_optimizer": lambda *args, **kwargs: _FakeOptimizer(),
+    }
+
+
+def test_space_declares_profiler_block():
+    profiler = laya_hpo.load_space()["profiler"]
+    assert profiler["enabled"] is True
+    assert profiler["top_ops"] == 15
+    assert set(profiler) == {"enabled", "wait", "warmup", "active", "repeat",
+                             "top_ops"}
+
+
+@pytest.mark.parametrize("mutate, message", [
+    (lambda s: s["profiler"].update(enabled="yes"), "enabled"),
+    (lambda s: s["profiler"].update(active=0), "active"),
+    (lambda s: s["profiler"].update(top_ops=0), "top_ops"),
+    (lambda s: s["profiler"].update(wait=-1), "wait"),
+])
+def test_validate_space_rejects_bad_profiler(mutate, message):
+    space = json.loads(json.dumps(laya_hpo.load_space()))
+    mutate(space)
+    with pytest.raises(ValueError, match=message):
+        laya_hpo.validate_space(space)
+
+
+def test_profiler_annotates_every_phase_without_gpu(tmp_path):
+    """The hook wraps each major phase with record_function and drives the
+    bounded schedule from the optimizer step — with a stubbed torch, no GPU."""
+    _RECORDED.clear()
+    torch_module = _FakeTorch()
+    laya = _FakeLayaTrain()
+    namespace = _fake_namespace()
+    trace = tmp_path / "ckpt" / "profiler" / "trial_0.json"
+    original_backward = torch_module.Tensor.backward
+    original_forward = namespace["_forward_dtype"]
+    profiler = laya_hpo_runtime.TrialProfiler(
+        torch_module=torch_module,
+        config={"enabled": True, "wait": 1, "warmup": 1, "active": 2,
+                "repeat": 1, "top_ops": 5},
+        trace_path=trace, device_type="cuda", laya_train=laya,
+        namespace=namespace, logger=lambda line: None, rank0=True)
+    with profiler:
+        laya.encode_item()
+        namespace["_forward_dtype"]()
+        laya.soft_ce_loss()
+        torch_module.Tensor().backward()
+        namespace["_make_optimizer"]().step()
+        namespace["_dev_metrics"]()
+        namespace["_save_control_checkpoint"]()
+        laya.fit_temperature_map()
+
+    assert set(_RECORDED) >= {
+        "data.encode", "forward", "loss", "backward", "optimizer_step",
+        "dev_eval", "checkpoint_save", "calibration"}
+    assert torch_module.profiler.schedule_kwargs == {
+        "wait": 1, "warmup": 1, "active": 2, "repeat": 1}
+    assert torch_module.profiler.profile_kwargs["profile_memory"] is True
+    assert torch_module.profiler.profile_kwargs["with_stack"] is False
+    assert torch_module.profiler.session.started
+    assert torch_module.profiler.session.steps >= 1   # advanced per optimizer step
+    assert torch_module.profiler.session.stopped
+    assert trace.is_file()
+    # Hooks are restored after the trial (no global leakage).
+    assert torch_module.Tensor.backward is original_backward
+    assert namespace["_forward_dtype"] is original_forward
+
+
+def test_profiler_fail_soft_when_setup_raises(tmp_path):
+    torch_module = _FakeTorch(fail=True)
+    profiler = laya_hpo_runtime.TrialProfiler(
+        torch_module=torch_module,
+        config={"enabled": True, "wait": 1, "warmup": 1, "active": 1,
+                "repeat": 1, "top_ops": 5},
+        trace_path=tmp_path / "p" / "trial_0.json", device_type="cuda",
+        laya_train=_FakeLayaTrain(), namespace=_fake_namespace(),
+        logger=lambda line: None, rank0=True)
+    with profiler:
+        pass  # a profiler error must never escape
+    assert profiler.enabled is False
+    assert torch_module.profiler.session.started is False
+
+
+@pytest.mark.parametrize("device_type, config", [
+    ("cpu", {"enabled": True}),          # auto-disable on CPU
+    ("cuda", {"enabled": False}),        # config knob off
+])
+def test_profiler_disabled_never_starts(tmp_path, device_type, config):
+    torch_module = _FakeTorch()
+    profiler = laya_hpo_runtime.TrialProfiler(
+        torch_module=torch_module, config=config,
+        trace_path=tmp_path / "p" / "trial_0.json", device_type=device_type,
+        laya_train=_FakeLayaTrain(), namespace=_fake_namespace(),
+        logger=lambda line: None, rank0=True)
+    with profiler:
+        pass
+    assert profiler.enabled is False
+    assert torch_module.profiler.calls == 0
+
+
+def test_profiler_disabled_for_non_rank0(tmp_path):
+    torch_module = _FakeTorch()
+    profiler = laya_hpo_runtime.TrialProfiler(
+        torch_module=torch_module,
+        config={"enabled": True, "wait": 1, "warmup": 1, "active": 1,
+                "repeat": 1, "top_ops": 5},
+        trace_path=tmp_path / "p" / "trial_0.json", device_type="cuda",
+        laya_train=_FakeLayaTrain(), namespace=_fake_namespace(),
+        logger=lambda line: None, rank0=False)
+    with profiler:
+        pass
+    assert profiler.enabled is False
+    assert torch_module.profiler.calls == 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

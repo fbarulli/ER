@@ -151,6 +151,21 @@ def validate_space(space: dict[str, Any]) -> None:
         raise ValueError("laya HPO objective.secondary must be dev_loss")
     if objective.get("forbidden") != "test":
         raise ValueError("laya HPO objective.forbidden must be test")
+    profiler = space.get("profiler")
+    if profiler is not None:
+        if not isinstance(profiler, dict):
+            raise TypeError("laya HPO profiler must be a mapping")
+        if not isinstance(profiler.get("enabled"), bool):
+            raise ValueError("laya HPO profiler.enabled must be a bool")
+        for key in ("wait", "warmup", "active", "repeat", "top_ops"):
+            value = profiler.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(
+                    f"laya HPO profiler.{key} must be a non-negative int")
+        if profiler["active"] < 1:
+            raise ValueError("laya HPO profiler.active must be >= 1")
+        if profiler["top_ops"] < 1:
+            raise ValueError("laya HPO profiler.top_ops must be >= 1")
 
 
 def space_digest(space: dict[str, Any]) -> str:
@@ -423,6 +438,7 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
         "budget": {"n_trials": budget_trials, "n_jobs": budget_jobs,
                    "seed": int(space["seed"]), "max_workers": _MAX_WORKERS},
         "objective": space["objective"],
+        "profiler": space.get("profiler"),
         "optuna_storage": {
             "required_env": OPTUNA_URL_ENV,
             "injected_into_kernel": True,
@@ -558,6 +574,16 @@ def wandb_finish():
             pass
 
 
+def wandb_log_profiler(table):
+    """Mirror a per-trial key_averages() top-op table to wandb (best-effort)."""
+    if WANDB_RUN is None:
+        return
+    try:
+        WANDB_RUN.log({"profiler/top_ops": table})
+    except Exception:
+        pass
+
+
 @DEVICE_PATCH@
 
 @PERF_PATCH@
@@ -674,6 +700,8 @@ def dev_loss_from_report(out_dir):
 
 
 def run_trial(trial, device, train_path, dev_path, base_model):
+    import torch
+    from laya import train as laya_train
     dials = sample_dials(trial, HPO_SPACE)
     config_dict, control_dict = route_dials(
         BASE_FINETUNE_CONFIG, BASE_FINETUNE_CONTROL, dials, HPO_SPACE)
@@ -687,7 +715,23 @@ def run_trial(trial, device, train_path, dev_path, base_model):
     out_dir.mkdir(parents=True, exist_ok=True)
     log("trial %d start device=%s dials=%s"
         % (int(trial.number), device, json.dumps(dials, sort_keys=True)))
-    run_laya_finetune(train_path, dev_path, base_model, out_dir, device)
+    rank0 = True
+    try:
+        rank0 = bool(globals()["is_rank0"]())
+    except Exception:
+        rank0 = True
+    profiler_config = HPO_SPACE.get("profiler") or {}
+    profiler = TrialProfiler(
+        torch_module=torch, config=profiler_config,
+        trace_path=out_dir / "profiler" / ("trial_" + str(int(trial.number))
+                                           + ".json"),
+        device_type=("cuda" if str(device).startswith("cuda") else "cpu"),
+        laya_train=laya_train, namespace=globals(),
+        logger=log, wandb_log=wandb_log_profiler, rank0=rank0)
+    # Fail-soft: the profiler never fails the trial (its __exit__ returns
+    # False), so a finetune error still propagates unchanged.
+    with profiler:
+        run_laya_finetune(train_path, dev_path, base_model, out_dir, device)
     result = globals().get("FINETUNE_CONTROL_RESULT") or {}
     accuracy = result.get("best_dev_accuracy")
     if accuracy is None:
