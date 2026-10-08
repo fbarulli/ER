@@ -26,8 +26,6 @@ FIDELITY_DIMENSIONS = ("epochs", "subset")
 WARM_START_MODES = ("scratch", "base", "champion")
 ENSEMBLE_METHODS = ("weights", "predictions")
 
-_DEFAULT_SECONDARY_OBJECTIVE = "epoch_time_s"
-
 
 # ── A) parallelism / resource caps ─────────────────────────────────────────
 class ResourceCaps:
@@ -527,9 +525,14 @@ class FidelitySchedule:
 class ObjectiveMode:
     """Single- vs multi-objective value shaping (directions from config)."""
 
-    def __init__(self, multi_objective, secondary=_DEFAULT_SECONDARY_OBJECTIVE):
+    def __init__(self, multi_objective, secondary=None):
         self.multi = bool(multi_objective)
-        self.secondary = str(secondary)
+        # The secondary metric name is config SSOT (options.multi_objective_
+        # secondary); never a code default. It is only read when multi is on.
+        if self.multi and not secondary:
+            raise ValueError(
+                "multi_objective=True requires options.multi_objective_secondary")
+        self.secondary = str(secondary) if secondary is not None else None
 
     def directions(self):
         if self.multi:
@@ -755,7 +758,7 @@ def build_option_set(space, *, root=None, base_model=None,
                                 options.get("staged"))
     objective_mode = ObjectiveMode(
         options.get("multi_objective", False),
-        options.get("multi_objective_secondary", _DEFAULT_SECONDARY_OBJECTIVE))
+        options.get("multi_objective_secondary"))
     shared_data = SharedDataCache(options.get("shared_data"),
                                   root or (Path.cwd() / "hpo_shared_cache"))
     warm_start_cfg = options.get("warm_start") or {}

@@ -77,10 +77,12 @@ HPO_RECEIPT_FILE = "laya-hpo.receipt.json"
 COLAB_ENTRY_FILE = "laya_hpo_colab.py"
 LANES = ("kaggle", "colab")
 SPACE_FILE_NAME = "laya_hpo_space.yaml"
-DEFAULT_MODEL_KEY = "laya"
 TARGETS = ("config", "control")
 TYPES = ("int", "float", "categorical")
-_MAX_WORKERS = 2
+# The Colab working/input roots the entry driver overrides; the Kaggle lane
+# keeps its defaults (runtime env, never code).
+COLAB_WORKING = "/content/laya_hpo/working"
+COLAB_INPUT_ROOT = "/content/laya_hpo/input"
 
 # The optuna env var the shared control plane reads. One name, one place.
 OPTUNA_URL_ENV = "OPTUNA_STORAGE_URL"
@@ -124,6 +126,12 @@ def validate_space(space: dict[str, Any]) -> None:
     if not isinstance(dials, dict) or not dials:
         raise ValueError("laya HPO space must declare a non-empty 'dials' mapping")
     known_fields = set(FinetuneSpec.model_fields)
+    # The routed channels are the SSOT field tuples (not a second registry):
+    # a dial whose name is in neither tuple samples a value no trainer reads.
+    config_fields = set(laya_lane.FINETUNE_CONFIG_FIELDS)
+    control_fields = set(laya_lane.FINETUNE_CONTROL_FIELDS)
+    if not space.get("model_key"):
+        raise ValueError("laya HPO space must declare a non-empty 'model_key'")
     for name, spec in dials.items():
         if not isinstance(spec, dict):
             raise TypeError(f"laya HPO dial {name!r} must be a mapping")
@@ -136,6 +144,15 @@ def validate_space(space: dict[str, Any]) -> None:
             raise ValueError(
                 f"laya HPO dial {name!r} target must be one of {TARGETS}, "
                 f"got {target!r}")
+        channel = config_fields if target == "config" else control_fields
+        if name not in channel:
+            raise ValueError(
+                f"laya HPO dial {name!r} targets {target!r} but is not in "
+                f"FINETUNE_{target.upper()}_FIELDS; it would be a dead/no-op dial")
+        if name in config_fields and name in control_fields:
+            raise ValueError(
+                f"laya HPO dial {name!r} is routed to BOTH channels; split the "
+                "SSOT field tuples")
         kind = spec.get("type")
         if kind not in TYPES:
             raise ValueError(
@@ -240,7 +257,9 @@ def study_identity(*, space: dict[str, Any] | None = None,
             f"[laya-hpo] {GENERATION_ID_ENV} is required: the shared study "
             "name is generation-scoped so a new corpus/recipe can never mix "
             "into an old TPE history. Export it before staging.")
-    key = (model_key or resolved_space.get("model_key") or DEFAULT_MODEL_KEY).strip()
+    # The model key is space SSOT (validated non-empty by `load_space`); never a
+    # second hardcoded registry.
+    key = (model_key or resolved_space["model_key"]).strip()
     registry = hpo_registry.default_registry()
     if key not in registry:
         raise ValueError(
@@ -400,6 +419,7 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "SEED": str(int(space["seed"])),
         "GENERATION_ID": generation,
         "MODEL_KEY": key,
+        "OPTUNA_URL_ENV": OPTUNA_URL_ENV,
         "WANDB_API_KEY": laya_lane._env_value("WANDB_API_KEY") or "",
         "WANDB_PROJECT": laya_lane._wandb_project(),
         "REPOSITORY": repository,
@@ -418,6 +438,217 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
     return script
 
 
+class HpoStagePlan:
+    """The lane-independent, fully-resolved staging inputs (one code path).
+
+    Built once by ``LayaHpoStager.plan`` and consumed by the two thin lane
+    envelopes; a slot carrying a value here means that value resolved from its
+    single SSOT (config, the search-space YAML or the runtime environment).
+    """
+
+    __slots__ = ("lane", "spec", "space", "options", "url", "generation",
+                 "key", "study_name", "dataset_slug", "base_dataset", "kernel",
+                 "repository", "branch", "revision", "tip", "dataset_receipt",
+                 "stage_dir", "tag", "budget_trials", "budget_jobs", "script",
+                 "working", "input_root")
+
+    def __init__(self, **kwargs):
+        for name in self.__slots__:
+            setattr(self, name, kwargs.get(name))
+
+
+class LayaHpoStager:
+    """Resolve and stage the laya HPO payload for ONE lane (SRP).
+
+    Kaggle and Colab differ ONLY in the delivery envelope (kernel metadata vs
+    the Colab entry driver) and in how the Optuna URL line is injected; the
+    space/identity/dataset resolution, the published-tip pin, the staged script
+    and the receipt are a single shared path. This replaces the two parallel
+    staging functions that previously duplicated that path.
+    """
+
+    def __init__(self, lane: str, *, revision: str | None = None,
+                 run_tag: str | None = None, generation_id: str | None = None,
+                 n_trials: int | None = None, n_jobs: int | None = None,
+                 space_config: str | Path | None = None,
+                 kernel_slug: str | None = None,
+                 working: str = COLAB_WORKING,
+                 input_root: str = COLAB_INPUT_ROOT):
+        if lane not in LANES:
+            raise ValueError(f"unknown laya HPO lane {lane!r}; expected {LANES}")
+        self.lane = lane
+        self.revision = revision
+        self.run_tag = run_tag
+        self.generation_id = generation_id
+        self.n_trials = n_trials
+        self.n_jobs = n_jobs
+        self.space_config = space_config
+        self.kernel_slug = kernel_slug
+        self.working = working
+        self.input_root = input_root
+
+    # ── resolution (shared by both lanes) ──────────────────────────────────
+    def _dataset_slugs(self, spec) -> tuple[str, str]:
+        dataset_slug = spec.finetune_dataset_slug
+        if not dataset_slug:
+            raise RuntimeError(
+                "config laya.finetune_dataset_slug is unset; the corpus travels "
+                "as that dataset (owner/slug) — name it before staging")
+        base_dataset = spec.base_model_dataset
+        if not base_dataset:
+            raise RuntimeError(
+                "config laya.base_model_dataset is unset; the base checkpoint "
+                "travels as that dataset (owner/slug) — name it before staging")
+        return dataset_slug, base_dataset
+
+    def _optuna_env_script(self) -> str | None:
+        """The lane's URL line: Colab reuses colab_runtime; Kaggle bakes the URL."""
+        if self.lane == "colab":
+            return _colab_optuna_env_line()
+        return None
+
+    def plan(self) -> HpoStagePlan:
+        spec = training_cfg().laya
+        space = load_space(self.space_config)
+        url = require_optuna_url()
+        generation, key, study_name = study_identity(
+            space=space, generation_id=self.generation_id)
+        dataset_slug, base_dataset = self._dataset_slugs(spec)
+        kernel = None
+        if self.lane == "kaggle":
+            kernel = self.kernel_slug or space.get("kernel_slug")
+            if not kernel:
+                raise RuntimeError(
+                    "laya-hpo kernel slug is unset; set kernel_slug in "
+                    f"{space_path(self.space_config)} (owner/slug) before staging")
+        repository = training_cfg().kaggle.repository
+        branch = _current_git_branch()
+        revision = self.revision or laya_lane._git_revision()
+        from core import runtime_inputs
+
+        tip = runtime_inputs.require_published_tip_match(
+            revision, repository, branch)
+        dataset_receipt = laya_lane.stage_finetune_dataset_payload(
+            dataset_slug=dataset_slug,
+            corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
+        stage_dir = laya_lane.staging_dir() / self.lane / HPO_DECISION
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        tag = self.run_tag or (
+            spec.run_tag_prefix + "hpo_" + laya_lane.decision_tag())
+        budget_trials = int(self.n_trials if self.n_trials is not None
+                            else space["n_trials"])
+        budget_jobs = int(self.n_jobs if self.n_jobs is not None
+                          else space["n_jobs"])
+        options = laya_hpo_options.build_option_set(space)
+        script = _compose_hpo_script(
+            spec=spec, space=space, generation=generation, key=key, tag=tag,
+            budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
+            repository=repository, branch=branch, revision=revision,
+            optuna_env_script=self._optuna_env_script())
+        return HpoStagePlan(
+            lane=self.lane, spec=spec, space=space, options=options, url=url,
+            generation=generation, key=key, study_name=study_name,
+            dataset_slug=dataset_slug, base_dataset=base_dataset, kernel=kernel,
+            repository=repository, branch=branch, revision=revision, tip=tip,
+            dataset_receipt=dataset_receipt, stage_dir=stage_dir, tag=tag,
+            budget_trials=budget_trials, budget_jobs=budget_jobs, script=script,
+            working=self.working, input_root=self.input_root)
+
+    # ── receipt (one shape; each lane adds only its envelope keys) ─────────
+    def _budget(self, plan: HpoStagePlan) -> dict[str, Any]:
+        pool = getattr(plan.options.scheduler, "pool", None)
+        return {"n_trials": plan.budget_trials, "n_jobs": plan.budget_jobs,
+                "seed": int(plan.space["seed"]),
+                "max_workers": int(getattr(pool, "max_concurrent_trials", 1))}
+
+    def _receipt_common(self, plan: HpoStagePlan) -> dict[str, Any]:
+        space = plan.space
+        return {
+            "lane": plan.lane,
+            "kind": HPO_DECISION,
+            "run_tag": plan.tag,
+            "staged": str(plan.stage_dir),
+            "code_file": HPO_CODE_FILE,
+            "study": {"generation_id": plan.generation, "model_key": plan.key,
+                      "study_name": plan.study_name},
+            "space": {"path": str(space_path(self.space_config)),
+                      "version": space["space_version"],
+                      "digest": space_digest(space),
+                      "dials": sorted(space["dials"])},
+            "budget": self._budget(plan),
+            "objective": space["objective"],
+            "profiler": space.get("profiler"),
+            "options": plan.options.as_dict(),
+            "registry": hpo_registry.default_registry().describe(),
+            "observability": hpo_observability.TrialObserver(
+                hpo_observability.OBSERVABILITY_DIR).as_dict(),
+            "optuna_storage": {"required_env": OPTUNA_URL_ENV,
+                               "injected_into_kernel": True,
+                               "url_persisted_to_manifest": False},
+            "published_pin": {"repository": plan.repository,
+                              "branch": plan.branch, "revision": plan.revision},
+            "published_tip": plan.tip,
+        }
+
+    # ── delivery envelopes (the only lane-specific surface) ────────────────
+    def _kernel_metadata(self, plan: HpoStagePlan) -> dict[str, Any]:
+        slug = plan.kernel
+        return {
+            "id": slug,
+            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
+            "code_file": HPO_CODE_FILE,
+            "language": "python",
+            "kernel_type": "script",
+            "enable_gpu": True,
+            "enable_internet": True,
+            "dataset_sources": [plan.dataset_slug, plan.base_dataset],
+            "kernel_sources": [],
+            "competition_sources": [],
+            "is_private": True,
+        }
+
+    def _stage_kaggle(self, plan: HpoStagePlan) -> dict[str, Any]:
+        atomic_write_json(self._kernel_metadata(plan),
+                          plan.stage_dir / "kernel-metadata.json")
+        (plan.stage_dir / HPO_CODE_FILE).write_text(plan.script, encoding="utf-8")
+        receipt = self._receipt_common(plan)
+        receipt["kernel"] = plan.kernel
+        receipt["gpu"] = ("T4 (2x when the session exposes it; one worker per "
+                          "device)")
+        receipt["dataset"] = {"slug": plan.dataset_slug,
+                              "payload": plan.dataset_receipt["payload"],
+                              "files": plan.dataset_receipt["files"]}
+        receipt["base_model"] = {"dataset": plan.base_dataset,
+                                 "archive": plan.spec.base_model_archive,
+                                 "dir": plan.spec.base_model_dir}
+        receipt["laya_package"] = plan.spec.finetune_package
+        return receipt
+
+    def _stage_colab(self, plan: HpoStagePlan) -> dict[str, Any]:
+        (plan.stage_dir / HPO_CODE_FILE).write_text(plan.script, encoding="utf-8")
+        (plan.stage_dir / COLAB_ENTRY_FILE).write_text(
+            _compose_colab_entry(HPO_CODE_FILE, plan.working, plan.input_root),
+            encoding="utf-8")
+        receipt = self._receipt_common(plan)
+        receipt["colab_entry"] = COLAB_ENTRY_FILE
+        receipt["working"] = plan.working
+        receipt["input_root"] = plan.input_root
+        return receipt
+
+    def stage(self) -> dict[str, Any]:
+        """Resolve, compose, write the payload + receipt (no push, no run)."""
+        plan = self.plan()
+        receipt = (self._stage_kaggle(plan) if self.lane == "kaggle"
+                   else self._stage_colab(plan))
+        # The one hard guarantee: the URL is not in the stored receipt.
+        _assert_secret_absent(receipt, plan.url)
+        atomic_write_json(receipt, plan.stage_dir / HPO_RECEIPT_FILE)
+        laya_lane._log_lane(
+            f"staged {plan.lane} laya-hpo run_tag={plan.tag} "
+            f"study={plan.study_name} -> {plan.stage_dir}")
+        return receipt
+
+
 def stage_laya_hpo_kernel(*, revision: str | None = None,
                           run_tag: str | None = None,
                           generation_id: str | None = None,
@@ -430,127 +661,15 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
     Writes under results/laya_lane/kaggle/laya-hpo/:
       kernel-metadata.json + laya_hpo.py + laya-hpo.receipt.json
       (+ the staged corpus dataset payload, which carries no secret).
-    Fail-loud preconditions:
-      * ``OPTUNA_STORAGE_URL`` present and PostgreSQL;
-      * ``EUROMONITOR_HPO_GENERATION_ID`` set (generation-scoped study);
-      * a corpus dataset slug + base-model dataset slug;
-      * the published-tip invariant (origin/<branch> == HEAD).
-
-    The URL is baked ONLY into the staged ``laya_hpo.py`` (gitignored); it is
-    asserted absent from the receipt.
+    Fail-loud preconditions: ``OPTUNA_STORAGE_URL`` present and PostgreSQL;
+    ``EUROMONITOR_HPO_GENERATION_ID`` set; the corpus + base-model dataset
+    slugs; the published-tip invariant. The URL is baked ONLY into the staged
+    ``laya_hpo.py`` (gitignored); it is asserted absent from the receipt.
     """
-    spec = training_cfg().laya
-    space = load_space(space_config)
-    url = require_optuna_url()
-    generation, key, study_name = study_identity(
-        space=space, generation_id=generation_id)
-
-    slug = kernel_slug or space.get("kernel_slug")
-    if not slug:
-        raise RuntimeError(
-            "laya-hpo kernel slug is unset; set kernel_slug in "
-            f"{space_path(space_config)} (owner/slug) before staging")
-    dataset_slug = spec.finetune_dataset_slug
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.finetune_dataset_slug is unset; the corpus travels "
-            "as that dataset (owner/slug) — name it before staging")
-    base_dataset = spec.base_model_dataset
-    if not base_dataset:
-        raise RuntimeError(
-            "config laya.base_model_dataset is unset; the base checkpoint "
-            "travels as that dataset (owner/slug) — name it before staging")
-
-    repository = training_cfg().kaggle.repository
-    branch = _current_git_branch()
-    revision = revision or laya_lane._git_revision()
-    from core import runtime_inputs
-
-    tip = runtime_inputs.require_published_tip_match(revision, repository, branch)
-
-    dataset_receipt = laya_lane.stage_finetune_dataset_payload(
-        dataset_slug=dataset_slug,
-        corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir,
-        kind=HPO_DECISION)
-
-    stage = laya_lane.staging_dir() / "kaggle" / HPO_DECISION
-    stage.mkdir(parents=True, exist_ok=True)
-    tag = run_tag or (spec.run_tag_prefix + "hpo_" + laya_lane.decision_tag())
-    budget_trials = int(n_trials if n_trials is not None else space["n_trials"])
-    budget_jobs = int(n_jobs if n_jobs is not None else space["n_jobs"])
-
-    script = _compose_hpo_script(
-        spec=spec, space=space, generation=generation, key=key, tag=tag,
-        budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
-        repository=repository, branch=branch, revision=revision)
-
-    metadata: dict[str, Any] = {
-        "id": slug,
-        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-        "code_file": HPO_CODE_FILE,
-        "language": "python",
-        "kernel_type": "script",
-        "enable_gpu": True,
-        "enable_internet": True,
-        "dataset_sources": [dataset_slug, base_dataset],
-        "kernel_sources": [],
-        "competition_sources": [],
-        "is_private": True,
-    }
-    atomic_write_json(metadata, stage / "kernel-metadata.json")
-    (stage / HPO_CODE_FILE).write_text(script, encoding="utf-8")
-
-    receipt: dict[str, Any] = {
-        "kernel": slug,
-        "kind": HPO_DECISION,
-        "gpu": "T4 (2x when the session exposes it; one worker per device)",
-        "run_tag": tag,
-        "staged": str(stage),
-        "code_file": HPO_CODE_FILE,
-        "dataset": {
-            "slug": dataset_slug,
-            "payload": dataset_receipt["payload"],
-            "files": dataset_receipt["files"],
-        },
-        "base_model": {
-            "dataset": base_dataset,
-            "archive": spec.base_model_archive,
-            "dir": spec.base_model_dir,
-        },
-        "study": {"generation_id": generation, "model_key": key,
-                  "study_name": study_name},
-        "space": {
-            "path": str(space_path(space_config)),
-            "version": space["space_version"],
-            "digest": space_digest(space),
-            "dials": sorted(space["dials"]),
-        },
-        "budget": {"n_trials": budget_trials, "n_jobs": budget_jobs,
-                   "seed": int(space["seed"]), "max_workers": _MAX_WORKERS},
-        "objective": space["objective"],
-        "profiler": space.get("profiler"),
-        "options": laya_hpo_options.build_option_set(
-            space, root="hpo_shared_cache").as_dict(),
-        "registry": hpo_registry.default_registry().describe(),
-        "observability": hpo_observability.TrialObserver(
-            "hpo_observability").as_dict(),
-        "optuna_storage": {
-            "required_env": OPTUNA_URL_ENV,
-            "injected_into_kernel": True,
-            "url_persisted_to_manifest": False,
-        },
-        "laya_package": spec.finetune_package,
-        "published_pin": {"repository": repository, "branch": branch,
-                          "revision": revision},
-        "published_tip": tip,
-    }
-    # The one hard guarantee: the URL is not in the stored receipt.
-    _assert_secret_absent(receipt, url)
-    atomic_write_json(receipt, stage / HPO_RECEIPT_FILE)
-    laya_lane._log_lane(
-        f"staged kaggle laya-hpo kernel run_tag={tag} study={study_name} "
-        f"-> {stage}")
-    return receipt
+    return LayaHpoStager(
+        "kaggle", revision=revision, run_tag=run_tag,
+        generation_id=generation_id, n_trials=n_trials, n_jobs=n_jobs,
+        space_config=space_config, kernel_slug=kernel_slug).stage()
 
 
 def _colab_optuna_env_line() -> str:
@@ -601,86 +720,21 @@ def stage_laya_hpo_colab(*, revision: str | None = None,
                          n_trials: int | None = None,
                          n_jobs: int | None = None,
                          space_config: str | Path | None = None,
-                         working: str = "/content/laya_hpo/working",
-                         input_root: str = "/content/laya_hpo/input"
+                         working: str = COLAB_WORKING,
+                         input_root: str = COLAB_INPUT_ROOT
                          ) -> dict[str, Any]:
     """Stage the Colab HPO payload (delivery contract; no session is opened).
 
-    Same script + branch pin + URL injection as Kaggle; the Colab driver only
-    overrides the working/input roots. Writes under
-    results/laya_lane/colab/laya-hpo/: laya_hpo.py + laya_hpo_colab.py +
-    laya-hpo.receipt.json.
+    The same ``LayaHpoStager`` path as Kaggle: same script + branch pin + URL
+    injection, with the Colab entry driver overriding the working/input roots.
+    Writes under results/laya_lane/colab/laya-hpo/: laya_hpo.py +
+    laya_hpo_colab.py + laya-hpo.receipt.json.
     """
-    spec = training_cfg().laya
-    space = load_space(space_config)
-    url = require_optuna_url()
-    generation, key, study_name = study_identity(
-        space=space, generation_id=generation_id)
-    dataset_slug = spec.finetune_dataset_slug
-    base_dataset = spec.base_model_dataset
-    if not dataset_slug or not base_dataset:
-        raise RuntimeError(
-            "laya-hpo needs spec.finetune_dataset_slug and "
-            "spec.base_model_dataset set before staging")
-    repository = training_cfg().kaggle.repository
-    branch = _current_git_branch()
-    revision = revision or laya_lane._git_revision()
-    from core import runtime_inputs
-
-    tip = runtime_inputs.require_published_tip_match(revision, repository, branch)
-    laya_lane.stage_finetune_dataset_payload(
-        dataset_slug=dataset_slug,
-        corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
-    stage = laya_lane.staging_dir() / "colab" / HPO_DECISION
-    stage.mkdir(parents=True, exist_ok=True)
-    tag = run_tag or (spec.run_tag_prefix + "hpo_" + laya_lane.decision_tag())
-    budget_trials = int(n_trials if n_trials is not None else space["n_trials"])
-    budget_jobs = int(n_jobs if n_jobs is not None else space["n_jobs"])
-    script = _compose_hpo_script(
-        spec=spec, space=space, generation=generation, key=key, tag=tag,
-        budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
-        repository=repository, branch=branch, revision=revision,
-        optuna_env_script=_colab_optuna_env_line())
-    (stage / HPO_CODE_FILE).write_text(script, encoding="utf-8")
-    (stage / COLAB_ENTRY_FILE).write_text(
-        _compose_colab_entry(HPO_CODE_FILE, working, input_root),
-        encoding="utf-8")
-    receipt: dict[str, Any] = {
-        "lane": "colab",
-        "kind": HPO_DECISION,
-        "run_tag": tag,
-        "staged": str(stage),
-        "code_file": HPO_CODE_FILE,
-        "colab_entry": COLAB_ENTRY_FILE,
-        "working": working,
-        "input_root": input_root,
-        "study": {"generation_id": generation, "model_key": key,
-                  "study_name": study_name},
-        "space": {"path": str(space_path(space_config)),
-                  "version": space["space_version"],
-                  "digest": space_digest(space), "dials": sorted(space["dials"])},
-        "budget": {"n_trials": budget_trials, "n_jobs": budget_jobs,
-                   "seed": int(space["seed"])},
-        "objective": space["objective"],
-        "profiler": space.get("profiler"),
-        "options": laya_hpo_options.build_option_set(
-            space, root="hpo_shared_cache").as_dict(),
-        "registry": hpo_registry.default_registry().describe(),
-        "observability": hpo_observability.TrialObserver(
-            "hpo_observability").as_dict(),
-        "optuna_storage": {"required_env": OPTUNA_URL_ENV,
-                           "injected_into_kernel": True,
-                           "url_persisted_to_manifest": False},
-        "published_pin": {"repository": repository, "branch": branch,
-                          "revision": revision},
-        "published_tip": tip,
-    }
-    _assert_secret_absent(receipt, url)
-    atomic_write_json(receipt, stage / HPO_RECEIPT_FILE)
-    laya_lane._log_lane(
-        f"staged colab laya-hpo payload run_tag={tag} study={study_name} "
-        f"-> {stage}")
-    return receipt
+    return LayaHpoStager(
+        "colab", revision=revision, run_tag=run_tag,
+        generation_id=generation_id, n_trials=n_trials, n_jobs=n_jobs,
+        space_config=space_config, working=working,
+        input_root=input_root).stage()
 
 
 # ── the embedded Kaggle kernel script ──────────────────────────────────────
@@ -729,6 +783,7 @@ N_JOBS = @N_JOBS@
 SEED = @SEED@
 GENERATION_ID = "@GENERATION_ID@"
 MODEL_KEY = "@MODEL_KEY@"
+OPTUNA_URL_ENV = "@OPTUNA_URL_ENV@"
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
 
@@ -843,17 +898,18 @@ def pip_install_laya():
 
 
 def ensure_optuna_url():
-    url = os.environ.get("OPTUNA_STORAGE_URL", "").strip()
+    url = os.environ.get(OPTUNA_URL_ENV, "").strip()
     if not url:
         raise SystemExit(
-            "[laya-hpo] OPTUNA_STORAGE_URL is missing; the shared PostgreSQL "
-            "Optuna study cannot be reached. Re-stage with the secret set.")
+            "[laya-hpo] " + OPTUNA_URL_ENV + " is missing; the shared "
+            "PostgreSQL Optuna study cannot be reached. Re-stage with the "
+            "secret set.")
     # SQLAlchemy's bare postgresql:// defaults to the psycopg2 driver; the
     # session ships psycopg3 (psycopg[binary]), so pin the driver explicitly
     # for BOTH Optuna's RDBStorage and the fencing/champion engines.
     if url.startswith("postgresql://"):
         url = "postgresql+psycopg://" + url[len("postgresql://"):]
-        os.environ["OPTUNA_STORAGE_URL"] = url
+        os.environ[OPTUNA_URL_ENV] = url
     return url
 
 
@@ -1169,7 +1225,7 @@ def run_worker(device):
     globals()["OPTION_SET"] = options
     options.resource_caps.apply_torch(torch)
     offline = bool(options.session.offline)
-    observer = TrialObserver(WORKING / "hpo_observability", offline=offline)
+    observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
     globals()["OBSERVER"] = observer
 
     if offline:
@@ -1275,7 +1331,7 @@ def write_session_receipt():
     } for trial in study.trials]
     # Control-plane observability: CDC events + local study mirror + offline
     # ledger, rebuilt from the authoritative study at session end.
-    observer = TrialObserver(WORKING / "hpo_observability", offline=offline)
+    observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
     for trial in study.trials:
         observer.observe(trial)
     observer.flush()
@@ -1389,9 +1445,9 @@ def main():
     try:
         include = [p for p in (
             WORKING / "laya-hpo.receipt.json",
-            WORKING / "hpo_observability" / "trial_events.jsonl",
-            WORKING / "hpo_observability" / "study_mirror.jsonl",
-            WORKING / "hpo_observability" / "hpo_trials.jsonl",
+            WORKING / OBSERVABILITY_DIR / "trial_events.jsonl",
+            WORKING / OBSERVABILITY_DIR / "study_mirror.jsonl",
+            WORKING / OBSERVABILITY_DIR / "hpo_trials.jsonl",
         ) if p.exists()]
         snapshot = build_snapshot(
             generation=WORKING, sequence=int(time.time()),

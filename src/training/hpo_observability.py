@@ -24,6 +24,10 @@ import os
 import time
 from pathlib import Path
 
+# The observer root dir name (single source for the host receipt and the
+# staged kernel, which both build <root>/trial_events.jsonl etc.).
+OBSERVABILITY_DIR = "hpo_observability"
+
 # CDC event names (the log's vocabulary; one place).
 EVENT_CREATE = "trial_created"
 EVENT_COMPLETE = "trial_completed"
