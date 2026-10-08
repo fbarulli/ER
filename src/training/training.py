@@ -673,6 +673,50 @@ def _write_checkpoint_manifest(
     )
 
 
+def _resume_component_filename(name: str) -> str:
+    """Resolve a native-HF resume component filename through the config SSOT.
+
+    The checkpoint layout owner is ``training_cfg().bundle.resume_only_filenames``;
+    every surface reads the name from there instead of re-spelling it. A
+    filename the config does not declare is reported, never invented.
+    """
+    bundle = training_cfg().bundle
+    for filename in bundle.resume_only_filenames:
+        if filename == name:
+            return filename
+    raise RuntimeError(
+        f"resume component filename {name!r} is not declared in "
+        f"bundle.resume_only_filenames={list(bundle.resume_only_filenames)}"
+    )
+
+
+def _trainer_state_filename() -> str:
+    """The native-HF trainer-state filename (config SSOT, not resume-only)."""
+    return training_cfg().bundle.trainer_state_file
+
+
+def _trainer_best_key() -> str:
+    """The trainer-state JSON key naming the selected checkpoint (config SSOT)."""
+    return training_cfg().bundle.trainer_best_key
+
+
+def _required_resume_filenames() -> tuple[str, ...]:
+    """The resume preflight set for ``on_save`` and the fold resume path.
+
+    Optimizer/scheduler/RNG are the native-HF resume state; the manifest and the
+    trainer-state file complete the set. ``scaler.pt`` and ``training_args.bin``
+    are deliberately NOT required here: they exist only under AMP / for arg
+    replay, so the preflight stays byte-identical to the historical check.
+    """
+    return (
+        _resume_component_filename("optimizer.pt"),
+        _resume_component_filename("scheduler.pt"),
+        _resume_component_filename("rng_state.pth"),
+        training_cfg().colab.checkpoint_manifest_name,
+        _trainer_state_filename(),
+    )
+
+
 class _CheckpointPublisher:
     """Small SR owner of checkpoint publication prerequisites.
 
@@ -840,25 +884,26 @@ class _CheckpointPublisher:
         """
         return {
             "model_state_dict": _CheckpointPublisher._model_files(checkpoint),
-            "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
-            "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
-            "scaler_state_dict": "scaler.pt" if scaler is not None else None,
-            "rng_state": "rng_state.pth",
-            "trainer_state": "trainer_state.json",
-            "training_args": "training_args.bin",
+            "optimizer_state_dict": _resume_component_filename("optimizer.pt") if optimizer is not None else None,
+            "scheduler_state_dict": _resume_component_filename("scheduler.pt") if scheduler is not None else None,
+            "scaler_state_dict": _resume_component_filename("scaler.pt") if scaler is not None else None,
+            "rng_state": _resume_component_filename("rng_state.pth"),
+            "trainer_state": _trainer_state_filename(),
+            "training_args": _resume_component_filename("training_args.bin"),
         }
 
     @staticmethod
     def _resume_block() -> dict:
         """The fixed native-HF resume component map manifest field."""
+        state_file = _trainer_state_filename()
         return {
             "native_hf_resume": {
-                "trainer_state": "trainer_state.json",
-                "trainer_control": "trainer_state.json:control",
-                "training_args": "training_args.bin",
-                "optimizer": "optimizer.pt",
-                "scheduler": "scheduler.pt",
-                "rng": "rng_state.pth",
+                "trainer_state": state_file,
+                "trainer_control": f"{state_file}:control",
+                "training_args": _resume_component_filename("training_args.bin"),
+                "optimizer": _resume_component_filename("optimizer.pt"),
+                "scheduler": _resume_component_filename("scheduler.pt"),
+                "rng": _resume_component_filename("rng_state.pth"),
             }
         }
 
@@ -3058,13 +3103,7 @@ class DvcCheckpointCallback(TrainerCallback):
         checkpoint_root = Path(args.output_dir)
         checkpoint = checkpoint_root / f"checkpoint-{state.global_step}"
         _make_checkpoint_tokenizer_portable(checkpoint)
-        required = (
-            "optimizer.pt",
-            "scheduler.pt",
-            "rng_state.pth",
-            training_cfg().colab.checkpoint_manifest_name,
-            "trainer_state.json",
-        )
+        required = _required_resume_filenames()
         missing = [name for name in required if not (checkpoint / name).is_file()]
         if missing:
             raise RuntimeError(
@@ -5636,7 +5675,7 @@ def train_one_config(
                         "step": 0,
                     },
                 ).parent
-                if resume and not any(checkpoint_dir.glob("checkpoint-*/trainer_state.json")):
+                if resume and not any(checkpoint_dir.glob(f"checkpoint-*/{_trainer_state_filename()}")):
                     if checkpoint_publication_deferred():
                         raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
                     from training.dvc_store import restore_checkpoint
@@ -6319,13 +6358,7 @@ def train_one_config(
                     )
                     if candidates:
                         latest = candidates[-1]
-                        required = (
-                            "optimizer.pt",
-                            "scheduler.pt",
-                            "rng_state.pth",
-                            training_cfg().colab.checkpoint_manifest_name,
-                            "trainer_state.json",
-                        )
+                        required = _required_resume_filenames()
                         missing = [name for name in required if not (latest / name).is_file()]
                         if missing:
                             raise RuntimeError(
@@ -6340,14 +6373,14 @@ def train_one_config(
                         # Trainer state contains absolute paths from the original
                         # VM. Rebase only to the selected sibling in this restored
                         # checkpoint tree, never to another run's checkpoint.
-                        state_path = latest / "trainer_state.json"
+                        state_path = latest / _trainer_state_filename()
                         restored_state = json.loads(state_path.read_text())
-                        selected = restored_state.get("best_model_checkpoint")
+                        selected = restored_state.get(_trainer_best_key())
                         if selected:
                             local_selected = checkpoint_dir / Path(selected).name
                             if not local_selected.is_dir():
                                 raise FileNotFoundError(f"resume selected checkpoint missing: {local_selected}")
-                            restored_state["best_model_checkpoint"] = str(local_selected.resolve())
+                            restored_state[_trainer_best_key()] = str(local_selected.resolve())
                             state_path.write_text(json.dumps(restored_state, indent=2) + "\n")
                         resume_checkpoint = str(latest)
                         print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
