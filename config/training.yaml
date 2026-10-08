@@ -1141,6 +1141,93 @@ rerank:
   min_delta_pr_auc: 0.005
   min_delta_f1: 0.005
 
+# ── TASK B advanced training additions (config/training.yaml advanced:) ─────
+# ONE config-owned home for every TASK B knob. All switches default OFF so the
+# shipped baseline is unchanged until an experiment flips one. Validated by
+# AdvancedSpec in src/core/schemas.py; pure helpers live in
+# src/training/advanced.py. Leakage discipline: calibration fitting reads the
+# dev/calibration carve only; test stays report-only.
+advanced:
+  ema:                       # weight EMA for eval/checkpoint/best-model select
+    enabled: false
+    decay: 0.999
+    warmup_updates: 0
+  calibration:               # post-hoc temperature scaling + ECE/Brier/reliability
+    enabled: false
+    temperature_scaling: false
+    n_bins: 15
+    min_temperature: 0.05
+    max_temperature: 50.0
+  adversarial:               # FGM on embeddings before the loss (train-only)
+    enabled: false
+    epsilon: 1.0e-3
+    norm: "l2"
+  swa:                       # average last-k / best-k checkpoints post-train
+    enabled: false
+    k: 3
+    use_best_k: false
+  curriculum:                # epoch-wise easy->hard on measured pair difficulty
+    enabled: false
+    schedule: "easy_to_hard"
+    warmup_fraction: 0.0
+  accel:                     # TF32 + text torch.compile
+    tf32: false
+    compile: false
+    compile_mode: "default"
+  telemetry:                 # NVML utilization/power/SM clocks into telemetry
+    nvml: false
+  focal:                     # class-weighted / focal BCE (GNN scorer)
+    enabled: false
+    gamma: 2.0
+    pos_weight: null
+    alpha: null
+  # Micro-batch accumulation for the text lane; 1 keeps today's behavior.
+  # NOTE: with the FrozenBatchSampler a step boundary is per optimizer step,
+  # so accumulation must divide the per-epoch batch count evenly.
+  gradient_accumulation_steps: 1
+  rerank:                    # cross-encoder stage-2 tuning
+    enabled: false
+    model: null
+    learning_rate: 2.0e-5
+    epochs: 3
+    batch_size: 16
+  distillation:              # larger teacher encoder -> student (train split only)
+    enabled: false
+    teacher_model: null
+    temperature: 2.0
+    alpha: 0.5
+  embedding_ensemble:        # average embeddings across folds/seeds at publish
+    enabled: false
+    normalize: true
+  graph:                     # GNN-lane overrides (all default OFF)
+    ema:
+      enabled: false
+      decay: 0.999
+      warmup_updates: 0
+    calibration:
+      enabled: false
+      temperature_scaling: false
+      n_bins: 15
+      min_temperature: 0.05
+      max_temperature: 50.0
+    focal:
+      enabled: false
+      gamma: 2.0
+      pos_weight: null
+      alpha: null
+    swa:
+      enabled: false
+      k: 3
+      use_best_k: false
+    arch:
+      dropout: 0.0
+      edge_dropout: 0.0
+      residual: false
+      two_hop: false
+      gated_pool: false
+    telemetry:
+      nvml: false
+
 # ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
 # second07's fixed grid, verbatim (epochs x lr x warmup%), + the TPE
 # search space and budgets. All were module-level literals in src/training/hpo.py

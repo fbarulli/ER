@@ -1815,7 +1815,7 @@ class TrainingSpec(BaseModel):
     weight_decay: float = Field(ge=0.0)
     projection_dropout: float = Field(ge=0.0, lt=1.0)
     label_smoothing: float = Field(ge=0.0, lt=0.5)
-    lr_scheduler: str
+    lr_scheduler: Literal["linear", "cosine", "one_cycle", "plateau", "constant"]
     max_grad_norm: float = Field(gt=0.0)
     es_patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
@@ -3264,6 +3264,185 @@ class PreparationSpec(BaseModel):
         return self
 
 
+class EmaSpec(BaseModel):
+    """Weight-EMA knobs (advanced.ema) — default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    decay: float = Field(default=0.999, gt=0.0, le=1.0)
+    warmup_updates: int = Field(default=0, ge=0)
+
+
+class CalibrationSpec(BaseModel):
+    """Post-hoc temperature scaling + ECE/Brier/reliability (advanced.calibration).
+
+    Fitting is DEV-only; reporting is test-side. Default OFF.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    temperature_scaling: bool = False
+    n_bins: int = Field(default=15, ge=2)
+    min_temperature: float = Field(default=0.05, gt=0.0)
+    max_temperature: float = Field(default=50.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _temperature_bounds_ordered(self) -> "CalibrationSpec":
+        if self.max_temperature <= self.min_temperature:
+            raise ValueError(
+                "advanced.calibration.max_temperature must exceed "
+                "min_temperature"
+            )
+        return self
+
+
+class AdversarialSpec(BaseModel):
+    """FGM adversarial perturbations on embeddings (advanced.adversarial)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    epsilon: float = Field(default=1.0e-3, ge=0.0)
+    norm: Literal["l2", "linf"] = "l2"
+
+
+class SwaSpec(BaseModel):
+    """SWA / top-k checkpoint averaging (advanced.swa)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    k: int = Field(default=3, ge=1)
+    use_best_k: bool = False  # False = last-k, True = best-k by dev AP
+
+
+class CurriculumSpec(BaseModel):
+    """Pair-difficulty curriculum (advanced.curriculum); train-side only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    schedule: Literal["easy_to_hard", "hard_to_easy"] = "easy_to_hard"
+    warmup_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
+
+
+class AccelSpec(BaseModel):
+    """TF32 + text torch.compile switches (advanced.accel); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tf32: bool = False
+    compile: bool = False
+    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
+
+
+class TelemetrySpec(BaseModel):
+    """GPU-utilization telemetry (advanced.telemetry); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nvml: bool = False
+
+
+class FocalSpec(BaseModel):
+    """Class-weighted / focal BCE for the graph scorer (advanced.focal)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    gamma: float = Field(default=2.0, ge=0.0)
+    pos_weight: float | None = Field(default=None, gt=0.0)
+    alpha: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class RerankAdvancedSpec(BaseModel):
+    """Cross-encoder rerank tuning knobs (advanced.rerank); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    model: str | None = None
+    learning_rate: float = Field(default=2.0e-5, gt=0.0)
+    epochs: int = Field(default=3, ge=1)
+    batch_size: int = Field(default=16, ge=1)
+
+
+class DistillationSpec(BaseModel):
+    """Teacher->student distillation (advanced.distillation); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    teacher_model: str | None = None
+    temperature: float = Field(default=2.0, gt=0.0)
+    alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class EmbeddingEnsembleSpec(BaseModel):
+    """Seed/fold embedding averaging at publish (advanced.embedding_ensemble)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    normalize: bool = True
+
+
+class GraphArchSpec(BaseModel):
+    """GNN architecture additions (advanced.graph.arch); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    edge_dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    residual: bool = False
+    two_hop: bool = False
+    gated_pool: bool = False
+
+
+class GraphAdvancedSpec(BaseModel):
+    """GNN-lane enhancements (advanced.graph); all default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ema: EmaSpec = Field(default_factory=EmaSpec)
+    calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
+    focal: FocalSpec = Field(default_factory=FocalSpec)
+    swa: SwaSpec = Field(default_factory=SwaSpec)
+    arch: GraphArchSpec = Field(default_factory=GraphArchSpec)
+    telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
+
+
+class AdvancedSpec(BaseModel):
+    """TASK B training additions (config/training.yaml advanced:).
+
+    Every switch defaults OFF and every value is config-owned (no code
+    literals). The text lane reads ``advanced`` through
+    ``core.common.training_cfg().advanced``; the GNN lane reads
+    ``advanced.graph``. Additive via default_factory so configs that predate
+    the block still validate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ema: EmaSpec = Field(default_factory=EmaSpec)
+    calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
+    adversarial: AdversarialSpec = Field(default_factory=AdversarialSpec)
+    swa: SwaSpec = Field(default_factory=SwaSpec)
+    curriculum: CurriculumSpec = Field(default_factory=CurriculumSpec)
+    accel: AccelSpec = Field(default_factory=AccelSpec)
+    telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
+    focal: FocalSpec = Field(default_factory=FocalSpec)
+    gradient_accumulation_steps: int = Field(default=1, ge=1)
+    rerank: RerankAdvancedSpec = Field(default_factory=RerankAdvancedSpec)
+    distillation: DistillationSpec = Field(default_factory=DistillationSpec)
+    embedding_ensemble: EmbeddingEnsembleSpec = Field(
+        default_factory=EmbeddingEnsembleSpec
+    )
+    graph: GraphAdvancedSpec = Field(default_factory=GraphAdvancedSpec)
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -3317,6 +3496,9 @@ class TrainingConfig(BaseModel):
     # existing YAML without the block stays byte-identical at load).
     laya: LayaSpec = Field(default_factory=LayaSpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
+    # TASK B training additions (additive; default factory so configs that
+    # predate the block still validate). All switches default OFF.
+    advanced: AdvancedSpec = Field(default_factory=AdvancedSpec)
     archives: ArchiveSpec
     packaging: PackagingSpec
     # One sealed Bundle contract (roles/manifests/checkpoints/markers/ablation);
@@ -3924,7 +4106,7 @@ class TrainConfig(BaseModel):
     random_easy_enabled: bool
     random_easy_ratio_to_hard: float = Field(ge=0.0)
     random_easy_candidate_pool_size: int = Field(ge=1)
-    lr_scheduler: str
+    lr_scheduler: Literal["linear", "cosine", "one_cycle", "plateau", "constant"]
     max_grad_norm: float = Field(gt=0.0)
     patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
