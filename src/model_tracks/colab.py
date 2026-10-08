@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 import hashlib
 
-from core.bundle import Bundle, BundleRole, manifest_name
-from core.archive_reader import open_archive, tar_archive
+from core.bundle import Bundle, BundleRole, bundle_spec, manifest_name
+from core.archive_reader import archive_sidecar, tar_archive
 from core.manifest import publish_replacing
 from graph_tracks.data import file_hash
 from model_tracks.package import verify, package_member
@@ -256,7 +256,6 @@ else:
             recovery_script = backend._BOOTSTRAP + f'''
 import json, os, pathlib, signal, time
 from model_tracks.package import recovery_package
-from graph_tracks.data import file_hash
 # Stop only this suite's supervisor and separately owned worker groups before
 # reading checkpoints. A lost poll connection can leave detached work alive.
 owned=[]
@@ -295,11 +294,11 @@ if destination.exists():
     destination.unlink()
 input_package=json.loads(pathlib.Path({backend.REMOTE_ROOT!r},{manifest_name(BundleRole.inputs)!r}).read_text())
 recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_package=input_package)
-destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
 '''
             backend.run_colab_exec_stream(backend.SESSION, recovery_script, timeout=300,
                                          log_name='tracks_recovery', retry_safe=True)
-            expected_recovery = backend._read_remote_text(str(Path(recovery_remote).with_suffix('.sha256'))).strip()
+            expected_recovery = backend._read_remote_text(str(archive_sidecar(
+                Path(recovery_remote), bundle_spec().sha256_sidecar_suffix))).strip()
             recovery_local.parent.mkdir(parents=True, exist_ok=True)
             partial = recovery_local.with_name(recovery_local.name + '.partial')
             backend._download_one_remote_file(recovery_remote, partial)
@@ -358,7 +357,10 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             f"Release the session with colab stop -s {backend.SESSION} before completing locally."
         )
     from model_tracks.resume import TRACKS, expected_postprocess, validate_archived_track
-    with open_archive(local) as result:
+    # The download boundary verified these bytes (``verify_result_archive``);
+    # the track contract reads the SAME archive through the trusted handle, so
+    # the result archive is parsed exactly once per VM crossing.
+    with Bundle.trusted(local, BundleRole.result, manifest).reader() as result:
         for track in TRACKS:
             # The remote stage always trains GPU-only: trained lanes defer their
             # CPU reports, the cascade already finished its composed report.

@@ -185,6 +185,6 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                 'publish': bool(publish)},
         source=str(final),
     )
-    published = _publish(final, settings, run_tag, ablation_done=True) if publish else final
+    published = _publish(final, settings, run_tag, ablation_done=True, bundle=sealed) if publish else final
     flush_trace()
     return published

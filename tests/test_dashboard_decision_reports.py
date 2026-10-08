@@ -248,3 +248,45 @@ def test_controlled_ablation_joins_pair_gate_jev_and_attribute(reports,monkeypat
     assert trace['gate']['gate_reason'] == 'review'
     assert trace['jev_history']
     assert result['attribute_tracking'][0]['cases'][0]['controlled_ablation_results'] == [row]
+
+
+# ── the decision surface reads declared names, never its own copies ─────────
+# ``saved_run_context`` used to spell ``suite_manifest.json``/``run_tag``, and
+# the prepared-setup reads spelled ``eligible_catalog.csv`` etc.; both classes
+# of name are declarations owned elsewhere (BundleSpec / preparation.graph_setup),
+# so re-pointing the declaration must move this reader.
+
+def test_saved_run_context_follows_the_bundle_spec(reports, tmp_path, monkeypatch):
+    from core import common
+
+    spec = common.training_cfg().bundle
+    monkeypatch.setattr(spec, 'suite_manifest_file', 'renamed_manifest.json')
+    monkeypatch.setattr(spec, 'run_tag_key', 'renamed_tag')
+    run = tmp_path / 'run'
+    run.mkdir()
+    (run / 'renamed_manifest.json').write_text(json.dumps({'renamed_tag': 'run-9'}))
+
+    assert reports.saved_run_context(run, []) is None
+    context = reports.saved_run_context(run, ['renamed_manifest.json'])
+    assert context['run_tag'] == 'run-9'
+    assert context['source'] == 'renamed_manifest.json'
+
+
+def test_prepared_setup_reads_follow_the_declared_layout(reports, tmp_path, monkeypatch):
+    from core import common
+
+    layout = common.prepared_setup_layout()
+    monkeypatch.setattr(layout, 'catalog', 'renamed_catalog.csv')
+    monkeypatch.setattr(layout, 'listings', 'renamed_listings.json')
+    monkeypatch.setattr(layout, 'embedding_request', 'renamed_request.json')
+    setup = tmp_path / 'setup'
+    (setup / layout.prepared_dir).mkdir(parents=True, exist_ok=True)
+    write_csv(setup / 'renamed_catalog.csv', [{'sku_id': 'a', 'gtin': '1'}])
+    (setup / layout.prepared_dir / 'renamed_listings.json').write_text(
+        json.dumps({'schema': 'er-graph-listings-v1', 'listings': []}))
+    (setup / 'renamed_request.json').write_text(json.dumps({'ids': ['a']}))
+
+    assert reports.embedding_state(setup, ['a'], 'missing-model')[0]['path'].endswith(
+        layout.shared_embeddings)
+    state, _ = reports.request_state(setup, 'missing-model', ['a'])
+    assert state.get('source', '').endswith('renamed_request.json')

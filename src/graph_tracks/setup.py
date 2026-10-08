@@ -736,7 +736,7 @@ def _write_text_config(output: Path, templates: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, default=_default_setup_output())
+    parser.add_argument('--output', type=Path, default=default_setup_dir())
     parser.add_argument('--text-checkpoint', type=Path,
                         default=_default_text_checkpoint())
     parser.add_argument('--defer-training-tensors', action='store_true',
@@ -746,10 +746,32 @@ def main():
                 training_tensors=not args.defer_training_tensors))
 
 
-def _default_setup_output() -> Path:
-    """The declared setup output root (paths.yaml data_dir)."""
+def default_setup_dir() -> Path:
+    """The declared setup output root: the SUITE config's own ``setup_dir``.
+
+    The prepared-setup root is config-owned (``config/model_tracks.yaml``
+    ``setup_dir``): the orchestrator (``training.prepare_all``), ``model_tracks``
+    preflight/worker/finalize and the data gate all read it from there. The
+    standalone setup CLI used to default to a hand-spelled ``data_dir/track_setup``
+    copy, so retargeting the suite's ``setup_dir`` silently left this producer
+    writing a tree no consumer reads. Resolve the ONE home instead, falling back
+    to the historical literal only when the suite config is absent/unreadable (a
+    fallback for a missing file, not for a broken one).
+    """
     from core.common import _CFG
-    return Path(_CFG['paths']['data_dir']) / 'track_setup'
+
+    fallback = Path(_CFG['paths']['data_dir']) / 'track_setup'
+    from core.common import artifact
+
+    try:
+        path = Path(artifact('model_tracks_config'))
+    except KeyError:
+        return fallback
+    if not path.is_file():
+        return fallback
+    from core.common import TRAIN_ROOT
+    from model_tracks.config import load_config as load_suite_config
+    return Path(TRAIN_ROOT) / load_suite_config(path).setup_dir
 
 
 def _default_text_checkpoint() -> Path:

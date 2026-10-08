@@ -168,12 +168,19 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
 def main(argv=None):
     from core.common import resolve_model
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--setup-dir', type=Path, default=Path('data/track_setup'))
+    parser.add_argument('--setup-dir', type=Path, default=None,
+                        help='prepared-setup root (default: the suite config setup_dir)')
     parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--device', choices=['cuda', 'cpu'], default='cuda')
     parser.add_argument('--batch-size', type=int, default=256)
     args = parser.parse_args(argv)
-    prepare(args.setup_dir, args.checkpoint or Path(resolve_model('minilm_l6')),
+    setup_dir = args.setup_dir
+    if setup_dir is None:
+        # ONE home for the prepared-setup root: the suite config's setup_dir,
+        # resolved by the graph setup producer (no second hand-spelled copy).
+        from graph_tracks.setup import default_setup_dir
+        setup_dir = default_setup_dir()
+    prepare(setup_dir, args.checkpoint or Path(resolve_model('minilm_l6')),
             device=args.device, batch_size=args.batch_size)
 
 

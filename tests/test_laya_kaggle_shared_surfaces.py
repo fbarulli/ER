@@ -63,6 +63,9 @@ def test_laya_templates_render_identically_through_the_shared_loop():
         "REPOSITORY": "https://example/repo.git",
         "BRANCH": "main",
         "REVISION": "0" * 40,
+        # the finetune kernel's session self-report helper (the ONE kernel-side
+        # home, shared with the kaggle lane's kernel templates)
+        "SESSION_REPORT": laya_lane._session_report_helper(),
     }
     templates = (laya_lane.LAYA_RUNTIME_PREFLIGHT,
                  laya_lane.DECISION_KERNEL_SCRIPT,

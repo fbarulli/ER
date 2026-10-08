@@ -65,6 +65,7 @@ def _render_finetune_script() -> str:
         "REVISION": "deadbeef",
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
+        "SESSION_REPORT": laya_lane._session_report_helper(),
     }
     preflight = laya_lane._template(laya_lane.FINETUNE_RUNTIME_PREFLIGHT, values)
     return laya_lane._template(

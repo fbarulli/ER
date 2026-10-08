@@ -27,6 +27,7 @@ from pathlib import Path
 import shutil
 import torch
 import yaml
+from core.bundle import bundle_spec
 from core.model_input import model_input_composition
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
@@ -42,6 +43,22 @@ from model_tracks.package import package_member
 _LOG = RunLogger(__name__)
 
 _BINDING_UNSET = object()
+
+
+def _templates_dir(setup: Path) -> Path:
+    """The declared ablation-template directory (``bundle.ablation_templates_dir``).
+
+    The templates ship inside the prepared inputs bundle under this member, so
+    the name is the bundle contract's and every surface (producer here, the
+    packaged worker's skip gate, the baseline forward) reads it from there
+    rather than re-spelling the literal.
+    """
+    return setup / bundle_spec().ablation_templates_dir
+
+
+def _request_name() -> str:
+    """The declared ablation request member name (``bundle.ablation_request_file``)."""
+    return bundle_spec().ablation_request_file
 
 
 def _setup_layout():
@@ -104,7 +121,7 @@ def _cohort_gate(setup,cfg,bundle):
 @timed
 def _freeze_config(setup,cfg):
     """Point the settings at the template root and write the frozen yaml."""
-    cfg.output_dir = str(setup/'ablation_templates')
+    cfg.output_dir = str(_templates_dir(setup))
     frozen_config = setup/'ablation_settings.yaml'
     write_config = yaml.safe_dump(cfg.model_dump())
     frozen_config.write_text(write_config)
@@ -189,10 +206,10 @@ def _anchor_request(setup,request):
 @timed
 def _copy_template(setup,track,path,request):
     """Materialize the fixed template folder: tensors copy + frozen request."""
-    target = setup/'ablation_templates'/track
+    target = _templates_dir(setup)/track
     target.mkdir(parents=True,exist_ok=True)
     shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')
-    write(target/'request.json',request)
+    write(target/_request_name(),request)
     return target
 
 
@@ -222,7 +239,7 @@ def _drop_staging(setup):
     """Remove generated content-addressed staging dirs; fixed templates stay."""
     # Generated content-addressed staging directories are temporary; retain one
     # fixed template per track and avoid shipping duplicate tensors.
-    staging = [path for path in (setup/'ablation_templates').iterdir()
+    staging = [path for path in _templates_dir(setup).iterdir()
                if path.is_dir() and path.name not in {'text','gnn_only'}]
     for path in _LOG.progress(staging,desc='ablation_staging_cleanup',unit='dir'):
         shutil.rmtree(path)
@@ -233,14 +250,14 @@ def _drop_staging(setup):
                'trained track is retained',
         detail={'staging_dirs': len(staging), 'retained': ['text', 'gnn_only'],
                 'sample_removed': [source_name(path) for path in staging[:5]]},
-        source=source_name(setup / 'ablation_templates'),
+        source=source_name(_templates_dir(setup)),
     )
     trace().add_entities(
         "prepare_suite.removed_staging", staging,
         key_of=lambda path: path.name,
         reason_of=lambda path: 'content_addressed_staging_dir',
         detail_of=lambda path: {'path': source_name(path)},
-        source=source_name(setup / 'ablation_templates'),
+        source=source_name(_templates_dir(setup)),
     )
 
 
@@ -270,19 +287,19 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
         "prepare_suite", "completed",
         in_count=len(tracks), out_count=len(tracks),
         reason='one frozen template per trained track; the cascade trains nothing and ships none',
-        detail={'tracks': list(tracks), 'templates': source_name(setup / 'ablation_templates'),
+        detail={'tracks': list(tracks), 'templates': source_name(_templates_dir(setup)),
                 'common_cohort': common_cohort},
-        source=source_name(setup / 'ablation_templates'),
+        source=source_name(_templates_dir(setup)),
     )
     flush_trace()
-    return setup/'ablation_templates'
+    return _templates_dir(setup)
 
 
 @timed
 def _read_template(setup,track):
     """The track's frozen template request file."""
-    template = setup/'ablation_templates'/track
-    return template,json.loads((template/'request.json').read_text())
+    template = _templates_dir(setup)/track
+    return template,json.loads((template/_request_name()).read_text())
 
 
 @timed
@@ -345,7 +362,7 @@ def _bound_folder(output,template,request):
     """Materialize the bound request and local tensors into the output folder."""
     folder = output/'ablation';folder.mkdir(parents=True,exist_ok=True)
     shutil.copy2(template/'prepared_inputs.npz',folder/'prepared_inputs.npz')
-    path = folder/'request.json'
+    path = folder/_request_name()
     write(path,request)
     return path,folder
 
@@ -412,7 +429,7 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
                 'portable_setup': request.get('portable_setup'),
                 'cohort_sha256': request.get('cohort_sha256'),
                 'variants': len(request.get('variants', []))},
-        source=source_name(template / 'request.json'),
+        source=source_name(template / _request_name()),
     )
     if track != 'text':
         with _LOG.section('ablation_forward.graph_binding'):

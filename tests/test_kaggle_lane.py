@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import textwrap
 import zipfile
 from pathlib import Path
 
@@ -1203,6 +1204,89 @@ def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch
     assert len(closed) == 2, "each bounded attempt still closes its response"
 
 
+# ── kernel self-report: ONE helper, pinned to the host-side parser ─────────
+
+def _kernel_session_report():
+    """The injected kernel-side self-report, exec'd exactly as a kernel does."""
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    namespace: dict = {"os": __import__("os")}
+    exec(compile(KernelTemplates.SESSION_REPORT_HELPER,
+                 "<kernel-session-helper>", "exec"), namespace)
+    return KernelTemplates, namespace["report_kernel_session"]
+
+
+def test_kernel_session_report_is_pinned_to_the_host_parser(monkeypatch, capsys):
+    """The kernel-side parse and its host twin are ONE rule (drift pin).
+
+    A kernel cannot import the lane package (the laya fine-tune kernel clones
+    nothing), so the self-report is injected source; this pin keeps it
+    byte-for-byte equivalent to ``cli.laya_lane.container_session_id`` (the host
+    twin) and keeps the printed line parseable by the follower's regex, for
+    every container-name shape.
+    """
+    from cli import laya_lane
+    from cli.kaggle_monitor import _reported_session_id
+
+    templates, report = _kernel_session_report()
+    for container in ("kaggle_abc-987654321-webtier", "kaggle-abc-webtier", "",
+                      "kaggle_abc-notanid-webtier", "kaggle_a-b-c-webtier"):
+        monkeypatch.setenv("KAGGLE_CONTAINER_NAME", container)
+        capsys.readouterr()
+        payload = report()
+        printed = capsys.readouterr().out.strip()
+        expected = laya_lane.container_session_id(container)
+        assert printed.startswith("[kaggle-session] session_id=")
+        assert _reported_session_id(printed) == expected, container
+        assert payload["KAGGLE_CONTAINER_NAME"] == container
+        assert payload["session_id"] == ("" if expected is None else str(expected))
+    # one definition per kernel, injected from one place (the sha256-helper rule)
+    for name in ("TRAIN_KERNEL_SHARED", "BUNDLE_KERNEL_SCRIPT"):
+        source = getattr(templates, name)
+        assert source.count("def report_kernel_session") == 0, name
+        assert source.count("@SESSION_REPORT@") == 1, name
+    assert laya_lane.FINETUNE_KERNEL_SCRIPT.count("@SESSION_REPORT@") == 1
+    assert laya_lane.FINETUNE_KERNEL_SCRIPT.count("def report_kernel_session") == 0
+    assert "return report_kernel_session()" in laya_lane.FINETUNE_KERNEL_SCRIPT
+
+
+@pytest.mark.parametrize("kind", ["bundle", "train", "embed", "finalize"])
+def test_staged_kernels_self_report_the_session_id(tmp_path, monkeypatch, kind):
+    """Every staged kernel prints the id the verified stop cancels in place.
+
+    The log-stream URL carries no id on the current SDK (probed by
+    scripts/kaggle_session_probe.py), so the kernel's own marker line is the
+    only id source the follower can persist; a kernel without it can never be
+    stopped in place, only version-replaced.
+    """
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    if kind == "finalize":
+        _finalize_spec(tmp_path, monkeypatch)
+    else:
+        _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                     embedding_kernel_slug="owner/er-embed-gpu",
+                     embedding_dataset_slug="owner/er-embed-requests",
+                     bundle_dataset_slug="owner/er-10k-bundle")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    if kind == "bundle":
+        kaggle_lane.stage_bundle_kernel(revision="abc123def")
+    elif kind in ("train", "embed"):
+        kaggle_lane.stage_gpu_kernel(kind=kind, revision="abc123def")
+    else:
+        kaggle_lane.stage_finalize_kernel(revision="abc123def", run_tag="gpu_x")
+    stage = tmp_path / "kaggle_stage" / f"{kind}_kernel"
+    identity = kaggle_lane.kernel_identity(kind)
+    script = (stage / identity.code_file).read_text()
+    assert "@SESSION_REPORT@" not in script, "the staged script is fully rendered"
+    # `KernelLifecycle.wrap_script` indents the whole payload by one level
+    assert textwrap.indent(KernelTemplates.SESSION_REPORT_HELPER, "    ") in script, \
+        "the staged text is the pinned helper, verbatim"
+    assert "\n    report_kernel_session()\n" in script, \
+        "the marker is emitted at import, before the session's real work"
+
+
 def test_push_and_record_session_clears_before_push_and_captures_after(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
     stage = tmp_path / "kaggle_stage" / "bundle_kernel"
@@ -1706,9 +1790,10 @@ def test_chain_with_embed_refuses_an_unconfigured_objective(tmp_path, monkeypatc
 
 
 def test_stream_kernel_logs_persists_reported_session_id(tmp_path, monkeypatch):
-    """A kernel self-reports KAGGLE_KERNEL_RUN_ID on stdout; the follower must
-    persist it as <kernel>.session_id so the verified in-place stop can target
-    the exact session (the log-stream URL carries no id)."""
+    """A kernel self-reports its id on stdout (the numeric suffix of
+    KAGGLE_CONTAINER_NAME, the id cancel_kernel_session accepts); the follower
+    must persist it as <kernel>.session_id so the verified in-place stop can
+    target the exact session (the log-stream URL carries no id)."""
     import types
     import kagglesdk.kaggle_client
     import kagglesdk.kernels.types.kernels_api_service
@@ -1735,3 +1820,101 @@ def test_stream_kernel_logs_persists_reported_session_id(tmp_path, monkeypatch):
     session_file = (tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id")
     assert session_file.read_text().strip() == "123456789"
 
+
+
+# ── train kernel: the ablation contract is enforced on the consumer side ───
+
+def _inputs_bundle_with_templates(path: Path, tracks) -> "object":
+    """A sealed `inputs` Bundle carrying (only) the given ablation templates."""
+    from core.bundle import Bundle
+
+    from core.common import training_cfg
+
+    spec = training_cfg().bundle
+    sources = {}
+    for index, track in enumerate(tracks):
+        member = path.parent / f"{track}.json"
+        member.write_text(json.dumps({"track": track}), encoding="utf-8")
+        sources[f"data/model_tracks/shared/{spec.ablation_templates_dir}/{track}/"
+                f"{spec.ablation_request_file}"] = member
+    return Bundle.seal_archive(path, sources, role="inputs",
+                               metadata={"run_tag": f"gpu_x{len(tracks)}"})
+
+
+def _staged_ablation_gate(script: str):
+    """The staged train kernel's OWN ablation-contract statements, compiled alone.
+
+    `KernelLifecycle.wrap_script` indents the payload into one `try:` body, so
+    the gate and the `SUITE_CONFIG` resolution it depends on are sliced out of
+    that body (never re-spelled here).
+    """
+    import ast
+
+    tree = ast.parse(script)
+    body = tree.body
+    while len(body) == 1 and isinstance(body[0], ast.Try):
+        body = body[0].body
+    gate = [index for index, node in enumerate(body)
+            if isinstance(node, ast.If)
+            and "post_training_ablation" in ast.unparse(node.test)]
+    assert len(gate) == 1, "the staged payload carries ONE ablation contract gate"
+    assigns = [index for index, node in enumerate(body[:gate[0]])
+               if isinstance(node, ast.Assign)
+               and any(getattr(target, "id", None) == "_suite_config"
+                       for target in node.targets)]
+    assert assigns, "the gate resolves SUITE_CONFIG before reading it"
+    return body[assigns[0]:gate[0] + 1]
+
+
+def test_train_kernel_refuses_a_bundle_without_ablation_templates(
+        tmp_path, monkeypatch):
+    """Item 5 (consumer side): post_training_ablation on + a bundle without the
+    frozen per-track templates = the session is refused before training, so the
+    ablation can never silently fall back to a local CPU run.
+
+    Runs the staged kernel's OWN gate statements against real sealed inputs
+    Bundles, so the pin is the deployed behavior, not a description of it.
+    """
+    import ast
+    import yaml
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                 bundle_dataset_slug="owner/er-10k-bundle")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
+    script = (tmp_path / "kaggle_stage" / "train_kernel" / "train_gpu.py").read_text()
+    # the gate reads the suite contract from the checkout and calls the ONE
+    # Bundle contract reader (never a re-spelled member path)
+    assert "inputs_bundle.ablation_templates(" in script
+    assert "post_training_ablation" in script
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    suite = root / "data/model_tracks/suite.yaml"
+    suite.parent.mkdir(parents=True)
+    suite.write_text("post_training_ablation: true\n"
+                     "setup_dir: data/model_tracks/shared\n", encoding="utf-8")
+    gate = _staged_ablation_gate(script)
+    tracks = ("text", "gnn_only")
+
+    def run_gate(bundle):
+        namespace = {"_suite_yaml": yaml, "Path": Path, "root": root,
+                     "SUITE_CONFIG": "data/model_tracks/suite.yaml",
+                     "inputs_bundle": bundle}
+        exec(compile(ast.fix_missing_locations(
+            ast.Module(body=list(gate), type_ignores=[])), "<train-kernel-gate>",
+            "exec"), namespace)
+
+    complete = _inputs_bundle_with_templates(tmp_path / "complete.tar.zst", tracks)
+    subset = _inputs_bundle_with_templates(tmp_path / "partial.tar.zst", ("text",))
+    for handle in (complete, subset):
+        assert handle.ablation_templates("text") is True
+    assert subset.ablation_templates("gnn_only") is False
+    run_gate(complete)  # passes: every ablation track shipped its template
+    with pytest.raises(SystemExit, match="no ablation templates for gnn_only"):
+        run_gate(subset)
+
+    # ablation off: the same bundle subset is fine (the contract is conditional)
+    suite.write_text("post_training_ablation: false\n", encoding="utf-8")
+    run_gate(subset)

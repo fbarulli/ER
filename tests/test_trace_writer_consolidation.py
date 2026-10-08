@@ -186,3 +186,49 @@ def test_registry_declares_the_producers_that_write_rows_and_only_two_gaps():
 def test_trace_stages_for_rejects_a_stage_the_registry_does_not_declare():
     with pytest.raises(ValueError, match="unknown orchestration stage"):
         tracing.trace_stages_for("not-a-stage")
+
+
+#: Every declared trace name and the producer module/constant that writes it.
+#: ``()`` is not allowed here: this map is the NON-row-free half of the registry.
+_DECLARED_TRACE_PRODUCERS = {
+    "dedupe": ("training.dedupe", "STAGE"),
+    "cross_country_pairs": ("training.build_second04_pairs", "STAGE"),
+    "number_reference": ("training.build_reference", "STAGE_WRITE"),
+    "verify_reference": ("training.build_reference", "STAGE_VERIFY"),
+    "canonical_and_gates": ("training.data_prep", "STAGE"),
+    "labeled_pairs": ("training.labeled_pairs", "STAGE"),
+    "negative_supply": ("training.negative_supply", "STAGE"),
+    "validation": ("training.build_final_validation", "STAGE"),
+    "full_bundle": ("training.train", "BUNDLE_STAGE"),
+    "suite_inputs": ("model_tracks.package", "STAGE"),
+    "verify_handoff": ("training.handoff", "STAGE"),
+}
+
+
+def test_every_declared_trace_name_is_a_producers_own_stage_constant():
+    """The registry's non-empty values ARE the producers' own stage constants.
+
+    This closes the join end to end: a stage can never be mapped to a trace name
+    nothing emits, and a producer can never write under a name the registry does
+    not join. ``canonical_and_gates`` (``training.data_prep``) is included here so
+    that stage's name is a module constant like every sibling's, not a string
+    spelled at the one call site (the gap this test was added to pin).
+    """
+    registry = tracing.orchestration_trace_stages()
+    for stage, (module_name, attribute) in sorted(_DECLARED_TRACE_PRODUCERS.items()):
+        constant = getattr(importlib.import_module(module_name), attribute)
+        assert tracing.trace_stages_for(stage) == (constant,), stage
+
+    # the composite stage names BOTH producers it runs, in plan order
+    from graph_tracks import prepare as graph_prepare
+    from graph_tracks import setup as graph_setup
+
+    assert tracing.trace_stages_for("graph_inputs") == (
+        graph_setup.STAGE, graph_prepare.STAGE)
+
+    # only the two inline stages write no rows today; the map is exhaustive
+    assert {stage for stage, names in registry.items() if not names} == {
+        "gate_census", "discriminator"}
+    assert set(_DECLARED_TRACE_PRODUCERS) | {
+        "graph_inputs", "gate_census", "discriminator",
+    } == set(registry)

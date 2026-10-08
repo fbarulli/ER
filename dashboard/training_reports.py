@@ -10,6 +10,7 @@ import stat
 import zipfile
 import tarfile
 from core.archive_reader import open_archive, archive_sidecar
+from core.bundle import bundle_spec
 from model_tracks import archive_verification
 
 from fastapi import APIRouter, HTTPException
@@ -44,7 +45,13 @@ ERROR_SUFFIXES = ('report.json',)
 AUDIT_ONLY_SUFFIXES = ('scored_pairs.csv',)
 PROFILER_SUFFIXES = ('operator_summary.txt', 'profile_manifest.json')
 LOG_PREVIEW_BYTES = 64 * 1024
-COLLECTED_EVENTS = '__collected__/suite_events.jsonl'
+# The suite event stream and the failure-path sidecar beside an archive are
+# BundleSpec names (config SSOT): the dashboard renders the same member a sealed
+# run ships, so a re-pointed ``bundle.suite_events_file`` /
+# ``bundle.events_sidecar_suffix`` must move this surface too. ``__collected__``
+# is the dashboard's OWN pseudo-namespace for the sidecar copy, not a bundle
+# member, so only the filename comes from the spec.
+COLLECTED_EVENTS = '__collected__/' + bundle_spec().suite_events_file
 # Directory-name suffix marking a DVC payload snapshot of a sibling tree.
 # graph_tracks/dvc.py snapshots the whole completion directory into
 # ``<track>__payload`` so `dvc add` sees the outputs, and that copy lives
@@ -57,14 +64,14 @@ DUPLICATE_TREE_SUFFIX = '__payload'
 def collected_events(path):
     if path.is_dir():
         return None
-    sibling = archive_sidecar(path, '.events.jsonl')
+    sibling = archive_sidecar(path, bundle_spec().events_sidecar_suffix)
     return sibling if sibling.is_file() and not sibling.is_symlink() else None
 
 
 def is_log(member):
     relative = PurePosixPath(member)
     return (relative.name.endswith(('.log', '.jsonl')) or relative.name in
-            {'live_status.json', 'trainer_state.json', 'checkpoint_manifest.json', 'best_checkpoint.json'}) and not any(
+            {'live_status.json', bundle_spec().trainer_state_file, 'checkpoint_manifest.json', 'best_checkpoint.json'}) and not any(
                 part in {'wandb', 'mlruns', '.git', '.dvc'} for part in relative.parts)
 
 
@@ -686,9 +693,9 @@ def training(run: str | None = None):
         except REPORT_ERRORS:
             members = []
             body += '<p>This report archive could not be read. Download the completed results again.</p>'
-        if 'suite_manifest.json' in members:
+        if bundle_spec().suite_manifest_file in members:
             try:
-                manifest = json.loads(read(path, 'suite_manifest.json'))
+                manifest = json.loads(read(path, bundle_spec().suite_manifest_file))
                 if not isinstance(manifest, dict) or not isinstance(manifest.get('config', {}), dict):
                     raise ValueError('Invalid suite manifest')
             except REPORT_ERRORS:

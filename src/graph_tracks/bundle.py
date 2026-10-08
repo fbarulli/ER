@@ -70,11 +70,12 @@ def bundle(source: Path, output: Path, *, include_dvc_cache=False):
     """Ship one graph track's results as a self-describing portable archive.
 
     Sealing goes through the shared writer (:meth:`core.bundle.Bundle.seal_archive`),
-    which hashes every source exactly once while writing, verifies the written
-    bytes, and returns the transport digest on the handle — so this transport
-    never re-reads or re-verifies the archive it just sealed. The returned
-    handle is a ``result`` Bundle: consumers load it and read through the
-    Bundle accessors instead of re-parsing the archive.
+    which hashes every source exactly once while writing and verifies the
+    written bytes — so this transport never re-reads or re-verifies the archive
+    it just sealed. It returns the SEALED ARCHIVE PATH (the handle is the
+    writer's; its whole-file digest is not carried out of this call), and a
+    consumer verifies the bytes once through ``Bundle.load`` with the bundle's
+    own manifest name before reading members.
 
     Member selection deliberately stays local. A standalone graph bundle is a
     resume-capable SUPERSET of the suite's ``result`` role (it ships every

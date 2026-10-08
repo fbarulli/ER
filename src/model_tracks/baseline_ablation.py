@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.bundle import bundle_spec
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.tracing import flush_stage_trace, stage_trace
@@ -67,19 +68,21 @@ class BaselineCalibration(BaseModel):
 def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_model=None):
     """Reuse text interventions and frozen catalog vectors in this suite session."""
     with _LOG.section('ablation.baseline.forward'):
-        template = json.loads((setup/'ablation_templates/text/request.json').read_text())
+        spec = bundle_spec()
+        template_path = setup/spec.ablation_templates_dir/'text'/spec.ablation_request_file
+        template = json.loads(template_path.read_text())
         saved = (setup/_setup_layout().shared_embeddings
                  if template['settings']['retrieval_catalog'] == 'full' and template['settings'].get('coverage') != 'all' else None)
         trace().add(
             "forward", "text_template",
             in_count=1, out_count=1, key='text',
             reason='the untrained baseline reuses the frozen text template and its saved catalog vectors',
-            detail={'template': source_name(setup/'ablation_templates/text/request.json'),
+            detail={'template': source_name(template_path),
                     'retrieval_catalog': template['settings']['retrieval_catalog'],
                     'coverage': template['settings'].get('coverage'),
                     'saved_text': None if saved is None else source_name(saved),
                     'checkpoint': source_name(checkpoint), 'device': device},
-            source=source_name(setup/'ablation_templates/text/request.json'),
+            source=source_name(template_path),
         )
         path = forward_staged(output, setup, 'text', checkpoint, device=device,
                               checkpoint_role='baseline', saved_text=saved, text_model=text_model)

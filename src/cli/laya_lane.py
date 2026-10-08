@@ -1980,6 +1980,8 @@ REVISION = "@REVISION@"
 
 @PERF_PATCH@
 
+@SESSION_REPORT@
+
 WORKING = Path("/kaggle/working")
 INPUTS = Path("/kaggle/input")
 
@@ -2150,19 +2152,16 @@ def evaluate_held_out(test_path, checkpoint, device):
 
 
 def session_env():
-    # Self-report the container session identity so the host-side log follower
-    # can persist logs/kaggle/<kernel>.session_id for the verified in-place
-    # stop. Kaggle sets NO KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID in the
-    # container; the only per-run id is the numeric suffix of
-    # KAGGLE_CONTAINER_NAME ("kaggle_<token>-<session_id>-webtier"), which the
-    # SDK cancel_kernel_session accepts.
-    _container = os.environ.get("KAGGLE_CONTAINER_NAME", "")
-    _parts = _container.rsplit("-", 2)
-    _session_id = (_parts[1] if len(_parts) == 3 and _parts[1].isdigit()
-                   else "")
-    print("[kaggle-session] session_id=" + _session_id
-          + " container=" + _container, flush=True)
-    return {"KAGGLE_CONTAINER_NAME": _container, "session_id": _session_id}
+    # The self-report prints the `[kaggle-session] ...` line the host-side log
+    # follower persists to logs/kaggle/<kernel>.session_id for the verified
+    # in-place stop; the parse itself is the ONE kernel-side helper injected
+    # above (`cli.kaggle_kernel_templates.SESSION_REPORT_HELPER`), pinned
+    # against its host twin `cli.laya_lane.container_session_id`. Kaggle sets
+    # NO KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID in the container; the only
+    # per-run id is the numeric suffix of KAGGLE_CONTAINER_NAME
+    # ("kaggle_<token>-<session_id>-webtier"), which the SDK
+    # cancel_kernel_session accepts.
+    return report_kernel_session()
 
 
 def _finetune_session(distributed, session):
@@ -2998,6 +2997,9 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "REVISION": revision,
         "DEVICE_PATCH": FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": FINETUNE_PERF_PATCH_SOURCE,
+        # The kernel-side session self-report (its host twin is
+        # ``container_session_id`` below); ONE definition for both lanes.
+        "SESSION_REPORT": _session_report_helper(),
     }
     # two-pass substitution (a nested value's @tokens@ are never re-scanned
     # once it is inserted): the preflight bakes its own literal tuple FIRST,
@@ -3299,6 +3301,22 @@ def kernel_slug(decision_kind: str) -> str:
             f"config laya.{attr} is unset; name the target kernel (owner/slug) "
             f"before addressing {decision_kind!r}")
     return slug
+
+
+def _session_report_helper() -> str:
+    """The ONE kernel-side session self-report source (kaggle lane's home).
+
+    A rendered kernel prints ``[kaggle-session] session_id=...`` at boot so the
+    host-side log follower can persist the id for the verified in-place stop;
+    the source lives once in ``KernelTemplates.SESSION_REPORT_HELPER`` (the
+    kaggle lane owns the kernel templates) and both lanes inject that same
+    constant, so the laya kernel parses the container name exactly like every
+    kaggle-lane kernel. The parse itself is pinned against its host-side twin
+    :func:`container_session_id` by tests/test_kaggle_lane.py.
+    """
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    return KernelTemplates.SESSION_REPORT_HELPER
 
 
 def container_session_id(container: str) -> int | None:

@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 
+from core.archive_reader import archive_sidecar
 from core.bundle import bundle_spec
 from core.portable_archive import RuntimeSnapshot
 from core.progress import tracked
@@ -292,9 +293,10 @@ def _prepare_exports(cfg, setup, bundle):
         # staging, and the bundle is verified to actually carry the templates.
         if cfg.post_training_ablation:
             from model_tracks.staged_ablation import prepare_suite
+            spec = bundle_spec()
             prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
             missing = [track for track in ('text','gnn_only')
-                       if not (setup/'ablation_templates'/track/'request.json').is_file()]
+                       if not (setup/spec.ablation_templates_dir/track/spec.ablation_request_file).is_file()]
             if missing:
                 raise RuntimeError(
                     'ablation templates missing from the prepared bundle for '
@@ -655,7 +657,10 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
     """Seal stopped workers' portable state as one recovery bundle.
 
     The recovery role is the ``all epochs + optimizer`` contract: nothing is
-    selected away, and the sealed archive is verified once by its writer.
+    selected away, and the sealed archive is verified once by its writer. The
+    writer's whole-file digest is published beside the archive as the transport
+    sidecar here, so no caller re-reads (and re-hashes) the sealed bytes to
+    produce the token a download checks against.
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()
@@ -666,10 +671,12 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
         if _read_json(output / spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
             raise ValueError('recovery suite run mismatch')
     files = _recovery_sources(output, destination.resolve())
-    return Bundle.seal_archive(
+    sealed = Bundle.seal_archive(
         destination, files, role=BundleRole.recovery,
         metadata={'schema': RECOVERY_SCHEMA, spec.run_tag_key: run_tag,
-                  'input_package': input_package}).path
+                  'input_package': input_package})
+    archive_sidecar(destination, spec.sha256_sidecar_suffix).write_text(sealed.digest + '\n')
+    return sealed.path
 
 
 def _publish_recovery(staging: Path, output: Path) -> None:

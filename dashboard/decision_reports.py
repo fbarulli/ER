@@ -13,7 +13,8 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
-from core.common import F, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH
+from core.common import F, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, prepared_setup_layout
+from core.bundle import bundle_spec
 from core.columns import read_column
 from core.schemas import CANONICAL_RECORDS_COLUMNS
 from graph_tracks.data import file_hash, load_records, load_text_cache
@@ -104,15 +105,16 @@ def audit_history(ledger):
 
 
 def embedding_state(setup, listing_ids, model):
-    cache = setup / 'shared_minilm__embeddings.npz'
+    layout = prepared_setup_layout()
+    cache = setup / layout.shared_embeddings
     state = {'status': 'pending', 'reason': 'GPU result is absent', 'path': str(cache.relative_to(TRAIN_ROOT))}
     if not cache.is_file():
         return state, {}, None
     try:
         vectors, metadata = load_text_cache(cache, listing_ids)
-        manifest = json_file(setup / 'prepared/input_manifest.json', {})
+        manifest = json_file(setup / layout.prepared_dir / layout.input_manifest, {})
         validate_prepared_provenance(cache, metadata, manifest)
-        if json_file(setup / 'embedding_inputs.json', {}).get('ids') != listing_ids:
+        if json_file(setup / layout.embedding_request, {}).get('ids') != listing_ids:
             raise ValueError('Embedding input ID order/population differs from prepared listings')
         current = input_identity(setup, Path(resolve_model(model)))
         for key, value in current.items():
@@ -127,7 +129,7 @@ def embedding_state(setup, listing_ids, model):
 
 
 def request_state(setup, model, listing_ids):
-    path = setup / 'embedding_inputs.json'
+    path = setup / prepared_setup_layout().embedding_request
     if not path.is_file():
         path = F['decision_embedding_request']
     if not path.is_file():
@@ -454,11 +456,14 @@ def report_inventory(available):
 
 
 def saved_run_context(path, members):
-    member = next((x for x in members if Path(x).name == 'suite_manifest.json'), None)
+    # The suite manifest member and the run-tag key inside it are BundleSpec
+    # names (config SSOT); a re-pointed value must move this reader too.
+    spec = bundle_spec()
+    member = next((x for x in members if Path(x).name == spec.suite_manifest_file), None)
     if member is None:
         return None
     manifest = json.loads(read(path,member))
-    return {'source':member,'run_tag':manifest.get('run_tag'),'config':manifest.get('config'),
+    return {'source':member,'run_tag':manifest.get(spec.run_tag_key),'config':manifest.get('config'),
             'inputs':manifest.get('inputs')}
 
 
@@ -592,6 +597,7 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
         raise HTTPException(422, 'Provide both GTINs for a pair trace')
     suite = load_config(F['decision_suite_config'])
     setup = TRAIN_ROOT / suite.setup_dir
+    layout = prepared_setup_layout()
     available = runs()
     ledger = json_file(F['decision_ledger'], [])
     watched = [F[k] for k in ('decision_ledger','decision_rebuild_report','decision_training_report',
@@ -602,15 +608,22 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
     watched += [bundle,bundle.with_suffix(bundle.suffix+'.json')]
     if F['decision_visibility'].is_dir():
         watched += [F['decision_visibility'] / member for member in entries(F['decision_visibility'])]
-    watched += [setup / name for name in ('eligible_catalog.csv','gnn_only.yaml','cascade.yaml','setup_manifest.json',
-                'embedding_inputs.json','shared_minilm__embeddings.npz','prepared/listings.json',
-                'prepared/input_manifest.json','prepared/pairs.csv','prepared/' + REPORT_ATTRIBUTES)]
+    watched += [setup / name for name in (
+                layout.catalog, f'gnn_only{layout.track_config_suffix}',
+                f'cascade{layout.track_config_suffix}', layout.manifest,
+                layout.embedding_request, layout.shared_embeddings,
+                f'{layout.prepared_dir}/{layout.listings}',
+                f'{layout.prepared_dir}/{layout.input_manifest}',
+                # ``pairs.csv`` inside the prepared dir is not a declared layout
+                # field yet; only the declared names above come from the layout.
+                f'{layout.prepared_dir}/pairs.csv',
+                f'{layout.prepared_dir}/{REPORT_ATTRIBUTES}')]
     watched += list(_LOADED_CONFIG_HASHES)
     watched += [ledger_path(item[key]) for item in ledger for key in ('sample','checkpoint')]
     for path in available.values():
         watched.extend([path] if path.is_file() else [path / member for member in entries(path)])
     signatures = {path: signature(path) for path in watched}
-    catalog = csv_rows(setup / 'eligible_catalog.csv')
+    catalog = csv_rows(setup / layout.catalog)
     by_gtin = defaultdict(list)
     sku_gtin = {}
     for row in catalog:
@@ -618,15 +631,15 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
         gtin = normalize_gtin(read_column(row, 'gtin'))
         by_gtin[gtin].append(row)
         sku_gtin[sku] = gtin
-    records = load_records(setup / 'prepared/listings.json')
+    records = load_records(setup / layout.prepared_dir / layout.listings)
     listing_records = {x['sku_id']: x for x in records}
     prepared = {'status':'valid'}
     try:
-        graph_inputs(graph_config(setup / 'gnn_only.yaml'))
+        graph_inputs(graph_config(setup / f'gnn_only{layout.track_config_suffix}'))
     except (ValueError, OSError, KeyError, TypeError) as exc:
         prepared.update(status='unusable', reason=str(exc))
     try:
-        attributes = report_attributes(setup / 'prepared/listings.json', records)
+        attributes = report_attributes(setup / layout.prepared_dir / layout.listings, records)
     except (ValueError, OSError, KeyError) as exc:
         attributes = {}
         prepared['report_attributes'] = {'status':'unusable','reason':str(exc)}
@@ -657,7 +670,7 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
                  if normalize_gtin(x['gtin']) in {g for key in keys for g in key}}
     labels = {pair_key(x['gtin1'], x['gtin2']): x for x in csv_rows(F['labeled_pairs'])}
     prepared_pairs = defaultdict(list)
-    for row in csv_rows(setup / 'prepared/pairs.csv'):
+    for row in csv_rows(setup / layout.prepared_dir / 'pairs.csv'):
         # The versioned graph pair contract still spells these product_id1/2.
         a, b = row.get('sku_id1', row.get('product_id1')), row.get('sku_id2', row.get('product_id2'))
         if a in sku_gtin and b in sku_gtin:

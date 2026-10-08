@@ -395,7 +395,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             if cfg.dvc_enabled and not gpu_only:
                 from model_tracks.local_complete import _publish
                 events.emit('publication', 'starting', archive=str(archive_path))
-                _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
+                # `existing` is the verified boundary handle for this archive:
+                # publication consumes it instead of re-loading the bytes
+                # (one integrity check per archive per VM crossing).
+                _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation,
+                         destination=output, bundle=existing)
                 events.emit('publication', 'complete')
                 trace().add(
                     'run', 'publication',
@@ -472,7 +476,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if publication:
             from model_tracks.local_complete import _publish
             events.emit('publication', 'starting', archive=str(archive_path))
-            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
+            # `sealed` is the writer's own handle: its digest came from the
+            # sealing pass, so publication reuses it rather than re-loading the
+            # archive it just wrote (one integrity check per VM crossing).
+            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation,
+                     destination=output, bundle=sealed)
             events.emit('publication', 'complete')
             trace().add(
                 'run', 'publication',

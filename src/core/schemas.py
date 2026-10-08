@@ -3365,6 +3365,23 @@ class TrainingConfig(BaseModel):
         self.kaggle.files.hash_suffix = self.bundle.sha256_sidecar_suffix
         return self
 
+    @model_validator(mode="after")
+    def _lane_package_manifest_is_the_bundle_inputs_manifest(self) -> TrainingConfig:
+        """``kaggle.files.package_manifest`` IS ``bundle.manifest_inputs``.
+
+        That field names the member the train kernel locates the installed
+        inputs manifest at, i.e. the SAME member ``Bundle.load(..., "inputs")``
+        verifies and ``model_tracks.package.package_manifest()`` returns. It was
+        a second, independent declaration of ``model_tracks_package.json``, so a
+        re-pointed ``bundle.manifest_inputs`` would have sealed one member while
+        the kernel looked for another. Copying the bundle value here (the same
+        projection pattern as ``hash_suffix`` above) gives the name ONE home.
+        ``config/training.yaml`` still declares the value only because the
+        rendered LANE contract reads it and is outside this change.
+        """
+        self.kaggle.files.package_manifest = self.bundle.manifest_inputs
+        return self
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BOUNDARY CONTRACTS — pipeline transforms

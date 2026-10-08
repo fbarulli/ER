@@ -139,6 +139,23 @@ CPU-smoke command, exactly as the gate intends:
 er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU
 ```
 
+## Bundle boundaries (one integrity check per VM crossing)
+
+The Colab lane itself hashes nothing role-related; it drives the shared
+boundaries:
+
+| crossing | contract | where |
+|---|---|---|
+| local → VM prepared inputs | role `inputs` Bundle, ONE `Bundle.load` (manifest + member digests) then a `reader()` install | `model_tracks/package.verify` (package.py:606) and `model_tracks/colab.run` (model_tracks/colab.py:154) + the VM bootstrap `Bundle.load(archive_path, BundleRole.inputs).reader()` (model_tracks/colab.py:216) |
+| resume state | role `recovery` Bundle | `model_tracks/colab.py:177` (opened once, handed to the transport builder) |
+| VM → local suite result (tracks flow) | role `result` Bundle, PINNED digest | `model_tracks/colab.verify_result_archive` (model_tracks/colab.py:21–31), used at the download boundary (model_tracks/colab.py:331) |
+| CPU delivery archive (prep lane) | transport wrapper, NOT a role Bundle | remote writer `record_digest_script`, local `verify_transport_digest` (cli/colab_lane_cpu_delivery.py:206–220); the sidecar suffix is `training_cfg().bundle.sha256_sidecar_suffix` |
+| legacy multi-worker train result | `ResultBundleManifest` (core.schemas) | `_prepare_remote_result_archive` / `_verify_result_bundle` (cli/colab_result_sync.py:35, 164), which covers the concurrent-worker layout that carries no suite manifest |
+
+The first three are Bundle role crossings; the last two are the documented
+alternative shapes (`cli/colab_bundle_transport.py:9–28`), so the rule is "one
+integrity check per crossing", not "a role archive for every archive".
+
 ## Precondition checklist (Colab)
 
 1. Colab CLI installed/authorized; launch lock available.

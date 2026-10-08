@@ -291,3 +291,28 @@ def test_worker_package_ships_the_declared_pair_lineage_name(tmp_path):
     with zipfile.ZipFile(archive) as saved:
         members = set(saved.namelist())
     assert f'data/graph_worker/gnn_only/{layout.pair_lineage}' in members
+
+
+def test_lane_package_manifest_is_the_bundle_inputs_manifest():
+    """The Kaggle lane's inputs-manifest name is BundleSpec's, not a copy.
+
+    The train kernel locates the installed inputs manifest at
+    ``LANE["files"]["package_manifest"]`` -- the SAME member
+    ``Bundle.load(..., "inputs")`` verifies and
+    ``model_tracks.package.package_manifest()`` returns. It was a second,
+    independent declaration of ``model_tracks_package.json``, so re-pointing
+    ``bundle.manifest_inputs`` would have sealed one member while the kernel
+    looked for another. ``TrainingConfig`` projects the bundle value into the
+    lane field (like ``files.hash_suffix``), and this pins that projection.
+    """
+    import yaml
+
+    from core.common import TRAIN_ROOT
+    from core.schemas import TrainingConfig
+
+    raw = yaml.safe_load((TRAIN_ROOT / 'config/training.yaml').read_text())
+    raw['bundle'] = {**raw['bundle'], 'manifest_inputs': 'renamed_package.json'}
+    config = TrainingConfig.model_validate(raw)
+
+    assert config.kaggle.files.package_manifest == 'renamed_package.json'
+    assert config.kaggle.files.package_manifest == config.bundle.manifest_inputs

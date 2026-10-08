@@ -20,7 +20,7 @@ def _manifest(path, track, report_test):
 
 
 def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='zip',
-          cascade_complete=False, ablation_skip_event=False):
+          cascade_complete=False, ablation_skip_event=False, with_runtime_source=False):
     from core import common
     from graph_tracks import preflight, report
     # Bind the graph modules that import ``load_records``/``load_pairs`` BY VALUE
@@ -38,6 +38,9 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
               # The prepared inputs the lanes and the cascade manifest read.
               'data/model_tracks/shared/prepared/listings.json': '{"listings": []}',
               'data/model_tracks/shared/prepared/pairs.csv': 'sku_id1,sku_id2,label,split\n'}
+    if with_runtime_source:
+        # The frozen completion runtime the snapshot wrapper materializes.
+        inline['src/model_tracks/local_complete.py'] = '# frozen runtime\n'
     for track in ('gnn_only', 'cascade'):
         settings = {'track': track, 'listings': 'data/model_tracks/shared/prepared/listings.json',
                     'pairs': 'data/model_tracks/shared/prepared/pairs.csv',
@@ -304,3 +307,41 @@ def test_legacy_source_pin_uses_the_runtime_inventory_ssot(tmp_path, monkeypatch
     files['src/a.py'] = '1' * 64
     with pytest.raises(ValueError, match='differs from training'):
         local_complete._require_legacy_source_pin(inputs, settings)
+
+
+def test_snapshot_completion_checks_the_final_archive_exactly_once(tmp_path, monkeypatch):
+    """The frozen-runtime wrapper reuses the boundary handle it already holds.
+
+    ``snapshot_completion.complete`` verifies the final archive once, then hands
+    that same handle to publication. Without the handle, publication re-loads
+    (and re-hashes) the archive again in the same process, violating the
+    one-integrity-check-per-VM-crossing contract.
+    """
+    from types import SimpleNamespace
+
+    from core.bundle import Bundle
+    from model_tracks import snapshot_completion
+
+    training_zip, input_zip, _, _ = suite(tmp_path, monkeypatch, with_runtime_source=True)
+    final = complete(training_zip, input_zip, 'run')
+
+    loads = []
+    real_load = Bundle.load.__func__
+
+    def counting(cls, path, role, **kwargs):
+        loads.append(str(path))
+        return real_load(cls, path, role, **kwargs)
+
+    monkeypatch.setattr(Bundle, 'load', classmethod(counting))
+
+    def fake_frozen_run(command, cwd=None, env=None, check=False):
+        Path(command[6]).write_text(json.dumps({'final': str(final)}))
+        assert Path(cwd).is_dir()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(snapshot_completion.subprocess, 'run', fake_frozen_run)
+
+    assert snapshot_completion.complete(training_zip, input_zip, 'run') == final
+    # Two boundary loads for the two transported archives, exactly one for the
+    # freshly sealed final archive (the load that produces the receipt).
+    assert loads.count(str(final)) == 1, loads

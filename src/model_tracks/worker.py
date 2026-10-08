@@ -466,7 +466,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 if track == 'text':
                     from training.validation_inference import resolve_best_checkpoint
                     checkpoint,_ = resolve_best_checkpoint(output)
-                if gpu_only and not (setup/'ablation_templates'/track/'request.json').is_file():
+                if gpu_only and not (setup/spec.ablation_templates_dir/track/spec.ablation_request_file).is_file():
                     # A GPU session relies on the CPU data bundle shipping the
                     # templates; a bundle built before that contract would
                     # FileNotFoundError here, so skip with a named reason.
@@ -478,9 +478,9 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                         scope=SCOPE_ENTITY, key=track,
                         reason='bundle_shipped_no_ablation_templates',
                         detail={'track': track, 'device': cfg.device,
-                                'template': str(setup/'ablation_templates'/track/'request.json'),
+                                'template': str(setup/spec.ablation_templates_dir/track/spec.ablation_request_file),
                                 'gpu_only': gpu_only},
-                        source=str(setup/'ablation_templates'),
+                        source=str(setup/spec.ablation_templates_dir),
                     )
                 else:
                     events.emit('attribute_ablation_export','started',device=cfg.device)

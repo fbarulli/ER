@@ -112,14 +112,18 @@ python laya_backend.py --kind kaggle --decision finetune --stop --execute
 `KAGGLE_KERNEL_RUN_ID`/`KAGGLE_SESSION_ID` into the container (probed live);
 the only per-run id is the numeric suffix of `KAGGLE_CONTAINER_NAME`
 (`kaggle_<token>-<session_id>-webtier`). The finetune kernel prints it at boot
-(`[kaggle-session] session_id=…`), the log follower persists it to
+(`[kaggle-session] session_id=…`, via the injected
+`KernelTemplates.SESSION_REPORT_HELPER`, the ONE kernel-side self-report every
+kaggle-lane kernel uses too), the log follower persists it to
 `logs/kaggle/<kernel>.session_id`, and `stop` feeds it to the SDK
 `cancel_kernel_session` (verified: the endpoint accepts this id; the kernel
 `id_no` is rejected). With no recorded id, `stop` falls back to the
-version-replace stub. The first-class parsers/readers are
-`container_session_id()` and `recorded_session_id()` (src/cli/laya_lane.py);
-the follower side is `_reported_session_id()` (src/cli/kaggle_monitor.py). The
-stop stages under `results/kaggle_lane/laya_stop` — the `which='laya'` label,
+version-replace stub. The first-class readers are `container_session_id()` and
+`recorded_session_id()` (src/cli/laya_lane.py); the follower side is
+`_reported_session_id()` (src/cli/kaggle_monitor.py). `container_session_id` is
+the host twin of the injected kernel helper and the two are pinned together by
+`tests/test_kaggle_lane.py::test_kernel_session_report_is_pinned_to_the_host_parser`.
+The stop stages under `results/kaggle_lane/laya_stop` — the `which='laya'` label,
 never `cpu`.
 
 ## Preflight (ducks in a row, before `--execute`)
@@ -189,7 +193,10 @@ for the loop, `FINETUNE_KERNEL_SCRIPT` for the launch):
 | teardown | `finetune_worker()` | `destroy_process_group()` in `finally` |
 
 Opt-outs / fallbacks: `ER_LAYA_DDP=0` forces single process; a single GPU or a
-CPU session falls back to the original loop unchanged; `ER_LAYA_PERF_PATCH=0`
+CPU session falls back to the original loop unchanged (**structurally proven
+byte-identical**: the only two insertions in the training loop are gated on
+`ddp_sampler is not None` / `is_distributed()`, so with DDP off the loop text
+matches the pre-DDP kernel line for line); `ER_LAYA_PERF_PATCH=0`
 disables both the perf patch and the distributed loop (the sharded loop lives
 in the perf patch). The receipt records `ddp` + `world_size`.
 
@@ -302,6 +309,15 @@ these are recorded as CONSIDERATIONS, not live-probed):
   deliberately does NOT run a `pip index` probe at staging time — that is
   a network path, and the `--execute` gate exists for exactly that
   boundary.
+* **The base-model archive is sealed as a Bundle but not re-verified on the
+  session.** `package_base_model` seals it with `Bundle.seal_archive` and
+  records the sealed digest in `base_model.receipt.json`, and
+  `extract_base_model` resolves the local dir it carries; the kernel does NOT
+  check the attached archive against that digest (it cannot import the lane
+  package, and the digest is not baked into the payload). The dataset attach is
+  immutable, so a wrong-but-valid archive would train silently rather than fail
+  loud: recorded as a known gap, fixable by baking the receipt digest into the
+  payload and comparing it in `extract_base_model`.
 * **The `onnx` toggle is recorded but not yet wired** into the kernel
   script (the laya ONNX export path needs the `laya[onnx]` extra on the
   session first). The receipt records the toggle state so the wiring is

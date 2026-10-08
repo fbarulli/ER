@@ -293,6 +293,7 @@ class KaggleKernels:
             slug, identity.code_file, enable_gpu=False)
         script = (lane.BUNDLE_KERNEL_SCRIPT
                   .replace("@REPOSITORY@", spec.repository)
+                  .replace("@SESSION_REPORT@", lane.KernelTemplates.SESSION_REPORT_HELPER)
                   .replace("@BRANCH@", spec.branch)
                   .replace("@REVISION@", pinned)
                   .replace("@CHECKOUT_PATHS@",
@@ -460,6 +461,7 @@ class KaggleKernels:
         ship = TRAIN_RESULT_BUNDLE_SHIP if kind == "train" else ""
         template = lane.TRAIN_KERNEL_SHARED + ship + body
         script = (template
+                  .replace("@SESSION_REPORT@", lane.KernelTemplates.SESSION_REPORT_HELPER)
                   .replace("@REPOSITORY@", spec.repository)
                   .replace("@BRANCH@", spec.branch)
                   .replace("@REVISION@", pinned)
@@ -566,6 +568,7 @@ class KaggleKernels:
         checkout = list(checkout_paths or spec.checkout_paths)
         template = lane.TRAIN_KERNEL_SHARED + lane.FINALIZE_KERNEL_BODY
         script = (template
+                  .replace("@SESSION_REPORT@", lane.KernelTemplates.SESSION_REPORT_HELPER)
                   .replace("@REPOSITORY@", spec.repository)
                   .replace("@BRANCH@", spec.branch)
                   .replace("@REVISION@", pinned)

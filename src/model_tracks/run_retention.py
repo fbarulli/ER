@@ -31,12 +31,19 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.bundle import bundle_spec
 from core.timing import Timing, emit_timing
 
-_RUN_MARKERS = ("track_inventory.json", "*__run_manifest.json")
 # Marker files live only in TRACK subdirectories one or two levels below the
-# run root: <run>/<track>/track_inventory.json AND (Colab worker layout)
-# <run>/worker_1/<track>__<tag>/{track_inventory.json, <track>__run_manifest.json}.
+# run root: <run>/<track>/<inventory_file> AND (Colab worker layout)
+# <run>/worker_1/<track>__<tag>/{<inventory_file>, <track>__run_manifest.json}.
+# The inventory name is the bundle contract's (``bundle.inventory_file``), so a
+# renamed marker cannot make retention stop recognizing (or start deleting) runs.
+
+
+def _run_markers() -> tuple[str, ...]:
+    """The run-root markers: the bundle inventory name plus the track manifests."""
+    return (bundle_spec().inventory_file, "*__run_manifest.json")
 
 
 class RetentionReceipt(BaseModel):
@@ -93,12 +100,12 @@ def _looks_like_run(path: Path) -> bool:
 
     Markers only ever live in track subdirectories one or two levels below
     the run root (`<run>/<track>/<marker>` or `<run>/worker_1/<track>/<marker>`):
-    results/model_tracks/<id>/<track>/track_inventory.json,
-    training_results/<run>/worker_1/<track>/track_inventory.json AND
+    results/model_tracks/<id>/<track>/<inventory_file>,
+    training_results/<run>/worker_1/<track>/<inventory_file> AND
     <track>__run_manifest.json variants all match; nothing deeper and no
     run-root file can fake it.
     """
-    for marker in _RUN_MARKERS:
+    for marker in _run_markers():
         for relative in (f"*/{marker}", f"*/*/{marker}"):
             if next(path.glob(relative), None) is not None:
                 return True
@@ -119,7 +126,7 @@ def publish_training_run(run_dir: Path) -> RetentionReceipt:
     run_dir = Path(run_dir).resolve()
     if not run_dir.is_dir() or not _looks_like_run(run_dir):
         raise FileNotFoundError(
-            f"retention refuses: {run_dir} lacks track-subdir run markers {_RUN_MARKERS}"
+            f"retention refuses: {run_dir} lacks track-subdir run markers {_run_markers()}"
         )
     relative = run_dir.relative_to(TRAIN_ROOT).as_posix()
     with timing.section("dvc_add"):

@@ -1301,3 +1301,115 @@ def test_base_model_archive_seals_as_an_inputs_bundle(tmp_path, monkeypatch):
     assert "convaiinnovations-laya/weights.bin" in handle.members()
     # the kaggle dataset shape lands beside the archive
     assert (tmp_path / "stage" / "dataset-metadata.json").is_file()
+
+
+# ── finetune session id: kernel self-report -> follower -> --session-id ─────
+
+def _finetune_corpus(tmp_path):
+    """The JSONL splits + receipt `stage_finetune_kernel` requires (hermetic)."""
+    corpus = tmp_path / "data/laya"
+    corpus.mkdir(parents=True, exist_ok=True)
+    for name in ("train.jsonl", "dev.jsonl", "test.jsonl"):
+        (corpus / name).write_text('{"state": "s"}\n', encoding="utf-8")
+    (corpus / "receipt.json").write_text('{"seed": 1729}\n', encoding="utf-8")
+    return corpus
+
+
+def _rendered_finetune_script(tmp_path, monkeypatch) -> str:
+    _spec(tmp_path, monkeypatch)
+    _finetune_corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_finetune_kernel(run_tag="laya_test")
+    script = (Path(receipt["staged"]) / laya_lane.FINETUNE_CODE_FILE).read_text()
+    # the staged payload must carry NO leftover marker of any kind
+    assert "@SESSION_REPORT@" not in script
+    return script
+
+
+def _rendered_session_env(script):
+    """The rendered kernel's OWN `report_kernel_session` + `session_env`.
+
+    Compiled from the staged text (not from the template constants), so the
+    test exercises exactly the bytes a Kaggle session executes.
+    """
+    import os
+
+    wanted = {"report_kernel_session", "session_env"}
+    nodes = [node for node in ast.walk(ast.parse(script))
+             if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    assert {node.name for node in nodes} == wanted
+    namespace = {"os": os}
+    exec(compile(ast.fix_missing_locations(
+        ast.Module(body=nodes, type_ignores=[])), "<rendered-finetune>",
+        "exec"), namespace)
+    return namespace["session_env"]
+
+
+def test_finetune_session_self_report_reaches_the_recorded_session_id(
+        tmp_path, monkeypatch, capsys):
+    """Item 3 end to end: kernel self-report -> follower -> recorded session id.
+
+    The finetune kernel prints the container's session id at boot; the
+    host-side SSE follower persists it to logs/kaggle/<kernel>.session_id; the
+    `--session-id` reader (and the verified stop it feeds) reads exactly that
+    file. Kaggle sets no KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID, and the stream
+    URL carries no id on the current SDK, so this line is the only source.
+    """
+    import types
+
+    import kagglesdk.kaggle_client
+    from cli import kaggle_lane
+    from core.schemas import KaggleSpec
+
+    script = _rendered_finetune_script(tmp_path, monkeypatch)
+    session_env = _rendered_session_env(script)
+
+    container = "kaggle_er-laya-finetune-123456789-webtier"
+    monkeypatch.setenv("KAGGLE_CONTAINER_NAME", container)
+    capsys.readouterr()
+    payload = session_env()
+    printed = capsys.readouterr().out
+    assert payload == {"KAGGLE_CONTAINER_NAME": container,
+                       "session_id": "123456789"}
+    assert "[kaggle-session] session_id=123456789" in printed
+
+    # the host side of the crossing: the follower reads that line off the SSE
+    # stream and persists it (lane_logs_dir resolves under the tmp TRAIN_ROOT).
+    monkeypatch.setattr(kaggle_lane, "_spec",
+                        lambda: KaggleSpec(staging_dir="kaggle_stage"))
+    monkeypatch.setattr(kaggle_lane, "TRAIN_ROOT", tmp_path)
+
+    class Stream:
+        def iter_lines(self):
+            yield ('data: {"stream_name":"stdout","time":1,"data":'
+                   + json.dumps(printed) + "}")
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+
+    kaggle_lane.stream_kernel_logs("fbarulli/er-laya-finetune")
+    session_file = (tmp_path / "logs/kaggle/er-laya-finetune.session_id")
+    assert session_file.read_text().strip() == "123456789"
+
+    # the readers the CLI surfaces use: `--session-id` and the stop target
+    assert laya_lane.recorded_session_id("fbarulli/er-laya-finetune") == 123456789
+    assert laya_lane.container_session_id(container) == 123456789
+    # and the SDK cancel consumes exactly this id
+    plan = laya_lane.stop_kaggle_kernel("fbarulli/er-laya-finetune", execute=False)
+    assert plan["kernel"] == "fbarulli/er-laya-finetune"
+
+
+def test_recorded_session_id_is_none_without_a_launch(tmp_path, monkeypatch):
+    """No recorded id -> None (never a fabricated session), offline."""
+    from cli import kaggle_lane
+    from core.schemas import KaggleSpec
+
+    monkeypatch.setattr(kaggle_lane, "_spec",
+                        lambda: KaggleSpec(staging_dir="kaggle_stage"))
+    monkeypatch.setattr(kaggle_lane, "TRAIN_ROOT", tmp_path)
+    assert laya_lane.recorded_session_id("fbarulli/er-laya-finetune") is None
+    assert laya_lane.container_session_id("kaggle_not-a-container") is None

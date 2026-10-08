@@ -48,6 +48,14 @@ from pipeline import run_within_brand_pipeline
 
 log = RunLogger(__name__)
 
+#: The consolidation-trace stage this module OWNS (core.tracing ``stage``
+#: column). Declared here, not spelled at each call site, so the orchestration
+#: join ``config/paths.yaml`` ``canonical_and_gates: [data_prep]`` can be pinned
+#: to this producer constant exactly like every sibling stage's (dedupe,
+#: labeled_pairs, final_validation, ...). ``pipeline._PipelineSteering`` hands
+#: its stage-1 writer to this module, which is the ONE production writer.
+STAGE = "data_prep"
+
 
 def _load_raw() -> pd.DataFrame:
     """The raw export exactly as the pipeline expects it (raw column names)."""
@@ -179,12 +187,12 @@ def _stage_outputs() -> tuple[list, list[str]]:
 def main() -> None:
     from core.timing import Timing
 
-    timing = Timing("data_prep")
+    timing = Timing(STAGE)
     # Stage manifest (SILENT_DROPS task 6) — begin BEFORE the work: the
     # raw export is hashed now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed; the pipeline is
     # deterministic, no RNG is consumed.
-    manifest = begin_manifest("data_prep", inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
+    manifest = begin_manifest(STAGE, inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
     timing.mark("manifest_begin")
     with log.section("data_prep.pipeline"):
         df = _load_raw()
@@ -192,7 +200,7 @@ def main() -> None:
         log.info(f"[data_prep] loaded {len(df):,} raw rows")
         # ONE writer for the stage: the pipeline adds its step rows to THIS run and
         # leaves the commit to us, so the manifest's accounting joins them.
-        trace = TraceRun("data_prep")
+        trace = TraceRun(STAGE)
         pairs, canon = run_within_brand_pipeline(df, trace)
         timing.mark("run_within_brand_pipeline")
     log.info(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}")
