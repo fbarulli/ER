@@ -2096,6 +2096,12 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
                                     eval_data=str(dev_path))
     config.validate()
     log("TrainConfig: " + json.dumps(FINETUNE_CONFIG, sort_keys=True))
+    # laya evaluates the dev split before training and prints nothing while it
+    # does (27k items here -> several minutes of silence). Say so, so the quiet
+    # stretch is not mistaken for a hang.
+    log("starting laya.train.finetune: the pre-train dev evaluation runs "
+        "silently until the first 'epoch 1/8 step' line (minutes on the full "
+        "corpus)")
     return laya_train.finetune(
         data=str(train_path), model_dir=str(base_model),
         output_dir=str(out_dir), config=config, device=device)
