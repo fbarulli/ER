@@ -18,11 +18,25 @@ from __future__ import annotations
 import ast
 import json
 import re
+from pathlib import Path
 
 import pytest
 
 from core.laya_config import FinetuneSpec, LayaSpec
 from cli import laya_lane
+
+
+def test_tests_import_the_worktree_src_not_a_sibling_checkout():
+    """The shared venv .pth can point at the primary tree; conftest + this pin
+    guarantee the suite exercises THIS checkout's src."""
+    import cli
+    import core
+    import training
+
+    src = Path(__file__).resolve().parents[1] / "src"
+    for module in (core, cli, training):
+        assert Path(module.__file__).resolve().is_relative_to(src), \
+            f"{module.__name__} resolved outside {src}: {module.__file__}"
 
 
 def _render(template, values):
