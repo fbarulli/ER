@@ -430,6 +430,9 @@ class PrunerFactory:
         self.n_warmup_steps = int(config.get("n_warmup_steps", 1))
         self.min_resource = int(config.get("min_resource", 1))
         self.reduction_factor = int(config.get("reduction_factor", 3))
+        # Hyperband's largest resource (epochs/subset): "auto" lets Optuna pick,
+        # otherwise pin the full-fidelity resource so brackets are correct.
+        self.max_resource = config.get("max_resource", "auto")
         if self.kind not in self.KINDS:
             raise ValueError(
                 f"unknown pruner {self.kind!r}; expected {self.KINDS}")
@@ -450,7 +453,7 @@ class PrunerFactory:
         if self.kind == "hyperband":
             return pruners.HyperbandPruner(
                 min_resource=self.min_resource,
-                max_resource=self.n_warmup_steps,
+                max_resource=self.max_resource,
                 reduction_factor=self.reduction_factor)
         raise ValueError(f"unknown pruner {self.kind!r}")  # pragma: no cover
 
@@ -458,6 +461,7 @@ class PrunerFactory:
         return {"kind": self.kind, "n_startup_trials": self.n_startup_trials,
                 "n_warmup_steps": self.n_warmup_steps,
                 "min_resource": self.min_resource,
+                "max_resource": self.max_resource,
                 "reduction_factor": self.reduction_factor}
 
 

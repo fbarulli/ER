@@ -82,6 +82,7 @@ options:
     n_startup_trials: 5
     n_warmup_steps: 1
     min_resource: 1
+    max_resource: auto        # Hyperband's largest resource ("auto" or epochs)
     reduction_factor: 3
   fidelity:
     enabled: false            # multi-fidelity (ASHA/Hyperband lever)

@@ -157,9 +157,10 @@ def test_pruner_factory_registry_covers_every_kind():
                        "reduction_factor": 4}).create(_fake_optuna())
     assert _Recording.calls[-1][0] == "SuccessiveHalvingPruner"
     opt.PrunerFactory({"kind": "hyperband", "min_resource": 1,
-                       "reduction_factor": 3,
-                       "n_warmup_steps": 9}).create(_fake_optuna())
-    assert _Recording.calls[-1][0] == "HyperbandPruner"
+                       "max_resource": 8,
+                       "reduction_factor": 3}).create(_fake_optuna())
+    assert _Recording.calls[-1] == ("HyperbandPruner", {
+        "min_resource": 1, "max_resource": 8, "reduction_factor": 3})
     with pytest.raises(ValueError, match="pruner"):
         opt.PrunerFactory({"kind": "bogus"})
 
