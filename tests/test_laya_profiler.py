@@ -65,10 +65,13 @@ class _FakeActivity:
 
 
 def _fake_torch(profile_cls=_FakeProfiler):
+    import contextlib
+
     profiler = types.SimpleNamespace(
         ProfilerActivity=_FakeActivity,
         schedule=lambda **kwargs: kwargs,
-        profile=profile_cls)
+        profile=profile_cls,
+        record_function=lambda name: contextlib.nullcontext())
     return types.SimpleNamespace(profiler=profiler)
 
 
@@ -140,6 +143,26 @@ def test_profiler_session_writes_trace_and_feeds_sink(tmp_path):
     off.close()
 
 
+def test_profiler_phase_gates_on_an_active_profiler(tmp_path):
+    control = laya_lane.finetune_control()
+    inactive = laya_controls.ProfilerSession.for_training(
+        _fake_torch(), control, _device("cpu"), True, str(tmp_path))
+    with inactive.phase("forward"):   # null context, no record_function emit
+        pass
+
+    active = laya_controls.ProfilerSession.for_training(
+        _fake_torch(), control, _device("cuda"), True, str(tmp_path))
+    assert active.start() is True
+    calls = []
+    import contextlib
+    active._torch.profiler.record_function = \
+        lambda name: calls.append(name) or contextlib.nullcontext()
+    with active.phase("forward"):
+        pass
+    assert calls == ["forward"]
+    active.close()
+
+
 def test_profiler_session_is_fail_soft(tmp_path):
     class _Broken(_FakeProfiler):
         def export_chrome_trace(self, path):
@@ -193,9 +216,12 @@ def test_rendered_kernel_annotates_phases_and_schedules_profiler():
     assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
     for phase in ("data.encode", "collate+batch_move", "forward", "loss",
                   "backward", "optimizer_step", "dev_eval",
-                  "checkpoint_save", "calibration"):
-        assert 'record_function("%s")' % phase in script, phase
+                  "checkpoint_save"):
+        assert 'phase("%s")' % phase in script, phase
+    # calibration is annotated inside DevEvaluator (gated via `annotate`)
+    assert 'annotate("calibration")' in script
     assert "class ProfilerSession" in script
+    assert "def phase(self, name)" in script
     assert "torch.profiler.profile(" in script
     assert "torch.profiler.schedule(" in script
     assert "profile_memory=True" in script

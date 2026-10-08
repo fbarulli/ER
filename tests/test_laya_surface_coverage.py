@@ -158,10 +158,31 @@ def test_finetune_kernel_wires_wandb_and_profiler_surfaces():
                     "def wandb_log_control_summary(", "def wandb_log_metrics(",
                     "class ProfilerSession", "class ControlCheckpointer",
                     "FINETUNE_DEV_ROWS = None", "FINETUNE_OUTPUT_DIR = None",
-                    "torch.profiler.record_function(\"dev_eval\")"):
+                    "FINETUNE_CHECKPOINT_DIR = None", "FINETUNE_RUN_TAG = None",
+                    'phase("dev_eval")'):
         assert surface in script, surface
     assert "checkpoint/checkpoints" not in script  # dir built from the global
-    assert "os.path.join(str(self._output_dir), \"checkpoints\")" in script
+    assert "os.path.join(str(self._checkpoint_dir), \"checkpoints\")" in script
+
+
+def test_finetune_kernel_wires_adversarial_and_swa_dials():
+    """No phantom dials: adv_kind selects the FGM/AWP target set and swa_lr
+    switches the optimizer LR during the SWA phase."""
+    script = render_finetune()
+    for needle in ('control.get("adv_kind")', "AdversarialPerturber.targets",
+                   'control.get("swa_lr")', 'group["lr"] = float(swa_lr)'):
+        assert needle in script, needle
+
+
+def test_env_value_is_shared_with_the_colab_lane(monkeypatch):
+    """ONE .env implementation: the laya lane delegates to the Colab lane."""
+    from cli import colab_runtime
+
+    calls = []
+    monkeypatch.setattr(colab_runtime, "_env_value",
+                        lambda name: calls.append(name) or "VALUE")
+    assert laya_lane._env_value("WANDB_API_KEY") == "VALUE"
+    assert calls == ["WANDB_API_KEY"]
 
 
 def test_kernel_registry_resolves_every_finetune_kind(monkeypatch):

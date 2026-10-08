@@ -36,6 +36,16 @@ def _optimizer(lr=0.1):
     return torch.optim.SGD([torch.nn.Parameter(torch.zeros(3))], lr=lr)
 
 
+def _factory(optimizer, kind, total=12, min_lr=1e-6, warmup=0):
+    """The SSOT-driven scheduler factory (spec defaults for plateau/onecycle)."""
+    spec = FinetuneSpec()
+    return laya_controls.LrSchedulerFactory(
+        optimizer, kind, total, min_lr, warmup,
+        plateau_mode="max", plateau_factor=spec.plateau_factor,
+        plateau_patience=spec.plateau_patience,
+        onecycle_pct_start=spec.onecycle_pct_start)
+
+
 # ── YAML-driven control block (separate from TrainConfig) ──────────────────
 def test_phase_defaults_are_gated():
     ft = LayaSpec().finetune
@@ -102,7 +112,7 @@ def test_control_block_merges_defaults_and_ignores_none():
 
 # ── EarlyStopPolicy ────────────────────────────────────────────────────────
 def test_early_stop_policy_improvement_and_patience():
-    policy = laya_controls.EarlyStopPolicy(patience=2)
+    policy = laya_controls.EarlyStopPolicy(2, 0.0, False)
     first = policy.update(0.5, None, 0)
     assert (first.best, first.bad_epochs, first.improved, first.stop) == \
         (0.5, 0, True, False)
@@ -112,16 +122,16 @@ def test_early_stop_policy_improvement_and_patience():
 
 
 def test_early_stop_policy_min_delta_and_direction():
-    policy = laya_controls.EarlyStopPolicy(patience=2, min_delta=0.05)
+    policy = laya_controls.EarlyStopPolicy(2, 0.05, False)
     assert policy.is_improvement(0.51, 0.5) is False
     assert policy.is_improvement(0.56, 0.5) is True
-    lower = laya_controls.EarlyStopPolicy(patience=2, lower_is_better=True)
+    lower = laya_controls.EarlyStopPolicy(2, 0.0, True)
     assert lower.is_improvement(0.3, 0.5) is True
     assert lower.is_improvement(0.6, 0.5) is False
 
 
 def test_early_stop_policy_patience_zero_stops_immediately():
-    policy = laya_controls.EarlyStopPolicy(patience=0)
+    policy = laya_controls.EarlyStopPolicy(0, 0.0, False)
     assert policy.update(0.4, 0.5, 0).stop is True
 
 
@@ -135,8 +145,7 @@ def test_early_stop_policy_from_control_reads_the_block():
 
 # ── LrSchedulerFactory ─────────────────────────────────────────────────────
 def test_scheduler_factory_reproduces_landed_cosine_exactly():
-    scheduler = laya_controls.LrSchedulerFactory(
-        _optimizer(), "cosine", 12, 1e-6, 0).build()
+    scheduler = _factory(_optimizer(), "cosine").build()
     assert isinstance(scheduler,
                       torch.optim.lr_scheduler.CosineAnnealingLR)
     assert scheduler.T_max == 12 and scheduler.eta_min == 1e-6
@@ -150,11 +159,9 @@ def test_scheduler_factory_kinds_and_warmup():
         "plateau": torch.optim.lr_scheduler.ReduceLROnPlateau,
     }
     for kind, expected in kinds.items():
-        factory = laya_controls.LrSchedulerFactory(
-            _optimizer(), kind, 12, 1e-6, 0)
+        factory = _factory(_optimizer(), kind)
         assert isinstance(factory.build(), expected), kind
-    warm = laya_controls.LrSchedulerFactory(
-        _optimizer(), "cosine", 12, 1e-6, 4).build()
+    warm = _factory(_optimizer(), "cosine", warmup=4).build()
     assert isinstance(warm, torch.optim.lr_scheduler.SequentialLR)
     assert list(warm._milestones) == [4]
 
@@ -177,11 +184,32 @@ def test_scheduler_factory_effective_warmup_steps():
 
 def test_linear_scheduler_decays():
     optimizer = _optimizer(lr=1.0)
-    scheduler = laya_controls.LrSchedulerFactory(
-        optimizer, "linear", 5, 0.0, 0).build()
+    scheduler = _factory(optimizer, "linear", total=5, min_lr=0.0).build()
     assert optimizer.param_groups[0]["lr"] == 1.0
     scheduler.step()
     assert optimizer.param_groups[0]["lr"] < 1.0
+
+
+def test_plateau_with_warmup_fails_loud():
+    # plateau steps on the per-epoch dev metric; a per-update warmup is
+    # meaningless, so it must fail loud rather than be silently ignored.
+    with pytest.raises(ValueError, match="plateau"):
+        _factory(_optimizer(), "plateau", warmup=5)
+
+
+def test_onecycle_consumes_warmup_as_pct_start(monkeypatch):
+    captured = {}
+    real = torch.optim.lr_scheduler.OneCycleLR
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(torch.optim.lr_scheduler, "OneCycleLR", spy)
+    scheduler = _factory(_optimizer(), "onecycle", total=100, warmup=10).build()
+    assert isinstance(scheduler, real)
+    # pct_start derived from warmup/total, never a restated default
+    assert captured["pct_start"] == pytest.approx(0.1)
 
 
 # ── MetricFlattener / AbstainCoverage / DevReport ──────────────────────────
@@ -233,6 +261,52 @@ def _perf_namespace():
     namespace = {"os": os, "math": math, "random": random}
     exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
     return namespace
+
+
+def test_adversarial_perturber_fgm_vs_awp_targets():
+    namespace = _perf_namespace()
+
+    class _Net(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = torch.nn.Linear(4, 4)
+            self.embed_tokens = torch.nn.Embedding(5, 4)
+
+    model = _Net()
+    params = list(model.parameters())
+    targets = namespace["AdversarialPerturber"].targets
+    fgm_ids = {id(p) for p in targets(model, params, "fgm")}
+    expected = {id(p) for name, p in model.named_parameters()
+                if "embed" in name}
+    assert fgm_ids == expected and fgm_ids  # fgm perturbs embeddings only
+    awp_ids = {id(p) for p in targets(model, params, "awp")}
+    assert awp_ids == {id(p) for p in params}
+
+
+def test_control_checkpointer_run_tag_guard_and_best_persist(tmp_path):
+    namespace = _perf_namespace()
+
+    class _Net(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin = torch.nn.Linear(2, 2)
+
+    model = _Net()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    checkpointer = namespace["ControlCheckpointer"](torch, str(tmp_path),
+                                                   "runA")
+    checkpointer.save(model, optimizer, scheduler, 3, 0.9, 0)
+    checkpointer.save_best(model, 0.9, 0.91, 3)
+    start, best, bad, record = checkpointer.resume(
+        model, optimizer, scheduler, torch.device("cpu"))
+    assert (start, best, bad) == (4, 0.9, 0)
+    assert record is not None and record["accuracy"] == 0.91
+    assert (tmp_path / "checkpoints" / "best.pt").is_file()
+    # a DIFFERENT run tag must not resume from runA's files
+    other = namespace["ControlCheckpointer"](torch, str(tmp_path), "runB")
+    assert other.resume(model, optimizer, scheduler,
+                        torch.device("cpu")) == (0, None, 0, None)
 
 
 def test_injected_classes_mirror_the_module():

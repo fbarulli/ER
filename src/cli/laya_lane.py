@@ -321,6 +321,19 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
                         "evaluate_records, writes eval_report.json. No "
                         "training, no Hub fetch."),
     },
+    "holdout-eval": {
+        # Corpus-grain like the two finetune kinds: the component-disjoint
+        # holdout rows (state + expected + stratum) are the contract, built by
+        # stage_holdout_dataset_payload. Registered so `LayaLane.run()` accepts
+        # the kind; `LayaLane.stage()` routes it to stage_holdout_eval_kernel.
+        "wanted_columns": ("state", "questions", "expected"),
+        "state_column": "state",
+        "record_columns": None,
+        "description": ("component-disjoint holdout verification of an "
+                        "attached fine-tuned laya checkpoint: writes the "
+                        "clustered, gate-stratified holdout report. No "
+                        "training, no Hub fetch."),
+    },
 }
 
 
@@ -1280,26 +1293,15 @@ def _git_revision() -> str:
 
 
 def _env_value(name: str) -> str | None:
-    """Read KEY=VALUE from .env (TRAIN_ROOT, then its parent), then the env.
+    """The Colab lane's .env lookup (ONE shared implementation).
 
-    The same lookup the Colab lane uses (cli.colab_runtime._env_value), plus
-    the box's project .env (`$HOME/ONE/.env`, the path .bashrc sources) so the
-    lane finds the keys from any worktree. The secret is baked into the STAGED
-    kernel only, never written to the repo.
+    The secret is baked into the STAGED kernel only, never written to the
+    repo. This lane used to carry a near-verbatim copy; it now delegates so the
+    two lanes cannot drift on lookup order.
     """
-    from pathlib import Path as _Path
+    from cli.colab_runtime import _env_value as _shared
 
-    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env",
-                     _Path.home() / "ONE" / ".env"):
-        if not env_path.is_file():
-            continue
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == name:
-                value = value.strip().strip('"').strip("'")
-                if value:
-                    return value
-    return os.environ.get(name) or None
+    return _shared(name)
 
 
 def _wandb_project() -> str:
@@ -1813,28 +1815,40 @@ def launch_finetune(worker):
 
 
 class ControlCheckpointer:
-    """Per-epoch rank-0 checkpoint save + resume (optimizer/scheduler state).
+    """Per-epoch checkpoint save + resume with optimizer/scheduler state.
 
-    The output root is set by the kernel before ``finetune`` (``None`` in the
-    offline unit test => checkpointing disabled, never a literal path).
+    The checkpoint dir is the CANONICAL, shared path on EVERY rank (rank 0
+    writes, all ranks resume), deliberately separate from the per-rank final
+    save dir. A ``run_tag`` is stored with each file so a resume can never
+    continue from another run's checkpoint, and the best-metric weights are
+    persisted separately so a resumed run that never improves ends on the
+    best weights, not the last epoch.
     """
 
-    def __init__(self, torch_module, output_dir):
+    def __init__(self, torch_module, checkpoint_dir, run_tag):
         self._torch = torch_module
-        self._output_dir = output_dir
+        self._checkpoint_dir = checkpoint_dir
+        self._run_tag = run_tag
 
     @classmethod
     def for_training(cls, torch_module):
-        return cls(torch_module, globals().get("FINETUNE_OUTPUT_DIR"))
+        # FINETUNE_CHECKPOINT_DIR is the shared canonical dir (all ranks);
+        # FINETUNE_OUTPUT_DIR is the per-rank fallback for single-process.
+        directory = (globals().get("FINETUNE_CHECKPOINT_DIR")
+                     or globals().get("FINETUNE_OUTPUT_DIR"))
+        return cls(torch_module, directory, globals().get("FINETUNE_RUN_TAG"))
 
     @staticmethod
     def unwrap(model):
         return model.module if hasattr(model, "module") else model
 
     def directory(self):
-        if not self._output_dir:
+        if not self._checkpoint_dir:
             return None
-        return os.path.join(str(self._output_dir), "checkpoints")
+        return os.path.join(str(self._checkpoint_dir), "checkpoints")
+
+    def _matches_run(self, state):
+        return self._run_tag is None or state.get("run_tag") == self._run_tag
 
     def save(self, model, optimizer, scheduler, epoch, best, bad_epochs):
         if not is_rank0():
@@ -1850,32 +1864,110 @@ class ControlCheckpointer:
             "scheduler": scheduler.state_dict(),
             "best": best,
             "bad_epochs": int(bad_epochs),
+            "run_tag": self._run_tag,
         }, os.path.join(path, "epoch_%d.pt" % int(epoch)))
 
+    def save_best(self, model, metric, accuracy, epoch):
+        """Persist the best early-stop-metric weights (rank 0 only)."""
+        if not is_rank0():
+            return
+        path = self.directory()
+        if not path:
+            return
+        os.makedirs(path, exist_ok=True)
+        self._torch.save({
+            "model": self.unwrap(model).state_dict(),
+            "metric": metric, "accuracy": accuracy, "epoch": int(epoch),
+            "run_tag": self._run_tag,
+        }, os.path.join(path, "best.pt"))
+
+    def _load_best(self, path, device):
+        best_path = os.path.join(path, "best.pt")
+        if not os.path.isfile(best_path):
+            return None
+        try:
+            state = self._torch.load(best_path, map_location=device,
+                                     weights_only=False)
+        except Exception:
+            return None
+        return state if self._matches_run(state) else None
+
     def resume(self, model, optimizer, scheduler, device):
+        """Return ``(start_epoch, best, bad_epochs, best_record)``.
+
+        Every rank resumes from the SAME shared file so ranks stay in
+        lockstep; a checkpoint from a different ``run_tag`` is ignored. The
+        best record carries the saved best weights + metric so a resumed run
+        that never improves still ends on the best epoch.
+        """
         path = self.directory()
         if not path or not os.path.isdir(path):
-            return 0, None, 0
+            return 0, None, 0, None
         names = [name for name in os.listdir(path)
                  if name.startswith("epoch_") and name.endswith(".pt")
                  and name[len("epoch_"):-3].isdigit()]
-        if not names:
-            return 0, None, 0
         names.sort(key=lambda name: int(name[len("epoch_"):-3]))
-        try:
-            state = self._torch.load(os.path.join(path, names[-1]),
-                                     map_location=device, weights_only=False)
+        for name in reversed(names):
+            try:
+                state = self._torch.load(os.path.join(path, name),
+                                         map_location=device,
+                                         weights_only=False)
+            except Exception as error:
+                print("[perf-patch] resume skipped " + name + ": "
+                      + str(error)[:160], flush=True)
+                continue
+            if not self._matches_run(state):
+                continue
             self.unwrap(model).load_state_dict(state["model"])
-            optimizer.load_state_dict(state["optimizer"])
-            scheduler.load_state_dict(state["scheduler"])
-        except Exception as error:
-            print("[perf-patch] resume skipped: " + str(error)[:200],
-                  flush=True)
-            return 0, None, 0
-        print("[perf-patch] resumed " + names[-1] + " (next epoch "
-              + str(int(state.get("epoch", 0)) + 2) + ")", flush=True)
-        return (int(state.get("epoch", 0)) + 1, state.get("best"),
-                int(state.get("bad_epochs", 0)))
+            try:
+                optimizer.load_state_dict(state["optimizer"])
+                scheduler.load_state_dict(state["scheduler"])
+            except Exception as error:
+                print("[perf-patch] resume state skipped: "
+                      + str(error)[:160], flush=True)
+            best_record = self._load_best(path, device)
+            print("[perf-patch] resumed " + name + " (next epoch "
+                  + str(int(state.get("epoch", 0)) + 2) + ")", flush=True)
+            return (int(state.get("epoch", 0)) + 1, state.get("best"),
+                    int(state.get("bad_epochs", 0)), best_record)
+        return 0, None, 0, None
+
+
+class AdversarialPerturber:
+    """FGM (embedding-direction) / AWP (weight-direction) perturbation.
+
+    ``fgm`` perturbs the embedding parameters (the classic Fast Gradient
+    Method input perturbation); ``awp`` perturbs every trainable parameter.
+    Both step along the gradient direction and are restored after the extra
+    forward/backward, so the recipe is unchanged when ``adv_eps == 0``.
+    """
+
+    @staticmethod
+    def targets(model, params, adv_kind):
+        if str(adv_kind).lower() != "fgm":
+            return list(params)
+        named = dict(model.named_parameters())
+        picked = [param for name, param in named.items()
+                  if "embed" in name.lower() and param.requires_grad]
+        return picked or list(params)
+
+    @staticmethod
+    def perturb(torch, params, adv_eps, norm):
+        deltas = []
+        with torch.no_grad():
+            for param in params:
+                if param.grad is None:
+                    continue
+                delta = (adv_eps / norm) * param.grad.detach()
+                param.add_(delta)
+                deltas.append((param, delta))
+        return deltas
+
+    @staticmethod
+    def restore(torch, deltas):
+        with torch.no_grad():
+            for param, delta in deltas:
+                param.sub_(delta)
 
 
 class TrainingOptimizer:
@@ -2056,12 +2148,10 @@ class DevEvaluator:
 
     @staticmethod
     def metrics(laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control):
-        import torch
-
+                head_max_len, parallel, control, annotate=None):
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
-                                        parallel)
+                                        parallel, annotate)
         metrics = laya_train.evaluate_records(records)
         return DevReport.from_metrics(
             metrics, records=records,
@@ -2069,10 +2159,10 @@ class DevEvaluator:
 
     @staticmethod
     def artifacts(laya_train, model, tok, dev_items, device, max_len,
-                  head_max_len, parallel, control):
+                  head_max_len, parallel, control, annotate=None):
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
-                                        parallel)
+                                        parallel, annotate)
         metrics = laya_train.evaluate_records(records)
         confusion = {}
         for qtype, logits, target, k in records:
@@ -2106,10 +2196,11 @@ class DevEvaluator:
 
     @staticmethod
     def _records(laya_train, model, tok, dev_items, device, max_len,
-                 head_max_len, parallel):
-        import torch
+                 head_max_len, parallel, annotate=None):
+        import contextlib
 
-        with torch.profiler.record_function("calibration"):
+        scope = annotate("calibration") if annotate else contextlib.nullcontext()
+        with scope:
             return laya_train.calibration_records(
                 model, tok, dev_items, device, max_len, head_max_len,
                 parallel=parallel)
@@ -2240,9 +2331,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     cache = {}
     hits = lookups = 0
     # ── control state ────────────────────────────────────────────────────
+    # `dev_enabled` is computed identically on every rank (the control block
+    # and the stashed rows are the same everywhere), so the per-epoch
+    # broadcast collective is entered by ALL ranks or none — never a subset.
     dev_rows = globals().get("FINETUNE_DEV_ROWS")
+    dev_enabled = bool(control.get("eval_dev")) and dev_rows is not None
     dev_items = None
-    if control.get("eval_dev") and dev_rows:
+    if dev_enabled:
         dev_items, dev_skipped = laya_train.items_from_rows(
             tok, dev_rows, max_len, head_max_len, label_smoothing=0.0)
         print("[perf-patch] dev eval items %d (skipped %r)"
@@ -2250,23 +2345,25 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     class_weights = (LossBuilder.class_weights(torch, items, device)
                      if control.get("class_weight") else None)
     adv_eps = control.get("adv_eps")
+    adv_kind = control.get("adv_kind")
     ema_decay = (float(control.get("ema_decay"))
                  if control.get("ema") else None)
     ema_state = ({id(p): p.detach().clone() for p in params}
                  if control.get("ema") else None)
     swa_on = bool(control.get("swa"))
+    swa_lr = control.get("swa_lr")
     swa_state = ({id(p): p.detach().clone() for p in params}
                  if swa_on else None)
     swa_count = 0
     swa_start = (int(round(float(control.get("swa_start_frac"))
                            * config.epochs)) if swa_on else None)
     checkpointer = ControlCheckpointer.for_training(torch)
-    start_epoch, best, bad_epochs = 0, None, 0
+    start_epoch, best, bad_epochs, best_record = 0, None, 0, None
     if control.get("resume"):
-        start_epoch, best, bad_epochs = checkpointer.resume(
+        start_epoch, best, bad_epochs, best_record = checkpointer.resume(
             model, optimizer, scheduler, device)
-    best_acc = None
-    best_state = None
+    best_acc = (best_record or {}).get("accuracy")
+    best_state = (best_record or {}).get("model")
     stopped = False
     stopped_epoch = None
     profiler = ProfilerSession.for_training(
@@ -2282,6 +2379,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             for p in model.encoder.parameters():
                 p.requires_grad_(True)
             model.encoder.train()
+        if swa_on and epoch == swa_start and swa_lr:
+            for group in optimizer.param_groups:
+                group["lr"] = float(swa_lr)
+            print("[perf-patch] SWA phase: lr -> %.6g" % float(swa_lr),
+                  flush=True)
         if ddp_sampler is not None:
             # Per-epoch reseed: every rank shuffles identically then takes a
             # disjoint stride slice, so no item is trained twice per epoch.
@@ -2301,7 +2403,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         for start in range(0, len(epoch_items), config.micro_batch):
             chunk_items = epoch_items[start:start + config.micro_batch]
             chunk = []
-            with torch.profiler.record_function("data.encode"):
+            with profiler.phase("data.encode"):
                 for it in chunk_items:
                     order = laya_train.draw_option_order(
                         it, order_rng, config.shuffle_options)
@@ -2316,17 +2418,17 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                         hits += 1
                     lookups += 1
                     chunk.append(encoded)
-            with torch.profiler.record_function("collate+batch_move"):
+            with profiler.phase("collate+batch_move"):
                 batch = laya_train.collate_items([chunk], tok.pad_token_id)
                 # (2) one device move for what the loop consumes; _forward's own
                 # .to(device) on the same device is then a no-op.
                 mask = batch["marker_mask"].to(device)
                 target = batch["target"].to(device)
                 qtype = batch["qtype"].to(device)
-            with torch.profiler.record_function("forward"):
+            with profiler.phase("forward"):
                 logits = Forwarder.run(torch, laya_train, model, batch, device,
                                         amp, config.freeze_encoder, amp_dtype)
-            with torch.profiler.record_function("loss"):
+            with profiler.phase("loss"):
                 if config.loss == "rlcd":
                     loss = laya_train.rlcd_loss(logits, target, mask, qtype,
                                                 sigma, config.rl_samples,
@@ -2340,28 +2442,22 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             window_size = min(config.grad_accum,
                               steps_per_epoch - window_start)
             scaled = loss / window_size
-            with torch.profiler.record_function("backward"):
+            with profiler.phase("backward"):
                 if scaler is not None:
                     scaler.scale(scaled).backward()
                 else:
                     scaled.backward()
             if adv_eps and float(adv_eps) > 0.0:
-                # AWP: perturb trainable weights by eps along the grad
-                # direction, take an extra backward, then restore the weights.
-                deltas = []
+                # FGM perturbs the embedding params, AWP every trainable param;
+                # both take an extra backward then restore the weights.
+                targets = AdversarialPerturber.targets(model, params, adv_kind)
                 total_sq = 0.0
-                for p in params:
-                    if p.grad is None:
-                        continue
-                    total_sq += float(p.grad.detach().pow(2).sum())
+                for p in targets:
+                    if p.grad is not None:
+                        total_sq += float(p.grad.detach().pow(2).sum())
                 norm = math.sqrt(total_sq) + 1e-12
-                with torch.no_grad():
-                    for p in params:
-                        if p.grad is None:
-                            continue
-                        delta = (adv_eps / norm) * p.grad.detach()
-                        p.add_(delta)
-                        deltas.append((p, delta))
+                deltas = AdversarialPerturber.perturb(
+                    torch, targets, float(adv_eps), norm)
                 adv_logits = Forwarder.run(
                     torch, laya_train, model, batch, device, amp,
                     config.freeze_encoder, amp_dtype)
@@ -2371,13 +2467,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                     scaler.scale(adv_scaled).backward()
                 else:
                     adv_scaled.backward()
-                with torch.no_grad():
-                    for p, delta in deltas:
-                        p.sub_(delta)
+                AdversarialPerturber.restore(torch, deltas)
             n_steps += 1
             if (n_steps % config.grad_accum == 0
                     or start + config.micro_batch >= len(epoch_items)):
-                with torch.profiler.record_function("optimizer_step"):
+                with profiler.phase("optimizer_step"):
                     if scaler is not None:
                         scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
@@ -2433,15 +2527,16 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         grad_norm_mean = (grad_norm_sum / grad_steps) if grad_steps else None
         # ── per-epoch dev evaluation (rank 0) + broadcast ───────────────
         dev = None
-        if dev_items:
+        if dev_enabled:
             # Every rank flips to eval/train together (DDP mode consistency);
             # only rank 0 runs the forward.
             model.eval()
             if is_rank0():
-                with torch.profiler.record_function("dev_eval"):
-                    dev = DevEvaluator.metrics(laya_train, model, tok, dev_items,
-                                       device, max_len, head_max_len, parallel,
-                                       control)
+                with profiler.phase("dev_eval"):
+                    dev = DevEvaluator.metrics(
+                        laya_train, model, tok, dev_items, device,
+                        max_len, head_max_len, parallel, control,
+                        annotate=profiler.phase)
             payload = dev.payload() if dev is not None else [0.0, 0.0, 0.0,
                                                              -1.0, -1.0]
             has_dev, dev_acc, dev_loss, dev_abstain, dev_cov = DistributedBroadcast.values(
@@ -2463,16 +2558,19 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         if grad_norm_mean is not None:
             extra["train/grad_norm"] = grad_norm_mean
         if dev is not None:
-            if best_acc is None or dev.accuracy > best_acc:
+            extra.update(dev.to_wandb("dev"))
+            metric_value = (dev.loss if lower_is_better else dev.accuracy)
+            step = stop_policy.update(metric_value, best, bad_epochs)
+            best, bad_epochs = step.best, step.bad_epochs
+            # keep_best tracks the EARLY-STOP optimum (not raw accuracy): the
+            # saved/deployed weights are the same epoch selection picked.
+            if step.improved:
                 best_acc = dev.accuracy
                 if control.get("keep_best") and is_rank0():
                     best_state = {key: value.detach().cpu().clone()
                                   for key, value in
                                   ControlCheckpointer.unwrap(model).state_dict().items()}
-            extra.update(dev.to_wandb("dev"))
-            metric_value = (dev.loss if lower_is_better else dev.accuracy)
-            step = stop_policy.update(metric_value, best, bad_epochs)
-            best, bad_epochs = step.best, step.bad_epochs
+                    checkpointer.save_best(model, best, best_acc, epoch)
             stop_flag = step.stop and bool(control.get("early_stop"))
             stop_flag = bool(DistributedBroadcast.values(
                 torch, [1.0 if stop_flag else 0.0], device)[0] >= 0.5)
@@ -2483,7 +2581,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         extra["select/best_dev_accuracy"] = best_acc
         extra["select/bad_epochs"] = bad_epochs
         wandb_log_epoch(epoch, mean, extra)
-        with torch.profiler.record_function("checkpoint_save"):
+        with profiler.phase("checkpoint_save"):
             if on_epoch_end is not None:
                 on_epoch_end(epoch, mean)
             if control.get("save_each_epoch"):
@@ -2536,7 +2634,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             model.eval()
             result["error_artifacts"] = DevEvaluator.artifacts(
                 laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control)
+                head_max_len, parallel, control,
+                annotate=profiler.phase)
         except Exception as error:
             result["error_artifacts_error"] = (
                 type(error).__name__ + ": " + str(error)[:200])
@@ -2682,6 +2781,10 @@ WANDB_RUN = None
 # finetune() so the perf patch (same module namespace) can evaluate/checkpoint.
 FINETUNE_DEV_ROWS = None
 FINETUNE_OUTPUT_DIR = None
+# The SHARED canonical checkpoint dir (all DDP ranks) + the run identity used
+# to reject another run's checkpoints on resume.
+FINETUNE_CHECKPOINT_DIR = None
+FINETUNE_RUN_TAG = None
 
 
 def wandb_init():
@@ -2875,10 +2978,14 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
     config = laya_train.TrainConfig(**FINETUNE_CONFIG,
                                     eval_data=str(dev_path))
     config.validate()
-    # Stash the attached dev split + the checkpoint root for the perf patch
+    # Stash the attached dev split + the checkpoint roots for the perf patch
     # (same module namespace): per-epoch dev eval and epoch_<n>.pt resume/
-    # checkpointing read these globals.
+    # checkpointing read these globals. FINETUNE_CHECKPOINT_DIR is the SHARED
+    # canonical dir on every rank (rank 0 writes, all ranks resume), so DDP
+    # ranks cannot diverge on resume.
     globals()["FINETUNE_OUTPUT_DIR"] = str(out_dir)
+    globals()["FINETUNE_CHECKPOINT_DIR"] = str(WORKING / "checkpoint")
+    globals()["FINETUNE_RUN_TAG"] = RUN_TAG
     if FINETUNE_CONTROL.get("eval_dev"):
         try:
             globals()["FINETUNE_DEV_ROWS"] = laya_train.read_jsonl(

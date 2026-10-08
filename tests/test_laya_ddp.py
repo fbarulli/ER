@@ -109,12 +109,27 @@ def _make_fake_laya(processed):
     def soft_ce_loss(logits, target, mask):
         return torch.nn.functional.cross_entropy(logits, target)
 
+    def items_from_rows(tok, rows, *args, **kwargs):
+        return ([{"i": index, "label": index % 3,
+                  "target": [1.0, 0.0, 0.0]} for index in range(len(rows))], {})
+
+    def calibration_records(model, tok, items, *args, **kwargs):
+        return [(0, [2.0, 0.0], [1.0, 0.0], 2) for _ in items]
+
+    def evaluate_records(records, *args, **kwargs):
+        return {"items": len(records), "loss": 0.5, "accuracy": 0.9,
+                "mean_confidence": 0.5, "ece": 0.1, "brier": 0.1,
+                "brier_top1": 0.1}
+
     train.sigma_at = sigma_at
     train.draw_option_order = draw_option_order
     train.encode_item = encode_item
     train.collate_items = collate_items
     train._forward = _forward
     train.soft_ce_loss = soft_ce_loss
+    train.items_from_rows = items_from_rows
+    train.calibration_records = calibration_records
+    train.evaluate_records = evaluate_records
     laya = types.ModuleType("laya")
     laya.train = train
     return laya
@@ -149,6 +164,9 @@ def _ddp_worker(rank, world_size, out_path):
         import sys
         sys.modules["laya"] = laya
         sys.modules["laya.train"] = laya.train
+        # The kernel always bakes the FULL control block; without it the
+        # strict `TrainingControls` (no restated defaults) would fail loud.
+        namespace["FINETUNE_CONTROL"] = laya_lane.finetune_control()
         history = namespace["_perf_train_model"](
             _TinyNet(), types.SimpleNamespace(pad_token_id=0), items, _Cfg(),
             torch.device("cpu"), 8, 4)
@@ -345,3 +363,82 @@ def test_ddp_find_unused_parameters_is_pinned():
     assert "DistributedDataParallel" in src
     assert src.count("find_unused_parameters=True") >= 2, (
         "both the CUDA and CPU DDP wrappers must set find_unused_parameters=True")
+
+
+def _ddp_control_worker(rank, world_size, shared_dir, out_path):
+    """Two ranks, dev eval ON, checkpoint+resume ON: prove lockstep."""
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace()
+    assert namespace["init_distributed"](backend="gloo") is True
+    try:
+        import sys
+        import torch.distributed as dist
+
+        processed = []
+        fake = _make_fake_laya(processed)
+        sys.modules["laya"] = fake
+        sys.modules["laya.train"] = fake.train
+
+        control = laya_lane.finetune_control()
+        control.update({"eval_dev": True, "resume": True,
+                        "save_each_epoch": True, "keep_best": True,
+                        "early_stop": True, "early_stop_patience": 5})
+        namespace["FINETUNE_CONTROL"] = control
+        namespace["FINETUNE_DEV_ROWS"] = [{"i": 0, "label": 0}]
+        namespace["FINETUNE_CHECKPOINT_DIR"] = shared_dir
+        namespace["FINETUNE_RUN_TAG"] = "ddp-control"
+        items = [{"i": index, "label": index % 3,
+                  "target": [1.0, 0.0, 0.0]} for index in range(N_ITEMS)]
+
+        def run():
+            return namespace["_perf_train_model"](
+                _TinyNet(), types.SimpleNamespace(pad_token_id=0), items,
+                _Cfg(), torch.device("cpu"), 8, 4)
+
+        run()
+        first = dict(namespace["FINETUNE_CONTROL_RESULT"])
+        run()
+        second = dict(namespace["FINETUNE_CONTROL_RESULT"])
+
+        gathered1 = [None for _ in range(world_size)]
+        gathered2 = [None for _ in range(world_size)]
+        dist.all_gather_object(gathered1, first)
+        dist.all_gather_object(gathered2, second)
+        if rank == 0:
+            checkpoint_dir = Path(shared_dir) / "checkpoints"
+            Path(out_path).write_text(json.dumps({
+                "first": first,
+                "second": second,
+                "gathered1": gathered1,
+                "gathered2": gathered2,
+                "checkpoints": sorted(p.name for p in checkpoint_dir.glob("*.pt")),
+            }), encoding="utf-8")
+    finally:
+        namespace["destroy_if_distributed"]()
+
+
+def test_ddp_control_dev_eval_checkpoint_resume_stay_in_lockstep(tmp_path):
+    """Finding 2/3/11: both ranks broadcast dev metrics, resume from the SAME
+    shared checkpoint path (no rank divergence), and the best weights persist
+    across the resume even though the resumed run never improves."""
+    out_path = str(tmp_path / "ddp_control.json")
+    shared = str(tmp_path / "checkpoint")
+    torch.multiprocessing.spawn(
+        _ddp_control_worker, args=(WORLD, shared, out_path), nprocs=WORLD,
+        join=True, start_method="spawn")
+    result = json.loads(Path(out_path).read_text(encoding="utf-8"))
+
+    # both ranks produced the identical result (dev broadcast + lockstep)
+    assert result["gathered1"][0] == result["gathered1"][1]
+    assert result["gathered2"][0] == result["gathered2"][1]
+    # run 1 trained 2 epochs; run 2 resumed and ran 0 more
+    assert result["first"]["epochs_run"] == 2
+    assert result["second"]["epochs_run"] == 0
+    # rank 0 wrote per-epoch checkpoints + the persisted best
+    assert "epoch_0.pt" in result["checkpoints"]
+    assert "epoch_1.pt" in result["checkpoints"]
+    assert "best.pt" in result["checkpoints"]

@@ -57,19 +57,24 @@ class EarlyStopStep:
 
 
 class EarlyStopPolicy:
-    """Patience/min-delta early stopping (direction-aware, pure)."""
+    """Patience/min-delta early stopping (direction-aware, pure).
 
-    def __init__(self, patience, min_delta=0.0, lower_is_better=False):
+    No dial default is restated here: `from_control` reads every value from
+    the baked block (built from ``FinetuneSpec``); direct construction requires
+    the caller to pass them.
+    """
+
+    def __init__(self, patience, min_delta, lower_is_better):
         self.patience = None if patience is None else int(patience)
-        self.min_delta = float(min_delta or 0.0)
+        self.min_delta = float(min_delta)
         self.lower_is_better = bool(lower_is_better)
 
     @classmethod
     def from_control(cls, control):
         return cls(
-            patience=control.get("early_stop_patience"),
-            min_delta=control.get("early_stop_min_delta"),
-            lower_is_better=control.get("early_stop_metric") == "dev_loss")
+            patience=control["early_stop_patience"],
+            min_delta=control["early_stop_min_delta"],
+            lower_is_better=control["early_stop_metric"] == "dev_loss")
 
     def is_improvement(self, value, best):
         if best is None:
@@ -94,42 +99,39 @@ class LrSchedulerFactory:
     ``plateau`` is stepped per EPOCH by the caller, never per update.
     """
 
-    # The landed scheduler used only when a control block carries no ``kind``
-    # (an offline unit test); the SSOT default is baked from FinetuneSpec.
-    LANDED_KIND = "cosine"
-
     def __init__(self, optimizer, kind, total_updates, min_lr, warmup,
-                 plateau_mode="max", plateau_factor=0.5, plateau_patience=2,
-                 onecycle_pct_start=0.3):
+                 plateau_mode, plateau_factor, plateau_patience,
+                 onecycle_pct_start):
         self.optimizer = optimizer
-        self.kind = str(kind or self.LANDED_KIND).lower()
+        self.kind = str(kind).lower()
         self.total_updates = max(1, int(total_updates))
         self.min_lr = float(min_lr)
         self.warmup = max(0, int(warmup or 0))
         self.plateau_mode = plateau_mode
-        # Kept raw: only the plateau/onecycle branches coerce them, so an
-        # absent value never breaks the landed cosine path.
-        self.plateau_factor = plateau_factor
-        self.plateau_patience = plateau_patience
-        self.onecycle_pct_start = onecycle_pct_start
+        self.plateau_factor = float(plateau_factor)
+        self.plateau_patience = int(plateau_patience)
+        self.onecycle_pct_start = float(onecycle_pct_start)
         self.is_plateau = self.kind == "plateau"
+        if self.is_plateau and self.warmup > 0:
+            raise ValueError(
+                "lr_scheduler='plateau' does not support warmup (it steps on "
+                "the per-epoch dev metric); set warmup_steps/warmup_frac to 0")
 
     @classmethod
     def from_control(cls, control, optimizer, total_updates, min_lr,
                      lower_is_better=False):
         warmup = cls.effective_warmup_steps(
-            control.get("warmup_steps"), control.get("warmup_frac"),
-            total_updates)
+            control["warmup_steps"], control["warmup_frac"], total_updates)
         return cls(
             optimizer=optimizer,
-            kind=control.get("lr_scheduler"),
+            kind=control["lr_scheduler"],
             total_updates=total_updates,
             min_lr=min_lr,
             warmup=warmup,
             plateau_mode="min" if lower_is_better else "max",
-            plateau_factor=control.get("plateau_factor"),
-            plateau_patience=control.get("plateau_patience"),
-            onecycle_pct_start=control.get("onecycle_pct_start"))
+            plateau_factor=control["plateau_factor"],
+            plateau_patience=control["plateau_patience"],
+            onecycle_pct_start=control["onecycle_pct_start"])
 
     @staticmethod
     def effective_warmup_steps(warmup_steps, warmup_frac, total_updates):
@@ -371,6 +373,19 @@ class ProfilerSession:
                   + ": " + str(error)[:160], flush=True)
             self._profiler = None
             return False
+
+    def phase(self, name):
+        """A zero-overhead annotation context when the profiler is not active.
+
+        Emitting ``record_function`` unconditionally costs a little on every
+        loop iteration even when profiling is off, so the loop annotates
+        through this gate: a null context unless a live profiler is running.
+        """
+        if self._profiler is None:
+            import contextlib
+
+            return contextlib.nullcontext()
+        return self._torch.profiler.record_function(name)
 
     def step(self):
         if self._profiler is None:
