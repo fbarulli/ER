@@ -13,17 +13,9 @@ gpu_parallel_backend: mps
 gpu_optimizer_backend: cuda_fused
 gpu_graph_aggregation_backend: cuda_segment
 # Populate with measured per-worker peaks before enabling GPU overlap.
-# MEASURED 2026-10-07 on the T4 (run 1007T224803008250Z, 3 workers over MPS):
-# device-wide peak 1.06 GiB of 15.0 GiB, median 0.36 GiB, 125 samples.
-# Left EMPTY on purpose: the profiler attributes the whole device and cannot
-# split MPS clients, so a per-worker number cannot be derived from it. Fill this
-# in only from a run that reports per-worker peaks.
 memory_reservations_gb: {}
 gpu_headroom_gb: 2.0
-# Report the held-out test half. Selection stays on dev (early stopping and
-# threshold fitting); this only turns on the post-selection test report, which
-# was the one thing missing from the 2026-10-07 run.
-report_test: true
+report_test: false
 publish_git: false
 publish_dvc: false
 profiling: true

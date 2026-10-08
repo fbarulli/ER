@@ -54,7 +54,6 @@ Use `colab_backend.py` or the installed `er-colab`, both of which delegate to
 `__main__` instance and can make the adapter read the default CPU setting even when
 you asked for a GPU.
 
-To reuse an existing package (e.g. `results/model_tracks/<tag>__inputs.tar.zst`) when the local tree has diverged since it was built, set `ER_SKIP_CONFIG_VERIFY=1` to bypass the inline-config and source-hash checks in `verify_current`.
 
 ## Launch lifecycle
 

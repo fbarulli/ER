@@ -180,10 +180,6 @@ The Colab lane uses a **sparse checkout** (`git sparse-checkout set --no-cone`) 
 
 For a prepared-train launch (`--what tracks --prepared-input-package ...`), two more paths are appended from the suite config: the `suite_git_inputs` archive and the resolved text-model directory (e.g. `artifacts/models/all-MiniLM-L6-v2`). The clone is `--depth=1 --single-branch --filter=blob:none --no-tags` (colab_runtime.py:168–245).
 
-## Config verify bypass
-
-`model_tracks.package.verify_current` fails loud when the package's inline configs or source hashes differ from the local tree. Set `ER_SKIP_CONFIG_VERIFY=1` to skip both checks (the package is assumed current). Use only when you know the package matches the pushed source.
-
 ## Artifacts and paths
 
 | artifact | path |
