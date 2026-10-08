@@ -62,7 +62,7 @@ from model_tracks.resume import GNN_ONLY_TRACKS as GRAPH_TRACKS
 PACKAGED_LANES = (GRAPH_TRACKS + ('cascade',))
 TRACK_CONFIGS = frozenset({'gnn_only.yaml', 'cascade.yaml', 'text.yaml'})
 INPUT_KEYS = ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results')
-RECOVERY_EXCLUDED = frozenset({'wandb', 'mlruns', 'mps_pipe', 'mps_log', '.git', '.dvc'})
+RECOVERY_EXCLUDED = frozenset({'wandb', 'mps_pipe', 'mps_log', '.git', '.dvc'})
 
 
 def package_member(key: str) -> str:

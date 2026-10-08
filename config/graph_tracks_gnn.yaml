@@ -1,4 +1,4 @@
-# Standalone graph worker: W&B offline + local DVC by default; no MLflow.
+# Standalone graph worker: W&B offline + local DVC by default.
 track: gnn_only
 listings: data/graph_tracks/listings.json
 pairs: data/graph_tracks/pairs.csv

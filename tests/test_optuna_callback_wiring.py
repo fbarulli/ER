@@ -1,12 +1,11 @@
 """Dead-code guard for Optuna callback wiring (audit B6).
 
-Defect: ``_optuna_mlflow_cb`` (training.py) was defined but never registered
-at any ``study.optimize`` call site. It was superseded by
-``_optuna_tracking_cb`` (same commit, superset telemetry: MLflow metric with
-the correct objective name + wandb params) but never deleted, so it sat as
-dead code whose only contribution had it been registered would have been a
-misleadingly-named ``trial_N_auc`` metric on a non-AUC objective
-(discriminative-LR calibration Rand).
+Defect: a superseded ``_optuna_*_cb`` helper (training.py) was defined but never
+registered at any ``study.optimize`` call site. Only ``_optuna_tracking_cb``
+should remain (superset telemetry: the tracked metric with the correct objective
+name + wandb params); the dead helper's only contribution, had it been
+registered, would have been a misleadingly-named ``trial_N_auc`` metric on a
+non-AUC objective (discriminative-LR calibration Rand).
 
 The guard: every ``_optuna_*_cb`` helper defined in training.py must be
 referenced at a ``callbacks=[...]`` registration. A defined-but-unregistered

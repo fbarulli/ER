@@ -41,7 +41,6 @@ def inputs(tmp_path):
 
 
 def disable_tracking(monkeypatch):
-    monkeypatch.setenv('MLFLOW_TRACKING_URI', 'off')
     monkeypatch.delenv('WANDB_API_KEY', raising=False)
     monkeypatch.delenv('EUROMONITOR_RESULTS_DIR', raising=False)
 

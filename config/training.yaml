@@ -1512,7 +1512,6 @@ bundle:
     - ".resume"
     - "_checkpoint_upload_staging"
     - "wandb"
-    - "mlruns"
     - "mps_pipe"
     - "mps_log"
     - "profiles"

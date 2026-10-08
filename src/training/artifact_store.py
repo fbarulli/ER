@@ -16,6 +16,17 @@ from core.common import training_cfg
 from core.manifest import sha256_file
 
 
+# The worker's own bookkeeping files: written for completion/audit, never part
+# of a published bundle. The Hub ignore globs and the manifest enumeration both
+# derive from this ONE set, so the two spellings cannot drift apart.
+UPLOAD_EXCLUDED_FILES = ("canonical_records.csv", "gate_results.csv", "training.status")
+
+
+def _is_uploadable(path: Path) -> bool:
+    """Whether one path is a publishable artifact (a file the worker does not own)."""
+    return path.is_file() and path.name not in UPLOAD_EXCLUDED_FILES
+
+
 def publish(source: Path, run_id: str, worker: int) -> str:
     from huggingface_hub import HfApi
 
@@ -31,7 +42,7 @@ def publish(source: Path, run_id: str, worker: int) -> str:
         exist_ok=True,
     )
     prefix = f"runs/{run_id}/worker_{worker}"
-    ignored = ["canonical_records.csv", "gate_results.csv", "mlruns/**", "training.status"]
+    ignored = list(UPLOAD_EXCLUDED_FILES)
     api.upload_folder(
         repo_id=spec.artifact_repo_id,
         repo_type="model",
@@ -40,7 +51,7 @@ def publish(source: Path, run_id: str, worker: int) -> str:
         ignore_patterns=ignored,
         commit_message=f"Upload training artifacts: {run_id} worker {worker}",
     )
-    files = [p for p in source.rglob("*") if p.is_file() and p.name not in {"canonical_records.csv", "gate_results.csv", "training.status"} and "mlruns" not in p.parts]
+    files = [p for p in source.rglob("*") if _is_uploadable(p)]
     manifest = {
         "run_id": run_id,
         "worker": worker,

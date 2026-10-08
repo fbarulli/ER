@@ -11,7 +11,7 @@ from core.manifest import sha256_file
 # are skipped in tracking and verification. KEEP the content byte-for-byte.
 DVC_EXCLUDED_DIRS = frozenset({
     ".dvc", ".dvc-cache", ".dvc-site-cache", ".resume", "_checkpoints",
-    "_checkpoint_upload_staging", "wandb", "mlruns",
+    "_checkpoint_upload_staging", "wandb",
 })
 
 # A verification pull is intentionally bounded: one target per command made a

@@ -78,7 +78,7 @@ def is_log(member):
     relative = PurePosixPath(member)
     return (relative.name.endswith(('.log', '.jsonl')) or relative.name in
             {'live_status.json', bundle_spec().trainer_state_file, 'checkpoint_manifest.json', 'best_checkpoint.json'}) and not any(
-                part in {'wandb', 'mlruns', '.git', '.dvc'} for part in relative.parts)
+                part in {'wandb', '.git', '.dvc'} for part in relative.parts)
 
 
 def local_target(path, member):

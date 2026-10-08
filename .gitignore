@@ -7,7 +7,6 @@ nohup.out
 artifacts/results/
 artifacts/models/
 artifacts/embeddings/
-artifacts/mlruns/
 artifacts/data/
 .venv/
 .venv

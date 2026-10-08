@@ -3184,7 +3184,7 @@ class BundleSpec(BaseModel):
     # Bundle owns the predicate; these names are never re-spelled by a surface.
     result_excluded_dirs: tuple[str, ...] = Field(default_factory=lambda: (
         ".dvc", ".dvc-cache", ".dvc-site-cache", ".git", ".resume",
-        "_checkpoint_upload_staging", "wandb", "mlruns", "mps_pipe", "mps_log",
+        "_checkpoint_upload_staging", "wandb", "mps_pipe", "mps_log",
         # Profiling is resume/diagnostic state, never a suite deliverable.
         "profiles", "resource_profile",
     ))

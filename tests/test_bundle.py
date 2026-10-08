@@ -42,7 +42,6 @@ def _result_tree(root: Path) -> dict[str, Path]:
         "resource_profile/gpu.csv": "x",
         "wandb/run-1/files/config.yaml": "x",
         ".resume/attempt.json": "{}",
-        "mlruns/0/meta.yaml": "x",
         "mps_pipe/control": "x",
         "mps_log/server.log": "x",
     }
@@ -167,7 +166,6 @@ def test_result_role_keeps_only_selected_checkpoint(tmp_path: Path) -> None:
     assert "wandb/run-1/files/config.yaml" not in members
     # Resume/diagnostic trees the delivered bundle must never carry.
     assert ".resume/attempt.json" not in members
-    assert "mlruns/0/meta.yaml" not in members
     assert "mps_pipe/control" not in members
     assert "mps_log/server.log" not in members
     assert "text/text__vectors.npz" in members
