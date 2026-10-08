@@ -2345,15 +2345,12 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         # ── per-epoch dev evaluation (rank 0) + broadcast ───────────────
         dev = None
         if dev_items:
+            # Every rank flips to eval/train together (DDP mode consistency);
+            # only rank 0 runs the forward.
+            model.eval()
             if is_rank0():
                 dev = _dev_metrics(laya_train, model, tok, dev_items, device,
                                    max_len, head_max_len, parallel, control)
-                # calibration_records() left the model in eval mode: restore the
-                # training mode (and the frozen-encoder eval that train()
-                # undoes).
-                model.train()
-                if config.freeze_encoder or gradual:
-                    model.encoder.eval()
             has_dev = 1.0 if dev is not None else 0.0
             payload = [has_dev,
                        float(dev["accuracy"]) if dev else 0.0,
@@ -2374,6 +2371,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                           flush=True)
             elif not is_rank0():
                 dev = None
+            # restore training mode (and the frozen-encoder eval that train()
+            # would otherwise undo) on every rank.
+            model.train()
+            if config.freeze_encoder or gradual:
+                model.encoder.eval()
         # ── best tracking + early stop + plateau + checkpointing ────────
         extra = {"epoch": epoch + 1, "train/lr": lr_now,
                  "epoch_time_s": epoch_time}
