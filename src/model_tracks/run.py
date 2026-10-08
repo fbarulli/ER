@@ -10,11 +10,48 @@ import tempfile
 
 from core.archive_reader import archive_sidecar
 from core.run_log import RunLogger
+from core.tracing import (
+    SCOPE_ENTITY,
+    TRACE_LANE_ENV,
+    flush_stage_trace,
+    run_trace_env,
+    stage_trace,
+)
 from model_tracks.config import load_config
 from model_tracks.parallel import mps_environment, run_parallel
 from model_tracks.preflight import preflight
 
 _LOG = RunLogger(__name__)
+
+#: The stage name this module owns in the ONE consolidated pipeline trace.
+STAGE = "suite_run"
+
+#: The module's trace writer: the shared shim's slot (``None`` until first use;
+#: see :func:`core.tracing.stage_trace`), so importing this module never touches
+#: the trace layout.
+_TRACE = None
+
+
+def trace():
+    """The ONE writer for the ``suite_run`` stage of the current run.
+
+    The supervisor emits selection, launch, completion, collection and
+    publication rows for the ONE suite it owns into the same stage commit.
+    """
+    global _TRACE
+    _TRACE = stage_trace(STAGE, _TRACE)
+    return _TRACE
+
+
+def flush_trace():
+    """Commit this process's supervisor rows once; a no-op while empty."""
+    return flush_stage_trace(_TRACE)
+
+
+def _spec():
+    """The bundle contract from config (single source for member names)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
 
 
 def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Path:
@@ -37,26 +74,42 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             raise FileNotFoundError('resume output directory does not exist')
         output.mkdir(parents=True, exist_ok=resume)
         from model_tracks.telemetry import WorkerEvents
-        events = WorkerEvents(output, 'suite', run_tag, filename='suite_events.jsonl')
+        spec = _spec()
+        events = WorkerEvents(output, 'suite', run_tag, filename=spec.suite_events_file)
         events.emit('suite', 'starting', resume=resume, config=str(config), output=str(output))
         from model_tracks.resource_profile import ResourceProfile
         profile = ResourceProfile(output / 'resource_profile', load_config(config).profiling).start()
         events.resource_profile = profile
+        sealed = False
         try:
             archive = _run(config, output, run_tag, resume=resume, events=events)
             events.emit('suite', 'complete', archive=str(archive))
+            sealed = True
+            flush_trace()
             return archive
         except BaseException as exc:
             import traceback
             events.emit('suite', 'failed', error_type=type(exc).__name__, error=str(exc),
                         failed_phase=events.last_phase, traceback=traceback.format_exc())
+            trace().add(
+                'run', 'failed',
+                reason=f'the suite aborted with {type(exc).__name__}; the rows above show the last '
+                       'step that ran',
+                detail={'error_type': type(exc).__name__, 'error': str(exc),
+                        'failed_phase': events.last_phase, 'resume': bool(resume)},
+                source=str(config),
+            )
+            flush_trace()
             raise
         finally:
             profile.close()
-            # Archive contents precede collection/publication. Preserve their
-            # final outcomes beside the archive without rewriting its digest.
-            import shutil
-            shutil.copyfile(events.path, output.with_suffix('.events.jsonl'))
+            # Single-archive handoff: on success the suite event stream was
+            # flushed into the result archive before sealing, so no second
+            # `.events.jsonl` sidecar is produced (or downloaded). Only a run
+            # that never sealed keeps its final event log beside the output.
+            if not sealed:
+                import shutil
+                shutil.copyfile(events.path, output.with_suffix(spec.events_sidecar_suffix))
 
 
 def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
@@ -65,12 +118,15 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
 
     The lane trains nothing and consumes the trained lanes' artifacts, so it is
     spawned as a normal worker process with the suite environment plus its own
-    results directory once ``run_parallel`` has returned.
+    results directory once ``run_parallel`` has returned. Like every other lane
+    it gets the RUN's trace pins, so its rows land in the run's ONE trace.
     """
     import subprocess
     from core.common import TRAIN_ROOT
     track_env = {**env, 'EUROMONITOR_RESULTS_DIR': str((output / track).resolve()),
-                 'ER_TRACK_BARRIER': str((output / 'barrier').resolve())}
+                 'ER_TRACK_BARRIER': str((output / 'barrier').resolve()),
+                 TRACE_LANE_ENV: track,
+                 **run_trace_env()}
     command = [sys.executable, '-m', 'model_tracks.worker', '--config',
                str(config.resolve()), '--track', track, '--run-tag', f'{run_tag}-{track}']
     if resume:
@@ -80,12 +136,22 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
     with (output / f'{track}__worker.log').open('a') as log:
         subprocess.run(command, cwd=TRAIN_ROOT, env=track_env,
                        stdout=log, stderr=subprocess.STDOUT, check=True)
+    trace().add(
+        'run', 'postprocess_lane',
+        scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
+        reason='the postprocess combinator ran as its own worker process after the parallel phase, '
+               'when the artifacts it consumes already exist',
+        detail={'track': track, 'command': ' '.join(command), 'resume': bool(resume),
+                'log': str(output / f'{track}__worker.log')},
+        source=str(config),
+    )
     return track
 
 
 def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, events=None) -> Path:
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
+    spec = _spec()
     cfg = load_config(config)
     gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
     # Structured training timings default into the run's output dir (owner
@@ -100,7 +166,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     with _LOG.section('phase.preflight', gpu_only=gpu_only):
         if gpu_only:
             from core.common import TRAIN_ROOT
-            inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
+            from core.bundle import BundleRole, manifest_name
+            inputs = json.loads(
+                (TRAIN_ROOT / manifest_name(BundleRole.inputs)).read_text())['preflight']
         else:
             # When this suite exports the baseline itself, the frozen embedding
             # cache is a declared pending input at preflight time: it is produced
@@ -155,6 +223,18 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
+    trace().add(
+        'run', 'preflight',
+        in_count=1, out_count=1,
+        reason='preflight and the pre-training data gate passed on the machine that will train',
+        detail={'run_tag': run_tag, 'device': cfg.device, 'gpu_only': gpu_only,
+                'epochs': cfg.epochs, 'report_test': bool(cfg.report_test),
+                'resume': bool(resume), 'dvc_enabled': bool(cfg.dvc_enabled),
+                'post_training_ablation': bool(cfg.post_training_ablation),
+                'data_gate_tracks': list(gate.tracks),
+                'data_gate_attestation': str(gate.attestation)},
+        source=str(config),
+    )
     from model_tracks.resume import (TRACKS, TRAINING_TRACKS, POSTPROCESS_TRACKS,
                                      expected_postprocess, suite_identity, validate_suite, completed_track)
     identity = suite_identity(cfg, inputs, run_tag)
@@ -162,7 +242,6 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         validate_suite(output, identity)
         events.emit('resume', 'verified', provenance='frozen inputs, config and implementation')
     from core.common import TRAIN_ROOT
-    from graph_tracks.data import file_hash
     import torch
     hardware = {'device': cfg.device, 'parallel_workers': len(TRAINING_TRACKS)}
     if cfg.device == 'cuda':
@@ -185,13 +264,32 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         'shared_inputs':'read-only; text bundle CSVs materialized in text worker output',
         'cascade_mode':'text ranker retrieves, gnn_only scorer decides; no fused embedding'
         })
-        atomic_write_text(output / 'suite_manifest.json',
+        atomic_write_text(output / spec.suite_manifest_file,
                           manifest.model_dump_json(indent=2, by_alias=True) + '\n')
     skipped = [track for track in TRACKS if resume and completed_track(
         output / track, track, postprocess_complete=expected_postprocess(track, gpu_only=gpu_only))]
     for track in skipped:
         events.emit('worker_selection', 'skipped', worker_track=track,
                     reason='completed artifacts verified against SHA256 inventory')
+    trace().add(
+        'run', 'worker_selection',
+        in_count=len(TRACKS), out_count=len(TRACKS) - len(skipped),
+        reason='a track whose completed artifacts verify against its SHA256 inventory is skipped '
+               'instead of retrained',
+        detail={'tracks': list(TRACKS), 'skipped': list(skipped),
+                'trained_lanes': [track for track in TRAINING_TRACKS if track not in skipped],
+                'postprocess_lanes': [track for track in POSTPROCESS_TRACKS if track not in skipped],
+                'resume': bool(resume)},
+        source='model_tracks.resume.completed_track',
+    )
+    trace().add_entities(
+        'run.skipped_track', list(skipped),
+        key_of=lambda track: track,
+        reason_of=lambda track: 'completed_artifacts_verified',
+        detail_of=lambda track: {'track': track, 'inventory': spec.inventory_file,
+                                 'marker': spec.complete_file},
+        source='model_tracks.resume.TRACKS',
+    )
     # The trained lanes (text, gnn_only) run in parallel behind the start
     # barrier. The cascade trains nothing and consumes both trained artifacts,
     # so it runs sequentially after the parallel phase completes. Both groups
@@ -223,13 +321,43 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             result.setdefault('workers', []).append(
                 _run_postprocess_track(config, output, run_tag, track, env,
                                        resume=resume, events=events))
+    trace().add(
+        'run', 'workers',
+        in_count=len(commands) + len(postprocess_tracks),
+        out_count=len(result.get('workers', [])),
+        reason='the trained lanes run in parallel behind the start barrier; a postprocess '
+               'combinator runs after it, when the artifacts it consumes exist',
+        detail={'mode': result.get('mode'), 'parallel_lanes': len(commands),
+                'postprocess_lanes': len(postprocess_tracks),
+                'skipped_verified_tracks': list(skipped), 'device': cfg.device},
+        source=str(output),
+    )
     result['skipped_verified_tracks'] = skipped
     # Validate the current artifact generation, not just completion markers.
     with _LOG.section('phase.completion', tracks=len(TRACKS)):
         for track in TRACKS:
             if not completed_track(output / track, track,
                                    postprocess_complete=expected_postprocess(track, gpu_only=gpu_only)):
+                trace().add(
+                    'run', 'incomplete_track',
+                    scope=SCOPE_ENTITY, key=track,
+                    reason='the track does not satisfy its completion contract (markers and '
+                           'artifacts verified against the SHA256 inventory)',
+                    detail={'track': track, 'inventory': spec.inventory_file,
+                            'marker': spec.complete_file, 'gpu_only': gpu_only},
+                    source=str(output / track),
+                )
+                flush_trace()
                 raise ValueError(f'incomplete track: {track}')
+        trace().add(
+            'run', 'completion_gate',
+            in_count=len(TRACKS), out_count=len(TRACKS),
+            reason='every track passes its completion contract before the result is collected',
+            detail={'tracks': list(TRACKS), 'gpu_only': gpu_only,
+                    'expected_postprocess': {track: bool(expected_postprocess(track, gpu_only=gpu_only))
+                                             for track in TRACKS}},
+            source='model_tracks.resume.completed_track',
+        )
     if cfg.post_training_ablation and not gpu_only:
         from model_tracks.baseline_ablation import complete as complete_baseline
         from model_tracks.post_training_ablation import complete_saved
@@ -238,6 +366,16 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         complete_saved(output, cfg)
         for track in TRACKS:
             record_completion(output / track, track)
+        trace().add(
+            'run', 'ablation',
+            in_count=len(TRACKS), out_count=len(TRACKS),
+            reason='the suite completes the baseline and the saved attribute ablation before the '
+                   'result is sealed, so the archive carries the frozen reports',
+            detail={'baseline': str(output / 'baseline'),
+                    'ablation_config': str(TRAIN_ROOT / cfg.ablation_config),
+                    'tracks': list(TRACKS)},
+            source=str(output / 'post_training_ablation.json'),
+        )
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     if getattr(events, 'resource_profile', None):
         events.resource_profile.close()
@@ -247,22 +385,46 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if not resume:
             raise FileExistsError(archive_path)
         from model_tracks.resume import verify_suite_archive
-        verify_suite_archive(archive_path, output, run_tag, identity, gpu_only=gpu_only)
-        archive_sha = file_hash(archive_path)
-        archive_sidecar(archive_path, '.sha256').write_text(archive_sha + '\n')
+        existing = verify_suite_archive(archive_path, output, run_tag, identity,
+                                        gpu_only=gpu_only)
+        archive_sha = existing.digest
+        archive_sidecar(archive_path, spec.sha256_sidecar_suffix).write_text(archive_sha + '\n')
         events.emit('collection', 'verified', archive=str(archive_path), sha256=archive_sha,
                     reused=True)
+        trace().add(
+            'run', 'collection',
+            in_count=len(existing.members()), out_count=len(existing.members()),
+            reason='a sealed archive for this run already exists and verifies against the current '
+                   'result tree, so it is reused instead of rewritten',
+            detail={'archive': str(archive_path), 'digest': archive_sha, 'reused': True,
+                    'members': len(existing.members()), 'format': cfg.result_archive_format},
+            source=str(archive_path),
+        )
         with _LOG.section('phase.publication', reused=True):
             if cfg.dvc_enabled and not gpu_only:
                 from model_tracks.local_complete import _publish
                 events.emit('publication', 'starting', archive=str(archive_path))
                 _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
                 events.emit('publication', 'complete')
+                trace().add(
+                    'run', 'publication',
+                    reason='the verified archive is published from the reused result tree',
+                    detail={'archive': str(archive_path), 'published': True, 'reused_archive': True,
+                            'dvc_enabled': bool(cfg.dvc_enabled)},
+                    source=str(archive_path),
+                )
             else:
                 events.emit('publication', 'skipped', reason='publication disabled in suite config')
+                trace().add(
+                    'run', 'publication',
+                    reason='publication is disabled in the suite config, so nothing is pushed',
+                    detail={'archive': str(archive_path), 'published': False, 'reused_archive': True,
+                            'dvc_enabled': bool(cfg.dvc_enabled)},
+                    source=str(archive_path),
+                )
+        flush_trace()
         return archive_path
-    from core.portable_archive import is_result_archive_member, write_archive
-    from model_tracks.resume import selected_checkpoint_dirs
+    from core.bundle import Bundle, BundleRole
     # The timing surfaces default into output/logs (bffadd3) and are appended
     # to by this very collection step, so the archive would hash bytes that
     # change mid-write ("archive integrity mismatch: logs/timings.log").
@@ -273,28 +435,70 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             os.environ[_variable] = str(
                 Path(tempfile.gettempdir()) / f'er_frozen_{Path(_bound).name}')
     publication = cfg.dvc_enabled and not gpu_only
-    # The publication decision is sealed into the archived event log: it is the
-    # last handoff event knowable before the archive exists (owner #5). The
-    # post-seal `collection complete` sha is carried by the .sha256 sidecar.
     if not publication:
         events.emit('publication', 'skipped', reason='publication disabled in suite config')
-    selected = selected_checkpoint_dirs(output)
-    files = {p.relative_to(output).as_posix(): p for p in output.rglob('*')
-             if p.is_file() and not p.is_symlink()
-             and is_result_archive_member(p.relative_to(output).as_posix(),
-                                          selected_checkpoints=selected)}
+    # The result role owns the member set (selected checkpoint only) and the
+    # sealing writer; this stage neither re-derives the predicate nor re-hashes.
+    result_bundle = Bundle.from_directory(output, BundleRole.result)
+    files = result_bundle.collect_result_members()
+    tree_files = result_bundle.members()
+    trace().add(
+        'run', 'collection',
+        in_count=len(tree_files), out_count=len(files),
+        reason='the result role decides the sealed member set: the selected checkpoint only, so '
+               'every other epoch, optimizer state and resume tree is dropped',
+        detail={'output': str(output), 'tree_files': len(tree_files),
+                'selected_members': len(files), 'format': cfg.result_archive_format,
+                'archive': str(archive_path), 'publication': publication,
+                'run_tag': run_tag},
+        source=str(output),
+    )
+    # Single-archive handoff (owner #5): the final events are emitted (and
+    # fsynced by WorkerEvents) BEFORE the seal, so the one downloaded archive
+    # carries the complete stream including the publication decision. The
+    # post-seal transport token travels in the .sha256 sidecar.
+    events.emit('collection', 'sealing', tracks=list(TRACKS), files=len(files),
+                publication=publication)
     with _LOG.section('phase.archive_write', files=len(files), format=cfg.result_archive_format):
-        write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag}, profile=cfg.profiling)
-        archive_sha = file_hash(archive_path)
-        archive_sidecar(archive_path, '.sha256').write_text(archive_sha + '\n')
-        events.emit('collection', 'complete', archive=str(archive_path), sha256=archive_sha,
+        sealed = result_bundle.seal_result(archive_path,
+                                           metadata={spec.run_tag_key: run_tag},
+                                           profile=cfg.profiling)
+        archive_sidecar(archive_path, spec.sha256_sidecar_suffix).write_text(sealed.digest + '\n')
+        events.emit('collection', 'complete', archive=str(archive_path), sha256=sealed.digest,
                     bytes=archive_path.stat().st_size)
+        trace().add(
+            'run', 'seal',
+            in_count=len(files), out_count=len(files),
+            reason='one sealed result archive is written by the role writer, which hashes each '
+                   'member exactly once while writing and captures the whole-file digest there',
+            detail={'archive': str(archive_path), 'digest': sealed.digest,
+                    'bytes': archive_path.stat().st_size, 'members': len(files),
+                    'format': cfg.result_archive_format, 'run_tag': run_tag,
+                    'profile': bool(cfg.profiling)},
+            source=str(archive_path),
+        )
     with _LOG.section('phase.publication', reused=False):
         if publication:
             from model_tracks.local_complete import _publish
             events.emit('publication', 'starting', archive=str(archive_path))
             _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
             events.emit('publication', 'complete')
+            trace().add(
+                'run', 'publication',
+                reason='the freshly sealed archive is published to its configured sinks',
+                detail={'archive': str(archive_path), 'published': True, 'reused_archive': False,
+                        'dvc_enabled': bool(cfg.dvc_enabled)},
+                source=str(archive_path),
+            )
+        else:
+            trace().add(
+                'run', 'publication',
+                reason='publication is disabled in the suite config, so nothing is pushed',
+                detail={'archive': str(archive_path), 'published': False, 'reused_archive': False,
+                        'dvc_enabled': bool(cfg.dvc_enabled)},
+                source=str(archive_path),
+            )
+    flush_trace()
     return archive_path
 
 

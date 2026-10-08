@@ -22,8 +22,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.archive_reader import archive_sidecar, open_archive
-from graph_tracks.data import file_hash
+from core.archive_reader import archive_sidecar
 from model_tracks.config import SuiteConfig
 from model_tracks.post_training_ablation import ABLATION_TRACKS, SavedAblationReport
 from model_tracks.resume import (
@@ -33,9 +32,21 @@ from model_tracks.resume import (
 VERIFICATION_SCHEMA = 'er-suite-verification-v1'
 
 
+def _spec():
+    """The bundle contract from config (single source for member names)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
+
+
 def report_member(track: str) -> str:
-    """The calibrated report manifest a completed track must carry exactly one of."""
-    return 'text__completion_manifest.json' if track == 'text' else f'{track}__report_manifest.json'
+    """The calibrated report manifest a completed track must carry exactly one of.
+
+    The derivation lives with the manifest contract it names
+    (``graph_tracks.report_manifest``); the import stays lazy so this module
+    does not pull the graph lane in just to spell a filename.
+    """
+    from graph_tracks.report_manifest import report_member as manifest_member
+    return manifest_member(track)
 
 
 def archive_run_tag(archive: Path) -> str:
@@ -62,6 +73,7 @@ def verification_result(archive: Path, run_tag: str | None = None,
     """
     archive = Path(archive)
     run_tag = run_tag or archive_run_tag(archive)
+    spec = _spec()
     result: dict = {
         'schema': VERIFICATION_SCHEMA,
         'verified_at': datetime.now(timezone.utc).isoformat(),
@@ -70,37 +82,45 @@ def verification_result(archive: Path, run_tag: str | None = None,
         'zip_sha256': {},
         'tracks': {},
     }
-    sidecar = archive_sidecar(archive, '.sha256')
+    sidecar = archive_sidecar(archive, spec.sha256_sidecar_suffix)
     if sidecar.is_file() and not sidecar.is_symlink():
         expected = sidecar.read_text(encoding='utf-8').strip().splitlines()[0]
-        actual = file_hash(archive)
         result['zip_sha256'] = {'sidecar': sidecar.name, 'expected': expected,
-                                'actual': actual, 'match': expected == actual}
+                                'actual': None, 'match': None}
     else:
         result['zip_sha256'] = {'sidecar': None, 'match': None,
                                 'note': 'no .sha256 sidecar to check against'}
     try:
-        validate_completed_suite_archive(archive, run_tag, settings=settings)
-        with open_archive(archive) as bundle:
-            binding = TrainingInputBinding.model_validate_json(bundle.read('suite_manifest.json'))
+        from core.bundle import Bundle, BundleRole
+        # Exactly one boundary check; its streaming pass also yields the
+        # whole-archive digest the sidecar is compared against.
+        handle = Bundle.load(archive, BundleRole.result)
+        if result['zip_sha256'].get('expected') is not None:
+            result['zip_sha256']['actual'] = handle.digest
+            result['zip_sha256']['match'] = (
+                result['zip_sha256']['expected'] == handle.digest)
+        validate_completed_suite_archive(archive, run_tag, settings=settings, bundle=handle)
+        with handle.reader() as source:
+            binding = TrainingInputBinding.model_validate_json(
+                source.read(spec.suite_manifest_file))
             ablation_enabled = binding.settings.post_training_ablation
             # A GPU suite that shipped no ablation templates records a deliberate
             # skip; the cascade never ships an ablation at all.
             ablation_skipped = any(
-                _events_skip_ablation(bundle.read(name).decode(errors='replace'))
-                for name in bundle.namelist()
-                if name.endswith(('suite_events.jsonl', 'worker_events.jsonl')))
+                _events_skip_ablation(source.read(name).decode(errors='replace'))
+                for name in source.namelist()
+                if name.endswith((spec.suite_events_file, spec.worker_events_file)))
             ablation_required = ablation_enabled and not ablation_skipped
             for track in TRACKS:
                 suffix = report_member(track)
-                reports = [relative for relative in bundle.namelist()
+                reports = [relative for relative in source.namelist()
                            if relative.startswith(f'{track}/')
                            and relative.split('/')[-1] == suffix
                            and _not_interrupted(relative)]
                 if len(reports) != 1:
                     raise ValueError(
                         'completed archive lacks one calibrated track report: ' + track)
-                report = json.loads(bundle.read(reports[0]))
+                report = json.loads(source.read(reports[0]))
                 entry: dict = {
                     'report': reports[0],
                     'threshold': report['threshold'],
@@ -109,7 +129,7 @@ def verification_result(archive: Path, run_tag: str | None = None,
                 }
                 if ablation_required and track in ABLATION_TRACKS:
                     saved = SavedAblationReport.model_validate_json(
-                        bundle.read(f'{track}/ablation/report.json'))
+                        source.read(f'{track}/ablation/report.json'))
                     entry['ablation'] = {
                         'threshold': saved.threshold,
                         'threshold_binding': saved.threshold_binding.model_dump(),

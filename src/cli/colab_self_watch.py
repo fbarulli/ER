@@ -2,7 +2,8 @@
 
 Split from cli/colab.py (capability module, phase 1). Collaborators still
 owned by cli.colab are resolved at call time through the running colab module
-(registered by colab.py itself in ``sys.modules["__colab_runtime_self__"]``),
+(the ``__colab_runtime_self__`` identity colab.py itself registers, read here
+through ``colab_hub.hub()``),
 so behavior is identical: ``monkeypatch`` on ``cli.colab.<name>`` keeps
 working and the ``python -m cli.colab`` runtime identity never sees a stale
 second copy.
@@ -20,9 +21,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-def _colab():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    return sys.modules["__colab_runtime_self__"]
+from cli.colab_hub import hub
 
 # ── default self-watch (owner order 2026-10-07): release + delivery is
 # baked in, no operator arg.  The colab twin of the kaggle lane's
@@ -30,13 +29,13 @@ def _colab():
 # carries its own detached watcher that proves delivery happened and the
 # VM was released, even when the launcher process itself dies. ──
 
-_SELF_WATCH_POLL_SECONDS = max(float(_colab()._LOG_POLL_SECONDS), 30.0)
+_SELF_WATCH_POLL_SECONDS = max(float(hub()._LOG_POLL_SECONDS), 30.0)
 _SELF_WATCH_BUDGET_SECONDS = 24 * 3600
 _SELF_WATCH_TRANSCRIPT_MAX_BYTES = 30 * 1024 * 1024
 
 def _self_watch_root(run_id: str) -> Path:
     """Receipt + captured-log folder for one watcher (lane receipts roof)."""
-    return _colab().TRAINING_RESULTS / f"self_watch_{run_id}"
+    return hub().TRAINING_RESULTS / f"self_watch_{run_id}"
 
 def _session_listed() -> bool:
     """Read the session state through the exact surface main()/stop() use.
@@ -45,10 +44,10 @@ def _session_listed() -> bool:
     false 'absent' would forfeit the release guarantee the watcher exists for.
     """
     try:
-        result = _colab().colab("sessions", check=False, timeout=30)
+        result = hub().colab("sessions", check=False, timeout=30)
     except (subprocess.SubprocessError, OSError):
         return True
-    return _colab().SESSION in (result.stdout or "")
+    return hub().SESSION in (result.stdout or "")
 
 def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     """Detach the release/delivery self-watch for one executed remote run.
@@ -64,7 +63,7 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     # one file).  It is a detached child, so it never truncates: the launcher
     # opened lane.log fresh (start_live_log) and this child only appends.
     from cli import log_capture
-    log_path = log_capture.lane_log("colab", _colab().LANE_LOG_NAME)
+    log_path = log_capture.lane_log("colab", hub().LANE_LOG_NAME)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # The runbook's "never python -m cli.colab for a launch" rule stands: this
     # child is a watcher, not a launch — it provisions nothing.
@@ -73,7 +72,7 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     environment = dict(
         os.environ,
         PYTHONUNBUFFERED="1",
-        PYTHONPATH=str(_colab().TRAIN_ROOT / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        PYTHONPATH=str(hub().TRAIN_ROOT / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
     )
     with log_path.open("ab") as handle:
         handle.write(f"[spawn_self_watch {datetime.now(ZoneInfo('Europe/Paris'))} "
@@ -81,7 +80,7 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
                      .encode())
         handle.flush()
         subprocess.Popen(
-            command, cwd=_colab().TRAIN_ROOT, env=environment,
+            command, cwd=hub().TRAIN_ROOT, env=environment,
             stdout=handle, stderr=subprocess.STDOUT, start_new_session=True,
         )
     return {"self_watch": "spawned", "what": what, "run_id": run_id,
@@ -95,11 +94,11 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     receipt folder so the failure stays inspectable after the VM is gone.
     """
     found: list[str] = []
-    for candidate in (_colab().TRAINING_RESULTS / run_id,
-                      _colab().TRAINING_RESULTS / f"colab_bundle_{run_id}"):
+    for candidate in (hub().TRAINING_RESULTS / run_id,
+                      hub().TRAINING_RESULTS / f"colab_bundle_{run_id}"):
         if candidate.is_dir():
             found.extend(
-                path.relative_to(_colab().TRAINING_RESULTS).as_posix()
+                path.relative_to(hub().TRAINING_RESULTS).as_posix()
                 for path in sorted(candidate.rglob("*")) if path.is_file()
             )
     state: dict[str, object] = {
@@ -110,7 +109,7 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     if not state["delivered"]:
         captured: list[str] = []
         destination = _self_watch_root(run_id)
-        for name in (f"colab_system_{_colab().SESSION}.log", f"training_{_colab().SESSION}.log",
+        for name in (f"colab_system_{hub().SESSION}.log", f"training_{hub().SESSION}.log",
                      "lane.log", "system.log", "training.log"):
             try:
                 from cli import log_capture
@@ -137,7 +136,7 @@ def _write_self_watch_receipt(plan: dict[str, object]) -> str:
         )
     except OSError as exc:
         print(
-            _colab()._stamp(),
+            hub()._stamp(),
             f"[self-watch] receipt write failed ({exc}); continuing",
             file=sys.stderr,
         )
@@ -164,13 +163,13 @@ def self_watch(
     budget = float(budget_seconds if budget_seconds is not None
                    else _SELF_WATCH_BUDGET_SECONDS)
     plan: dict[str, object] = {
-        "what": what, "run_id": run_id, "session": _colab().SESSION,
+        "what": what, "run_id": run_id, "session": hub().SESSION,
         "mode": "executed" if execute else "dry-run",
         "poll_seconds": poll,
     }
     if not execute:
         return plan
-    lock_path = _colab()._colab_launch_lock_path()
+    lock_path = hub()._colab_launch_lock_path()
     deadline = time.monotonic() + budget
     polls = 0
     listed = True
@@ -181,7 +180,7 @@ def self_watch(
         if not listed:
             outcome = "released"
             break
-        if not _colab()._colab_launch_lock_is_held(lock_path):
+        if not hub()._colab_launch_lock_is_held(lock_path):
             outcome = "launcher_exit_detected"
             break
         if time.monotonic() >= deadline:
@@ -190,14 +189,14 @@ def self_watch(
         time.sleep(poll)
     plan.update({"polls": polls, "outcome": outcome})
     if listed:
-        confirmed = _colab().stop()
+        confirmed = hub().stop()
         plan["release"] = {"guarantee_ran": True, "confirmed": bool(confirmed)}
     else:
         plan["release"] = {"guarantee_ran": False, "observed_absent": True}
     plan["delivery"] = _self_watch_delivery_state(run_id)
     plan["receipt"] = _write_self_watch_receipt(plan)
     print(
-        _colab()._stamp(),
+        hub()._stamp(),
         f"[self-watch] run_id={run_id} outcome={outcome} release={plan['release']}",
         flush=True,
     )

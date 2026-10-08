@@ -1,12 +1,13 @@
 # Standalone graph training tracks
 
-Two runnable experimental workers live here. Existing ANN, text training and
+Two runnable experimental lanes live here: the trained `gnn_only` worker and
+its `cascade` retrieve-then-rerank combinator. Existing ANN, text training and
 Colab launcher code stays unchanged. MLflow is neither imported nor required.
 
 | Track | Inputs | Learned outputs |
 |---|---|---|
 | `gnn_only` | Structured attributes and training-only graph context | Graph embeddings and calibrated pair scorer |
-| `hybrid` | Same graph plus frozen MiniLM vectors | Graph-informed embeddings and graph/text pair scorer |
+| `cascade` | The trained text ANN (ranker) plus the trained `gnn_only` scorer checkpoint (decider) | Nothing — a combinator: it fuses no embedding and trains no parameters |
 
 This is full-batch, relation-specific listing → attribute → listing aggregation
 in plain PyTorch. It is not neighbor-sampled GraphSAGE. The initial feature
@@ -33,7 +34,8 @@ unverified; no silent CPU fallback occurs when CUDA is requested.
 The setup command builds listing assignments from the same
 `training.folds.derive_holdout` entry point used by text training. It records
 the exact local text checkpoint, source hashes, exclusions and graph census.
-It creates independent GNN/hybrid configs with test reporting disabled.
+It creates the independent `gnn_only` and `cascade` configs with test reporting
+disabled.
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m graph_tracks.setup --output data/track_setup
@@ -42,7 +44,7 @@ PYTHONPATH=src .venv/bin/python -m graph_tracks.text_cache \
   --checkpoint artifacts/models/all-MiniLM-L6-v2 \
   --output data/track_setup/shared_minilm__embeddings.npz
 PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight --config data/track_setup/gnn_only.yaml
-PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight --config data/track_setup/hybrid.yaml
+PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight --config data/track_setup/cascade.yaml
 ```
 
 Entity labels select the lexically first listing per normalized entity.
@@ -61,14 +63,15 @@ credentials and do not start a worker or provision a VM:
 ```bash
 PYTHONPATH=src .venv/bin/python -m graph_tracks.worker_package \
   --config data/track_setup/gnn_only.yaml --output results/gnn_worker_setup.zip
-PYTHONPATH=src .venv/bin/python -m graph_tracks.worker_package \
-  --config data/track_setup/hybrid.yaml --output results/hybrid_worker_setup.zip
 ```
+
+The `cascade` lane is a combinator, not a trained worker: it ships no standalone
+package and is composed by the suite after the trained lanes finish.
 
 Extract into the recorded ER checkout revision and follow the package README.
 The target runtime must pass its own preflight, including CUDA availability,
 before training. These packages support manual workers. The consolidated
-three-track Colab route uses the existing entry point:
+`text` + `gnn_only` + `cascade` Colab route uses the existing entry point:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cli.colab --what tracks \
@@ -105,8 +108,9 @@ hatch, disabled in shipped configs.
 
 Frozen caches are NPZ with string `ids`, finite nonzero `embeddings` and JSON
 `metadata`. They identify the local checkpoint, shared model-input composition,
-catalog and identity policies. IDs are aligned explicitly. Hybrid training
-checks cache/preparation provenance, not just vector dimensions. A cache may
+catalog and identity policies. IDs are aligned explicitly. The fused text cache
+is retired with the hybrid encoder: no shipped graph config declares one, and the
+cascade reads the trained text index directly. A cache may
 contain extra IDs, but production training requires the same source catalog
 fingerprint. No checkpoint is downloaded implicitly.
 
@@ -143,13 +147,17 @@ the selected checkpoint; their queries retain the checkpoint's training support.
 ```bash
 PYTHONPATH=src .venv/bin/python -m graph_tracks.train \
   --config config/graph_tracks_gnn.yaml --run-tag experiment-001
-PYTHONPATH=src .venv/bin/python -m graph_tracks.train \
-  --config config/graph_tracks_hybrid.yaml --run-tag experiment-001
 ```
 
+The `cascade` lane trains nothing. It is composed by the suite
+(`model_tracks.cascade`) from the trained text ranker and `gnn_only` checkpoint,
+and reported by `graph_tracks.report.report_cascade`; there is no
+`graph_tracks.train --config config/graph_tracks_cascade.yaml` invocation.
+
 Each worker creates `<output_dir>/<track>__<run_tag>`. If
-`EUROMONITOR_RESULTS_DIR` is set it supplies the base output directory. The same
-run tag can be used for both tracks safely. Checkpoint **filenames**, manifests,
+`EUROMONITOR_RESULTS_DIR` is set it supplies the base output directory. Each
+lane writes its own track-prefixed paths, so the same run tag can be reused
+safely across lanes. Checkpoint **filenames**, manifests,
 logs, vectors, reports and W&B artifacts carry the track name. The shared HNSW
 adapter's internal filenames stay inside a track-prefixed index directory.
 
@@ -227,7 +235,7 @@ extras and standard provider configuration. Live remote publication is unverifie
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m graph_tracks.dvc \
-  --project /path/hybrid__run/hybrid__dvc-epoch-10 --output /path/restored-run
+  --project /path/gnn_only__run/gnn_only__dvc-epoch-10 --output /path/restored-run
 ```
 
 Local-only restores need the original local DVC cache. A remote push permits an
@@ -243,15 +251,15 @@ uses Python pickle. Legacy unprefixed experimental files require fresh training.
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m graph_tracks.train \
-  --config /path/updated-hybrid-config.yaml --run-tag experiment-001-resumed \
-  --resume /path/restored-run/_checkpoints/hybrid/experiment-001_f0/checkpoint-10/hybrid__graph_model.pt
+  --config /path/updated-gnn_only-config.yaml --run-tag experiment-001-resumed \
+  --resume /path/restored-run/_checkpoints/gnn_only/experiment-001_f0/checkpoint-10/gnn_only__graph_model.pt
 PYTHONPATH=src .venv/bin/python -m graph_tracks.bundle \
-  --source results/graph_tracks/hybrid__experiment-001 \
-  --output /path/hybrid__experiment-001.zip
+  --source results/graph_tracks/gnn_only__experiment-001 \
+  --output /path/gnn_only__experiment-001.zip
 ```
 
-For relocated runs, point `listings`, `pairs`, `input_manifest`, and `text_cache`
-at their copied `hybrid__inputs/` files; increase `epochs`. The bundle retains
+For relocated runs, point `listings`, `pairs` and `input_manifest`
+at their copied `gnn_only__inputs/` files; increase `epochs`. The bundle retains
 raw artifacts and DVC pointers but excludes credentials, SDK caches and duplicated
 DVC payloads. `--include-dvc-cache` additionally makes a local-only DVC workspace
 portable. Online W&B runs persist remotely; offline W&B logs remain in the worker
@@ -264,17 +272,19 @@ PYTHONPATH=src .venv/bin/python -m graph_tracks.infer \
   --checkpoint /path/checkpoint-N/gnn_only__graph_model.pt \
   --listings /path/query_listings.json --output /path/new-export --build-index
 PYTHONPATH=src .venv/bin/python -m graph_tracks.report \
-  --config config/graph_tracks_hybrid.yaml \
-  --checkpoint /path/checkpoint-N/hybrid__graph_model.pt --output /path/new-reports
+  --config config/graph_tracks_gnn.yaml \
+  --checkpoint /path/checkpoint-N/gnn_only__graph_model.pt --output /path/new-reports
 ```
 
-Hybrid inference additionally needs `--text-cache`. Optional `--pairs` contains
+The retired fused encoder's report additionally needed `--text-cache`; the
+cascade instead consumes the trained text index and `gnn_only` scorer through
+`report_cascade`. Optional `--pairs` contains
 exactly `sku_id1,sku_id2`, without labels. New queries may use
 `split: inference`, rejected by training. Query batches cannot communicate;
 their graph context is frozen from training support stored in the checkpoint.
 
 ANN cosine search does not reproduce the learned pair scorer, especially the
-hybrid's direct text path. Exported vector/index IDs are listing `sku_id`s,
+cascade decider's graph-only scorer. Exported vector/index IDs are listing `sku_id`s,
 not GTINs. HNSW settings and candidate budgets are configurable. Index metadata
 contains source paths; after relocation regenerate indexes through inference
 instead of treating old absolute paths as valid.
@@ -298,7 +308,7 @@ PYTHONPATH=src WANDB_SILENT=true WANDB_CONSOLE=off .venv/bin/python \
 ```
 
 The standalone smoke uses the actual local MiniLM checkpoint, shared preparation,
-both CPU workers, real W&B offline runs, complete inference/reports, and DVC
+the trained CPU worker, real W&B offline runs, complete inference/reports, and DVC
 push/independent clean pull to a temporary local remote. Its listings and labels
 are synthetic; perfect metrics there are not quality evidence.
 

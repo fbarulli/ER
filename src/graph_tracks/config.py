@@ -2,10 +2,8 @@
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Literal
-
-import yaml
 from core.execution_policy import AggregationBackend, OptimizerBackend
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 def _default_ann_recall_ks() -> tuple[int, ...]:
@@ -142,11 +140,10 @@ class GraphConfig(RetrievalConfig):
 
 
 def load_config(path: Path, *, expected_track: str | None = None) -> GraphConfig:
-    try:
-        cfg = GraphConfig.model_validate(yaml.safe_load(path.read_text()))
-    except (ValidationError, yaml.YAMLError) as exc:
-        exc.add_note(f"Graph lane configuration: {path}")
-        raise
+    """Read + validate one graph-lane YAML; read/validate live in core.common."""
+    from core.common import load_validated_yaml
+
+    cfg = load_validated_yaml(path, GraphConfig, label='Graph lane configuration')
     if expected_track is not None and cfg.track != expected_track:
         raise ValueError(f"{path}: expected {expected_track} lane, got {cfg.track}")
     return cfg
@@ -155,8 +152,6 @@ def load_config(path: Path, *, expected_track: str | None = None) -> GraphConfig
 def load_text_config(path: Path) -> TextConfig:
     if not path.is_file():
         raise FileNotFoundError(f"text lane config {path} is missing; regenerate the track setup")
-    try:
-        return TextConfig.model_validate(yaml.safe_load(path.read_text()))
-    except (ValidationError, yaml.YAMLError) as exc:
-        exc.add_note(f"Text lane configuration: {path}")
-        raise
+    from core.common import load_validated_yaml
+
+    return load_validated_yaml(path, TextConfig, label='Text lane configuration')

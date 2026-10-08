@@ -8,13 +8,41 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.run_log import RunLogger
 from core.step_trace import timed
+from core.tracing import flush_stage_trace, stage_trace
 from graph_tracks.data import file_hash, load_records, load_text_cache
 from graph_tracks.report import dev_threshold
 from graph_tracks.train import load_pairs
-from model_tracks.ablation import checkpoint_identity, report, request_context, resolve, write
+from model_tracks.ablation import checkpoint_identity, report, request_context, resolve, source_name, write
 from model_tracks.staged_ablation import forward as forward_staged
 
 _LOG = RunLogger(__name__)
+
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
+#: The stage name this module owns in the ONE consolidated pipeline trace.
+STAGE = "baseline_ablation"
+
+#: The module's trace writer: the shared shim's slot (``None`` until first use;
+#: see :func:`core.tracing.stage_trace`), so importing this module never touches
+#: the trace layout.
+_TRACE = None
+
+
+def trace():
+    """The ONE writer for the ``baseline_ablation`` stage of the current run."""
+    global _TRACE
+    _TRACE = stage_trace(STAGE, _TRACE)
+    return _TRACE
+
+
+def flush_trace():
+    """Commit this process's baseline-ablation rows once; a no-op while empty."""
+    return flush_stage_trace(_TRACE)
 
 
 class BaselineCalibration(BaseModel):
@@ -40,17 +68,30 @@ def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_mo
     """Reuse text interventions and frozen catalog vectors in this suite session."""
     with _LOG.section('ablation.baseline.forward'):
         template = json.loads((setup/'ablation_templates/text/request.json').read_text())
-        saved = (setup/'shared_minilm__embeddings.npz'
+        saved = (setup/_setup_layout().shared_embeddings
                  if template['settings']['retrieval_catalog'] == 'full' and template['settings'].get('coverage') != 'all' else None)
-        return forward_staged(output, setup, 'text', checkpoint, device=device,
+        trace().add(
+            "forward", "text_template",
+            in_count=1, out_count=1, key='text',
+            reason='the untrained baseline reuses the frozen text template and its saved catalog vectors',
+            detail={'template': source_name(setup/'ablation_templates/text/request.json'),
+                    'retrieval_catalog': template['settings']['retrieval_catalog'],
+                    'coverage': template['settings'].get('coverage'),
+                    'saved_text': None if saved is None else source_name(saved),
+                    'checkpoint': source_name(checkpoint), 'device': device},
+            source=source_name(setup/'ablation_templates/text/request.json'),
+        )
+        path = forward_staged(output, setup, 'text', checkpoint, device=device,
                               checkpoint_role='baseline', saved_text=saved, text_model=text_model)
+    flush_trace()
+    return path
 
 
 @timed
 def _saved_vectors(records, output):
     """Vectors and metadata for the saved catalog snapshot."""
     with _LOG.section('ablation.baseline.saved_vectors'):
-        vectors_path = output/'shared_minilm__embeddings.npz'
+        vectors_path = output/_setup_layout().shared_embeddings
         vectors, metadata = load_text_cache(vectors_path, [row['sku_id'] for row in records])
         return vectors_path, vectors, metadata
 
@@ -68,20 +109,63 @@ def _calibrated_calibration(checkpoint_sha256, vectors_path, metadata, records_p
     """The BaselineCalibration for the untrained checkpoint, or identity raise."""
     with _LOG.section('ablation.baseline.calibrate'):
         if metadata.get('checkpoint_sha256') != checkpoint_sha256:
+            from core.tracing import SCOPE_ENTITY
+            trace().add(
+                "complete", "calibration_rejected",
+                scope=SCOPE_ENTITY, key='text',
+                reason='baseline calibration vectors differ from the frozen checkpoint; '
+                       'the baseline is quarantined rather than refit',
+                detail={'vectors_checkpoint_sha256': metadata.get('checkpoint_sha256'),
+                        'frozen_checkpoint_sha256': checkpoint_sha256,
+                        'vectors': source_name(vectors_path)},
+                source=source_name(vectors_path),
+            )
+            flush_trace()
             raise ValueError('baseline calibration vectors differ from frozen checkpoint')
-        return BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
+        calibration = BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
             vectors_sha256=file_hash(vectors_path), listings_sha256=file_hash(records_path),
             pairs_sha256=file_hash(pairs_path), threshold=dev_threshold(labels, scores),
             dev_pairs=len(labels), dev_positives=int(labels.sum()),
             dev_negatives=int((labels == 0).sum()))
+    trace().add(
+        "complete", "calibration",
+        in_count=int(len(labels)), out_count=1, key='text',
+        reason='the untrained baseline threshold is fit on the dev split and never on test',
+        detail={'checkpoint_sha256': checkpoint_sha256,
+                'vectors_sha256': calibration.vectors_sha256,
+                'listings_sha256': calibration.listings_sha256,
+                'pairs_sha256': calibration.pairs_sha256,
+                'threshold': calibration.threshold,
+                'dev_pairs': calibration.dev_pairs,
+                'dev_positives': calibration.dev_positives,
+                'dev_negatives': calibration.dev_negatives,
+                'threshold_source': calibration.threshold_source,
+                'test_used_for_selection': calibration.test_used_for_selection},
+        source=source_name(pairs_path),
+    )
+    return calibration
 
 
 @timed
 def _frozen_report(request_path, calibration, *, saved=None):
     """Compute the threshold-frozen report at the baseline calibration threshold."""
     with _LOG.section('ablation.baseline.frozen_report'):
-        return report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
-                      threshold_source=str(saved), save=False)
+        result = report(request_path, request_path.parent/'vectors.npz', calibration.threshold,
+                        threshold_source=str(saved), save=False)
+    trace().add(
+        "complete", "frozen_report",
+        # Two different populations (dev calibration pairs vs comparison rows):
+        # a validation/reporting row, not a funnel.
+        in_count=None, out_count=len(result['rows']), key='text',
+        reason='the baseline report is computed at the frozen calibration threshold with no refit',
+        detail={'request_path': source_name(request_path),
+                'dev_pairs': int(calibration.dev_pairs),
+                'threshold': result['threshold'],
+                'rows': len(result['rows']),
+                'retrieval_catalog_count': result.get('retrieval_catalog_count')},
+        source=source_name(request_path.parent/'vectors.npz'),
+    )
+    return result
 
 
 @timed
@@ -91,8 +175,28 @@ def _frozen_calibration(request_path, calibration):
         binding = request_path.parent/'baseline_threshold.json'
         document = calibration.model_dump(mode='json')
         if binding.exists() and json.loads(binding.read_text()) != document:
+            from core.tracing import SCOPE_ENTITY
+            trace().add(
+                "complete", "binding_rejected",
+                scope=SCOPE_ENTITY, key='text',
+                reason='frozen baseline calibration changed during completion; the sealed '
+                       'binding is never overwritten',
+                detail={'binding': source_name(binding)},
+                source=source_name(binding),
+            )
+            flush_trace()
             raise ValueError('frozen baseline calibration changed during completion')
         write(binding, document)
+        trace().add(
+            "complete", "binding",
+            in_count=1, out_count=1, key='text',
+            reason='the untrained baseline checkpoint identity and frozen threshold are sealed together',
+            detail={'binding': source_name(binding),
+                    'checkpoint_sha256': calibration.checkpoint_sha256,
+                    'threshold': calibration.threshold,
+                    'pre_existed': binding.exists()},
+            source=source_name(binding),
+        )
         return binding
 
 
@@ -110,8 +214,18 @@ def _persist_baseline(request_path, result):
                               indent=2, allow_nan=False) + '\n').encode('utf-8')
         path.write_bytes(payload)
         # Hash the bytes we just wrote instead of reading 7 MB back off disk.
-        (request_path.parent/'report.sha256').write_text(
-            hashlib.sha256(payload).hexdigest()+'\n')
+        digest = hashlib.sha256(payload).hexdigest()
+        (request_path.parent/'report.sha256').write_text(digest+'\n')
+        trace().add(
+            "complete", "persisted",
+            in_count=None, out_count=2, key='text',
+            reason='the baseline report and its sha256 sidecar are written beside the request',
+            detail={'report': source_name(path), 'report_sha256': digest,
+                    'sidecar': source_name(request_path.parent/'report.sha256'),
+                    'rows': len(result['rows']), 'threshold': result['threshold']},
+            source=source_name(path),
+        )
+    return path
 
 
 @timed
@@ -122,10 +236,26 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
         request = json.loads(request_path.read_text())
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
             raise ValueError('baseline report requires the frozen baseline ablation')
-        records_path, pairs_path = setup/'prepared/listings.json', setup/'prepared/pairs.csv'
+        layout = _setup_layout()
+        records_path, pairs_path = (setup/layout.prepared_dir/'listings.json',
+                                    setup/layout.prepared_dir/'pairs.csv')
         records = load_records(records_path)
         vectors_path, vectors, metadata = _saved_vectors(records, output)
         labels, scores = _dev_scores(pairs_path, records, vectors)
+        trace().add(
+            "complete", "load",
+            # Two different populations (listing records vs dev pair rows):
+            # a load row, not a funnel.
+            in_count=None, out_count=int(len(labels)), key='text',
+            reason='the untrained baseline consumes only the saved catalog vectors and the dev labels',
+            detail={'request_path': source_name(request_path), 'track': request['track'],
+                    'checkpoint_role': request.get('checkpoint_role'),
+                    'checkpoint': request['checkpoint'], 'records': len(records),
+                    'dev_pairs': int(len(labels)),
+                    'vectors': source_name(vectors_path),
+                    'vectors_bytes': vectors_path.stat().st_size},
+            source=source_name(request_path),
+        )
     with _LOG.section('ablation.baseline.calibration'):
         with request_context(request_path):
             checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
@@ -135,4 +265,5 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
             result = _frozen_report(request_path, calibration, saved=binding)
             # Keep this baseline report separate from trained-text dashboard pointers.
             _persist_baseline(request_path, result)
+    flush_trace()
     return request_path.parent/'report.json'

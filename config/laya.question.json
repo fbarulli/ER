@@ -1,5 +1,18 @@
 {
   "schema": "er-laya-questions-v1",
+  "corpus": {
+    "seed": null,
+    "hard_no_cap": null,
+    "identity_negative_target_ratio": null,
+    "sources": {
+      "catalog": null,
+      "pairs": null,
+      "gate": null,
+      "bundle": null,
+      "labeled_pairs": null,
+      "output_dir": null
+    }
+  },
   "questions": {
     "attribute_alignment": {
       "type": "choice",

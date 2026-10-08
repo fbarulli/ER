@@ -22,6 +22,8 @@ class KaggleOutputs:
         bundle — bundle.receipt.json contract (all_tracks_inputs.tar.zst)
         train  — result_manifest.json contract (result_bundle.tar.zst)
         embed  — result_manifest.json contract (vectors.tar.zst)
+        finalize — result_manifest.json contract (finalized_bundle.tar.zst, the
+        sealed result bundle the remote CPU finalize job wrote)
         Verified artifacts install under staging_dir/<cohort>/<kind>/; the
         destination cohort tag comes from the explicit override (for the bundle
         lane's per-cohort fetch) or from the config dataset binding, matching
@@ -34,18 +36,18 @@ class KaggleOutputs:
         from cli import kaggle_lane as lane
 
         spec = lane._spec()
-        slugs = {"bundle": spec.cpu_kernel_slug, "train": spec.gpu_kernel_slug,
-                 "embed": spec.embedding_kernel_slug}
-        if kind not in slugs:
-            raise ValueError(f"unknown kernel output kind: {kind!r}")
-        slug = slug or slugs[kind]
+        # One registry (config SSOT) resolves the slug, the bundle role, and the
+        # manifest/archive names — no per-surface kind->slug table here.
+        try:
+            identity = lane.kernel_identity(kind, spec)
+        except RuntimeError as error:
+            raise ValueError(f"unknown kernel output kind: {kind!r}") from error
+        slug = slug or identity.slug(spec)
         if not slug:
-            raise RuntimeError(f"config kaggle kernel slug for {kind!r} is unset")
-        result_kind = spec.files.result_names.get(kind, kind)
-        manifest_name = (spec.files.bundle_receipt if kind == "bundle"
-                         else spec.files.result_manifest.format(kind=result_kind))
-        archive_name = (spec.files.bundle_archive if kind == "bundle"
-                        else spec.files.result_archive.format(kind=result_kind))
+            raise RuntimeError(
+                f"config kaggle.{identity.slug_attr} for {kind!r} is unset")
+        manifest_name = identity.manifest_name(spec.files)
+        archive_name = identity.archive_name(spec.files)
         stage = lane.staging_dir() / lane._spec().files.fetch_stage.format(kind=kind)
         plan: dict[str, Any] = {
             "mode": "executed" if execute else "dry-run",
@@ -87,11 +89,23 @@ class KaggleOutputs:
             raise FileNotFoundError(
                 f"kernel output manifest names {archive_name} but it is missing "
                 f"under {manifest_dir}")
-        observed = lane.sha256_file(archive)
         sidecar = manifest_dir / (archive_name + spec.files.hash_suffix)
         expected = (sidecar.read_text().strip() if sidecar.is_file()
                     else manifest.get("archive_sha256"))
-        if not expected or observed != expected:
+        if not expected:
+            raise RuntimeError(
+                f"fetched {kind} output records no sha256 for {archive_name} "
+                f"(neither {archive_name + spec.files.hash_suffix} nor the "
+                "manifest carries one)")
+        # ONE read of the archive. A bundle role is named by its boundary load,
+        # which verifies the whole-archive sha256 against the recorded receipt
+        # AND the archive's own member inventory in that same pass — so a role
+        # archive is never hashed twice. Kinds with no bundle role (train,
+        # embed) get the plain whole-archive digest. Either way this crossing
+        # performs exactly one integrity hash of the fetched archive.
+        bundle = KaggleOutputs.identify_bundle(kind, archive, expected)
+        observed = bundle.get("sha256") or lane.sha256_file(archive)
+        if observed != expected:
             raise RuntimeError(
                 f"fetched {kind} sha256 mismatch: expected {expected} observed "
                 f"{observed}")
@@ -120,11 +134,50 @@ class KaggleOutputs:
             "cohort": resolved_cohort,
             "installed": installed,
         })
+        # ``bundle`` above IS this crossing's single integrity check: the role
+        # load verified the whole-archive sha256 against the receipt and, in the
+        # same pass, the archive's own member inventory. A non-role kind was
+        # named and hashed once; either way the artifact is reported for what it
+        # is and nothing downstream re-reads the archive to re-verify it.
+        plan["bundle"] = bundle
         # Publish default (owner order 2026-10-07): every successful verified
         # fetch ends with the publish step — no operator hand-invoke. The plan
         # entry records what was published (or why it was skipped/failed).
         plan["publish"] = lane._publish_after_verified_fetch(kind)
         return plan
+
+    @staticmethod
+    def identify_bundle(kind: str, archive: Path, expected_digest: str) -> dict[str, Any]:
+        """Name the fetched archive's ``core.bundle`` role (and load ONE handle).
+
+        The role comes from the lane identity registry (``bundle`` fetches the
+        prepared-inputs Bundle, ``finalize`` the sealed result Bundle); a role
+        archive is loaded exactly once through :meth:`core.bundle.Bundle.load`,
+        whose single pass verifies the whole-archive sha256 against
+        ``expected_digest`` AND the archive's own member inventory — so the
+        caller gets the observed digest and never re-reads the archive. Any
+        other kind is not a Bundle role. An archive whose role manifest is
+        absent is reported as unidentified — never silently treated as a bundle
+        (the enforcing stage fails loud on its own load instead).
+        """
+        from cli import kaggle_lane as lane
+
+        from core.bundle import Bundle, BundleRole, manifest_name
+
+        role_value = lane.kernel_identity(kind).bundle_role
+        if role_value is None:
+            return {"identified": False, "role": None,
+                    "note": f"fetched {kind!r} output is not a bundle role archive"}
+        role = BundleRole(role_value)
+        try:
+            handle = Bundle.load(archive, role, expected_digest=expected_digest)
+        except (ValueError, KeyError, EOFError, OSError) as error:
+            return {"identified": False, "role": role.value,
+                    "expected_manifest": manifest_name(role),
+                    "note": f"{type(error).__name__}: {str(error)[:300]}"}
+        return {"identified": True, "role": role.value, "sha256": handle.digest,
+                "members": len(handle.members()),
+                "run_tag": handle.run_tag() or None}
 
     @staticmethod
     def fetch_failed_kernel_log(kind: str, *, slug: str | None = None) -> dict[str, Any]:

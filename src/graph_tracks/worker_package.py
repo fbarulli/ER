@@ -1,13 +1,19 @@
-"""Build a portable, preflighted graph worker input ZIP; never provision or train."""
+"""Build a portable, preflighted graph worker input ZIP; never provision or train.
+
+Sealing goes through the shared writer (``Bundle.seal_archive``), so the ZIP is
+written and verified exactly once and the returned archive IS a loadable
+``inputs`` Bundle. The package manifest keeps the historical ``files_sha256``
+inventory (already-published packages and the printed ``--verify`` instructions
+keep working) alongside the Bundle-facing ``files`` inventory the shared writer
+records; both are the same name -> sha256 map.
+"""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import subprocess
 from core.bundle import Bundle, BundleRole
-from core.portable_archive import write_archive
 
 import yaml
 
@@ -15,29 +21,57 @@ from graph_tracks.data import file_hash
 from graph_tracks.preflight import preflight
 
 
-def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
-    """The Bundle-facing inventory (config ``files_key``).
+def _legacy_inventory_key() -> str:
+    """The historical member-inventory manifest key (``files_sha256``).
 
-    ``Bundle.load`` verifies against ``training_cfg().bundle.files_key``. The
-    portable package keeps its historical ``files_sha256`` key (written by
-    ``write_archive``) for existing consumers, so the manifest carries both.
+    Derived from the Bundle spec (``bundle.files_key`` + ``_sha256``), never
+    re-spelled: the authoritative inventory key is the config one.
     """
-    from core.portable_archive import cached_file_digest
-    inventory = {target: cached_file_digest(source) for target, source in files.items()}
-    inventory.update({target: hashlib.sha256(value.encode()).hexdigest()
-                      for target, value in inline.items()})
-    return inventory
+    from core.common import training_cfg
+    return f"{training_cfg().bundle.files_key}_sha256"
+
+
+def _package_base(track: str) -> Path:
+    """The packaged worker's portable member root (``paths.yaml`` layout).
+
+    Read as the layout TEMPLATE with only its declared ``track`` field, exactly
+    like ``model_tracks.package.package_member``: every member key in this ZIP is
+    repository-relative (the ZIP is extracted into a checkout), so the resolved
+    absolute address is the wrong shape here. A non-repo root, an undeclared
+    placeholder set or an unresolvable template fails loud instead of shipping a
+    silently different tree.
+    """
+    from core.common import LAYOUTS
+    layout = LAYOUTS['graph_worker_package']
+    if layout.root != 'repo' or set(layout.fields) != {'track'}:
+        raise ValueError('graph_worker_package must be a repo-relative {track} layout')
+    return Path(layout.template.format(track=str(track)))
+
+
+def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
+    """The historical ``files_sha256`` inventory (same shape as ``files``).
+
+    ``Bundle.seal_archive`` recomputes the authoritative ``bundle.files_key``
+    inventory through the ONE builder (``core.portable_archive
+    .source_inventory``) while it writes and verifies it against the written
+    bytes, so the boundary check owns integrity; this mirror exists only for
+    the legacy key. Forwarding to that same builder means both keys carry the
+    identical map and the sources are hashed once per process (the digest
+    cache), never by a second loop.
+    """
+    from core.portable_archive import source_inventory
+    return source_inventory(files, inline)
 
 
 def package(config: Path, output: Path, *, device: str = 'cuda',
             run_tag: str | None = None) -> Path:
-    from core.common import TRAIN_ROOT, training_cfg
+    from core.common import TRAIN_ROOT
     from graph_tracks.config import load_config
     cfg = load_config(config)
     checks = preflight(config, check_device=False)
     if output.exists():
         raise FileExistsError(output)
-    base = Path('data/graph_worker') / cfg.track
+    base = _package_base(cfg.track)
     settings = cfg.model_dump()
     files = {}
     for key in ('listings', 'pairs', 'input_manifest', 'text_cache'):
@@ -52,7 +86,11 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
                 files[(destination.parent / relative).as_posix()] = source.parent / relative
         files[destination.as_posix()] = source
         settings[key] = destination.as_posix()
-    settings.update(device=device, output_dir='results/graph_tracks')
+    # The packaged worker's output tree is the lane config's own ``output_dir``
+    # (GraphConfig, declared per lane in config/graph_tracks_*.yaml and rewritten
+    # from those templates by graph_tracks.setup). Spelling it here would be a
+    # second declaration that silently overrides a retuned lane.
+    settings.update(device=device)
     from graph_tracks.prepared_inputs import PLAN, ARRAYS
     for filename in (PLAN, ARRAYS, 'pair_lineage.json'):
         source = (TRAIN_ROOT / cfg.listings).resolve().parent / filename
@@ -91,17 +129,22 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
         'Collect the complete result ZIP before VM teardown using graph_tracks.bundle.\n'
         'This package does not provision a VM or start training. No credentials are included.\n')
     inline = {config_target: configuration, (base / 'README.txt').as_posix(): readme}
-    bundle_spec = training_cfg().bundle
-    manifest[bundle_spec.files_key] = _bundle_inventory(files, inline)
+    manifest[_legacy_inventory_key()] = _bundle_inventory(files, inline)
     manifest_name = (base / 'package_manifest.json').as_posix()
-    write_archive(output, files, manifest_name=manifest_name,
-                  metadata=manifest, inventory_key='files_sha256', inline=inline)
-    return Bundle.load(output, BundleRole.inputs, manifest_name=manifest_name).path
-
+    sealed = Bundle.seal_archive(output, files, role=BundleRole.inputs,
+                                 manifest_name=manifest_name, metadata=manifest,
+                                 inline=inline)
+    return sealed.path
 
 
 def verify(manifest_path: Path) -> None:
-    from core.common import TRAIN_ROOT
+    """Re-verify an extracted worker package against its own manifest.
+
+    Prefers the Bundle-facing inventory (``training_cfg().bundle.files_key``,
+    the key ``Bundle.load`` checks) and falls back to the historical
+    ``files_sha256`` mirror so already-written packages still verify.
+    """
+    from core.common import TRAIN_ROOT, training_cfg
     manifest = json.loads(manifest_path.read_text())
     if manifest.get('schema') != 'er-graph-worker-package-v1':
         raise ValueError('unsupported package schema')
@@ -109,10 +152,20 @@ def verify(manifest_path: Path) -> None:
                               capture_output=True, text=True, check=True).stdout.strip()
     if revision != manifest['base_git_revision']:
         raise ValueError('worker checkout revision mismatch')
-    for target, expected in manifest['files_sha256'].items():
+    inventory = (manifest.get(training_cfg().bundle.files_key)
+                 or manifest.get(_legacy_inventory_key()))
+    if not isinstance(inventory, dict) or not inventory:
+        raise ValueError('worker package manifest carries no member inventory')
+    # The tree is already unpacked, so member names resolve against the
+    # checkout; the ONE inventory comparison owns the digest check.
+    from core.portable_archive import compare_inventory
+    actual = {}
+    for target in inventory:
         path = (TRAIN_ROOT / target).resolve()
-        if not path.is_relative_to(TRAIN_ROOT.resolve()) or file_hash(path) != expected:
+        if not path.is_relative_to(TRAIN_ROOT.resolve()):
             raise ValueError(f'worker package file mismatch: {target}')
+        actual[target] = file_hash(path)
+    compare_inventory(inventory, actual, mismatch='worker package file mismatch')
 
 
 def main():

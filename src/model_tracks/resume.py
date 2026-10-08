@@ -4,13 +4,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Literal
-from core.archive_reader import open_archive
 from core.portable_archive import (
-    Digest, RuntimeSnapshot, cached_file_digest, is_result_archive_member,
+    Digest, RuntimeSnapshot, cached_file_digest,
 )
 from core.step_trace import timed
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from model_tracks.config import SuiteConfig
+
+
+def _spec():
+    """The bundle contract from config (lazy import keeps the cycle open)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
 
 TRACKS = ('text', 'gnn_only', 'cascade')
 #: Tracks that train behind the shared start barrier. The cascade trains
@@ -66,15 +71,16 @@ def _events_skip_ablation(text: str) -> bool:
 
     The GPU worker emits the skip as ``attribute_ablation_export``/``skipped``
     (bundle shipped no ablation templates); older/suite streams may use
-    ``ablation``. Both count.
+    ``ablation``. The phases and status come from the bundle contract.
     """
+    spec = _spec()
     for line in text.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if (event.get('phase') in ('ablation', 'attribute_ablation_export')
-                and event.get('status') == 'skipped'):
+        if (event.get('phase') in spec.ablation_skip_phases
+                and event.get('status') == spec.ablation_skip_status):
             return True
     return False
 
@@ -85,8 +91,9 @@ def recorded_ablation_skip(output: Path) -> bool:
     The skip lives in the per-track ``worker_events.jsonl`` (the suite event
     stream carries no ablation phase), so scan those as well as the suite log.
     """
-    candidates = [output / 'suite_events.jsonl']
-    candidates += sorted(output.glob('*/worker_events.jsonl'))
+    spec = _spec()
+    candidates = [output / spec.suite_events_file]
+    candidates += sorted(output.glob(f"*/{spec.worker_events_file}"))
     return any(events.is_file() and _events_skip_ablation(events.read_text())
                for events in candidates)
 
@@ -130,49 +137,69 @@ def validate_training_binding(document: dict[str, Any], inputs: dict[str, Any],
     return binding
 
 
-def validate_archived_track(bundle, manifest: dict[str, Any], track: Track,
+def validate_archived_track(source, manifest: dict[str, Any], track: Track,
                             *, postprocess_complete: bool) -> TrackInventory:
-    """One completion contract for downloaded and recovered worker generations."""
-    inventory = TrackInventory.model_validate_json(bundle.read(track + '/track_inventory.json'))
-    marker = TrackCompletion.model_validate_json(bundle.read(track + '/track_complete.json'))
+    """One completion contract for downloaded and recovered worker generations.
+
+    ``source`` is any verified reader over the archive (an open ``open_archive``
+    reader or :meth:`core.bundle.Bundle.reader`); it is never re-verified here.
+    """
+    spec = _spec()
+    inventory = TrackInventory.model_validate_json(
+        source.read(f'{track}/' + spec.inventory_file))
+    marker = TrackCompletion.model_validate_json(
+        source.read(f'{track}/' + spec.complete_file))
     if inventory.track != track or marker != TrackCompletion(
             track=track, status='ok', postprocess_complete=postprocess_complete):
         raise ValueError(f'archive contains an incomplete track: {track}')
     for relative, expected in inventory.files.items():
         if Path(relative).is_absolute() or '..' in Path(relative).parts:
             raise ValueError(f'unsafe completion artifact: {relative}')
-        if manifest['files'].get(track + '/' + relative) != expected:
+        if manifest[spec.files_key].get(track + '/' + relative) != expected:
             raise ValueError(f'archive lacks current artifact: {track}/{relative}')
     return inventory
 
 
 def validate_completed_suite_archive(archive: Path, run_tag: str,
-                                     *, settings: SuiteConfig | None = None) -> dict[str, Any]:
-    """Validate CPU completion semantics as well as ZIP byte integrity."""
-    from core.portable_archive import verify_archive
-    from graph_tracks.report_manifest import TrackReportManifest
-    metadata = verify_archive(archive, 'suite_bundle_manifest.json')
-    if metadata.get('run_tag') != run_tag:
+                                     *, settings: SuiteConfig | None = None,
+                                     bundle=None) -> dict[str, Any]:
+    """Validate CPU completion semantics as well as archive byte integrity.
+
+    ``bundle`` is the already-verified boundary handle for this archive (from
+    :meth:`core.bundle.Bundle.load`, or the handle the sealing writer returned);
+    when omitted the archive is verified here, exactly once.
+    """
+    from core.bundle import Bundle, BundleRole
+    from graph_tracks.report_manifest import TrackReportManifest, report_member
+    spec = _spec()
+    if bundle is None:
+        bundle = Bundle.load(Path(archive), BundleRole.result)
+    metadata = bundle.manifest
+    if metadata.get(spec.run_tag_key) != run_tag:
         raise ValueError('completed archive belongs to a different run')
-    with open_archive(archive) as bundle:
-        binding = TrainingInputBinding.model_validate_json(bundle.read('suite_manifest.json'))
+    with bundle.reader() as source:
+        binding = TrainingInputBinding.model_validate_json(
+            source.read(spec.suite_manifest_file))
         if binding.run_tag != run_tag or settings is not None and binding.settings != settings:
             raise ValueError('completed archive suite configuration differs')
         # A GPU run that shipped no ablation templates records the deliberate
         # skip; the completed suite then legitimately has no saved ablation.
-        ablation_skipped = ('suite_events.jsonl' in bundle.namelist()
-                            and _events_skip_ablation(bundle.read('suite_events.jsonl').decode()))
+        names = source.namelist()
+        ablation_skipped = (spec.suite_events_file in names
+                            and _events_skip_ablation(
+                                source.read(spec.suite_events_file).decode()))
         for track in TRACKS:
-            inventory = validate_archived_track(bundle, metadata, track, postprocess_complete=True)
-            suffix = ('text__completion_manifest.json' if track == 'text'
-                      else track + '__report_manifest.json')
+            inventory = validate_archived_track(source, metadata, track,
+                                                postprocess_complete=True)
+            suffix = report_member(track)
             reports = [relative for relative in inventory.files
                        if Path(relative).name == suffix
                        and not any(part.startswith('interrupted-') or '.interrupted-' in part
                                    for part in Path(relative).parts)]
             if len(reports) != 1:
                 raise ValueError('completed archive lacks one calibrated track report: ' + track)
-            report = TrackReportManifest.model_validate_json(bundle.read(track + '/' + reports[0]))
+            report = TrackReportManifest.model_validate_json(
+                source.read(track + '/' + reports[0]))
             if report.track != track or report.test_reported and not binding.settings.report_test:
                 raise ValueError('completed archive report configuration differs: ' + track)
             if binding.settings.post_training_ablation and not ablation_skipped and track != 'cascade':
@@ -180,7 +207,8 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
                 path = 'ablation/report.json'
                 if path not in inventory.files:
                     raise ValueError('completed archive lacks saved ablation: ' + track)
-                ablation = SavedAblationReport.model_validate_json(bundle.read(track + '/' + path))
+                ablation = SavedAblationReport.model_validate_json(
+                    source.read(track + '/' + path))
                 if (ablation.track != track or ablation.threshold != report.threshold
                         or ablation.threshold_binding.track != track
                         or ablation.threshold_binding.checkpoint_sha256 != report.checkpoint_sha256):
@@ -189,27 +217,33 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
 
 
 def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: dict[str, Any],
-                         *, gpu_only: bool = False) -> dict[str, Any]:
-    """Reuse only an archive containing the verified current worker generation."""
-    from core.portable_archive import verify_archive
-    import zipfile
-    manifest = verify_archive(archive, 'suite_bundle_manifest.json')
-    if manifest.get('run_tag') != run_tag:
+                         *, gpu_only: bool = False):
+    """Reuse only an archive containing the verified current worker generation.
+
+    Returns the verified :class:`core.bundle.Bundle` handle, so the caller keeps
+    the boundary digest instead of re-reading the archive for its transport
+    token.
+    """
+    from core.bundle import Bundle, BundleRole
+    spec = _spec()
+    handle = Bundle.load(Path(archive), BundleRole.result)
+    if handle.run_tag() != run_tag:
         raise ValueError('existing archive belongs to a different suite')
-    with open_archive(archive) as bundle:
-        archived_suite = json.loads(bundle.read('suite_manifest.json'))
+    with handle.reader() as source:
+        archived_suite = json.loads(source.read(spec.suite_manifest_file))
         if _training_identity(archived_suite.get('resume_identity')) != _training_identity(identity):
             raise ValueError('existing archive has different suite provenance')
         for track in TRACKS:
             complete = expected_postprocess(track, gpu_only=gpu_only)
             if not completed_track(output / track, track, postprocess_complete=complete):
                 raise ValueError(f'incomplete track: {track}')
-            inventory = TrackInventory.model_validate_json((output / track / 'track_inventory.json').read_text())
+            inventory = TrackInventory.model_validate_json(
+                (output / track / spec.inventory_file).read_text())
             archived_inventory = validate_archived_track(
-                bundle, manifest, track, postprocess_complete=complete)
+                source, handle.manifest, track, postprocess_complete=complete)
             if archived_inventory != inventory:
                 raise ValueError(f'existing archive contains stale worker artifacts: {track}')
-    return manifest
+    return handle
 
 
 def digest(path: Path) -> str:
@@ -260,7 +294,8 @@ def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> di
 
 
 def validate_suite(output: Path, identity: dict[str, Any]) -> None:
-    path = output / 'suite_manifest.json'
+    spec = _spec()
+    path = output / spec.suite_manifest_file
     if not path.is_file():
         raise ValueError('resume requires an existing suite manifest')
     prior = json.loads(path.read_text())
@@ -271,46 +306,56 @@ def validate_suite(output: Path, identity: dict[str, Any]) -> None:
 def selected_checkpoint_dirs(root: Path) -> frozenset[str]:
     """Posix dirs (relative to ``root``) of the checkpoints a track consumes.
 
-    Thin compatibility surface over :meth:`core.bundle.Bundle.selected_checkpoint_dirs`
-    (the selection contract now lives with the bundle role it enforces). Kept as
-    a module attribute so call sites and tests can still monkeypatch it.
+    Retired into :meth:`core.bundle.Bundle.selected_checkpoint_dirs` (the
+    selection contract lives with the bundle role it enforces); this name is
+    kept only for external callers that still address it here.
     """
     from core.bundle import Bundle, BundleRole
     return Bundle.from_directory(root, BundleRole.result).selected_checkpoint_dirs()
 
 
 def artifact_files(output: Path) -> list[Path]:
-    """Result-archive artifacts: the shared member predicate plus marker/log skips."""
-    selected = selected_checkpoint_dirs(output)
-    markers = {'track_complete.json', 'track_inventory.json', 'worker.yaml', 'worker_events.jsonl'}
+    """Result-archive artifacts: the bundle member predicate plus marker/log skips.
+
+    The predicate and the selection both come from the ``result`` role; this
+    only drops the per-track bookkeeping that must never inventory itself.
+    """
+    from core.bundle import Bundle, BundleRole
+    spec = _spec()
+    tree = Bundle.from_directory(output, BundleRole.result)
+    selected = tree.selected_checkpoint_dirs()
+    markers = {spec.complete_file, spec.inventory_file, spec.worker_config_file,
+               spec.worker_events_file}
     return [path for path in output.rglob('*') if path.is_file() and not path.is_symlink()
-            and is_result_archive_member(path.relative_to(output).as_posix(),
-                                         selected_checkpoints=selected)
+            and tree.is_result_member(path.relative_to(output).as_posix(),
+                                      selected_checkpoints=selected)
             and path.name not in markers and not path.name.endswith('.log')]
 
 
 
 @timed
 def record_completion(output: Path, track: Track, *, postprocess_complete: bool = True) -> None:
+    spec = _spec()
     files = {path.relative_to(output).as_posix(): digest(path) for path in artifact_files(output)}
     if not files:
         raise ValueError(f'cannot complete empty track: {track}')
     from core.manifest import atomic_write_text
     inventory = TrackInventory(track=track, files=files)
     completion = TrackCompletion(track=track, status='ok', postprocess_complete=postprocess_complete)
-    atomic_write_text(output / 'track_inventory.json', inventory.model_dump_json(indent=2) + '\n')
-    atomic_write_text(output / 'track_complete.json', completion.model_dump_json() + '\n')
+    atomic_write_text(output / spec.inventory_file, inventory.model_dump_json(indent=2) + '\n')
+    atomic_write_text(output / spec.complete_file, completion.model_dump_json() + '\n')
 
 
 @timed
 def completed_track(output: Path, track: Track, *, postprocess_complete: bool = True) -> bool:
-    marker = output / 'track_complete.json'
+    spec = _spec()
+    marker = output / spec.complete_file
     if not marker.exists():
         return False
     completion = TrackCompletion.model_validate_json(marker.read_text())
     if completion != TrackCompletion(track=track, status='ok', postprocess_complete=postprocess_complete):
         raise ValueError(f'invalid completion marker: {track}')
-    inventory_path = output / 'track_inventory.json'
+    inventory_path = output / spec.inventory_file
     if not inventory_path.is_file():
         raise ValueError(f'completion inventory missing: {track}')
     inventory = TrackInventory.model_validate_json(inventory_path.read_text())
@@ -340,8 +385,10 @@ def expected_postprocess(track: Track, *, gpu_only: bool) -> bool:
 def graph_checkpoint(output: Path, track: Track, run_tag: str) -> Path | None:
     # Graph trainers isolate their own run inside the worker output root.
     # Retain flat-root compatibility for previously materialized trees.
+    from graph_tracks.artifacts import name as artifact_name
+    spec = _spec()
     roots = [output, output / f'{track}__{run_tag}']
     paths = [path for folder in roots
-             for path in (folder / '_checkpoints' / track / f'{run_tag}_f0').glob(
-                 f'checkpoint-*/{track}__graph_model.pt')]
+             for path in (folder / spec.checkpoint_dir / track / f'{run_tag}_f0').glob(
+                 f'checkpoint-*/{artifact_name(track, "graph_model.pt")}')]
     return max(paths, key=lambda path: int(path.parent.name.split('-')[-1]), default=None)

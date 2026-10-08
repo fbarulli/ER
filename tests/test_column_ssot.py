@@ -532,3 +532,77 @@ def test_pipeline_uses_the_shared_alias_resolver() -> None:
         for pair in ('"attribute", "attr"', '"description_short_eng", "description_short_eng"',
                      '"sku_name_eng": "sku_name_eng"', '"attribute": "attribute"'):
             assert pair not in source, f"{module.__name__} re-declares {pair}"
+
+# ── (g) one attribute-dimension -> column registry, DERIVED ─────────────────
+# The audit (2026-10-08) found the dimension -> canonical_records column table
+# declared six times with drift: 7 dimensions in training.negative_supply, 8 in
+# training.attribute_separation, 6 in training.build_final_validation, 6 in
+# scripts/check_proceed_precision, an implicit `"flavor_set" if dimension ==
+# "flavor" else dimension` in training.rand_matching, and a name copy in
+# scripts/laya_metrics_pairs. The table now lives here, derived from the record
+# schema, and every lane reads it.
+
+
+def test_attribute_dimension_registry_is_derived_from_the_record_schema():
+    from core.columns import ATTRIBUTE_DIMENSION_COLUMNS, CANONICAL_SET_COLUMNS
+    from core.schemas import CanonicalRecord
+
+    assert CANONICAL_SET_COLUMNS == tuple(
+        name for name in CanonicalRecord.model_fields if name.endswith("_set")
+    )
+    for column in CANONICAL_SET_COLUMNS:
+        assert ATTRIBUTE_DIMENSION_COLUMNS[column[: -len("_set")]] == column
+    # the one scalar dimension reads the record's own declared field
+    assert ATTRIBUTE_DIMENSION_COLUMNS["brand"] == "mode_brand"
+
+
+def test_every_registry_column_is_a_real_canonical_records_column():
+    from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
+
+    for dimension, column in ATTRIBUTE_DIMENSION_COLUMNS.items():
+        assert column in CANONICAL_RECORDS_COLUMNS, f"{dimension} -> {column}"
+
+
+def test_the_lanes_consume_the_registry_not_a_literal():
+    """No lane re-declares the table; the columns come from the one home."""
+    from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
+    from training import build_final_validation, negative_supply
+
+    # the frozen slice ORDER is the lane's own; the columns are the registry's
+    assert build_final_validation.SLICE_FIELDS == tuple(
+        (dimension, ATTRIBUTE_DIMENSION_COLUMNS[dimension])
+        for dimension, _column in build_final_validation.SLICE_FIELDS
+    )
+    # the negative-supply whitelist names dimensions only, never columns
+    for dimension in negative_supply._DIFF_DIMENSIONS:
+        assert dimension in ATTRIBUTE_DIMENSION_COLUMNS
+
+
+def test_the_scripts_read_the_registry_too():
+    """The two script copies the audit named are gone."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+
+    def load(name: str):
+        spec = importlib.util.spec_from_file_location(name, scripts / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    probe = load("check_proceed_precision")
+    expected = {
+        "pack": "pack_set", "package_type": "package_type_set",
+        "flavor": "flavor_set", "carbonation": "carbonation_set",
+        "sweetener": "sweetener_set", "pulp": "pulp_set",
+    }
+    assert dict(probe.DIMENSION_COLUMNS) == expected
+    assert probe.ALL_COLUMNS == ("volume_set", "pack_set", "package_type_set",
+                                 "flavor_set", "carbonation_set",
+                                 "sweetener_set", "pulp_set")
+    metrics = load("laya_metrics_pairs")
+    assert metrics.SLICE_FIELDS == (
+        "volume", "pack", "package_type", "sweetener", "flavor", "carbonation")

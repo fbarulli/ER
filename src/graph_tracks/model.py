@@ -7,7 +7,10 @@ This is a small full-batch baseline, not a neighbor-sampled GraphSAGE package.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
+
 from core.execution_policy import AggregationBackend, resolve_aggregation
+from core.fast_kernels import autocast_context, compile_model, segment_reduce_fast
 from core.perf_switches import perf_enabled
 
 import torch
@@ -15,14 +18,48 @@ from torch import nn
 from torch.nn import functional as F
 
 from graph_tracks.data import GraphBatch, NUMERIC, RELATIONS
-from graph_tracks.pooling import pool, segment_pool, topology
+from graph_tracks.pooling import fused_pool, pool, segment_pool, topology
 
 # Performance switches (see core.perf_switches). Legacy mode turns both off.
 _POOL_BACKEND_CACHE = perf_enabled("graph.pool_backend_cache")
 _ACCUMULATE_MESSAGES = perf_enabled("graph.accumulate_messages")
+# Opt-in accelerator wiring. All three default OFF: the index_add backend is
+# bit-identical with or without the fast kernel, but the CUDA behaviour of the
+# Triton reduction, of autocast, and of torch.compile has not been validated on
+# GPU hardware from this host, so each stays behind an explicit switch.
+_WIRE_SEGMENT_REDUCE = perf_enabled("accel.graph_wire_segment_reduce", default=False)
+_WIRE_AUTOCAST = perf_enabled("accel.graph_wire_autocast", default=False)
+_WIRE_COMPILE = perf_enabled("accel.graph_wire_compile", default=False)
+# Fused pooling (one scatter per call) is numerically identical to the two-pass
+# helper, so it follows the ordinary graph.* convention: on unless legacy mode.
+_FUSE_POOL_PASSES = perf_enabled("graph.fused_pool")
+
+
+def _index_add_pool(values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
+    """The ``index_add`` aggregation, optionally through the guarded fast kernel.
+
+    ``segment_reduce_fast(..., reduce='mean')`` is a literal ``index_add_`` sum
+    divided by the supplied denominators, so it is bit-identical to
+    :func:`graph_tracks.pooling.pool`. It is only used when the denominators
+    already share the values' dtype (the fast kernel casts them, while ``pool``
+    would promote), so the wired path cannot change the result dtype either.
+    """
+    if _WIRE_SEGMENT_REDUCE and sizes.dtype == values.dtype:
+        return segment_reduce_fast(values, target, sizes, reduce='mean')
+    return pool(values, target, sizes)
+
+
+def _step_context(device) -> object:
+    """Autocast for one forward, only when wired (``accel.autocast`` gates it)."""
+    if not _WIRE_AUTOCAST:
+        return nullcontext()
+    return autocast_context(device)
 
 
 def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.Tensor:
+    """Mean pooling over ``indices``; one scatter once the degrees are cached."""
+    if _FUSE_POOL_PASSES:
+        return fused_pool(values, indices, count)
     total = values.new_zeros((count, values.shape[-1]))
     total.index_add_(0, indices, values)
     sizes = values.new_zeros(count)
@@ -54,15 +91,37 @@ class AttributeGNN(nn.Module):
     def pool(self, values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
         if not _POOL_BACKEND_CACHE:
             operation = (segment_pool if resolve_aggregation(self.aggregation_backend, str(values.device)) == 'segment'
-                         else pool)
+                         else _index_add_pool)
             return operation(values, target, sizes)
         kind = values.device.type
         operation = self._pool_operations.get(kind)
         if operation is None:
             operation = (segment_pool if resolve_aggregation(self.aggregation_backend, kind) == 'segment'
-                         else pool)
+                         else _index_add_pool)
             self._pool_operations[kind] = operation
         return operation(values, target, sizes)
+
+    def compile_accelerated_methods(self) -> AttributeGNN:
+        """Route ``context``/``encode`` through ``torch.compile`` (opt-in).
+
+        Idempotent and safe on every platform: ``compile_model`` is gated by
+        ``accel.compile`` and returns the original method whenever
+        ``torch.compile`` is unavailable or Inductor fails, so the returned
+        handle is always callable. Invoked automatically on the first
+        ``context``/``encode`` when ``accel.graph_wire_compile`` is on; callers
+        with an explicit compilation policy can call it directly instead.
+        """
+        if getattr(self, '_accelerators_compiled', False):
+            return self
+        self._accelerators_compiled = True
+        self.context = compile_model(self.context, name='gnn.context')
+        self.encode = compile_model(self.encode, name='gnn.encode')
+        return self
+
+    def _wire_accelerators(self) -> None:
+        """One constant check per forward; a no-op unless compile is switched on."""
+        if _WIRE_COMPILE and not getattr(self, '_accelerators_compiled', False):
+            self.compile_accelerated_methods()
 
     def initial(self, batch: GraphBatch, text: torch.Tensor | None = None) -> torch.Tensor:
         if bool(self.text_dim) != (text is not None):
@@ -80,6 +139,11 @@ class AttributeGNN(nn.Module):
     def context(self, support: GraphBatch, text: torch.Tensor | None = None, *, initial=None) -> dict:
         if not self.graph_enabled:
             return {}
+        self._wire_accelerators()
+        with _step_context(support.numeric.device):
+            return self._context_impl(support, text, initial=initial)
+
+    def _context_impl(self, support: GraphBatch, text: torch.Tensor | None = None, *, initial=None) -> dict:
         h = self.initial(support, text) if initial is None else initial
         states = {}
         for relation in RELATIONS:
@@ -95,6 +159,12 @@ class AttributeGNN(nn.Module):
 
     def encode(self, batch: GraphBatch, states: dict,
                text: torch.Tensor | None = None, *, initial=None) -> torch.Tensor:
+        self._wire_accelerators()
+        with _step_context(batch.numeric.device):
+            return self._encode_impl(batch, states, text, initial=initial)
+
+    def _encode_impl(self, batch: GraphBatch, states: dict,
+                     text: torch.Tensor | None = None, *, initial=None) -> torch.Tensor:
         h = self.initial(batch, text) if initial is None else initial
         message = None
         for relation in RELATIONS if self.graph_enabled else ():

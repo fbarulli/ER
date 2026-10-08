@@ -14,11 +14,10 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     settings = dict(setup_dir='data/setup', text_bundle='data/text.pkl', device='cpu',
                     publish_dvc=publishing, publish_git=False)
     inputs = tmp_path / 'inputs.zip'
-    # A REAL verified package: model_tracks.package writes
-    # model_tracks_package.json with a sha256 inventory of every other member,
-    # and colab.py opens it through verified_archive() (not verify_archive),
-    # which re-hashes each member against that inventory. A zip holding only
-    # the suite config no longer passes.
+    # A REAL verified package: `colab.run` opens it through the ONE inputs
+    # `Bundle.load` boundary (manifest + every member hashed once), so a zip
+    # holding only the suite config no longer passes. `revision` is the
+    # package's own revision, which the checkout script fetches separately.
     import hashlib as _hashlib
     from model_tracks.package import package_member as _member
     _members = {_member('suite_package_config'): json.dumps(settings).encode()}
@@ -41,10 +40,6 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     monkeypatch.setattr(common, 'RESULTS', tmp_path)
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(colab, 'verify', lambda _: dict(revision='revision', files={}))
-    # colab.run reads `revision` off the transport verification to fetch and
-    # detach-checkout the package's exact source revision before restoring
-    # its frozen files, so the stub must carry it alongside run_tag.
-    monkeypatch.setattr(colab, 'verify_archive', lambda *a: dict(run_tag='run', revision='revision'))
     # The result download trusts one named single-pass verify seam. Stub it so
     # a tiny fixture archive is never parsed as a real tar.zst; the returned
     # whole-file digest still drives the corruption check.

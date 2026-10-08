@@ -13,6 +13,12 @@ from graph_tracks.data import file_hash
 from training.prepare_embeddings import input_identity, prepare_request, validate_result
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def complete_local_handoff(local, request):
     from model_tracks.preflight import preflight
     validate_result(local, request)
@@ -36,10 +42,11 @@ def persist_embeddings(local, handoff, publisher=None, *, additional_files=None,
     import hashlib
     from model_tracks.publish import push_artifacts
     setup = local.parent
+    layout = _setup_layout()
     files = {p.relative_to(setup).as_posix(): p for p in (
-        local, setup / 'embedding_inputs.json', setup / 'eligible_catalog.csv',
+        local, setup / layout.embedding_request, setup / layout.catalog,
         setup / 'encoding.log',setup / 'prepared_text.npz',
-        setup / 'setup_manifest.json', *sorted((setup / 'prepared').glob('*')))
+        setup / layout.manifest, *sorted((setup / layout.prepared_dir).glob('*')))
         if p.is_file()}
     files.update(additional_files or {})
     files['local_handoff.json'] = handoff
@@ -81,8 +88,9 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
     if smoke_size is not None and smoke_size < 1:
         raise ValueError('Smoke size must be positive')
     setup = TRAIN_ROOT / 'data/track_setup'
+    layout = _setup_layout()
     checkpoint = Path(resolve_model('minilm_l6'))
-    local = setup / 'shared_minilm__embeddings.npz'
+    local = setup / layout.shared_embeddings
     # Finish CPU work before allocating a GPU. Never reuse a cached text request.
     if smoke_size is not None:
         if prepared_request is not None:
@@ -92,8 +100,8 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
         source_identity = input_identity(setup, checkpoint)
         smoke = TRAIN_ROOT / 'results/embedding_job' / ('smoke-' + uuid.uuid4().hex)
         smoke.mkdir(parents=True)
-        catalog = smoke / 'eligible_catalog.csv'
-        rows = pd.read_csv(setup / 'eligible_catalog.csv', dtype=str, keep_default_na=False).head(smoke_size)
+        catalog = smoke / layout.catalog
+        rows = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False).head(smoke_size)
         if len(rows) != smoke_size:
             raise ValueError('Smoke sample exceeds eligible listing population')
         rows.to_csv(catalog,index=False)
@@ -101,7 +109,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
         request = {'schema':'er-embedding-request-v2','ids':ids,'texts':texts,
                    'metadata':{**source_identity,'text_sha256':texts_hash(texts),'scope':'smoke',
                                'sample_size':smoke_size,'sample_catalog_sha256':file_hash(catalog)}}
-        local = smoke / 'shared_minilm__embeddings.npz'
+        local = smoke / layout.shared_embeddings
         print(f'[embeddings/local] smoke={smoke_size} device={device} output={smoke}',flush=True)
     elif prepared_request is None:
         request = prepare_request(setup, checkpoint)
@@ -115,7 +123,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
                 or request['metadata'].get('text_sha256') != texts_hash(request['texts'])
                 or len(request['ids']) != len(request['texts'])
                 or len(set(request['ids'])) != len(request['ids'])
-                or set(request['ids']) != {r['sku_id'] for r in load_records(setup/'prepared/listings.json')}):
+                or set(request['ids']) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/'listings.json')}):
             raise ValueError('Prepared text request is stale or corrupt; recompose locally')
         print('[embeddings/local] resuming verified prepared texts; no CPU recomposition needed', flush=True)
     # Prepare native token IDs locally, including full-length validation.
@@ -132,7 +140,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
         np.savez_compressed(handle,**arrays)
     request['prepared_text'] = {**token_plan,'sha256':file_hash(tokens)}
     print(f'[embeddings/local] tokenized={len(request["texts"])} truncated=0 max_tokens={max(token_plan["token_lengths"],default=0)}',flush=True)
-    saved = local.parent / 'embedding_inputs.json' if smoke_size is not None else TRAIN_ROOT / 'results/embedding_job/prepared_request.json'
+    saved = local.parent / layout.embedding_request if smoke_size is not None else TRAIN_ROOT / 'results/embedding_job/prepared_request.json'
     saved.parent.mkdir(parents=True, exist_ok=True)
     saved.with_suffix('.tmp').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
     saved.with_suffix('.tmp').replace(saved)
@@ -212,7 +220,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
             if any(current[key] != request['metadata'][key] for key in current):
                 raise ValueError('Local inputs changed during GPU encoding; refusing publication')
             # Persist provenance first. Readers require it and fail on any mismatch.
-            request_path.replace(local.parent / 'embedding_inputs.json')
+            request_path.replace(local.parent / layout.embedding_request)
             candidate.replace(local)
             print(f'[embeddings/local] validated cache published: {local}', flush=True)
     finally:

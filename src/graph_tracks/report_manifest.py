@@ -23,7 +23,26 @@ from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
+from graph_tracks.artifacts import name
+
 MANIFEST_SCHEMA = "er-track-report-manifest-v1"
+
+
+#: The stem of the calibrated report manifest each lane writes: the text lane
+#: predates the shared contract and keeps its legacy ``completion_manifest``
+#: stem. The member NAME itself is composed through ``graph_tracks.artifacts``
+#: (which owns the ``<track>__<stem>`` shape), so no naming registry is added.
+def report_member(track: str) -> str:
+    """The ONE derivation of a track's report-manifest member name.
+
+    Every surface that must find or expect the manifest (the track writers,
+    ``model_tracks.resume``'s completion contract and
+    ``model_tracks.archive_verification``'s post-download re-check) calls this
+    instead of re-spelling the text/other split.
+    """
+    stem = "completion_manifest.json" if track == "text" else "report_manifest.json"
+    return name(track, stem)
+
 
 #: Every manifest must carry all of these. Enforced by
 #: tests/test_track_report_manifest.py for each track.
@@ -245,6 +264,12 @@ def write(path: Path, manifest: dict) -> Path:
             f"refusing to write {path.name}: manifest missing {missing}"
         )
     manifest = _fold_cascade_extras(Path(path), manifest)
+    # The ``slices`` table is the lane's generalization-slice rows, serialized
+    # VERBATIM. The emitter (``graph_tracks.report_slices.report``) validates its
+    # own rows once, before persisting them; this writer reuses those already
+    # validated rows instead of re-checking the same list. A manifest built from
+    # any other source carries a plain list and is validated where it is built.
+    # An empty table is the cascade's explicit not-applicable and needs no check.
     validated = TrackReportManifest.model_validate(manifest)
     candidate = path.with_suffix(path.suffix + ".partial")
     candidate.write_text(validated.model_dump_json(indent=2, by_alias=True) + "\n")
@@ -252,4 +277,5 @@ def write(path: Path, manifest: dict) -> Path:
     return path
 
 
-__all__ = ["MANIFEST_SCHEMA", "REQUIRED_KEYS", "TRACEABILITY_KEYS", "build", "write"]
+__all__ = ["MANIFEST_SCHEMA", "REQUIRED_KEYS", "TRACEABILITY_KEYS", "build",
+           "report_member", "write"]

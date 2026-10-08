@@ -1,0 +1,49 @@
+retrieval_ks:
+- 1
+- 5
+- 10
+- 50
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
+report_test: false
+build_index: true
+track: cascade
+listings: data/prepared/smoke_500/prepared/listings.json
+pairs: data/prepared/smoke_500/prepared/pairs.csv
+output_dir: results/graph_tracks
+text_cache: null
+text_checkpoint_sha256: null
+text_index: data/prepared/smoke_500/text_index
+gnn_checkpoint: data/prepared/smoke_500/gnn_checkpoint.json
+input_manifest: data/prepared/smoke_500/prepared/input_manifest.json
+allow_unmanifested_inputs: false
+wandb:
+  project: e-r
+  mode: offline
+dvc:
+  enabled: false
+  remote: null
+  push: false
+include_inputs: true
+postprocess: true
+inference_batch_size: 1024
+hidden_dim: 64
+output_dim: 128
+epochs: 1
+learning_rate: 0.001
+weight_decay: 0.0001
+optimizer_backend: auto
+aggregation_backend: index_add
+early_stopping_patience: 3
+early_stopping_threshold: 0.001
+lr_scheduler: plateau
+lr_patience: 1
+lr_factor: 0.5
+min_lr: 1.0e-05
+seed: 1337
+device: cpu
+graph_enabled: true
+metric_weight: 1.0
+negative_margin: 0.3
+max_grad_norm: 1.0

@@ -13,7 +13,7 @@ precedent) never imports or edits those packages.
 | SSOT spec | `src/core/schemas.py` -> `LayaSpec` (additive; mounted in `TrainingConfig` as `laya:`) |
 | question schema | `config/laya.question.json` |
 | repo-root shim | `laya_backend.py` (the `er-laya` entry, colab_backend.py pattern) |
-| offline pins | `tests/test_laya_lane.py` (25 tests, no network) |
+| offline pins | `tests/test_laya_lane.py` (offline, no network) |
 
 ## Rulings
 
@@ -42,14 +42,22 @@ kernel script runs `pip install laya` on the session first.
 
 ## Question schema
 
-`config/laya.question.json` carries three typed questions
-(`schema: er-laya-questions-v1`):
+`config/laya.question.json` is the SSOT for the typed questions
+(`schema: er-laya-questions-v1`). The three headline questions:
 
 | key | type | ask |
 |---|---|---|
 | `attribute_alignment` | `choice` | aligned / mismatched / obscure verdict on the state's attribute evidence |
 | `identity_claim` | `noul` | does the paired attribute evidence support the same-grocery-item claim |
 | `package_state` | `noul` | does the state carry explicit package-quantity evidence |
+
+The same file also declares the per-field `field_same:<attribute>` choices
+(volume, pack, package_type, sweetener, flavor, carbonation), the pack/format
+equivalences (`pack_volume_equal`, `pack_format_equivalent`), and the
+gate/counterfactual checks (`gate_verdict`, `gate_reason`, `counterfactual`,
+`same_brand_only`, `evidence_sufficient`, `better_match`). The live question
+set is whatever the file declares — this table names the headline three, not
+an exhaustive or fixed count.
 
 No silent placeholder: a missing schema file fails the stage
 (FileNotFoundError); a schema with no `questions` dict fails too
@@ -100,7 +108,7 @@ Every item, and how to re-verify it (all read-only except the launch):
 | duck | check |
 |---|---|
 | credentials | `~/.kaggle/kaggle.json` present; **no** `~/.kaggle/access_token` (the 403 trap) |
-| tip gate | staged `<decision>.receipt.json` `published_tip == HEAD == origin/main` (`require_published_tip_match`, laya_lane.py:2174) |
+| tip gate | staged `<decision>.receipt.json` `published_tip == HEAD == origin/main` (`core.runtime_inputs.require_published_tip_match`; called from the laya staging path) |
 | corpus (full) | `data/laya/{train,dev,test}.jsonl` + `receipt.json`, staged into `results/laya_lane/kaggle/<kind>/dataset_payload/` |
 | base-model dataset | `kaggle datasets status fbarulli/er-laya-base` -> `ready` (the fine-tune attaches it; no Hub fetch) |
 | corpus dataset | `kaggle datasets status fbarulli/er-laya-train` -> `ready` (versioned on `--execute`) |

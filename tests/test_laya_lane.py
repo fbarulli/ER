@@ -117,6 +117,62 @@ def test_laya_spec_rejects_non_portable_and_bad_contract(updates):
         LayaSpec(**updates)
 
 
+# ── the eval-path calibration/abstention selection (laya.eval_calibration) ──
+def test_eval_calibration_defaults_preserve_the_landed_eval():
+    """No block -> the landed eval exactly (temperature fit on, no abstention)."""
+    from core.laya_config import EvalCalibrationSpec
+
+    spec = LayaSpec()
+    assert spec.eval_calibration.temperature is True
+    assert spec.eval_calibration.abstention is False
+    assert spec.eval_calibration.target_error == 0.10
+    assert spec.eval_calibration.min_abstain_n == 10
+    assert spec.eval_calibration.min_confidence is None
+    # ONE declaration: the baked field tuple names exactly the spec surface.
+    assert set(laya_lane.EVAL_CALIBRATION_FIELDS) == set(
+        EvalCalibrationSpec.model_fields)
+    assert laya_lane.eval_calibration_config(spec) == {
+        "temperature": True, "abstention": False, "target_error": 0.10,
+        "min_abstain_n": 10, "min_confidence": None}
+
+
+def test_eval_calibration_flows_yaml_into_the_ssot_config():
+    spec = LayaSpec(eval_calibration={
+        "abstention": True, "target_error": 0.25, "min_abstain_n": 5,
+        "min_confidence": 0.8})
+    config = laya_lane.eval_calibration_config(spec)
+    assert config == {"temperature": True, "abstention": True,
+                      "target_error": 0.25, "min_abstain_n": 5,
+                      "min_confidence": 0.8}
+    # an unknown knob fails loud (extra='forbid'), never silently ignored
+    with pytest.raises(ValidationError):
+        LayaSpec(eval_calibration={"nope": 1})
+    # abstention cuts on the CALIBRATED confidence scale: it needs the
+    # temperature fit, so the contradictory pair is refused at config load.
+    with pytest.raises(ValidationError, match="requires temperature"):
+        LayaSpec(eval_calibration={"abstention": True, "temperature": False})
+    with pytest.raises(ValidationError):
+        LayaSpec(eval_calibration={"min_confidence": 1.5})
+
+
+def test_finetune_package_and_corpus_dir_are_config_owned():
+    """The pin + the corpus root are LayaSpec knobs, never code literals."""
+    spec = LayaSpec()
+    assert spec.finetune_package == "laya>=0.3.29"
+    assert spec.finetune_corpus_dir == "data/laya"
+    custom = LayaSpec(finetune_package="laya==9.9.9",
+                      finetune_corpus_dir="data/laya_v2")
+    assert custom.finetune_package == "laya==9.9.9"
+    assert custom.finetune_corpus_dir == "data/laya_v2"
+    # both stay portable names (no absolute path, no traversal)
+    with pytest.raises(ValidationError):
+        LayaSpec(finetune_corpus_dir="../escape")
+    # the deprecated module alias now derives from the SSOT default
+    from core.laya_config import LayaSpec as _LayaSpec
+
+    assert laya_lane.FINETUNE_LAYA_PACKAGE == _LayaSpec().finetune_package
+
+
 def test_lane_kind_validation_contract():
     for kind in ("kaggle", "colab"):
         assert laya_lane.LayaLane(kind).kind == kind
@@ -1116,3 +1172,132 @@ def test_corpus_fails_loud_on_catalog_missing_columns(tmp_path):
     with pytest.raises(RuntimeError, match="missing required columns"):
         builder.build(catalog_path=catalog, pairs_path=pairs, gate_path=gate,
                       question_path=question_path, output_dir=tmp_path / "out")
+
+
+# ── standalone archive/hash boundaries (Bundle migration) ──────────────────
+def test_fetch_plan_is_json_serializable_end_to_end(tmp_path, monkeypatch):
+    """`--fetch` prints its plan with json.dumps: the traceability documents the
+    plan carries must be stored in JSON form. A pydantic model left in the plan
+    made the print raise `TypeError: Object of type TraceabilityReport is not
+    JSON serializable`."""
+    import io
+    import subprocess
+    import tarfile
+
+    _spec(tmp_path, monkeypatch)
+    report_path = (Path(__file__).resolve().parents[1] / "results/laya_lane"
+                   "/kaggle/finetune/output/checkpoint/train_report.json")
+    if not report_path.is_file():
+        pytest.skip(f"real artifact not present: {report_path}")
+    digest = "6" * 64
+    receipt = {"corpus_sha256": {"train.jsonl": digest},
+               "output_dir": "/kaggle/working/checkpoint"}
+
+    def fake_run(args, **kwargs):
+        # `kaggle kernels output <slug> -p <stage>`: stage the kernel handoff
+        # archive offline (no CLI is ever spawned).
+        destination = Path(args[args.index("-p") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(destination / "laya_attribute.tar.gz", "w:gz") as tar:
+            tar.add(report_path, arcname="train_report.json")
+            body = json.dumps(receipt).encode()
+            info = tarfile.TarInfo("laya_attribute.receipt.json")
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+    plan = laya_lane.collect_kaggle_result("attribute", "owner/slug",
+                                          execute=True)
+    document = plan["traceability"]["train_report.json"]
+    assert isinstance(document, dict)  # JSON form, never a pydantic model
+    assert document["provenance"]["digests"]["corpus_sha256"] == digest
+    # the plan is exactly what main() prints
+    assert json.loads(json.dumps(plan)) == plan
+
+
+def test_fetch_emits_the_record_grain_traceability_artifact(tmp_path, monkeypatch):
+    """A fetched ``<kind>.decisions.jsonl`` becomes a WRITTEN record-derived report.
+
+    Falsified 2026-10-08: ``decision_csv_records`` / ``eval_case_records`` /
+    ``records_traceability`` had no production caller at all, and `--fetch`
+    never wrote a traceability artifact. The per-row identity grain now goes
+    through the adapters, is validated against the shared contract and lands
+    through the declared ``traceability_report`` layout.
+    """
+    import io
+    import subprocess
+    import tarfile
+
+    _spec(tmp_path, monkeypatch)
+    # the schema this box STAGED before the push (the fetched grain needs it)
+    schema_dir = laya_lane.staging_dir() / "kaggle" / "question"
+    schema_dir.mkdir(parents=True, exist_ok=True)
+    (schema_dir / laya_lane.QUESTION_SCHEMA_FILE).write_text(
+        json.dumps({"questions": {"identity_claim": {"type": "noul"}}}),
+        encoding="utf-8")
+    monkeypatch.setitem(common._BINDING_ROOTS, "results", tmp_path)
+    monkeypatch.setattr(common, "trace_artifact", lambda *args, **kwargs: None)
+    receipt = {"gpu_kind": "identity", "batch_size": 4, "split": "dev",
+               "decision_csv_sha256": "8" * 64}
+
+    def fake_run(args, **kwargs):
+        destination = Path(args[args.index("-p") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(destination / "laya_identity.tar.gz", "w:gz") as tar:
+            for name, body in (
+                    ("laya_identity.receipt.json",
+                     json.dumps(receipt).encode()),
+                    ("identity.decisions.jsonl",
+                     b"".join(json.dumps(
+                         {"_row": {"gtin1": str(index), "gtin2": str(index + 1)}})
+                         .encode() + b"\n" for index in range(3)))):
+                info = tarfile.TarInfo(name)
+                info.size = len(body)
+                tar.addfile(info, io.BytesIO(body))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+    plan = laya_lane.collect_kaggle_result("identity", "owner/slug", execute=True)
+    assert plan["decision_rows"] == 3
+    document = plan["traceability"]["record_grain"]
+    assert document["coverage"]["records_total"] == 3
+    assert document["coverage"]["by_source"] == {"identity_decision_csv": 3}
+    assert document["coverage"]["by_dimension"]["split"] == {"dev": 3}
+    assert document["overall"] is None  # identity-only: no metrics measured
+    artifact = Path(plan["traceability_artifacts"]["record_grain"])
+    assert artifact.is_file()
+    assert json.loads(artifact.read_text(encoding="utf-8")) == document
+    assert json.loads(json.dumps(plan)) == plan
+
+
+def test_base_model_archive_seals_as_an_inputs_bundle(tmp_path, monkeypatch):
+    """The base-model dataset archive seals through the shared writer.
+
+    The receipt's sha256 token IS the sealed digest (the archive is never read
+    back), and the archive loads as an `inputs` Bundle while the
+    `rl_agent_config.json` layout `extract_base_model` resolves stays intact.
+    """
+    from core.bundle import Bundle, BundleRole
+
+    _spec(tmp_path, monkeypatch)
+    source = tmp_path / "checkpoint"
+    source.mkdir()
+    (source / "rl_agent_config.json").write_text("{}", encoding="utf-8")
+    (source / "weights.bin").write_bytes(b"weights")
+
+    receipt = laya_lane.package_base_model(
+        source_dir=source, dataset_slug="owner/base",
+        archive_name="convaiinnovations-laya.tar.zst",
+        member_name="convaiinnovations-laya", output_dir=tmp_path / "stage")
+
+    archive = tmp_path / "stage" / "convaiinnovations-laya.tar.zst"
+    assert receipt["bundle_role"] == "inputs"
+    assert receipt["manifest"] == laya_lane.BASE_MODEL_MANIFEST_FILE
+    assert receipt["sha256"] == laya_lane.sha256_file(archive)
+    handle = Bundle.load(archive, BundleRole.inputs,
+                         manifest_name=laya_lane.BASE_MODEL_MANIFEST_FILE)
+    assert "convaiinnovations-laya/rl_agent_config.json" in handle.members()
+    assert "convaiinnovations-laya/weights.bin" in handle.members()
+    # the kaggle dataset shape lands beside the archive
+    assert (tmp_path / "stage" / "dataset-metadata.json").is_file()

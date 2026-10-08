@@ -263,8 +263,19 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                         hard_negative_frac=0, hard_negative_mask_prob=None,
                         hard_negative_mask_lo=0, hard_negative_mask_hi=0))
     monkeypatch.setattr(trainer, 'RESULTS', tmp_path)
-    monkeypatch.setattr(trainer, 'F', {key: tmp_path / f'{key}.csv'
-                                    for key in ('labeled_pairs', 'canonical_records', 'gate_results')})
+    # The frozen-input copy is materialized by the SHARED implementation
+    # (training.run_plan._materialize_frozen_inputs), which binds its registry
+    # and root through core.common at call time; patch those so the copy lands
+    # in tmp_path and the checkout's own registry is never touched.
+    import core.common as common
+    monkeypatch.setattr(common, 'RESULTS', tmp_path)
+    monkeypatch.setattr(common, 'F', {key: tmp_path / f'{key}.csv'
+                                      for key in ('labeled_pairs', 'canonical_records', 'gate_results')})
+    materialized = []
+    from training import run_plan as plan_module
+    materialize = plan_module._materialize_frozen_inputs
+    monkeypatch.setattr(plan_module, '_materialize_frozen_inputs',
+                        lambda bundle: materialized.append(bundle) or materialize(bundle))
     captured = {}
     def train(*_, **kwargs):
         captured.update(kwargs)
@@ -273,6 +284,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                  'test_eval': 'skipped_selection_mode' if not report_test else 'evaluated'}]
     monkeypatch.setattr(trainer, 'train_one_config', train)
     trainer._main(args, SimpleNamespace())
+    assert len(materialized) == 1 and materialized[0] is bundle
     assert captured['selection_mode'] is (not report_test)
     assert captured['skip_test_eval'] is (not report_test)
     assert captured['on_cuda'] is False
@@ -301,6 +313,54 @@ def test_suite_preflight_rejects_changed_source_catalog_before_launch(tmp_path, 
     monkeypatch.setattr(checks, 'load_config', lambda _: SimpleNamespace(setup_dir='setup'))
     with pytest.raises(ValueError, match='graph setup is stale: source catalog'):
         checks.preflight(tmp_path / 'suite.yaml')
+
+
+def test_support_floor_gate_refuses_thin_scored_halves():
+    """The publish gate refuses a suite whose scored halves cannot be measured.
+
+    The shipped census carried dev 1286/9 and test 1276/7 pairs: nine negatives
+    cannot fit a Youden threshold or report a false-positive rate, so preflight
+    refuses to publish instead of presenting a near-degenerate metric.
+    """
+    from model_tracks import preflight as checks
+
+    with pytest.raises(ValueError, match='scored-half support floor violated'):
+        checks.assert_scored_support(
+            {
+                'train': {'positive': 295, 'negative': 9},
+                'dev': {'positive': 139, 'negative': 1},
+                'test': {'positive': 130, 'negative': 2},
+            },
+            floor=5,
+        )
+    with pytest.raises(ValueError, match='has no positives'):
+        checks.assert_scored_support(
+            {'dev': {'positive': 0, 'negative': 9}, 'test': {'positive': 5, 'negative': 9}},
+            floor=5,
+        )
+
+
+def test_support_floor_gate_reports_the_census_when_it_passes():
+    from model_tracks import preflight as checks
+
+    census = checks.assert_scored_support(
+        {'dev': {'positive': 1, 'negative': 6}, 'test': {'positive': 3, 'negative': 6}},
+        floor=5,
+    )
+    assert census == {
+        'dev': {'positives': 1, 'negatives': 6},
+        'test': {'positives': 3, 'negatives': 6},
+    }
+
+
+def test_support_floor_is_the_training_ssot_min_test_negatives():
+    """No second number: the floor reuses robust_validation.min_test_negatives."""
+    from core.common import training_cfg
+    from model_tracks import preflight as checks
+
+    assert checks.scored_support_floor() == int(
+        training_cfg().evaluation.robust_validation.min_test_negatives
+    )
 
 
 def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch):

@@ -14,8 +14,12 @@ import torch
 from sklearn.metrics import (accuracy_score, average_precision_score, confusion_matrix,
                              precision_recall_fscore_support, precision_recall_curve,
                              roc_auc_score, roc_curve)
-from core.common import plot_dpi
-from core.ranking_metrics import ranking_at_k
+from core.common import plot_dpi, precision_at_recall_key
+from core.coverage_contracts import (
+    UNKNOWN_DIMENSION_VALUE, DimensionAccounting, ReportCoverageContract,
+    TaggedDimensionRecord,
+)
+from core.ranking_metrics import POOLED_METRIC_PREFIX, ranking_at_k
 from graph_tracks.artifacts import name
 from graph_tracks.data import file_hash, load_records, load_text_cache
 
@@ -90,6 +94,31 @@ def pair_metrics(labels, scores, threshold, ks):
         'tp': int(tp), 'tn': int(tn), 'fp': int(fp), 'fn': int(fn),
         'precision_defined': bool(tp + fp), 'both_classes': supported,
         **{key: value for key, value in pooled.items() if key.startswith('pooled_')}}
+
+
+#: The metric columns ``pair_metrics`` emits under a FIXED, name-stable header.
+#: DERIVED from a probe CALL, never retyped: the emitter itself is the registry,
+#: so a metric added or dropped next to ``pair_metrics`` moves every consumer at
+#: once. A hand-typed second registry is the defect pinned by
+#: tests/test_column_ssot.py, and a *validated* copy of the emitter's header is
+#: exactly what silently drifts from it.
+#:
+#: The two DYNAMIC families are excluded because their names are decided by
+#: config at emission time, not by the emitter's own shape:
+#:
+#:   * ``precision_at_recall_key()`` (``p_at_r<recall>``) -- retuning
+#:     ``evaluation.operating_recall`` renames the column;
+#:   * ``pooled_*`` from ``ranking_at_k`` -- the ladder is ``retrieval_ks``, and
+#:     a slice with no positive pair emits none of them.
+#:
+#: The slice adapter matches those two families by PATTERN (see
+#: ``graph_tracks.report_slices.DYNAMIC_METRIC_PATTERNS``); consumers that need
+#: the complete emitted header should call ``pair_metrics`` itself.
+PAIR_METRIC_KEYS: tuple[str, ...] = tuple(
+    key for key in pair_metrics(np.array([0, 1]), np.array([0.1, 0.9]), 0.5, ())
+    if not key.startswith(POOLED_METRIC_PREFIX)
+    and key != precision_at_recall_key()
+)
 
 
 def retrieval_report(records, vectors, pairs, output, track, cfg, *, perf=None):
@@ -258,6 +287,9 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     progress('attribute_reports_complete', output=str(report_dir))
     # The model plan requires unseen / sparse-neighborhood / isolated /
     # missing-field slices; only the attribute slices existed before this.
+    # ``report`` validates its own rows ONCE, before persisting them; the
+    # manifest below carries those already-validated rows verbatim, so no
+    # second check of the same list runs here or in the manifest writer.
     from graph_tracks.report_slices import report as slice_report
     slices = slice_report(records, scored, track=track, output=report_dir,
                           pair_metrics=pair_metrics, threshold=threshold,
@@ -318,6 +350,49 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
             'performance': performance, 'confidence_intervals': intervals}
 
 
+def cascade_traceability_coverage(
+        query_ids, *, measured_slices, measured_attributes) -> ReportCoverageContract:
+    """The cascade's ``not_applicable`` traceability claim, machine-checked.
+
+    ``report_cascade`` scores retrieved candidate pairs for a set of query
+    records and owns no encoded listing catalog, so no scored record can carry a
+    generalization-slice or attribute-separation tag. That is a DECLARED
+    ``not_applicable`` for both dimensions over the whole scored-query
+    population, with an explicit reason and unknown policy -- expressed in
+    ``core.coverage_contracts.ReportCoverageContract``, the project's general
+    per-record contract, so the claim is checked rather than aspirational.
+
+    The claim is only honest while the tables it talks about stay empty, so the
+    emitted ``slices``/``attributes`` rows are part of the check: a
+    ``not_applicable`` dimension carries the whole population under
+    ``unknown`` and NO measured value. Nothing new is emitted here; the cascade
+    report derives its ``traceability`` prose FROM the validated contract and
+    its bytes are unchanged.
+    """
+    records = tuple(query_ids)
+    if not records:
+        raise ValueError('cascade traceability needs at least one scored query record')
+    if measured_slices or measured_attributes:
+        raise ValueError(
+            'the cascade declares slice/attribute coverage not_applicable but emits rows')
+    return ReportCoverageContract(
+        records=tuple(
+            TaggedDimensionRecord(
+                record_id=f'query:{identifier}',
+                dimensions={name: (UNKNOWN_DIMENSION_VALUE,)
+                            for name in CASCADE_TRACEABILITY})
+            for identifier in records),
+        dimensions={name: DimensionAccounting(
+            policy='not_applicable',
+            counts={UNKNOWN_DIMENSION_VALUE: len(records)},
+            unknown_policy=('every scored query record is unknown for this dimension: the '
+                            'cascade composes trained artifacts and owns no listing-attribute '
+                            'table to derive a value from'),
+            reason=reason)
+            for name, reason in CASCADE_TRACEABILITY.items()},
+    )
+
+
 def report_cascade(ranked, relevant, decisions, output, *, track='cascade',
                    ks=(), recall_targets=(0.95,), bins=10, threshold=None):
     """Cascade report: ranker recall AND decider precision/calibration.
@@ -327,6 +402,10 @@ def report_cascade(ranked, relevant, decisions, output, *, track='cascade',
     ranker by candidate recall, the decider on the RETRIEVED candidate set by
     PR-AUC, precision at the requested recalls and ECE. It is a combinator
     report: no fused embedding or fused score is computed here.
+
+    The cascade composes trained artifacts and never sees a listing catalog, so
+    its slice/attribute coverage is a declared ``not_applicable`` that
+    :func:`cascade_traceability_coverage` validates (see it for the rule).
     """
     from model_tracks.cascade import decider_report, ranker_report, retrieved_relevance
     output = Path(output)
@@ -336,14 +415,23 @@ def report_cascade(ranked, relevant, decisions, output, *, track='cascade',
     ranker = ranker_report(list(ranked.candidate_ids), relevant, ks)
     labels, scores = retrieved_relevance(decisions, relevant)
     decider = decider_report(labels, scores, recall_targets=recall_targets, bins=bins)
+    # The cascade declares no slice/attribute population of its own; that claim
+    # is validated as a per-record coverage contract over the scored queries
+    # (see above). It emits nothing: the traceability prose below comes FROM the
+    # validated contract, so the report's bytes are unchanged.
+    slices: list = []
+    attributes: list = []
+    coverage = cascade_traceability_coverage(
+        decisions.query_ids, measured_slices=slices, measured_attributes=attributes)
     report = {'schema': 'er-cascade-report-v1', 'track': track,
               'roles': {'ranker': ranker, 'decider': decider},
               # Same traceability keys as every trained-lane manifest; empty
               # with a documented reason because the cascade has no listing
               # catalog of its own to slice or attribute-score.
-              'slices': [],
-              'attributes': [],
-              'traceability': dict(CASCADE_TRACEABILITY),
+              'slices': slices,
+              'attributes': attributes,
+              'traceability': {name: coverage.dimensions[name].reason
+                               for name in CASCADE_TRACEABILITY},
               'retrieval_ks': [int(k) for k in ks],
               'decision_threshold': threshold,
               'composed_from': ['text ranker (ANN candidates)',

@@ -143,24 +143,50 @@ def plan_identity(bundle,*,loss,train_frac,sample,seed=SEED):
             'data_sha256':data_digest(bundle)}
 
 
+#: The frozen input files a prepared bundle carries inline. The bundle member
+#: is the ``*_csv`` byte payload; the local file registry key is the bare name
+#: the plan and the loss functions read (``F['labeled_pairs']`` etc.).
+_FROZEN_INPUT_MEMBERS = {'labeled_pairs': 'labeled_pairs_csv',
+                         'canonical_records': 'canonical_records_csv',
+                         'gate_results': 'gate_results_csv'}
+
+
+def _materialize_frozen_inputs(bundle, *, results=None):
+    """Write the bundle-carried frozen CSVs and bind the local file registry.
+
+    THE single implementation: the plan path (``prepare_run_plan``) and the
+    prepared trainer (``training.train_prepared._main``) both call this, so the
+    ``*_csv`` member names, the return shape and the destination directory are
+    declared exactly once.
+
+    A prepared bundle ships the exact frozen bytes it trained from, so this
+    materializes them instead of re-reading whatever the live checkout happens
+    to hold. Returns the registry key -> written path mapping. A bundle that
+    carries none of these members is left untouched (its plan is byte-identical
+    to the pre-bundle behavior).
+    """
+    from core.common import F, RESULTS
+    root = RESULTS if results is None else results
+    materialized = {}
+    for key, member in _FROZEN_INPUT_MEMBERS.items():
+        if member not in bundle:
+            continue
+        destination = root / '_prepared_inputs' / Path(F[key]).name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(bundle[member])
+        F[key] = destination
+        materialized[key] = destination
+        print(f"[prepared-bundle] materialized {key}={destination} "
+              f"bytes={len(bundle[member]):,}", flush=True)
+    return materialized
+
+
 def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
     from training.prepared_bundle import prepared_holdout
     from training.training import prepare_fixed_training_inputs
     if np.asarray(bundle['emb0']).size:
         raise ValueError('initial embeddings have no checkpoint producer attestation; prepare verified GPU embeddings before mining')
-    frozen_inputs = {'labeled_pairs': 'labeled_pairs_csv',
-                     'canonical_records': 'canonical_records_csv',
-                     'gate_results': 'gate_results_csv'}
-    bound_files = [key for key in frozen_inputs if key in bundle]
-    if bound_files:
-        from core.common import F, RESULTS
-        for key in bound_files:
-            destination = RESULTS / '_prepared_inputs' / Path(F[key]).name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(bundle[frozen_inputs[key]])
-            F[key] = destination
-            print(f"[prepared-bundle] materialized {key}={destination} "
-                  f"bytes={len(bundle[frozen_inputs[key]]):,}", flush=True)
+    _materialize_frozen_inputs(bundle)
     cfg=load_config();loss=loss or cfg['training']['loss']
     validate_collapse_regulation(cfg)
     train_bc,dev_bc,test_bc=prepared_holdout(bundle,cfg['split'],seed=seed)

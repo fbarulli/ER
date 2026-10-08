@@ -1,8 +1,12 @@
-"""One supervisor, the trained model workers and a shared start barrier.
+"""The suite's two phases: the trained-lane parallel barrier, then the combinators.
 
-The barrier is for the trained lanes only (``resume.TRAINING_TRACKS``). The
-cascade composes already-trained artifacts and runs sequentially after this
-phase, so it never reaches ``run_parallel``.
+``run_parallel`` is the barrier phase and admits ONLY the trained lanes
+(``resume.TRAINING_TRACKS``). ``run_track_suite`` is the supervisor's single
+entry point: it partitions any declared track set by that same taxonomy, runs
+the trained lanes behind the shared start barrier, and only once that call has
+returned does it run the postprocess combinators (the cascade) sequentially.
+A combinator therefore never reaches the barrier, never holds up a trained
+lane's release, and never runs before the artifacts it composes exist.
 """
 from __future__ import annotations
 
@@ -16,7 +20,8 @@ import time
 import uuid
 
 from core.perf_switches import perf_enabled
-from model_tracks.resume import TRAINING_TRACKS
+from core.tracing import TRACE_LANE_ENV, run_trace_env
+from model_tracks.resume import POSTPROCESS_TRACKS, TRACKS, TRAINING_TRACKS
 
 
 @contextmanager
@@ -51,6 +56,89 @@ def mps_environment(root: Path, *, thread_percentage: int | None = None):
         shutil.rmtree(pipes)  # Only this verified-stopped attempt owns these pipes.
 
 
+def split_tracks(tracks) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Partition declared tracks into (trained-behind-barrier, postprocess).
+
+    The split is the suite taxonomy, never a per-callsite list: a track that
+    trains runs in the parallel barrier phase, a track that only composes
+    trained artifacts runs after it. Unknown tracks fail loud rather than
+    silently running in neither phase.
+    """
+    requested = set(tracks)
+    unknown = requested - set(TRACKS)
+    if unknown:
+        raise ValueError(f'unknown suite track(s): {", ".join(sorted(unknown))}')
+    return (tuple(track for track in TRAINING_TRACKS if track in requested),
+            tuple(track for track in POSTPROCESS_TRACKS if track in requested))
+
+
+def run_track_suite(commands: dict[str, list[str]], root: Path, env: dict,
+                    *, resume: bool = False, multiprocess: bool = False,
+                    thread_percentage: int | None = None, timeout: float = 14400,
+                    barrier_timeout: float = 600) -> dict:
+    """Run every declared track: trained lanes in parallel, combinators after.
+
+    The commands may name any declared tracks. The trained lanes go through
+    :func:`run_parallel` exactly as before; the postprocess combinators are
+    spawned one after another only after that barrier phase has returned, so a
+    combinator can never be released by (or delay) the shared start barrier and
+    can never read a trained lane's artifacts before they exist.
+
+    ``multiprocess`` scopes the MPS environment to the trained phase: the
+    combinators are spawned with the plain suite environment, never with the
+    MPS pipes of a training session.
+    """
+    if not commands:
+        raise ValueError('suite run requires at least one track command')
+    trained, postprocess = split_tracks(commands)
+    trained_commands = {track: commands[track] for track in trained}
+    combinator_commands = {track: commands[track] for track in postprocess}
+    if trained_commands:
+        if multiprocess:
+            share = max(1, 100 // len(trained_commands)) if thread_percentage is None else thread_percentage
+            with mps_environment(root, thread_percentage=share) as mps_env:
+                result = run_parallel(trained_commands, root, {**env, **mps_env},
+                                      resume=resume, timeout=timeout,
+                                      barrier_timeout=barrier_timeout)
+        else:
+            result = run_parallel(trained_commands, root, env, resume=resume,
+                                  timeout=timeout, barrier_timeout=barrier_timeout)
+    else:
+        result = {'mode': 'postprocess', 'workers': []}
+    workers = list(result.get('workers') or [])
+    for track, command in combinator_commands.items():
+        run_postprocess_track(command, root, env, track, resume=resume)
+        workers.append(track)
+    result['workers'] = workers
+    result['postprocess'] = list(combinator_commands)
+    return result
+
+
+def run_postprocess_track(command: list[str], root: Path, env: dict, track: str,
+                          *, resume: bool = False) -> None:
+    """Run one postprocess combinator lane after the barrier phase, sequentially.
+
+    The lane keeps its own results root and log, but deliberately gets no
+    ``ER_TRACK_BARRIER``: a combinator composes artifacts the trained lanes
+    already wrote and must not wait on a start barrier that has already been
+    released. It gets the RUN's trace pins like every other lane, so its rows
+    join the run instead of landing in its own subtree.
+    """
+    if track not in POSTPROCESS_TRACKS:
+        raise ValueError(f'{track} is not a declared postprocess track')
+    from core.common import TRAIN_ROOT
+    track_env = {**env, 'PYTHONUNBUFFERED': '1', 'ER_TRACK_NAME': track,
+                 'EUROMONITOR_RESULTS_DIR': str((root / track).resolve()),
+                 'WANDB_DIR': str((root / track / 'wandb').resolve()),
+                 TRACE_LANE_ENV: track,
+                 **run_trace_env()}
+    track_env.pop('ER_TRACK_BARRIER', None)
+    (root / track / 'wandb').mkdir(parents=True, exist_ok=True)
+    with (root / f'{track}__worker.log').open('a' if resume else 'w') as log:
+        subprocess.run(command, cwd=TRAIN_ROOT, env=track_env, stdout=log,
+                       stderr=subprocess.STDOUT, check=True)
+
+
 def wait_for_start(root: Path, track: str, timeout: float = 600):
     (root / f'{track}.ready').write_text(str(os.getpid()))
     started = time.monotonic()
@@ -64,7 +152,11 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
                  *, timeout: float = 14400, barrier_timeout: float = 600,
                  resume: bool = False):
     if not commands or set(commands) - set(TRAINING_TRACKS):
-        raise ValueError('suite workers must be known unfinished trained tracks')
+        combinators = ', '.join(POSTPROCESS_TRACKS) or 'none declared'
+        raise ValueError(
+            'suite workers must be known unfinished trained tracks; trained lanes '
+            'run behind the barrier and the postprocess combinators (' + combinators +
+            ') run after it, through run_track_suite')
     # Each attempt has a fresh barrier; a restored start file cannot release
     # a resumed worker before its companions have loaded.
     barrier = root / ('barrier' if not resume else f'barrier_resume_{time.time_ns()}')
@@ -91,6 +183,12 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
         return f'{track} worker failed (rc={processes[track].returncode})\n{tail}'
     try:
         # Spawn every worker before waiting for any worker to finish.
+        # ONE run has ONE trace: a lane owns its own RESULTS subtree (below) but
+        # must append its rows to the RUN's trace, or each lane would write its
+        # own logs/training_trace.csv and its per-lane run id would keep those
+        # rows from ever joining the run. Resolved once for the whole suite, from
+        # the layout + run identity SSOTs (core.tracing.run_trace_env).
+        trace_pins = run_trace_env()
         for track, command in commands.items():
             log = (root / f'{track}__worker.log').open('a' if resume else 'w')
             handles.append(log)
@@ -101,7 +199,9 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
                           'WANDB_RUN_NAME': f'{root.name}-{track}',
                           'EUROMONITOR_RUN_ID': f'{root.name}-{track}',
                           'OMP_NUM_THREADS': str(worker_threads),
-                          'MKL_NUM_THREADS': str(worker_threads)}
+                          'MKL_NUM_THREADS': str(worker_threads),
+                          TRACE_LANE_ENV: track,
+                          **trace_pins}
             if perf_enabled('parallel.thread_pinning'):
                 # BLAS backends other than OpenMP/MKL size their own pools from
                 # these; pin them so three workers cannot each grab every core.

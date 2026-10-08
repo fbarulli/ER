@@ -10,6 +10,39 @@ import pytest
 from core.common import SEED, runtime, training_cfg
 
 
+#: The boundary now writes its rows into the ONE consolidated trace, so this
+#: module keeps them out of the real results tree, exactly like the traceability
+#: stage tests do.
+@pytest.fixture(autouse=True)
+def _hermetic_trace(tmp_path, monkeypatch):
+    import core.tracing as tracing
+
+    # Under a subdirectory on purpose: the boundary's own test globs the tmp
+    # root for its declared artifacts, and the trace is not one of them.
+    target = tmp_path / "logs" / "training_trace.csv"
+    monkeypatch.setattr(tracing, "trace_path", lambda: target)
+    monkeypatch.setenv("EUROMONITOR_TRACE_RUN", "run-test-handoff")
+    return target
+
+
+def _trace_rows():
+    """The boundary's trace rows, every one proven against the row contract."""
+    import core.tracing as tracing
+    from core.schemas import TraceRow
+
+    frame = tracing.read_trace(tracing.trace_path())
+    tracing.assert_trace_frame(frame)
+    for row in frame.to_dict("records"):
+        TraceRow.model_validate(row)
+    return frame
+
+
+def _step(frame, step):
+    hit = frame[frame["step"].astype(str) == step]
+    assert len(hit) == 1, f"expected one {step!r} row, got {len(hit)}"
+    return hit.iloc[0]
+
+
 def _frozen_plan(loss, rows, batch_sizes, epochs):
     def epoch(bs):
         return [rows[i:i + bs] for i in range(0, len(rows), bs)]
@@ -147,3 +180,75 @@ def test_handoff_rejects_provenance_drift_stale_csvs_and_graph_manifest(tmp_path
     manifest.write_text(json.dumps(document))
     with pytest.raises(ValueError, match='Graph inputs contain stale'):
         _verify(env)
+
+
+# ── the ONE consolidated trace (core.tracing, stage verify_handoff) ─────────
+def test_handoff_trace_enumerates_every_check_load_and_the_report(tmp_path, monkeypatch):
+    """A passing boundary states WHAT it checked, WHAT it loaded, and the report."""
+    from core.tracing import detail_json
+    from model_tracks.config import SuiteConfig
+    from training.handoff import CHECK_ORDER
+
+    suite = SuiteConfig(setup_dir='setup', text_bundle='setup/text.pkl.gz')
+    plan = _frozen_plan(training_cfg().training.loss, [0, 1, 2],
+                        {device: int(runtime('batch_size_' + device))
+                         for device in ('cpu', 'cuda')}, suite.epochs)
+    report = _verify(_handoff_env(tmp_path, monkeypatch, plan))
+
+    frame = _trace_rows()
+    assert set(frame["stage"]) == {'verify_handoff'}
+    assert set(frame["run_id"]) == {'run-test-handoff'}
+
+    # every declared check is NAMED and states its verdict + readback
+    for name in CHECK_ORDER:
+        row = _step(frame, f'check.{name}')
+        assert row["reason"] == 'passed'
+        assert detail_json(row["detail"])["verdict"] == 'passed'
+    assert detail_json(_step(frame, 'check.bundle_load')["detail"])["readback"]['sha256'] == 'a' * 64
+    assert detail_json(_step(frame, 'check.inventory')["detail"])["readback"]['artifacts'] == len(
+        report.final_inventory)
+
+    # the load meter: exact totals, and one named ENTITY row per metered input
+    metered = detail_json(_step(frame, 'loads.metered')["detail"])
+    assert metered['inputs'] == len(report.inputs)
+    assert metered['loads'] == sum(entry.loads for entry in report.inputs)
+    assert metered['bytes'] == sum(entry.bytes for entry in report.inputs)
+    assert metered['sha256_pinned'] == sum(1 for entry in report.inputs if entry.sha256)
+    named = frame[frame["step"] == 'loads.input']
+    assert set(named["scope"]) == {'entity'}
+    assert set(named["key"]) == {entry.input for entry in report.inputs}
+    bundle_row = named[named["key"] == 'text_bundle'].iloc[0]
+    assert detail_json(bundle_row["detail"]) == {
+        'path': str(tmp_path / 'bundle.pkl.gz'), 'loads': 1, 'bytes': len(b'bundle'),
+        'seconds': detail_json(bundle_row["detail"])['seconds'], 'sha256': 'a' * 64,
+    }
+
+    # the report's own census, and it agrees with the report object
+    handoff = detail_json(_step(frame, 'report.handoff')["detail"])
+    assert handoff['status'] == 'pass'
+    assert handoff['loads'] == len(report.inputs)
+    assert handoff['inventory_artifacts'] == len(report.final_inventory)
+    assert handoff['loss_batch_attested'] is True
+    assert handoff['bundle_sha256'] == 'a' * 64
+    assert handoff['total_seconds'] == report.total_seconds
+
+
+def test_handoff_failure_names_the_check_that_raised_and_keeps_the_error(tmp_path, monkeypatch):
+    """A failing boundary commits evidence, then re-raises the boundary's error."""
+    from core.tracing import detail_json
+
+    plan = _frozen_plan('other_loss', [0, 1], {'cpu': 2, 'cuda': 2}, 1)
+    with pytest.raises(ValueError, match='loss differs'):
+        _verify(_handoff_env(tmp_path, monkeypatch, plan))
+
+    frame = _trace_rows()
+    failed = _step(frame, 'boundary.failed')
+    evidence = detail_json(failed["detail"])
+    assert evidence['failed_check'] == 'loss_batch'
+    assert evidence['error_type'] == 'ValueError'
+    assert 'loss differs' in failed["reason"]
+    # the checks that had already passed are stated; the failed one is not
+    assert 'provenance' in evidence['checks_passed']
+    assert 'bundle_load' in evidence['checks_passed']
+    assert 'loss_batch' not in evidence['checks_passed']
+    assert 'check.loss_batch' not in set(frame["step"])

@@ -8,8 +8,8 @@ pattern) exactly like colab_runtime/colab_retention/colab_self_watch.
 
 Collaborators still owned by cli.colab (transport dial-ins, config constants,
 receipts, the bootstrap preamble) resolve at call time through the running
-colab module (``sys.modules["__colab_runtime_self__"]``), never a direct
-second import, so the legacy ``from cli import colab`` monkeypatch surface —
+colab module, via ``cli.colab_hub.hub()`` (the ONE resolver, never a direct
+second import), so the legacy ``from cli import colab`` monkeypatch surface —
 ``TRAINING_RESULTS``, ``_read_remote_text``, ``_list_remote``,
 ``_download_one_remote_file``, ``_verify_result_bundle`` — keeps driving every
 phase and the ``python -m cli.colab`` runtime identity never sees a stale
@@ -22,7 +22,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -30,35 +29,28 @@ from pathlib import Path
 from core.archive_reader import tar_archive
 from core.manifest import sha256_file
 from core.schemas import ResultBundleManifest
-
-
-def _hub():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    return sys.modules.get("__colab_runtime_self__") or sys.modules["cli.colab"]
+from cli.colab_hub import hub
 
 
 def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
     """Build one manifest-backed archive on the VM before transfer."""
-    surface = _hub()
+    surface = hub()
     archive_name = surface._RESULT_ARCHIVE_NAME
     manifest_name = surface._RESULT_MANIFEST_NAME
     excluded_dirs = surface._RESULT_DOWNLOAD_EXCLUDED_DIRS
     archive_path = f"{remote_base}/{archive_name}"
     script = surface._BOOTSTRAP + f"""
-import hashlib, json, pathlib
+import json, pathlib
 from core.archive_reader import tar_archive
+# The ONE file digest: the remote result archive is hashed by the shared
+# implementation the local side verifies with (``core.manifest.sha256_file``
+# -> ``core.portable_archive``), never by a second copy of the algorithm.
+from core.manifest import sha256_file
 
 base = pathlib.Path({remote_base!r})
 archive_path = base / {archive_name!r}
 manifest_path = base / {manifest_name!r}
 excluded_dirs = set({excluded_dirs!r})
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 included = []
 excluded = []
@@ -117,7 +109,7 @@ for worker in range(1, {workers + 1}):
                     "worker": worker,
                     "path": relative.as_posix(),
                     "size": path.stat().st_size,
-                    "sha256": sha256(path),
+                    "sha256": sha256_file(path),
                 }})
                 continue
         blocked = next((part for part in relative.parts if part in excluded_dirs), None)
@@ -132,7 +124,7 @@ for worker in range(1, {workers + 1}):
             "worker": worker,
             "path": relative.as_posix(),
             "size": path.stat().st_size,
-            "sha256": sha256(path),
+            "sha256": sha256_file(path),
         }})
 
 manifest = {{
@@ -171,7 +163,7 @@ print("[result-archive] included={{}} excluded={{}} archive_bytes={{}}".format(
 
 def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundleManifest:
     """Validate manifest coverage, paths, sizes, and hashes after extraction."""
-    manifest_path = root / _hub()._RESULT_MANIFEST_NAME
+    manifest_path = root / hub()._RESULT_MANIFEST_NAME
     if not manifest_path.is_file():
         raise RuntimeError(f"result archive is missing its manifest: {manifest_path}")
     manifest = ResultBundleManifest.model_validate_json(
@@ -224,7 +216,7 @@ def _extract_result_archive(
     archive_path: Path, local_base: Path, run_id: str, workers: int
 ) -> ResultBundleManifest:
     """Safely extract and atomically replace the worker result directories."""
-    surface = _hub()
+    surface = hub()
     manifest_name = surface._RESULT_MANIFEST_NAME
     temporary = Path(tempfile.mkdtemp(prefix=f".{run_id}-result-", dir=local_base.parent))
     try:
@@ -312,7 +304,7 @@ class _IncrementalResultSync:
         return self._synced_bytes
 
     def _loop(self) -> None:
-        surface = _hub()
+        surface = hub()
         while not self._stop.wait(surface._INCREMENTAL_SYNC_SECONDS):
             try:
                 self._pass()
@@ -325,7 +317,7 @@ class _IncrementalResultSync:
                 )
 
     def _pass(self) -> None:
-        surface = _hub()
+        surface = hub()
         for worker in range(1, self.workers + 1):
             try:
                 self._sync_worker(worker)
@@ -348,7 +340,7 @@ class _IncrementalResultSync:
         log, and wandb tree on a 30 s cadence cannot finish inside the exec
         budget while training is competing for the same control channel.
         """
-        surface = _hub()
+        surface = hub()
         heartbeat = self._heartbeat(worker)
         if heartbeat is None:
             return
@@ -426,7 +418,7 @@ class _IncrementalResultSync:
         """The step and score the trainer last reported, if it reported one."""
         remote = f"{self.remote_base}/worker_{worker}/live_status.json"
         try:
-            payload = json.loads(_hub()._read_remote_text(remote))
+            payload = json.loads(hub()._read_remote_text(remote))
         except BaseException:
             return None
         step = payload.get("step")
@@ -448,7 +440,7 @@ class _IncrementalResultSync:
         bounded probe of one small subtree, not a walk of the whole run: only
         ``_checkpoints/<model>/<run>_f0`` is examined.
         """
-        surface = _hub()
+        surface = hub()
         root = f"{self.remote_base}/worker_{worker}/{surface._CHECKPOINT_ROOT_NAME}"
         try:
             matches = surface._list_remote(root, max_depth=surface._CHECKPOINT_LISTING_DEPTH)
@@ -466,7 +458,7 @@ class _IncrementalResultSync:
 
     def _best_local(self, worker: int) -> tuple[float, str | None]:
         """Score and checkpoint name already held locally, if any."""
-        surface = _hub()
+        surface = hub()
         pointer = surface.TRAINING_RESULTS / self.run_id / f"worker_{worker}" / "latest_best"
         marker = pointer / surface._LATEST_BEST_MARKER
         if not marker.is_file():
@@ -485,7 +477,7 @@ def _download_one_remote_file(remote: str, local: Path) -> None:
     the name ``colab`` is both the module and the CLI wrapper function, so a
     test cannot patch the wrapper without shadowing the module.
     """
-    surface = _hub()
+    surface = hub()
     surface.colab(
         "download", "-s", surface.SESSION, remote, str(local),
         timeout=surface._RESULT_DOWNLOAD_TIMEOUT_SECONDS,
@@ -494,7 +486,7 @@ def _download_one_remote_file(remote: str, local: Path) -> None:
 
 def _read_remote_text(remote: str) -> str:
     """Read one small remote file through the shared stdin-exec channel."""
-    surface = _hub()
+    surface = hub()
     script = (
         "import base64, pathlib\n"
         f"p = pathlib.Path({remote!r})\n"
@@ -524,7 +516,7 @@ def download_verified_training_results(
     remote_base: str, workers: int, *, smoke: bool = False
 ) -> None:
     """Transfer one manifest-backed result archive before VM teardown."""
-    surface = _hub()
+    surface = hub()
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     # Smoke runs join a separate retention lane (smoke_ prefix): the local
     # root must already carry the prefix BEFORE extraction so the overwrite

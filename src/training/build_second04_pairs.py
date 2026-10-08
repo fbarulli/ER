@@ -5,6 +5,27 @@ valid GTIN are paired when both countries are present and different.  The
 existing ``volume_verified_cross_country`` consumer applies the final volume
 agreement gate before returning training pairs.
 
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+Stage ``build_second04_pairs``. Emitted:
+  run   source.rows_classified        every source row -> the accepted rows,
+                                      with the closed exclusion census in detail
+  group source.exclusion.reason_census  the EXACT per-reason census (accepted /
+                                      missing_sku_id / missing_gtin /
+                                      missing_country / invalid_gtin)
+  ent   source.exclusion.*            the named ROWS behind those reasons
+                                      (sku_id + that row's exact reason)
+  run   pairs.batch_<i>              BATCH grain: one row per traced chunk of
+                                      GTIN groups (in = groups, out = pairs)
+  run   pairs.batch_census            how many batches there were, how many were
+                                      traced, and how many were omitted
+  run   pairs.cross_country_built     accepted rows -> cross-country pair rows
+  run   pairs.manifest_validated      the frame contract check (in == out)
+  run   pairs.manifest_written        the atomic publication
+Batch caps: ``_BATCH_GTINS`` GTIN groups per traced batch row and at most
+``_MAX_BATCH_ROWS`` batch rows; both are written into the batch rows' detail.
+Never unbounded.
+
 Run::
 
     python -m training.build_second04_pairs
@@ -27,8 +48,21 @@ from core.schemas import (
     check_cross_country_pair_frame,
 )
 from core.step_trace import timed
+from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
 
 _LOG = RunLogger(__name__)
+
+#: The pipeline stage these rows belong to (core.tracing ``stage`` column).
+STAGE = "build_second04_pairs"
+
+# ── batch-grain budget (documented where it is spent) ──────────────────────
+# The pairing pass walks one GTIN group at a time; a group is the natural chunk
+# (its rows can form pairs only with each other). 4,096 groups per BATCH row
+# makes a real cohort a handful of rows while staying small enough to read, and
+# 16 traced batches keep the file bounded on a 25k-GTIN corpus; the remainder is
+# announced in ``pairs.batch_census`` instead of vanishing.
+_BATCH_GTINS = 4096
+_MAX_BATCH_ROWS = 16
 
 MANIFEST_COLUMNS = CROSS_COUNTRY_PAIR_COLUMNS
 
@@ -128,25 +162,94 @@ class SourcePopulation:
         )
 
     @classmethod
-    def usable_rows_with_census(
+    def usable_rows_with_census_and_reasons(
         cls, frame: pd.DataFrame
-    ) -> tuple[pd.DataFrame, ExclusionCensus]:
-        """The accepted rows in canonical order, plus the closed census."""
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, ExclusionCensus]:
+        """The accepted rows, ALL normalized rows, every row's reason, and the census.
+
+        The normalized frame is returned beside the accepted one because the
+        trace's ENTITY rows must name the DROPPED rows too (a dropped row is a
+        named ``sku_id`` with the exact gate that removed it, never a count).
+        """
         cls.require_columns(frame)
         usable = cls.normalized_copy(frame)
         reason = cls.exclusion_reasons(usable)
         census = cls.census_from_reasons(reason, int(len(usable)))
-        return usable.loc[reason.eq("accepted")].sort_values(
+        accepted = usable.loc[reason.eq("accepted")].sort_values(
             ["gtin", "sku_id", "country"],
             kind="mergesort",
-        ), census
+        )
+        return accepted, usable, reason, census
+
+    @classmethod
+    def usable_rows_with_census(
+        cls, frame: pd.DataFrame
+    ) -> tuple[pd.DataFrame, ExclusionCensus]:
+        """The accepted rows in canonical order, plus the closed census."""
+        accepted, _usable, _reason, census = cls.usable_rows_with_census_and_reasons(
+            frame
+        )
+        return accepted, census
 
 
 def _usable_rows_with_census(
     frame: pd.DataFrame,
-) -> tuple[pd.DataFrame, ExclusionCensus]:
-    """The accepted rows in canonical order, plus their closed census."""
-    return SourcePopulation.usable_rows_with_census(frame)
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, ExclusionCensus]:
+    """The accepted rows, all normalized rows, every row's reason, and the census."""
+    return SourcePopulation.usable_rows_with_census_and_reasons(frame)
+
+
+# ── the source-row trace (stage + entity grain) ─────────────────────────────
+class SourcePopulationTrace:
+    """Records every source row's fate: the census, and the named rows behind it."""
+
+    @staticmethod
+    def records(usable: pd.DataFrame, reason: pd.Series) -> list[dict[str, str]]:
+        """One record per SOURCE row: its key, its fields, its exact reason.
+
+        ``usable`` is the normalized copy the classifier ran on (all rows, accepted
+        or not), so its index is the frame's own and ``reason`` aligns row for row.
+        """
+        return [
+            {
+                "sku_id": str(row["sku_id"]),
+                "gtin": str(row["gtin"]),
+                "country": str(row["country"]),
+                "reason": str(reason.loc[index]),
+            }
+            for index, row in usable.iterrows()
+        ]
+
+    @classmethod
+    def record(cls, trace: TraceRun, usable: pd.DataFrame, reason: pd.Series,
+               census: ExclusionCensus) -> None:
+        """The stage row plus the exact reason census and its entity sample."""
+        trace.add(
+            "source",
+            "rows_classified",
+            in_count=census.input_rows,
+            out_count=census.accepted_rows,
+            reason=(
+                "a source row is buildable only when it carries sku_id, gtin AND "
+                "country and its gtin passes the GS1 check digit; each rejected "
+                "row is charged to its FIRST failing gate, once"
+            ),
+            detail=census.model_dump(),
+            source="dataset_deduped (core.common.load_dataset_deduped)",
+        )
+        trace.add_entities(
+            "source.exclusion",
+            cls.records(usable, reason),
+            key_of=lambda record: record["sku_id"],
+            reason_of=lambda record: record["reason"],
+            detail_of=lambda record: {
+                "gtin": record["gtin"],
+                "country": record["country"],
+            },
+            source="dataset_deduped (core.common.load_dataset_deduped)",
+            per_reason=ENTITY_SAMPLE_PER_REASON,
+            total_cap=ENTITY_ROW_CAP,
+        )
 
 
 # ── cross-country pairing ───────────────────────────────────────────────────
@@ -183,13 +286,31 @@ class CrossCountryPairs:
         return pairs
 
     @classmethod
-    def pair_rows(cls, usable: pd.DataFrame) -> list[dict[str, object]]:
-        """One validated row dict per cross-country pair, grouped per gtin."""
+    def pair_rows(
+        cls, usable: pd.DataFrame, trace: TraceRun | None = None
+    ) -> list[dict[str, object]]:
+        """One validated row dict per cross-country pair, grouped per gtin.
+
+        ``trace`` adds BATCH-grain rows: one row per ``_BATCH_GTINS`` GTIN groups
+        (in = groups walked, out = pairs they produced), capped at
+        ``_MAX_BATCH_ROWS`` rows. The grouping, order and pair sequence are
+        untouched — the batch boundary is read off the existing loop, it does not
+        re-chunk it.
+        """
         rows: list[dict[str, object]] = []
         groups = list(usable.groupby("gtin", sort=True))
+        groups_in_batch = 0
+        pairs_in_batch = 0
+        first_gtin = last_gtin = ""
+        batches = traced = 0
         for gtin, group in _LOG.progress(
             groups, desc="cross_country_pairs", unit="gtin"
         ):
+            if groups_in_batch == 0:
+                first_gtin = str(gtin)
+                pairs_in_batch = 0
+            last_gtin = str(gtin)
+            groups_in_batch += 1
             for left, right in cls.differing_country_pairs(
                 group[["sku_id", "country"]].to_dict("records")
             ):
@@ -203,6 +324,54 @@ class CrossCountryPairs:
                         country_b=str(right["country"]),
                     ).model_dump()
                 )
+                pairs_in_batch += 1
+            if groups_in_batch >= _BATCH_GTINS or groups_in_batch == len(groups):
+                batches += 1
+                if trace is not None and traced < _MAX_BATCH_ROWS:
+                    traced += 1
+                    # Deliberately NO in/out pair: a group's rows can form many
+                    # pairs (fan-out), so "groups -> pairs" is a census, not a
+                    # funnel, and forcing an in/out pair would be a lie.
+                    trace.add(
+                        "pairs",
+                        f"batch_{batches - 1:04d}",
+                        reason=(
+                            "GTIN groups walked; the pairs they produced are a "
+                            "fan-out over their rows (a census, not a funnel), "
+                            "so no in/out pair is stated"
+                        ),
+                        detail={
+                            "first_gtin": first_gtin,
+                            "last_gtin": last_gtin,
+                            "gtin_groups": groups_in_batch,
+                            "pairs": pairs_in_batch,
+                            "batch_gtins": _BATCH_GTINS,
+                            "max_batch_rows": _MAX_BATCH_ROWS,
+                        },
+                        source="dataset_deduped gtin groups",
+                    )
+                groups_in_batch = 0
+        if trace is not None:
+            trace.add(
+                "pairs",
+                "batch_census",
+                in_count=batches,
+                out_count=traced,
+                reason=(
+                    "batches traced individually; the remainder is summed here so "
+                    "no chunk is silent"
+                ),
+                detail={
+                    "gtin_groups": len(groups),
+                    "batches": batches,
+                    "batches_traced": traced,
+                    "batches_omitted": batches - traced,
+                    "batch_gtins": _BATCH_GTINS,
+                    "max_batch_rows": _MAX_BATCH_ROWS,
+                    "pairs": len(rows),
+                },
+                source="dataset_deduped gtin groups",
+            )
         return rows
 
 
@@ -216,40 +385,98 @@ def _cross_country_pairs(records: list[dict]) -> list[tuple[dict, dict]]:
     return CrossCountryPairs.differing_country_pairs(records)
 
 
-def _pair_rows(usable: pd.DataFrame) -> list[dict[str, object]]:
+def _pair_rows(
+    usable: pd.DataFrame, trace: TraceRun | None = None
+) -> list[dict[str, object]]:
     """One validated row dict per cross-country pair (see CrossCountryPairs)."""
-    return CrossCountryPairs.pair_rows(usable)
+    return CrossCountryPairs.pair_rows(usable, trace)
 
 
 @timed
 def _build_manifest_with_census(
-    frame: pd.DataFrame,
+    frame: pd.DataFrame, trace: TraceRun | None = None
 ) -> tuple[pd.DataFrame, ExclusionCensus]:
     """The pair manifest plus its closed exclusion census."""
-    usable, census = _usable_rows_with_census(frame)
-    manifest = pd.DataFrame(_pair_rows(usable), columns=CROSS_COUNTRY_PAIR_COLUMNS)
-    return check_cross_country_pair_frame(manifest), census
+    usable, all_rows, reason, census = _usable_rows_with_census(frame)
+    if trace is not None:
+        SourcePopulationTrace.record(trace, all_rows, reason, census)
+    manifest = pd.DataFrame(_pair_rows(usable, trace), columns=CROSS_COUNTRY_PAIR_COLUMNS)
+    checked = check_cross_country_pair_frame(manifest)
+    if trace is not None:
+        # Census, not a funnel: a group's rows fan out into pairs, so a
+        # pairs-per-row in/out pair would be false for the smallest populations.
+        trace.add(
+            "pairs",
+            "cross_country_built",
+            reason=(
+                "one row per (left, right) pair of a GTIN group whose countries "
+                "differ — a fan-out over the accepted rows, so the population is "
+                "recorded as a census"
+            ),
+            detail={
+                "accepted_rows": census.accepted_rows,
+                "gtins": int(checked["gtin"].nunique()) if len(checked) else 0,
+                "pairs": int(len(checked)),
+            },
+            source="dataset_deduped gtin groups",
+        )
+        trace.add(
+            "pairs",
+            "manifest_validated",
+            in_count=int(len(checked)),
+            out_count=int(len(checked)),
+            reason="the frame contract (endpoints, cross_country, distinct countries) holds",
+            detail={"columns": list(CROSS_COUNTRY_PAIR_COLUMNS)},
+            source="core.schemas.check_cross_country_pair_frame",
+        )
+    return checked, census
 
 
-def build_manifest(frame: pd.DataFrame) -> pd.DataFrame:
+def build_manifest(
+    frame: pd.DataFrame, trace: TraceRun | None = None
+) -> pd.DataFrame:
     """Return one deterministic row per valid-GTIN cross-country pair."""
-    manifest, census = _build_manifest_with_census(frame)
+    own = trace is None
+    if own:
+        trace = TraceRun(STAGE)
+    manifest, census = _build_manifest_with_census(frame, trace)
     manifest.attrs["exclusion_census"] = census.model_dump()
     _LOG.info(f"[second04] exclusion census: {census.model_dump_json()}")
+    if own:
+        trace.write()
     return manifest
 
 
-def write_manifest(output_path: Path) -> pd.DataFrame:
+def write_manifest(output_path: Path, trace: TraceRun | None = None) -> pd.DataFrame:
     """Build and atomically write the configured manifest."""
-    manifest = build_manifest(load_dataset_deduped())
-    atomic_write_csv(manifest, ensure_parent(Path(output_path)), index=False)
+    own = trace is None
+    if own:
+        trace = TraceRun(STAGE)
+    manifest = build_manifest(load_dataset_deduped(), trace)
+    path = ensure_parent(Path(output_path))
+    atomic_write_csv(manifest, path, index=False)
+    trace.add(
+        "pairs",
+        "manifest_written",
+        in_count=int(len(manifest)),
+        out_count=int(len(manifest)),
+        reason="cross-country pair manifest published atomically",
+        detail={"path": str(path), "gtins": int(manifest["gtin"].nunique())},
+        source=str(path),
+    )
+    if own:
+        trace.write()
     return manifest
 
 
 @timed
 def main() -> None:
     output_path = Path(F["second04_pairs_positive"])
-    manifest = write_manifest(output_path)
+    # ONE writer for the stage: the census, the batches and the publication are
+    # one flow in the trace, committed once.
+    trace = TraceRun(STAGE)
+    manifest = write_manifest(output_path, trace)
+    trace.write()
     _LOG.info(
         f"[second04] wrote {output_path}: {len(manifest):,} cross-country pairs "
         f"across {manifest['gtin'].nunique():,} valid GTINs"

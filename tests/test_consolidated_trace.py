@@ -47,6 +47,7 @@ from core.tracing import (
 REPO = Path(__file__).resolve().parents[1]
 OWNED_MODULES = (
     REPO / "src" / "core" / "tracing.py",
+    REPO / "src" / "core" / "eval_trace.py",  # builds paths via core.common.artifact
     REPO / "src" / "pipeline.py",
     REPO / "src" / "training" / "data_prep.py",
 )
@@ -399,16 +400,31 @@ def test_two_stage_live_run_covers_every_row_and_every_pair(
     # ── the row identity, from the trace alone ─────────────────────────────
     measured = accounting(frame)
     valid_rows = len(raw) - 1 - 1  # one missing-gtin row, one bad-checksum row
+    # the identity is RUN-SCOPED: it reports the run it read, not "the file"
+    assert measured["run_id"] == frame["run_id"].iloc[0]
     assert measured["rows_in"] == len(raw)
     assert measured["gtin_missing_or_nan"] == 1
     assert measured["gs1_checksum_failed"] == 1
+    assert measured["identity_review_quarantined"] == 0  # no holds on this slice
     assert measured["rows_identity_valid"] == valid_rows
-    assert (
-        measured["rows_in"]
-        == measured["canonical_records"]
+    # FOUR terms: the quarantine population is part of the identity (its
+    # omission is why the documented three-term form never closed on a real run)
+    assert measured["rows_in"] == (
+        measured["canonical_records"]
         + measured["collapsed_same_gtin"]
         + measured["gtin_missing_or_nan"]
         + measured["gs1_checksum_failed"]
+        + measured["identity_review_quarantined"]
+    )
+    # the same closure, stated as the guard row states it
+    assert measured["rows_in"] == (
+        measured["rows_retained"]
+        + measured["gtin_missing_or_nan"]
+        + measured["gs1_checksum_failed"]
+        + measured["identity_review_quarantined"]
+    )
+    assert measured["rows_retained"] == (
+        measured["canonical_records"] + measured["collapsed_same_gtin"]
     )
     # the crafted repeated gtin really did collapse (so the term is exercised)
     assert measured["collapsed_same_gtin"] == 1

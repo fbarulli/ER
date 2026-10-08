@@ -23,11 +23,14 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from core.common import TRAIN_ROOT, retrieval_ks
 from core.encoding_inputs import load_token_features, tokenization_policy
+from core.eval_trace import AttributeAttributionRow, decision_flip
 from core.model_input import build_sku_text, model_input_info
+from core.portable_archive import cached_file_digest
 from core.run_log import RunLogger
 from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
+from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
@@ -36,26 +39,50 @@ from training.masking import field_of
 
 _LOG = RunLogger(__name__)
 
-_HASH_MEMO: dict[tuple, str] = {}
+#: The stage name this module owns in the ONE consolidated pipeline trace.
+STAGE = "ablation"
+
+#: The module's trace writer: the shared shim's slot (``None`` until first use;
+#: see :func:`core.tracing.stage_trace`), so importing this module never touches
+#: the trace layout. Deliberately NEVER reset, unlike
+#: ``training.training.flush_training_trace``: ``prepare``/``encode``/``report``
+#: run once per track inside one suite, and ``core.tracing`` commits a stage
+#: run-scoped and idempotently (a re-write REPLACES that stage's rows for the
+#: run). A reset would therefore make the second track's commit silently replace
+#: the first track's rows; keeping the one writer accumulating is what makes the
+#: whole ablation track followable from the single file.
+_TRACE = None
+
+
+def trace():
+    """The ONE writer for the ``ablation`` stage of the current run."""
+    global _TRACE
+    _TRACE = stage_trace(STAGE, _TRACE)
+    return _TRACE
+
+
+def flush_trace():
+    """Commit this process's ablation rows once; a no-op while empty.
+
+    Idempotent: the writer is retained, so rows added after a flush (the next
+    track's ``report`` call) are committed by the next flush and never dropped.
+    """
+    return flush_stage_trace(_TRACE)
 
 
 def file_hash(path):
+    """The ablation lane's file digest: the ONE shared memoized policy by name.
+
+    The algorithm lives once (``core.portable_archive.raw_file_digest``) and the
+    per-process memo policy lives once (``cached_file_digest``, keyed on
+    abspath/mtime_ns/size). This wrapper only keeps the lane's directory case --
+    a checkpoint directory is hashed by its composition, not as one file -- on
+    top of that home; the local ``_HASH_MEMO`` copy is gone.
+    """
     path = Path(path)
     if path.is_dir():
         return _raw_file_hash(path)
-    try:
-        info = path.stat()
-    except OSError:
-        return _raw_file_hash(path)
-    signature = (str(path.resolve()), info.st_mtime_ns, info.st_size)
-    memoized = _HASH_MEMO.get(signature)
-    if memoized is not None:
-        return memoized
-    result = _raw_file_hash(path)
-    if len(_HASH_MEMO) > 256:
-        _HASH_MEMO.clear()
-    _HASH_MEMO[signature] = result
-    return result
+    return cached_file_digest(path)
 
 
 def _raw_identity(path):
@@ -262,6 +289,17 @@ def validate_sources(request):
             continue
         source = resolve(path)
         if not source.exists() or _raw_identity(source) != expected:
+            trace().add(
+                "sources", "changed",
+                scope=SCOPE_ENTITY, key=path,
+                reason='a frozen ablation source no longer matches the identity the request '
+                       'pinned; the lane refuses rather than reporting on different inputs',
+                detail={'path': path, 'expected': expected,
+                        'present': source.exists(),
+                        'observed': _raw_identity(source) if source.exists() else None},
+                source=path,
+            )
+            flush_trace()
             raise ValueError(f'ablation source changed: {path}')
 
 
@@ -308,7 +346,8 @@ def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoi
 
 @timed
 def _selected_pairs(pairs, cfg):
-    chosen = sample_pairs(pd.read_csv(pairs, dtype=str, keep_default_na=False), cfg)
+    frame = pd.read_csv(pairs, dtype=str, keep_default_na=False)
+    chosen = sample_pairs(frame, cfg)
     # A present-but-empty slice column reads as '' (not None); normalize
     # all-empty axes to None so they are reported in missing_axes and the
     # report rows carry null instead of a silent empty-string stratum.
@@ -316,6 +355,30 @@ def _selected_pairs(pairs, cfg):
         if chosen and all(p.get(axis) is None or p.get(axis) == '' for p in chosen):
             for p in chosen:
                 p[axis] = None
+    trace().add(
+        "prepare",
+        "pairs_selected",
+        in_count=int(len(frame)),
+        out_count=len(chosen),
+        reason=(
+            "coverage="
+            + cfg.coverage
+            + ": the cohort is "
+            + ("the whole labeled population" if cfg.coverage == "all"
+               else f"the held-out {cfg.split!r} split")
+            + f", sampled deterministically at seed={int(cfg.seed)}"
+        ),
+        detail={
+            "coverage": cfg.coverage,
+            "split": cfg.split,
+            "seed": int(cfg.seed),
+            "sample_pairs": int(cfg.sample_pairs),
+            "pairs_in_file": int(len(frame)),
+            "pairs_chosen": len(chosen),
+            "slice_columns": list(cfg.slice_columns),
+        },
+        source=source_name(Path(pairs)),
+    )
     return chosen
 
 
@@ -324,20 +387,49 @@ def _catalog_rows(catalog):
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
-    return frame.set_index('sku_id', drop=False).to_dict('index')
+    rows = frame.set_index('sku_id', drop=False).to_dict('index')
+    trace().add(
+        "prepare", "catalog_rows",
+        in_count=int(len(frame)), out_count=len(rows),
+        reason='the catalog requires a unique nonempty sku_id; one ablation row per sku_id',
+        detail={'catalog_rows': int(len(frame)), 'unique_sku_ids': len(rows)},
+        source=source_name(Path(catalog)),
+    )
+    return rows
 
 
 @timed
 def _pair_endpoints(chosen):
-    return sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
+    ids = sorted({p[k] for p in chosen for k in ('sku_id1', 'sku_id2')})
+    trace().add(
+        "prepare", "endpoints",
+        in_count=2 * len(chosen), out_count=len(ids),
+        reason='both endpoints of every selected pair, deduplicated to distinct catalog ids',
+        detail={'pairs': len(chosen), 'endpoint_slots': 2 * len(chosen),
+                'distinct_endpoints': len(ids)},
+        source='selected ablation pairs',
+    )
+    return ids
 
 
 @timed
 def _attributes(cfg):
     from core.attribute_universe import attribute_registry
-    attributes = cfg.attributes or sorted(attribute_registry())
-    if len(set(attributes)) != len(attributes) or set(attributes)-attribute_registry().keys():
+    registry = attribute_registry()
+    attributes = cfg.attributes or sorted(registry)
+    if len(set(attributes)) != len(attributes) or set(attributes) - registry.keys():
         raise ValueError('attributes must be unique registry keys')
+    trace().add(
+        "prepare", "attributes",
+        in_count=len(cfg.attributes) if cfg.attributes else len(registry),
+        out_count=len(attributes),
+        reason=('the lane declared an explicit attribute list'
+                if cfg.attributes else
+                'the lane declared no attributes; the whole registry is ablated'),
+        detail={'declared': list(cfg.attributes), 'registry_keys': len(registry),
+                'ablated': len(attributes)},
+        source='config/attribute_ablation.yaml (Settings.attributes)',
+    )
     return attributes
 
 
@@ -346,6 +438,18 @@ def _listing_records(listings, ids, cfg):
     records = {r['sku_id']: r for r in load_records(listings)} if listings else {}
     if listings and any(i not in records or (cfg.coverage != 'all' and records[i]['split'] != cfg.split) for i in ids):
         raise ValueError('graph endpoints must belong to the selected held-out split')
+    trace().add(
+        "prepare", "graph_records",
+        # Two different populations (pair endpoints vs every listing record):
+        # a load/validation row, not a funnel.
+        in_count=None, out_count=len(records),
+        reason=('graph lane: one listing record per distinct pair endpoint, each checked '
+                'against the selected held-out split' if listings else
+                'text lane: no graph listings are consumed'),
+        detail={'listings': source_name(Path(listings)) if listings else None,
+                'endpoints': len(ids), 'records': len(records)},
+        source=source_name(Path(listings)) if listings else 'no listings (text lane)',
+    )
     return records
 
 
@@ -406,6 +510,33 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
             variants.append({'attribute':attribute, 'channel':channel, 'text_indices':ti,
                              'records':gr, 'changed_listings':changed})
         print(f'[ablation/local] attribute={attr_index}/{len(attributes)} {attribute} unique_texts={len(pool.texts)} elapsed={time.monotonic()-started:.1f}s',flush=True)
+    channels_per_attribute: dict[str, int] = {}
+    for variant in variants[1:]:
+        channels_per_attribute[variant['attribute']] = channels_per_attribute.get(variant['attribute'], 0) + 1
+    trace().add(
+        "prepare", "variants",
+        # A DERIVATION, not a funnel: attributes fan out into one variant per
+        # channel, so there is no single input population to state.
+        in_count=None, out_count=len(variants) - 1,
+        reason='one baseline variant plus one variant per ablated attribute and channel',
+        detail={'attributes': len(attributes), 'variants_including_baseline': len(variants),
+                'channels_per_attribute': channels_per_attribute,
+                'changing_variants': sum(1 for v in variants if v['changed_listings'] > 0),
+                'unique_texts': len(pool.texts)},
+        source='ablation interventions (declared attribute removed per channel)',
+    )
+    # The EXACT per-effect census is a GROUP row per bucket; the entity rows are a
+    # bounded sample of it. A variant that changes no model input is the honest
+    # exception set: the intervention is declared but this lane cannot express it.
+    trace().add_entities(
+        "prepare.variant_effect", variants,
+        key_of=lambda v: f"{v['attribute']}:{v['channel']}",
+        reason_of=lambda v: 'changes_model_input' if v['changed_listings'] else 'no_changed_input',
+        detail_of=lambda v: {'attribute': v['attribute'], 'channel': v['channel'],
+                             'changed_listings': int(v['changed_listings']),
+                             'texts': len(v['text_indices']), 'records': len(v['records'])},
+        source='composed ablation variants',
+    )
     return baseline_text, variants
 
 
@@ -423,6 +554,20 @@ def _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, list
                 print(f'[ablation/local] candidate texts={n}/{len(candidate_ids)} elapsed={time.monotonic()-started:.1f}s',flush=True)
                 last_progress = time.monotonic()
     candidate_records = [records[i] for i in candidate_ids] if listings else []
+    trace().add(
+        "prepare", "candidates",
+        in_count=len(rows) if cfg.retrieval_catalog == 'full' else len(ids),
+        out_count=len(candidate_ids),
+        reason=(f"retrieval_catalog={cfg.retrieval_catalog}: "
+                + ('the trained catalog is the fixed candidate set'
+                   if cfg.retrieval_catalog == 'full' else
+                   'the pair endpoints are the fixed candidate set')),
+        detail={'catalog_mode': cfg.retrieval_catalog, 'catalog_rows': len(rows),
+                'candidate_ids': len(candidate_ids),
+                'candidate_text_indices': len(candidate_text),
+                'candidate_records': len(candidate_records)},
+        source='ablation retrieval catalog',
+    )
     return candidate_ids, candidate_text, candidate_records
 
 
@@ -453,7 +598,10 @@ def _persist_prepared(request, cfg, token_cache):
         prepared = Path(tmp)/'prepared_inputs.npz'
         request['prepared_inputs'] = prepare_inputs(request,prepared,token_cache=token_cache)
         validate_sources(request)
-        output = out_dir/digest(request)[:24]
+        # One digest, two uses: the content-addressed staging dir AND the trace
+        # row. A second digest() here would stream the (up to ~1GB) request twice.
+        request_sha = digest(request)
+        output = out_dir/request_sha[:24]
         output.mkdir(parents=True, exist_ok=True)
         destination = output/prepared.name
         if destination.exists():
@@ -465,6 +613,24 @@ def _persist_prepared(request, cfg, token_cache):
         if path.exists() and json.loads(path.read_text()) != request:
             raise ValueError('existing request differs')
         write(path,request)
+        text_slots = (sum(len(variant['text_indices']) for variant in request['variants'])
+                      + len(request['candidate_text_indices']))
+        trace().add(
+            "prepare", "request_persisted",
+            in_count=text_slots, out_count=len(request['texts']),
+            reason='every intervention text slot is interned down to its distinct native text; '
+                   'the request freezes cohort, interventions and texts',
+            detail={'request_path': source_name(path), 'request_sha256': request_sha,
+                    'prepared_inputs_sha256': request['prepared_inputs']['sha256'],
+                    'cohort_sha256': request.get('cohort_sha256'),
+                    'variants': len(request['variants']),
+                    'pairs': len(request['pairs']),
+                    'candidate_ids': len(request['candidate_ids']),
+                    'unique_texts': len(request['texts']),
+                    'attributes': len(request.get('coverage', {}).get('attributes', [])),
+                    'missing_axes': request.get('missing_axes')},
+            source=source_name(path),
+        )
     return path
 
 
@@ -493,6 +659,7 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         path = _persist_prepared(request, cfg, token_cache)
     print(f'[ablation/local] pairs={len(chosen)} endpoints={len(ids)} unique_texts={len(pool.texts)} '
           f'variants={len(variants)-1} changed={sum(v["changed_listings"] > 0 for v in variants[1:])}', flush=True)
+    flush_trace()
     return path
 
 
@@ -503,6 +670,16 @@ def load_prepared(request_path, request):
         raise ValueError('locally prepared model inputs required; prepare again')
     path = request_path.parent/'prepared_inputs.npz'
     if _raw_file_hash(path) != plan['sha256']:
+        trace().add(
+            "prepared_inputs", "checksum_mismatch",
+            scope=SCOPE_ENTITY, key=str(path),
+            reason='the prepared tensors beside the request do not match the digest the request '
+                   'pinned; the lane refuses rather than encoding different inputs',
+            detail={'path': str(path), 'expected_sha256': plan['sha256'],
+                    'request_path': source_name(request_path)},
+            source=source_name(request_path),
+        )
+        flush_trace()
         raise ValueError('prepared input checksum mismatch')
     return np.load(path,allow_pickle=False)
 
@@ -515,6 +692,11 @@ def _validated_device(device):
 @timed
 def _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text):
     if track == 'gnn_only':
+        trace().add(
+            "encode", "text_vectors", in_count=0, out_count=0,
+            reason='the gnn_only decider consumes no text vectors',
+            detail={'track': track, 'device': device}, source='none',
+        )
         return None
     from sentence_transformers import SentenceTransformer
     checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
@@ -549,6 +731,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
                 raise ValueError('identical baseline texts have inconsistent exported vectors')
             seeded[index] = candidates[row]
             covered[index] = True
+    reused_from_export = int(np.count_nonzero(covered))
     chunks = []
     with torch.no_grad():
         for n,batch in enumerate(plan['token_batches'],1):
@@ -568,6 +751,18 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     if not covered.all():
         raise ValueError('prepared ablation text vectors miss native inputs')
     text_vectors = seeded
+    trace().add(
+        "encode", "text_vectors",
+        in_count=len(request['texts']), out_count=int(covered.sum()),
+        reason='the baseline text export seeds every catalog text it already covers; the '
+               'remaining native texts are encoded forwards on the frozen checkpoint',
+        detail={'texts': len(request['texts']), 'reused_from_export': reused_from_export,
+                'encoded_on_device': int(covered.sum()) - reused_from_export,
+                'token_batches': len(plan['token_batches']), 'device': device,
+                'checkpoint': request['checkpoint'],
+                'saved_text': None if saved_text is None else source_name(saved_text)},
+        source=str(request['checkpoint']),
+    )
     del model
     return text_vectors
 
@@ -589,6 +784,17 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
             raise ValueError('prepared vocabulary differs from checkpoint')
         graph_batches = {key:[load_batch(arrays,prefix,device,vocabulary) for prefix in prefixes]
                          for key,prefixes in plan['graph_batches'].items()}
+    trace().add(
+        "encode", "graph_encoder",
+        # A UNIT row: either the lane has an encoder to encode with or it does not.
+        in_count=None, out_count=1 if encoder is not None else 0,
+        reason=('the prepared graph batches are encoded through the frozen checkpoint encoder'
+                if encoder is not None else
+                'the text ranker consumes no graph encoder'),
+        detail={'track': track, 'device': device, 'graph_batch_groups': len(graph_batches),
+                'shared_encoder_supplied': graph_encoder is not None},
+        source=str(request['checkpoint']) if track != 'text' else 'none (text track)',
+    )
     return encoder, graph_batches
 
 
@@ -601,6 +807,20 @@ def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, s
         candidate_text = text_vectors[arrays['candidate_text_indices']] if text_vectors is not None else None
         candidate_vectors = candidate_text if encoder is None else encoder.encode_prepared(
             [load_batch(arrays,prefix,device,plan['vocabulary']) for prefix in plan['candidate_batches']],candidate_text)
+    trace().add(
+        "encode", "candidates",
+        # A lane may legitimately arrive with saved candidate vectors and no
+        # candidate_ids in the request, so the two counts are stated, not linked.
+        in_count=None,
+        out_count=0 if candidate_vectors is None else int(candidate_vectors.shape[0]),
+        reason=('the saved graph candidate vectors are validated and reused'
+                if saved_candidates is not None else
+                'the fixed catalog candidates are encoded from the prepared tensors'),
+        detail={'candidate_ids': len(request.get('candidate_ids', [])),
+                'reused_saved': saved_candidates is not None,
+                'dim': None if candidate_vectors is None else int(candidate_vectors.shape[-1])},
+        source='prepared candidates',
+    )
     return candidate_vectors
 
 
@@ -627,6 +847,16 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
         print(f'[ablation/{device}] prepared inference job={n}/{len(plan["jobs"])}',flush=True)
     vectors = [results[job][0] for job in plan['variant_jobs']]
     scores = [results[job][1] for job in plan['variant_jobs']]
+    trace().add(
+        "encode", "jobs",
+        in_count=len(plan['jobs']), out_count=len(results),
+        reason='one forward pass per prepared job; the baseline job reuses saved candidate '
+               'vectors when the lane supplied them',
+        detail={'jobs': len(plan['jobs']), 'scored_pairs': len(request['pairs']),
+                'variants': len(plan['variant_jobs']), 'device': device,
+                'uses_saved_candidates': saved_candidates is not None},
+        source='prepared inference jobs',
+    )
     return vectors, scores
 
 
@@ -634,11 +864,26 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
 def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
+    request_sha = file_hash(request_path)
     with output.open('xb') as handle:
         np.savez_compressed(handle, vectors=np.asarray(vectors,dtype=np.float32), scores=np.asarray(scores,dtype=np.float32),
-                            request_sha256=file_hash(request_path),embedding_dtype='float32',
+                            request_sha256=request_sha,embedding_dtype='float32',
                             **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
-    output.with_suffix('.sha256').write_text(file_hash(output))
+    output_sha = file_hash(output)
+    output.with_suffix('.sha256').write_text(output_sha)
+    trace().add(
+        "encode", "persisted",
+        # A UNIT row: the whole job fan-in lands in one export artifact.
+        in_count=None, out_count=1,
+        reason='one float32 vectors/scores export and its sha256 sidecar for the whole request',
+        detail={'output': source_name(output), 'output_sha256': output_sha,
+                'request_sha256': request_sha,
+                'vectors_shape': list(np.asarray(vectors).shape),
+                'scores_shape': list(np.asarray(scores).shape),
+                'candidate_vectors': candidate_vectors is not None,
+                'embedding_dtype': 'float32'},
+        source=source_name(request_path),
+    )
 
 
 @timed
@@ -655,6 +900,19 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         arrays = load_prepared(request_path,request)
         plan = request['prepared_inputs']
         track = request['track']
+    trace().add(
+        "encode", "plan",
+        # A DERIVATION (one job per variant, baseline included), not a funnel.
+        in_count=None, out_count=len(plan['jobs']),
+        reason='one forward pass per prepared job; a variant whose inputs are unchanged '
+               'reuses the baseline vectors instead of a second pass',
+        detail={'track': track, 'device': device, 'variants': len(request['variants']),
+                'jobs': len(plan['jobs']), 'variant_jobs': list(plan['variant_jobs']),
+                'token_batches': len(plan.get('token_batches') or []),
+                'pairs': len(request['pairs']), 'ids': len(request['ids']),
+                'candidate_ids': len(request.get('candidate_ids', []))},
+        source=source_name(request_path),
+    )
     with _LOG.section('ablation.encode.text_vectors'):
         text_vectors = _prepared_text_vectors(request, arrays, plan, device, track, text_model, saved_text)
     with _LOG.section('ablation.encode.graph_encoder'):
@@ -665,6 +923,7 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         vectors, scores = _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates)
     with _LOG.section('ablation.encode.persist'):
         _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
+    flush_trace()
 
 
 @timed
@@ -797,6 +1056,18 @@ def validate_vectors(request_path, result):
         raise ValueError('ablation scores must be finite')
     if request.get('candidate_ids') and (candidates is None or candidates.ndim != 2 or candidates.shape != (len(request['candidate_ids']),vectors.shape[-1])):
         raise ValueError('full catalog candidate vectors missing or shape mismatch')
+    trace().add(
+        "vectors", "validated",
+        # Two different populations (catalog ids vs comparison pairs): this is a
+        # validation row, not a funnel.
+        in_count=None, out_count=len(request['pairs']),
+        reason='cheap integrity validation of one ablation export before it is reused or reported',
+        detail={'request_path': source_name(request_path), 'result': source_name(result),
+                'variants': expected[0], 'ids': expected[1], 'pairs': len(request['pairs']),
+                'candidate_vectors': candidates is not None,
+                'vectors_shape': list(vectors.shape), 'scores_shape': list(scores.shape)},
+        source=source_name(result),
+    )
     return request,vectors,scores,candidates
 
 
@@ -810,6 +1081,17 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
         return retrieval.ranks(vec)
     for n, variant in enumerate(variants[1:], 1):
         if not variant['changed_listings'] and (not np.array_equal(vectors[n],vectors[0]) or not np.array_equal(scores[n],scores[0])):
+            trace().add(
+                "report", "noop_variant_changed_output",
+                scope=SCOPE_ENTITY, key=f"{variant['attribute']}:{variant['channel']}",
+                reason='an intervention that changed no model input still produced different '
+                       'vectors/scores; the comparison is refused rather than reported',
+                detail={'attribute': variant['attribute'], 'channel': variant['channel'],
+                        'changed_listings': int(variant['changed_listings']),
+                        'cohort_sha256': request.get('cohort_sha256')},
+                source='composed ablation variants',
+            )
+            flush_trace()
             raise ValueError('no-op ablation changed model output')
         key = hashlib.sha256(vectors[n].tobytes()).hexdigest()
         if key not in comparison_cache:
@@ -840,6 +1122,35 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
     return rows
 
 
+def assert_ablation_rows(rows, threshold):
+    """Validate the emitted comparison rows; return the ORIGINAL list, untouched.
+
+    The contract is a PREDICATE over the emitter's own dicts: each row is
+    validated verbatim against ``AttributeAttributionRow`` and its
+    ``decision_flip`` is checked against the FROZEN threshold this run already
+    bound -- never against a hardcoded ``0.0`` and never with a chained
+    comparison, because the row model owns no threshold and the lane that does
+    is the only authority on the verdict (the D3 false rejection).
+
+    Nothing is renamed, rebuilt or re-serialized, so a caller still hands the
+    ORIGINAL dicts to the report writer and the emitted bytes are unchanged.
+    """
+    threshold = float(threshold)
+    if not np.isfinite(threshold):
+        raise ValueError('ablation row validation requires a finite frozen threshold')
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f'ablation row {index} is {type(row).__name__}, not a dict')
+        model = AttributeAttributionRow.model_validate(row)
+        expected = decision_flip(model.baseline_score, model.ablated_score, threshold)
+        if model.decision_flip is not expected:
+            raise ValueError(
+                f'ablation row {index} decision_flip={model.decision_flip} disagrees '
+                f'with the frozen threshold {threshold!r}: baseline='
+                f'{model.baseline_score!r} ablated={model.ablated_score!r} -> {expected}')
+    return rows
+
+
 def _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids):
     return {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
         'request_path':source_name(request_path), 'request_sha256':file_hash(request_path),
@@ -865,6 +1176,20 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         threshold_binding = verify_threshold_binding(request,threshold_provenance)
         nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
         cfg = Settings.model_validate(request['settings'])
+    trace().add(
+        "report", "validated",
+        # Two different populations (comparison pairs vs ablated variants).
+        in_count=None, out_count=nv - 1,
+        reason='every ablated variant is compared against the baseline at the frozen threshold '
+               'that was selected before this lane ran',
+        detail={'track': request['track'], 'variants': nv, 'ids': ni, 'pairs': npairs,
+                'threshold': float(threshold), 'threshold_source': str(threshold_source),
+                'threshold_sha256': threshold_provenance.get('sha256'),
+                'vectors_shape': list(vectors.shape), 'scores_shape': list(scores.shape),
+                'candidate_vectors': candidate_vectors is not None,
+                'request_path': source_name(request_path)},
+        source=source_name(result),
+    )
     with _LOG.section('ablation.report.comparison'):
         if not cfg.retrieval_ks or any(k < 1 for k in cfg.retrieval_ks):
             raise ValueError('retrieval ks must be positive')
@@ -883,14 +1208,47 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
                                 baseline_ranks, ann_baseline, comparison_cache)
         retrieval.close()
+        # The comparison funnel plus its EXACT flip census. ``add_entities``
+        # buckets the whole row population once (references only) and emits a
+        # capped stratified sample, so the trace stays bounded even at
+        # exhaustive-coverage size.
+        trace().add(
+            "report", "comparisons",
+            in_count=(nv - 1) * npairs, out_count=len(rows),
+            reason='one row per ablated variant and pair; the census below buckets them by '
+                   'decision flip at the frozen threshold',
+            detail={'variants_excluding_baseline': nv - 1, 'pairs': npairs, 'rows': len(rows),
+                    'threshold': float(threshold), 'track': request['track'],
+                    'retrieval_catalog_count': len(candidate_ids)},
+            source=source_name(result),
+        )
+        trace().add_entities(
+            "report.decision_flip", rows,
+            key_of=lambda row: f"{row['attribute']}:{row['channel']}:{row['sku_id1']}~{row['sku_id2']}",
+            reason_of=lambda row: 'flip' if row['decision_flip'] else 'no_flip',
+            detail_of=lambda row: {'attribute': row['attribute'], 'channel': row['channel'],
+                                   'label': row['label'], 'changed_listings': row['changed_listings'],
+                                   'baseline_score': row['baseline_score'],
+                                   'ablated_score': row['ablated_score'],
+                                   'score_delta': row['score_delta'],
+                                   'baseline_error': row['baseline_error'],
+                                   'ablated_error': row['ablated_error']},
+            source=source_name(result),
+        )
     with _LOG.section('ablation.report.document'):
+        # The emitted rows are the report's evidence; validate them against the
+        # contract and the FROZEN threshold in scope BEFORE anything is saved.
+        assert_ablation_rows(rows, threshold)
         output = _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids)
         validate_sources(request)
         if frozen_threshold(threshold_source, threshold) != threshold_provenance:
             raise ValueError('threshold report changed during comparison')
     if not save:
+        flush_trace()
         return output
-    return save_report(request_path, output, config=config)
+    report_path = save_report(request_path, output, config=config)
+    flush_trace()
+    return report_path
 
 
 def save_report(request_path, output, *, config=None):
@@ -904,6 +1262,16 @@ def save_report(request_path, output, *, config=None):
         write(saved, output)
     rows, threshold = output['rows'], output['threshold']
     print(f'[ablation/local] report={path} rows={len(rows)} threshold frozen={threshold}', flush=True)
+    trace().add(
+        "report", "persisted",
+        in_count=None, out_count=1 if saved == path else 2,
+        reason='identical report bytes land on the dashboard pointer and beside the request',
+        detail={'dashboard_pointer': source_name(path), 'beside_request': source_name(saved),
+                'single_path': saved == path, 'rows': len(rows),
+                'threshold': threshold, 'track': output.get('track'),
+                'reported_rows': len(rows)},
+        source=source_name(request_path),
+    )
     return path
 
 

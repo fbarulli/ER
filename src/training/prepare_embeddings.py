@@ -12,14 +12,21 @@ from graph_tracks.data import file_hash, load_records, load_text_cache
 from graph_tracks.text_cache import checkpoint_hash, create_cache, compose_texts, composition_fingerprint, texts_hash
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def input_identity(setup: Path, checkpoint: Path) -> dict:
     from core.common import TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
     from core.model_input import model_input_composition
-    manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
-    baseline = json.loads((setup / 'setup_manifest.json').read_text())
+    layout = _setup_layout()
+    manifest = json.loads((setup / layout.prepared_dir / 'input_manifest.json').read_text())
+    baseline = json.loads((setup / layout.manifest).read_text())
     expected = {
-        'catalog_sha256': file_hash(setup / 'eligible_catalog.csv'),
+        'catalog_sha256': file_hash(setup / layout.catalog),
         'identity_policy_sha256': file_hash(POLICY_PATH),
         'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
         'checkpoint_sha256': checkpoint_hash(checkpoint),
@@ -29,8 +36,8 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
         # name it too; otherwise the request omits the key and the cache builder
         # compares None against 'float32' and refuses its own output.
         'embedding_dtype': 'float32',
-        'input_manifest_sha256': file_hash(setup / 'prepared/input_manifest.json'),
-        'listings_sha256': file_hash(setup / 'prepared/listings.json'),
+        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / 'input_manifest.json'),
+        'listings_sha256': file_hash(setup / layout.prepared_dir / 'listings.json'),
     }
     for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):
         if expected[key] != manifest[key]:
@@ -45,8 +52,9 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
 def prepare_request(setup: Path, checkpoint: Path) -> dict:
     """Always compose actual text locally; no persistent text-cache shortcut."""
     expected = input_identity(setup, checkpoint)
-    ids, texts = compose_texts(setup / 'eligible_catalog.csv')
-    listing_ids = [row['sku_id'] for row in load_records(setup / 'prepared/listings.json')]
+    layout = _setup_layout()
+    ids, texts = compose_texts(setup / layout.catalog)
+    listing_ids = [row['sku_id'] for row in load_records(setup / layout.prepared_dir / 'listings.json')]
     if set(ids) != set(listing_ids) or len(ids) != len(listing_ids):
         raise ValueError('Catalog and prepared listings do not have identical IDs')
     drifted_inputs = input_identity(setup, checkpoint)
@@ -79,7 +87,8 @@ def validate_result(path: Path, request: dict, *, request_sha256: str | None = N
 def validate_prepared_provenance(cache: Path, metadata: dict, manifest: dict):
     """Consumers fail closed if prepared text provenance is missing or stale."""
     setup = cache.parent
-    path = setup / 'embedding_inputs.json'
+    layout = _setup_layout()
+    path = setup / layout.embedding_request
     if not path.is_file():
         raise ValueError('text cache lacks prepared text provenance; regenerate locally')
     request = json.loads(path.read_text())
@@ -91,9 +100,9 @@ def validate_prepared_provenance(cache: Path, metadata: dict, manifest: dict):
     if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
         raise ValueError('invalid prepared text population')
     current = {
-        'catalog_sha256': file_hash(setup / 'eligible_catalog.csv'),
-        'input_manifest_sha256': file_hash(setup / 'prepared/input_manifest.json'),
-        'listings_sha256': file_hash(setup / 'prepared/listings.json'),
+        'catalog_sha256': file_hash(setup / layout.catalog),
+        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / 'input_manifest.json'),
+        'listings_sha256': file_hash(setup / layout.prepared_dir / 'listings.json'),
     }
     for key, value in current.items():
         if expected.get(key) != value:
@@ -120,8 +129,9 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
     if device == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError('CUDA unavailable: select a GPU runtime for the embedding job')
     setup, checkpoint = setup.resolve(), checkpoint.resolve()
-    catalog = setup / 'eligible_catalog.csv'
-    output = setup / 'shared_minilm__embeddings.npz'
+    layout = _setup_layout()
+    catalog = setup / layout.catalog
+    output = setup / layout.shared_embeddings
     request = prepare_request(setup, checkpoint)
     expected = request['metadata']
     ids = request['ids']
@@ -144,9 +154,9 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
             for key, value in drifted_inputs.items():
                 if expected.get(key) != value:
                     raise ValueError('Embedding inputs changed during generation')
-            request_path = setup / 'embedding_inputs.json.tmp'
+            request_path = setup / (layout.embedding_request + '.tmp')
             request_path.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
-            request_path.replace(setup / 'embedding_inputs.json')
+            request_path.replace(setup / layout.embedding_request)
             candidate.replace(output)
         status = 'created'
     result = {'status': status, 'output': str(output), 'rows': shape[0], 'dimensions': shape[1],

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import get_args
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -30,14 +31,88 @@ def test_track_identity_is_text_gnn_only_cascade():
 
 def test_trained_lanes_partition_tracks_and_own_the_barrier(tmp_path):
     """Only the trained lanes reach run_parallel; the cascade runs post-hoc."""
-    from model_tracks.parallel import run_parallel
+    from model_tracks.parallel import run_parallel, split_tracks
     assert set(resume.TRAINING_TRACKS).isdisjoint(resume.POSTPROCESS_TRACKS)
     assert tuple(resume.TRAINING_TRACKS) + tuple(resume.POSTPROCESS_TRACKS) == resume.TRACKS
     assert resume.POSTPROCESS_TRACKS == ('cascade',)
+    # The split is the taxonomy, for any requested subset of declared tracks.
+    assert split_tracks(['cascade', 'text', 'gnn_only']) == (('text', 'gnn_only'), ('cascade',))
+    assert split_tracks(['cascade']) == ((), ('cascade',))
+    assert split_tracks(['text']) == (('text',), ())
+    with pytest.raises(ValueError, match='unknown suite track'):
+        split_tracks(['hybrid'])
     # The cascade trains nothing and has no start barrier, so the parallel
     # supervisor must refuse it before spawning anything.
     with pytest.raises(ValueError, match='trained tracks'):
         run_parallel({'cascade': ['true']}, tmp_path, dict(os.environ), barrier_timeout=1)
+
+
+def test_run_track_suite_runs_the_cascade_only_after_the_barrier(tmp_path):
+    """One call runs all tracks: trained lanes behind the barrier, then cascade.
+
+    The real fix for the cascade: the barrier's membership comes from the
+    declared taxonomy, so a caller can hand every track to one function and a
+    combinator still never reaches the barrier. It also cannot start before the
+    trained lanes have exited, which is the property the sequential workaround
+    in ``run.supervisor`` was standing in for.
+    """
+    import sys
+    from model_tracks.parallel import run_track_suite
+    root = tmp_path
+    trained = '''import os, pathlib\nfrom model_tracks.parallel import wait_for_start\nroot = pathlib.Path(os.environ['ER_TEST_ROOT'])\nwait_for_start(pathlib.Path(os.environ['ER_TRACK_BARRIER']), os.environ['ER_TRACK_NAME'])\n(root / (os.environ['ER_TRACK_NAME'] + '.done')).write_text('')\n'''
+    cascade = '''import os, pathlib, sys\nroot = pathlib.Path(os.environ['ER_TEST_ROOT'])\nassert 'ER_TRACK_BARRIER' not in os.environ, 'a combinator must not join the barrier'\nfor track in ('text', 'gnn_only'):\n    assert (root / (track + '.done')).exists(), track\nsys.exit(0 if not (root / 'barrier').joinpath('cascade.ready').exists() else 3)\n'''
+    commands = {track: [sys.executable, '-c', trained] for track in ('text', 'gnn_only')}
+    commands['cascade'] = [sys.executable, '-c', cascade]
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'),
+           'ER_TEST_ROOT': str(root)}
+    result = run_track_suite(commands, root, env, barrier_timeout=30)
+    assert result['workers'] == ['text', 'gnn_only', 'cascade']
+    assert result['postprocess'] == ['cascade']
+    # The cascade's own assertions ran in its process; a fresh barrier directory
+    # for this phase carries no cascade.ready and the trained lanes' outputs.
+    assert not (root / 'barrier' / 'cascade.ready').exists()
+    assert (root / 'cascade__worker.log').read_text() == ''
+
+
+def test_run_track_suite_skips_the_barrier_when_only_combinators_run(tmp_path, monkeypatch):
+    """A postprocess-only phase never enters run_parallel, and so never MPS."""
+    from model_tracks import parallel
+    monkeypatch.setattr(parallel, 'run_parallel',
+                        lambda *a, **k: pytest.fail('no trained lanes means no barrier'))
+    monkeypatch.setattr(parallel, 'mps_environment',
+                        lambda *a, **k: pytest.fail('combinators never need MPS'))
+    result = parallel.run_track_suite({'cascade': ['true']}, tmp_path,
+                                      dict(os.environ), multiprocess=True)
+    assert result['workers'] == ['cascade']
+    assert result['mode'] == 'postprocess'
+
+
+def test_cascade_catalog_vectors_resolve_from_the_saved_export(tmp_path):
+    """A real lane keeps its vectors in the forward export, not at the root.
+
+    The gnn lane's saved inference writes ``<track>/<track>__inference/``; the
+    cascade must find the catalog vectors there (or at the root when a flow
+    roots them), never require a hand-placed copy.
+    """
+    text_root = tmp_path / 'text'
+    gnn_root = tmp_path / 'gnn_only'
+    (text_root / 'text__index').mkdir(parents=True)
+    (text_root / 'text__vectors.npz').write_bytes(b'text')
+    export = gnn_root / 'gnn_only__1008T000000Z-gnn_only' / 'gnn_only__inference'
+    export.mkdir(parents=True)
+    (export / 'gnn_only__vectors.npz').write_bytes(b'gnn')
+    (export / 'gnn_only__export_manifest.json').write_text('{}')
+    checkpoint = gnn_root / 'gnn_only__graph_model.pt'
+    checkpoint.write_bytes(b'scorer')
+    (gnn_root / 'gnn_only__best_checkpoint.json').write_text(
+        json.dumps({'path': str(checkpoint)}))
+    lane = _lane(tmp_path)
+    lane.text_index = None
+    lane.gnn_checkpoint = None
+    artifacts = worker._cascade_artifacts(tmp_path, lane)
+    assert artifacts['text_vectors'] == text_root / 'text__vectors.npz'
+    assert artifacts['gnn_vectors'] == export / 'gnn_only__vectors.npz'
+    assert artifacts['gnn_checkpoint'] == checkpoint
 
 
 def test_artifact_namer_accepts_cascade_and_rejects_hybrid():

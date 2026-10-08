@@ -73,7 +73,7 @@ class KaggleChain:
 
     @staticmethod
     def run_chain(*, cohort: str | None = None, with_embed: bool = False,
-                  execute: bool) -> dict[str, Any]:
+                  with_finalize: bool = False, execute: bool) -> dict[str, Any]:
         """One command runs the whole kaggle loop supervised end-to-end.
 
         Steps and their fail-loud gates, in order:
@@ -89,7 +89,15 @@ class KaggleChain:
            train stage attaches the fresh bundle dataset version the publish
            recorded (owner/slug/version) when the mount pin is available.
         3. (--with-embed) embed-kernel: identical pattern after the train
-           watcher reports completion.
+           watcher reports completion; the step runs only when the embed
+           objective is configured AND present on the account (an absent kernel
+           fails loud with the push path named, never silently skipped).
+        4. (--with-finalize) finalize-kernel: the remote CPU job that runs
+           model_tracks.bundle_steps role=result from a sparse checkout — the
+           operator box is no longer a finalize surface. It reuses the bundling
+           CPU kernel slug and attaches the published inputs bundle plus the
+           trained result kernel output; the sealed result bundle is fetched
+           and digest-verified like every other step.
         Dry-run prints the entire plan (no staging writes, no subprocesses).
         """
         from cli import kaggle_lane as lane
@@ -98,21 +106,23 @@ class KaggleChain:
         cohort = cohort or spec.default_cohort
         stage_root = lane.staging_dir()
         head = lane._git_revision()
-        slugs = {"bundle": spec.cpu_kernel_slug, "train": spec.gpu_kernel_slug,
-                 "embed": spec.embedding_kernel_slug}
+        # One identity registry (config SSOT) resolves every step's slug and the
+        # config field it came from — no per-surface kind->slug table here.
+        identities = lane.kernel_identities(spec)
+        slugs = {kind: identity.slug(spec) for kind, identity in identities.items()}
         publish_slug = spec.bundle_dataset_slug
         plan: dict[str, Any] = {
             "what": "chain", "mode": "executed" if execute else "dry-run",
-            "cohort": cohort, "with_embed": with_embed, "revision": head,
+            "cohort": cohort, "with_embed": with_embed,
+            "with_finalize": with_finalize, "revision": head,
             "slugs": slugs, "publish_slug": publish_slug, "steps": {},
         }
-        kinds = ["bundle", "train"] + (["embed"] if with_embed else [])
-        spec_kinds = {"bundle": "cpu_kernel_slug", "train": "gpu_kernel_slug",
-                      "embed": "embedding_kernel_slug"}
+        kinds = ["bundle", "train"] + (["embed"] if with_embed else []) \
+            + (["finalize"] if with_finalize else [])
         for step_kind in kinds:
             if not slugs[step_kind]:
                 raise RuntimeError(
-                    f"chain requires config kaggle.{spec_kinds[step_kind]}; "
+                    f"chain requires config kaggle.{identities[step_kind].slug_attr}; "
                     "name the kernel (owner/slug) before chaining")
         if not publish_slug:
             raise RuntimeError(
@@ -135,6 +145,19 @@ class KaggleChain:
                         "stage": str(lane._bundle_dataset_stage(cohort)),
                         "mode": "planned",
                     }
+                if step_kind == "embed":
+                    # The embed objective is stated, never implied: an
+                    # unconfigured objective fails here (dry run included), and
+                    # the verdict rides the plan so the operator sees exactly
+                    # which kernel/dataset the step would use.
+                    plan["steps"][step_kind]["objective"] = \
+                        lane.require_embed_objective(execute=False)
+                if step_kind == "finalize":
+                    plan["steps"][step_kind]["mount"] = {
+                        "dataset_sources": [f"{publish_slug}/<fresh version>"],
+                        "kernel_sources": [identities["train"].slug(spec)],
+                    }
+                    plan["steps"][step_kind]["role"] = "result"
             return plan
         # ── the published-tip invariant: the chain pins per-step revisions
         # from `head`; before any staging write, the head must BE the
@@ -154,8 +177,26 @@ class KaggleChain:
 
         for step_index, step_kind in enumerate(kinds):
             expect_publish = step_kind == "bundle"
+            entry: dict[str, Any] = {}
+            if step_kind == "embed":
+                # Live embed step: the configured kernel must EXIST on the
+                # account (config alone cannot tell — the phantom
+                # fbarulli/er-embed-gpu case), or the step fails loud with the
+                # push path named instead of running a missing kernel.
+                entry["objective"] = lane.require_embed_objective(execute=True)
             if step_kind == "bundle":
                 receipt = lane.stage_bundle_kernel(revision=head, cohort=cohort)
+            elif step_kind == "finalize":
+                # The remote CPU finalize job: bundle_steps role=result from a
+                # sparse checkout, attaching the published inputs bundle (the
+                # version this chain's publish recorded) and the trained
+                # result kernel output. Same published-tip guard as every
+                # other stage (stage_finalize_kernel re-checks it).
+                receipt = lane.stage_finalize_kernel(
+                    revision=head,
+                    bundle_dataset_version=(publish_plan or {}).get("dataset_version"),
+                    run_tag=(plan["steps"]["train"]["stage"]["run_tag"]
+                             if "train" in plan["steps"] else None))
             else:
                 receipt = lane.stage_gpu_kernel(
                     kind=step_kind, revision=head,
@@ -163,7 +204,7 @@ class KaggleChain:
                         (publish_plan or {}).get("dataset_version")
                         if step_kind == "train" else None))
             assert_revision(receipt["revision"], f"{step_kind} stage")
-            entry: dict[str, Any] = {"stage": receipt}
+            entry["stage"] = receipt
             stale = lane._clear_stale_autowatch_receipt(step_kind)
             if stale:
                 entry["cleared_stale_receipt"] = stale
@@ -171,7 +212,8 @@ class KaggleChain:
                 entry["push"] = lane.push_bundle_kernel(Path(receipt["staged"]))
                 entry["autowatch"] = entry["push"].get("autowatch")
             else:
-                # Exact main()-lineage push path: push_kernel + ONE watcher spawn.
+                # Exact main()-lineage push path: push_kernel + ONE watcher spawn
+                # (the finalize step reuses it, with its own watcher identity).
                 entry["push"] = lane.push_kernel(Path(receipt["staged"]))
                 entry["autowatch"] = entry["push"].get("autowatch")
             watch = lane._await_autowatch_receipt(step_kind)

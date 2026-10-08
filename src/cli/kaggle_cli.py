@@ -16,8 +16,9 @@ class KaggleCLI:
         parser = argparse.ArgumentParser(description=lane.__doc__)
         parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                             "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
-                            "train-kernel", "embed-kernel", "kernel-logs", "fetch-results",
-                            "stop", "supervise", "autowatch", "kernel-stream", "chain"],
+                            "train-kernel", "embed-kernel", "embed-objective", "finalize-kernel",
+                            "kernel-logs", "fetch-results", "stop", "supervise", "autowatch",
+                            "kernel-stream", "chain"],
                             default="package")
         parser.add_argument("--dataset-csv", type=Path, default=None,
                             help="cohort export to package (default: the SSOT "
@@ -36,12 +37,12 @@ class KaggleCLI:
                             help="stop: issue the cancel/replace and return "
                                  "immediately (verdict 'requested'); never block "
                                  "in the bounded verify poll")
-        parser.add_argument("--kernel", choices=["cpu", "gpu", "embed"], default="cpu",
+        parser.add_argument("--kernel", choices=["cpu", "gpu", "embed", "finalize"], default="cpu",
                             help="which configured kernel slug kernel-status "
                                  "resolves (default: cpu)")
-        parser.add_argument("--kind", choices=["bundle", "train", "embed"], default=None,
-                            help="fetch-results: which kernel output to fetch and "
-                                 "verify (default: bundle)")
+        parser.add_argument("--kind", choices=["bundle", "train", "embed", "finalize"], default=None,
+                            help="fetch-results/supervise: which kernel output to "
+                                 "fetch and verify (default: bundle)")
         parser.add_argument("--slug", default=None,
                             help="kernel-logs: explicit owner/slug (default: "
                                  "resolved from --kernel)")
@@ -66,6 +67,11 @@ class KaggleCLI:
         parser.add_argument("--with-embed", action="store_true",
                             help="chain: continue into embed-kernel after the "
                                  "train watcher reports completion")
+        parser.add_argument("--with-finalize", action="store_true",
+                            help="chain: finish with the remote CPU finalize job "
+                                 "(model_tracks.bundle_steps role=result) so the "
+                                 "sealed result bundle is built on a Kaggle VM, "
+                                 "never on the operator box")
         args = parser.parse_args()
         if args.what == "credentials":
             print(json.dumps(lane.write_credentials(key_env=args.key_env, execute=args.execute),
@@ -77,11 +83,22 @@ class KaggleCLI:
         cohort_resolved = args.cohort or lane._spec().default_cohort
         if args.what == "chain":
             plan = lane.run_chain(cohort=cohort_resolved, with_embed=args.with_embed,
+                             with_finalize=args.with_finalize,
                              execute=args.execute)
             print(json.dumps(plan, indent=2), flush=True)
             if not args.execute:
                 print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to run "
                       "the chain end-to-end", flush=True)
+            return
+        if args.what == "embed-objective":
+            verdict = lane.embed_objective(execute=args.execute)
+            print(json.dumps(verdict, indent=2), flush=True)
+            if verdict.get("available") is False:
+                # Explicit absence, never a silent skip: the objective is
+                # declared unavailable and the caller learns the fix.
+                print(lane._stamp(), f"[kaggle-lane] embed objective UNAVAILABLE: "
+                      f"{verdict.get('reason')}", flush=True)
+                raise SystemExit(2)
             return
         if args.what == "bundle-kernel":
             receipt = lane.stage_bundle_kernel(revision=args.revision, cohort=cohort_resolved)
@@ -120,12 +137,25 @@ class KaggleCLI:
                 print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to push the kernel",
                       flush=True)
             return
+        if args.what == "finalize-kernel":
+            receipt = lane.stage_finalize_kernel(
+                revision=args.revision,
+                run_tag=args.run_tag,
+                slug=args.slug,
+            )
+            print(lane._stamp(), f"[kaggle-lane] staged finalize kernel: "
+                  f"{json.dumps(receipt, indent=2)}", flush=True)
+            if args.execute:
+                plan = lane.push_kernel(Path(receipt["staged"]))
+                print(json.dumps(plan, indent=2), flush=True)
+            else:
+                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to push the kernel",
+                      flush=True)
+            return
         if args.what == "kernel-logs":
             spec = lane._spec()
-            resolved = args.slug or (
-                spec.embedding_kernel_slug if args.kernel == "embed"
-                else spec.gpu_kernel_slug if args.kernel == "gpu"
-                else spec.cpu_kernel_slug)
+            identity = lane.kernel_identity(args.kernel, spec)
+            resolved = args.slug or identity.slug(spec)
             print(json.dumps(lane.kernel_logs(slug=resolved, follow=args.follow,
                                          execute=args.execute), indent=2), flush=True)
             return
@@ -154,10 +184,8 @@ class KaggleCLI:
             return
         if args.what == "kernel-stream":
             spec = lane._spec()
-            resolved = args.slug or (
-                spec.embedding_kernel_slug if args.kernel == "embed"
-                else spec.gpu_kernel_slug if args.kernel == "gpu"
-                else spec.cpu_kernel_slug)
+            identity = lane.kernel_identity(args.kernel, spec)
+            resolved = args.slug or identity.slug(spec)
             print(json.dumps(lane.stream_kernel_logs(resolved), indent=2), flush=True)
             return
         if args.what == "kernel-status":
@@ -165,10 +193,8 @@ class KaggleCLI:
             return
         if args.what == "stop":
             spec = lane._spec()
-            resolved = args.slug or (
-                spec.embedding_kernel_slug if args.kernel == "embed"
-                else spec.gpu_kernel_slug if args.kernel == "gpu"
-                else spec.cpu_kernel_slug)
+            identity = lane.kernel_identity(args.kernel, spec)
+            resolved = args.slug or identity.slug(spec)
             print(json.dumps(lane.stop_kernel(slug=resolved, which=args.kernel,
                                          execute=args.execute,
                                          wait=not args.no_wait), indent=2), flush=True)

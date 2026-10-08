@@ -1,4 +1,16 @@
-"""Complete a downloaded suite using its immutable packaged runtime."""
+"""Run the frozen CPU finalize step from a packaged runtime snapshot.
+
+Lane change (owner ruling): the operator box is no longer a finalize surface.
+Finalize is a remote CPU lane job — a Kaggle CPU kernel or a Colab CPU stage
+runs :mod:`model_tracks.bundle_steps` from a sparse checkout. This module is the
+in-process form of that job: it materializes the packaged source/config
+inventory into a temporary sparse checkout and runs the ONE finalize entry
+(:func:`model_tracks.local_complete.complete`) against the two verified bundles.
+
+It stays a thin wrapper: no post-processing logic lives here, and the archives
+are verified once each through :meth:`core.bundle.Bundle.load`, whose streaming
+pass also yields the whole-file digests the receipt records.
+"""
 from __future__ import annotations
 
 import json
@@ -11,9 +23,36 @@ import tempfile
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.portable_archive import Digest, verify_archive
-from graph_tracks.data import file_hash
-from core.archive_reader import archive_sidecar, open_archive
+from core.portable_archive import Digest
+from core.archive_reader import archive_sidecar
+from core.tracing import flush_stage_trace, stage_trace
+
+#: The stage name this module owns in the ONE consolidated pipeline trace.
+STAGE = "snapshot_completion"
+
+#: The module's trace writer: the shared shim's slot (``None`` until first use;
+#: see :func:`core.tracing.stage_trace`), so importing this module never touches
+#: the trace layout. This wrapper owns no post-processing logic, so it records
+#: the runtime inventory it materializes, which working-tree files differ, and
+#: the receipt it returns.
+_TRACE = None
+
+
+def trace():
+    """The ONE writer for the ``snapshot_completion`` stage of the current run."""
+    global _TRACE
+    _TRACE = stage_trace(STAGE, _TRACE)
+    return _TRACE
+
+
+def flush_trace():
+    """Commit this process's snapshot-completion rows once; a no-op while empty."""
+    return flush_stage_trace(_TRACE)
+
+
+def _spec():
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
 
 
 class SnapshotCompletionReceipt(BaseModel):
@@ -28,35 +67,64 @@ class SnapshotCompletionReceipt(BaseModel):
 
 
 def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publish: bool = True) -> Path:
-    """Run frozen CPU reporting, then publish from the original workspace."""
+    """Run the frozen CPU finalize step, then publish from the original workspace."""
+    from core.bundle import Bundle, BundleRole
     from core.common import TRAIN_ROOT
     from model_tracks.config import SuiteConfig
     import yaml
 
-    training_archive = training_archive.resolve()
-    input_archive = input_archive.resolve()
-    training = verify_archive(training_archive, 'suite_bundle_manifest.json')
-    inputs = verify_archive(input_archive, 'model_tracks_package.json')
-    if training['run_tag'] != run_tag:
+    spec = _spec()
+    training_archive = Path(training_archive).resolve()
+    input_archive = Path(input_archive).resolve()
+    # Two boundary checks, one per archive; every later read is trusted.
+    training = Bundle.load(training_archive, BundleRole.result)
+    inputs = Bundle.load(input_archive, BundleRole.inputs)
+    if training.run_tag() != run_tag:
         raise ValueError('snapshot completion run mismatch')
-    with open_archive(input_archive) as archive:
-        settings = SuiteConfig.model_validate(
-            yaml.safe_load(archive.read(package_member('suite_package_config'))))
+    settings = SuiteConfig.model_validate(
+        yaml.safe_load(inputs.read(package_member('suite_package_config'))))
     from model_tracks.resume import runtime_source_inventory
     inventory = runtime_source_inventory(
-        inputs['files'], ablation_config=settings.ablation_config)
+        inputs.manifest[spec.files_key], ablation_config=settings.ablation_config)
     if not inventory or 'src/model_tracks/local_complete.py' not in inventory:
         raise ValueError('prepared inputs lack the frozen completion runtime')
+    from graph_tracks.data import file_hash
     mismatches = [relative for relative, expected in inventory.items()
                   if not (TRAIN_ROOT / relative).is_file()
                   or file_hash(TRAIN_ROOT / relative) != expected]
-    with open_archive(input_archive) as archive:
+    trace().add(
+        'complete', 'runtime_inventory',
+        in_count=len(inputs.manifest[spec.files_key]), out_count=len(inventory),
+        reason='the packaged runtime inventory is the only source materialized into the sparse '
+               'checkout, so the frozen source is what runs',
+        detail={'run_tag': run_tag, 'packaged_files': len(inputs.manifest[spec.files_key]),
+                'inventory_files': len(inventory),
+                'local_complete_present': 'src/model_tracks/local_complete.py' in inventory,
+                'working_tree_mismatches': len(mismatches),
+                'mismatch_sample': mismatches[:5],
+                'train_root': str(TRAIN_ROOT)},
+        source=str(input_archive),
+    )
+    # The exact census of working-tree drift is the GROUP row; the entity rows
+    # name each file whose live bytes differ from the frozen inventory.
+    trace().add_entities(
+        'complete.working_tree_drift', mismatches,
+        key_of=lambda relative: relative,
+        reason_of=lambda relative: 'live_checkout_differs_from_frozen_inventory',
+        detail_of=lambda relative: {'relative': relative,
+                                    'frozen_sha256': inventory.get(relative),
+                                    'live_present': (TRAIN_ROOT / relative).is_file()},
+        source=str(TRAIN_ROOT),
+    )
+    with inputs.reader() as source:
         with tempfile.TemporaryDirectory(prefix='er-suite-completion-') as temporary:
             snapshot = Path(temporary)
+            written = 0
             for relative in inventory:
                 target = snapshot / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                archive.extract(relative, snapshot)
+                target.write_bytes(source.read(relative))
+                written += 1
             # Root discovery needs project markers; packaging owns all executable
             # source and config above, so this marker carries no runtime settings.
             (snapshot / 'pyproject.toml').write_text(
@@ -83,16 +151,44 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                             str(input_archive), run_tag, str(result)],
                            cwd=snapshot, env=env, check=True)
             final = Path(json.loads(result.read_text())['final'])
+            trace().add(
+                'complete', 'frozen_runtime',
+                in_count=written, out_count=1,
+                reason='the frozen source/config inventory runs the ONE finalize step in a '
+                       'subprocess, so completion never depends on the live checkout',
+                detail={'snapshot': str(snapshot), 'files_written': written,
+                        'mismatches_retained': len(mismatches),
+                        'result_json': str(result), 'final': str(final),
+                        'publish_in_subprocess': False},
+                source=str(input_archive),
+            )
     from model_tracks.resume import validate_completed_suite_archive
-    completed = validate_completed_suite_archive(final, run_tag, settings=settings)
-    if completed.get('run_tag') != run_tag:
+    sealed = Bundle.load(final, BundleRole.result)
+    validate_completed_suite_archive(final, run_tag, settings=settings, bundle=sealed)
+    if sealed.run_tag() != run_tag:
         raise ValueError('snapshot completion produced a different run')
     receipt = SnapshotCompletionReceipt(
-        run_tag=run_tag, input_archive_sha256=file_hash(input_archive),
-        training_archive_sha256=file_hash(training_archive),
-        final_archive_sha256=file_hash(final), source_inventory=inventory,
+        run_tag=run_tag, input_archive_sha256=inputs.digest,
+        training_archive_sha256=training.digest,
+        final_archive_sha256=sealed.digest, source_inventory=inventory,
         working_tree_mismatches=mismatches)
     archive_sidecar(final, '.snapshot_completion.json').write_text(
         receipt.model_dump_json(indent=2) + '\n')
     from model_tracks.local_complete import _publish
-    return _publish(final, settings, run_tag, ablation_done=True) if publish else final
+    trace().add(
+        'complete', 'receipt',
+        in_count=1, out_count=1,
+        reason='the receipt pins both incoming archives and the sealed completion archive, with '
+               'the inventory and the retained working-tree drift',
+        detail={'run_tag': run_tag, 'receipt': str(final) + '.snapshot_completion.json',
+                'input_archive_sha256': inputs.digest,
+                'training_archive_sha256': training.digest,
+                'final_archive_sha256': sealed.digest,
+                'inventory_files': len(inventory),
+                'working_tree_mismatches': len(mismatches),
+                'publish': bool(publish)},
+        source=str(final),
+    )
+    published = _publish(final, settings, run_tag, ablation_done=True) if publish else final
+    flush_trace()
+    return published

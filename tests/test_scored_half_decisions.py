@@ -3,14 +3,15 @@
 Two decisions live here:
 
 1. SCORED-HALF NEGATIVE FOLD ASSIGNMENT — ``split.negative_fold_policy``.
-   RE-DECIDED at the 2026-10-01 regeneration (canonical/gate/labeled rerun
-   after the volume-unification closure): on the regenerated dev half the
-   pinned "train_side" leaks — scored-fold negatives now carry trained-on
-   endpoints — while "withhold_straddle" stays clean AND repeats its thin-cell
-   advantage on the dev half (63.80% < 65.71%) with more price paid in
-   withheld negatives (4,823 vs 3,872). No artifact may ship under a policy
-   its evidence rejects, so the default is "withhold_straddle" and the leak
-   assertion runs against the ASSIGNED policy, not both.
+   RE-DECIDED 2026-10-08 (TODO "Balance dev/test negatives"): the pin moved
+   back to "train_side" because the criterion that parked it was never made
+   checkable. The evidence surface now MEASURES, per policy, how many scored
+   negatives carry a trained-on endpoint, and the emit guard refuses a policy
+   with a non-zero count — measured zero for BOTH policies on the committed
+   census (B parks every train-endpoint pair in the train fold by rule, like
+   A), while B additionally scores the dev/test straddlers A can only drop and
+   therefore doubles the negatives on both scored halves. A stays load-valid
+   and its rule/evidence tests below are unchanged.
 
 2. SLICE-FLAG SET SEMANTICS — ``evaluation.slice_agreement = "set_bag"``.
    The v1_*/v2_* slice columns are set-valued extractions: agreement is BAG
@@ -30,6 +31,7 @@ from core.common import training_cfg
 from training.build_final_validation import (
     NEGATIVE_FOLD_POLICY_TRAIN_SIDE,
     NEGATIVE_FOLD_POLICY_WITHHOLD,
+    LeakGuards,
     count_slice_disagreements,
     negative_pair_fold,
     negative_policy_evidence,
@@ -42,8 +44,15 @@ CONFIG = training_cfg()
 
 
 def test_config_pins_the_decided_defaults() -> None:
-    """The defaults ARE the decision; changing them is a re-decision, not a knob."""
-    assert CONFIG.split.negative_fold_policy == "withhold_straddle"
+    """The defaults ARE the decision; changing them is a re-decision, not a knob.
+
+    RE-PINNED 2026-10-08 (TODO "Balance dev/test negatives"): the pin moved
+    back to "train_side" once the leak criterion that parked it became
+    MEASURED (``scored_negatives_with_trained_on_endpoint``, asserted zero by
+    the emit guard) instead of prose — B doubles the scored negatives on both
+    halves and now wins the thin-cell share too.
+    """
+    assert CONFIG.split.negative_fold_policy == "train_side"
     assert CONFIG.evaluation.slice_agreement == "set_bag"
 
 
@@ -111,28 +120,25 @@ def manifest() -> dict:
 def test_pinned_decision_criteria_hold_on_live_evidence(manifest: dict) -> None:
     """The decision's numbers stay true at every emit — else emit refuses.
 
-    RE-PINNED 2026-10-01: the assigned policy is "withhold_straddle"; the old
-    numbers were (withhold_straddle 592/466/4,728 withheld, train_side
-    1,087/957/3,742) and no longer reproduce on the regenerated artifact.
+    The test no longer hardcodes WHICH policy is pinned: the manifest is read
+    against the config pin so a re-decision (2026-10-08: "train_side") is
+    exercised rather than fought, and the recorded evidence is the policy's
+    own. The emit guard in build_final_validation refuses to write when the
+    pinned policy's criteria stop holding, so the manifest's recorded evidence
+    is authoritative for the numbers.
     """
     evidence = manifest["negative_policy_evidence"]
-    assert manifest["negative_fold_policy"] == "withhold_straddle"
-    now = evidence["withhold_straddle"]
-    # A's own-evidence criteria (mirroring the emit guard added 2026-10-06):
-    # the scored halves must be USABLE — negatives present in both — and the
-    # withheld population is recorded. The thin-cell share against B is
-    # RECORDED, not asserted: the 2026-10-06 census reversed A's 2026-10-01
-    # dev-half thin advantage (A 87.9% vs B 77.6% on the 35,561-row frame),
-    # and B remains structurally disqualified (its scored negatives carry
-    # trained-on endpoints), so thinness is no longer a decision criterion.
+    pinned = CONFIG.split.negative_fold_policy
+    assert manifest["negative_fold_policy"] == pinned
+    now = evidence[pinned]
+    # Own-evidence criteria: the scored halves must be USABLE (negatives
+    # present in both) and no scored negative may carry a trained-on endpoint.
     for half in ("dev", "test"):
-        assert now["scored_dev_negatives" if half == "dev" else "scored_test_negatives"] > 0, half
-    assert now["negatives_withheld_from_scored_half"] > 0
+        assert now[f"scored_{half}_negatives"] > 0, half
+    assert now["scored_negatives_with_trained_on_endpoint"] == 0
     # Exact on-census counts are deliberately NOT pinned (owner directive
-    # 2026-10-04): they move with every data regeneration (2026-10-04 frame:
-    # now 33/29/390, was 63/57/332; 2026-10-02 frame: 553/461/4677,
-    # 1009/875/3807). build_final_validation.build() refuses to emit when
-    # the assigned policy's criteria stop holding, so the manifest's
+    # 2026-10-04): they move with every data regeneration. build() refuses to
+    # emit when the pinned policy's criteria stop holding, so the manifest's
     # recorded evidence is authoritative for the numbers.
 
 
@@ -142,12 +148,14 @@ def test_no_trained_on_endpoint_scores_under_assigned_semantics(
     """The qualitative criterion in code: no scored-half negative carries a
     trained-on endpoint under the ASSIGNED policy.
 
-    RE-DECIDED 2026-10-01: the old name "under_either_semantics" was true
-    when train_side was the readable composed path; on the regenerated
-    artifact train_side's scored folds DO carry trained-on endpoints
-    (measured: folds 2/3 -> 1,916/1,974 negatives, leak present) and that is
-    exactly why the config moved to withhold_straddle. The legacy read is
-    documented here, not guarded, because evidence rejected it.
+    RE-DECIDED 2026-10-08: the 2026-10-01 note here claimed train_side's
+    scored folds carry trained-on endpoints; that claim was never measured.
+    The evidence surface now measures it per policy
+    (``scored_negatives_with_trained_on_endpoint``) and the emit guard refuses
+    a leaking policy, and the regenerated artifact below shows 0 leaks under
+    the pinned train_side assignment — its train-endpoint pairs are parked in
+    the train fold by rule. This assertion therefore holds for the assigned
+    policy, whichever policy the config pins.
     """
     neg = artifact[artifact.true_label == 0]
     f1, f2 = neg["fold"].astype(int), neg["fold_2"].astype(int)
@@ -185,6 +193,57 @@ def test_evidence_is_not_vacuous(manifest: dict) -> None:
     evidence = manifest["negative_policy_evidence"]
     total = lambda e: e["scored_dev_negatives"] + e["scored_test_negatives"]  # noqa: E731
     assert total(evidence["train_side"]) > total(evidence["withhold_straddle"])
+
+
+def test_emit_guard_refuses_a_policy_that_scores_a_trained_on_endpoint() -> None:
+    """The criterion that parked B is now enforced, not asserted.
+
+    One scored negative with a trained-on endpoint is enough to refuse the
+    emit: the qualitative property is a correctness gate, so it is guarded
+    with the same loudness as the count/thinness criteria.
+    """
+    evidence = {
+        NEGATIVE_FOLD_POLICY_WITHHOLD: {
+            "scored_dev_negatives": 1,
+            "scored_test_negatives": 1,
+            "scored_negatives_with_trained_on_endpoint": 0,
+            "thin_cells": None,
+            "populated_cells": None,
+        },
+        NEGATIVE_FOLD_POLICY_TRAIN_SIDE: {
+            "scored_dev_negatives": 2,
+            "scored_test_negatives": 2,
+            "scored_negatives_with_trained_on_endpoint": 1,
+            "thin_cells": None,
+            "populated_cells": None,
+        },
+    }
+    with pytest.raises(SystemExit, match="trained-on endpoint"):
+        LeakGuards.assert_pinned_evidence(
+            NEGATIVE_FOLD_POLICY_TRAIN_SIDE, evidence, min_test_negatives=5
+        )
+
+
+def test_evidence_records_the_balance_of_each_scored_half() -> None:
+    """The TODO's imbalance (dev 1286/9) is MEASURED per policy.
+
+    A same-quarter dev negative scores under both policies; a dev/test
+    straddler only under the pinned assignment — so the balance block moves
+    with the policy instead of being an unrecorded side effect.
+    """
+    frame = pd.DataFrame(
+        {
+            "true_label": [1, 0, 0],
+            "fold": [2, 2, 2],
+            "fold_2": [2, 2, 3],
+        }
+    )
+    evidence = negative_policy_evidence(frame, min_test_negatives=1, n_folds=4)
+    withheld = evidence[NEGATIVE_FOLD_POLICY_WITHHOLD]["scored_half_balance"]["dev"]
+    assigned = evidence[NEGATIVE_FOLD_POLICY_TRAIN_SIDE]["scored_half_balance"]["dev"]
+    assert withheld == {"positives": 1, "negatives": 1, "negative_share": 0.5}
+    assert assigned["positives"] == 1 and assigned["negatives"] == 2
+    assert assigned["negative_share"] == pytest.approx(2 / 3)
 
 
 # ── slice-flag set semantics ────────────────────────────────────────────────

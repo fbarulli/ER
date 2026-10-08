@@ -1,14 +1,21 @@
-"""All-track adapter; provisioning, locks, polling and teardown stay in cli.colab."""
+"""All-track adapter; provisioning, locks, polling and teardown stay in cli.colab.
+
+Every archive this boundary touches is opened through its ONE ``Bundle`` load
+(``core.bundle.Bundle.load``): the legacy ``verify_archive``/``verified_archive``
+helpers are gone from here, so the inputs package, the recovery archive and the
+result archive are each integrity-checked by the boundary that owns their role
+(a resume run loads its recovery archive once and hands the manifest on), and
+then trusted.
+"""
 import json
 from pathlib import Path
 import hashlib
 
-from core.portable_archive import verify_archive, verify_archive_digest, verified_archive
+from core.bundle import Bundle, BundleRole
 from core.archive_reader import open_archive, tar_archive
+from core.manifest import publish_replacing
 from graph_tracks.data import file_hash
 from model_tracks.package import verify, package_member
-
-RESULT_MANIFEST = 'suite_bundle_manifest.json'
 
 
 def verify_result_archive(path: Path) -> tuple[dict, str]:
@@ -19,7 +26,18 @@ def verify_result_archive(path: Path) -> tuple[dict, str]:
     every member, so the result archive is read exactly once. Tests stub this
     named seam rather than the underlying core call.
     """
-    return verify_archive_digest(path, RESULT_MANIFEST)
+    handle = Bundle.load(path, BundleRole.result)
+    return handle.manifest, handle.digest
+
+
+def _validate_recovery(recovery: dict, run_tag: str, metadata: dict) -> None:
+    """The ONE resume-provenance check (was duplicated in both entry points)."""
+    if recovery.get('run_tag') != run_tag:
+        raise ValueError('recovery suite run mismatch')
+    original = recovery.get('input_package')
+    if not isinstance(original, dict) or any(original.get(key) != metadata.get(key)
+                                            for key in ('revision', 'files')):
+        raise ValueError('resume package differs from interrupted suite sources or inputs')
 
 
 def _publish_git_inputs(paths, message: str) -> None:
@@ -47,19 +65,21 @@ def _publish_git_inputs(paths, message: str) -> None:
                        cwd=TRAIN_ROOT, check=True)
 
 
-def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publisher=None):
-    """Save immutable inputs through the existing Git artifact publisher."""
+def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
+                       recovery: dict | None = None, publisher=None):
+    """Save immutable inputs through the existing Git artifact publisher.
+
+    ``recovery`` is the ALREADY loaded recovery manifest (a caller that opens
+    the same archive for its own provenance check passes it down) so a resume
+    run verifies the recovery archive exactly once.
+    """
     from core.common import TRAIN_ROOT
     metadata = verify(archive)
     files = {'inputs.tar.zst':archive}
     if resume_archive is not None:
-        recovery = verify_archive(resume_archive,'suite_recovery_manifest.json')
-        if recovery.get('run_tag') != run_tag:
-            raise ValueError('recovery suite run mismatch')
-        original = recovery.get('input_package')
-        if not isinstance(original,dict) or any(original.get(key) != metadata.get(key)
-                                               for key in ('revision','files')):
-            raise ValueError('resume package differs from interrupted suite sources or inputs')
+        recovery = (recovery if recovery is not None
+                    else Bundle.load(resume_archive, BundleRole.recovery).manifest)
+        _validate_recovery(recovery, run_tag, metadata)
         files['recovery.tar.zst'] = resume_archive
     inventory = {name:{'sha256':file_hash(path),'size':path.stat().st_size}
                  for name,path in files.items()}
@@ -72,7 +92,9 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
         with tar_archive(partial, 'x') as package:
             for name,path in files.items():
                 package.add(path,arcname=name,recursive=False)
-        partial.replace(transport)
+        # Publish the completed sibling through the ONE publish helper (fsync +
+        # os.replace), never a bare rename of a possibly-unflushed file.
+        publish_replacing(partial, transport)
     with tar_archive(transport) as package:
         if set(package.getnames()) != set(files):
             raise ValueError('Git input transport inventory mismatch')
@@ -96,6 +118,11 @@ def _collect_failure_logs(backend, remote_output: str, run_tag: str):
     names = ['suite_events.jsonl']
     for track in TRACKS:
         names.extend([f'{track}__worker.log', f'{track}/worker_events.jsonl'])
+    # PINNED STANDALONE COPY: `run_colab_exec_capture` executes this probe
+    # verbatim (no `_BOOTSTRAP`, so the checkout is not on sys.path) and it
+    # hashes a handful of small log files, so it uses the stdlib digest the
+    # local side re-checks with `file_hash` (the shared home) rather than
+    # importing `core.manifest` from a path the probe cannot count on.
     script = f'''import hashlib, json, pathlib
 root=pathlib.Path({remote_output!r})
 print(json.dumps({{name: hashlib.sha256((root/name).read_bytes()).hexdigest()
@@ -112,7 +139,7 @@ print(json.dumps({{name: hashlib.sha256((root/name).read_bytes()).hexdigest()
         backend._download_one_remote_file(remote_output + '/' + name, partial)
         if file_hash(partial) != digest:
             raise ValueError(f'failure log changed during collection: {name}; partial retained')
-        partial.replace(destination)
+        publish_replacing(partial, destination)
         print(f'Failure log verified: {destination}', flush=True)
     if not inventory:
         print('No remote suite log files were available for collection', flush=True)
@@ -122,7 +149,9 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         git_inputs: Path | None = None):
     from cli import colab as backend
     from core.common import RESULTS, TRAIN_ROOT
-    with verified_archive(archive, 'model_tracks_package.json') as (source, metadata):
+    inputs_bundle = Bundle.load(archive, BundleRole.inputs)
+    with inputs_bundle.reader() as source:
+        metadata = inputs_bundle.manifest
         import yaml
         settings = yaml.safe_load(source.read(package_member('suite_package_config')))
     from model_tracks.config import SuiteConfig
@@ -141,16 +170,15 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         resume_archive = recovery_local
     remote_recovery = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__recovery.tar.zst'
     remote_zip = f"{backend.REMOTE_ROOT}/prepared_training/{run_tag}__all_tracks.{settings['input_archive_format']}"
-    git_inputs = git_inputs or prepare_git_inputs(archive,run_tag,resume_archive=resume_archive)
+    # Opened ONCE here (the boundary that owns the recovery role) and handed to
+    # the transport builder, so a resume run never verifies the archive twice.
+    recovery = (Bundle.load(resume_archive, BundleRole.recovery).manifest
+                if resume_archive is not None else None)
+    git_inputs = git_inputs or prepare_git_inputs(archive,run_tag,resume_archive=resume_archive,
+                                                  recovery=recovery)
     remote_inputs = backend.REMOTE_ROOT+'/'+git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
     if resume_archive is not None:
-        recovery = verify_archive(resume_archive, 'suite_recovery_manifest.json')
-        if recovery.get('run_tag') != run_tag:
-            raise ValueError('recovery suite run mismatch')
-        original = recovery.get('input_package')
-        if not isinstance(original, dict) or any(original.get(key) != metadata.get(key)
-                                               for key in ('revision', 'files')):
-            raise ValueError('resume package differs from interrupted suite sources or inputs')
+        _validate_recovery(recovery, run_tag, metadata)
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
     auth = backend._wandb_env_script()
     script = backend._BOOTSTRAP + auth + f'''
@@ -181,8 +209,9 @@ if file_hash(archive_path) != {file_hash(archive)!r}:
 # The immutable package can predate its transport publication commit. Fetch
 # only that revision: a depth-one branch checkout need not contain its parent.
 
-from core.portable_archive import verified_archive, verify_archive, install_data_members
-with verified_archive(archive_path,"model_tracks_package.json") as (archive, _):
+from core.bundle import Bundle, BundleRole
+from core.portable_archive import install_data_members
+with Bundle.load(archive_path,BundleRole.inputs).reader() as archive:
     for member in archive.infolist():
         if not (root/member.filename).resolve().is_relative_to(root.resolve()):
             raise ValueError("unsafe input package member")
@@ -201,7 +230,7 @@ env={{**os.environ,"PYTHONPATH":str(root/"src"),"PYTHONUNBUFFERED":"1", "ER_GPU_
 result_archive=pathlib.Path({remote_output!r}+{result_suffix!r})
 if result_archive.exists():
     # Collection/publication retry must never restart completed training.
-    verified=verify_archive(result_archive,"suite_bundle_manifest.json")
+    verified=Bundle.load(result_archive,BundleRole.result).manifest
     if verified["run_tag"] != {run_tag!r}:
         raise ValueError("existing suite result run mismatch")
 
@@ -274,8 +303,10 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             backend._download_one_remote_file(recovery_remote, partial)
             if file_hash(partial) != expected_recovery:
                 raise ValueError('suite recovery download mismatch')
-            verify_archive(partial, 'suite_recovery_manifest.json')
-            partial.replace(recovery_local)
+            verify=Bundle.load(partial,BundleRole.recovery)
+            if verify.run_tag() != run_tag:
+                raise ValueError('suite recovery run mismatch')
+            publish_replacing(partial, recovery_local)
             print(f'Interrupted suite recovery saved: {recovery_local}', flush=True)
         except BaseException as recovery_error:
             print(f'Interrupted suite recovery unavailable: {recovery_error}', flush=True)
@@ -287,10 +318,11 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
     expected = backend._read_remote_text(remote_output+'.sha256').strip()
     local = RESULTS/'model_tracks'/f'{run_tag}.training{result_suffix}'
     local.parent.mkdir(parents=True,exist_ok=True)
-    # One download + one streaming verify (owner #5): verify_archive_digest folds
-    # the whole-file SHA256 into the manifest/member verification pass, so the
-    # ~1 GB result archive is read exactly once. A matching local archive skips
-    # the download entirely; a corrupt partial is retained for diagnosis.
+    # One download + one streaming verify (owner #5): the result Bundle's
+    # boundary load folds the whole-file SHA256 into the manifest/member
+    # verification pass, so the ~1 GB result archive is read exactly once. A
+    # matching local archive skips the download entirely; a corrupt partial is
+    # retained for diagnosis.
     manifest = None
     observed = None
     if local.exists():
@@ -304,7 +336,7 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         manifest, observed = verify_result_archive(partial)
         if observed != expected:
             raise ValueError('all-track result download mismatch; partial retained for diagnosis')
-        partial.replace(local)
+        publish_replacing(partial, local)
     if manifest.get('run_tag') != run_tag:
         raise ValueError('all-track result archive run mismatch')
     print(f'[tracks] Direct result archive download verified: {local}', flush=True)

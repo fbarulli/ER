@@ -311,7 +311,14 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     vendor_pairs=_mine_vendor_pairs(by_entity,fields,retailer_of,spec.counts.vendor_variation_positives)
     pos_with_vendors=np.vstack([pos,np.asarray(vendor_pairs,dtype=int)]) if vendor_pairs else np.asarray(pos)
     # Only originals that now have an explicit negative are masked: no dead
-    # positive copies are minted speculatively.
+    # positive copies are minted speculatively. GENERATE-ONLY-IF-COVERED, never
+    # backfill (TODO "Eval balance / data coverage"): a masked copy trains only
+    # when its anchor carries a negative — the anchor's own negatives OR a
+    # minted counterfactual twin registered against it (that twin lineage is
+    # what the frozen objective's triples show, see training.diet_coverage). A
+    # shortfall raises instead of padding the quota with uncovered anchors,
+    # because an uncovered copy would be a minted row that never reaches a
+    # gradient.
     usable={a for a,b in negatives} | {r['anchor_payload_idx'] for r in audits}
     mask_pairs=np.asarray([(a,b) for a,b in positives if a in usable],dtype=int).reshape(-1,2)
     if len(mask_pairs) < spec.counts.masked_positives:

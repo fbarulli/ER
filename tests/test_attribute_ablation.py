@@ -59,7 +59,12 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
     ckpt = tmp_path/'text-checkpoint'; ckpt.write_bytes(b'weights')
     frozen = tmp_path/'baseline.json'; frozen.write_text(json.dumps({'threshold':.5,'track':'text','checkpoint_sha256':a.file_hash(ckpt)}))
-    pair = {'sku_id1':'a','sku_id2':'b','label':'1','difficulty_slice':'hard','masking_profile':None}
+    # A prepared pair's real shape: split plus the evidence map (_pair_evidence).
+    # The map must cover every attribute a variant ablates, or the narrowed
+    # per-variant evidence is all-None and the row contract requires a scope.
+    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
+            'current_attribute_evidence':{'volume':{'exact_match':True},
+                                          'coffee type':{'exact_match':False}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
         {'attribute':None,'channel':'baseline','changed_listings':0},
         {'attribute':'volume','channel':'text','changed_listings':1},
@@ -71,16 +76,20 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     base = np.array([[1.,0.],[.8,.6],[0.,1.]])
     altered = np.array([[1.,0.],[0.,1.],[.8,.6]])
     output = tmp_path/'vectors.npz'
-    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.8],[.1],[.8]],request_sha256=a.file_hash(path))
+    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.75],[.25],[.75]],request_sha256=a.file_hash(path))
     report = json.loads(a.report(path,output,.5,threshold_source=str(frozen)).read_text())
     row = report['rows'][0]
     assert row['decision_flip']
-    assert row['score_delta'] == pytest.approx(-.7)
+    # .75/.25 are exactly representable, so the float32 score_delta the emitter
+    # stores equals ablated-baseline exactly. Real ablation deltas are small
+    # enough that the same identity holds (Sterbenz); a fixture pairing like
+    # .8/.1 would instead expose float32 rounding the real data never sees.
+    assert row['score_delta'] == pytest.approx(-.5)
     assert row['baseline_ranks'][0] == 1 and row['ablated_ranks'][0] == 1
     assert row['masking_profile'] is None
     assert report['threshold'] == .5
     assert report['rows'][1]['decision_flip'] is False
-    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.8],[.1],[.8]],request_sha256='stale')
+    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.75],[.25],[.75]],request_sha256='stale')
     with pytest.raises(ValueError,match='another request'):
         a.report(path,output,.5,threshold_source=str(frozen))
 
@@ -91,7 +100,9 @@ def test_threshold_binds_to_attested_track_and_checkpoint(tmp_path,monkeypatch):
     src = tmp_path/'summary.csv'
     src.write_text('model,split,threshold_source,checkpoint,threshold\nhybrid,dev,dev_youden,hybrid__graph_model.pt,0.5\n')
     ckpt = tmp_path/'hybrid__graph_model.pt'; ckpt.write_bytes(b'ckpt-bytes')
-    pair = {'sku_id1':'a','sku_id2':'b','label':'1','difficulty_slice':'hard','masking_profile':None}
+    # A prepared pair's real shape: split plus the evidence map (_pair_evidence).
+    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
+            'current_attribute_evidence':{'volume':{'exact_match':True}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
         {'attribute':None,'channel':'baseline','changed_listings':0},
         {'attribute':'volume','channel':'text','changed_listings':1}],
@@ -126,7 +137,9 @@ def test_threshold_manifest_binds_absolute_checkpoint(tmp_path,monkeypatch):
     manifest = tmp_path/'text__completion_manifest.json'
     manifest.write_text(json.dumps({'checkpoint':str(ckpt),
         'summary':[{'model':'text','split':'dev','threshold_source':'dev_youden','threshold':0.5}]}))
-    pair = {'sku_id1':'a','sku_id2':'b','label':'1','difficulty_slice':'hard','masking_profile':None}
+    # A prepared pair's real shape: split plus the evidence map (_pair_evidence).
+    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
+            'current_attribute_evidence':{'volume':{'exact_match':True}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
         {'attribute':None,'channel':'baseline','changed_listings':0},
         {'attribute':'volume','channel':'text','changed_listings':1}],
@@ -150,7 +163,7 @@ def test_report_evidence_omits_null_key_for_attribute_less_variants(tmp_path,mon
     monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
     ckpt = tmp_path/'text-checkpoint'; ckpt.write_bytes(b'weights')
     frozen = tmp_path/'baseline.json'; frozen.write_text(json.dumps({'threshold':.5,'track':'text','checkpoint_sha256':a.file_hash(ckpt)}))
-    pair = {'sku_id1':'a','sku_id2':'b','label':'1','difficulty_slice':'hard','masking_profile':None,
+    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
             'current_attribute_evidence':{'volume':{'exact_match':True}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
         {'attribute':None,'channel':'baseline','changed_listings':0},
@@ -432,3 +445,67 @@ def test_full_catalog_has_candidates_outside_sample(tmp_path):
         assert hits[0]['2'][0] is True
     finally:
         comparison.close()
+
+
+# ── the emitted rows validate against the frozen threshold ─────────────────
+
+def _straddle_row():
+    """A legitimate no-flip row whose scores straddle the draft's hardcoded 0.0.
+
+    Under the frozen threshold used below (0.7) both scores sit on the same
+    side, so ``decision_flip`` is genuinely False; the rejected draft's
+    predicate comparing against 0.0 called it a flip and rejected the row.
+    """
+    return {'sku_id1':'a','sku_id2':'b','label':'0','split':'train','attribute':None,'channel':None,
+        'baseline_score':-0.20,'ablated_score':0.30,'score_delta':0.50,'decision_flip':False,
+        'baseline_error':False,'ablated_error':True,'changed_listings':1,
+        'endpoint_input_changed':[False,False],'embedding_cosine_delta':[0.0,0.0],
+        'baseline_ranks':[1],'ablated_ranks':[1],'ann_baseline_hits':None,'ann_ablated_hits':None,
+        'known_positive_recall_change':{},'current_attribute_evidence':{'x':None},
+        'evidence_scope':'frozen payload; raw-row evidence unavailable'}
+
+
+def test_the_flip_is_decided_by_the_frozen_threshold_not_a_hardcoded_zero():
+    row = _straddle_row()
+    assert a.assert_ablation_rows([row],0.7)[0] is row
+    with pytest.raises(ValueError,match='decision_flip'):
+        a.assert_ablation_rows([dict(row,decision_flip=True)],0.7)
+    # 0.0 sits between the two scores, so a 0.0-shaped predicate inverts the row
+    with pytest.raises(ValueError,match='decision_flip'):
+        a.assert_ablation_rows([row],0.0)
+
+
+def test_the_real_ablation_report_matches_the_frozen_threshold():
+    path = Path(__file__).resolve().parents[1]/'results/attribute_ablation/report.json'
+    if not path.is_file():
+        pytest.skip('results/attribute_ablation/report.json not present')
+    report = json.loads(path.read_text(encoding='utf-8'))
+    rows = report['rows']
+    assert a.assert_ablation_rows(rows,report['threshold']) is rows
+    assert sum(row['decision_flip'] for row in rows) == 5
+
+
+def test_report_refuses_a_wrong_flip_before_saving(tmp_path,monkeypatch):
+    monkeypatch.setattr(a,'validate_sources',lambda request:None)
+    monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
+    ckpt = tmp_path/'text-checkpoint'; ckpt.write_bytes(b'weights')
+    frozen = tmp_path/'baseline.json'; frozen.write_text(json.dumps({'threshold':.5,'track':'text','checkpoint_sha256':a.file_hash(ckpt)}))
+    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev',
+            'current_attribute_evidence':{'volume':{'exact_match':True}}}
+    request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
+        {'attribute':None,'channel':'baseline','changed_listings':0},
+        {'attribute':'volume','channel':'text','changed_listings':1}],
+        'settings':a.Settings().model_dump(),'track':'text','checkpoint':str(ckpt),
+        'sources':{str(ckpt):a.file_hash(ckpt)},'composition':'x',
+        'implementation_sha256':'x','intervention':'declaration only','retrieval_scope':'sampled',
+        'missing_axes':[]}
+    path = tmp_path/'request.json'; a.write(path,request)
+    vectors = np.array([[1.,0.],[.8,.6],[0.,1.]])
+    result = tmp_path/'vectors.npz'
+    save_vectors(result,vectors=np.stack([vectors,vectors]),scores=[[.75],[.25]],request_sha256=a.file_hash(path))
+    saved = []
+    monkeypatch.setattr(a,'_comparison_rows',lambda *args,**kwargs:[dict(_straddle_row(),decision_flip=True)])
+    monkeypatch.setattr(a,'save_report',lambda *args,**kwargs: saved.append(args) or 'handoff')
+    with pytest.raises(ValueError,match='decision_flip'):
+        a.report(path,result,.5,threshold_source=str(frozen))
+    assert saved == []

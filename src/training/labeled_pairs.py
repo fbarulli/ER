@@ -22,6 +22,20 @@ Every gate row lands in exactly one bucket; the closure
 input == output + sum(dropped) is asserted by finish_manifest before the
 manifest is published.
 
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+Stage ``labeled_pairs``. Emitted:
+  run   gate_rows.split               gate_results rows -> labeled rows, with the
+                                      EXACT four-bucket partition in detail
+  group partition.reason_census       one EXACT census row per bucket label —
+                                      the SAME labels the manifest's `dropped`
+                                      keys carry, so the two join by key
+  ent   partition.*                   the sampled GATE PAIRS behind each label
+                                      (gtin1|gtin2 + its decision + similarity)
+  run   labeled_rows.published        the atomic write under the frame contract
+Sampling caps are core.tracing's (ENTITY_SAMPLE_PER_REASON / ENTITY_ROW_CAP) and
+appear in the sample_budget row's detail; nothing here is unbounded.
+
 Class map (one owner per responsibility):
   - SimilarityThresholds — the pairs-config thresholds
   - GateSplit            — gate CSV load, partition masks, labeled frame
@@ -48,10 +62,23 @@ from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.run_log import RunLogger
 from core.schemas import check_labeled_pairs_frame
 from core.step_trace import timed
+from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
 
 _LOG = RunLogger(__name__)
 
+#: The pipeline stage these rows belong to (core.tracing ``stage`` column).
+STAGE = "labeled_pairs"
+
 _LABELED_DECISIONS = ("proceed", "hard_no")
+
+#: The partition's bucket labels. These are the SAME strings the manifest's
+#: row_accounting ``dropped`` keys carry, so the trace's reason census and the
+#: manifest close over one vocabulary (a reader joins them by key, no mapping).
+BUCKET_POS = "pos_labeled"
+BUCKET_NEG = "hard_neg_labeled"
+BUCKET_FALLBACK = "fallback_gate_pairs"
+BUCKET_BELOW = "below_similarity_threshold"
+BUCKET_OTHER = "other_gate_decision"
 
 
 class SimilarityThresholds:
@@ -130,14 +157,34 @@ class SplitLedger:
         """
         below_thr = (~is_fallback) & (~is_kept)
         return {
-            "fallback_gate_pairs": int(is_fallback.sum()),
-            "below_similarity_threshold": int(
+            BUCKET_FALLBACK: int(is_fallback.sum()),
+            BUCKET_BELOW: int(
                 (below_thr & g.gate_decision.isin(_LABELED_DECISIONS)).sum()
             ),
-            "other_gate_decision": int(
+            BUCKET_OTHER: int(
                 (below_thr & ~g.gate_decision.isin(_LABELED_DECISIONS)).sum()
             ),
         }
+
+    @classmethod
+    def reason_buckets(
+        cls, g: pd.DataFrame, pos, neg, is_fallback, is_kept
+    ) -> pd.Series:
+        """One bucket label per gate row — the PER-ENTITY form of the partition.
+
+        Precedence: kept-over-below (a kept pair is pos/neg even if a future
+        threshold change made it ambiguous), then the two labeled classes, then
+        the fallback tier, then below-threshold, then anything else. It yields
+        exactly :meth:`dropped_buckets` folded against the labeled classes, which
+        is what makes the trace's census and the manifest's closure one statement.
+        """
+        below_thr = (~is_fallback) & (~is_kept)
+        labels = pd.Series(BUCKET_OTHER, index=g.index, dtype="string")
+        labels.loc[below_thr & g.gate_decision.isin(_LABELED_DECISIONS)] = BUCKET_BELOW
+        labels.loc[is_fallback] = BUCKET_FALLBACK
+        labels.loc[neg] = BUCKET_NEG
+        labels.loc[pos] = BUCKET_POS
+        return labels
 
     @classmethod
     def row_accounting(
@@ -252,10 +299,13 @@ def main() -> None:
     """Read gate_results.csv, split pos/hard-neg, write labeled_pairs.csv.
 
     Pure pandas over the gate CSV (~135k rows, <1s); the manifest wraps the
-    whole flow — begin at stage start, finish LAST.
+    whole flow — begin at stage start, finish LAST. ONE consolidated-trace
+    writer commits the partition census, the sampled gate pairs and the
+    publication as one flow.
     """
     pos_sim, neg_sim = _similarity_thresholds()
     gate_csv = F["gate_results"]
+    trace = TraceRun(STAGE)
     # Seed: the SSOT seed (lib.common.SEED) — this stage is deterministic
     # (no RNG consumed), recorded so the manifest's environment block
     # pins which seed the lane runs under.
@@ -290,6 +340,10 @@ def main() -> None:
         row_accounting = SplitLedger.row_accounting(
             g, out, is_fallback, is_kept, pos_sim, neg_sim
         )
+    _record_partition(
+        trace, g, out, pos_mask, neg_mask, is_fallback, is_kept,
+        row_accounting, pos_sim, neg_sim, gate_csv,
+    )
     manifest_path = finish_manifest(
         manifest,
         outputs=[F["labeled_pairs"]],
@@ -297,6 +351,91 @@ def main() -> None:
         expected_outputs=[F["labeled_pairs"]],
     )
     LabeledWriter.closure(manifest_path, row_accounting, out)
+    trace.write()
+
+
+def _record_partition(
+    trace: TraceRun,
+    g: pd.DataFrame,
+    out: pd.DataFrame,
+    pos_mask,
+    neg_mask,
+    is_fallback,
+    is_kept,
+    row_accounting: dict,
+    pos_sim: float,
+    neg_sim: float,
+    gate_csv: object,
+) -> None:
+    """The stage row, the exact per-bucket census, the named pairs, the write.
+
+    The census is the manifest's own four-bucket partition expressed per row, so
+    the two agree by construction and a reader can join them on the bucket label
+    itself. Every bucket whose rows were DROPPED carries its pairs at ENTITY
+    grain (the gtin pair is the entity here), which is what answers "which pair
+    was left out, and why" without opening gate_results.csv.
+    """
+    trace.add(
+        "gate_rows",
+        "split",
+        in_count=int(len(g)),
+        out_count=int(len(out)),
+        reason=(
+            "a labeled row must be gate-confirmed: proceed with similarity >= "
+            f"{pos_sim} (positive) or hard_no with similarity >= {neg_sim} "
+            "(hard negative); the fallback tier is uncertain by design and stays out"
+        ),
+        detail={
+            **row_accounting,
+            "bucket_labels": [
+                BUCKET_POS, BUCKET_NEG, BUCKET_FALLBACK, BUCKET_BELOW, BUCKET_OTHER
+            ],
+        },
+        source=str(gate_csv),
+    )
+    labels = SplitLedger.reason_buckets(
+        g, pos_mask, neg_mask, is_fallback, is_kept
+    )
+    records = [
+        {
+            "pair": f"{row['gtin1']}|{row['gtin2']}",
+            "label": str(labels.loc[index]),
+            "gate_decision": str(row["gate_decision"]),
+            "similarity": row["similarity"],
+            "gate_reason": str(row.get("gate_reason", "")),
+        }
+        for index, row in g[['gtin1', 'gtin2', 'gate_decision', 'similarity', 'gate_reason']].iterrows()
+    ]
+    trace.add_entities(
+        "partition",
+        records,
+        key_of=lambda record: record["pair"],
+        reason_of=lambda record: record["label"],
+        detail_of=lambda record: {
+            "gate_decision": record["gate_decision"],
+            "similarity": record["similarity"],
+            "gate_reason": record["gate_reason"],
+        },
+        source=str(gate_csv),
+        per_reason=ENTITY_SAMPLE_PER_REASON,
+        total_cap=ENTITY_ROW_CAP,
+    )
+    trace.add(
+        "labeled_rows",
+        "published",
+        in_count=int(len(out)),
+        out_count=int(len(out)),
+        reason="labeled_pairs.csv written atomically under the frame contract",
+        detail={
+            "path": str(F["labeled_pairs"]),
+            "rows": int(len(out)),
+            "positives": int((out.true_label == 1).sum()),
+            "hard_negatives": int((out.true_label == 0).sum()),
+            "pos_sim_threshold": pos_sim,
+            "hardneg_sim_threshold": neg_sim,
+        },
+        source=str(F["labeled_pairs"]),
+    )
 
 
 if __name__ == "__main__":

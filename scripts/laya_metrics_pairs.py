@@ -73,6 +73,7 @@ from collections import Counter
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
+from training.build_final_validation import SLICE_FIELDS as SLICE_FIELD_PAIRS
 from training.folds import normalize_gtin
 
 PAIRS_PATH = TRAIN_ROOT / "data/track_setup/listing_pairs.csv"
@@ -82,9 +83,10 @@ OUTPUT = TRAIN_ROOT / "data/laya/metrics_pairs.csv"
 
 # The six frozen identity-slice fields (training.build_final_validation
 # SLICE_FIELDS) — the fields the final_validation.csv `attribute_pairs`
-# shape is composed from, in that composition order.
-SLICE_FIELDS: tuple[str, ...] = (
-    "volume", "pack", "package_type", "sweetener", "flavor", "carbonation",
+# shape is composed from, in that composition order. DERIVED from that lane's
+# frozen order rather than retyped here, so the two cannot drift.
+SLICE_FIELDS: tuple[str, ...] = tuple(
+    dimension for dimension, _column in SLICE_FIELD_PAIRS
 )
 
 # The final_validation.csv header this builder mirrors (the output adds

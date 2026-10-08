@@ -28,9 +28,34 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from core.run_log import RunLogger
 from core.timing import Timing
+from core.tracing import SCOPE_ENTITY, TraceRun
 from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
+
+#: The stage name prepare_all runs this module as, and the name this stage's
+#: consolidated-trace rows carry (core.tracing ``stage`` column).
+STAGE = 'verify_handoff'
+
+#: The boundary's checks, in execution order. A check missing from a
+#: ``HandoffTrace``'s passed list when the boundary raises is the one that
+#: raised, so a failure names itself instead of guessing.
+CHECK_ORDER: tuple[str, ...] = (
+    'provenance', 'bundle_load', 'frozen_csvs', 'graph_manifest',
+    'worker_settings', 'loss_batch', 'package_verify', 'smoke', 'inventory',
+)
+
+#: ``reason`` cells are NOT capped by core.tracing (only ``detail`` is), so the
+#: boundary bounds its own: a raise message can be arbitrarily long.
+REASON_CHARS = 240
+
+
+def _bounded_reason(text: object, limit: int = REASON_CHARS) -> str:
+    """One bounded single-line reason string (the trace caps ``detail`` only)."""
+    flat = ' '.join(str(text).split())
+    if len(flat) <= limit:
+        return flat
+    return f'{flat[:limit]}…<elided {len(flat) - limit} chars>'
 
 
 class HandoffLoad(BaseModel):
@@ -79,6 +104,130 @@ class HandoffReport(BaseModel):
     bundle_header: dict[str, Any]
     suite_package: dict[str, Any]
     total_seconds: float = Field(ge=0.0)
+
+
+class HandoffTrace:
+    """Stage ``verify_handoff`` in the ONE consolidated trace (core.tracing).
+
+    The boundary verified every training input and persisted ``handoff.json``,
+    but the ONE trace held nothing about it: "which input was loaded through
+    which consumer path, and which check attested what" lived only in the
+    report, and a FAILING boundary left no trace row at all. Emitted here:
+
+      run   check.<name>      one row per boundary check, with its readback
+                              (reason ``passed``; a check that raises is
+                              recorded by :meth:`failure` instead)
+      run   loads.metered     every input the boundary read: loads, bytes,
+                              seconds, and how many entries are content-pinned
+      ent   loads.input       one row per metered input, NAMED with its path,
+                              size, load count and sha256 (the entries ARE the
+                              declared input set, so they are enumerated in
+                              full — no sampling applies)
+      run   report.handoff    the persisted report's own census (status, the
+                              checks that ran, the inventory, the attestation)
+      run   boundary.failed   the check that raised, the checks that had
+                              already passed and the error, when the boundary
+                              cannot pass (the error still propagates)
+
+    Rows are committed once, at the end: on success a write failure fails the
+    stage loudly, while :meth:`failure` must never mask the boundary's own
+    error and therefore only warns when the trace cannot be written.
+    """
+
+    def __init__(self, trace: TraceRun | None = None) -> None:
+        self.trace = trace if trace is not None else TraceRun(STAGE)
+        self.checks: list[str] = []
+
+    def check(self, name: str, *, detail: object = None, source: str = '') -> None:
+        """Record one boundary check that PASSED, with its readback."""
+        self.checks.append(str(name))
+        self.trace.add(
+            'check', name, reason='passed',
+            detail={'check': str(name), 'verdict': 'passed', 'readback': detail},
+            source=source,
+        )
+
+    def _loads(self, meter: "_LoadMeter") -> None:
+        """The load meter's totals, then one NAMED row per metered input."""
+        entries = list(meter.entries)
+        self.trace.add(
+            'loads', 'metered',
+            reason=(
+                'every declared input the boundary read or re-validated '
+                'through its consumer path; each entry is enumerated below'
+            ),
+            detail={
+                'inputs': len(entries),
+                'loads': sum(int(entry.loads) for entry in entries),
+                'bytes': sum(int(entry.bytes) for entry in entries),
+                'seconds': round(sum(float(entry.seconds) for entry in entries), 6),
+                'sha256_pinned': sum(1 for entry in entries if entry.sha256),
+            },
+            source="handoff.json inputs[] (the boundary's own load meter)",
+        )
+        for entry in entries:
+            self.trace.add(
+                'loads', 'input', scope=SCOPE_ENTITY, key=entry.input,
+                reason=f'loaded {int(entry.loads)}x through its consumer path',
+                detail={
+                    'path': entry.path, 'loads': int(entry.loads),
+                    'bytes': int(entry.bytes), 'seconds': float(entry.seconds),
+                    'sha256': entry.sha256 or '',
+                },
+                source="handoff.json inputs[] (the boundary's own load meter)",
+            )
+
+    def report(self, report: HandoffReport, meter: "_LoadMeter") -> None:
+        """Record the persisted report's census and its loads, then commit."""
+        self._loads(meter)
+        self.trace.add(
+            'report', 'handoff',
+            reason=(
+                'the boundary passed: every check above attested, every '
+                'declared input loaded, and handoff.json is the persisted '
+                'evidence the trainer verifies instead of re-running this stack'
+            ),
+            detail={
+                'status': report.status,
+                'checks': sorted(report.checks),
+                'loads': len(report.inputs),
+                'load_seconds': round(
+                    sum(float(entry.seconds) for entry in report.inputs), 6),
+                'inventory_artifacts': len(report.final_inventory),
+                'bundle_sha256': report.bundle_header.get('sha256'),
+                'suite_package_sha256': report.suite_package.get('sha256'),
+                'loss_batch_attested': report.loss_batch_correctness is not None,
+                'gpu_embeddings': report.gpu_embeddings,
+                'total_seconds': report.total_seconds,
+            },
+            source="handoff.json (the boundary's own report)",
+        )
+        self.trace.write()
+
+    def failure(self, failure: BaseException, meter: "_LoadMeter") -> None:
+        """Record the failing check, commit, and let the error propagate.
+
+        The commit is guarded on purpose: a secondary trace failure must never
+        replace the boundary's own error (the thing the operator acts on).
+        """
+        pending = [name for name in CHECK_ORDER if name not in self.checks]
+        self._loads(meter)
+        self.trace.add(
+            'boundary', 'failed',
+            reason=_bounded_reason(f'{type(failure).__name__}: {failure}'),
+            detail={
+                'failed_check': pending[0] if pending else '',
+                'error_type': type(failure).__name__,
+                'checks_passed': list(self.checks),
+                'inputs_metered': len(meter.entries),
+            },
+            source='training.handoff.verify_training_loads',
+        )
+        try:
+            self.trace.write()
+        except Exception as error:  # pragma: no cover - never mask the boundary
+            _LOG.warning(
+                f'[trace] verify_handoff rows could not be committed: {error}')
 
 
 class _LoadMeter:
@@ -315,33 +464,109 @@ def verify_training_loads(*, root, suite, suite_config_path, checkpoint,
     objective's batch contract, the package archive) follow.  The bundle is
     loaded with ``verify_inputs=True`` exactly once -- after the first full
     load the run's cache serves it, so the payload is unpickled once per run.
+
+    Every check, every metered load and the report itself also land in the ONE
+    consolidated trace (core.tracing, stage ``verify_handoff``): a passing
+    boundary enumerates exactly what it checked, and a FAILING one commits the
+    check that raised plus the checks that had already passed, then re-raises.
     """
-    started = time.monotonic()
+    trace = HandoffTrace()
     meter = _LoadMeter()
+    try:
+        report = _verify_loads(
+            trace, meter, root=root, suite=suite,
+            suite_config_path=suite_config_path, checkpoint=checkpoint,
+            setup_dir=setup_dir, full_bundle=full_bundle, text_bundle=text_bundle,
+            suite_archive=suite_archive, provenance=provenance,
+            smoke_dir=smoke_dir, smoke_original=smoke_original,
+            reusable_paths=reusable_paths,
+            plan_identity_revalidate=plan_identity_revalidate,
+        )
+    except BaseException as failure:
+        trace.failure(failure, meter)
+        raise
+    trace.report(report, meter)
+    return report
+
+
+def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
+                  suite_config_path, checkpoint, setup_dir, full_bundle,
+                  text_bundle, suite_archive, provenance, smoke_dir,
+                  smoke_original, reusable_paths,
+                  plan_identity_revalidate: bool = False) -> HandoffReport:
+    """The boundary's checks, each recorded as it passes (see the caller)."""
+    started = time.monotonic()
     timing = Timing('training.handoff')
     from core.common import training_cfg
     layout = training_cfg().preparation.graph_setup
 
     with timing.section('provenance'):
         current = _check_provenance(root, suite_config_path, checkpoint, provenance)
+    trace.check(
+        'provenance',
+        detail={'readback': 'preparation identity re-hashed and unchanged',
+                'text_checkpoint': current.get('text_checkpoint'),
+                'provenance_keys': sorted(current)},
+        source='training.prepare_all.preparation_provenance')
     with timing.section('bundle_load'):
         header, prepared, sidecar = _load_bundle_verified(full_bundle, meter)
+    trace.check(
+        'bundle_load',
+        detail={'payload_variant': getattr(header, 'payload_variant', None),
+                'masking_profile': getattr(header, 'masking_profile', None),
+                'sha256': getattr(header, 'sha256', None),
+                'verify_inputs': True, 'bundle_members': len(prepared)},
+        source='training.prepared_bundle.load_prepared_bundle(verify_inputs=True)')
     with timing.section('frozen_csvs'):
         _check_frozen_csvs(prepared)
+    trace.check(
+        'frozen_csvs',
+        detail={'agreed': ['canonical_records', 'gate_results', 'labeled_pairs']},
+        source='the bundle\'s frozen CSV copies vs the run\'s published files')
     with timing.section('graph_manifest'):
         graph = _check_graph_manifest(setup_dir, layout, current, meter)
+    trace.check(
+        'graph_manifest',
+        detail={key: graph.get(key) for key in (
+            'source_catalog_sha256', 'labeled_pairs_sha256',
+            'text_checkpoint_sha256', 'smoke')},
+        source=f'{layout.manifest} re-hashed against the run\'s sources')
     with timing.section('worker_settings'):
         settings_summary = _check_worker_settings(setup_dir, layout, suite, meter)
+    trace.check(
+        'worker_settings', detail=settings_summary,
+        source='model_tracks.worker.graph_worker_settings (per track config)')
     with timing.section('loss_batch'):
         attestation, token_checks = _attest_loss_batch(
             prepared, graph, suite, plan_identity_revalidate=plan_identity_revalidate)
+    trace.check(
+        'loss_batch',
+        detail={
+            'plan': 'absent' if attestation is None else 'attested',
+            'loss_batch_correctness': (
+                None if attestation is None else attestation.model_dump(mode='json')),
+            'training_tokens': token_checks or None,
+        },
+        source='training.run_plan.validate_epoch_batches over the frozen plan')
     with timing.section('package_verify'):
         suite_package, package_checks = _verify_package(suite_archive, meter)
+    trace.check(
+        'package_verify',
+        detail={'sha256': suite_package.get('sha256'), **package_checks},
+        source='model_tracks.package.verify (the sealed inputs bundle)')
     with timing.section('smoke'):
         _check_smoke(smoke_dir, smoke_original)
+    trace.check(
+        'smoke',
+        detail={'declared_files': len(smoke_original), 'unchanged': True},
+        source='data/prepared smoke inputs re-hashed (untouched by the run)')
     with timing.section('inventory'):
         final_inventory = _final_inventory(reusable_paths, full_bundle,
                                            text_bundle, suite_archive)
+    trace.check(
+        'inventory',
+        detail={'artifacts': len(final_inventory)},
+        source='training.prepare_all.file_inventory (the resume contract)')
 
     checks: dict[str, Any] = {
         'provenance': 'stable (src/scripts/config/raw inputs/checkpoint re-hashed)',

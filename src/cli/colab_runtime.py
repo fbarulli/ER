@@ -1,4 +1,4 @@
-"""Session + runtime + environment (split phase C of cli.colab); cross-references resolve lazily through the colab runtime-self hub."""
+"""Session + runtime + environment (split phase C of cli.colab); cross-references resolve lazily through cli.colab_hub."""
 
 from __future__ import annotations
 
@@ -11,51 +11,40 @@ from pathlib import Path
 
 from core.common import TRAIN_ROOT, load_config, resolve_model, training_cfg
 from training.prepare_all_trace import timed
+from cli.colab_hub import hub, timed_colab
 
 # Byte-equal import-time constant feeding _BOOTSTRAP (config-owned, immutable).
 _REMOTE_ROOT = training_cfg().colab.remote_root
 
 
-def _hub():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    return sys.modules.get("__colab_runtime_self__") or sys.modules["cli.colab"]
-
-
-def _timed_colab(kind: str):
-    """Lazy decorator shim — cli.colab defines _timed_colab after this module imports."""
-    def deco(fn):
-        return _hub()._timed_colab(kind)(fn)
-    return deco
-
-
-@_timed_colab("step")
+@timed_colab("step")
 def _verify_session_handshake() -> None:
     """Fail before checkout if the CLI cannot execute on the VM."""
     try:
-        heartbeat = _hub().run_colab_exec_capture(
-            _hub().SESSION,
+        heartbeat = hub().run_colab_exec_capture(
+            hub().SESSION,
             "import os, socket, sys; print({'pid': os.getpid(), 'python': sys.version.split()[0], 'host': socket.gethostname()})",
             timeout=60,
         )
     except BaseException as exc:
         raise RuntimeError(
-            f"Colab session '{_hub().SESSION}' failed the control-channel handshake "
+            f"Colab session '{hub().SESSION}' failed the control-channel handshake "
             f"before training: {exc}"
         ) from exc
-    print(_hub()._stamp(), f"[session] control-channel handshake passed: {heartbeat.strip()}")
+    print(hub()._stamp(), f"[session] control-channel handshake passed: {heartbeat.strip()}")
 
-@_timed_colab("step")
+@timed_colab("step")
 def _forget_cached_session() -> None:
     """Drop only this launcher's stale local session record before reprovisioning."""
-    if not _hub()._COLAB_CLI_CONFIG.is_file():
+    if not hub()._COLAB_CLI_CONFIG.is_file():
         return
     try:
-        state = json.loads(_hub()._COLAB_CLI_CONFIG.read_text(encoding="utf-8"))
+        state = json.loads(hub()._COLAB_CLI_CONFIG.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
-    if not isinstance(state, dict) or _hub().SESSION not in state:
+    if not isinstance(state, dict) or hub().SESSION not in state:
         return
-    cached = state.get(_hub().SESSION)
+    cached = state.get(hub().SESSION)
     keep_alive_pid = cached.get("keep_alive_pid") if isinstance(cached, dict) else None
     if isinstance(keep_alive_pid, int) and keep_alive_pid != os.getpid():
         proc_cmdline = Path(f"/proc/{keep_alive_pid}/cmdline")
@@ -63,22 +52,22 @@ def _forget_cached_session() -> None:
             command = proc_cmdline.read_bytes().replace(b"\0", b" ").decode(errors="replace")
         except OSError:
             command = ""
-        if _hub()._is_keep_alive_daemon(command):
+        if hub()._is_keep_alive_daemon(command):
             try:
                 os.kill(keep_alive_pid, 15)
-                print(_hub()._stamp(), f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
+                print(hub()._stamp(), f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
             except ProcessLookupError:
                 pass
-    state.pop(_hub().SESSION, None)
-    temporary = _hub()._COLAB_CLI_CONFIG.with_name(_hub()._COLAB_CLI_CONFIG.name + ".tmp")
+    state.pop(hub().SESSION, None)
+    temporary = hub()._COLAB_CLI_CONFIG.with_name(hub()._COLAB_CLI_CONFIG.name + ".tmp")
     temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, _hub()._COLAB_CLI_CONFIG)
-    print(_hub()._stamp(), f"[session] removed stale cached record for '{_hub().SESSION}'", flush=True)
+    os.replace(temporary, hub()._COLAB_CLI_CONFIG)
+    print(hub()._stamp(), f"[session] removed stale cached record for '{hub().SESSION}'", flush=True)
 
 def _is_keep_alive_daemon(command: str) -> bool:
     """Whether a /proc command line is this wrapper's keep-alive daemon."""
     return (
-        _hub()._COLAB_CLI_ENTRYPOINT.name in command
+        hub()._COLAB_CLI_ENTRYPOINT.name in command
         and "keep-alive" in command
     )
 
@@ -99,11 +88,11 @@ def keep_alive_daemon_pids() -> list[int]:
             )
         except OSError:
             continue
-        if _hub()._is_keep_alive_daemon(command) and _hub().SESSION in command:
+        if hub()._is_keep_alive_daemon(command) and hub().SESSION in command:
             found.append(int(entry.name))
     return sorted(found)
 
-@_timed_colab("step")
+@timed_colab("step")
 def stop_keep_alive_daemon(*, reason: str) -> int:
     """Stop this session's keep-alive daemon and report how many were stopped.
 
@@ -114,10 +103,10 @@ def stop_keep_alive_daemon(*, reason: str) -> int:
     its own daemon.  A daemon that cannot be found is reported loudly rather
     than passed over in silence.
     """
-    pids = _hub().keep_alive_daemon_pids()
+    pids = hub().keep_alive_daemon_pids()
     if not pids:
         print(
-            f"[session] no keep-alive daemon found for '{_hub().SESSION}' ({reason}); "
+            f"[session] no keep-alive daemon found for '{hub().SESSION}' ({reason}); "
             "the VM is released by the launcher's own teardown",
             flush=True,
         )
@@ -129,40 +118,40 @@ def stop_keep_alive_daemon(*, reason: str) -> int:
             continue
         except OSError as exc:
             print(
-                _hub()._stamp(),
+                hub()._stamp(),
                 f"[session] could not stop keep-alive pid={pid} ({exc!r}); "
                 "the VM is released by the launcher's own teardown",
                 flush=True,
             )
             continue
-        print(_hub()._stamp(), f"[session] stopped keep-alive daemon pid={pid} ({reason})", flush=True)
+        print(hub()._stamp(), f"[session] stopped keep-alive daemon pid={pid} ({reason})", flush=True)
     return len(pids)
 
-@_timed_colab("step")
+@timed_colab("step")
 def ensure_session() -> None:
     """Provision and verify the session before any training stage starts."""
-    r = _hub().colab("sessions", check=False)
-    if r.returncode == 0 and _hub().SESSION in (r.stdout or ""):
-        print(_hub()._stamp(), f"[session] '{_hub().SESSION}' already active; verifying control channel ...")
+    r = hub().colab("sessions", check=False)
+    if r.returncode == 0 and hub().SESSION in (r.stdout or ""):
+        print(hub()._stamp(), f"[session] '{hub().SESSION}' already active; verifying control channel ...")
         try:
-            _hub()._verify_session_handshake()
+            hub()._verify_session_handshake()
             return
         except BaseException as exc:
-            print(_hub()._stamp(), f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
-            _hub()._forget_cached_session()
+            print(hub()._stamp(), f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
+            hub()._forget_cached_session()
     else:
         # The CLI may retain a named session locally after the VM has been
         # torn down.  Never let that record prevent a fresh allocation.
-        _hub()._forget_cached_session()
-    accelerator = [] if _hub().GPU.upper() == "CPU" else ["--gpu", _hub().GPU]
-    print(_hub()._stamp(), f"[session] provisioning {_hub().SESSION} ({'cpu' if not accelerator else f'gpu={_hub().GPU}'}) ...")
+        hub()._forget_cached_session()
+    accelerator = [] if hub().GPU.upper() == "CPU" else ["--gpu", hub().GPU]
+    print(hub()._stamp(), f"[session] provisioning {hub().SESSION} ({'cpu' if not accelerator else f'gpu={hub().GPU}'}) ...")
     # Owner ruling 8: the CPU high-RAM production shape belongs to its own
     # lane (cli.colab_data_bundle_prep); this line is the thin passthrough.
     # With the lane's config flag off it returns (), byte-identical argv.
     from cli.colab_data_bundle_prep import cpu_shape_args
-    _hub().colab("new", "-s", _hub().SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
-    print(_hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
-    _hub()._verify_session_handshake()
+    hub().colab("new", "-s", hub().SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
+    print(hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
+    hub()._verify_session_handshake()
 
 # --- Runtime checkout contract -------------------------------------------------
 # The prepared Colab lanes sparse-check out only the paths below; the VM never
@@ -171,6 +160,18 @@ def ensure_session() -> None:
 # branch -- the VM sees that branch, not this working tree. A missing or
 # uncommitted entry surfaces as a FileNotFoundError on the VM, so
 # validate_runtime_checkout() fails loud locally, before any VM is allocated.
+#
+# ONE HOME (consolidated 2026-10-08): this block is the Colab checkout
+# contract -- the declared path lists, their emitted sparse patterns
+# (runtime_checkout_paths), their verifier (validate_runtime_checkout) and the
+# path-shape rule every consumer shares (is_checkout_relative_path, which the
+# lane's ColabLaneBase.checkout_relative_guard now delegates to). The Kaggle
+# lane declares its own, deliberately different list in the config SSOT
+# (config/training.yaml kaggle.checkout_paths: src/scripts/config/requirements/
+# artifacts/models, cone-mode root files via the clone); the Colab list is not
+# derivable from it (this lane needs artifacts/wheels + artifacts/evidence and
+# no requirements/artifacts/models), so unifying the two needs a
+# ``colab.checkout_paths`` config key -- reported, not invented here.
 RUNTIME_DIRECTORY_PATHS = (
     'src/', 'config/', 'scripts/', 'artifacts/wheels/', 'artifacts/evidence/',
 )
@@ -178,6 +179,29 @@ RUNTIME_REQUIRED_ROOT_FILES = (
     'pyproject.toml', 'requirements.txt', 'colab_backend.py',
     'model_tracks_package.json',
 )
+# Characters that can never appear in a repository-relative checkout path: a
+# newline/CR breaks the emitted git pathspec, a backslash escapes it, and
+# ``*?[]{}`` turned a declared path into a pattern/expansion in the old
+# hand-rolled guards. One set, one rule, both consumers.
+CHECKOUT_REJECTED_CHARS = '\n\r\\*?[]!{}'
+
+
+def is_checkout_relative_path(value: str, *, single_component: bool = False) -> bool:
+    """Whether ``value`` is a repository-relative checkout path.
+
+    The ONE checkout-path shape contract: the runtime's per-launch sparse
+    patterns (``prepare_remote_layout``) and the lane's single-segment guard
+    (``ColabLaneBase.checkout_relative_guard``) both ask this instead of
+    re-spelling the traversal/pattern charset. ``single_component`` adds the
+    lane's extra requirement: exactly one plain path segment (a run id, not a
+    path).
+    """
+    candidate = Path(value)
+    if candidate.is_absolute() or '..' in candidate.parts or not candidate.parts:
+        return False
+    if single_component and len(candidate.parts) != 1:
+        return False
+    return not any(char in str(value) for char in CHECKOUT_REJECTED_CHARS)
 
 
 def runtime_checkout_paths() -> tuple[str, ...]:
@@ -219,18 +243,16 @@ def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
                 'push it before launching')
 
 
-@_timed_colab("step")
+@timed_colab("step")
 def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[str, ...] = ()) -> None:
     """Fetch a shallow prepared runtime, selecting only this suite's inputs."""
     if sparse_paths and not minimal_runtime:
         raise ValueError('sparse checkout requires a prepared runtime')
     patterns = list(runtime_checkout_paths())
     for value in sparse_paths:
-        path = Path(value)
-        if (path.is_absolute() or '..' in path.parts or not path.parts
-                or any(char in value for char in '\n\r\\*?[]!')):
+        if not is_checkout_relative_path(value):
             raise ValueError('runtime checkout path must be repository-relative')
-        patterns.append('/' + path.as_posix())
+        patterns.append('/' + Path(value).as_posix())
     script = f"""
 import pathlib, shutil, subprocess, time
 
@@ -246,8 +268,8 @@ def run_git(command, **kwargs):
     print(f"[checkout] event={{name}} state={{'completed' if result.returncode == 0 else 'failed'}} elapsed_seconds={{time.perf_counter() - started:.3f}}", flush=True)
     return result
 
-root = pathlib.Path({_hub().REMOTE_ROOT!r})
-remote_name = {_hub().GIT_REMOTE_NAME!r}
+root = pathlib.Path({hub().REMOTE_ROOT!r})
+remote_name = {hub().GIT_REMOTE_NAME!r}
 sparse_patterns = {patterns if sparse_paths else []!r}
 minimal_runtime = {minimal_runtime!r}
 def configure_sparse():
@@ -275,10 +297,10 @@ if (root / ".git").is_dir():
                 f"available remotes={{remotes}}"
             )
     fetch_options = ['--depth=1', '--filter=blob:none', '--no-tags'] if minimal_runtime else []
-    run_git(["git", "fetch", *fetch_options, remote_name, {_hub().BRANCH!r}], cwd=root, check=True)
+    run_git(["git", "fetch", *fetch_options, remote_name, {hub().BRANCH!r}], cwd=root, check=True)
     configure_sparse()
     run_git(
-        ["git", "checkout", "-B", {_hub().BRANCH!r}, 'FETCH_HEAD'],
+        ["git", "checkout", "-B", {hub().BRANCH!r}, 'FETCH_HEAD'],
         cwd=root,
         check=True,
     )
@@ -286,16 +308,16 @@ else:
     root.parent.mkdir(parents=True, exist_ok=True)
     clone_options = ['--depth=1', '--single-branch', '--filter=blob:none', '--no-tags'] if minimal_runtime else []
     run_git(["git", "clone", *clone_options, '--no-checkout', "--origin", remote_name,
-         "--branch", {_hub().BRANCH!r},
-         {_hub().REPOSITORY!r}, str(root)], check=True)
+         "--branch", {hub().BRANCH!r},
+         {hub().REPOSITORY!r}, str(root)], check=True)
     configure_sparse()
-    run_git(['git', 'checkout', {_hub().BRANCH!r}], cwd=root, check=True)
+    run_git(['git', 'checkout', {hub().BRANCH!r}], cwd=root, check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
-print("[repo] ready", {_hub().REPOSITORY!r}, "branch", {_hub().BRANCH!r},
+print("[repo] ready", {hub().REPOSITORY!r}, "branch", {hub().BRANCH!r},
       "prepared_runtime=" + str({minimal_runtime!r}), "at", root)
 """
-    _hub().run_colab_exec_stream(_hub().SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
+    hub().run_colab_exec_stream(hub().SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
 
 def _runtime_install_command(
     packages: list[str], *, prefer_uv: bool, wheel_paths: list[str],
@@ -321,7 +343,7 @@ def _runtime_install_command(
 import pathlib, shutil, subprocess, sys, sysconfig
 
 packages = {packages!r}
-root = pathlib.Path({_hub().REMOTE_ROOT!r})
+root = pathlib.Path({hub().REMOTE_ROOT!r})
 tag = "cp{{}}{{}}".format(*sys.version_info[:2])
 platform = sysconfig.get_platform().replace("-", "_")
 requirements = []
@@ -365,15 +387,15 @@ raise SystemExit(subprocess.call(command))
 """
     return f"[sys.executable, '-c', {program!r}]"
 
-@_timed_colab("step")
+@timed_colab("step")
 def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) -> None:
     packages = list(
-        _hub()._RUNTIME_PACKAGES.prepared if minimal_runtime else _hub()._RUNTIME_PACKAGES.full
+        hub()._RUNTIME_PACKAGES.prepared if minimal_runtime else hub()._RUNTIME_PACKAGES.full
     )
     if graph_runtime:
-        packages = list(dict.fromkeys([*packages, *_hub()._RUNTIME_PACKAGES.graph]))
+        packages = list(dict.fromkeys([*packages, *hub()._RUNTIME_PACKAGES.graph]))
     print(
-        _hub()._stamp(),
+        hub()._stamp(),
         "[deps] installing "
         + ("prepared training runtime" if minimal_runtime else "full lane dependencies")
         + f" on the VM ({len(packages)} distributions: {', '.join(packages)}) ...",
@@ -382,17 +404,17 @@ def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) 
     # Run the installer outside the notebook kernel. A kernel disconnect can
     # interrupt the control channel, but the detached process keeps writing a
     # durable log/status pair that the launcher can retrieve before teardown.
-    _hub().run_detached_stage(
+    hub().run_detached_stage(
         "00_deps",
         _runtime_install_command(
             packages,
-            prefer_uv=_hub()._PREFER_UV_INSTALL,
-            wheel_paths=list(_hub()._RUNTIME_PACKAGES.prebuilt_wheels),
+            prefer_uv=hub()._PREFER_UV_INSTALL,
+            wheel_paths=list(hub()._RUNTIME_PACKAGES.prebuilt_wheels),
         ),
         timeout=900,
     )
 
-@_timed_colab("step")
+@timed_colab("step")
 def log_gpu_profile() -> None:
     """Record the runtime hardware before training, including CPU smoke runs."""
     script = """import torch
@@ -403,7 +425,7 @@ if torch.cuda.is_available():
 else:
     print({'hardware': 'cpu', 'threads': torch.get_num_threads(), 'torch': torch.__version__}, flush=True)
 """
-    _hub().run_colab_exec_stream(_hub().SESSION, script, timeout=120, log_name="runtime_profile", retry_safe=True)
+    hub().run_colab_exec_stream(hub().SESSION, script, timeout=120, log_name="runtime_profile", retry_safe=True)
 
 _BOOTSTRAP = f"""
 import sys, runpy, pathlib, os
@@ -429,34 +451,34 @@ def _env_value(name: str) -> str | None:
 
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk."""
-    key = _hub()._env_value("WANDB_API_KEY")
+    key = hub()._env_value("WANDB_API_KEY")
     if not key:
-        print(_hub()._stamp(), "[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
+        print(hub()._stamp(), "[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
         return ""
-    print(_hub()._stamp(), "[wandb] API key loaded from local .env and injected into VM process")
+    print(hub()._stamp(), "[wandb] API key loaded from local .env and injected into VM process")
     return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
 
 def _optuna_env_script() -> str:
     """Inject the shared PostgreSQL control-plane URL into the VM only."""
-    url = _hub()._env_value("OPTUNA_STORAGE_URL")
+    url = hub()._env_value("OPTUNA_STORAGE_URL")
     if not url:
-        print(_hub()._stamp(), "[hpo-control] OPTUNA_STORAGE_URL absent; concurrent HPO is disabled")
+        print(hub()._stamp(), "[hpo-control] OPTUNA_STORAGE_URL absent; concurrent HPO is disabled")
         return ""
     if not url.startswith(("postgresql://", "postgresql+psycopg://")):
         raise RuntimeError("OPTUNA_STORAGE_URL must use a PostgreSQL URL")
-    print(_hub()._stamp(), "[hpo-control] PostgreSQL Optuna URL loaded from local .env and injected into VM process")
+    print(hub()._stamp(), "[hpo-control] PostgreSQL Optuna URL loaded from local .env and injected into VM process")
     return f"os.environ['OPTUNA_STORAGE_URL'] = {url!r}\n"
 
 def _remote_auth_env_script(
     *, include_optuna: bool = False, include_wandb: bool = True,
 ) -> str:
     """Credential exports used by remote subprocess launch cells only."""
-    wandb = _hub()._wandb_env_script() if include_wandb else ""
+    wandb = hub()._wandb_env_script() if include_wandb else ""
     return ("os.environ['EUROMONITOR_DISABLE_DVC_CHECKPOINTS'] = '1'\n"
             "os.environ['ER_INCREMENTAL_DVC'] = '0'\n"
-            + wandb + (_hub()._optuna_env_script() if include_optuna else ""))
+            + wandb + (hub()._optuna_env_script() if include_optuna else ""))
 
-@_timed_colab("step")
+@timed_colab("step")
 @timed
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
@@ -466,19 +488,19 @@ def run_data_prep() -> None:
     -> data_prep. Running all three keeps the VM replay identical to the
     local worktree replay (byte-comparable outputs).
     """
-    print(_hub()._stamp(), "[run] dedupe + reference-verify + data_prep on the VM ...")
+    print(hub()._stamp(), "[run] dedupe + reference-verify + data_prep on the VM ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
 for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "src/training/build_reference.py --verify", "src/training/data_prep.py", "src/training/labeled_pairs.py"):
     print("== " + step, flush=True)
-    rc = subprocess.run([sys.executable, "{_hub().REMOTE_ROOT}/" + step.split()[0]] + step.split()[1:]).returncode
+    rc = subprocess.run([sys.executable, "{hub().REMOTE_ROOT}/" + step.split()[0]] + step.split()[1:]).returncode
     if rc != 0:
         raise RuntimeError(f"data-prep stage failed: {{step}} (rc={{rc}})")
 """
     # dedupe 1-2 min + reference verify ~3 min + data_prep ~2 min
-    _hub().run_colab_exec_stream(_hub().SESSION, script, timeout=1800, log_name="data_prep")
+    hub().run_colab_exec_stream(hub().SESSION, script, timeout=1800, log_name="data_prep")
 
-@_timed_colab("step")
+@timed_colab("step")
 def verify_remote_models(model_keys: list[str]) -> None:
     """Validate the Git-shipped model bundles before starting any worker."""
     keys = sorted(set(model_keys))
@@ -491,14 +513,14 @@ def verify_remote_models(model_keys: list[str]) -> None:
         raise KeyError(f"unknown local model registry key(s): {unknown}")
     model_root_relative = str(config["paths"]["models_dir"])
     print(
-        _hub()._stamp(),
+        hub()._stamp(),
         f"[models] source=git-shipped requested={keys} status=validation-start",
         flush=True,
     )
     script = _BOOTSTRAP + f"""
 from pathlib import Path
 from core.common import resolve_model
-root = {_hub().REMOTE_ROOT!r}
+root = {hub().REMOTE_ROOT!r}
 requested = {keys!r}
 model_root = (Path(root) / {model_root_relative!r}).resolve()
 
@@ -523,18 +545,18 @@ print(
     flush=True,
 )
 """
-    _hub().run_colab_exec_stream(
-        _hub().SESSION,
+    hub().run_colab_exec_stream(
+        hub().SESSION,
         script,
         timeout=600,
         log_name="model_validation",
         retry_safe=False,
     )
 
-@_timed_colab("step")
+@timed_colab("step")
 def verify_training_inputs() -> None:
     """Use frozen CSV inputs and materialize derived calibration input."""
-    print(_hub()._stamp(), "[data] validating frozen training CSVs from the cloned branch ...")
+    print(hub()._stamp(), "[data] validating frozen training CSVs from the cloned branch ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
 from core.common import F
@@ -557,7 +579,7 @@ if not calibration_path.is_file():
     )
     rc = subprocess.run(
         [sys.executable, "src/training/labeled_pairs.py"],
-        cwd={_hub().REMOTE_ROOT!r},
+        cwd={hub().REMOTE_ROOT!r},
     ).returncode
     if rc != 0:
         raise RuntimeError(f"labeled-pairs generation failed (rc={{rc}})")
@@ -565,4 +587,4 @@ if not calibration_path.is_file():
     raise FileNotFoundError(f"derived calibration input missing after generation: {{calibration_path}}")
 print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes", flush=True)
 """
-    _hub().run_colab_exec_stream(_hub().SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
+    hub().run_colab_exec_stream(hub().SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)

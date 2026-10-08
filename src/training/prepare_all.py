@@ -38,11 +38,22 @@ from tqdm import tqdm
 from core.portable_archive import Digest
 from core.run_log import RunLogger
 from core.schemas import PREPARATION_REUSABLE_KEYS
+from core.tracing import (
+    ORCHESTRATION_LANE_STAGES,
+    ORCHESTRATION_TRACE_STAGES,
+    trace_stages_for,
+)
 from training.prepare_all_trace import send, timed, trace_step
 
-STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference',
-          'canonical_and_gates', 'gate_census', 'labeled_pairs', 'validation',
-          'graph_inputs', 'full_bundle', 'suite_inputs', 'verify_handoff')
+#: The preparation's stage inventory is declared ONCE, in ``core.tracing``
+#: (``ORCHESTRATION_TRACE_STAGES``: keys = every orchestration stage, order =
+#: execution order, values = the trace stage(s) its producer writes rows under).
+#: Derived here instead of restated, so a stage can never be planned without a
+#: trace join (or the join name a stage the plan never runs).
+STAGES = tuple(
+    stage for stage in ORCHESTRATION_TRACE_STAGES
+    if stage not in ORCHESTRATION_LANE_STAGES
+)
 
 REUSABLE_KEYS = PREPARATION_REUSABLE_KEYS
 
@@ -52,9 +63,26 @@ _LINUX_FICLONE = 0x40049409
 _CLONE_UNSUPPORTED = frozenset({errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY,
                                 errno.EINVAL, errno.ENOSYS})
 _RUN_TAG_PATTERN = r'[A-Za-z0-9_-]+'
-_EXTRA_LANE_STAGES = frozenset({'negative_supply', 'discriminator'})
-_LANE_STAGE_ORDER = ('negative_supply', 'discriminator')
+#: The registry's LANE subset (``core.tracing.ORCHESTRATION_LANE_STAGES``): the
+#: stages the orchestrator inserts before ``validation`` only when a run tag is
+#: requested; ``_EXTRA_LANE_STAGES`` is the set form the state validator uses.
+_LANE_STAGE_ORDER = ORCHESTRATION_LANE_STAGES
+_EXTRA_LANE_STAGES = frozenset(_LANE_STAGE_ORDER)
 
+#: The stage that WRITES the artifacts defining the run's trace identity
+#: (core.tracing.run_artifact_fingerprint: canonical_records + gate_results).
+#: Before it the run has no identity of its own; after it every stage shares it.
+_IDENTITY_STAGE = 'canonical_and_gates'
+#: Stages that run BEFORE the identity exists: they are pinned to
+#: core.tracing.TRACE_PENDING_RUN and adopted onto the run's real id once
+#: ``_IDENTITY_STAGE`` completes (see PrepareRun._bind_trace_run_id).
+_PENDING_TRACE_STAGES = frozenset(STAGES[: STAGES.index(_IDENTITY_STAGE)])
+
+#: The module-backed stages' child commands (argv after ``-m``). NOT a stage
+#: inventory: the inventory is the ONE registry imported above, and this table
+#: only says HOW to spawn the module-backed subset. The guard keeps it from
+#: naming a stage the registry does not declare, a drift nobody would notice
+#: until the unregistered stage was actually planned.
 _STAGE_MODULES = {
     'dedupe': ['training.dedupe'],
     'cross_country_pairs': ['training.build_second04_pairs'],
@@ -64,6 +92,12 @@ _STAGE_MODULES = {
     'labeled_pairs': ['training.labeled_pairs'],
     'validation': ['training.build_final_validation'],
 }
+
+if _UNREGISTERED := sorted(set(_STAGE_MODULES) - set(STAGES)):
+    raise ValueError(
+        f'_STAGE_MODULES names stages absent from the ONE preparation registry '
+        f'(core.tracing.ORCHESTRATION_TRACE_STAGES): {_UNREGISTERED}'
+    )
 
 
 class PreparedFile(BaseModel):
@@ -141,6 +175,7 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
 def _provenance_paths(root: Path, suite_config: Path) -> set[Path]:
     """Every byte-relevant input of a full preparation, as one resolved set."""
     from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT, artifact
+    from core.runtime_inputs import evidence_members
     layouts = _pipeline_layouts()
     paths = set((root / layouts['source_code_dir']).rglob('*.py')) | \
         set((root / layouts['scripts_dir']).rglob('*.py'))
@@ -150,8 +185,17 @@ def _provenance_paths(root: Path, suite_config: Path) -> set[Path]:
                   Path(VOCABULARY_CONFIG_PATH), Path(suite_config), Path(DATA_PATH)])
     # Measured-evidence inputs the pipeline consumes fail-loud: they are
     # tracked build inputs, so any regeneration must regenerate everything.
-    paths.update([TRAIN_ROOT / 'artifacts/evidence/attribute_universe_census.json',
-                  artifact('semantic_family_registry')])
+    # The member list is the ONE declaration of that evidence
+    # (core.runtime_inputs.evidence_members, which the transport also ships and
+    # the runtime preflight also demands) — a literal here could drift from the
+    # bytes the GPU lanes actually verify. NOTE: config/paths.yaml
+    # ``files.decision_attribute_census`` is a DIFFERENT artifact (a
+    # results-tree census the dashboard watches), not this tracked evidence
+    # copy; the layout a config owner would add to bind this one is
+    # ``layouts.attribute_universe_census: {root: repo, template:
+    # artifacts/evidence/attribute_universe_census.json}``.
+    paths.update(TRAIN_ROOT / member for member in evidence_members())
+    paths.add(artifact('semantic_family_registry'))
     return paths
 
 
@@ -407,12 +451,42 @@ def _hash_smoke_baseline(smoke: Path) -> dict[str, str]:
     return before
 
 
+def _trace_run_pin(name: str) -> str | None:
+    """The run id a preparation stage's child must tag its trace rows with.
+
+    A run's identity is the fingerprint of the artifacts it produces
+    (``core.tracing``), so the stages that run BEFORE ``canonical_and_gates``
+    cannot know it: resolving then would return the PREVIOUS run's fingerprint
+    and attribute this run's rows to another run (or 'run-unbound' before any run
+    exists). They are pinned to :data:`core.tracing.TRACE_PENDING_RUN` and their
+    rows are adopted onto the run's own id once it exists (``adopt_run``).
+
+    ``_IDENTITY_STAGE`` itself returns ``None`` on purpose: it WRITES the
+    identity artifacts, so its child must resolve the id at write time, after
+    those bytes exist. Every later stage is pinned to that same id, which the
+    training side reproduces from the same artifacts — one preparation run, one
+    run id, on both sides of the handoff.
+    """
+    from core.tracing import TRACE_PENDING_RUN, resolve_run_id
+    if name in _PENDING_TRACE_STAGES:
+        return TRACE_PENDING_RUN
+    if name == _IDENTITY_STAGE:
+        return None
+    return resolve_run_id()
+
+
 def _prepare_environment(root: Path, run_dir: Path, prep) -> tuple[dict[str, str], str]:
     """Child-stage environment contract; returns (env, shared_base_payload)."""
+    from core.tracing import TRACE_PATH_ENV, trace_path
     env = os.environ.copy()
     env['PYTHONPATH'] = (str(root / _pipeline_layouts()['source_code_dir'])
                          + os.pathsep + str(root))
     env['EUROMONITOR_SHARED_BASE_DATA'] = _shared_base_payload_path(run_dir)
+    # ONE trace per preparation run: every child appends to the RUN's trace file
+    # (the layout rendered in the parent, whose RESULTS is the run root) instead
+    # of re-deriving one from its own view, and carries the run id this run pins
+    # (_bind_trace_run_id) so all of its stages are ONE run in the file.
+    env[TRACE_PATH_ENV] = str(trace_path())
     _bind_cohort_tag(env)
     env.pop('WANDB_API_KEY', None)
     # Preparation mutates inputs; inherited worker attestations are invalid.
@@ -444,6 +518,14 @@ def _initial_manifest(*, root: Path, resume_from: str, run_dir: Path, config_pat
         'status': 'running', 'resume_from': resume_from,
         'training_started': False, 'smoke_updated': False,
         'stages': [], 'run_dir': str(run_dir),
+        # The join from an orchestration stage to the TRACE STAGE(S) that carry
+        # its rows, from the one declaration in core.tracing. The two
+        # vocabularies differ by design (a child writes under its own module's
+        # stage), so publishing the map here is what lets a reader follow this
+        # manifest into the consolidated trace without a hand map; an empty list
+        # marks a stage that writes no trace rows (a coverage gap).
+        'trace_stages': {stage: list(trace_stages_for(stage))
+                         for stage in (*STAGES, *_LANE_STAGE_ORDER)},
         'shared_base_payload': shared_base_payload,
         'tracks_config': str(config_path),
         'negative_supply_mode': lane.mode,
@@ -825,6 +907,7 @@ class PrepareRun:
     def _begin_stage(self, name: str) -> float:
         """Mark one stage running in the manifest, timings log + live reporting."""
         stage_started = time.monotonic()
+        self._bind_trace_run_id(name)
         self.manifest.setdefault('stage_metrics', {})[name] = {
             'status': 'running', 'started_at': datetime.now(timezone.utc).isoformat(),
             'detail_path': str(self.run_dir / (name + self.context.prep.stage_timing_suffix)),
@@ -833,6 +916,39 @@ class PrepareRun:
         emit_timing(f'[timing] prepare.{name} state=started',
                     path=self.run_dir / self.context.prep.timings_log)
         return stage_started
+
+    # --- the run's ONE trace id -------------------------------------------
+
+    def _bind_trace_run_id(self, name: str) -> None:
+        """Pin the trace run id this stage's child must tag its rows with.
+
+        The policy lives in :func:`_trace_run_pin`; an unpinned stage
+        (``canonical_and_gates``) must carry no inherited pin, or it would tag
+        the rows it writes with the identity its own artifacts supersede.
+        """
+        from core.tracing import TRACE_RUN_ENV
+        pin = _trace_run_pin(name)
+        if pin is None:
+            self.env.pop(TRACE_RUN_ENV, None)
+        else:
+            self.env[TRACE_RUN_ENV] = pin
+
+    @timed
+    def _adopt_pending_trace_rows(self) -> None:
+        """Fold the pre-identity stages' rows into this run's own id.
+
+        The pre-gate stages were pinned to TRACE_PENDING_RUN because the run's
+        identity did not exist yet. Now that ``canonical_and_gates`` has written
+        it, the pending rows move onto it, so the whole preparation run is ONE
+        run in the trace — the same id the training side computes from the same
+        artifacts, which is what lets a reader follow prepare_all's stages into
+        the training rows without a hand map.
+        """
+        from core.tracing import TRACE_PENDING_RUN, adopt_run, resolve_run_id
+        run_id = resolve_run_id()
+        adopted = adopt_run(from_run_id=TRACE_PENDING_RUN, to_run_id=run_id)
+        if adopted:
+            _LOG.info(f'[prepare] adopted {adopted} pre-identity trace row(s) onto run {run_id}')
 
     def _complete_stage(self, name: str, stage_started: float) -> None:
         """Record one stage's healthy completion across manifest + timings."""
@@ -843,6 +959,10 @@ class PrepareRun:
             status='complete', seconds=elapsed,
             finished_at=datetime.now(timezone.utc).isoformat())
         self.manifest['stages'].append(name)
+        if name == _IDENTITY_STAGE:
+            # The run's identity exists now: the rows the pre-identity stages
+            # wrote under the pending pin join it (ONE run in the trace).
+            self._adopt_pending_trace_rows()
         emit_timing(f'[timing] prepare.{name} state=completed elapsed_seconds={elapsed:.3f}',
                     path=self.run_dir / self.context.prep.timings_log)
 

@@ -144,6 +144,14 @@ layouts:
     owner: model_tracks.package
     template: "data/model_tracks/suite.yaml"
     fields: {}
+  # The standalone graph worker package's portable member root. The worker ZIP is
+  # extracted into a checkout, so every member key is repository-relative and the
+  # track name is a declared field (owner: graph_tracks.worker_package).
+  graph_worker_package:
+    root: repo
+    owner: graph_tracks.worker_package
+    template: "data/graph_worker/{track}"
+    fields: {track: str}
   semantic_family_registry:
     root: repo
     owner: core.attribute_decision
@@ -225,6 +233,16 @@ layouts:
     owner: core.tracing
     template: "logs/training_trace.csv"
     fields: {}
+  # The evaluation traceability document (owner: core.eval_trace): the per-slice
+  # / per-attribute contract report for one lane and track. A SEPARATE artifact
+  # on purpose — the frozen ablation report carries a .sha256 sidecar, so extra
+  # keys on it are forbidden; this is the artifact that declares the shared
+  # vocabulary. fields: one lane name + one track.
+  traceability_report:
+    root: results
+    owner: core.eval_trace
+    template: "logs/{lane}/{track}__traceability.json"
+    fields: {lane: str, track: str}
   resume_pointer:
     root: results
     owner: training.dvc_store

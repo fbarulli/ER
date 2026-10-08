@@ -112,7 +112,7 @@ def discovery():
     originals = ''.join(f'<li><a href="/catalog?gtin={gtin}">{escape(title)} · {gtin}</a></li>' for gtin,title in cases)
     n_held = len(review_policy().quarantined_gtins)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER discovery</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}h1{{font-size:1.5rem}}li{{margin:.5rem 0}}iframe{{width:100%;height:1100px;border:1px solid #ddd}}.status{{padding:8px;background:#dff4e8;display:inline-block}}.metrics{{display:flex;gap:1rem;flex-wrap:wrap}}.metric{{border:1px solid #ddd;padding:1rem}}.metric strong{{display:block;font-size:1.5rem}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:.5rem;text-align:left}}details{{margin:1rem 0}}input{{padding:.5rem}}summary{{cursor:pointer}}</style></head><body><h1>ER · Identity findings and fixes</h1><p class="status">{n_held} reviewed identifiers blocked from labels and splits · source data retained</p><h2>Original audit</h2><div class="metrics"><div class="metric"><strong>{counts['pairs_with_at_least_one_disjoint_dimension']:,} / {counts['sampled_cross_retailer_same_gtin_pairs']:,}</strong>pairs with raw disagreements</div><div class="metric"><strong>{counts['affected_gtins']:,}</strong>affected GTINs</div><div class="metric"><strong>{audit['observed_dimensions']}</strong>dimensions checked</div><div class="metric"><strong>71,623</strong>original listings</div></div><p>Audit snapshot · capped at 20 cross-retailer pairs per GTIN · raw disagreements, not confirmed identity errors.</p>
-<p>Session tracks · <a href="/training"><strong>Training reports</strong></a> · <a href="/datagen"><strong>Datagen track</strong></a> (identity fixes, GTIN integrity, attribute-universe census, datagen budget) · <a href="/gate"><strong>Gate decisions</strong></a> (original-column sample of 5 per decision bucket) · <a href="/graphs"><strong>Graphs track</strong></a> (GNN-only / hybrid semantic-ID lane)</p><h2>Findings · comparisons · results</h2><ul>{links}</ul><iframe title="Finding 01 — comparison and fix" src="/results/identity/01_identity_discovery_findings.html" sandbox="allow-same-origin allow-popups"></iframe><h2>Original listing evidence</h2><form action="/catalog"><label for="gtin">GTIN</label> <input id="gtin" name="gtin" placeholder="868784000346" required> <button>Compare listings</button></form><ul>{originals}</ul><details><summary>All 37 dimensions · coverage and raw disagreements</summary><table><tr><th>Dimension</th><th>Coverage</th><th>Pairs with both observed</th><th>Disjoint pairs</th></tr>{dimensions}</table></details><p><a href="/experiments">Experiment dashboard</a> · <a href="/canvas">Maps</a></p></body></html>'''
+<p>Session tracks · <a href="/training"><strong>Training reports</strong></a> · <a href="/datagen"><strong>Datagen track</strong></a> (identity fixes, GTIN integrity, attribute-universe census, datagen budget) · <a href="/gate"><strong>Gate decisions</strong></a> (original-column sample of 5 per decision bucket) · <a href="/graphs"><strong>Graphs track</strong></a> (GNN-only / cascade retrieve-then-rerank lane)</p><h2>Findings · comparisons · results</h2><ul>{links}</ul><iframe title="Finding 01 — comparison and fix" src="/results/identity/01_identity_discovery_findings.html" sandbox="allow-same-origin allow-popups"></iframe><h2>Original listing evidence</h2><form action="/catalog"><label for="gtin">GTIN</label> <input id="gtin" name="gtin" placeholder="868784000346" required> <button>Compare listings</button></form><ul>{originals}</ul><details><summary>All 37 dimensions · coverage and raw disagreements</summary><table><tr><th>Dimension</th><th>Coverage</th><th>Pairs with both observed</th><th>Disjoint pairs</th></tr>{dimensions}</table></details><p><a href="/experiments">Experiment dashboard</a> · <a href="/canvas">Maps</a></p></body></html>'''
 
 
 @app.get('/findings/02', response_class=HTMLResponse)
@@ -984,12 +984,13 @@ def graphs_track():
     # Finding 01 — configs + lane scope
     config_evidence = []
     config_count = 0
-    for name in ('graph_tracks_gnn.yaml', 'graph_tracks_hybrid.yaml'):
+    for name in ('graph_tracks_gnn.yaml', 'graph_tracks_cascade.yaml'):
         path = ROOT.parent / 'config' / name
         if path.exists():
             config_count += 1
             config_evidence.append(f'{name}:\n' + path.read_text()[:900])
     config_excerpt = '\n\n'.join(config_evidence) or 'no graph-track configs present yet'
+    cfg_ok = config_count == 2
     cfg_metrics = ''.join([
         _fmetric(config_count, 'configs governed in config/'),
         _fmetric('8 + 2', 'categorical relations + volume/pack'),
@@ -997,12 +998,14 @@ def graphs_track():
     ])
     cfg_compare = _fcompare([
         ('Aggregation scheme (planned lane)', 'full-batch typed two-hop aggregation over 8 categorical relations + volume/pack', 'PASS'),
-        ('Config surface', 'graph_tracks_gnn.yaml + graph_tracks_hybrid.yaml', 'PASS' if config_count == 2 else 'OPEN'),
+        ('Config surface', 'graph_tracks_gnn.yaml + graph_tracks_cascade.yaml', 'PASS' if cfg_ok else 'OPEN'),
+        ('Cascade lane role', 'retrieve-then-rerank over the trained text ranker + gnn_only scorer (trains nothing, fuses nothing)', 'PASS'),
         ('Tractable catalogs in lane scope', '62,963-row catalogs — skipped by design (graph lane covers tractable sizes only)', 'OPEN'),
     ])
-    f01 = _ffinding(1, 'GNN-only + hybrid semantic-ID lane — configs', 'PASS', cfg_metrics, cfg_compare,
-                    _fevidence('config/graph_tracks_gnn.yaml + config/graph_tracks_hybrid.yaml (verbatim, capped)', config_excerpt),
-                    "<span class='badge badge-pass'>PASS</span> — lane setting fixed in config; tractable catalogs skip.")
+    f01 = _ffinding(1, 'GNN-only + cascade lane — configs', 'PASS' if cfg_ok else 'OPEN', cfg_metrics, cfg_compare,
+                    _fevidence('config/graph_tracks_gnn.yaml + config/graph_tracks_cascade.yaml (verbatim, capped)', config_excerpt),
+                    f"<span class='badge {'badge-pass' if cfg_ok else 'badge-open'}'>{'PASS' if cfg_ok else 'OPEN'}</span> — "
+                    "lane settings fixed in config; tractable catalogs skip.")
     # Finding 02 — checkpoint / DVC snapshot lifecycle
     snips = sorted((ROOT.parent / 'results').glob('graph_tracks/*'))[:8]
     pubs = sorted((ROOT.parent / 'dvc_refs').glob('*'))[:8]
@@ -1042,8 +1045,8 @@ def graphs_track():
                                'Census feeds the graph node relations; P1/P2 items gate the expansion of graph linkage.'),
                     "<span class='badge badge-open'>OPEN</span> — census is the dependency; linkage expansion waits on the P1/P2 owner ruling.")
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER graphs</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}</style></head><body>
-<h1>ER · Graphs track — GNN-only + hybrid semantic-ID lane</h1>
-<p class="status">2 lanes (GNN-only / hybrid semantic-ID) · full-batch typed two-hop aggregation · snapshot lifecycle landed (commit 5001027) · 62,963-row catalogs skip</p>
+<h1>ER · Graphs track — GNN-only + cascade lane</h1>
+<p class="status">2 lanes (gnn_only trained / cascade retrieve-then-rerank) · full-batch typed two-hop aggregation · snapshot lifecycle landed (commit 5001027) · 62,963-row catalogs skip</p>
 {f01}{f02}{f03}
 <p class="muted"><a href="/">← home</a> · <a href="/datagen">datagen track</a> · <a href="/gate">gate decisions</a> · <a href="/training">training reports</a></p>
 </body></html>'''

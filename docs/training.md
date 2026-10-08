@@ -11,19 +11,20 @@ bash scripts/run_full_training.sh \
   --prepared-input-package results/training_prep/<run>/all_tracks_inputs.tar.zst
 ```
 
-## The three tracks
+## The tracks
 
-One runtime, three workers, one control channel.
+One runtime, two trained workers, one control channel, then the cascade
+combinator over their saved artifacts.
 
 | Track | Inputs | Trains |
 |---|---|---|
 | **A** `text` | MiniLM-L6 text + a structured channel | The text encoder. Loss is MNRL. |
 | **B** `gnn_only` | Structured attributes, numeric features, typed relations | Graph encoder + pair scorer. No text, no text-derived edges. |
-| **C** `hybrid` | The same graph **plus** exact frozen A0 MiniLM vectors | Graph encoder + fusion. Baseline MiniLM stays frozen. |
+| **C** `cascade` | The trained text ANN (ranker) plus the trained `gnn_only` scorer checkpoint (decider) | Nothing. A retrieve-then-rerank combinator: it fuses no embedding and runs after the A/B barrier. |
 
-B and C share one train-only attribute graph and vocabulary. C's frozen vectors come
-from the **baseline** checkpoint, not from the concurrently fine-tuned Track A — so A
-and C never contaminate each other.
+A and B share one train-only component split and, for the graph lane, one
+train-only attribute graph and vocabulary. The cascade consumes their saved
+artifacts exactly as trained.
 
 ANN/HNSW retrieves vectors; it is not a fourth model. SID and RQ-VAE are out of scope.
 
@@ -72,9 +73,10 @@ you asked for a GPU.
 5. Clone the pushed `origin/main` at depth one, then restore the package's exact
    source revision.
 6. Install the CPU/CUDA PyTorch runtime, then graph requirements.
-7. Export the frozen baseline embeddings — before hybrid training is released.
-8. Run the three workers in parallel over MPS.
-9. After checkpoint selection, each track exports vectors and runs its own
+7. Export the frozen baseline embeddings — before graph training is released.
+8. Run the two trained workers in parallel over MPS, then the cascade combinator
+   after the barrier.
+9. After checkpoint selection, each trained track exports vectors and runs its own
    interventions from its own selected checkpoint.
 10. Download a compressed archive, verify SHA-256 and the inventory, shut down.
 11. Local CPU postprocessing: reports, calibration, indexes, ablation analysis.

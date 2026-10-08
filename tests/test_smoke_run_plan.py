@@ -50,6 +50,48 @@ def test_plan_identity_drops_whole_config_hash(monkeypatch):
                         'seed': run_plan.SEED, 'data_sha256': 'same-data'}
 
 
+def test_frozen_inputs_materialize_from_the_bundle_members(tmp_path, monkeypatch):
+    """The plan binds the bundle-carried ``*_csv`` bytes, not the live checkout.
+
+    The bug this pins: the materialization compared the bare registry keys
+    (``labeled_pairs``) against the bundle, so a bundle carrying the real members
+    (``labeled_pairs_csv``) was never materialized and the plan read whatever the
+    checkout happened to hold. A bundle with none of them is left untouched.
+    """
+    from core import common
+    monkeypatch.setattr(common, 'RESULTS', tmp_path / 'results')
+    monkeypatch.setattr(common, 'F', {'labeled_pairs': tmp_path / 'data/labeled_pairs.csv',
+                                      'canonical_records': tmp_path / 'data/canonical_records.csv',
+                                      'gate_results': tmp_path / 'data/gate_results.csv'})
+    written = run_plan._materialize_frozen_inputs(
+        {'labeled_pairs_csv': b'labeled', 'gate_results_csv': b'gates'})
+    assert set(written) == {'labeled_pairs', 'gate_results'}
+    assert written['labeled_pairs'].read_bytes() == b'labeled'
+    assert common.F['labeled_pairs'] == written['labeled_pairs']
+    assert written['labeled_pairs'].parent == tmp_path / 'results' / '_prepared_inputs'
+
+    untouched = dict(common.F)
+    assert run_plan._materialize_frozen_inputs({'df': None}) == {}
+    assert common.F == untouched
+
+
+def test_one_frozen_input_materializer_serves_plan_and_trainer():
+    """Both callers share ONE implementation (no second literal to drift).
+
+    The plan path and the prepared trainer used to spell the ``*_csv`` member
+    names and the ``_prepared_inputs`` destination directory independently; the
+    trainer now calls ``run_plan._materialize_frozen_inputs``, so only that
+    function declares them.
+    """
+    import inspect
+
+    from training import train_prepared
+
+    assert '_materialize_frozen_inputs' in inspect.getsource(train_prepared)
+    assert '_prepared_inputs' not in inspect.getsource(train_prepared)
+    assert '_prepared_inputs' in inspect.getsource(run_plan._materialize_frozen_inputs)
+
+
 def test_smoke_accepts_config_drift_without_mutating_plan(saved_plan):
     before = copy.deepcopy(saved_plan)
     assert validate(saved_plan) is saved_plan

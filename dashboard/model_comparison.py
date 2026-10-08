@@ -27,12 +27,14 @@ from fastapi.responses import HTMLResponse
 
 router = APIRouter()
 
-TRACKS = ('baseline', 'text', 'gnn_only', 'hybrid')
-FITTED = ('text', 'gnn_only', 'hybrid')
+TRACKS = ('baseline', 'text', 'gnn_only', 'cascade')
+# The cascade is a combinator, not a fitted encoder: it owns no ablation report,
+# no vectors and no ablation cells, so it stays out of the fitted-model metrics.
+FITTED = ('text', 'gnn_only')
 LABEL = {'baseline': 'baseline (frozen MiniLM)', 'text': 'A text',
-         'gnn_only': 'B gnn_only', 'hybrid': 'C hybrid'}
+         'gnn_only': 'B gnn_only', 'cascade': 'C cascade'}
 COLOR = {'baseline': '#9ca3af', 'text': '#2563eb',
-         'gnn_only': '#16a34a', 'hybrid': '#9333ea'}
+         'gnn_only': '#16a34a', 'cascade': '#9333ea'}
 # Track-owned artifact suffixes; the paths themselves come from paths.yaml.
 SUMMARY_SUFFIX = '__model_evaluation_summary.csv'
 SCORED_SUFFIX = '__scored_pairs.csv'
@@ -363,7 +365,7 @@ def analyse(run_tag: str) -> dict | None:
             for row in csv.DictReader(fh):
                 catalog[row.get('sku_id')] = row.get('gtin')
     geom = {}
-    for model in ('text', 'gnn_only', 'hybrid'):
+    for model in FITTED:
         vec = _first(dest / model, VECTOR_SUFFIX)
         if vec is None:
             continue
@@ -494,7 +496,7 @@ def _plots(run_tag: str, data: dict) -> dict[str, str]:
         fig.tight_layout(); fig.savefig(out / 'calibration_thresholds.png', dpi=130); plt.close(fig)
         written['calibration_thresholds'] = 'calibration_thresholds.png'
 
-    # 4. attribute effect heat-style bar (top attributes by hybrid effect)
+    # 4. attribute effect heat-style bar (top attributes by mean effect)
     if data['attributes']:
         ranked = sorted(
             (a for a in data['attributes'] if any(v and not v['dead'] for v in data['attributes'][a].values())),

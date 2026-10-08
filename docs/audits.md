@@ -149,7 +149,7 @@ accuracy estimates.
 .venv/bin/python scripts/pseudo_gtin_census.py
 .venv/bin/python scripts/feed_reliability.py
 .venv/bin/python scripts/brand_differentiation_audit.py
-.venv/bin/python scripts/identity_discovery_replay.py
+.venv/bin/python scripts/replay_identity_residuals.py
 ```
 
 Machine-readable outputs sit beside the findings and are the authoritative record;

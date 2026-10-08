@@ -20,7 +20,7 @@ the memory-hungry step.
 | 2 | `cross_country_pairs` | Same GTIN in two countries → hard positives | `results/training/second04_pairs_positive.csv` |
 | 3–4 | `number_reference` | How to read digits in names (`7up` is a brand, `250ml` is a volume) | `data/number_tokens_reference.csv` |
 | 5 | `canonical_and_gates` | Extract attributes per GTIN, then decide every candidate pair | `data/canonical_records.csv`, `data/gate_results.csv` |
-| 6 | `gate_census` | Re-measure the gate and rewrite the pin in `training.yaml` | run dir `gate_census.json` |
+| 6 | `gate_census` | Re-measure the gate census as a measured record (no config rewrite; the pin system was removed 2026-10-06) | run dir `gate_census.json` |
 | 7 | `labeled_pairs` | Turn gate decisions into training labels | `data/labeled_pairs.csv` |
 | 8–9 | `negative_supply` + `discriminator` | Diagnostic lane; generated but **not** used for training in gate mode | `results/negative_supply/<tag>/` |
 | 10 | `validation` | The held-out scored population and its fold map | `data/final_validation.csv` |

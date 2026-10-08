@@ -4,9 +4,14 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from core.archive_reader import open_archive, archive_sidecar
+from core.archive_reader import archive_sidecar
 
-from core.portable_archive import verify_archive
+
+def _spec():
+    """The bundle contract from config (single source for member names)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
+
 
 def push_artifacts(paths: list[Path], message: str) -> None:
     """Publish only explicit artifact paths, using the existing Git save flow."""
@@ -25,18 +30,25 @@ def push_artifacts(paths: list[Path], message: str) -> None:
     subprocess.run(['git', 'push', 'origin', 'HEAD'], cwd=TRAIN_ROOT, check=True)
 
 
-def persist_results(archive: Path, run_tag: str) -> Path:
-    """Publish the entire immutable suite, with a verified clean DVC pull."""
+def persist_results(archive: Path, run_tag: str, *, bundle=None) -> Path:
+    """Publish the entire immutable suite, with a verified clean DVC pull.
+
+    ``bundle`` is the already-verified boundary handle for ``archive``; a caller
+    that already verified the bytes at the VM crossing passes it so publication
+    does not open the same archive a second time.
+    """
+    from core.bundle import Bundle, BundleRole
     from core import common
-    from graph_tracks.data import file_hash
+    from core.portable_archive import cached_file_digest
     from training import dvc_store
-    metadata = verify_archive(archive, 'suite_bundle_manifest.json')
-    if metadata['run_tag'] != run_tag:
+    # One boundary check; the handle also supplies the archive's digest.
+    handle = Bundle.load(Path(archive), BundleRole.result) if bundle is None else bundle
+    if handle.run_tag() != run_tag:
         raise ValueError('publication run mismatch')
     workspace = archive_sidecar(archive, '.publication')
     workspace.mkdir(exist_ok=True)
     payload = workspace / archive.name
-    if payload.exists() and file_hash(payload) != file_hash(archive):
+    if payload.exists() and cached_file_digest(payload) != handle.digest:
         raise ValueError('existing publication payload differs from suite')
     if not payload.exists():
         shutil.copy2(archive, payload)
@@ -54,53 +66,79 @@ def persist_results(archive: Path, run_tag: str) -> Path:
     refs = [index, *(common.TRAIN_ROOT / entry['pointer'] for entry in publication['pointers'])]
     receipt = archive_sidecar(archive, '.publication.json')
     receipt.write_text(json.dumps({
-        'run_tag': run_tag, 'archive_sha256': file_hash(archive),
+        'run_tag': run_tag, 'archive_sha256': handle.digest,
         'verified_download': True,
         'references': {p.relative_to(common.TRAIN_ROOT).as_posix(): p.read_text() for p in refs},
     }, indent=2) + '\n')
     return receipt
 
 
-def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
+def _selected_graph_checkpoint(tree, track: str) -> Path:
+    """The one selected graph checkpoint; any ambiguity is fatal.
+
+    The selection rule is the Bundle's (``Bundle.checkpoint``, called below): the
+    ``*__best_checkpoint.json`` marker names the selected model, the member is
+    located by name under the track (parent-qualified first, bare name as the
+    transport fallback), and several matches are refused there instead of being
+    ranked by name order. Publication adds the ONE thing the handle still
+    tolerates: a second recorded marker, which must stop the publication rather
+    than be resolved by marker name order. A recorded selection with no member
+    stays unavailable.
+    """
+    root = tree._root()
+    track_root = root / track if (root / track).is_dir() else root
+    markers = sorted(track_root.rglob(_spec().best_checkpoint_glob))
+    if len(markers) != 1:
+        recorded = ', '.join(marker.relative_to(root).as_posix() for marker in markers) or 'none'
+        raise ValueError(f'ambiguous selected checkpoint: {track} ({recorded})')
+    selected = tree.checkpoint(track)
+    if selected is None or not selected.is_file():
+        raise ValueError(f'selected checkpoint unavailable: {track}')
+    return selected
+
+
+def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None) -> Path:
+    from core.bundle import Bundle, BundleRole
     from core.common import TRAIN_ROOT
+    from core.portable_archive import cached_file_digest
     from graph_tracks.artifacts import name
     from graph_tracks.data import file_hash
-    from training.validation_inference import resolve_best_checkpoint
-    import torch
     from model_tracks.resume import validate_completed_suite_archive
-    metadata = validate_completed_suite_archive(archive, run_tag)
-    if metadata['run_tag'] != run_tag:
+    import torch
+    spec = _spec()
+    # The boundary check happens once; the completion contract and the digest
+    # both come off that handle (or the caller's already-verified one).
+    handle = Bundle.load(Path(archive), BundleRole.result) if bundle is None else bundle
+    validate_completed_suite_archive(archive, run_tag, bundle=handle)
+    if handle.run_tag() != run_tag:
         raise ValueError('publication run mismatch')
     destination = TRAIN_ROOT/'artifacts/models/tracks'/run_tag
     if destination.exists():
         existing = json.loads((destination/'models_manifest.json').read_text())
-        if existing.get('source_archive_sha256') != file_hash(archive):
+        if existing.get('source_archive_sha256') != handle.digest:
             raise ValueError('existing models came from a different suite archive')
-        if any(file_hash(destination/key) != digest for key, digest in existing['files'].items()):
+        if any(cached_file_digest(destination/key) != digest
+               for key, digest in existing['files'].items()):
             raise ValueError('existing publication model files differ')
     destination.parent.mkdir(parents=True,exist_ok=True)
     if not destination.exists():
         with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
             workspace = Path(temporary)
-            restored = workspace/'restored'
-            with open_archive(archive) as source:
-                source.extractall(restored)  # path/link validation was done by verify_archive
+            # The verified handle materializes the tree; the selected checkpoints
+            # come from the bundle's role contract, not a per-surface re-search.
+            tree = handle.materialize(workspace/'restored')
             staged = workspace/'models'
             staged.mkdir()
-            checkpoint, _ = resolve_best_checkpoint(restored/'text')
-            ignored = {'optimizer.pt','scheduler.pt','rng_state.pth','trainer_state.json','training_args.bin','scaler.pt'}
+            checkpoint = tree.checkpoint('text')
+            if checkpoint is None:
+                raise ValueError('selected checkpoint unavailable: text')
+            ignored = set(spec.deployment_ignored_filenames)
             shutil.copytree(checkpoint,staged/'text',ignore=lambda _, names: [n for n in names if n in ignored])
             for track in ('gnn_only',):
-                selected = list((restored/track).rglob(name(track,'best_checkpoint.json')))
-                if len(selected)!=1:
-                    raise ValueError(f'ambiguous selected checkpoint: {track}')
-                recorded = Path(json.loads(selected[0].read_text())['path'])
-                candidates = list((restored/track).rglob(f'{recorded.parent.name}/{recorded.name}'))
-                if len(candidates)!=1:
-                    raise ValueError(f'selected checkpoint unavailable: {track}')
+                selected = _selected_graph_checkpoint(tree, track)
                 from graph_tracks.artifacts import checkpoint_track
-                checkpoint_track(candidates[0])
-                payload = torch.load(candidates[0],map_location='cpu',weights_only=False)
+                checkpoint_track(selected)
+                payload = torch.load(selected,map_location='cpu',weights_only=False)
                 fields = ('schema','manifest','vocabulary','support_records','support_text','text_dim','model','scorer')
                 deployed = {key:payload[key] for key in fields}
                 folder = staged/track
@@ -109,13 +147,13 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
                 torch.save(deployed,model)
                 (folder/name(track,'checkpoint_manifest.json')).write_text(json.dumps({
                     'schema':'er-graph-checkpoint-v1','track':track,'files':{model.name:file_hash(model)},
-                    'inference_only':True,'source_checkpoint_sha256':file_hash(candidates[0])},indent=2)+'\n')
+                    'inference_only':True,'source_checkpoint_sha256':file_hash(selected)},indent=2)+'\n')
             inventory = {str(p.relative_to(staged)):file_hash(p) for p in staged.rglob('*') if p.is_file()}
             for path in staged.rglob('*'):
                 if path.is_file() and path.stat().st_size>=100*1024**2:
                     raise ValueError(f'model file exceeds GitHub regular-file limit: {path.name}')
             (staged/'models_manifest.json').write_text(json.dumps({
-                'run_tag':run_tag,'source_archive_sha256':file_hash(archive),'files':inventory,
+                'run_tag':run_tag,'source_archive_sha256':handle.digest,'files':inventory,
                 'tracks':['text','gnn_only'],'graph_models_inference_only':True,
                 'cascade_composed_from':['text ranker (ANN candidates)','gnn_only pair scorer (decisions)']
             },indent=2)+'\n')

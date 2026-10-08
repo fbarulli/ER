@@ -602,7 +602,7 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
     watched += [bundle,bundle.with_suffix(bundle.suffix+'.json')]
     if F['decision_visibility'].is_dir():
         watched += [F['decision_visibility'] / member for member in entries(F['decision_visibility'])]
-    watched += [setup / name for name in ('eligible_catalog.csv','gnn_only.yaml','hybrid.yaml','setup_manifest.json',
+    watched += [setup / name for name in ('eligible_catalog.csv','gnn_only.yaml','cascade.yaml','setup_manifest.json',
                 'embedding_inputs.json','shared_minilm__embeddings.npz','prepared/listings.json',
                 'prepared/input_manifest.json','prepared/pairs.csv','prepared/' + REPORT_ATTRIBUTES)]
     watched += list(_LOADED_CONFIG_HASHES)

@@ -72,6 +72,7 @@ from core.common import DATA_PATH, SEED, F, data_cfg, ensure_parent, load_datase
 from core.deduplication import collapse_representatives
 from core.gtin import gtin_validity
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
 from core.run_log import RunLogger
 from core.sku_identity import (
     completeness_frame,
@@ -113,6 +114,21 @@ _TIER_T1 = "T1 retailer+gtin"
 _TIER_T15 = "T1.5 retailer+malformed-gtin+same-product"
 _TIER_T2 = "T2 retailer+title+gtin"
 _TIER_T3 = "T3 retailer+title+identity-partition (price-aggregation)"
+
+#: The stage name prepare_all runs this module as, and the name its consolidated
+#: trace rows carry (core.tracing ``stage`` column).
+STAGE = "dedupe"
+
+#: Tier label (what the removal ledger carries) -> the manifest's ``dropped`` key.
+#: The trace's per-reason census uses the MANIFEST's key, so the census and the
+#: published row accounting join on one vocabulary, by key, with no mapping in
+#: the reader's head (the same rule labeled_pairs follows).
+TIER_DROP_KEYS: dict[str, str] = {
+    _TIER_T1: "t1_retailer_gtin",
+    _TIER_T15: "t1_5_retailer_malformed_gtin_same_product",
+    _TIER_T2: "t2_retailer_title_gtin",
+    _TIER_T3: "t3_retailer_title_identity_partition",
+}
 
 # The only decisions core.sku_identity may return for two rows to collapse:
 # "same" is proof, "compatible_unverified" is absence-of-contradiction —
@@ -909,6 +925,9 @@ def main() -> None:
     # what this stage read. Seed = the SSOT seed (lib.common.SEED); the
     # tiered collapse below is deterministic, no RNG is consumed.
     manifest = begin_manifest("dedupe", inputs=[DATA_PATH], seed=SEED)
+    # ONE consolidated-trace writer for the stage, committed once before the
+    # manifest is published (so a shipped manifest pins the trace it describes).
+    trace = TraceRun(STAGE)
     df, work = FrameWorkbook.load()
     n0 = len(df)
     _LOG.info(f"[dedupe] {n0:,} raw rows under identity links")
@@ -927,6 +946,15 @@ def main() -> None:
         n0, deduped, ambiguous_out, conflicts,
         n_t1_skipped=n_t1_skipped, n_deferred=n_deferred,
     )
+    # ── CONSOLIDATED TRACE (core.tracing): the stage had NO rows at all, so
+    # "which rows did dedupe remove, and why" could only be answered from the
+    # removals CSV by hand. The stage row carries the manifest's own closure and
+    # the per-reason census names the DROPPED SKUs behind every tier.
+    _record_dedupe(
+        trace, n0=n0, deduped=deduped, ambiguous_out=ambiguous_out,
+        conflicts=conflicts, summary=summary, row_accounting=row_accounting,
+    )
+    trace.write()
     manifest_path = finish_manifest(
         manifest,
         outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS,
@@ -946,6 +974,73 @@ def main() -> None:
               f"(dropped {n0 - len(deduped):,}); "
               f"{len(ambiguous_out):,} retailer+title groups were "
               "price-varying offers (flagged, not silently merged)")
+
+
+def _record_dedupe(
+    trace: TraceRun,
+    *,
+    n0: int,
+    deduped: pd.DataFrame,
+    ambiguous_out: pd.DataFrame,
+    conflicts: pd.DataFrame,
+    summary: list,
+    row_accounting: dict,
+) -> None:
+    """The stage's funnel, its per-tier census and the SKUs each tier removed.
+
+    The removals ledger (``sku_id`` -> ``rep_id`` + ``tier``) is the stage's own
+    published artifact, read back here rather than re-derived: it is already the
+    per-drop record, so the trace's census and entity rows cannot disagree with
+    the CSV an auditor reads. BATCH grain is the TIER (the tiers are the chunks
+    this stage walks; ``summary`` carries each one's drop count), and the census
+    below is the joinable form of the same numbers.
+    """
+    trace.add(
+        "rows",
+        "collapsed",
+        in_count=int(n0),
+        out_count=int(len(deduped)),
+        reason=(
+            "tiered exact-duplicate collapse: T1 retailer+gtin, T1.5 "
+            "retailer+malformed-gtin+same-product, T2 retailer+title+gtin, "
+            "T3 retailer+title+identity-partition; the representative is chosen "
+            "by descriptor completeness and gtin trust, never by price"
+        ),
+        detail={
+            **row_accounting,
+            "tier_summary": [dict(entry) for entry in summary],
+            "ambiguous_offer_groups": int(len(ambiguous_out)),
+            "dedupe_conflicts": int(len(conflicts)),
+            "batch_grain": (
+                "the tiers are this stage's chunks; tier_summary carries each "
+                "one's drop count and the census below is its joinable form"
+            ),
+        },
+        source=str(CSV_SUMMARY),
+    )
+    removals = pd.read_csv(CSV_REMOVALS, dtype=str, keep_default_na=False)
+    records = [
+        {
+            "sku_id": str(row.sku_id),
+            "rep_id": str(row.rep_id),
+            "tier": str(row.tier),
+            "reason": TIER_DROP_KEYS.get(str(row.tier), str(row.tier)),
+        }
+        for row in removals.itertuples(index=False)
+    ]
+    trace.add_entities(
+        "removal",
+        records,
+        key_of=lambda record: record["sku_id"],
+        reason_of=lambda record: record["reason"],
+        detail_of=lambda record: {
+            "rep_id": record["rep_id"],
+            "tier": record["tier"],
+        },
+        source=str(CSV_REMOVALS),
+        per_reason=ENTITY_SAMPLE_PER_REASON,
+        total_cap=ENTITY_ROW_CAP,
+    )
 
 
 def publish_stage_outputs(

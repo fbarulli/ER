@@ -51,6 +51,9 @@ def test_downloaded_suite_plots_and_metrics_render(dashboard):
     assert response.status_code == 200
     assert 'dev' in response.text and '0.7' in response.text
     assert 'cpu' in response.text and 'Complete suite' in response.text
+    # The live track set is text / gnn_only / cascade; the retired hybrid name
+    # must not reappear on the public page.
+    assert 'cascade' in response.text and 'hybrid' not in response.text
     plot = client.get('/training/plot', params={'run': 'results/model_tracks/smoke.zip',
         'artifact': 'text/text__reports/text__score_distribution_and_pr.png'})
     assert plot.content == b'png-test' and plot.headers['content-type'] == 'image/png'

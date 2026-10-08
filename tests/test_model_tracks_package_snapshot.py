@@ -8,6 +8,19 @@ import yaml
 import pytest
 
 
+#: ``package()`` now writes its rows into the ONE consolidated trace, so this
+#: module keeps them out of the real results tree. The path is under a
+#: subdirectory on purpose: the packaged member set must not see the trace.
+@pytest.fixture(autouse=True)
+def _hermetic_trace(tmp_path, monkeypatch):
+    import core.tracing as tracing
+
+    target = tmp_path / 'logs' / 'training_trace.csv'
+    monkeypatch.setattr(tracing, 'trace_path', lambda: target)
+    monkeypatch.setenv('EUROMONITOR_TRACE_RUN', 'run-test-suite-inputs')
+    return target
+
+
 def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     import core.common
     from model_tracks import package as packaging
@@ -108,6 +121,57 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
             assert config['device'] == 'cpu'
             assert config['report_test'] is False
             assert config['listings'] == 'data/model_tracks/shared/listings.csv'
+
+    # ── the ONE consolidated trace (core.tracing, stage suite_inputs) ───────
+    import core.tracing as tracing
+    from core.schemas import TraceRow
+    frame = tracing.read_trace(tracing.trace_path())
+    tracing.assert_trace_frame(frame)
+    for row in frame.to_dict('records'):
+        TraceRow.model_validate(row)
+    assert set(frame['stage']) == {'suite_inputs'}
+    assert set(frame['run_id']) == {'run-test-suite-inputs'}
+
+    collected_row = frame[frame['step'] == 'members.collected'].iloc[0]
+    collected = tracing.detail_json(collected_row['detail'])
+    assert collected['manifest_member'] == packaging.package_manifest()
+    # every collected member is sealed: the manifest member is never one
+    assert int(collected_row['in_count']) == int(collected_row['out_count'])
+    assert int(collected_row['dropped_count']) == 0
+
+    # the per-group census is EXACT and closes over the sealed member set
+    census = {str(r['reason']): int(r['in_count'])
+              for _, r in frame[frame['step'] == 'member.reason_census'].iterrows()}
+    assert sum(census.values()) == collected['archive_members']
+    assert census['config'] == len([name for name in snapshots if name.startswith('config/')])
+    assert census['inputs_csv'] == len([name for name in snapshots if name.endswith('.csv')]) + 2
+    assert collected['by_group']['source_code']['members'] >= 1
+    assert collected['by_group']['source_code']['bytes'] >= len(b'# current pipeline\n')
+
+    # the named ENTITY rows carry the REAL size of the file each member seals,
+    # and every sampled member is a member of the archive's own inventory
+    named = {str(r['key']): tracing.detail_json(r['detail'])
+             for _, r in frame[frame['scope'] == 'entity'].iterrows()}
+    assert named['src/pipeline.py']['bytes'] == len(b'# current pipeline\n')
+    assert named['config/paths.yaml']['bytes'] == len(b'current paths.yaml\n')
+    assert set(named) <= set(metadata['files'])
+    budget = tracing.detail_json(frame[frame['step'] == 'member.sample_budget'].iloc[0]['detail'])
+    assert budget['population'] == collected['archive_members']
+    assert budget['sampled'] == len(named)
+
+    # the SEAL: the transport token the boundary re-checks, and the archive's
+    # real size on disk — the trace states what the transport will carry
+    sealed = tracing.detail_json(frame[frame['step'] == 'archive.sealed'].iloc[0]['detail'])
+    assert sealed['sha256'] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert sealed['bytes'] == output.stat().st_size
+    assert sealed['members'] == collected['archive_members']
+    assert sealed['role'] == 'inputs'
+    assert sealed['schema'] == 'er-model-tracks-package-v1'
+    assert sealed['revision'] == 'revision'
+    assert sealed['source_bytes'] == collected['member_bytes']
+    # the inlined portable configs are members too, and the seal names them
+    assert len(sealed['inline_configs']) == 4
+    assert set(sealed['inline_configs']) <= set(metadata['files'])
 
 
 def test_suite_rejects_changed_labels_with_unchanged_catalog(tmp_path, monkeypatch):

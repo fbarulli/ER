@@ -18,7 +18,11 @@ gpu_graph_aggregation_backend: cuda_segment
 # Populate with measured per-worker peaks before enabling GPU overlap.
 memory_reservations_gb: {}
 gpu_headroom_gb: 2.0
-report_test: false
+# Score the held-out TEST split. Was ``false``, which made every packaged run
+# skip test evaluation (worker prints "test skipped reason=report_test_false")
+# and report nothing but the dev-selected threshold. The test split is only
+# ever read after dev selection, so scoring it cannot steer the choice.
+report_test: true
 publish_git: false
 publish_dvc: false
 profiling: true

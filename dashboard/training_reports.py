@@ -663,7 +663,7 @@ def training(run: str | None = None):
     options = ''.join(f'<option value="{escape(key, quote=True)}"'
                       f'{" selected" if key == selected else ""}>{escape(key)}</option>'
                       for key in available)
-    body = '<h1>Training reports</h1><p>Saved metrics and plots for text, GNN-only and hybrid runs. Smoke runs verify the workflow; their scores are not model quality benchmarks.</p>'
+    body = '<h1>Training reports</h1><p>Saved metrics and plots for text, GNN-only and cascade runs. Smoke runs verify the workflow; their scores are not model quality benchmarks.</p>'
     if selected is None:
         body += '<p>No downloaded training reports yet.</p>'
     else:

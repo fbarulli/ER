@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from core.common import load_config, masking_cfg
+from training.diet_coverage import folded_objectives, masked_positive_coverage
 from training.prepared_bundle import load_prepared_bundle
 
 
@@ -212,6 +213,9 @@ class DietViews:
         self.easy_ratio = easy_ratio
         self.projected_neg_views = projected_neg_views
         self.projected_neg_presentations = projected_neg_presentations
+        # Per-fold masked-positive coverage from the frozen objective; None
+        # when the bundle has no complete plan (bundle-level fallback used).
+        self.fold_coverage = None
         self.pos_base = 0
         self.neg_base = 0
 
@@ -333,6 +337,26 @@ class DietGate:
         surviving_pos_views, dead_masked_pos = effective_pos_views(
             pos_views, mask_audit, train_neg, loss=loss
         )
+        # PREFER the frozen objective's PER-FOLD truth over that bundle-level
+        # heuristic (TODO "compute coverage PER FOLD; prefer
+        # generate-only-if-covered over backfill"). The heuristic cannot see
+        # the minted-twin negative lineage, so it reported 980/1,200 masked
+        # positives dead on the shipped bundle while the frozen objective
+        # trains all 1,200 — subtracting those "dead" rows was a
+        # backfill-then-remove fiction. Only a complete frozen plan can answer
+        # the per-fold question; without one the documented fallback stands.
+        fold_coverage = None
+        if loss == "mnrl" and mask_audit:
+            try:
+                frozen_folds = folded_objectives(inputs.data)
+            except (KeyError, ValueError):
+                frozen_folds = []
+            if frozen_folds:
+                fold_coverage = masked_positive_coverage(
+                    mask_audit, frozen_folds, source_negatives=train_neg
+                )
+                dead_masked_pos = int(fold_coverage["never_trained"])
+                surviving_pos_views = pos_views - dead_masked_pos
         easy_cfg = load_config()["training"]["random_easy_negatives"]
         easy_enabled = bool(easy_cfg["enabled"])
         easy_ratio = float(easy_cfg["ratio_to_hard"])
@@ -346,7 +370,7 @@ class DietGate:
         projected_neg_presentations = project_train_time_neg_views(
             projected_neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
         )
-        return DietViews(
+        views = DietViews(
             pos_views=pos_views,
             neg_views=neg_views,
             retained_neg_audit=retained_neg_audit,
@@ -358,6 +382,8 @@ class DietGate:
             projected_neg_views=projected_neg_views,
             projected_neg_presentations=projected_neg_presentations,
         )
+        views.fold_coverage = fold_coverage
+        return views
 
     # ── phase: base census ─────────────────────────────────────────────────
 
@@ -403,7 +429,25 @@ class DietGate:
             f"(pos_views={views.surviving_pos_views:,}, neg_views={views.projected_neg_views:,})",
             flush=True,
         )
-        if views.dead_masked_pos:
+        if views.fold_coverage is not None:
+            coverage = views.fold_coverage
+            for counts in coverage["folds"]:
+                print(
+                    f"[diet] MNRL masked-positive coverage fold={counts['fold']} "
+                    f"trained={counts['trained']:,}/{coverage['copies']:,} "
+                    f"({counts['coverage']:.4f}) of {counts['presentations']:,} objective presentations",
+                    flush=True,
+                )
+            print(
+                f"[diet] MNRL masked-positive coverage: {coverage['trained_union']:,}/"
+                f"{coverage['copies']:,} copies train in >=1 fold, "
+                f"{coverage['never_trained']:,} never train (the rows a "
+                "generate-only-if-covered policy must refuse to mint, never backfill); "
+                f"bundle-level source-anchor lower bound={coverage['source_anchor_covered']:,} "
+                "is NOT survival",
+                flush=True,
+            )
+        elif views.dead_masked_pos:
             print(
                 f"[diet] MNRL survival: {views.dead_masked_pos:,} masked-positive copies "
                 "have no source negative in the training pool and never train "
@@ -497,8 +541,6 @@ class DietGate:
         return DietGate.EXIT_PASS
 
 
-def main(argv: list[str], *, prepared=None) -> int:
-    return DietGate(argv, prepared=prepared).run()
 def main(argv: list[str], *, prepared=None) -> int:
     return DietGate(argv, prepared=prepared).run()
 

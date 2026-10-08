@@ -80,7 +80,6 @@ to read the Hugging Face settings from ``config.yaml``.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -91,6 +90,7 @@ from pathlib import Path
 
 from core.common import TRAINING_CONFIG_PATH, TRAIN_ROOT, ner_config, resolve_model, training_cfg
 from core.archive_reader import tar_archive
+from core.manifest import sha256_file
 
 NER_SOURCE_DIR = Path(__file__).resolve().parent
 ARTIFACT_MANIFEST_NAME = "ner_artifacts_manifest.json"
@@ -504,11 +504,16 @@ def monitor_training(settings: dict) -> None:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Hash one downloaded NER artifact through the SHARED digest home.
+
+    ``core.manifest.sha256_file`` forwards to
+    ``core.portable_archive.raw_file_digest``, the ONE implementation; this
+    consumer runs in the repo checkout and delegates there, so the verifying
+    side never re-implements (or drifts from) that algorithm. The producer
+    (`ner.ner._sha256_file`) is the single pinned standalone copy, because the
+    bare remote runtime it runs on ships no ``core.manifest``.
+    """
+    return sha256_file(path)
 
 
 def _read_artifact_manifest(path: Path) -> dict[str, dict]:
@@ -582,12 +587,18 @@ def _verify_download(path: Path, expected_sha256: str) -> None:
 
 
 def download_results(settings: dict) -> None:
+    """Download every final NER artifact, verifying each transfer exactly once.
+
+    This is the NER result integrity boundary (a sidecar-inventory boundary,
+    deliberately NOT a `Bundle`: the artifacts travel as separate HF objects,
+    not as members of one sealed archive — see `ner._write_artifact_manifest`).
+    The manifest is fetched FIRST and each artifact is accepted only when it
+    matches the remote-generated digest, so a partial transfer can never look
+    complete.
+    """
     remote = settings["remote_results_dir"]
     local = settings["results_dir"]
 
-    # The manifest is created by ner.py only after all three final artifacts
-    # are complete.  Fetch it first, then accept each transfer only if it
-    # matches the remote-generated digest.
     manifest_path = local / ARTIFACT_MANIFEST_NAME
     download_if_exists(
         settings,

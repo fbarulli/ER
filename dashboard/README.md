@@ -126,15 +126,16 @@ JEV audit samples and results are available at `/jev`. The page reads the
 saved verification results on each request. Round 3 contains 500 unique
 pairs (1,000 ordered calls), tested via OpenRouter (all 1,000 calls completed).
 
-The JEV page now defaults to the latest fresh-sample round (round 4), with
-250 gate-data pairs and 250 original-data pairs. It displays per-cohort
-judgments and the deliberately repeated same-pair comparison (round 5).
-Downloads include frozen inputs, successful results, and run provenance.
+The JEV page defaults to the highest-numbered fresh-sample round in the
+ledger, with 250 gate-data pairs and 250 original-data pairs for round 4. It
+displays per-cohort judgments and the deliberately repeated same-pair
+comparison (round 5). Downloads include frozen inputs, successful results, and
+run provenance.
 
 Round 6 compares both original and processed evidence on the same 100 fresh
-pairs (400 completed calls). The JEV page defaults to this round and shows
-matched score-category changes, per-format judgments, and a downloadable
-paired comparison. Ledger call counts distinguish input format and order.
+pairs (400 completed calls). Selecting that round shows matched score-category
+changes, per-format judgments, and a downloadable paired comparison. Ledger
+call counts distinguish input format and order.
 
 Frozen-checkpoint attribute influence is read from the configured
 `decision_ablation_report` binding. The report preserves attribute, intervention

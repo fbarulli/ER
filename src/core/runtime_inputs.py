@@ -22,6 +22,12 @@ def evidence_files(root: Path) -> dict[str, Path]:
 def checkout_members(extra=(), *, lane="bundle") -> tuple[str, ...]:
     """One source/config/model/reference selection for both remote platforms."""
     from core.common import load_config, training_cfg
+    # The checkout-path shape contract (absolute / traversal / pattern charset)
+    # has ONE home: ``cli.colab_runtime.is_checkout_relative_path``. This staging
+    # surface asks it instead of re-spelling the rule (the old inline copy here
+    # missed the ``{}`` charset the shared predicate refuses), so a path can no
+    # longer pass locally yet be refused by the VM's sparse checkout.
+    from cli.colab_runtime import is_checkout_relative_path
 
     if lane not in {'bundle', 'training'}:
         raise ValueError(f'Unknown runtime checkout lane: {lane}')
@@ -36,8 +42,7 @@ def checkout_members(extra=(), *, lane="bundle") -> tuple[str, ...]:
     result = []
     for member in members:
         path = Path(member)
-        if (path.is_absolute() or '..' in path.parts or not path.parts
-                or any(char in str(member) for char in '\n\r\\*?[]!')):
+        if not is_checkout_relative_path(str(member)):
             raise ValueError('runtime checkout path must be repository-relative')
         if path.as_posix() not in result:
             result.append(path.as_posix())

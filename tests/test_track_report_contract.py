@@ -11,6 +11,7 @@ from the report.
 from __future__ import annotations
 
 import ast
+import csv
 import json
 from pathlib import Path
 
@@ -337,10 +338,20 @@ def test_text_lane_no_longer_reads_the_graph_lane_config():
             # the coupling it replaced.
             assert "gnn_only.yaml" not in Path(node.value).name, (
                 "text_report still reads the graph lane's config")
-    source = (SRC / "model_tracks/text_report.py").read_text(encoding="utf-8")
-    assert "'text.yaml'" in source
-    setup = (SRC / "graph_tracks/setup.py").read_text(encoding="utf-8")
-    assert "'text.yaml'" in setup, "the setup must stage the text lane's own config"
+    # The text lane's config NAME is declared once (the preparation layout
+    # spec, graph_setup.text_config), so no surface re-spells it: text_report
+    # and setup both resolve it. The old pin asserted the literal, which is the
+    # duplication the layout spec exists to remove.
+    from core.common import training_cfg
+
+    assert training_cfg().preparation.graph_setup.text_config == "text.yaml"
+    for relative in ("model_tracks/text_report.py", "graph_tracks/setup.py",
+                     "model_tracks/data_gate.py", "model_tracks/smoke_inputs.py"):
+        parsed = ast.parse((SRC / relative).read_text(encoding="utf-8"))
+        for node in ast.walk(parsed):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                assert Path(node.value).name != "text.yaml", (
+                    f"{relative} re-spells the declared text lane config name")
     assert (SRC.parent / "config/text_track.yaml").is_file()
 
 
@@ -357,3 +368,90 @@ def test_retrieval_report_no_longer_persists_a_second_index(tmp_path, monkeypatc
             assert "_retrieval_index" not in text, (
                 "per-split index is still written into the report directory")
             assert "_retrieval_index" not in source.replace(text, "")
+
+# ── the slice rows validate in the lane and reach the manifest verbatim ─────
+
+def _scored() -> pd.DataFrame:
+    return pd.DataFrame({
+        "sku_id1": ["d1", "d2", "t1"], "sku_id2": ["d2", "d1", "d1"],
+        "true_label": [1, 0, 1], "split": ["dev", "dev", "test"],
+        "score": [0.9, 0.2, 0.8],
+    })
+
+
+def _slice_rows(output: Path) -> list:
+    """The REAL emitter's rows, persisted as ``<track>__slice_metrics.csv``."""
+    return report_slices.report(
+        _records(), _scored(), track="gnn_only", output=output,
+        pair_metrics=graph_report.pair_metrics, threshold=0.5, ks=(1, 5))
+
+
+def test_slice_rows_validate_and_the_manifest_carries_them_verbatim(tmp_path):
+    rows = _slice_rows(tmp_path)
+    report_slices.assert_slice_rows(rows)
+    persisted = pd.read_csv(tmp_path / "gnn_only__slice_metrics.csv")
+    assert len(persisted) == len(rows) == 2 * len(SLICES)
+    write_manifest(tmp_path / "m.json",
+                   build_manifest(**_manifest_kwargs(), slices=rows))
+    carried = json.loads((tmp_path / "m.json").read_text())["slices"]
+    report_slices.assert_slice_rows(carried)
+    assert [row["slice"] for row in carried] == [row["slice"] for row in rows]
+
+
+def test_slice_validation_changes_no_emitted_bytes(tmp_path, monkeypatch):
+    """The emitter's adapter is a PREDICATE: active or bypassed, bytes are identical.
+
+    ``report_slices.report`` is the ONE call site that validates slice rows, so
+    the predicate is patched there (nothing downstream re-checks the list).
+    """
+    on, off = tmp_path / "on", tmp_path / "off"
+    on.mkdir()
+    off.mkdir()
+    rows = _slice_rows(on)
+    write_manifest(on / "m.json", build_manifest(**_manifest_kwargs(), slices=rows))
+    with monkeypatch.context() as patch:
+        patch.setattr(report_slices, "assert_slice_rows", lambda rows: rows)
+        control = _slice_rows(off)
+        write_manifest(off / "m.json",
+                       build_manifest(**_manifest_kwargs(), slices=control))
+    assert rows == control
+    for name in ("gnn_only__slice_metrics.csv", "m.json"):
+        assert (on / name).read_bytes() == (off / name).read_bytes(), name
+
+
+def test_the_slice_emitter_refuses_a_drifted_metric_row(tmp_path):
+    """The drift contract is enforced where the rows are MADE, before the CSV.
+
+    ``report_slices.report`` is the single validation site (the manifest writer
+    reuses the rows it returns), so a metric column the emitter's own surface
+    does not declare must fail there, not halfway through the lane's writes.
+    """
+    emitted: list[int] = []
+
+    def drifted(labels, scores, threshold, ks):
+        row = graph_report.pair_metrics(labels, scores, threshold, ks)
+        emitted.append(1)
+        return {**row, "mystery_metric": 1.0}
+
+    with pytest.raises(ValueError, match="not in the emitter"):
+        report_slices.report(_records(), _scored(), track="gnn_only",
+                             output=tmp_path, pair_metrics=drifted,
+                             threshold=0.5, ks=(1, 5))
+    assert emitted, "the drifted emitter was never reached"
+    assert not (tmp_path / "gnn_only__slice_metrics.csv").exists(), (
+        "a drifted row must fail before the CSV is persisted")
+
+
+def test_persisted_slice_traceability_artifacts_validate():
+    """Rows read back from disk satisfy the same contract as the emitter."""
+    repo = SRC.parent
+    csvs = sorted((repo / "results/model_tracks").rglob("*__slice_metrics.csv"))
+    manifests = sorted((repo / "results/model_tracks").rglob("*__report_manifest.json"))
+    if not csvs or not manifests:
+        pytest.skip("no persisted track reports in this checkout")
+    for path in csvs:
+        with path.open(newline="", encoding="utf-8") as handle:
+            report_slices.assert_slice_rows(list(csv.DictReader(handle)))
+    for path in manifests:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        report_slices.assert_slice_rows(payload.get("slices", []))

@@ -7,6 +7,8 @@ from unittest import mock
 import pytest
 from cli import colab
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
@@ -147,3 +149,84 @@ def test_resolve_prepared_package_lists_candidates_on_miss(tmp_path, monkeypatch
     assert 'cohort=full' in message
 
 
+# ── ONE checkout contract home (consolidation audit 2026-10-08, finding 3) ──
+# Three homes used to answer "what does a prepared Colab runtime check out":
+# the hardcoded RUNTIME_DIRECTORY_PATHS/RUNTIME_REQUIRED_ROOT_FILES, the
+# lane's hand-rolled checkout_relative_guard charset, and (for the Kaggle
+# lane) the config SSOT's kaggle.checkout_paths. The Colab side is now one
+# home: the declared lists + their emitted patterns + the path-shape rule all
+# live in cli.colab_runtime, and the lane guard delegates to it. The
+# hand-rolled guard also owned a SECOND charset (it additionally refused
+# ``{}``); the shared rule now refuses it everywhere, so a brace path can no
+# longer reach the emitted git pathspec on one side only.
+
+def test_checkout_path_shape_is_one_contract():
+    from cli import colab_runtime
+    shape = colab_runtime.is_checkout_relative_path
+    assert shape('src')
+    assert shape('artifacts/models/all-MiniLM-L6-v2')
+    for refused in ('/absolute', '../escape', '', '.', 'results/*', 'results/[old]',
+                    'results/{old}', 'a\\b', 'a\nb'):
+        assert not shape(refused), refused
+    # single_component is the lane's extra requirement, not a second charset.
+    assert shape('run_1', single_component=True)
+    assert not shape('artifacts/models', single_component=True)
+
+
+def test_lane_guard_delegates_to_the_checkout_contract(monkeypatch):
+    from cli import colab_runtime
+    from cli.colab_lane_contracts import ColabLaneBase
+    real = colab_runtime.is_checkout_relative_path
+    calls: list = []
+
+    def spy(value, *, single_component=False):
+        calls.append((value, single_component))
+        return real(value, single_component=single_component)
+
+    monkeypatch.setattr(colab_runtime, 'is_checkout_relative_path', spy)
+    ColabLaneBase.checkout_relative_guard('run_7', message='unused')
+    assert calls == [('run_7', True)]
+    with pytest.raises(ValueError, match='resume run id must be plain'):
+        ColabLaneBase.checkout_relative_guard(
+            'nested/run', message='resume run id must be plain')
+
+
+def test_runtime_checkout_patterns_are_the_declared_contract():
+    from cli import colab_runtime
+    assert colab_runtime.runtime_checkout_paths() == tuple(
+        '/' + name for name in (*colab_runtime.RUNTIME_DIRECTORY_PATHS,
+                                *colab_runtime.RUNTIME_REQUIRED_ROOT_FILES))
+
+
+def test_the_runtime_checkout_lists_have_one_home():
+    declaring = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / 'src').rglob('*.py')
+        if 'RUNTIME_DIRECTORY_PATHS =' in path.read_text(encoding='utf-8'))
+    assert declaring == ['src/cli/colab_runtime.py']
+
+
+def test_sparse_paths_refuse_the_shared_rejected_charset():
+    for value in ('results/*', 'results/{old}', 'a\\b', 'a\nb'):
+        with pytest.raises(ValueError):
+            colab.prepare_remote_layout(minimal_runtime=True, sparse_paths=(value,))
+
+
+def test_runtime_checkout_members_ask_the_one_shape_contract():
+    """The staging selection delegates the shape rule to the shared predicate.
+
+    ``core.runtime_inputs.checkout_members`` used to re-spell the traversal /
+    pattern charset and missed ``{}``; it now asks
+    ``cli.colab_runtime.is_checkout_relative_path`` for every member (including
+    the launch's extras), so a path can no longer pass locally and be refused by
+    the VM's sparse checkout.
+    """
+    from cli import colab_runtime
+    from core import runtime_inputs
+
+    for refused in ('/absolute', '../escape', 'results/*', 'results/{old}',
+                    'a\\b', 'a\nb'):
+        assert not colab_runtime.is_checkout_relative_path(refused), refused
+        with pytest.raises(ValueError, match='repository-relative'):
+            runtime_inputs.checkout_members((refused,))
+    assert 'run_1' in runtime_inputs.checkout_members(('run_1',))

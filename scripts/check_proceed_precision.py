@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
 from core.common import F, load_config
 from core.critical_attributes import categorical_conflict, volumes_compatible
 
@@ -55,7 +56,8 @@ def _as_set(value: object, column: str) -> set:
             f"{column} must contain a set/list/tuple, got {type(parsed).__name__}"
         )
 
-    is_numeric = column in {"volume_set", "pack_set"}
+    is_numeric = column in {ATTRIBUTE_DIMENSION_COLUMNS["volume"],
+                            ATTRIBUTE_DIMENSION_COLUMNS["pack"]}
     normalized = set()
     for item in parsed:
         if is_numeric:
@@ -73,15 +75,20 @@ def _as_set(value: object, column: str) -> set:
     return normalized
 
 
-DIMENSION_COLUMNS = (
-    ("pack", "pack_set"),
-    ("package_type", "package_type_set"),
-    ("flavor", "flavor_set"),
-    ("carbonation", "carbonation_set"),
-    ("sweetener", "sweetener_set"),
-    ("pulp", "pulp_set"),
+#: The dimensions this gate compares categorically, in the gate's own order
+#: (volume has its own tolerance rule). The dimension -> canonical_records
+#: column pairs are DERIVED from the record schema (core.columns.
+#: ATTRIBUTE_DIMENSION_COLUMNS), never retyped here.
+DIMENSION_DIMENSIONS: tuple[str, ...] = (
+    "pack", "package_type", "flavor", "carbonation", "sweetener", "pulp",
 )
-ALL_COLUMNS = ("volume_set",) + tuple(column for _, column in DIMENSION_COLUMNS)
+DIMENSION_COLUMNS = tuple(
+    (dimension, ATTRIBUTE_DIMENSION_COLUMNS[dimension])
+    for dimension in DIMENSION_DIMENSIONS
+)
+ALL_COLUMNS = (ATTRIBUTE_DIMENSION_COLUMNS["volume"],) + tuple(
+    column for _, column in DIMENSION_COLUMNS
+)
 
 
 def _record(frame_row) -> dict:

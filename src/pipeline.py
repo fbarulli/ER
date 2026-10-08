@@ -73,7 +73,6 @@ from core.critical_attributes import (
 from core.tracing import (
     ENTITY_ROW_CAP,
     ENTITY_SAMPLE_PER_REASON,
-    count_rows,
     trace_path,
 )
 
@@ -91,6 +90,112 @@ CANONICAL_DATASET_REQUIRED_COLUMNS = CANONICAL_DATASET_REQUIRED_COLUMNS_REQUIRED
 # justification: exact per-reason census rows + a bounded stratified sample.
 ENTITY_PER_REASON = ENTITY_SAMPLE_PER_REASON
 ENTITY_TOTAL_CAP = ENTITY_ROW_CAP
+
+# ── bounded trace cells (pipeline-owned) ───────────────────────────────────
+# The consolidated trace is a READABLE census, not a dump. Two shapes had grown
+# unbounded here and blew the file up to ~12 MB for three runs (the contract's
+# own justification is ~1.5 MB):
+#   * a free-text reason used as a bucket label is a PER-PAIR literal (gate
+#     reasons embed the values that produced them, "...: mode_flavor:orange|apple"),
+#     so it minted one group row per pair — 589 rows / 257 singleton buckets on
+#     the live census. The CATEGORY (text before the first ':') collapses those
+#     to 9 stable, non-singleton buckets.
+#   * one `count_rows(..., limit=None)` cell carried every distinct value; the
+#     dimension-conflict cell alone was 1.07 MB (13,067 strings).
+# So: bucket by category, list the top-N values, and state the remainder as
+# NUMBERS (`distinct` / `others_buckets` / `others`) — nothing is hidden, but a
+# wide distribution costs two integers instead of a megabyte.
+CENSUS_TOP_N = 24
+CENSUS_CELL_BYTES = 4096
+REASON_LABEL_CHARS = 96
+
+
+def _reason_category(reason: object) -> str:
+    """The reason's CATEGORY: the text before its first ':' (values follow it).
+
+    Gate reasons append the evidence that produced them ("Declared product
+    identity differs or is incomplete: flavor,organic"), so the raw string is a
+    per-pair literal. Measured on data/gate_results.csv: 138 distinct reasons ->
+    9 categories, none of them a singleton.
+    """
+    text = str(reason or "").strip()
+    return text.split(":", 1)[0].strip()[:REASON_LABEL_CHARS]
+
+
+def _bounded_census(values, *, top_n: int = CENSUS_TOP_N) -> dict[str, object]:
+    """The top-N `"value=n"` entries plus an explicit remainder, as NUMBERS.
+
+    `distinct` and `others`/`others_buckets` are always stated, so a bounded cell
+    still reports the exact shape of the distribution it summarises.
+    """
+    series = pd.Series(list(values))
+    if series.empty:
+        return {"top": [], "distinct": 0, "others_buckets": 0, "others": 0}
+    couples = series.astype(str).value_counts()
+    head = couples.head(int(top_n))
+    return {
+        "top": [f"{name}={int(count)}" for name, count in head.items()],
+        "distinct": int(len(couples)),
+        "others_buckets": int(max(0, len(couples) - len(head))),
+        "others": int(couples.iloc[len(head):].sum()),
+    }
+
+
+def unit_change_counts(incoming: int, outgoing: int) -> tuple[int | None, int, bool]:
+    """A step's counts, as a funnel ONLY when the units do not change.
+
+    Some steps are unit CHANGES, not filters: one block expands into its
+    candidate pairs, one pair into its two directions, one source row into a row
+    plus its canonical, one listing into several vocabulary entries. Those
+    legitimately emit MORE than they received, and stating an in/out pair for
+    them makes `dropped_count` negative — which the row contract forbids
+    (dropped = in - out, and a drop cannot be negative). Such a step therefore
+    states only its output and flags the unit change.
+
+    Public because it is the ONE declaration of this rule: pipeline's own steps
+    use it directly, and modules that already depend on pipeline
+    (training.build_reference) import it rather than restating the arithmetic.
+    """
+    incoming, outgoing = int(incoming), int(outgoing)
+    if outgoing > incoming:
+        return None, outgoing, True
+    return incoming, outgoing, False
+
+
+def _capped_detail(detail: dict, *, max_bytes: int = CENSUS_CELL_BYTES) -> dict:
+    """Bound a detail payload's serialized size, stating exactly what was elided.
+
+    Values keep their identity (a long string is truncated IN PLACE with its
+    elided length recorded; a long list keeps its head with its elided item count
+    recorded), so a cap never turns a readback into a different one. If even that
+    is over budget the payload degrades to its own key list plus the byte count —
+    a bounded cell that says so, never a megabyte.
+    """
+    text = json.dumps(detail, sort_keys=True, default=str)
+    size = len(text.encode())
+    if size <= int(max_bytes):
+        return detail
+    capped: dict[str, object] = {}
+    for key, value in detail.items():
+        if isinstance(value, str) and len(value) > 512:
+            capped[key] = f"{value[:512]}…<elided {len(value) - 512} chars>"
+        elif isinstance(value, list) and len(value) > CENSUS_TOP_N:
+            capped[key] = [
+                *value[:CENSUS_TOP_N],
+                f"…<elided {len(value) - CENSUS_TOP_N} items>",
+            ]
+        else:
+            capped[key] = value
+    capped["detail_bytes_before"] = size
+    capped["detail_truncated"] = True
+    if len(json.dumps(capped, sort_keys=True, default=str).encode()) <= int(max_bytes):
+        return capped
+    return {
+        "detail_keys": sorted(str(key) for key in detail),
+        "detail_bytes_before": size,
+        "detail_truncated": True,
+        "note": "payload exceeded the trace cell budget; its keys are listed",
+    }
 
 # ============================================================================
 # EXTRACTION
@@ -3588,8 +3693,13 @@ class _PipelineSteering:
       gate_trace_rows      — decision/reason census + bounded pair samples
     """
 
-    def __init__(self, df_full: pd.DataFrame) -> None:
+    def __init__(self, df_full: pd.DataFrame, trace=None) -> None:
         self.df_full = df_full
+        # An EXTERNALLY owned trace writer (training.data_prep owns the stage so
+        # the manifest's row accounting lands in the SAME run as the pipeline's
+        # step rows — one writer per stage, core.tracing's contract). None keeps
+        # the historical behaviour: this class creates and commits its own.
+        self._external_trace = trace
         self.trace = None
         self.timing = None
         self.grouped: pd.DataFrame | None = None
@@ -3626,7 +3736,11 @@ class _PipelineSteering:
         # downstream.
         from core.tracing import TraceRun
 
-        self.trace = TraceRun("data_prep")
+        self.trace = (
+            self._external_trace
+            if self._external_trace is not None
+            else TraceRun("data_prep")
+        )
         self.trace.add_column_contract(
             self.df_full,
             contract="raw_export (core.common.load_raw_export)",
@@ -4047,6 +4161,10 @@ class _PipelineSteering:
         self._decision_bucket_rows(gate_frame)
         self._dimension_rollup_row(gate_frame)
         self._reason_census_and_samples(gate_frame, vis_reasons)
+        if self._external_trace is not None:
+            # The owner of this stage commits the rows (it still has the manifest
+            # accounting to add), so this writer must not commit a partial stage.
+            return
         self.trace.write()
         print(
             f"[trace] data_prep steps written -> {trace_path()} | "
@@ -4055,13 +4173,17 @@ class _PipelineSteering:
         )
 
     def _decision_bucket_rows(self, gate_frame: pd.DataFrame) -> None:
-        """One group row per decision: exact population + reason distribution."""
-        # One group row per decision: its EXACT population plus the complete reason
-        # distribution inside it (count_rows with no limit — the label set is small
-        # and bounded, so "which pairs got which decision and why" is answered here
-        # rather than by opening gate_results.csv).
+        """One group row per decision: exact population + reason distribution.
+
+        One group row per decision: its EXACT population plus the reason
+        distribution inside it, as a BOUNDED top-N census (the raw reason is a
+        per-pair literal; see :func:`_bounded_census`). "Which pairs got which
+        decision and why" is still answered here, at category grain, with the
+        exact bucket/remainder counts beside it.
+        """
         for decision in ("hard_no", "fallback", "proceed"):
             subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
+            categories = subset["reason"].map(_reason_category) if len(subset) else subset
             self.trace.add(
                 "gate",
                 f"decision_{decision}",
@@ -4069,12 +4191,14 @@ class _PipelineSteering:
                 in_count=len(self.candidate_pairs),
                 out_count=int(len(subset)),
                 reason=f"gate_decision == {decision}",
-                detail={
-                    "reasons": count_rows(subset["reason"]) if len(subset) else [],
-                    "reason_census": (
-                        count_rows(subset["reason"], limit=None) if len(subset) else []
-                    ),
-                },
+                detail=_capped_detail(
+                    {
+                        "reasons": _bounded_census(categories),
+                        "reason_category_chars": REASON_LABEL_CHARS,
+                    }
+                    if len(subset)
+                    else {"reasons": _bounded_census([])}
+                ),
                 source="gate_results.csv",
             )
 
@@ -4085,10 +4209,12 @@ class _PipelineSteering:
         # pairs carried at least one recorded dimension conflict and which
         # dimensions are the loud ones — per-pair detail rides the sampled
         # pair_decision rows (bounded sample, see core.tracing) and this row
-        # carries the exact counts.
+        # carries the exact counts. The conflict cell is a TOP-N census, not the
+        # full 13k-string dump it used to be (1.07 MB in one cell).
         if not len(gate_frame):
             return
         conflicts = gate_frame["dimension_conflicts"].astype(str)
+        recorded = conflicts[conflicts != ""]
         self.trace.add(
             "attribute_gate",
             "pair_dimension_census",
@@ -4096,11 +4222,13 @@ class _PipelineSteering:
             in_count=int(len(gate_frame)),
             out_count=int((conflicts != "").sum()),
             reason="pairs with at least one recorded dimension conflict (absence stays unknown, never minted)",
-            detail={
-                "pairs": int(len(gate_frame)),
-                "conflict_paired": count_rows(conflicts[conflicts != ""], limit=None),
-                "no_conflict": int((conflicts == "").sum()),
-            },
+            detail=_capped_detail(
+                {
+                    "pairs": int(len(gate_frame)),
+                    "conflict_paired": _bounded_census(recorded),
+                    "no_conflict": int((conflicts == "").sum()),
+                }
+            ),
             source="gate_stage in-memory readback",
         )
 
@@ -4119,23 +4247,31 @@ class _PipelineSteering:
             in_count=int(len(gate_frame)),
             out_count=int(len(vis_reasons)),
             reason="complete reason census over every decision, not just hard_no",
-            detail={
-                "reasons": count_rows(gate_frame["reason"], limit=None),
-                "pairs": int(len(gate_frame)),
-            },
+            detail=_capped_detail(
+                {
+                    "reasons": _bounded_census(
+                        gate_frame["reason"].map(_reason_category)
+                    ),
+                    "pairs": int(len(gate_frame)),
+                    "reason_category_chars": REASON_LABEL_CHARS,
+                }
+            ),
             source="gate_results.csv",
         )
         # Full per-pair readback: exactly what the gate SAW on both sides
         # (volume/pack/package sets + their confidences and consistency) next
         # to what it DECIDED and the similarity downstream mining bands on.
         # The inputs are JSON so one cell stays machine-readable. Bucketed by
-        # (decision :: reason) so the census rows above and the sampled rows
-        # below join on the same label.
+        # (decision :: reason CATEGORY): the raw reason embeds the values that
+        # produced it, so using it as a label minted one group row per pair
+        # (589 rows / 257 singletons on the live census); the category keeps the
+        # census and the sampled rows joining on a bounded label, and each
+        # sampled row's detail still carries the FULL reason.
         self.trace.add_entities(
             "pair_decision",
             list(gate_frame.itertuples(index=False)),
             key_of=lambda r: f"{r.gtin1}|{r.gtin2}",
-            reason_of=lambda r: f"{r.decision} :: {r.reason}",
+            reason_of=lambda r: f"{r.decision} :: {_reason_category(r.reason)}",
             detail_of=lambda r: json.dumps(
                 {
                     "decision": str(r.decision),
@@ -4190,9 +4326,17 @@ class _PipelineSteering:
 
 def run_within_brand_pipeline(
     df_full: pd.DataFrame,
+    trace=None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
-    """Stage 1 of data prep: canonical cards + gate decisions over the RAW export."""
-    return _PipelineSteering(df_full).steer()
+    """Stage 1 of data prep: canonical cards + gate decisions over the RAW export.
+
+    ``trace`` is an optional EXTERNALLY owned ``core.tracing.TraceRun`` for this
+    stage. Supplying it makes the caller the stage's single writer (training.data_prep
+    does, so the manifest's row accounting and the flag census join the pipeline's
+    steps in one commit). With none, this function keeps its historical
+    one-writer behaviour.
+    """
+    return _PipelineSteering(df_full, trace).steer()
 
 
 # ============================================================================
@@ -5008,15 +5152,23 @@ class _PairBundleBuilder:
             source="model payload index maps (rows + canonicals)",
         )
         self._funnel_rows(trace)
+        # A unit CHANGE, not a filter: one source row becomes a payload row plus
+        # one canonical entry, so the payload is legitimately LARGER than the row
+        # population. Stating an in/out pair here made dropped_count negative,
+        # which the row contract forbids; the unit change is flagged instead.
+        _payload_in, _payload_out, _payload_unit_change = unit_change_counts(
+            int(len(self.df)), int(len(self.payload))
+        )
         trace.add(
             "payload",
             "materialized",
-            in_count=int(len(self.df)),
-            out_count=int(len(self.payload)),
+            in_count=_payload_in,
+            out_count=_payload_out,
             reason="every source row plus one canonical per GTIN",
             detail={
                 "sku_payload": int(len(self.df)),
                 "canonical_payload": int(len(self.canon_gtins)),
+                "unit_change": _payload_unit_change,
                 "structured_feature_dim": int(len(self.structured_features[0])),
                 "structured_encode": bool(self.structured_cfg.get("enabled", True)),
             },
@@ -5057,20 +5209,37 @@ class _PairBundleBuilder:
         # candidates die at the name filter and made the lane's ceiling
         # unanswerable from the trace. The miner stays the label authority; this
         # only records what it did.
+        #
+        # The whole funnel is stated ONCE per lane (`*.census`), not repeated in
+        # every step's detail: at ~3.7 KB per copy and ~30 steps that was
+        # O(steps^2) bytes per row set. A step row now carries its own numbers,
+        # the shared thresholds, and a pointer to the census row.
         if self.mining_funnel is not None:
+            trace.add(
+                "mining",
+                "targeted_attribute_funnel.census",
+                reason=(
+                    "the targeted lane's funnel, stated ONCE: every per-step row "
+                    "below carries only that step's own numbers"
+                ),
+                detail=_capped_detail({"funnel": self.mining_funnel.to_dict()}),
+                source="gate_results.csv",
+            )
             for _step, _in, _out, _why in self.mining_funnel.stages():
+                _in_count, _out_count, _unit_change = unit_change_counts(_in, _out)
                 trace.add(
                     "mining",
                     f"targeted_attribute_funnel.{_step}",
-                    in_count=int(_in),
-                    out_count=int(_out),
+                    in_count=_in_count,
+                    out_count=_out_count,
                     reason=_why,
-                    detail={
+                    detail=_capped_detail({
                         "gate_similarity_floor": float(self.targeted_cfg["min_similarity"]),
                         "volume_tolerance": float(training_cfg().gate.vol_tolerance),
                         "target": int(self.targeted_cfg["target"]),
-                        "funnel": self.mining_funnel.to_dict(),
-                    },
+                        "unit_change": _unit_change,
+                        "funnel_census": "mining.targeted_attribute_funnel.census",
+                    }),
                     source="gate_results.csv",
                 )
         else:
@@ -5088,20 +5257,32 @@ class _PairBundleBuilder:
         # lane whose population is generated rather than handed in cannot be
         # audited from its output count alone, so the census is the trace's job.
         if self.cross_brand_funnel is not None:
+            trace.add(
+                "mining",
+                "cross_brand_funnel.census",
+                reason=(
+                    "the cross-brand lane's funnel, stated ONCE: every per-step row "
+                    "below carries only that step's own numbers"
+                ),
+                detail=_capped_detail({"funnel": self.cross_brand_funnel.to_dict()}),
+                source="canonical_records.csv + gate_results.csv",
+            )
             for _step, _in, _out, _why in self.cross_brand_funnel.stages():
+                _in_count, _out_count, _unit_change = unit_change_counts(_in, _out)
                 trace.add(
                     "mining",
                     f"cross_brand_funnel.{_step}",
-                    in_count=int(_in),
-                    out_count=int(_out),
+                    in_count=_in_count,
+                    out_count=_out_count,
                     reason=_why,
-                    detail={
+                    detail=_capped_detail({
                         "target": int(self.cross_cfg["target"]),
                         "min_similarity": float(self.cross_cfg["min_similarity"]),
                         "require_agreement": list(self.cross_cfg["require_agreement"]),
                         "volume_tolerance": float(training_cfg().gate.vol_tolerance),
-                        "funnel": self.cross_brand_funnel.to_dict(),
-                    },
+                        "unit_change": _unit_change,
+                        "funnel_census": "mining.cross_brand_funnel.census",
+                    }),
                     source="canonical_records.csv + gate_results.csv",
                 )
         else:

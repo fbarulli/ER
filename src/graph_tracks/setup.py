@@ -13,6 +13,30 @@ One responsibility per unit:
   _chain_pairs               trusted same-entity positive chains
   listing_contract           the pairing orchestrator
   setup                      the artifact orchestrator (stages below)
+
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+Stage ``graph_setup``. Emitted:
+  run   catalog.listings_retained    catalog rows -> retained listings, with the
+                                     unassigned-listing drop named in detail
+  run   labels.source_rows_applied   labeled rows -> applied source-label pairs,
+                                     with missing-endpoint / cross-split counts
+  run   chains.batches_<i>           BATCH grain over entity groups (in =
+                                     entities walked, out = chain pairs built)
+  run   labels.batches_<i>           BATCH grain over labeled rows
+  run   chains.batch_census /        batches walked / traced / omitted, so no
+        labels.batch_census          chunk is silent
+  ent   chains.untrusted_listing     each listing dropped from a chain because
+                                     its gtin is not GS1-valid (named sku_id)
+  run   pairs.supervision_built      source-label + chain pairs actually built
+  group pairs.reason_census          the EXACT provenance census (origin kind)
+  ent   pairs.*                      the named supervised pairs with their
+                                     split/label/origins
+  run   artifacts.published          the setup artifacts written + the census
+Batch caps: ``_BATCH_ENTITIES`` / ``_BATCH_LABEL_ROWS`` per traced batch row,
+at most ``_MAX_BATCH_ROWS`` batch rows each (both written into the rows'
+detail). Entity caps are core.tracing's (ENTITY_SAMPLE_PER_REASON /
+ENTITY_ROW_CAP). Nothing here is unbounded.
 """
 from __future__ import annotations
 
@@ -24,12 +48,76 @@ import pandas as pd
 import yaml
 
 from core.run_log import RunLogger
+from core.tracing import (
+    ENTITY_ROW_CAP,
+    ENTITY_SAMPLE_PER_REASON,
+    SCOPE_ENTITY,
+    TraceRun,
+)
 from graph_tracks.data import census, file_hash, fit_vocabulary, load_records
 from graph_tracks.prepare import prepare
 from graph_tracks.text_cache import checkpoint_hash
 from graph_tracks.train import write_json
 
 _LOG = RunLogger(__name__)
+
+#: The pipeline stage these rows belong to (core.tracing ``stage`` column).
+STAGE = "graph_setup"
+
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup).
+
+    Every layout name this module writes (the catalog/split/pair CSVs, the
+    lineage/manifest/census documents, the prepared dir and the rendered lane
+    configs) is read from the ONE declared contract rather than spelled here.
+    """
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
+def write_setup_frames(output: Path, *, catalog: pd.DataFrame,
+                       splits: pd.DataFrame, pairs: pd.DataFrame) -> None:
+    """The ONE writer of the setup's catalog/split/pair CSVs.
+
+    ``model_tracks.smoke_inputs`` (the CPU smoke's subset setup) and
+    ``model_tracks.shared_graph_data`` (the shared-objective projection rebuild)
+    each used to re-emit these three frames with their own ``to_csv`` calls, so
+    a write-flag change here silently forked the other two surfaces. Both call
+    this instead; the producer owns the write.
+    """
+    layout = _setup_layout()
+    catalog.to_csv(Path(output) / layout.catalog, index=False)
+    splits.to_csv(Path(output) / layout.splits, index=False)
+    pairs.to_csv(Path(output) / layout.pairs, index=False)
+
+
+def write_track_config(output: Path, track: str, settings: dict) -> Path:
+    """The ONE writer of a runnable per-track lane config into a setup tree."""
+    path = Path(output) / _setup_layout().track_config(track)
+    path.write_text(yaml.safe_dump(settings, sort_keys=False))
+    return path
+
+
+def write_text_config(output: Path, settings: dict) -> Path:
+    """The ONE writer of the setup's text lane config (its declared name).
+
+    The text lane's own declared retrieval/index contract, dumped through the
+    same yaml writer as the graph lanes' configs, so the smoke setup and the
+    production setup cannot render it two different ways.
+    """
+    path = Path(output) / _setup_layout().text_config
+    path.write_text(yaml.safe_dump(settings, sort_keys=False))
+    return path
+
+# ── batch-grain budget (documented where it is spent) ──────────────────────
+# The two per-row loops are entity groups (chains) and labeled rows (supervision).
+# One batch row per 512 entities / 2,048 rows keeps a real cohort to a handful of
+# rows; at most 16 batch rows each are traced and the remainder is announced in
+# the matching ``batch_census`` row rather than vanishing.
+_BATCH_ENTITIES = 512
+_BATCH_LABEL_ROWS = 2048
+_MAX_BATCH_ROWS = 16
 
 
 class _PairLedger:
@@ -105,24 +193,111 @@ def _validate_catalog_skuids(frame: pd.DataFrame) -> None:
         raise ValueError('catalog requires unique nonempty sku_id')
 
 
-def _chain_pairs(groups, roles, ledger: _PairLedger, frame: pd.DataFrame) -> None:
-    """Trusted listings of one entity form its positive chain in listing order."""
+def _chain_pairs(groups, roles, ledger: _PairLedger, frame: pd.DataFrame,
+                 trace: TraceRun | None = None) -> int:
+    """Trusted listings of one entity form its positive chain in listing order.
+
+    Returns the number of chain pairs the ledger accepted (the trace's attempts
+    count). ``trace`` adds BATCH-grain rows over the entity groups and an ENTITY
+    row for every listing dropped from a chain (a listing whose gtin fails the
+    GS1 check digit cannot assert the identity the chain claims), capped and
+    named.
+    """
     from core.gtin import gtin_validity
     trusted_ids = set(frame.loc[gtin_validity(frame.gtin)].sku_id)
-    for key, listings in _LOG.progress(groups.items(), desc='listing_chains',
+    groups_list = list(groups.items())
+    entities_in_batch = pairs_in_batch = 0
+    batches = traced = 0
+    untrusted_rows = 0
+    chain_pairs = 0
+    for key, listings in _LOG.progress(groups_list, desc='listing_chains',
                                        unit='entity'):
         eligible = [listing for listing in listings if listing in trusted_ids]
-        ledger.skipped['untrusted_identity_chain_listings'] += len(listings) - len(eligible)
+        dropped = len(listings) - len(eligible)
+        ledger.skipped['untrusted_identity_chain_listings'] += dropped
+        if trace is not None and dropped:
+            for listing in listings:
+                if listing in trusted_ids:
+                    continue
+                if untrusted_rows >= ENTITY_ROW_CAP:
+                    break
+                untrusted_rows += 1
+                trace.add(
+                    'chains', 'untrusted_listing', scope=SCOPE_ENTITY,
+                    key=listing,
+                    reason=(
+                        'listing dropped from its positive chain: its gtin fails '
+                        'the GS1 check digit, so it cannot assert the identity the '
+                        'chain claims'
+                    ),
+                    detail={'gtin': key, 'chain_listings': len(listings)},
+                    source=f'{_setup_layout().catalog} gtin column',
+                )
+        entities_in_batch += 1
         for a, b in zip(eligible, eligible[1:]):
             ledger.add(a, b, 1, roles[key], {'kind': 'trusted_same_entity_chain',
                                              'gtin': key, 'augmentation': 'not_applicable'})
+            pairs_in_batch += 1
+            chain_pairs += 1
+        if entities_in_batch >= _BATCH_ENTITIES or entities_in_batch == len(groups_list):
+            batches += 1
+            if trace is not None and traced < _MAX_BATCH_ROWS:
+                traced += 1
+                # No in/out pair: one entity's k trusted listings form k-1
+                # chain pairs, so "entities -> pairs" is a fan-out census.
+                trace.add(
+                    'chains', f'batch_{batches - 1:04d}',
+                    reason=(
+                        'entity groups walked; the same-entity chain pairs they '
+                        'formed are a fan-out over their trusted listings (a '
+                        'census, not a funnel), so no in/out pair is stated'
+                    ),
+                    detail={
+                        'entity_groups': entities_in_batch,
+                        'pairs': pairs_in_batch,
+                        'batch_entities': _BATCH_ENTITIES,
+                        'max_batch_rows': _MAX_BATCH_ROWS,
+                    },
+                    source=f'{_setup_layout().catalog} grouped by normalized gtin',
+                )
+            entities_in_batch = 0
+            pairs_in_batch = 0
+    if trace is not None:
+        trace.add(
+            'chains', 'batch_census', in_count=batches, out_count=traced,
+            reason=(
+                'entity-group batches traced individually; the remainder is summed '
+                'here so no chunk is silent'
+            ),
+            detail={
+                'entity_groups': len(groups_list),
+                'batches': batches,
+                'batches_traced': traced,
+                'batches_omitted': batches - traced,
+                'batch_entities': _BATCH_ENTITIES,
+                'max_batch_rows': _MAX_BATCH_ROWS,
+                'untrusted_chain_listings': int(
+                    ledger.skipped['untrusted_identity_chain_listings']
+                ),
+            },
+            source=f'{_setup_layout().catalog} grouped by normalized gtin',
+        )
+    return chain_pairs
 
 
 def _apply_source_labels(labels: pd.DataFrame, groups, roles,
-                         ledger: _PairLedger) -> list[str]:
-    """Every labeled source row contributes its supervised listing pair."""
+                         ledger: _PairLedger,
+                         trace: TraceRun | None = None) -> list[str]:
+    """Every labeled source row contributes its supervised listing pair.
+
+    ``trace`` adds BATCH-grain rows over the labeled rows; the skip reasons are
+    counted by the ledger and recorded by the caller's stage row.
+    """
     from training.folds import normalize_gtin
     source_axes = [c for c in labels.columns if c not in {'gtin1', 'gtin2', 'true_label'}]
+    rows_in_batch = pairs_in_batch = 0
+    batches = traced = 0
+    n_rows = int(len(labels))
     for source_row, row in enumerate(
             _LOG.progress(labels.itertuples(index=False), desc='source_labels',
                           unit='row'), 1):
@@ -130,6 +305,7 @@ def _apply_source_labels(labels: pd.DataFrame, groups, roles,
         label = int(row.true_label)
         if label not in (0, 1):
             raise ValueError('invalid entity label')
+        rows_in_batch += 1
         if a not in groups or b not in groups:
             ledger.skipped['missing_listing_endpoint'] += 1
             continue
@@ -144,18 +320,66 @@ def _apply_source_labels(labels: pd.DataFrame, groups, roles,
         ledger.add(groups[a][0], groups[b][0], label, roles[a],
                    {'kind': 'source_entity_label', 'source_row': source_row,
                     'gtin1': str(row.gtin1), 'gtin2': str(row.gtin2), 'metadata': metadata})
+        pairs_in_batch += 1
+        if rows_in_batch >= _BATCH_LABEL_ROWS or rows_in_batch == n_rows:
+            batches += 1
+            if trace is not None and traced < _MAX_BATCH_ROWS:
+                traced += 1
+                trace.add(
+                    'labels', f'batch_{batches - 1:04d}',
+                    in_count=rows_in_batch, out_count=pairs_in_batch,
+                    reason=(
+                        'labeled source rows walked -> supervised listing pairs; a '
+                        'row with a missing endpoint or a cross-split negative '
+                        'contributes none'
+                    ),
+                    detail={
+                        'batch_label_rows': _BATCH_LABEL_ROWS,
+                        'max_batch_rows': _MAX_BATCH_ROWS,
+                        'pairs_in_batch': pairs_in_batch,
+                    },
+                    source='data/labeled_pairs.csv',
+                )
+            rows_in_batch = 0
+            pairs_in_batch = 0
+    if trace is not None:
+        trace.add(
+            'labels', 'batch_census', in_count=batches, out_count=traced,
+            reason=(
+                'labeled-row batches traced individually; the remainder is summed '
+                'here so no chunk is silent'
+            ),
+            detail={
+                'label_rows': n_rows,
+                'batches': batches,
+                'batches_traced': traced,
+                'batches_omitted': batches - traced,
+                'batch_label_rows': _BATCH_LABEL_ROWS,
+                'max_batch_rows': _MAX_BATCH_ROWS,
+            },
+            source='data/labeled_pairs.csv',
+        )
     return source_axes
 
 
-def listing_contract(catalog, labels, populations):
-    """Pair the catalog under the shared split policy; return frames + accounts."""
+def listing_contract(catalog, labels, populations, trace: TraceRun | None = None):
+    """Pair the catalog under the shared split policy; return frames + accounts.
+
+    ``trace`` (optional) receives this unit's BATCH-grain rows; the stage rows
+    that summarize the accounting are emitted by :func:`setup`, which holds the
+    frames those counts describe.
+    """
     from training.folds import normalize_gtin
     roles = _normalize_split_roles(populations)
     frame, assignments, groups, excluded = _eligible_listing_groups(catalog, roles)
     ledger = _PairLedger()
-    _chain_pairs(groups, roles, ledger, frame)
-    source_axes = _apply_source_labels(labels, groups, roles, ledger)
+    chain_pairs = _chain_pairs(groups, roles, ledger, frame, trace)
+    source_axes = _apply_source_labels(labels, groups, roles, ledger, trace)
     pairs = ledger.frame()
+    # Trace-only bookkeeping rides in DataFrame attrs, NOT in `accounting`: the
+    # accounting dict is serialized verbatim into the setup manifest, so adding
+    # a key here would change an emitted artifact's bytes.
+    pairs.attrs['chain_pairs_accepted'] = int(chain_pairs)
     accounting = {
         'excluded_unassigned_listings': excluded,
         'skipped_labels': dict(ledger.skipped),
@@ -183,6 +407,10 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     from core.identity_policy import POLICY_PATH
     from training.base_data import load_base_data
     from training.folds import derive_holdout
+    # ONE consolidated-trace writer for the stage. The rows are committed at the
+    # end so the catalog, the supervision and the published artifacts read as one
+    # flow (core.tracing: a stage replaces its own rows in place, so one writer).
+    trace = TraceRun(STAGE)
     output = output.resolve()
     if output.exists():
         raise FileExistsError(output)
@@ -195,34 +423,187 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
                                       dict(training_cfg().split), seed=SEED)
     labels = pd.read_csv(F['labeled_pairs'], dtype=str, keep_default_na=False)
     frame, assignments, pairs, accounting = listing_contract(
-        catalog, labels, {'train': train, 'dev': dev, 'test': test})
+        catalog, labels, {'train': train, 'dev': dev, 'test': test}, trace)
+    _record_supervision(trace, catalog, frame, labels, pairs, accounting)
     timing.mark('splits_and_listing_contract')
     # Validate before publishing any setup artifacts.
     from graph_tracks.train import load_pairs
     load_pairs_from = [{'sku_id': r.sku_id, 'split': r.split}
                        for r in assignments.itertuples(index=False)]
     output.mkdir(parents=True)
-    frame.to_csv(output / 'eligible_catalog.csv', index=False)
-    assignments.to_csv(output / 'listing_splits.csv', index=False)
-    pairs.to_csv(output / 'listing_pairs.csv', index=False)
-    write_json(output / 'pair_lineage.json',
+    layout = _setup_layout()
+    write_setup_frames(output, catalog=frame, splits=assignments, pairs=pairs)
+    write_json(output / layout.pair_lineage,
                _pair_lineage_document(accounting, output, F))
-    load_pairs(output / 'listing_pairs.csv', load_pairs_from)
+    load_pairs(output / layout.pairs, load_pairs_from)
     timing.mark('validate_and_write_pairs')
-    listings = prepare(output / 'eligible_catalog.csv', output / 'listing_splits.csv',
-                       output / 'listing_pairs.csv', output / 'prepared',
+    listings = prepare(output / layout.catalog, output / layout.splits,
+                       output / layout.pairs, output / layout.prepared_dir,
                        training_tensors=training_tensors)
     timing.mark('graph_prepare')
-    records = load_records(listings)
-    write_json(output / 'graph_census.json', census(records, fit_vocabulary(records)))
+    records = load_records(listings, trace=trace)
+    write_json(output / layout.census, census(records, fit_vocabulary(records, trace=trace)))
     timing.mark('graph_features_and_census')
     _write_setup_manifest(output, accounting, baseline_hash, checkpoint, pairs,
                           F, git_revision())
     templates = _load_setup_templates(Path(TRAIN_ROOT))
     _write_track_configs(output, templates, listings, baseline_hash)
     _write_text_config(output, templates)
+    _record_artifacts(trace, output, frame, assignments, pairs, listings, records)
     timing.mark('hashes_manifest_and_track_configs')
+    trace.write()
     return output
+
+
+# ── the stage's trace rows (real counts, named reasons) ─────────────────────
+def _record_supervision(
+    trace: TraceRun,
+    catalog: pd.DataFrame,
+    frame: pd.DataFrame,
+    labels: pd.DataFrame,
+    pairs: pd.DataFrame,
+    accounting: dict,
+) -> None:
+    """Catalog retention, label application and the pair-provenance census.
+
+    Every count comes from the accounting ``listing_contract`` returned (the
+    same numbers the setup manifest ships) or from the frames themselves, so the
+    trace and the manifest cannot disagree. Pair provenance is an ENTITY census:
+    one row per supervised pair naming its split, its label and its origin kinds.
+    """
+    skipped = accounting.get('skipped_labels', {})
+    trace.add(
+        'catalog', 'listings_retained',
+        in_count=int(len(catalog)), out_count=int(len(frame)),
+        reason=(
+            'a catalog listing is retained only when its normalized gtin belongs '
+            'to an assigned split population; an unassigned listing is dropped '
+            'here, never silently relabelled'
+        ),
+        detail={
+            'catalog_rows': int(len(catalog)),
+            'retained_listings': int(len(frame)),
+            'excluded_unassigned_listings': int(
+                accounting.get('excluded_unassigned_listings', 0)
+            ),
+        },
+        source="dataset_deduped (core.common.load_dataset_deduped)",
+    )
+    missing_endpoint = int(skipped.get('missing_listing_endpoint', 0))
+    cross_split = int(skipped.get('cross_split_negative', 0))
+    applied = int(len(labels)) - missing_endpoint - cross_split
+    trace.add(
+        'labels', 'source_rows_applied',
+        in_count=int(len(labels)), out_count=applied,
+        reason=(
+            'a labeled row contributes its supervised pair only when BOTH '
+            'normalized gtins have a retained listing and both sit in one split; '
+            'a cross-split positive is a loud error, a cross-split negative is '
+            'dropped'
+        ),
+        detail={
+            'label_rows': int(len(labels)),
+            'applied_pairs': applied,
+            'missing_listing_endpoint': missing_endpoint,
+            'cross_split_negative': cross_split,
+            'other_skips': {
+                key: int(value) for key, value in skipped.items()
+                if key not in {'missing_listing_endpoint', 'cross_split_negative'}
+            },
+        },
+        source="data/labeled_pairs.csv",
+    )
+    lineage = accounting.get('pair_lineage', [])
+    records = [
+        {
+            'pair': f"{record['sku_id1']}|{record['sku_id2']}",
+            'kind': '+'.join(sorted({str(origin.get('kind', '')) for origin in record['origins']})),
+            'label': record['label'],
+            'split': record['split'],
+            'origins': len(record['origins']),
+        }
+        for record in lineage
+    ]
+    trace.add(
+        'pairs', 'supervision_built',
+        in_count=applied
+        + int(skipped.get('untrusted_identity_chain_listings', 0))
+        + int(pairs.attrs.get('chain_pairs_accepted', 0)),
+        out_count=int(len(pairs)),
+        reason=(
+            'source-label rows and same-entity chain pairs are DEDUPLICATED into '
+            'one supervised pair per normalized listing pair; the drop is '
+            'therefore collisions (a pair supervised twice counts once) and self '
+            'positives, never a fabricated loss'
+        ),
+        detail={
+            'applied_source_label_pairs': applied,
+            'chain_pairs_accepted': int(pairs.attrs.get('chain_pairs_accepted', 0)),
+            'untrusted_identity_chain_listings': int(
+                skipped.get('untrusted_identity_chain_listings', 0)
+            ),
+            'self_positive_skipped': int(skipped.get('self_positive', 0)),
+            'supervised_pairs': int(len(pairs)),
+            'pair_counts': {
+                str(split): {str(label): int(count) for label, count in group.label.value_counts().items()}
+                for split, group in pairs.groupby('split')
+            } if len(pairs) else {},
+        },
+        source=f'{_setup_layout().catalog} + data/labeled_pairs.csv',
+    )
+    trace.add_entities(
+        'pairs', records,
+        key_of=lambda record: record['pair'],
+        reason_of=lambda record: record['kind'],
+        detail_of=lambda record: {
+            'label': record['label'],
+            'split': record['split'],
+            'origins': record['origins'],
+        },
+        source='graph_tracks.setup._pair_lineage_records',
+        per_reason=ENTITY_SAMPLE_PER_REASON,
+        total_cap=ENTITY_ROW_CAP,
+    )
+
+
+def _record_artifacts(
+    trace: TraceRun,
+    output: Path,
+    frame: pd.DataFrame,
+    assignments: pd.DataFrame,
+    pairs: pd.DataFrame,
+    listings: Path,
+    records: list[dict],
+) -> None:
+    """The published setup artifacts, with the prepared listing population."""
+    layout = _setup_layout()
+    trace.add(
+        'artifacts', 'published',
+        in_count=int(len(frame)), out_count=int(len(records)),
+        reason=(
+            'the retained catalog is published, the supervised pairs are '
+            'validated, the graph listings are materialized and the census is '
+            'written; the prepared listing population is what the count reports'
+        ),
+        detail={
+            'output': str(output),
+            'retained_listings': int(len(frame)),
+            'listing_splits': int(len(assignments)),
+            'supervised_pairs': int(len(pairs)),
+            'prepared_listings': int(len(records)),
+            'listings_json': str(Path(listings).parent / 'listings.json'),
+            'files': [
+                name for name in (
+                    layout.catalog, layout.splits, layout.pairs,
+                    layout.pair_lineage, layout.manifest, layout.census,
+                    layout.track_config('gnn_only'),
+                    layout.track_config('cascade'), layout.text_config,
+                )
+                if (output / name).exists()
+            ],
+        },
+        source=str(output),
+    )
 
 
 def _config_template_path(track_template: str) -> Path:
@@ -250,22 +631,22 @@ def _config_layout() -> str:
 
 
 def _pair_lineage_document(accounting: dict, output: Path, F) -> dict:
-    """pair_lineage.json: lineage + the input hashes an auditor re-verifies."""
+    """The pair-lineage document: lineage + the input hashes an auditor re-verifies."""
     return {'schema': 'er-graph-pair-lineage-v1',
             'pairs': accounting.pop('pair_lineage'),
             'source_trace_columns': accounting['source_trace_columns'],
             'missing_axes': accounting['missing_axes'],
             'augmentation': accounting['augmentation'],
-            'listing_pairs_sha256': file_hash(output / 'listing_pairs.csv'),
+            'listing_pairs_sha256': file_hash(output / _setup_layout().pairs),
             'source_labels_sha256': file_hash(F['labeled_pairs'])}
 
 
 def _write_setup_manifest(output: Path, accounting: dict, baseline_hash: str,
                           checkpoint: Path, pairs: pd.DataFrame, F, revision: str) -> None:
-    """setup_manifest.json: the run's identity + pairing policy + pair counts."""
+    """The setup manifest: the run's identity + pairing policy + pair counts."""
     from core.common import SEED
     from core.identity_policy import POLICY_PATH
-    write_json(output / 'setup_manifest.json', {
+    write_json(output / _setup_layout().manifest, {
         'schema': 'er-track-setup-v1', 'git_revision': revision, 'seed': SEED,
         'source_catalog_sha256': file_hash(F['dataset_deduped']),
         'labeled_pairs_sha256': file_hash(F['labeled_pairs']),
@@ -281,36 +662,81 @@ def _write_setup_manifest(output: Path, accounting: dict, baseline_hash: str,
     })
 
 
+def _suite_report_test() -> bool | None:
+    """The suite's own ``report_test`` switch, from the config SSOT.
+
+    ``model_tracks.preflight`` refuses a prepared setup whose lane configs
+    disagree with the suite switch, so the rendered configs must not invent one.
+    They used to be hardcoded ``report_test=False`` here, which silently dropped
+    the suite's request to score the held-out test split. Resolved through the
+    declared layout (paths.yaml ``model_tracks_config``).
+
+    Returns ``None`` when the suite config is not declared/readable, so the
+    caller falls back to the LANE TEMPLATE's own declared switch instead of
+    inventing a value. A malformed suite config still raises: this is a
+    fallback for a missing file, not for a broken one.
+    """
+    from core.common import artifact
+
+    try:
+        path = Path(artifact('model_tracks_config'))
+    except KeyError:
+        return None
+    if not path.is_file():
+        return None
+    from model_tracks.config import load_config as load_suite_config
+    return bool(load_suite_config(path).report_test)
+
+
 def _write_track_configs(output: Path, templates: dict, listings: Path,
                          baseline_hash: str) -> None:
     """Render each graph track's runnable config against this setup tree."""
+    from graph_tracks.artifacts import name
     from graph_tracks.config import GraphConfig
+    # The held-out test switch comes FROM THE CONFIG SSOT (the suite's own
+    # report_test), never from a literal here: preflight compares the prepared
+    # lane configs against the suite and refuses a setup whose lanes disagree.
+    report_test = _suite_report_test()
     for track in ('gnn_only', 'cascade'):
         cfg = templates[track].copy()
         cfg.update(listings=str(listings),
                    pairs=str(listings.parent / 'pairs.csv'),
-                   input_manifest=str(listings.parent / 'input_manifest.json'),
-                   report_test=False)
+                   input_manifest=str(listings.parent / 'input_manifest.json'))
+        if report_test is not None:
+            cfg['report_test'] = report_test
         if track == 'cascade':
             # The cascade consumes the trained text ANN and the trained
-            # gnn_only scorer; the paths are resolved by the worker once those
-            # artifacts exist. No text_cache fusion is ever declared.
+            # gnn_only scorer. Both are artifacts of the OTHER tracks, named
+            # through the ONE artifact-naming SSOT (graph_tracks.artifacts.name)
+            # under the declared results root — the exact names the worker's
+            # resolver consumes. They used to point into THIS setup tree
+            # (output/text_index, output/gnn_checkpoint.json), which is not
+            # where a trained artifact ever lands, so the cascade lane raised
+            # FileNotFoundError before ranking anything. No text_cache fusion is
+            # ever declared.
             cfg.pop('text_cache', None)
-            cfg['text_index'] = str(output / 'text_index')
-            cfg['gnn_checkpoint'] = str(output / 'gnn_checkpoint.json')
+            results_root = Path(str(cfg['output_dir']))
+            cfg['text_index'] = str(results_root / name('text', 'index'))
+            cfg['gnn_checkpoint'] = str(
+                results_root / name('gnn_only', 'best_checkpoint.json')
+            )
         cfg = GraphConfig.model_validate(cfg).model_dump()
-        (output / f'{track}.yaml').write_text(yaml.safe_dump(cfg, sort_keys=False))
+        write_track_config(output, track, cfg)
 
 
 def _write_text_config(output: Path, templates: dict) -> None:
     """The text lane's own declared retrieval/index contract.
 
     It used to borrow gnn_only.yaml's HNSW settings and recall ladder, so a
-    graph-track retune silently changed the text track's reported recall@k.
+    graph-track retune silently changed the text track's reported recall@k. Its
+    ``report_test`` comes from the same config SSOT as the graph lanes (the
+    suite's switch), never from a literal here.
     """
     text_cfg = templates['text'].copy()
-    text_cfg.update(report_test=False)
-    (output / 'text.yaml').write_text(yaml.safe_dump(text_cfg, sort_keys=False))
+    report_test = _suite_report_test()
+    if report_test is not None:
+        text_cfg['report_test'] = report_test
+    write_text_config(output, text_cfg)
 
 
 def main():

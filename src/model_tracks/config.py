@@ -1,8 +1,7 @@
 from pathlib import Path
 from typing import Literal
-import yaml
 from core.execution_policy import AggregationBackend, OptimizerBackend
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SuiteConfig(BaseModel):
@@ -64,8 +63,8 @@ class SuiteConfig(BaseModel):
 
 
 def load_config(path: Path) -> SuiteConfig:
-    try:
-        return SuiteConfig.model_validate(yaml.safe_load(path.read_text()))
-    except (ValidationError, yaml.YAMLError) as exc:
-        exc.add_note(f"Model-track suite configuration: {path}")
-        raise
+    """The one suite-manifest loader: read + validate live in core.common."""
+    from core.common import load_validated_yaml
+
+    return load_validated_yaml(
+        path, SuiteConfig, label='Model-track suite configuration')

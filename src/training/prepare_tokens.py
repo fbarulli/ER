@@ -16,6 +16,12 @@ _LOG = RunLogger(__name__)
 _FROZEN_INPUT_KEYS = ('canonical_records', 'gate_results', 'labeled_pairs')
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def _fail_on_stale_frozen(bundle: dict) -> None:
     """Every frozen artifact in the bundle must still match the on-disk F map."""
     for key in _FROZEN_INPUT_KEYS:
@@ -26,7 +32,7 @@ def _fail_on_stale_frozen(bundle: dict) -> None:
 def _fail_on_setup_drift(setup: Path, checkpoint: str) -> None:
     """A prepared setup must match the on-disk catalog and the requested checkpoint."""
     from graph_tracks.text_cache import checkpoint_hash
-    manifest = json.loads((setup / 'setup_manifest.json').read_text())
+    manifest = json.loads((setup / _setup_layout().manifest).read_text())
     if manifest['source_catalog_sha256'] != _digest(Path(F['dataset_deduped'])):
         raise ValueError('prepared setup contains stale source catalog; rebuild CPU preparation')
     if manifest['text_checkpoint_sha256'] != checkpoint_hash(Path(checkpoint)):

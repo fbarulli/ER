@@ -85,6 +85,12 @@ def _resolve(config: Path) -> Path:
     return Path(config) if Path(config).is_absolute() else TRAIN_ROOT / config
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def suite_config() -> Path | None:
     """The suite configuration a worker must attest against, if one was given.
 
@@ -139,29 +145,32 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
     from core.portable_archive import cached_file_digest
     from graph_tracks.config import load_config as load_graph_config
     cfg = load_config(config)
+    layout = _setup_layout()
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     bundle = (TRAIN_ROOT / cfg.text_bundle).resolve()
     digests: dict[str, str] = {}
     # Inputs the suite gate reads directly. All are mandatory for this suite.
+    # Every setup-tree name is the declared layout (training.preparation.
+    # graph_setup), never re-spelled here.
     for owner, path in (('text_bundle', bundle),
                         ('text_bundle_manifest', Path(str(bundle) + '.json')),
-                        ('setup_manifest', setup / 'setup_manifest.json'),
-                        ('text_config', setup / 'text.yaml'),
-                        ('shared_training_data', setup / 'shared_training_data.json'),
-                        ('text_training_binding', setup / 'text_training_binding.json'),
-                        ('shared_training_projection', setup / 'shared_training_projection.json'),
-                        ('text_export_request', setup / 'text_export_request.json'),
-                        ('eligible_catalog', setup / 'eligible_catalog.csv'),
-                        ('listing_splits', setup / 'listing_splits.csv'),
+                        ('setup_manifest', setup / layout.manifest),
+                        ('text_config', setup / layout.text_config),
+                        ('shared_training_data', setup / layout.shared_training_data),
+                        ('text_training_binding', setup / layout.text_training_binding),
+                        ('shared_training_projection', setup / layout.shared_training_projection),
+                        ('text_export_request', setup / layout.text_export_request),
+                        ('eligible_catalog', setup / layout.catalog),
+                        ('listing_splits', setup / layout.splits),
                         # baseline export consumes these to produce the
                         # frozen embedding cache, so they are always gate inputs.
-                        ('embedding_inputs', setup / 'embedding_inputs.json'),
+                        ('embedding_inputs', setup / layout.embedding_request),
                         ('prepared_text', setup / 'prepared_text.npz')):
         digests[owner] = _required(path, owner)
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
         digests[key] = _required(Path(F[key]).resolve(), key)
     for track in ('gnn_only', 'cascade'):
-        track_config = setup / f'{track}.yaml'
+        track_config = setup / layout.track_config(track)
         digests[f'{track}_config'] = _required(track_config, f'{track} config')
         settings = load_graph_config(track_config, expected_track=track)
         # These four are the graph model's own declared inputs; the schema says

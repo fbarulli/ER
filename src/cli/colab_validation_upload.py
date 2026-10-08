@@ -9,40 +9,19 @@ colab_launch / colab_bundle_prewarm.
 
 Collaborators still owned by cli.colab (config, ``REMOTE_ROOT``/``SESSION``/
 ``_BOOTSTRAP``, the legacy validation sources, transport, receipts constants)
-are re-read through ``_hub()`` at call time, so the legacy
+are re-read through ``colab_hub.hub()`` at call time, so the legacy
 ``from cli import colab`` monkeypatch surface keeps driving every phase and the
 running colab identity never sees a stale second copy.  The in-flight upload
 slot stays on the hub (``_VALIDATION_UPLOAD_PREWARM``) for the same reason.
 """
 from __future__ import annotations
 
-import functools
-import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from core.manifest import sha256_file
-
-
-def _hub():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    hub = sys.modules.get("__colab_runtime_self__")
-    if hub is not None:
-        return hub
-    import cli.colab as surface
-
-    return surface
-
-
-def _timed_colab(kind: str):
-    """Lazy step-timing shim: cli.colab owns ``_timed_colab`` at call time."""
-    def decorate(function):
-        @functools.wraps(function)
-        def wrapped(*args, **kwargs):
-            return _hub()._timed_colab(kind)(function)(*args, **kwargs)
-        return wrapped
-    return decorate
+from cli.colab_hub import hub, timed_colab
 
 
 def _validation_input_path(configured_value: str) -> Path:
@@ -53,14 +32,14 @@ def _validation_input_path(configured_value: str) -> Path:
     SSOT final_validation binding and is never resolved here.
     """
     configured = Path(configured_value)
-    root = _hub().TRAIN_ROOT
+    root = hub().TRAIN_ROOT
     source = configured if configured.is_absolute() else root / configured
     source = source.resolve()
     if not source.is_relative_to(root.resolve()):
         raise ValueError(
             "the configured lane input CSV must stay inside the repository"
         )
-    if _hub()._FINAL_INFERENCE.enabled and not source.is_file():
+    if hub()._FINAL_INFERENCE.enabled and not source.is_file():
         raise FileNotFoundError(f"configured final-inference CSV is missing: {source}")
     return source
 
@@ -78,7 +57,7 @@ def _remote_checkout_copy(source: Path) -> str | None:
     must equal the local digest, so a locally modified or absent input falls
     back to a normal upload instead of silently training on the wrong rows.
     """
-    surface = _hub()
+    surface = hub()
     relative = source.resolve().relative_to(surface.TRAIN_ROOT.resolve()).as_posix()
     remote = f"{surface.REMOTE_ROOT}/{relative}"
     probe = surface._BOOTSTRAP + f"""
@@ -147,18 +126,18 @@ class _ValidationUploadPrewarm:
         # drain joins it and an unbounded wait would hang teardown forever.
         if not self.session_ready.wait(_PREWARM_GATE_TIMEOUT_SECONDS):
             print(
-                _hub()._stamp(),
+                hub()._stamp(),
                 f"[upload] session was not ready within "
                 f"{_PREWARM_GATE_TIMEOUT_SECONDS}s; uploading serially instead",
                 flush=True,
             )
             return
         try:
-            self.remote_paths = _hub()._perform_validation_upload(self.stamp)
+            self.remote_paths = hub()._perform_validation_upload(self.stamp)
         except BaseException as exc:  # handed back to the owning run, or fallen back from
             self.error = exc
             print(
-                _hub()._stamp(),
+                hub()._stamp(),
                 f"[upload] concurrent validation upload failed: {exc!r}", flush=True
             )
 
@@ -171,10 +150,10 @@ class _ValidationUploadPrewarm:
         return self.remote_paths
 
 
-@_timed_colab("step")
+@timed_colab("step")
 def start_validation_upload_prewarm() -> str:
     """Begin this lane's validation uploads; returns the run id they belong to."""
-    surface = _hub()
+    surface = hub()
     if surface._VALIDATION_UPLOAD_PREWARM is not None:
         # Running a second prewarm over an unfinished one would race two
         # threads onto the same remote paths, and the first thread would never
@@ -199,7 +178,7 @@ def start_validation_upload_prewarm() -> str:
 
 def drain_validation_upload_prewarm() -> None:
     """Never leave an upload thread writing while the live log closes."""
-    surface = _hub()
+    surface = hub()
     prewarm, surface._VALIDATION_UPLOAD_PREWARM = surface._VALIDATION_UPLOAD_PREWARM, None
     if prewarm is not None and prewarm.thread.is_alive():
         print(surface._stamp(), "[upload] waiting for the concurrent upload to finish ...", flush=True)
@@ -218,17 +197,17 @@ def drain_validation_upload_prewarm() -> None:
             )
 
 
-@_timed_colab("step")
+@timed_colab("step")
 def release_validation_upload_prewarm() -> None:
     """Let the prewarmed upload start, now that the session can accept it."""
-    prewarm = _hub()._VALIDATION_UPLOAD_PREWARM
+    prewarm = hub()._VALIDATION_UPLOAD_PREWARM
     if prewarm is not None:
         prewarm.session_ready.set()
 
 
 def _lane_run_stamp() -> str:
     """Adopt the prewarmed run identity so the uploads belong to this run."""
-    prewarm = _hub()._VALIDATION_UPLOAD_PREWARM
+    prewarm = hub()._VALIDATION_UPLOAD_PREWARM
     if prewarm is not None:
         return prewarm.stamp
     return datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
@@ -241,7 +220,7 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
     hands over runs once and the overlap in `start_validation_upload_prewarm`
     is real.
     """
-    surface = _hub()
+    surface = hub()
     if surface._VALIDATION_UPLOAD_PREWARM is not None:
         prewarm, surface._VALIDATION_UPLOAD_PREWARM = surface._VALIDATION_UPLOAD_PREWARM, None
         if prewarm.stamp == run_id:
@@ -294,7 +273,7 @@ def _perform_validation_upload(run_id: str) -> dict[str, str]:
     what the prewarm thread runs, so looking the prewarm up here would make
     that thread join itself.
     """
-    surface = _hub()
+    surface = hub()
     sources = surface._legacy_validation_sources()
     remote_dir = f"{surface.REMOTE_ROOT}/prepared_training/{run_id}/validation"
     remotes: dict[str, str] = {}

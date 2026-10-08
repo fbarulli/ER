@@ -36,6 +36,15 @@ class ColabCPULaneDelivery:
 
     @timed
     def delivery_segment(self) -> str:
+        """The remote delivery assembly, ending with its transport token.
+
+        The archive is hashed once as it is written and the token lands beside
+        it (``bundle_delivery.tar.zst.sha256``); the operator-side boundary is
+        :func:`cli.colab_bundle_transport.verify_transport_digest`, the one
+        integrity check of this VM crossing.
+        """
+        from cli.colab_bundle_transport import record_digest_script
+
         return f"""
 # delivery: run dir + regenerated data artifacts (list from the 8ddc614 lane).
 run_dir = sorted(glob.glob(root + "/results/training_prep/*"))[-1]
@@ -54,7 +63,7 @@ with tar_archive(delivery, "w") as tar:
         member = root + "/data/prepared/" + name
         if os.path.isdir(member):
             tar.add(member, arcname="data/prepared/" + name)
-print("[bundle] delivery archive ready", flush=True)
+{record_digest_script('delivery', label='bundle')}print("[bundle] delivery archive ready", flush=True)
 """
 
     @timed
@@ -183,5 +192,40 @@ print("[bundle] delivery archive ready", flush=True)
         )
         self.result_event(run_id, "download", "completed", archive=str(local),
                           destination=str(local_base))
+        self._verify_delivery_boundary(local, run_id)
         print(_stamp(), f"[bundle] delivered -> {local}", flush=True)
         print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
+
+    @timed
+    def _verify_delivery_boundary(self, local: Path, run_id: str) -> str:
+        """The ONE integrity check of this VM crossing, then the token receipt.
+
+        The VM recorded ``<archive>.sha256`` as it finished writing; this reads
+        that token back over the existing control channel (a small text read,
+        never a second archive transfer) and hashes the delivered archive once
+        (:func:`cli.colab_bundle_transport.verify_transport_digest`). A
+        mismatch fails loud with the partial kept; a VM whose lane script
+        predates the token is reported as unverified, loudly, rather than
+        silently trusted.
+        """
+        from cli.colab_bundle_transport import digest_sidecar, verify_transport_digest
+
+        remote_token = f"{self.remote_root}/{digest_sidecar(local).name}"
+        expected = ""
+        try:
+            expected = self.surface._read_remote_text(remote_token).strip()
+        except Exception as error:  # noqa: BLE001 - absence is reported, not hidden
+            print(_stamp(), f"[bundle] delivery digest token unreadable at "
+                  f"{remote_token} ({error}); verifying locally only", flush=True)
+        observed = verify_transport_digest(local, expected)
+        if not expected:
+            print(_stamp(), "[bundle] WARNING: the VM recorded no delivery digest "
+                  "token; this delivery's bytes are unverified against the writer"
+                  f" (local sha256={observed})", flush=True)
+            self.result_event(run_id, "download", "digest_absent", archive=str(local),
+                              archive_sha256=observed)
+            return observed
+        self.result_event(run_id, "download", "verified", archive=str(local),
+                          archive_sha256=observed)
+        print(_stamp(), f"[bundle] delivery verified sha256={observed}", flush=True)
+        return observed

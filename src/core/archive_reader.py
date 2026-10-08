@@ -13,16 +13,71 @@ def archive_settings():
     return training_cfg().archives
 
 
+class _HashingWriter:
+    """Binary write-through wrapper recording the SHA256 of exactly the bytes written.
+
+    A sealed archive's whole-file digest is the transport token (the ``.sha256``
+    sidecar). Computing it here means the bytes are hashed as they are written,
+    so no caller re-reads a multi-GB archive to produce that token.
+    """
+
+    def __init__(self, handle, digest):
+        self._handle = handle
+        self._digest = digest
+
+    def write(self, data):
+        self._digest.update(data)
+        return self._handle.write(data)
+
+    def flush(self):
+        return self._handle.flush()
+
+    def close(self):
+        return self._handle.close()
+
+    def fileno(self):
+        return self._handle.fileno()
+
+    def writable(self):
+        return True
+
+    def readable(self):
+        return False
+
+    def seekable(self):
+        return self._handle.seekable()
+
+    def tell(self):
+        return self._handle.tell()
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+
 @contextmanager
-def tar_archive(path, mode='r', *, settings=None):
-    """Zstandard for new tar writers; spool once for repeated legacy/new reads."""
+def tar_archive(path, mode='r', *, settings=None, digest=None):
+    """Zstandard for new tar writers; spool once for repeated legacy/new reads.
+
+    ``digest`` (a ``hashlib``-style object) updates with the compressed bytes
+    exactly as they are written, so the caller gets the sealed archive's
+    whole-file SHA256 without reading it back.
+    """
     settings = archive_settings() if settings is None else settings
     if mode in {'w', 'x'}:
-        with zstd_module().open(path, mode + 'b', level=settings.compression_level) as compressed:
-            with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
-                              bufsize=settings.copy_buffer_bytes,
-                              copybufsize=settings.copy_buffer_bytes) as archive:
-                yield archive
+        if digest is None:
+            with zstd_module().open(path, mode + 'b', level=settings.compression_level) as compressed:
+                with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
+                                  bufsize=settings.copy_buffer_bytes,
+                                  copybufsize=settings.copy_buffer_bytes) as archive:
+                    yield archive
+            return
+        with open(path, mode + 'b') as raw:
+            with zstd_module().open(_HashingWriter(raw, digest), 'wb',
+                                    level=settings.compression_level) as compressed:
+                with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
+                                  bufsize=settings.copy_buffer_bytes,
+                                  copybufsize=settings.copy_buffer_bytes) as archive:
+                    yield archive
         return
     if mode != 'r':
         raise ValueError('tar archive mode must be r, w or x')

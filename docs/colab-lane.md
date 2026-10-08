@@ -9,13 +9,17 @@ network transport for other data. Everything Colab shaped lives here.
 | file | role |
 |---|---|
 | `src/cli/colab_lane.py` | the lane classes: `ColabLaneBase` (transport dial-ins + receipts + shared contracts), `ColabCPULane` (committed-export delivery + CPU prep parity), `ColabGPULane` (accelerator/retention boundary gates) |
+| `src/cli/colab_lane_contracts.py` | shared lane constants (`DELIVERY_PREPARED_DIRS`, `MAX_PARALLEL_PREP_SESSIONS`, `DELIVERY_ARCHIVE_NAME`) + the `ColabLaneBase` contracts (delivery root/member list, checkout guard, resume triplet) |
+| `src/cli/colab_lane_cpu_provision.py` | CPU lane provisioning order + byte-exact prepare-launch script segments (committed-export membership guard) |
+| `src/cli/colab_lane_cpu_delivery.py` | delivery archive, launch/poll/collect/download phases, frozen resume-state upload |
+| `src/cli/colab_lane_cpu_poll.py` | VM prepare-log poll (offset probes, transit tolerance, dual transcripts) |
 | `src/cli/colab.py` | GPU launcher surface facade (`train / tracks / dual-train / hpo / sims / mixed / smoke / stop`) plus the legacy `--what bundle` upload lane |
 | `src/cli/colab_self_watch.py` | detached session self-watch (spawned default on executed remote runs: poll → delivery proof → release guarantee; receipt under `TRAINING_RESULTS/self_watch_<run_id>/`) |
 | `src/cli/colab_retention.py` | local HPO report/snapshot retention (one-roof exported from the launcher surface) |
 | `src/cli/colab_bundle.py` | CPU committed-export delivery facade |
 | `src/cli/colab_data_bundle_prep.py` | CPU data-bundle prep facade (high-RAM shape, dual transcripts, 2-parallel cap) |
 | `src/cli/colab_cli_entry.py` | read-only-home-safe entry point for the installed Colab CLI |
-| `src/core/schemas.py` | `ColabBundlePlan` (additive dry-run receipt) + the baked suite-matrix spec: `SuiteMatrixSpec`/`SuiteMatrixEntry`/`SuiteDeviceFlip`/`SuiteFreshnessManifest` with `canonical_suite_matrix()` |
+| `src/core/schemas.py` | `ColabBundlePlan` (additive dry-run receipt) + the baked suite-matrix spec: `SuiteMatrixSpec`/`SuiteMatrixEntry`/`SuiteDeviceFlip` with `canonical_suite_matrix()` |
 
 `ColabLaneBase` resolves every transport dial-in through the `cli.colab`
 module namespace at call time — one patch surface for the offline fakes, no
@@ -32,30 +36,30 @@ er-colab --what tracks --tracks-config config/model_tracks.yaml --gpu T4 --allow
 er-colab --what stop
 ```
 
-## Command inventory (SSOT: `cli.colab.main`, src/cli/colab.py:4457–4565)
+## Command inventory (SSOT: `cli.colab.main`, src/cli/colab.py:2201–2325)
 
 `--what` choices (default `tracks`): `train | tracks | dual-train | hpo |
 sims | mixed | smoke | bundle | stop`. Flags:
 
 | flag | meaning (source anchor) |
 |---|---|
-| `--tracks-config <yaml>` | all-track suite; applies to train/tracks/smoke only (colab.py:4576–4577); forces `--what tracks` (colab.py:4616) |
+| `--tracks-config <yaml>` | all-track suite; applies to train/tracks/smoke only (colab.py:2351); forces `--what tracks` (colab.py:2409) |
 | `--prepared-input-package <path>` | reuse a `training.prepare_all` `all_tracks_inputs` package; suite-only; archive-integrity verified then copied to `results/model_tracks/<tag>__inputs.<fmt>`. `<path>` may be the archive, a bundle directory (resolved through its `bundle.receipt.json`'s `archive`, else the canonical `all_tracks_inputs.tar.zst`), so `results/kaggle_lane/full/bundle` works directly. Unspecified on the default `--what tracks` launch, it resolves to that full bundle. A path that resolves to nothing fails before the VM with every known bundle + cohort/revision (`resolve_prepared_input_package`, `prepared_package_candidates`) |
-| `--dataset-csv` | raw export for `--what bundle` only (colab.py:4464–4468) |
-| `--train-frac`, `--epochs`, `--workers`, `--model`, `--loss`, `--run-label`, `--masking-profile`, `--collapse-guardrail-profile` | plain `train`/`dual-train`/`hpo` knobs (colab.py:4469–4509) |
-| `--sample` | sampled-training cap; requires `--tracks-config` frozen parent splits (colab.py:4623–4625) |
-| `--resume-run <id>` | resume `concurrent_train_<id>` or a prior suite run (needs the original `__inputs` archive, colab.py:4597–4601); not supported by dual-train (colab.py:4826–4827) |
-| `--resume-hpo`, `--hpo-persistence {local,none}`, `--hpo-mode`, `--hpo-jobs` | Optuna durability/schedule (colab.py:4515–4547) |
-| `--gpu <name>` | accelerator request; `CPU` is the safe default (colab.py:4526–4530) |
-| `--allow-gpu` | acknowledgement before any non-CPU runtime (colab.py:4531–4535) |
-| `--keep-alive` | CPU-only: no teardown on completion/failure; refused for GPU (colab.py:4553–4557) |
-| `--refresh-data` | regenerate frozen CSVs before training; banned with suites (colab.py:4578–4579, 4766–4767) |
-| `--preflight-only` | offline lifecycle validation; suite preflight for tracks, train/smoke lanes otherwise (colab.py:4585–4592, 4649–4658) |
-| `--train-only` | skip post-training validation inference; banned with suites (colab.py:4578–4579) |
+| `--dataset-csv` | raw export for `--what bundle` only (colab.py:2215–2219) |
+| `--train-frac`, `--epochs`, `--workers`, `--model`, `--loss`, `--run-label`, `--masking-profile`, `--collapse-guardrail-profile` | plain `train`/`dual-train`/`hpo` knobs (colab.py:2220–2260) |
+| `--sample` | sampled-training cap; requires `--tracks-config` frozen parent splits (colab.py:2235–2239) |
+| `--resume-run <id>` | resume `concurrent_train_<id>` or a prior suite run (needs the original `__inputs` archive, colab.py:2261–2265); not supported by dual-train (colab.py:2644–2645) |
+| `--resume-hpo`, `--hpo-persistence {local,none}`, `--hpo-mode`, `--hpo-jobs` | Optuna durability/schedule (colab.py:2266–2298) |
+| `--gpu <name>` | accelerator request; `CPU` is the safe default (colab.py:2277–2281) |
+| `--allow-gpu` | acknowledgement before any non-CPU runtime (colab.py:2282–2286) |
+| `--keep-alive` | CPU-only: no teardown on completion/failure; refused for GPU (colab.py:2304–2308) |
+| `--refresh-data` | regenerate frozen CSVs before training; banned with suites (colab.py:2352–2353, 2571–2572) |
+| `--preflight-only` | offline lifecycle validation; suite preflight for tracks, train/smoke lanes otherwise (colab.py:2369–2378, 2442–2445) |
+| `--train-only` | skip post-training validation inference; banned with suites (colab.py:2352–2353) |
 
 `--what bundle` is the legacy upload lane with a thin passthrough: when
 `training.yaml colab.cpu_bundle_prep.lane` is set it forwards to
-`cli.colab_data_bundle_prep.run_cpu_bundle_prep` (owner ruling 8; colab.py:4782–4791).
+`cli.colab_data_bundle_prep.run_cpu_bundle_prep` (owner ruling 8; colab.py:2602–2609).
 
 CPU standalone facades (relaunch/production entries, not first launches):
 
@@ -63,14 +67,14 @@ CPU standalone facades (relaunch/production entries, not first launches):
 PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --preflight-only   # plan receipt only
 PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_50pct.csv \
   --resume-from validation --resume-run-id <frozen_id> --resume-state <tar.zst>
-PYTHONPATH=src .venv/bin/python -m cli.colab_data_bundle_prep --dataset-csv data/dataset.csv
+PYTHONPATH=src .venv/bin/python -m cli.colab_data_bundle_prep --dataset-csv dataset.csv
 ```
 
-`cli.colab_bundle` flags (colab_bundle.py:103–122): `--dataset-csv` (default
+`cli.colab_bundle` flags (colab_bundle.py:94–118): `--dataset-csv` (default
 repo-root `dataset.csv`; must be a `kaggle.export_csvs` entry — no upload
 exists on this lane), `--resume-from {dedupe,validation,full_bundle,suite_inputs}`,
-`--resume-run-id`, `--resume-state` (triplet all-or-none, colab_lane.py:416–438),
-`--preflight-only`. `cli.colab_data_bundle_prep` (colab_data_bundle_prep.py:111)
+`--resume-run-id`, `--resume-state` (triplet all-or-none, colab_lane.py:125–145),
+`--preflight-only`. `cli.colab_data_bundle_prep` (colab_data_bundle_prep.py:102)
 takes `--dataset-csv` only; it qualifies per-session transcripts from
 `EUROMONITOR_COLAB_SESSION` and is the relaunch entry that needs an already-live
 session with a checkout (runbook "Do not").
@@ -85,22 +89,22 @@ PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_50pct.
 
 | intent | rule | anchor |
 |---|---|---|
-| sampled `--what train --sample N` | rejected: `sampled training requires --tracks-config with frozen parent splits` — sanctioned path is the suite | colab.py:4623–4625 |
-| legacy `--sample` bundle rebuild | rejected: `legacy sampled preparation does not preserve the shared component split` | colab.py:3049–3053 |
-| legacy `--what smoke` (no tracks-config) | raised before provisioning: `legacy smoke does not preserve the shared component holdout; use --what tracks --tracks-config ...` — the smoke body behind this branch is unreachable | colab.py:4618–4622; dispatch 4796 |
-| `--tracks-config` on other `--what` | `--tracks-config applies to train/tracks/smoke only` | colab.py:4576–4577 |
-| suite device vs `--gpu` | `suite.device and --gpu must agree`: `--gpu CPU` requires `suite.device: cpu`; any accelerator request (e.g. T4) maps to `cuda`. **Baked default (S/M/L matrix): a non-CPU request against a device-cpu tracked suite AUTO-generates the scratch cuda clone** `results/model_tracks/<suite>__gpu/suite.yaml` (only the yamls are copied — every data binding stays under `data/`; the tracks gate then validates the clone), and the launch proceeds with the flipped config. Opt out with `ER_SUITES_KEEP_DEVICE=1` to get the raw must-agree error | colab.py:4794–4808 device gate; `_suite_device_flip` colab.py:4580–4602; schemas.py `SuiteDeviceFlip` |
+| sampled `--what train --sample N` | rejected: `sampled training requires --tracks-config with frozen parent splits` — sanctioned path is the suite | colab.py:2235–2239 |
+| legacy `--sample` bundle rebuild | rejected: `legacy sampled preparation does not preserve the shared component split` | colab_bundle_prewarm.py:335 |
+| legacy `--what smoke` (no tracks-config) | raised before provisioning: `legacy smoke does not preserve the shared component holdout; use --what tracks --tracks-config ...` — the smoke body behind this branch is unreachable | colab.py:2413–2416; dispatch 2614 |
+| `--tracks-config` on other `--what` | `--tracks-config applies to train/tracks/smoke only` | colab.py:2351 |
+| suite device vs `--gpu` | `suite.device and --gpu must agree`: `--gpu CPU` requires `suite.device: cpu`; any accelerator request (e.g. T4) maps to `cuda`. **Baked default (S/M/L matrix): a non-CPU request against a device-cpu tracked suite AUTO-generates the scratch cuda clone** `results/model_tracks/<suite>__gpu/suite.yaml` (only the yamls are copied — every data binding stays under `data/`; the tracks gate then validates the clone), and the launch proceeds with the flipped config. Opt out with `ER_SUITES_KEEP_DEVICE=1` to get the raw must-agree error | colab.py:2379–2388 device gate; `_suite_device_flip` colab.py:2091; schemas.py `SuiteDeviceFlip` |
 | full-cohort bundle default | the default `--what tracks` launch resolves an unspecified `--prepared-input-package` to `results/kaggle_lane/full/bundle` (`default_prepared_input_package`); an explicit `--tracks-config` (CPU smoke) or `--prepared-input-package` wins. **The source/config freshness gate is removed** (no `freshness.json`, no `SuiteFreshnessManifest`, no `ER_SKIP_CONFIG_VERIFY`): a reused package is verified for archive integrity only | colab.py `default_prepared_input_package` / `resolve_prepared_input_package`; model_tracks/package.py `verify` |
 | S/M/L dataset matrix | baked SSOT in `canonical_suite_matrix()`: `S=smoke_200` (device cpu), `M=50pct` (device cpu; suite config + prepared writer are prep-stage follow-ups), `L=full` (`config/model_tracks.yaml`, device cuda). ADDITIVE ONLY: unknown suite configs keep working — the matrix supplies labels and the device-flip pattern, it never restricts | schemas.py `SuiteMatrixSpec`/`canonical_suite_matrix` |
-| `--allow-gpu` | non-CPU `--gpu` without it: `GPU launch requires --allow-gpu` | colab_lane.py:485–486 |
-| `--keep-alive` on GPU | refused: `--keep-alive is CPU-only (a retained GPU VM consumes accelerator quota indefinitely)` | colab_lane.py:487–492 |
-| `--refresh-data` / `--train-only` with a suite | banned: suites require prepared inputs + full postprocessing | colab.py:4578–4579 |
-| bundle export membership | CPU committed-export delivery refuses exports outside `config kaggle.export_csvs` | colab_lane.py:201–204 |
-| smoke parent | `data/prepared/smoke_200` is the established smoke parent: 200 listings frozen, epochs 1, `report_test: false`, publishing off, profiling on (config binding `colab.smoke_dir`, schemas.py:2906; written by `model_tracks.smoke_inputs.prepare_smoke`) | smoke_inputs.py:176–184; config/training.yaml:1202 |
-| smoke sample floor | the bootstrapped supervision-graph selection must fit the sample: `sample too small for selected smoke supervision` (smoke_inputs.py:91–92); records show the floor across this parent at ≥ 70 listings |
-| smoke retention | smoke results land as `smoke_<run_id>` under TRAINING_RESULTS; `replace_smoke` deletes every older `smoke_*` sibling — the newest smoke is the only local smoke run | colab.py:2024–2063; model_tracks/run_retention.py:166–188 |
-| bundle delivery root | delivery archive lands at `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` | colab_lane.py:144–147, 399–413 |
-| parallel CPU prep cap | exactly two concurrent CPU prep sessions (`MAX_PARALLEL_PREP_SESSIONS = 2`); per-session transcripts `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` | colab_lane.py:73, 455–458 |
+| `--allow-gpu` | non-CPU `--gpu` without it: `GPU launch requires --allow-gpu` | colab_lane.py:202–203 |
+| `--keep-alive` on GPU | refused: `--keep-alive is CPU-only (a retained GPU VM consumes accelerator quota indefinitely)` | colab_lane.py:204–208 |
+| `--refresh-data` / `--train-only` with a suite | banned: suites require prepared inputs + full postprocessing | colab.py:2352–2353 |
+| bundle export membership | CPU committed-export delivery refuses exports outside `config kaggle.export_csvs` | colab_lane_cpu_provision.py:44–46 |
+| smoke parent | `data/prepared/smoke_200` is the established smoke parent: 200 listings frozen, epochs 1, `report_test: false`, publishing off, profiling on (config binding `colab.smoke_dir`, schemas.py:3127; written by `model_tracks.smoke_inputs.prepare_smoke`) | smoke_inputs.py:72; config/training.yaml:1291 |
+| smoke sample floor | the bootstrapped supervision-graph selection must fit the sample: `sample too small for selected smoke supervision` (smoke_inputs.py:158); records show the floor across this parent at ≥ 70 listings |
+| smoke retention | smoke results land as `smoke_<run_id>` under TRAINING_RESULTS; `replace_smoke` deletes every older `smoke_*` sibling — the newest smoke is the only local smoke run | colab_result_sync.py:559–561; model_tracks/run_retention.py:166–188 |
+| bundle delivery root | delivery archive lands at `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` | colab_lane_contracts.py:120; colab_lane.py:119 |
+| parallel CPU prep cap | exactly two concurrent CPU prep sessions (`MAX_PARALLEL_PREP_SESSIONS = 2`); per-session transcripts `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` | colab_lane_contracts.py:42; colab_lane.py:150–158 |
 | baked-in self-watch | every executed remote `--what` run that passes its pre-provisioning gates spawns a detached self-watch after the first healthy provisioning stream — no operator arg. It polls the session listing (the `colab sessions` surface main/stop read) until the session is absent, verifies the run's delivery/retention artifacts under TRAINING_RESULTS (captures the lane transcripts on a failed delivery), and runs the lane's own `stop()` release guarantee if the launcher died with the session still listed; release on every terminal outcome; receipts `TRAINING_RESULTS/self_watch_<run_id>/self_watch_receipt.json`, poll log `logs/colab/self_watch_<run_id>.log` | colab.py `spawn_self_watch` / `self_watch` |
 
 ## Default self-watch (owner order 2026-10-07)
@@ -126,7 +130,7 @@ subprocess.Popen(
 deaths; the runbook's "never `python -m cli.colab` for a launch" rule is
 unchanged — the watcher is not a launch and provisions nothing.
 
-Stale-string correction: the legacy-gate error text (colab.py:294, 3053, 4622)
+Stale-string correction: the legacy-gate error text (colab.py:294, 2415)
 still cites `results/model_tracks/smoke_20261001_128/suite.yaml`; that path no
 longer exists on disk (results/model_tracks holds only `inputs/`). Sanctioned
 CPU-smoke command, exactly as the gate intends:
@@ -141,7 +145,7 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
 2. `origin/main` has every file the VM must see pushed (VMs clone the branch;
    the working tree is invisible to them).
 3. Committed exports for the CPU lane must appear in `config kaggle.export_csvs`
-   (colab_lane.py:201–204).
+   (colab_lane_cpu_provision.py:44–46).
 4. Suites require their prepared `__inputs` package (newly packaged, supplied
    via `--prepared-input-package`, or resolvable from `--resume-run`).
 5. Do not run any other Colab session while two CPU prep lanes hold the
@@ -166,7 +170,7 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
 - Every Colab status/log line carries a Europe/Paris local stamp (CET/CEST, e.g. `[colab 2026-10-07T09:13:28 CEST]`) and goes through the timestamped live-log wrapper
   (`start_live_log`) into `logs/colab/system.log` / `logs/colab/training.log`, session-qualified
   to `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` when
-  `EUROMONITOR_COLAB_SESSION` is set (colab.py:120–126 anchor; colab_lane.py:455–458). One
+  `EUROMONITOR_COLAB_SESSION` is set (colab.py:119 anchor; colab_lane.py:150–158). One
   canonical logs root (owner order 2026-10-07); tqdm CR frames are expanded to grep-able
   lines at write time by the shared formatter `cli.log_capture.progress_frames_to_lines`.
 
@@ -217,7 +221,7 @@ read nothing.
 |---|---|
 | suite input package | `results/model_tracks/<run_tag>__inputs.<fmt>` (tar/format from the suite) |
 | suite recovery | `results/model_tracks/<run_tag>.recovery.tar.zst` |
-| prepared supply | `data/prepared/{full,smoke_200}` (DELIVERY_PREPARED_DIRS, colab_lane.py:66) |
+| prepared supply | `data/prepared/{full,smoke_200}` (DELIVERY_PREPARED_DIRS, colab_lane_contracts.py:35) |
 | remote prepare log | `prepare_bundle.log` / `prepare_bundle.status` at the VM checkout root; budget `PREPARE_BUDGET_SECONDS = 4h` | 
 | delivery archive | `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` (run dir + `data/` members + `track_setup` + `prepared/{full,smoke_200}`) |
 | suite outputs | `results/model_tracks/<run_tag>/` |
@@ -234,13 +238,13 @@ read nothing.
 | Colab mixed / hpo / sims | `er-colab --what mixed|hpo|sims` (+ `--resume-hpo`, `--hpo-jobs` for hpo) | GPU VM legacy lanes (direct result transport) | legacy result bundles under TRAINING_RESULTS | VM released |
 | Colab bundle prep (50pct/full) | runbook systemd-run block: `python -m cli.colab --what bundle --gpu CPU --keep-alive --dataset-csv dataset_50pct.csv` (cap: 2 parallel) | high-RAM CPU VM, sparse checkout, cohort remap, remote `training.prepare_all` | `colab_bundle_<run_id>/bundle_delivery.tar.zst` + training_prep run dir contents | left open by directive (`--keep-alive`); stop via the launcher lock lane |
 | Colab relaunch CPU prep | `python -m cli.colab_data_bundle_prep --dataset-csv ...` (needs a live session with a checkout) | existing CPU VM | same as bundle prep | none (relaunch lane) |
-| Colab stop | `er-colab --what stop` | — | — | VM release requested; warns if it may still be live (colab.py:4436–4450) |
+| Colab stop | `er-colab --what stop` | — | — | VM release requested; warns if it may still be live (colab.py:2016–2081) |
 
 TBD resolved (owner order 2026-10-07): `colab_bundle_10k_sparse.log` and the
 other stray root `*.log` files were moved under `logs/colab/` — the canonical
 logs root lane transcripts; the old root copies are deleted.
 `scripts/run_colab_smoke.sh` contents beyond its `--what smoke` call
-(now legacy — the gate at colab.py:4618 rejects it; prefer the tracks-config
+(now legacy — the gate at colab.py:2413 rejects it; prefer the tracks-config
 command above).
 
 ## Fix inheritance

@@ -19,16 +19,20 @@ def _manifest(path, track, report_test):
         model_selection='dev_pr_auc', retrieval_ks=[10]))
 
 
-def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='zip'):
+def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='zip',
+          cascade_complete=False, ablation_skip_event=False):
     from core import common
     from graph_tracks import preflight, report
-    from model_tracks import text_report
+    from model_tracks import text_report, worker
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     cfg = {'setup_dir': 'data/model_tracks/shared',
            'text_bundle': 'data/model_tracks/shared/text.pkl',
            'publish_git': False, 'publish_dvc': False, 'result_archive_format': archive_format,
            'post_training_ablation': post_training_ablation}
-    inline = {'data/model_tracks/suite.yaml': yaml.safe_dump(cfg)}
+    inline = {'data/model_tracks/suite.yaml': yaml.safe_dump(cfg),
+              # The prepared inputs the lanes and the cascade manifest read.
+              'data/model_tracks/shared/prepared/listings.json': '{"listings": []}',
+              'data/model_tracks/shared/prepared/pairs.csv': 'sku_id1,sku_id2,label,split\n'}
     for track in ('gnn_only', 'cascade'):
         settings = {'track': track, 'listings': 'data/model_tracks/shared/prepared/listings.json',
                     'pairs': 'data/model_tracks/shared/prepared/pairs.csv',
@@ -44,6 +48,11 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
     root.mkdir()
     (root / 'suite_manifest.json').write_text(json.dumps({'run_tag': 'run', 'inputs': inputs, 'config': cfg,
         'resume_identity': {'implementation': {}}}))
+    if ablation_skip_event:
+        # A GPU session that shipped no ablation templates records the skip.
+        (root / 'suite_events.jsonl').write_text(json.dumps({
+            'phase': 'attribute_ablation_export', 'status': 'skipped',
+            'reason': 'bundle shipped no ablation templates'}) + '\n')
     for track in ('text', 'gnn_only', 'cascade'):
         output = root / track
         output.mkdir()
@@ -52,7 +61,15 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
         (checkpoint / 'model.pt').write_bytes(b'trained')
         if track != 'text':
             (output / f'{track}__best_checkpoint.json').write_text(json.dumps({'path': '/remote/checkpoint-1/model.pt'}))
-        record_completion(output, track, postprocess_complete=False)
+        if track == 'cascade' and cascade_complete:
+            # A finished cascade already ships the composed report and its
+            # calibrated manifest; local completion leaves both alone.
+            (output / 'cascade__cascade_report.json').write_text('{}')
+            _manifest(output / 'cascade__report_manifest.json', 'cascade', False)
+        # The trained lanes deferred their CPU report (the GPU-only contract);
+        # the cascade did or did not finish composing.
+        record_completion(output, track,
+                          postprocess_complete=(track == 'cascade') and cascade_complete)
     training_zip = write_archive(tmp_path / f'run.training.{archive_format}',
         {p.relative_to(root).as_posix(): p for p in root.rglob('*') if p.is_file()},
         manifest_name='suite_bundle_manifest.json', metadata={'run_tag': 'run'})
@@ -61,6 +78,9 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
         assert device == 'cpu'
         calls.append('text')
         (output / 'text__training_report.md').write_text('local text report')
+        # The text lane's saved catalog export: the cascade's ranker input.
+        (output / 'text__index').mkdir()
+        (output / 'text__vectors.npz').write_bytes(b'text-vectors')
         _manifest(output / 'text__completion_manifest.json', 'text', report_test)
     def graph(checkpoint, listings, pairs, output, cfg, **kwargs):
         assert checkpoint.read_bytes() == b'trained'
@@ -68,11 +88,73 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
         assert listings.is_relative_to(tmp_path / 'run/local_inputs')
         calls.append(cfg.track)
         (output / 'report.md').write_text('local graph report')
+        # The gnn lane's saved forward export: the cascade's decider input.
+        inference = output / f'{cfg.track}__inference'
+        inference.mkdir()
+        (inference / f'{cfg.track}__vectors.npz').write_bytes(b'gnn-vectors')
         _manifest(output / f'{cfg.track}__report_manifest.json', cfg.track, cfg.report_test)
+
+    def cascade_roles(records, pairs, artifacts):
+        return 'RANKED', ['relevant'], 'DECISIONS'
+
+    def cascade_report(ranked, relevant, decisions, output, *, track, ks):
+        assert (ranked, relevant, decisions) == ('RANKED', ['relevant'], 'DECISIONS')
+        assert track == 'cascade'
+        calls.append('cascade')
+        (output / 'cascade__cascade_report.json').write_text('{}')
+
+    monkeypatch.setattr(worker, '_cascade_roles', cascade_roles)
+    monkeypatch.setattr('graph_tracks.report.report_cascade', cascade_report)
+    # The cascade branch loads the suite's frozen pair/listings inputs for real;
+    # this fixture ships them empty, so the loaders are stubbed to their shape.
+    monkeypatch.setattr('graph_tracks.data.load_records', lambda path: [])
+    monkeypatch.setattr('graph_tracks.train.load_pairs', lambda path, records: {})
     monkeypatch.setattr(text_report, 'complete', text)
     monkeypatch.setattr(report, 'complete', graph)
     monkeypatch.setattr(preflight, 'preflight', lambda *_args, **_kwargs: {})
     return training_zip, input_zip, calls, graph
+
+def test_cascade_completes_locally_by_composing_the_trained_lanes(tmp_path, monkeypatch):
+    """An interrupted cascade is re-composed, never re-trained.
+
+    The cascade has no checkpoint, so the trained-lane branch cannot apply: its
+    completion composes the text ranker export and the gnn_only decider export
+    that the trained lanes already wrote, and identifies itself by that scorer.
+    """
+    from graph_tracks.data import file_hash
+    training_zip, input_zip, calls, _ = suite(tmp_path, monkeypatch, cascade_complete=False)
+    final = complete(training_zip, input_zip, 'run')
+    assert calls == ['text', 'gnn_only', 'cascade']
+    cascade = tmp_path / 'run' / 'cascade'
+    assert json.loads((cascade / 'track_complete.json').read_text())['postprocess_complete'] is True
+    report = json.loads((cascade / 'cascade__report_manifest.json').read_text())
+    assert report['track'] == 'cascade'
+    assert report['checkpoint_sha256'] == file_hash(cascade / 'checkpoint-1/model.pt')
+
+
+def test_a_completed_cascade_is_never_recomposed(tmp_path, monkeypatch):
+    training_zip, input_zip, calls, _ = suite(tmp_path, monkeypatch, cascade_complete=True)
+    complete(training_zip, input_zip, 'run')
+    assert calls == ['text', 'gnn_only']
+
+
+def test_verified_cascade_archive_needs_no_ablation(tmp_path, monkeypatch):
+    """``post_training_ablation=True`` covers the trained lanes, not the cascade."""
+    from model_tracks import archive_verification
+    from model_tracks.config import SuiteConfig
+    training_zip, input_zip, _, _ = suite(tmp_path, monkeypatch, cascade_complete=True,
+                                         post_training_ablation=True,
+                                         ablation_skip_event=True)
+    final = complete(training_zip, input_zip, 'run')
+    settings = SuiteConfig.model_validate({'setup_dir': 'data/model_tracks/shared',
+                                           'text_bundle': 'data/model_tracks/shared/text.pkl',
+                                           'publish_git': False, 'publish_dvc': False,
+                                           'result_archive_format': 'zip',
+                                           'post_training_ablation': True})
+    result = archive_verification.verification_result(final, 'run', settings=settings)
+    assert result['status'] == 'verified', result.get('error')
+    assert set(result['tracks']) == {'text', 'gnn_only', 'cascade'}
+    assert 'ablation' not in result['tracks']['cascade']
 
 
 def test_downloaded_checkpoints_complete_locally_without_retraining(tmp_path, monkeypatch):
@@ -110,6 +192,9 @@ def test_interrupted_text_report_preserves_future_artifacts(tmp_path, monkeypatc
         # an artifact outside the old fixed allowlist
         (output / 'text__future_artifact.json').write_text(f'attempt {len(attempts)}')
         (output / 'text__training_report.md').write_text(f'attempt {len(attempts)}')
+        # A real retry rebuilds the ranker export its consumers read.
+        (output / 'text__index').mkdir(exist_ok=True)
+        (output / 'text__vectors.npz').write_bytes(b'text-vectors')
         _manifest(output / 'text__completion_manifest.json', 'text', report_test)
         if len(attempts) == 1:
             raise RuntimeError('text report interrupted')
@@ -142,7 +227,7 @@ def test_completion_runs_configured_post_training_ablation(tmp_path,monkeypatch)
         return destination
     monkeypatch.setattr(post_training_ablation, 'complete_saved', complete_saved)
     monkeypatch.setattr(post_training_ablation, 'publish_saved',
-                        lambda destination, suite, *, archive: calls.append(('publish', archive)))
+                        lambda destination, suite, *, archive, bundle=None: calls.append(('publish', archive)))
     training_zip, input_zip, _, _ = suite(tmp_path, monkeypatch, post_training_ablation=True)
     final = local_complete.complete(training_zip, input_zip, 'run')
     # the ablation runs once, before the publication archive is sealed
@@ -157,7 +242,7 @@ def test_completed_archive_restores_inputs_and_reports_before_publish(tmp_path,m
     training_zip,input_zip,calls,_ = suite(tmp_path,monkeypatch)
     final = complete(training_zip,input_zip,'run')
     shutil.rmtree(tmp_path/'run')
-    def publish(archive,settings,run_tag,*,ablation_done=False):
+    def publish(archive,settings,run_tag,*,ablation_done=False,bundle=None):
         assert (tmp_path/'run/text/text__training_report.md').is_file()
         assert (tmp_path/'run/local_inputs/data/model_tracks/suite.yaml').is_file()
         return archive

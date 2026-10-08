@@ -14,6 +14,25 @@ The two-stage flow this file is half of:
 Stage 2 does NOT consume stage 1's dataframe — it reloads the deduped dataset
 (core.common.load_dataset_deduped) and only MEETS stage 1 at the two artifacts
 above. That handoff is pinned in the trace by each stage's column-contract row.
+
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+This module OWNS the ``data_prep`` stage writer and drives stage 1 with it
+(``run_within_brand_pipeline(df, trace)``), so the pipeline's step rows and the
+manifest's accounting land in ONE commit of ONE run — the consolidated trace's
+one-writer-per-stage contract. Rows this module adds after the pipeline returns:
+  run   guard.recomputed_census   raw rows -> GS1-valid rows, with the
+                                  missing/checksum/review drops named exactly
+  run   manifest.row_accounting   the closure input == kept-visible + dropped +
+                                  collapsed_same_gtin, with the manifest's own
+                                  accounting in detail
+  group flags.reason_census       one EXACT census row per attribute-consistency
+                                  flag (how many GTINs carry it)
+  ent   flags.*                   the sampled GTINs carrying each flag
+  run   batch_grain               this stage reads ONE file in one pass, so
+                                  there is no chunk fan-out to trace (stated,
+                                  not silently omitted)
+Sampling caps are core.tracing's (ENTITY_SAMPLE_PER_REASON / ENTITY_ROW_CAP).
 """
 
 from __future__ import annotations
@@ -24,7 +43,7 @@ from core.common import DATA_PATH, SEED, F, CONFIG_PATH, VOCABULARY_CONFIG_PATH,
 from core.manifest import begin_manifest, finish_manifest
 from core.run_log import RunLogger
 from core.step_trace import timed
-from core.tracing import trace_path
+from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun, trace_path
 from pipeline import run_within_brand_pipeline
 
 log = RunLogger(__name__)
@@ -171,20 +190,25 @@ def main() -> None:
         df = _load_raw()
         timing.mark("load_raw_export")
         log.info(f"[data_prep] loaded {len(df):,} raw rows")
-        pairs, canon = run_within_brand_pipeline(df)
+        # ONE writer for the stage: the pipeline adds its step rows to THIS run and
+        # leaves the commit to us, so the manifest's accounting joins them.
+        trace = TraceRun("data_prep")
+        pairs, canon = run_within_brand_pipeline(df, trace)
         timing.mark("run_within_brand_pipeline")
     log.info(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}")
     _report_regex_fallback_census()
-    _close_manifest(manifest, timing, df, pairs, canon)
+    _close_manifest(manifest, timing, df, pairs, canon, trace)
 
 
-def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon) -> None:
+def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon, trace) -> None:
     """Assemble the stage's ledger into the manifest and print the closure.
 
     Row accounting (gtin-guard drops vs kept-visible canonical records), the
     attribute-consistency flag census, the frozen artifact list, the atomic
     manifest publication and the closing closure line — the one
-    responsibility the stage owes AFTER the pipeline ran.
+    responsibility the stage owes AFTER the pipeline ran. The consolidated-trace
+    rows are added to the stage's single writer and committed BEFORE the manifest
+    hashes it, so the shipped manifest pins the trace it describes.
     """
     # ---- row accounting (SILENT_DROPS task 6; capture-only) ────────────────
     # The pipeline's gtin-guard drops rows for two loud reasons (both
@@ -202,6 +226,8 @@ def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon) -> None:
     # pinning them. Persist the census here so the counts are verifiable
     # from committed data (results/manifests/data_prep.json).
     row_accounting["flags_census"] = _flag_census(canon)
+    _record_stage_rows(trace, df, canon, row_accounting)
+    trace.write()
     out_paths, expected = _stage_outputs()
     timing.mark("accounting_and_flags")
     mpath = finish_manifest(
@@ -214,6 +240,110 @@ def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon) -> None:
     log.info(
         f"[manifest] data_prep complete -> {mpath} | "
         f"closure {n_in:,} == {n_out:,} kept-visible + {n_drop:,} dropped"
+    )
+
+
+def _record_stage_rows(
+    trace: TraceRun, df: pd.DataFrame, canon, row_accounting: dict
+) -> None:
+    """The manifest's row accounting, the flag census and the guard readback.
+
+    ``guard.recomputed_census`` re-derives the guard's populations from the frame
+    the same way the guard does (``_gtin_guard_census``), so the trace carries the
+    stage's own closure arithmetic and cannot drift from the manifest.
+    """
+    from core.identity_policy import apply_identity_links
+
+    linked = apply_identity_links(df)
+    census = _gtin_guard_census(linked)
+    # The invariant, stated in the trace itself: ONE writer commits stage
+    # 'data_prep'. This module drives stage 1 with its own writer
+    # (run_within_brand_pipeline(df, trace)), which defers its commit, so a second
+    # writer for this stage would silently REPLACE these rows. A reader seeing two
+    # of these rows knows the deferral was bypassed.
+    trace.add(
+        "stage_ownership",
+        "single_writer",
+        reason=(
+            "training.data_prep is the ONE writer of stage 'data_prep': it hands "
+            "its writer to run_within_brand_pipeline, which defers its commit, so "
+            "the pipeline's step rows and this manifest accounting commit together"
+        ),
+        detail={
+            "writer": "training.data_prep",
+            "stage1_handoff": "run_within_brand_pipeline(df, trace)",
+        },
+        source="src/pipeline.py _PipelineSteering.open_stage",
+    )
+    trace.add(
+        "guard",
+        "recomputed_census",
+        in_count=int(len(df)),
+        out_count=int(census["n_valid"]),
+        reason=(
+            "rows keep identity only with a present, GS1-valid gtin (and no "
+            "identity-review hold), recomputed from the frame the guard used"
+        ),
+        detail={**census, "input_rows": int(len(df))},
+        source="raw export (core.common.load_raw_export)",
+    )
+    dropped = row_accounting["dropped"]
+    trace.add(
+        "manifest",
+        "row_accounting",
+        in_count=int(row_accounting["input_rows"]),
+        out_count=int(row_accounting["output_rows"]),
+        reason=(
+            "closure: input_rows == output_rows + sum(dropped) + "
+            "collapsed_same_gtin; the last term is rows KEPT and AGGREGATED into "
+            "their gtin's record, not lost"
+        ),
+        detail={
+            "output_rows": int(row_accounting["output_rows"]),
+            "dropped": {key: int(value) for key, value in dropped.items()},
+            "collapsed_same_gtin": int(row_accounting["collapsed_same_gtin"]),
+            "gate_pairs": int(row_accounting["gate_pairs"]),
+        },
+        source="data_prep stage manifest row accounting",
+    )
+    trace.add(
+        "batch_grain",
+        "not_applicable",
+        reason=(
+            "this stage reads ONE raw-export frame in one pass and writes two "
+            "artifacts; there is no chunk or file fan-out to trace at batch grain"
+        ),
+        detail={
+            "rows": int(len(df)),
+            "artifacts": [path.name for path in _stage_outputs()[0]],
+        },
+        source="raw export (core.common.load_raw_export)",
+    )
+    _record_flag_census(trace, canon)
+
+
+def _record_flag_census(trace: TraceRun, canon) -> None:
+    """One group row per attribute-consistency flag, plus the flagged GTINs.
+
+    A GTIN can carry several flags, so the entity here is the (gtin, flag) pair
+    and the census counts GTINs per flag — exactly what ``_flag_census`` counts.
+    """
+    records: list[dict[str, str]] = []
+    if "attribute_consistency_flags" in canon:
+        for gtin, flags in zip(canon["gtin"], canon["attribute_consistency_flags"], strict=True):
+            if not isinstance(flags, (list, tuple, set)):
+                continue
+            for flag in flags:
+                records.append({"gtin": str(gtin), "flag": str(flag)})
+    trace.add_entities(
+        "flags",
+        records,
+        key_of=lambda record: record["gtin"],
+        reason_of=lambda record: record["flag"],
+        detail_of=lambda record: {"gtin": record["gtin"]},
+        source="canonical_records.csv attribute_consistency_flags",
+        per_reason=ENTITY_SAMPLE_PER_REASON,
+        total_cap=ENTITY_ROW_CAP,
     )
 
 

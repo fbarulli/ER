@@ -7,6 +7,12 @@ import pandas as pd
 from graph_tracks.config import load_text_config, RetrievalReportContext
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     from model_tracks.text_export import validate as validate_export
     from graph_tracks.data import file_hash, load_records
@@ -18,7 +24,8 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     from core.performance import PerformanceRecorder
     from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
     # Validate the lane before checkpoint loading, encoding or report writes.
-    settings = load_text_config(setup / 'text.yaml')
+    layout = _setup_layout()
+    settings = load_text_config(setup / layout.text_config)
     settings.report_test = report_test
     started = time.monotonic()
     print(f"[text-postprocess] start output={output} setup={setup} device={device} report_test={report_test}", flush=True)
@@ -35,7 +42,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     print(f"[text-phase] inputs complete listings={len(records)} split_pairs="
           f"{ {split: {'positive': int(labels.sum()), 'negative': int((labels == 0).sum())} for split, (_, labels) in pairs.items()} }", flush=True)
     cache_started = time.monotonic()
-    print(f"[text-phase] vector_export start catalog={setup / 'eligible_catalog.csv'} checkpoint={checkpoint} "
+    print(f"[text-phase] vector_export start catalog={setup / layout.catalog} checkpoint={checkpoint} "
           f"output={output / 'text__vectors.npz'}", flush=True)
     cache = output / 'text__vectors.npz'
     vectors, metadata = validate_export(cache, checkpoint, setup)

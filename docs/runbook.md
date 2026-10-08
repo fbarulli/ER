@@ -174,8 +174,8 @@ into the new run dir, so check disk.
 - **Do not normalize `row_bc`** — fold sets are raw keys, zero-padding drops pairs.
 - **Do not flip `negative_supply.mode` from `gate`** without discriminator plus
   stratified eval evidence.
-- **Do not run a hybrid-worker preflight** before the declared GPU-pending cache
-  exists. It cannot pass.
+- **Do not run a graph-worker preflight** against a prepared input or frozen cache
+  the run has not produced yet. It cannot pass.
 - **Do not assume BF16 on a T4.**
 - **Do not trust GPU throughput numbers taken with profiling on.** Measure the
   sampling overhead first.

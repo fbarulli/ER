@@ -20,10 +20,21 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
 - :class:`TextCache` — the checkpoint-native embedding cache contract
   (:func:`load_text_cache`).
 - :func:`census` — the representation-policy census.
+
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+Stage ``graph_data``. These rows describe the graph inputs' own contract, so
+they are OPT-IN: the caller passes the consolidated-trace writer it already
+owns (``setup.py`` and ``prepare.py`` do) and no row is written otherwise. That
+is deliberate — ``tensorize``/``fit_vocabulary`` sit on the training hot path,
+and a library that writes a file per call would be a performance defect, not
+traceability. Rows:
+  run   listings.validated      raw listings JSON -> contract-checked records
+  run   vocabulary.fitted       train-split records -> train-only vocabulary
+  run   census.representation   records -> the representation census
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +47,9 @@ from core.run_log import RunLogger
 from core.sku_identity import ProductIdentity, graph_schema
 
 _LOG = RunLogger(__name__)
+
+#: The pipeline stage these rows belong to (core.tracing ``stage`` column).
+STAGE = "graph_data"
 
 # Defaults OFF: the full finite/norm scan stays on so corruption detection is
 # unchanged. Opting in skips the O(rows*cols) scan on caches the data gate has
@@ -53,7 +67,19 @@ SPLITS = {"train", "dev", "test"}
 
 
 class FileDigest:
-    """The one hash surface of the graph inputs."""
+    """The one hash surface of the graph inputs.
+
+    Files forward to the ONE digest implementation (``core.portable_archive
+    .raw_file_digest``) instead of carrying a second copy of the algorithm;
+    directories keep the checkpoint-composition hash that only this lane
+    defines.
+
+    Deliberately the UNCACHED route: ``file_hash`` is used as a change
+    detector (frozen ablation sources, worker-package verification, git
+    transport checks), so a same-size rewrite that preserves ``mtime_ns`` must
+    still be observed. Repeated-read callers that want the memoized policy ask
+    for it by name (``core.portable_archive.cached_file_digest``).
+    """
 
     @staticmethod
     def of(path: Path | str) -> str:
@@ -61,7 +87,8 @@ class FileDigest:
         if path.is_dir():
             from graph_tracks.text_cache import checkpoint_hash
             return checkpoint_hash(path)
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        from core.portable_archive import raw_file_digest
+        return raw_file_digest(path)
 
 
 def file_hash(path: Path | str) -> str:
@@ -130,10 +157,41 @@ class ListingValidator:
                     raise ValueError("numeric fields must be lists of finite nonnegative numbers")
 
 
-def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
-    """Load + validate the listing JSON (contract on :class:`ListingValidator`)."""
+def load_records(
+    path: Path, *, require_training: bool = True, trace=None
+) -> list[dict]:
+    """Load + validate the listing JSON (contract on :class:`ListingValidator`).
+
+    ``trace`` is the caller's consolidated-trace writer (core.tracing.TraceRun);
+    with it the validated population is recorded, with none nothing is written
+    (this function is on the training path).
+    """
     raw = json.loads(path.read_text())
-    return ListingValidator(require_training=require_training).check_frame(raw)
+    records = ListingValidator(require_training=require_training).check_frame(raw)
+    if trace is not None:
+        raw_listings = raw.get("listings") if isinstance(raw, dict) else None
+        trace.add(
+            "listings",
+            "validated",
+            in_count=len(raw_listings) if isinstance(raw_listings, list) else len(records),
+            out_count=len(records),
+            reason=(
+                "every listing must carry exactly sku_id/split/attribute/numeric, "
+                "a unique nonempty sku_id, a declared split and values from the "
+                "shared extractor's schema"
+            ),
+            detail={
+                "path": str(path),
+                "schema": ListingValidator.SCHEMA,
+                "require_training": bool(require_training),
+                "splits": {
+                    split: sum(1 for record in records if record["split"] == split)
+                    for split in sorted({record["split"] for record in records})
+                },
+            },
+            source=str(path),
+        )
+    return records
 
 
 class Vocabulary:
@@ -146,8 +204,47 @@ class Vocabulary:
                 for relation in RELATIONS}
 
 
-def fit_vocabulary(records: list[dict]) -> dict[str, list[str]]:
-    return Vocabulary.fit(records)
+def fit_vocabulary(records: list[dict], trace=None) -> dict[str, list[str]]:
+    """Train-split-only categorical vocabulary, optionally traced.
+
+    The traced counts are NOT a funnel: one train listing carries SEVERAL distinct
+    values, so the vocabulary is legitimately larger than the train population
+    (measured live: 3 train listings -> 4 entries). Stating an in/out pair here
+    made dropped_count negative, which the row contract forbids, so a unit change
+    states only its output and flags the change.
+
+    The rule is the shared one (``pipeline.unit_change_counts``). It is restated
+    here as two lines rather than imported so this graph leaf module does not
+    take a dependency on ``pipeline``; the arithmetic and the flag are identical.
+    """
+    vocabulary = Vocabulary.fit(records)
+    if trace is not None:
+        train_records = sum(1 for record in records if record["split"] == "train")
+        entries = sum(len(values) for values in vocabulary.values())
+        unit_change = entries > train_records
+        trace.add(
+            "vocabulary",
+            "fitted",
+            in_count=None if unit_change else train_records,
+            out_count=entries,
+            reason=(
+                "only TRAIN-split listings feed the vocabulary; a value seen by "
+                "several listings is one entry, and missing/unseen values share "
+                "the unknown token at use time"
+            ),
+            detail={
+                "listings": len(records),
+                "train_listings": train_records,
+                "vocabulary_entries": entries,
+                "unit_change": unit_change,
+                "relations": {
+                    relation: len(values)
+                    for relation, values in sorted(vocabulary.items())
+                },
+            },
+            source="graph listing records",
+        )
+    return vocabulary
 
 
 @dataclass
@@ -264,8 +361,14 @@ def load_text_cache(path: Path, ids: list[str]) -> tuple[np.ndarray, dict]:
     return cache.gather(ids), cache.metadata
 
 
-def census(records: list[dict], vocabulary: dict[str, list[str]]) -> dict:
-    return {
+def census(records: list[dict], vocabulary: dict[str, list[str]], trace=None) -> dict:
+    """The representation-policy census, optionally traced.
+
+    The funnel is records -> their split assignments (every record has exactly
+    one), so the counts close; the per-relation membership detail is what the
+    census is for.
+    """
+    result = {
         "representation_policy": {
             "numeric": "log1p min/max and presence; interior values omitted",
             "categorical": "train vocabulary; missing and all unseen values share token zero; deduplicated",
@@ -284,3 +387,18 @@ def census(records: list[dict], vocabulary: dict[str, list[str]]) -> dict:
                                   for v in r["attribute"].get(rel, [])} - set(vocabulary[rel])),
         } for rel in RELATIONS},
     }
+    if trace is not None:
+        trace.add(
+            "census",
+            "representation",
+            in_count=len(records),
+            out_count=sum(result["splits"].values()),
+            reason=(
+                "every listing carries exactly one split, so the census closes; "
+                "it records the representation policy and the per-relation "
+                "membership/missing/unseen counts"
+            ),
+            detail=result,
+            source="graph listing records + train vocabulary",
+        )
+    return result

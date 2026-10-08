@@ -9,11 +9,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.common import training_cfg
+from core.coverage_contracts import Difficulty
 from core.schemas import DifficultySpec
 from training.masking import _FIELD_PREFIXES, _field_surfaces, _field_values_conflict, field_of
-
-Difficulty = Literal['easy', 'medium', 'hard', 'unknown']
-
 
 
 class DifficultyEndpoint(BaseModel):

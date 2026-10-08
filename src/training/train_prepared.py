@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from core.common import (
-    F,
     RESULTS,
     SEED,
     load_config,
@@ -34,7 +33,7 @@ from training.attestation import (
     verify_attestation,
     verify_plan_identity,
 )
-from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
+from training.training import ES_PATIENCE, ES_THRESHOLD, flush_training_trace, train_one_config
 from training.prepared_bundle import load_prepared_bundle, prepared_holdout
 
 
@@ -89,8 +88,17 @@ def main() -> None:
     # W&B is supplementary telemetry.  A checkout-native Colab smoke must
     # remain runnable with the signed-in Colab account alone: its artifacts
     # are collected by the launcher either way.
-    with WandbCtx(run_name) as wandb_ctx:
-        _main(args, wandb_ctx)
+    try:
+        with WandbCtx(run_name) as wandb_ctx:
+            _main(args, wandb_ctx)
+    finally:
+        # ONE commit for the "training" stage (train.py's flush, mirrored): this
+        # entry is the suite's production training path and does not go through
+        # train.py, so without this the fold/epoch/batch/collapse rows recorded
+        # by train_one_config would never reach the consolidated trace. Runs on
+        # the failure path too (a partial run is still describable), and is a
+        # no-op when nothing was recorded.
+        flush_training_trace()
 
 
 def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
@@ -155,24 +163,16 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     train_neg_sources = np.asarray(bundle["train_neg_sources"], dtype=object)
     mask_audit = list(bundle["mask_audit"])
     hard_negative_mask_audit = list(bundle["hard_negative_mask_audit"])
-    frozen_inputs = {
-        "labeled_pairs": "labeled_pairs_csv",
-        "canonical_records": "canonical_records_csv",
-        "gate_results": "gate_results_csv",
-    }
-    for file_key, bundle_key in frozen_inputs.items():
-        # Each prepared worker owns its frozen-input copy. F is a process-local
-        # mapping, so downstream split/calibration readers use this copy without
-        # modifying checkout inputs shared with graph/hybrid workers.
-        destination = RESULTS / "_prepared_inputs" / Path(F[file_key]).name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(bundle[bundle_key])
-        F[file_key] = destination
-        print(
-            f"[prepared-bundle] materialized {file_key}={destination} "
-            f"bytes={len(bundle[bundle_key]):,}",
-            flush=True,
-        )
+    from training.run_plan import _materialize_frozen_inputs
+
+    # Each prepared worker owns its frozen-input copy. F is a process-local
+    # mapping, so downstream split/calibration readers use this copy without
+    # modifying checkout inputs shared with graph/hybrid workers. The plan path
+    # (``training.run_plan.prepare_run_plan``) materializes the exact same
+    # members from the exact same bundle contract, so both callers share this
+    # ONE implementation instead of each spelling the member names and the
+    # destination directory.
+    _materialize_frozen_inputs(bundle)
 
     if args.split != "holdout":
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")

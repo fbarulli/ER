@@ -38,6 +38,27 @@ Class map (one owner per responsibility):
   - LaneAssembler    — the trainer bridge (negative swap + minted leaves)
   - FoldMap          — GTIN-grouped fold buckets over union components
   - NegativeSupply   — the orchestrator: block -> mine -> mint -> emit
+  - SupplyTrace      — the lane's rows in the ONE consolidated trace
+
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+Stage ``negative_supply``, emitted by :class:`SupplyTrace` from
+``NegativeSupply.emit`` (the lane's only public entry point):
+  run   block.candidates_blocked   anchors -> candidates (the blocker's funnel)
+  run   mine_real.partners_mined   candidates -> real one-diff partners, with
+                                   the rejection census in detail
+  group mine_real.rejected.reason_census  one row per REJECTION reason, EXACT
+  ent   mine_real.rejected.sampled each sampled rejected candidate, NAMED
+  run   mint.partners_minted       uncovered anchor rows -> minted partners
+  group mint.skipped.reason_census one row per SKIP reason, EXACT
+  ent   mint.skipped.sampled       each sampled skipped anchor, NAMED
+  run   pairs.emitted              the emitted population census
+  run   coverage.anchors_covered   anchors -> anchors with a real partner
+Every census number is the stage's OWN funnel count (never re-derived from the
+sample); the entity rows are a bounded sample (ENTITY_SAMPLE_PER_REASON per
+(step, reason)) collected by ``NegativeSupply._sample_trace_row``.
+``empty_pool`` is counted per move ATTEMPT, not per anchor, and is stated as
+such: it is never added to a row-funnel term.
 """
 
 from __future__ import annotations
@@ -61,9 +82,16 @@ from pydantic import (
     model_validator,
 )
 
+from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
 from core.disjoint_sets import DisjointSet
 from core.run_log import RunLogger
 from core.step_trace import timed
+from core.tracing import (
+    ENTITY_SAMPLE_PER_REASON,
+    SCOPE_ENTITY,
+    SCOPE_GROUP,
+    TraceRun,
+)
 
 _LOG = RunLogger(__name__)
 
@@ -79,17 +107,22 @@ _POPULATION_TYPE = Literal[
     "minted_partner", "edited_positive",
 ]
 
-# whitelisted attribute dimension -> canonical_records.csv set column
-_DIMENSION_COLUMNS: Mapping[str, str] = {
-    "volume": "volume_set",
-    "pack": "pack_set",
-    "package_type": "package_type_set",
-    "package_material": "package_material_set",
-    "flavor": "flavor_set",
-    "carbonation": "carbonation_set",
-    "sweetener": "sweetener_set",
-}
-_DIFF_DIMENSIONS = tuple(_DIMENSION_COLUMNS)
+#: The whitelisted attribute dimensions the single-move mint may differ on,
+#: in the order the diff census reports them. The dimension -> canonical_records
+#: column table is DERIVED from the record schema (core.columns.
+#: ATTRIBUTE_DIMENSION_COLUMNS), never retyped here.
+_DIFF_DIMENSIONS: tuple[str, ...] = (
+    "volume",
+    "pack",
+    "package_type",
+    "package_material",
+    "flavor",
+    "carbonation",
+    "sweetener",
+)
+
+#: The lane's name in the ONE consolidated trace (core.tracing ``stage``).
+STAGE = "negative_supply"
 
 
 class SupplySpecBase(BaseModel):
@@ -473,10 +506,10 @@ class CanonicalIndex:
 
     def dimension_pool(self, dimension: str) -> frozenset[str]:
         """Every atom observed in the corpus for one dimension's set column."""
-        if dimension not in _DIMENSION_COLUMNS:
+        if dimension not in _DIFF_DIMENSIONS:
             raise ValueError(f"unpooled dimension: {dimension}")
         pool: set[str] = set()
-        column = self._frame[_DIMENSION_COLUMNS[dimension]]
+        column = self._frame[ATTRIBUTE_DIMENSION_COLUMNS[dimension]]
         for raw in _LOG.progress(column, desc="dimension_pool", unit="record"):
             pool |= read_set_column(raw)
         return frozenset(pool)
@@ -845,6 +878,10 @@ class NegativeSupply(BaseModel):
     _block_vectorizer: object = PrivateAttr(default=None)
     _block_matrix: object = PrivateAttr(default=None)
     _block_anchor_positions: dict[int, int] = PrivateAttr(default_factory=dict)
+    #: Bounded ENTITY samples for the consolidated trace (see
+    #: ``_sample_trace_row``); the exact populations stay in ``funnel``.
+    _trace_rows: list[dict] = PrivateAttr(default_factory=list)
+    _trace_sampled: dict[str, int] = PrivateAttr(default_factory=dict)
 
     @field_validator("df")
     @classmethod
@@ -856,7 +893,8 @@ class NegativeSupply(BaseModel):
     @field_validator("canonical")
     @classmethod
     def _canonical_contract(cls, canonical: pd.DataFrame) -> pd.DataFrame:
-        needs = {"gtin", _DIMENSION_COLUMNS["volume"], _DIMENSION_COLUMNS["flavor"]}
+        needs = {"gtin", ATTRIBUTE_DIMENSION_COLUMNS["volume"],
+                 ATTRIBUTE_DIMENSION_COLUMNS["flavor"]}
         missing = needs - set(canonical.columns)
         if missing:
             raise ValueError(f"canonical records missing columns: {sorted(missing)}")
@@ -905,6 +943,39 @@ class NegativeSupply(BaseModel):
         pool = self._canonical_index.corpus_donors(dimension)
         return tuple(value for value in pool if value not in exclude)
 
+    # ── the trace's bounded sample collectors (see SupplyTrace) ──────────────
+    def _reset_trace_samples(self) -> None:
+        """Start a supply pass with empty collectors (one pass = one ``emit``).
+
+        The trace's exact per-reason populations are the funnel's OWN counts;
+        these collectors only feed its ENTITY rows, so they hold a BOUNDED
+        sample instead of one record per rejected candidate (measured: anchors
+        x top_k candidates, i.e. hundreds of thousands on a real corpus).
+        """
+        self._trace_rows = []
+        self._trace_sampled = {}
+
+    def _sample_trace_row(
+        self, step: str, reason: str, *, key: object, **detail: object
+    ) -> None:
+        """Keep at most ENTITY_SAMPLE_PER_REASON records per (step, reason).
+
+        The census is NOT built from here — it is the funnel's count — so
+        dropping records past the cap never changes a population number.
+        """
+        bucket = f"{step}:{reason}"
+        if self._trace_sampled.get(bucket, 0) >= ENTITY_SAMPLE_PER_REASON:
+            return
+        self._trace_sampled[bucket] = self._trace_sampled.get(bucket, 0) + 1
+        self._trace_rows.append({
+            "step": str(step), "reason": str(reason),
+            "key": str(key), "detail": dict(detail),
+        })
+
+    def _sampled_trace_rows(self, step: str) -> list[dict]:
+        """The collected sample rows of one trace step (never the census)."""
+        return [row for row in self._trace_rows if row["step"] == step]
+
     # ── stage 1: blocking ────────────────────────────────────────────────────
     def block(self) -> pd.DataFrame:
         """Real different-GTIN candidates per anchor, TF-IDF cosine top-k."""
@@ -912,6 +983,7 @@ class NegativeSupply(BaseModel):
 
         with _LOG.section("negative_supply.block"):
             self._prepare()
+            self._reset_trace_samples()
             anchors = np.flatnonzero(self.anchor_mask.to_numpy())
             if len(anchors) == 0:
                 return self._block_empty_pool()
@@ -1069,15 +1141,35 @@ class NegativeSupply(BaseModel):
         """One candidate's outcome: the canonical-gate then one-diff verdict."""
         left_gtin = self._anchors.row_gtin(candidate.anchor_row)
         right_gtin = self._anchors.row_gtin(candidate.candidate_row)
-        if not self._canonical_index.has_record(left_gtin) \
-                or not self._canonical_index.has_record(right_gtin):
+        has_left = self._canonical_index.has_record(left_gtin)
+        has_right = self._canonical_index.has_record(right_gtin)
+        if not has_left or not has_right:
             census["no_canonical_record"] += 1
+            self._sample_trace_row(
+                "mine_real.rejected", "no_canonical_record",
+                key=f"{left_gtin}|{right_gtin}",
+                anchor_gtin=str(left_gtin), partner_gtin=str(right_gtin),
+                score=float(candidate.score),
+                missing_canonical=", ".join(
+                    side for side, present in
+                    (("anchor", has_left), ("partner", has_right)) if not present
+                ),
+            )
             return None
         diffs = self._candidate_diff(left_gtin, right_gtin)
         if self._single_whitelisted_diff(diffs):
             census["diff_count_1"] += 1
             return self._real_partner_row(candidate, diffs)
         census["diff_count_other"] += 1
+        self._sample_trace_row(
+            "mine_real.rejected", "diff_count_other",
+            key=f"{left_gtin}|{right_gtin}",
+            anchor_gtin=str(left_gtin), partner_gtin=str(right_gtin),
+            score=float(candidate.score),
+            diff_count=int(sum(diffs.values())),
+            differing=sorted(name for name, differs in diffs.items() if differs),
+            whitelisted_moves=[str(move) for move in self.spec.mint.moves],
+        )
         return None
 
     # ── stage 3: minted partners for uncovered anchors ───────────────────────
@@ -1176,12 +1268,24 @@ class NegativeSupply(BaseModel):
         """
         if self.spec.mint.entity_level == "gtin" and anchor_gtins[anchor] in minted_gtins:
             skipped["same_entity"] += 1
+            self._sample_trace_row(
+                "mint.skipped", "same_entity",
+                key=str(anchor_gtins[anchor]), anchor_row=int(anchor),
+                entity_level=str(self.spec.mint.entity_level),
+                note="its entity already minted a partner this pass",
+            )
             return None
         if len(rows) >= self.spec.mint.max_minted:
             skipped["target_cap"] += 1
+            self._sample_trace_row(
+                "mint.skipped", "target_cap",
+                key=str(anchor_gtins[anchor]), anchor_row=int(anchor),
+                minted=len(rows), max_minted=int(self.spec.mint.max_minted),
+            )
             return None
         landed = self._try_moves(
-            anchor, _ordered_moves(moves, self.spec.mint.prefer, sequence), skipped
+            anchor, str(anchor_gtins[anchor]),
+            _ordered_moves(moves, self.spec.mint.prefer, sequence), skipped
         )
         if landed is None:
             return None
@@ -1208,12 +1312,13 @@ class NegativeSupply(BaseModel):
         )
 
     def _try_moves(
-        self, anchor: int, attempted: list[str], skipped: dict[str, int]
+        self, anchor: int, gtin: str, attempted: list[str], skipped: dict[str, int]
     ) -> tuple[str, str, str, str] | None:
         """Try each whitelisted move in order; report exhausted pools.
 
         Returns (new_text, dimension, moved_from, moved_to), or None when no
         move could land (the surface is missing — reported, not silent).
+        ``gtin`` only names the anchor on the trace's skip rows.
         """
         anchor_text = str(self._texts.iloc[anchor])
         outcome = None
@@ -1222,6 +1327,11 @@ class NegativeSupply(BaseModel):
             pool = self._donors(move, exclude=frozenset(atoms))
             if not pool:
                 skipped["empty_pool"] += 1
+                self._sample_trace_row(
+                    "mint.skipped", "empty_pool",
+                    key=gtin, anchor_row=int(anchor), move=str(move),
+                    note="donor pool empty once its own surfaces were excluded",
+                )
                 continue
             moved_to = pool[int(self._rng.integers(len(pool)))]
             replacement = {atom: moved_to for atom in atoms}
@@ -1231,6 +1341,11 @@ class NegativeSupply(BaseModel):
                 break
         if outcome is None:
             skipped["no_move_surface"] += 1
+            self._sample_trace_row(
+                "mint.skipped", "no_move_surface",
+                key=gtin, anchor_row=int(anchor),
+                attempted_moves=[str(move) for move in attempted],
+            )
             return None
         return outcome
 
@@ -1243,6 +1358,16 @@ class NegativeSupply(BaseModel):
         self._score_pairs(rows)
         eligible = [pair for pair in rows if pair.score > self.spec.blocker.min_score]
         skipped["below_blocker_floor"] = len(rows) - len(eligible)
+        for pair in rows:
+            if pair.score > self.spec.blocker.min_score:
+                continue
+            self._sample_trace_row(
+                "mint.skipped", "below_blocker_floor",
+                key=str(pair.anchor_gtin), anchor_row=int(pair.anchor_row),
+                partner_row=int(pair.partner_row), score=float(pair.score),
+                min_score=float(self.spec.blocker.min_score),
+                edit_field=str(pair.edit_field),
+            )
         return eligible
 
     def _score_pairs(self, rows: list[PairRow]) -> None:
@@ -1349,11 +1474,11 @@ class NegativeSupply(BaseModel):
     def _dimension_diff(self, left, right, dimension: str) -> bool:
         """One dimension's bool: both populated and different."""
         left_atoms = (
-            read_set_column(left.get(_DIMENSION_COLUMNS[dimension]))
+            read_set_column(left.get(ATTRIBUTE_DIMENSION_COLUMNS[dimension]))
             if left is not None else frozenset()
         )
         right_atoms = (
-            read_set_column(right.get(_DIMENSION_COLUMNS[dimension]))
+            read_set_column(right.get(ATTRIBUTE_DIMENSION_COLUMNS[dimension]))
             if right is not None else frozenset()
         )
         return bool(left_atoms and right_atoms
@@ -1446,7 +1571,9 @@ class NegativeSupply(BaseModel):
         """Ordered pass: block -> mine -> coverage -> mint -> attach -> write.
 
         Writes pairs.csv + manifest.json and returns the manifest. The
-        emitted table is the ONLY interface to the trainer/evaluator.
+        emitted table is the ONLY interface to the trainer/evaluator. The
+        lane's own rows go to the ONE consolidated trace (core.tracing, stage
+        ``negative_supply``) — see :class:`SupplyTrace`.
         """
         with _LOG.section("negative_supply.emit"):
             self._prepare()
@@ -1467,6 +1594,12 @@ class NegativeSupply(BaseModel):
             (folder / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n"
             )
+            # The stage's rows into the ONE consolidated trace, committed after
+            # pairs.csv + manifest.json so they describe the bytes actually
+            # published (the manifest's own funnel is the census they carry).
+            trace = TraceRun(STAGE)
+            SupplyTrace.record(trace, self, manifest)
+            trace.write()
             self.pairs = frame
             return manifest
 
@@ -1541,6 +1674,181 @@ class NegativeSupply(BaseModel):
             anchors_total = int(self.anchor_mask.sum())
             covered_total = len(covered)
         return anchors_total, covered_total
+
+
+# ── the lane's rows into the ONE consolidated trace ─────────────────────────
+class SupplyTrace:
+    """Stage ``negative_supply`` in the ONE consolidated trace (core.tracing).
+
+    The lane published pairs.csv + manifest.json (whose ``funnel`` block held
+    the accounting) but no row in the trace, so its attrition was readable only
+    from its own manifest. The row list is in the module header; every census
+    number here is the funnel's OWN count, never a count of the sample.
+
+    ``empty_pool`` is deliberately its own census bucket: it counts move
+    ATTEMPTS (a two-move anchor can report it twice), so it is never folded
+    into an anchor-row funnel term.
+    """
+
+    @staticmethod
+    def _census(
+        trace: TraceRun,
+        base: str,
+        counts: Mapping[str, int],
+        sampled: list[dict],
+        *,
+        source: str,
+    ) -> None:
+        """One GROUP row per reason (its EXACT count) beside its bounded sample.
+
+        The count is the stage's funnel; the sample is what
+        ``NegativeSupply._sample_trace_row`` retained. ``omitted`` states
+        exactly how much of the population the entity rows do not carry, so a
+        capped sample can never be mistaken for the population.
+        """
+        per_reason: dict[str, list[dict]] = {}
+        for record in sampled:
+            per_reason.setdefault(str(record["reason"]), []).append(record)
+        for name in sorted(counts, key=lambda key: (-int(counts[key]), key)):
+            rows = per_reason.get(name, [])
+            trace.add(
+                base, "reason_census", scope=SCOPE_GROUP,
+                in_count=int(counts[name]), out_count=len(rows),
+                reason=name,
+                detail={
+                    "population": int(counts[name]),
+                    "sampled": len(rows),
+                    "omitted": int(counts[name]) - len(rows),
+                    "sample_keys": [str(row["key"]) for row in rows[:5]],
+                    "cap_per_reason": ENTITY_SAMPLE_PER_REASON,
+                },
+                source=source,
+            )
+        for record in sampled:
+            trace.add(
+                base, "sampled", scope=SCOPE_ENTITY,
+                key=record["key"], reason=record["reason"],
+                detail=record["detail"], source=source,
+            )
+
+    @classmethod
+    def record(cls, trace: TraceRun, supply, manifest: Mapping) -> None:
+        """The lane's three funnels, its exact censuses and its named pairs."""
+        funnel = dict(supply.funnel or {})
+        block = funnel.get("block")
+        if block:
+            # No in/out pair: one anchor yields up to top_k candidates, so
+            # "anchors -> candidates" is a FAN-OUT over the candidate pairs, not
+            # a funnel — stating it as one would derive a negative drop (the
+            # same rule graph_tracks/setup.py's batch rows follow).
+            trace.add(
+                "block", "candidates_blocked",
+                reason=(
+                    "anchor rows (checksum-valid gtin, non-empty finalized "
+                    "title) -> cross-gtin candidates above the blocker's strict "
+                    "cosine floor; each anchor's own gtin is suppressed BEFORE "
+                    "the top-k budget is spent (a fan-out census: one anchor "
+                    "yields up to top_k candidates, so no in/out pair is "
+                    "stated)"
+                ),
+                detail={
+                    **block,
+                    "batch_grain": (
+                        "candidate pairs are the blocker's unit; anchor_rows "
+                        "and candidates are both exact counts"
+                    ),
+                },
+                source="data/dataset_deduped.csv anchors -> TF-IDF blocker top-k",
+            )
+        mine = funnel.get("mine_real")
+        if mine:
+            trace.add(
+                "mine_real", "partners_mined",
+                in_count=int(
+                    mine["no_canonical_record"] + mine["diff_count_1"]
+                    + mine["diff_count_other"]
+                ),
+                out_count=int(mine["real_partners"]),
+                reason=(
+                    "every above-floor candidate is evaluated against the "
+                    "canonical attribute sets; a candidate supplies a REAL "
+                    "negative only when EXACTLY ONE whitelisted dimension "
+                    "differs and every other populated dimension agrees "
+                    "(absence is never a diff)"
+                ),
+                detail=mine,
+                source="blocker candidates x canonical_records.csv attribute diffs",
+            )
+            cls._census(
+                trace, "mine_real.rejected",
+                {
+                    "no_canonical_record": int(mine["no_canonical_record"]),
+                    "diff_count_other": int(mine["diff_count_other"]),
+                },
+                supply._sampled_trace_rows("mine_real.rejected"),
+                source="manifest.json funnel.mine_real (the lane's own census)",
+            )
+        mint = funnel.get("mint")
+        if mint:
+            trace.add(
+                "mint", "partners_minted",
+                in_count=int(mint["uncovered_sku_rows"]), out_count=int(mint["minted"]),
+                reason=(
+                    "anchored rows whose entity got NO real partner -> one "
+                    "minted partner per anchor with a SINGLE whitelisted token "
+                    "move (the anchor text is byte-untouched); same_entity, "
+                    "target_cap and no_move_surface are the anchor-level skips "
+                    "and below_blocker_floor is a minted row dropped for "
+                    "scoring under the blocker floor"
+                ),
+                detail=mint,
+                source="manifest.json funnel.mint (the lane's own census)",
+            )
+            cls._census(
+                trace, "mint.skipped",
+                {
+                    name: int(mint[name]) for name in (
+                        "same_entity", "target_cap", "no_move_surface",
+                        "below_blocker_floor", "empty_pool",
+                    ) if name in mint
+                },
+                supply._sampled_trace_rows("mint.skipped"),
+                source=(
+                    "manifest.json funnel.mint; empty_pool is counted per move "
+                    "ATTEMPT, the others per anchor row"
+                ),
+            )
+        populations = {str(key): int(value)
+                       for key, value in (manifest.get("populations") or {}).items()}
+        trace.add(
+            "pairs", "emitted",
+            reason=(
+                "the emitted table is the lane's ONLY interface to the "
+                "trainer/evaluator: one row per population, plus the sha256 of "
+                "the bytes published"
+            ),
+            detail={
+                "populations": populations,
+                "pairs": int(sum(populations.values())),
+                "run_tag": str(manifest.get("run_tag", "")),
+                "pairs_sha256": str(manifest.get("pairs_sha256", "")),
+            },
+            source="results/negative_supply/<run_tag>/pairs.csv",
+        )
+        coverage = dict(manifest.get("coverage") or {})
+        if coverage:
+            trace.add(
+                "coverage", "anchors_covered",
+                in_count=int(coverage["anchors_total"]),
+                out_count=int(coverage["anchors_with_real_partner"]),
+                reason=(
+                    "anchors per the configured entity level -> the anchors a "
+                    "REAL partner covers (minted partners never count as "
+                    "coverage)"
+                ),
+                detail=coverage,
+                source="manifest.json coverage (core.coverage_contracts)",
+            )
 
 
 def _suppress_same_gtin(

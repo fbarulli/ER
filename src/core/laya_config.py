@@ -71,6 +71,53 @@ class FinetuneSpec(BaseModel):
     device: str = "auto"
 
 
+class EvalCalibrationSpec(BaseModel):
+    """laya.eval_calibration — the held-out EVAL path's calibration knobs.
+
+    The fine-tune EVAL-ONLY path (the remote `finetune-eval` kernel and the
+    local `--local-eval` CPU helper) fits laya's own calibration on the scored
+    split: `fit_temperature_map` (the per-type temperature sequence + the
+    per-bucket map) and, opt-in, `fit_abstention_thresholds` (the per-bucket
+    `min_confidence` gate). Both live in the external `laya` package and are
+    CONSUMED here, never reimplemented; this block only selects them.
+
+    The defaults reproduce the landed eval byte-for-byte: the temperature map
+    was always fitted and reported (`temperature=True`), abstention threshold
+    fitting was never called (`abstention=False`, so the report carries no
+    `abstention_thresholds` key), and no explicit runtime scalar was pinned
+    (`min_confidence=None`). A config/training.yaml without this block
+    therefore stages exactly as before.
+
+    `min_confidence` is the runtime scalar the eval report/provenance echoes
+    (the `laya.router`-style gate): when set it also overrides the fitted
+    map's `"default"` sentinel, because an explicit operator pin beats a fit.
+    `target_error`/`min_abstain_n` are the two `fit_abstention_thresholds`
+    kwargs (`target_error` as named; `min_abstain_n` is passed as laya's
+    `min_bucket_n` floor, the same role `TrainConfig.min_abstain_n` plays) and
+    mirror the sibling `FinetuneSpec` defaults, never re-derived.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    temperature: bool = True
+    abstention: bool = False
+    target_error: float = Field(default=0.10, ge=0.0, le=1.0)
+    min_abstain_n: int = Field(default=10, ge=1)
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _abstention_needs_temperature(self) -> "EvalCalibrationSpec":
+        # `fit_abstention_thresholds(records, temperature, ...)` scales the
+        # logits by the fitted per-type map before choosing the cut, so
+        # abstention without the temperature fit has no calibrated scale.
+        if self.abstention and not self.temperature:
+            raise ValueError(
+                "laya.eval_calibration.abstention=True requires temperature="
+                "True: laya's fit_abstention_thresholds cuts on the "
+                "calibrated confidence scale")
+        return self
+
+
 class LayaSpec(BaseModel):
     """training.laya — the laya decision lane's SSOT (additive).
 
@@ -120,6 +167,15 @@ class LayaSpec(BaseModel):
     staging_dir: str = "results/laya_lane"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
+    # The fine-tune/eval kernels' pin (the version their flags + the PERF/
+    # device monkeypatches were verified against). Distinct from
+    # `laya_package` (the DECISION kernel's unpinned install) and YAML-driven,
+    # so a version bump is config, never a code literal.
+    finetune_package: str = "laya>=0.3.29"
+    # The JSONL corpus root the fine-tune/eval payloads stage from
+    # (TRAIN_ROOT-relative; scripts/laya_build_dataset.py writes it). A path
+    # knob, not a literal: relocating the corpus is config alone.
+    finetune_corpus_dir: str = "data/laya"
     # Both kaggle dataset slugs ('owner/slug') are owner-picked
     # 2026-10-07 (no silent default account; kaggle_slug=None sibling
     # precedent).
@@ -153,6 +209,12 @@ class LayaSpec(BaseModel):
     # (additive; defaults reproduce the landed recipe exactly). YAML-driven
     # so every trainer knob is SSOT config, never a code literal.
     finetune: FinetuneSpec = Field(default_factory=FinetuneSpec)
+    # The held-out EVAL path's calibration/abstention selection (additive;
+    # defaults reproduce the landed eval exactly). Consumed by the
+    # `finetune-eval` kernel AND the local `--local-eval` CPU helper, so both
+    # report the same per-type temperature + abstention `min_confidence`.
+    eval_calibration: EvalCalibrationSpec = Field(
+        default_factory=EvalCalibrationSpec)
     run_tag_prefix: str = "laya_"
     # SINGLE T4 per owner ruling; the meta never requests 2xT4.
     gpu: Literal["T4"] = "T4"

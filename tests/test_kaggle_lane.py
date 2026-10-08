@@ -510,6 +510,11 @@ def test_kernel_identities_resolve_every_kind_from_config(tmp_path, monkeypatch)
     assert identities["finalize"].result_name == kaggle_lane.FINALIZE_RESULT_NAME
     assert identities["finalize"].bundle_role == "result"
     assert identities["bundle"].bundle_role == "inputs"
+    # The train kernel ships the suite's own sealed result Bundle, so its fetched
+    # output is role-loaded at the same boundary the finalize job consumes; the
+    # embed output is not a Bundle role.
+    assert identities["train"].bundle_role == "result"
+    assert identities["embed"].bundle_role is None
     assert identities["bundle"].manifest_name(spec.files) == spec.files.bundle_receipt
     assert identities["finalize"].manifest_name(spec.files) == \
         spec.files.result_manifest.format(kind=kaggle_lane.FINALIZE_RESULT_NAME)
@@ -1572,22 +1577,22 @@ def test_role_archive_fetch_hashes_the_archive_exactly_once(tmp_path, monkeypatc
 
 
 def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monkeypatch):
-    """The complement: a train/embed output has no bundle role, so the fetch's
-    own digest IS its single integrity check (one read, no boundary load)."""
+    """The complement: an embed output has no bundle role, so the fetch's own
+    digest IS its single integrity check (one read, no boundary load)."""
     import hashlib
 
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                 bundle_dataset_slug="owner/er-10k-bundle")
-    archive_bytes = b"fake train result archive bytes"
+    _kernel_spec(tmp_path, monkeypatch,
+                 embedding_kernel_slug="owner/er-embed-gpu")
+    archive_bytes = b"fake embed vectors archive bytes"
 
     def fake_run(command, **kwargs):
         stage = Path(command[command.index("-p") + 1])
-        out = stage / "train"
+        out = stage / "embed"
         out.mkdir(parents=True)
-        (out / "result_bundle.tar.zst").write_bytes(archive_bytes)
-        (out / "result_bundle.manifest.json").write_text(json.dumps({
-            "kind": "result_bundle", "cohort": "10k",
-            "archive": "result_bundle.tar.zst",
+        (out / "vectors.tar.zst").write_bytes(archive_bytes)
+        (out / "vectors.manifest.json").write_text(json.dumps({
+            "kind": "vectors", "cohort": "10k",
+            "archive": "vectors.tar.zst",
             "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
         return subprocess.CompletedProcess(command, 0)
 
@@ -1601,11 +1606,55 @@ def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monk
         return real_sha256_file(path)
 
     monkeypatch.setattr(kaggle_lane, "sha256_file", counting_sha256)
-    plan = kaggle_lane.fetch_kernel_output(kind="train", execute=True)
+    plan = kaggle_lane.fetch_kernel_output(kind="embed", execute=True)
     assert plan["verified"] is True
     assert len(hashed) == 1, "exactly one whole-archive digest for a non-role kind"
     assert plan["bundle"] == {"identified": False, "role": None,
-                              "note": "fetched 'train' output is not a bundle role archive"}
+                              "note": "fetched 'embed' output is not a bundle role archive"}
+
+
+def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkeypatch):
+    """The train kernel's identity carries the result role (the handoff fix).
+
+    The train kernel ships ``model_tracks.run``'s sealed result Bundle, so its
+    fetched output is named by the SAME boundary load the finalize job performs:
+    the whole-archive digest and the member inventory are verified in that one
+    pass, and no second whole-archive hash runs at the fetch.
+    """
+    import hashlib
+
+    from core.bundle import Bundle
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                 bundle_dataset_slug="owner/er-10k-bundle")
+    assert kaggle_lane.kernel_identity("train").bundle_role == "result"
+    member = tmp_path / "member.txt"
+    member.write_text("sealed", encoding="utf-8")
+    sealed = Bundle.seal_archive(tmp_path / "sealed.tar.zst", {"tracks/a.txt": member},
+                                 role="result", metadata={"run_tag": "gpu_test"})
+    archive_bytes = (tmp_path / "sealed.tar.zst").read_bytes()
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        out = stage / "train"
+        out.mkdir(parents=True)
+        (out / "result_bundle.tar.zst").write_bytes(archive_bytes)
+        (out / "result_bundle.tar.zst.sha256").write_text(sealed.digest + "\n")
+        (out / "result_bundle.manifest.json").write_text(json.dumps({
+            "kind": "result_bundle", "role": "result", "run_tag": "gpu_test",
+            "cohort": "10k", "archive": "result_bundle.tar.zst",
+            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "sha256_file",
+                        lambda path: pytest.fail(f"redundant archive hash of {path}"))
+    plan = kaggle_lane.fetch_kernel_output(kind="train", execute=True)
+    assert plan["verified"] is True and plan["archive_sha256"] == sealed.digest
+    assert plan["bundle"] == {"identified": True, "role": "result",
+                              "sha256": sealed.digest, "members": 2,
+                              "run_tag": "gpu_test"}
 
 
 # ── the embed objective: explicit, never silently absent ────────────────────

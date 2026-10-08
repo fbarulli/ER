@@ -178,15 +178,19 @@ class KaggleRuntime:
         return result.returncode, output
 
     @staticmethod
-    def _env_dot_value(name: str) -> str | None:
-        """Read a simple KEY=VALUE from TRAIN_ROOT/.env or its parent .env.
+    def _env_dot_value(name: str, root: Path | None = None) -> str | None:
+        """Read a simple KEY=VALUE from <root>/.env or its parent .env.
 
         Same semantics as cli.colab._env_value: no printing (secrets stay out of
-        every log), env-var override first, never cloned into the repo.
+        every log), env-var override first, never cloned into the repo. ``root``
+        defaults to the lane's TRAIN_ROOT (the staging knob tests and alternate
+        checkouts re-point); a caller passes the repository root explicitly for
+        a value whose lookup must survive that redirection.
         """
         from cli import kaggle_lane as lane
 
-        for env_path in (lane.TRAIN_ROOT / ".env", lane.TRAIN_ROOT.parent / ".env"):
+        search_root = lane.TRAIN_ROOT if root is None else Path(root)
+        for env_path in (search_root / ".env", search_root.parent / ".env"):
             if not env_path.is_file():
                 continue
             for line in env_path.read_text(encoding="utf-8").splitlines():

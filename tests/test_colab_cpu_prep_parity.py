@@ -389,3 +389,58 @@ def test_the_own_lane_reports_failed_and_reraises(monkeypatch, tmp_path, capsys)
     captured = capsys.readouterr()
     assert "[failed] cpu prep lane did not complete" in captured.out
     assert "[done]" not in captured.out
+
+
+# ── the delivery crossing: one integrity check per VM transition ────────────
+
+def test_delivery_segment_writes_the_archive_and_its_digest_token(tmp_path):
+    """The VM-side delivery assembly ends with the transport token.
+
+    `bundle_delivery.tar.zst` is hashed as it is written and the digest lands
+    beside it; that token is the ONE integrity check the operator side runs on
+    the delivered bytes.
+    """
+    import glob as _glob
+    import hashlib
+
+    from cli.colab_bundle_transport import digest_sidecar
+    from cli.colab_lane import ColabCPULane
+
+    root = tmp_path / "remote"
+    run = root / "results" / "training_prep" / "20261008T000000000000"
+    run.mkdir(parents=True)
+    (run / "manifest.json").write_text("{}\n", encoding="utf-8")
+    (root / "data").mkdir()
+    (root / "data" / "canonical_records.csv").write_text("a,b\n", encoding="utf-8")
+    exec(ColabCPULane().delivery_segment(), {"root": str(root), "os": os, "glob": _glob})
+    archive = root / "bundle_delivery.tar.zst"
+    assert archive.is_file()
+    assert digest_sidecar(archive).read_text().strip() == \
+        hashlib.sha256(archive.read_bytes()).hexdigest()
+
+
+def test_downloaded_delivery_is_verified_once_against_the_vm_token(tmp_path, monkeypatch):
+    """The operator-side boundary: the delivered archive is checked ONCE against
+    the token the VM recorded. A tampered download fails loud and is never
+    recorded as verified (before this boundary the download was unchecked)."""
+    import hashlib
+
+    from cli.colab_lane import ColabCPULane
+
+    local_dir = tmp_path / "results" / "colab_bundle_x"
+    local_dir.mkdir(parents=True)
+    archive = local_dir / "bundle_delivery.tar.zst"
+    archive.write_bytes(b"delivered bundle bytes")
+    token = hashlib.sha256(archive.read_bytes()).hexdigest()
+    events: list[tuple] = []
+    monkeypatch.setattr(colab, "REMOTE_ROOT", "/content/ER")
+    monkeypatch.setattr(colab, "TRAINING_RESULTS", tmp_path / "results")
+    monkeypatch.setattr(colab, "_result_event", lambda *a, **k: events.append((a, k)))
+    monkeypatch.setattr(colab, "_read_remote_text", lambda remote: token + "\n")
+    lane = ColabCPULane()
+    assert lane._verify_delivery_boundary(archive, "bundle_x") == token
+    assert events[-1][0][1:3] == ("download", "verified")
+
+    monkeypatch.setattr(colab, "_read_remote_text", lambda remote: "0" * 64)
+    with pytest.raises(ValueError, match="transport digest mismatch"):
+        lane._verify_delivery_boundary(archive, "bundle_x")

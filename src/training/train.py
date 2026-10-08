@@ -40,7 +40,13 @@ from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
 from core.run_log import RunLogger
 from core.step_trace import send, timed, trace_step
 from training.folds import component_folds, derive_holdout
-from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
+from training.training import (
+    ES_PATIENCE,
+    ES_THRESHOLD,
+    flush_training_trace,
+    train_one_config,
+    training_trace,
+)
 
 _LOG = RunLogger(__name__)
 
@@ -55,6 +61,91 @@ _REMOTE_TRAINING = os.environ.get("EUROMONITOR_REMOTE_TRAINING") == "1"
 def _uniformity_cfg() -> dict:
     """Read at call time so refresh_training_config() is never shadowed."""
     return load_config()["training"]["uniformity_regularization"]
+
+
+# ── CONSOLIDATED TRACE (stage "training") ─────────────────────────────────
+# This entry owns the RUN; src/training/training.py owns the folds, epochs and
+# batches. Every row goes through the ONE stage writer (training_trace()) and is
+# committed by the single flush below, so the training stage joins the existing
+# data-prep rows in the ONE trace file under the ONE run id core.tracing
+# resolves — never a second trace file and never a second id scheme.
+#
+# The --prepare-bundle lane is a DIFFERENT stage: core.tracing replaces a
+# stage's rows for the run in place, so writing the bundle rows under
+# "training" would make either commit silently destroy the other's rows. Its
+# stage name is the orchestrator's own (training.prepare_all.STAGES) so a
+# reader can join the trace row to the stage that ran it.
+BUNDLE_STAGE = "full_bundle"
+
+
+def _trace_flush() -> None:
+    """Commit this run's training-stage rows (no-op when nothing was traced)."""
+    path = flush_training_trace()
+    if path is not None:
+        print(f"[trace] training rows committed to {path}", flush=True)
+
+
+def _trace_bundle_lane(manifest, args) -> None:
+    """Commit the bundle lane's rows in its OWN stage (see BUNDLE_STAGE).
+
+    The whole lane runs under that stage -- ``main()`` pins it from the CLI flag
+    BEFORE the driver records anything, so this commit is the bundle stage's
+    complete story -- and it is flushed here because the lane exits immediately
+    after (no training; the run-level flush would otherwise be its only chance
+    to reach the file). A caller that drives the driver programmatically instead
+    of via the CLI must pin the stage the same way, otherwise ``training_trace``
+    refuses to relabel a writer that already recorded rows (deliberately loud:
+    mixing the two stages in one commit is the bug this exists to prevent).
+    """
+    trace = training_trace(BUNDLE_STAGE)
+    trace.add(
+        "bundle",
+        "materialize",
+        in_count=None,
+        out_count=None,
+        reason=(
+            "--prepare-bundle: the fully prepared local training bundle is "
+            "written and this process exits before any fold trains. No in/out "
+            "counts: source rows and built pairs are different units, so a "
+            "derived dropped_count would be meaningless (the real numbers are "
+            "in the detail)"
+        ),
+        detail={
+            "path": str(args.prepare_bundle),
+            "run_tag": getattr(args, "run_tag", None),
+            "n_df": int(manifest.n_df),
+            "n_payload": int(manifest.n_payload),
+            "n_pos": int(manifest.n_pos),
+            "n_neg": int(manifest.n_neg),
+            "payload_variant": args.payload,
+            "loss": args.loss,
+            "train_frac": args.train_frac,
+            "sample": bool(args.sample),
+        },
+        source="training.prepared_bundle.write_prepared_bundle",
+    )
+    committed = flush_training_trace()
+    if committed is not None:
+        print(f"[trace] {BUNDLE_STAGE} rows committed to {committed}", flush=True)
+
+
+def _trace_fold_rollup(rows: list[dict]) -> dict[str, dict]:
+    """Per-fold checkpoint / early-stop facts from the trainer's own rows."""
+    rollup: dict[str, dict] = {}
+    for row in rows:
+        fold = row.get("fold")
+        if fold is None:
+            continue
+        rollup[str(fold)] = {
+            "status": row.get("status"),
+            "best_model_checkpoint": row.get("best_model_checkpoint"),
+            "best_metric": row.get("best_metric"),
+            "global_step": row.get("global_step"),
+            "es_saved_pct": row.get("es_saved_pct"),
+            "test_eval": row.get("test_eval"),
+            "calibration_status": row.get("calibration_status"),
+        }
+    return rollup
 
 # thresholds live in config/paths.yaml (pairs.proceed_sim_threshold /
 # pairs.hardneg_sim_threshold) and are read by pipeline.build_training_data
@@ -237,6 +328,11 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
 def main() -> None:
     """Train with W&B telemetry and local run artifacts."""
     RunLogger.configure_console()
+    # --prepare-bundle materializes the suite's training bundle: the whole
+    # process is that stage (see BUNDLE_STAGE), so its rows can never collide
+    # with the training lane's rows for the same run.
+    if "--prepare-bundle" in sys.argv:
+        training_trace(BUNDLE_STAGE)
     from core.wandb_ctx import WandbCtx
 
     run_name = "hpo" if "--hpo" in sys.argv else "train_gpu"
@@ -247,7 +343,14 @@ def main() -> None:
 @timed
 def _main_inner(_wandb) -> None:
     """One run, threaded phase by phase (the former _main_inner body)."""
-    _TrainerDriver(_wandb).run()
+    try:
+        _TrainerDriver(_wandb).run()
+    finally:
+        # ONE commit for the whole "training" stage, after the run (including
+        # every early-return lane: bundle write, HPO sweep, sample runs). The
+        # flush is what keeps core.tracing's one-writer-per-stage contract and
+        # the stage's flow order intact.
+        _trace_flush()
 
 
 _THREADED = [
@@ -351,6 +454,30 @@ class _TrainerDriver:
         self.mask_cfg = mask_cfg
         self.collapse_cfg = collapse_cfg
         self.split_cfg = split_cfg
+        # ── CONSOLIDATED TRACE: the run's config scale, resolved before any
+        # data/model randomness (the same point set_determinism runs).
+        training_trace().add(
+            "run",
+            "config",
+            in_count=None,
+            out_count=None,
+            reason=(
+                "training knobs resolved from the config SSOT (no scattered "
+                "literals) with the optional mining profile applied"
+            ),
+            detail={
+                "seed": SEED,
+                "mining_profile": mining_profile,
+                "ann_mining_enabled": bool(ann_mining_enabled),
+                "attribute_conflict_enabled": bool(attribute_conflict_enabled),
+                "cross_brand_enabled": bool(cross_brand_enabled),
+                "masking_profile": mask_cfg.get("profile"),
+                "collapse_guardrail_profile": collapse_cfg.get("profile"),
+                "collapse_guardrail_enabled": bool(collapse_cfg.get("enabled")),
+                "split": dict(split_cfg) if isinstance(split_cfg, dict) else split_cfg,
+            },
+            source="config SSOT (load_config)",
+        )
 
     @timed
     def resolve_arguments(self) -> None:
@@ -567,6 +694,35 @@ class _TrainerDriver:
         self.args = args
         self.dev_share = dev_share
         self.test_share = test_share
+        # ── CONSOLIDATED TRACE: the CLI axes every artifact name carries.
+        training_trace().add(
+            "run",
+            "arguments",
+            in_count=None,
+            out_count=None,
+            reason="CLI axes resolved (model/loss/split/payload/fraction) before the split",
+            detail={
+                "model": str(args.model),
+                "loss": args.loss,
+                "split": args.split,
+                "payload": args.payload,
+                "train_frac": args.train_frac,
+                "mask_frac": args.mask_frac,
+                "epochs": args.epochs,
+                "lr": args.lr,
+                "folds": args.folds,
+                "sample": bool(args.sample),
+                "hpo": bool(args.hpo),
+                "grid": bool(args.grid),
+                "resume": bool(args.resume),
+                "prepare_bundle": None if args.prepare_bundle is None else str(args.prepare_bundle),
+                "dev_share": dev_share,
+                "test_share": test_share,
+                "masking_profile": args.masking_profile,
+                "collapse_guardrail_profile": args.collapse_guardrail_profile,
+            },
+            source="training.train CLI",
+        )
 
     @timed
     def resolve_masking(self) -> None:
@@ -667,10 +823,39 @@ class _TrainerDriver:
                     raise FileNotFoundError(f"training dataset override is missing: {dataset_path}")
                 df = load_dataset_deduped(dataset_path)
                 print(f"[dataset] override={dataset_path} rows={len(df):,}", flush=True)
+            n_dataset_rows = int(len(df))
             if args.sample:
                 df = df.head(args.sample).reset_index(drop=True)
                 print(f"SAMPLE MODE: first {args.sample} rows", flush=True)
             timing.mark("dataset_load")
+            # ── CONSOLIDATED TRACE: the row funnel's training-side entry — the
+            # deduped dataset the folds are carved from, INCLUDING the --sample
+            # truncation (measured before and after, so the funnel is real).
+            training_trace().add(
+                "dataset",
+                "load",
+                in_count=n_dataset_rows,
+                out_count=int(len(df)),
+                reason=(
+                    "deduped training dataset loaded through the SSOT path; "
+                    "--sample keeps the FIRST n rows (the only truncation here)"
+                ),
+                detail={
+                    "rows_loaded": n_dataset_rows,
+                    "rows_used": int(len(df)),
+                    "sample": None if not args.sample else int(args.sample),
+                    "dataset_override": (
+                        None if args.dataset is None else str(args.dataset.expanduser().resolve())
+                    ),
+                    "distinct_gtins": (
+                        int(df["gtin"].nunique()) if "gtin" in df.columns else None
+                    ),
+                    "distinct_brands": (
+                        int(df["brand"].nunique()) if "brand" in df.columns else None
+                    ),
+                },
+                source="core.common.load_dataset_deduped",
+            )
             # run_tag (owner ruling): every varying axis — model, payload variant,
             # train fraction, split, AND sample mode — is part of every artifact
             # name this run touches (fold metrics, pair dumps, checkpoints,
@@ -701,6 +886,33 @@ class _TrainerDriver:
                 data["neg"],
             )
             timing.mark("base_data")
+            # ── CONSOLIDATED TRACE: the OFFICIAL pair construction funnel
+            # (positives = sku/own canonical, negatives = gate hard-no pairs).
+            training_trace().add(
+                "pairs",
+                "constructed",
+                in_count=None,
+                out_count=int(len(pos)) + int(len(neg)),
+                reason=(
+                    "positives + gate hard-no negatives built from the deduped "
+                    "dataset; the payload carries the clean sku text per row. "
+                    "No in_count: source ROWS and built PAIRS are different "
+                    "units, so a derived dropped_count would be meaningless"
+                ),
+                detail={
+                    "payload_variant": args.payload,
+                    "n_source_rows": int(len(df)),
+                    "n_pos": int(len(pos)),
+                    "n_neg": int(len(neg)),
+                    "n_payload": int(len(payload)),
+                    "n_structured_features": int(len(structured_features)),
+                    "n_targeted_attribute_neg": int(
+                        len(data.get("targeted_attribute_neg", []))
+                    ),
+                    "n_cross_brand_neg": int(len(data.get("cross_brand_neg", []))),
+                },
+                source="training.base_data.load_base_data",
+            )
         self.on_cuda = on_cuda
         self.band = band
         self.df = df
@@ -1431,6 +1643,35 @@ class _TrainerDriver:
             print(f"[cv] {args.folds} component folds", flush=True)
         self.folds_override = folds_override
         self.dev_override = dev_override
+        # ── CONSOLIDATED TRACE: the split as resolved (component-aware).
+        if isinstance(folds_override, (set, frozenset)):
+            fold_sizes = [len(folds_override)]
+        else:
+            fold_sizes = [len(fold) for fold in (folds_override or [])]
+        training_trace().add(
+            "split",
+            "resolved",
+            in_count=None,
+            out_count=int(len(folds_override or [])),
+            reason=(
+                "holdout = one component-aware test fold (+ its component-aligned "
+                "dev set); cv = component folds of the positive-pair graph. "
+                "No in_count: gtins and folds are different units"
+            ),
+            detail={
+                "mode": args.split,
+                "n_folds": int(len(folds_override or [])),
+                "fold_sizes": fold_sizes,
+                "dev_override_gtins": (
+                    None if dev_override is None else int(len(dev_override))
+                ),
+                "dev_share": dev_share,
+                "test_share": test_share,
+                "n_gtins": int(len(row_bc)),
+                "n_pos_pairs": int(len(pos)),
+            },
+            source="training.folds.derive_holdout / component_folds",
+        )
 
     @timed
     def attach_supply(self) -> None:
@@ -1787,6 +2028,9 @@ class _TrainerDriver:
             )
             timing.mark("bundle_write")
             timing.dump_if_requested()
+            # ── CONSOLIDATED TRACE: its OWN stage (never "training"), committed
+            # here because this lane exits immediately (see BUNDLE_STAGE).
+            _trace_bundle_lane(manifest, args)
             return True
 
     @timed
@@ -1814,6 +2058,31 @@ class _TrainerDriver:
         if args.grid or args.hpo:
             from training.hpo import run_grid, run_tpe
 
+            # ── CONSOLIDATED TRACE: the sweep dispatch. The per-fold/per-epoch
+            # rows of every trial land in this SAME stage, so a reader can walk
+            # a trial exactly as they walk the main lane.
+            training_trace().add(
+                "hpo",
+                "dispatch",
+                in_count=None,
+                out_count=None,
+                reason=(
+                    "grid/TPE sweep dispatched; each trial calls the same "
+                    "train_one_config and appends its fold rows to this stage"
+                ),
+                detail={
+                    "mode": "grid" if args.grid else "tpe",
+                    "n_trials": getattr(args, "n_trials", None),
+                    "run_tag": run_tag,
+                    "folds": (
+                        [len(folds_override)]
+                        if isinstance(folds_override, (set, frozenset))
+                        else [len(fold) for fold in (folds_override or [])]
+                    ),
+                    "selection_mode": True,
+                },
+                source="training.hpo.run_grid / run_tpe",
+            )
             # TEST-LEAK WIRING (2026-09-12): both sweep lanes ride the SAME
             # component split the main lane just built — holdout mode passes
             # the test quarter (folds_override) + dev quarter (dev_override)
@@ -1935,6 +2204,42 @@ class _TrainerDriver:
                 ),
             }
             t0 = time.perf_counter()
+            # ── CONSOLIDATED TRACE: the fold set handed to the trainer. The
+            # trainer adds the per-fold/epoch/batch rows to this SAME writer.
+            _folds_requested = (
+                [folds_override] if isinstance(folds_override, (set, frozenset))
+                else list(folds_override or [])
+            )
+            training_trace().add(
+                "folds",
+                "dispatch",
+                in_count=None,
+                out_count=int(len(_folds_requested)),
+                reason=(
+                    "train_one_config invoked on the resolved component folds; "
+                    "it returns one row per fold, failures included. No "
+                    "in_count: source rows and folds are different units"
+                ),
+                detail={
+                    "n_folds": int(len(_folds_requested)),
+                    "split": args.split,
+                    "loss": args.loss,
+                    "payload": args.payload,
+                    "epochs": cfg["epochs"],
+                    "lr": cfg["lr"],
+                    "patience": cfg["patience"],
+                    "es_threshold": cfg["es_threshold"],
+                    "uniformity_weight": cfg["uniformity_weight"],
+                    "run_tag": run_tag,
+                    "sample": bool(args.sample),
+                    "resume": bool(args.resume),
+                    "device": "cuda" if on_cuda else "cpu",
+                    "mask_hard_negatives": bool(mask_hard_negatives),
+                    "ann_mining_enabled": bool(ann_mining_enabled),
+                    "attribute_conflict_enabled": bool(attribute_conflict_enabled),
+                },
+                source="training.train._TrainerDriver.train_folds",
+            )
             # run_tag carries EVERY varying axis (owner ruling): the 07-series
             # ablation sweep ran 12 variants into the SAME train_fold_metrics.csv
             # and r{tag}_f{fold} checkpoint dirs — each run silently overwrote the
@@ -1987,6 +2292,120 @@ class _TrainerDriver:
                 enabled=bool(mask_cfg["track_visibility"]),
             )
             elapsed = time.perf_counter() - t0
+            # ── CONSOLIDATED TRACE: the run-level rollup of what the folds did:
+            # completion, checkpoint selection, early stopping and the final
+            # metrics — computed from the trainer's returned rows, never re-derived.
+            _ok_rows = [r for r in rows if r.get("status") == "ok"]
+            _failed_rows = [r for r in rows if r.get("status") == "failed"]
+            _skipped_rows = [r for r in rows if r.get("status") == "skipped"]
+            _rollup = _trace_fold_rollup(rows)
+            _selected = [
+                key for key, facts in _rollup.items() if facts["best_model_checkpoint"]
+            ]
+            training_trace().add(
+                "folds",
+                "completed",
+                in_count=int(len(rows)),
+                out_count=int(len(_ok_rows)),
+                reason=(
+                    "one row per fold returned by the trainer (failures and "
+                    "skips included); ok rows carry the fold's real metrics"
+                ),
+                detail={
+                    "n_requested": int(len(_folds_requested)),
+                    "n_rows": int(len(rows)),
+                    "n_ok": int(len(_ok_rows)),
+                    "n_failed": int(len(_failed_rows)),
+                    "n_skipped": int(len(_skipped_rows)),
+                    "fold_status": {
+                        str(row.get("fold")): row.get("status") for row in rows
+                    },
+                    "failure_reasons": [
+                        str(row.get("reason") or row.get("traceback", "")[:200])
+                        for row in _failed_rows
+                    ],
+                },
+                source="training.training.train_one_config returned rows",
+            )
+            training_trace().add(
+                "checkpoint",
+                "select",
+                in_count=int(len(_ok_rows)),
+                out_count=int(len(_selected)),
+                reason=(
+                    "checkpoint selection rolled up: every ok fold reports the "
+                    "checkpoint load_best_model_at_end kept (best dev metric)"
+                ),
+                detail={
+                    "selected_folds": _selected,
+                    "per_fold": _rollup,
+                },
+                source="training.training fold metric rows (best_model_checkpoint)",
+            )
+            _planned_steps = [
+                row.get("global_step") or 0 for row in _ok_rows
+            ]
+            _saved_pct = [
+                row.get("es_saved_pct")
+                for row in _ok_rows
+                if isinstance(row.get("es_saved_pct"), (int, float))
+            ]
+            training_trace().add(
+                "early_stop",
+                "rollup",
+                in_count=int(sum(_planned_steps)),
+                out_count=None,
+                reason=(
+                    "optimizer steps executed per fold and the share early "
+                    "stopping saved (es_saved_pct) from the fold rows"
+                ),
+                detail={
+                    "steps_run_per_fold": {
+                        str(row.get("fold")): row.get("global_step") for row in _ok_rows
+                    },
+                    "mean_es_saved_pct": (
+                        float(np.mean(_saved_pct)) if _saved_pct else None
+                    ),
+                    "max_es_saved_pct": (
+                        float(np.max(_saved_pct)) if _saved_pct else None
+                    ),
+                },
+                source="training.training fold metric rows (global_step/es_saved_pct)",
+            )
+            _aucs = [
+                float(row["auc"])
+                for row in _ok_rows
+                if isinstance(row.get("auc"), (int, float))
+            ]
+            _pr_aucs = [
+                float(row["pr_auc"])
+                for row in _ok_rows
+                if isinstance(row.get("pr_auc"), (int, float))
+            ]
+            training_trace().add(
+                "metrics",
+                "final",
+                in_count=int(len(_ok_rows)),
+                out_count=int(len(_aucs)),
+                reason=(
+                    "final fold metrics aggregated over the rows that actually "
+                    "produced an AUC (deferred/skipped rows are counted here, "
+                    "never averaged as zeros)"
+                ),
+                detail={
+                    "n_ok": int(len(_ok_rows)),
+                    "n_with_auc": int(len(_aucs)),
+                    "mean_auc": float(np.mean(_aucs)) if _aucs else None,
+                    "min_auc": float(np.min(_aucs)) if _aucs else None,
+                    "max_auc": float(np.max(_aucs)) if _aucs else None,
+                    "mean_pr_auc": float(np.mean(_pr_aucs)) if _pr_aucs else None,
+                    "per_fold_auc": {
+                        str(row.get("fold")): row.get("auc") for row in _ok_rows
+                    },
+                    "elapsed_s": round(float(elapsed), 1),
+                },
+                source="training.training fold metric rows",
+            )
         self.rows = rows
         self.elapsed = elapsed
 
@@ -2248,6 +2667,31 @@ class _TrainerDriver:
                 "[fold-metrics] sample run — latest-run pointer NOT updated",
                 flush=True,
             )
+        # ── CONSOLIDATED TRACE: the handoff out of training — which artifacts
+        # this run wrote and whether their metrics are available or deferred.
+        training_trace().add(
+            "handoff",
+            "artifacts",
+            in_count=int(len(all_rows)),
+            out_count=int(len([r for r in all_rows if r.get("status") == "ok"])),
+            reason=(
+                "fold metrics + results pointer written; the pointer names the "
+                "latest full-run artifacts (sample runs never move it)"
+            ),
+            detail={
+                "run_tag": run_tag,
+                "fold_metrics_csv": str(out),
+                "pointer": None if args.sample else str(F["results_pointer"]),
+                "pointer_updated": int(not args.sample),
+                "n_rows": int(len(all_rows)),
+                "n_ok": int(len([r for r in all_rows if r.get("status") == "ok"])),
+                "metrics_status": (
+                    "deferred_local" if _REMOTE_TRAINING else "available_local_lane"
+                ),
+                "sample": bool(args.sample),
+            },
+            source="training.train.publish_results",
+        )
 
         # ── 07-series CSV emission (owner ruling: emit from src/training/train) ────────
         # report_plots.py reads 07b/07c/07d; their monorepo producers were never

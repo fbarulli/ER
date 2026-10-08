@@ -67,7 +67,21 @@ def _select_bundle_files(source: Path, track: str, *,
 
 
 def bundle(source: Path, output: Path, *, include_dvc_cache=False):
-    """Ship one graph track's results as a self-describing portable archive."""
+    """Ship one graph track's results as a self-describing portable archive.
+
+    Sealing goes through the shared writer (:meth:`core.bundle.Bundle.seal_archive`),
+    which hashes every source exactly once while writing, verifies the written
+    bytes, and returns the transport digest on the handle — so this transport
+    never re-reads or re-verifies the archive it just sealed. The returned
+    handle is a ``result`` Bundle: consumers load it and read through the
+    Bundle accessors instead of re-parsing the archive.
+
+    Member selection deliberately stays local. A standalone graph bundle is a
+    resume-capable SUPERSET of the suite's ``result`` role (it ships every
+    ``_checkpoints`` epoch), while the suite ships only the selected
+    checkpoint, so ``Bundle.collect_result_members`` would drop the checkpoint
+    the inputs->resume round trip needs.
+    """
     _raise_if_output_exists(output)
     run, _ = _load_run(source)
     track = run['track']
@@ -77,11 +91,9 @@ def bundle(source: Path, output: Path, *, include_dvc_cache=False):
                 'dvc_cache_included': include_dvc_cache,
                 'wandb_logs_included': False}
     manifest = name(track, 'bundle_manifest.json')
-    from core.portable_archive import write_archive
-    write_archive(output, files, manifest_name=manifest, metadata=metadata)
-    # Sealing is not done until the result Bundle verifies at the boundary;
-    # consumers load this handle and never re-hash the members.
-    return Bundle.load(output, BundleRole.result, manifest_name=manifest).path
+    sealed = Bundle.seal_archive(output, files, role=BundleRole.result,
+                                 manifest_name=manifest, metadata=metadata)
+    return sealed.path
 
 
 def main():

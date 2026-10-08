@@ -13,6 +13,12 @@ from graph_tracks.data import file_hash, load_records, load_text_cache
 from graph_tracks.train import load_pairs
 
 
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 def load_inputs(cfg, *, verify_inputs=None):
     """Shared trainer/preflight validation; no output files or GPU allocation.
 
@@ -27,6 +33,7 @@ def load_inputs(cfg, *, verify_inputs=None):
         verify_inputs = not _owner_trusted('graph inputs')
     from core.common import TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
+    layout = _setup_layout()
     resolve = lambda raw: (TRAIN_ROOT / raw).resolve()
     manifest = None
     if cfg.input_manifest:
@@ -53,14 +60,14 @@ def load_inputs(cfg, *, verify_inputs=None):
         from model_tracks.training_data import SharedTrainingData
         from model_tracks.shared_graph_data import validate_projection
         setup = resolve(cfg.listings).parent.parent
-        shared = SharedTrainingData.model_validate_json((setup / 'shared_training_data.json').read_text())
+        shared = SharedTrainingData.model_validate_json((setup / layout.shared_training_data).read_text())
         if shared.fingerprint != manifest['shared_training_data_sha256']:
             raise ValueError('graph shared training data fingerprint mismatch')
-        if file_hash(setup / 'shared_training_projection.json') != manifest.get('shared_training_projection_sha256'):
+        if file_hash(setup / layout.shared_training_projection) != manifest.get('shared_training_projection_sha256'):
             raise ValueError('graph shared training projection fingerprint mismatch')
         validate_projection(setup, shared, track=cfg.track)
     if verify_inputs and manifest is not None and manifest.get('pair_lineage_sha256'):
-        if file_hash(resolve(cfg.listings).parent / 'pair_lineage.json') != manifest['pair_lineage_sha256']:
+        if file_hash(resolve(cfg.listings).parent / layout.pair_lineage) != manifest['pair_lineage_sha256']:
             raise ValueError('prepared pair lineage mismatch')
     if verify_inputs:
         from graph_tracks.prepared_inputs import PLAN, load_plan

@@ -5,22 +5,44 @@ host without Triton or a GPU. Availability is *probed*, never assumed, and the
 whole module is deactivated by ``ER_PERF_LEGACY=1`` through
 :func:`core.perf_switches.perf_enabled`:
 
-============================  =========================================
-switch (``perf_enabled``)     gate
-============================  =========================================
-``accel.compile``             :func:`compile_model`
-``accel.segment_reduce``      Triton segment-add kernel
-``accel.autocast``            :func:`autocast_context`
-``accel.cuda_graph``          :func:`cuda_graph_wrap` (experimental)
-============================  =========================================
+============================  ===================  ========================
+switch (``perf_enabled``)     default when unset   gate
+============================  ===================  ========================
+``accel.compile``             on                   :func:`compile_model`
+``accel.segment_reduce``      **off**              Triton segment-add kernel
+``accel.cuda_graph``          **off**              :func:`cuda_graph_wrap`
+``accel.autocast``            on                   :func:`autocast_context`
+============================  ===================  ========================
+
+The two primitives that no host here could validate numerically (the Triton
+segment kernel and the experimental CUDA-graph wrapper) default to **off**:
+they only run when ``ER_PERF_ACCEL_SEGMENT_REDUCE=1`` /
+``ER_PERF_ACCEL_CUDA_GRAPH=1`` is set explicitly on a host that can run them.
 
 Nothing in this module imports Triton at module scope unless it is installed;
 ``torch.compile`` is only ever *called* behind the gate, never at import time.
+
+The Triton reduction additionally carries a runtime guard:
+
+  * *capability* -- opt-in AND CUDA AND Triton importable AND floating dtype
+    AND ``not values.requires_grad`` (a raw kernel write cannot build an autograd
+    edge, so a grad-enabled call would silently detach -- it always falls back);
+  * *correctness* -- the first eligible call for a given
+    ``(device, dtype, feature-width, edge-count)`` signature is compared against
+    the ``index_add_`` fallback, on the caller's own values **and** on a
+    deterministic synthetic probe; any mismatch (or any launch error) disables
+    the fast path for the rest of the process and logs once.
+
+:func:`check_segment_reduce_equivalence` is the CPU-testable harness for that
+reduction: it always compares the production fallback against
+:func:`reference_segment_sum` (an obviously-correct explicit loop) and reports
+the Triton comparison with an explicit skip reason on hosts without CUDA.
 """
 from __future__ import annotations
 
 import functools
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import torch
@@ -30,6 +52,11 @@ from core.perf_switches import perf_enabled
 __all__ = [
     'compile_model',
     'segment_reduce_fast',
+    'segment_reduce_capability',
+    'segment_reduce_status',
+    'check_segment_reduce_equivalence',
+    'reference_segment_sum',
+    'reset_segment_guard',
     'autocast_context',
     'cuda_graph_wrap',
     'triton_available',
@@ -118,7 +145,7 @@ def compile_model(module, *, name: str, mode: str = 'reduce-overhead',
 
 
 # ---------------------------------------------------------------------------
-# Triton grouped segment-add (UNVALIDATED ON GPU HARDWARE -- see note below)
+# Triton grouped segment-add (runtime-guarded, opt-in, UNVALIDATED ON THIS HOST)
 # ---------------------------------------------------------------------------
 try:  # pragma: no cover - import probe, environment dependent
     import triton
@@ -128,6 +155,16 @@ except Exception:  # pragma: no cover - triton absent on most CI/CPU hosts
     triton = None
     tl = None
     _TRITON_AVAILABLE = False
+
+# Declared equivalence budget of the runtime guard. The kernel accumulates in
+# float32 and casts back, so a grouping that differs from ``index_add_``'s
+# accumulation order may drift by a few ULPs; a difference beyond this budget is
+# a kernel bug, not rounding, and disables the fast path for the process.
+_GUARD_RTOL = 1e-4
+_GUARD_ATOL = 1e-5
+# Deterministic probe seed: the guard re-runs the reduction on a fixed synthetic
+# tensor so a grouping bug cannot hide behind degenerate (e.g. all-zero) inputs.
+_PROBE_SEED = 20261008
 
 
 def triton_available() -> bool:
@@ -149,10 +186,10 @@ if _TRITON_AVAILABLE:
         whenever many edges share a target.
 
         NOTE: written but NOT validated on real GPU hardware (no GPU on this
-        host). It is only launched when ``accel.segment_reduce`` is on AND CUDA
-        AND Triton are all available, and any launch failure silently falls back
-        to the torch path. The arithmetic (float32 accumulator, cast back to the
-        caller dtype) is identical to :func:`_torch_segment_sum`.
+        host). It is launched only when ``accel.segment_reduce`` is explicitly
+        opted in AND CUDA AND Triton are available AND the runtime guard below
+        has accepted it; the arithmetic (float32 accumulator, cast back to the
+        caller dtype) must stay equivalent to :func:`_torch_segment_sum`.
         """
         segment = tl.program_id(0)
         feature_block = tl.program_id(1)
@@ -168,12 +205,28 @@ if _TRITON_AVAILABLE:
         tl.store(out_ptr + segment * n_features + offs_f, accumulator, mask=f_mask)
 
 
+# The single launch indirection: the guard and the CPU test harness both drive
+# this, so the kernel itself never has to be importable to exercise the logic.
+_TRITON_LAUNCH = _segment_add_kernel if _TRITON_AVAILABLE else None
+
+
+def _grouped_kernel_launch(grouped: torch.Tensor, offsets: torch.Tensor, out: torch.Tensor,
+                           features: int, count: int, block_f: int) -> None:
+    """Launch the grouped Triton kernel (one program per (segment, feature tile))."""
+    grid = (count, triton.cdiv(features, block_f))
+    _TRITON_LAUNCH[grid](grouped, offsets, out, features, BLOCK_F=block_f)
+
+
 def _triton_segment_sum(values: torch.Tensor, index: torch.Tensor, count: int) -> torch.Tensor:
     """Grouped segment sum through the Triton kernel (float32 accumulator).
 
     Edges are stably sorted by target once; the kernel then reduces each
     contiguous group without atomics. ``values`` is only cast when it is not
     already float32, and ``index`` is never copied.
+
+    NOTE: the kernel writes into a fresh ``out`` buffer, so the returned tensor
+    carries no autograd edge. Callers must keep grad-enabled tensors on the
+    ``index_add_`` fallback; :func:`_segment_fast_eligibility` enforces that.
     """
     edges, features = values.shape
     out = torch.zeros((count, features), dtype=torch.float32, device=values.device)
@@ -186,8 +239,7 @@ def _triton_segment_sum(values: torch.Tensor, index: torch.Tensor, count: int) -
     lengths = torch.bincount(index, minlength=count)
     offsets = torch.cat([lengths.new_zeros(1), lengths.cumsum(0)])
     block_f = min(64, triton.next_power_of_2(max(features, 1)))
-    grid = (count, triton.cdiv(features, block_f))
-    _segment_add_kernel[grid](grouped, offsets, out, features, BLOCK_F=block_f)
+    _grouped_kernel_launch(grouped, offsets, out, features, count, block_f)
     return out.to(values.dtype)
 
 
@@ -196,6 +248,245 @@ def _torch_segment_sum(values: torch.Tensor, index: torch.Tensor, count: int) ->
     total = values.new_zeros((count, values.shape[-1]))
     total.index_add_(0, index, values)
     return total
+
+
+def reference_segment_sum(values: torch.Tensor, index: torch.Tensor, count: int) -> torch.Tensor:
+    """Obviously-correct reference: one explicit accumulation per edge.
+
+    ``O(E * F)`` in Python, but it is the kernel of truth for the equivalence
+    harness: no scatter, no sort, no atomics, no vectorisation, no dtype change.
+    """
+    out = values.new_zeros((count, values.shape[-1]))
+    for row, target in enumerate(index.tolist()):
+        out[int(target)] += values[row]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# runtime guard: capability + one-time correctness validation
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SegmentFastPathStatus:
+    """Outcome of the runtime guard for the Triton segment reduction."""
+    state: str                      # 'unvalidated' | 'validated' | 'disabled'
+    reason: str
+    validated: tuple[str, ...] = ()  # device|dtype|features|edges signatures accepted
+    attempts: int = 0                # signatures actually launched + validated
+
+    @property
+    def active(self) -> bool:
+        return self.state == 'validated'
+
+
+_GUARD = {'state': 'unvalidated', 'reason': 'no eligible call yet',
+          'validated': (), 'attempts': 0}
+
+
+def reset_segment_guard() -> None:
+    """Forget the guard outcome (a new run, or a test injecting a fake kernel)."""
+    _GUARD.update(state='unvalidated', reason='no eligible call yet',
+                  validated=(), attempts=0)
+
+
+def segment_reduce_status() -> SegmentFastPathStatus:
+    """The guard's current verdict, including the reason for a fallback."""
+    return SegmentFastPathStatus(state=_GUARD['state'], reason=_GUARD['reason'],
+                                 validated=tuple(_GUARD['validated']),
+                                 attempts=int(_GUARD['attempts']))
+
+
+def segment_reduce_capability() -> dict[str, Any]:
+    """Whether this host could run the Triton reduction, and what is missing."""
+    opt_in = perf_enabled('accel.segment_reduce', default=False)
+    cuda = bool(torch.cuda.is_available())
+    missing = []
+    if not opt_in:
+        missing.append('opt-in: set ER_PERF_ACCEL_SEGMENT_REDUCE=1')
+    if not _TRITON_AVAILABLE:
+        missing.append('triton is not importable')
+    if not cuda:
+        missing.append('no CUDA device on this host')
+    device = None
+    if cuda:
+        try:
+            device = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - driver quirk on a CUDA host
+            device = 'cuda'
+    return {
+        'opt_in': opt_in,
+        'triton': _TRITON_AVAILABLE,
+        'triton_version': getattr(triton, '__version__', None) if _TRITON_AVAILABLE else None,
+        'cuda': cuda,
+        'device': device,
+        'eligible': opt_in and _TRITON_AVAILABLE and cuda,
+        'reason': '; '.join(missing) if missing else 'eligible on this host',
+    }
+
+
+def _segment_fast_eligibility(values: torch.Tensor) -> tuple[bool, str]:
+    """Capability guard: everything that must hold before a launch is attempted."""
+    if not perf_enabled('accel.segment_reduce', default=False):
+        return False, ('accel.segment_reduce is opt-in and off '
+                       '(set ER_PERF_ACCEL_SEGMENT_REDUCE=1 to enable)')
+    if not _TRITON_AVAILABLE:
+        return False, 'triton is not importable'
+    if not values.is_cuda:
+        return False, 'values are not on CUDA'
+    if not values.is_floating_point():
+        return False, f'values are {values.dtype}, not floating point'
+    if values.requires_grad:
+        return False, ('values require grad: index_add_ keeps the autograd edge, '
+                       'the raw kernel write would detach the graph')
+    return True, 'eligible'
+
+
+def _guard_signature(values: torch.Tensor) -> tuple[str, str, int, int]:
+    """Everything the kernel's correctness depends on and that can change.
+
+    The edge count is part of the key: a grouping/offset bug that only shows up
+    at another population size must be re-validated, not inherited from a
+    smaller node.
+    """
+    return (str(values.device), str(values.dtype), int(values.shape[-1]), int(values.shape[0]))
+
+
+def _synthetic_probe(values: torch.Tensor) -> torch.Tensor:
+    """Deterministic same-shape probe tensor, so a grouping bug cannot hide."""
+    generator = torch.Generator(device=values.device).manual_seed(_PROBE_SEED)
+    return torch.rand(values.shape, generator=generator, dtype=values.dtype,
+                      device=values.device)
+
+
+def _close_enough(candidate: torch.Tensor, reference: torch.Tensor) -> bool:
+    if candidate.shape != reference.shape or candidate.dtype != reference.dtype:
+        return False
+    if not bool(torch.isfinite(candidate).all()):
+        return False
+    # A non-finite reference value is never "close": fail safe onto index_add_.
+    if not bool(torch.isfinite(reference).all()):
+        return False
+    return bool(torch.allclose(candidate, reference, rtol=_GUARD_RTOL, atol=_GUARD_ATOL))
+
+
+def _maximum_absolute_difference(candidate: torch.Tensor, reference: torch.Tensor) -> float:
+    if candidate.shape != reference.shape or candidate.dtype != reference.dtype:
+        return float('inf')
+    return float((candidate - reference).abs().max())
+
+
+def _validate_kernel_result(values: torch.Tensor, index: torch.Tensor, count: int,
+                            candidate: torch.Tensor) -> tuple[bool, str]:
+    """Compare a fast-path result against ``index_add_`` on real and probe input."""
+    reference = _torch_segment_sum(values, index, count)
+    if not _close_enough(candidate, reference):
+        return False, ('kernel result disagrees with index_add_ on the caller values '
+                       f'(rtol={_GUARD_RTOL}, atol={_GUARD_ATOL})')
+    probe = _synthetic_probe(values)
+    probe_reference = _torch_segment_sum(probe, index, count)
+    probe_candidate = _triton_segment_sum(probe, index, count)
+    if not _close_enough(probe_candidate, probe_reference):
+        return False, ('kernel result disagrees with index_add_ on the deterministic '
+                       f'probe (rtol={_GUARD_RTOL}, atol={_GUARD_ATOL})')
+    return True, f'validated against index_add_ on caller values and probe (rtol={_GUARD_RTOL})'
+
+
+def _disable_segment_fast_path(reason: str) -> None:
+    _GUARD.update(state='disabled', reason=reason)
+    _log_once('segment.triton_disabled',
+              f'segment_reduce_fast: fast path disabled ({reason}); using index_add_ from now on')
+
+
+def _fast_segment_sum(values: torch.Tensor, index: torch.Tensor,
+                      count: int) -> torch.Tensor | None:
+    """Guarded launch. ``None`` means: use the ``index_add_`` fallback."""
+    # The disable latch is consulted before any capability probe, so a rejected
+    # kernel can never be launched again -- not even by a caller that overrides
+    # the capability check.
+    if _GUARD['state'] == 'disabled':
+        return None
+    eligible, reason = _segment_fast_eligibility(values)
+    if not eligible:
+        if _GUARD['state'] == 'unvalidated':
+            _GUARD['reason'] = reason
+        return None
+    label = '|'.join(map(str, _guard_signature(values)))
+    known = label in _GUARD['validated']
+    if not known:
+        _GUARD['attempts'] = int(_GUARD['attempts']) + 1
+    try:
+        candidate = _triton_segment_sum(values, index, count)
+        if known:
+            return candidate
+        accepted, why = _validate_kernel_result(values, index, count, candidate)
+    except Exception as exc:  # never raise from an accelerator path
+        _disable_segment_fast_path(f'triton launch failed ({exc!r})')
+        return None
+    if not accepted:
+        _disable_segment_fast_path(why)
+        return None
+    _GUARD.update(state='validated', reason=why, validated=tuple(_GUARD['validated']) + (label,))
+    _log_once('segment.triton.validated', f'segment_reduce_fast: Triton kernel {why}')
+    return candidate
+
+
+@dataclass(frozen=True)
+class SegmentEquivalence:
+    """Result of :func:`check_segment_reduce_equivalence`."""
+    fallback_equal: bool
+    fallback_max_abs_diff: float
+    fast_checked: bool
+    fast_equal: bool | None
+    fast_max_abs_diff: float | None
+    reason: str
+
+
+def check_segment_reduce_equivalence(values: torch.Tensor, index: torch.Tensor,
+                                     count: int | None = None, *,
+                                     trial_fn: Callable | None = None) -> SegmentEquivalence:
+    """CPU-testable equivalence harness for the segment reduction.
+
+    Always compares the production fallback (``index_add_``) against
+    :func:`reference_segment_sum`. Additionally compares a fast-path trial
+    (``trial_fn``, or the guarded Triton path when this host is eligible)
+    against that same reference, so the harness yields a positive result on a
+    CPU-only host and an explicit skip reason for the unvalidated kernel.
+
+    A rejected trial is reported, not raised; when the trial is the guarded
+    Triton path it also latches the guard off (that is the fallback behaviour
+    under test).
+    """
+    if values.ndim != 2 or index.ndim != 1 or values.shape[0] != index.shape[0]:
+        raise ValueError('equivalence harness needs (E, F) values indexed by (E,) rows')
+    if count is None:
+        count = int(index.max()) + 1 if index.numel() else 0
+    reference = reference_segment_sum(values, index, count)
+    fallback = _torch_segment_sum(values, index, count)
+    fallback_diff = _maximum_absolute_difference(fallback, reference)
+    verdict = SegmentEquivalence(
+        fallback_equal=_close_enough(fallback, reference),
+        fallback_max_abs_diff=fallback_diff,
+        fast_checked=False, fast_equal=None, fast_max_abs_diff=None,
+        reason='fallback compared against the explicit reference',
+    )
+    if trial_fn is None:
+        if _GUARD['state'] == 'disabled':
+            return SegmentEquivalence(**{**verdict.__dict__, 'reason':
+                                         f'kernel not checked: fast path disabled ({_GUARD["reason"]})'})
+        eligible, why = _segment_fast_eligibility(values)
+        if not eligible:
+            return SegmentEquivalence(**{**verdict.__dict__,
+                                         'reason': f'kernel not checked: {why}'})
+        trial_fn = _triton_segment_sum
+    try:
+        trial = trial_fn(values, index, count)
+    except Exception as exc:
+        return SegmentEquivalence(**{**verdict.__dict__,
+                                     'reason': f'kernel trial raised: {exc!r}'})
+    diff = _maximum_absolute_difference(trial, reference)
+    return SegmentEquivalence(**{**verdict.__dict__, 'fast_checked': True,
+                                 'fast_equal': _close_enough(trial, reference),
+                                 'fast_max_abs_diff': diff,
+                                 'reason': f'kernel trial compared (rtol={_GUARD_RTOL})'})
 
 
 def segment_reduce_fast(values: torch.Tensor, index: torch.Tensor, sizes: torch.Tensor,
@@ -229,9 +520,13 @@ def segment_reduce_fast(values: torch.Tensor, index: torch.Tensor, sizes: torch.
     ``0/0`` NaNs the existing ``pool`` would produce -- the fallback is a
     literal ``index_add_`` sum divided by ``sizes``.
 
-    Selection: the Triton kernel runs only when ``perf_enabled(
-    'accel.segment_reduce')`` AND ``values.is_cuda`` AND Triton is importable;
-    otherwise (and on any Triton error) it dispatches to ``index_add_``.
+    Selection: the Triton kernel runs only when ``accel.segment_reduce`` is
+    explicitly opted in (``ER_PERF_ACCEL_SEGMENT_REDUCE=1``; the switch defaults
+    to **off**) AND ``values.is_cuda`` AND Triton is importable AND the values do
+    not require grad AND the one-time correctness guard has accepted this
+    ``(device, dtype, feature-width, edge-count)`` signature. Otherwise -- and
+    after any launch error or numeric disagreement -- it dispatches to
+    ``index_add_``. :func:`segment_reduce_status` reports the guard's verdict.
     """
     if reduce not in {'mean', 'sum'}:
         raise ValueError(f'unknown segment reduce {reduce!r}')
@@ -245,16 +540,11 @@ def segment_reduce_fast(values: torch.Tensor, index: torch.Tensor, sizes: torch.
     if sizes.ndim not in (1, 2) or (sizes.ndim == 2 and sizes.shape[1] != 1):
         raise ValueError('segment denominators must be (count,) or (count, 1)')
 
-    if perf_enabled('accel.segment_reduce') and values.is_cuda and _TRITON_AVAILABLE:
-        try:
-            total = _triton_segment_sum(values, index, count)
-            _log_once('segment.triton', 'segment_reduce_fast: using Triton segment kernel')
-        except Exception as exc:  # never raise from an accelerator path
-            _log_once('segment.triton_failed',
-                      f'segment_reduce_fast: Triton failed ({exc!r}); using index_add_')
-            total = _torch_segment_sum(values, index, count)
-    else:
+    total = _fast_segment_sum(values, index, count)
+    if total is None:
         total = _torch_segment_sum(values, index, count)
+    else:
+        _log_once('segment.triton', 'segment_reduce_fast: using the validated Triton segment kernel')
 
     if reduce == 'sum':
         return total
@@ -302,8 +592,9 @@ def cuda_graph_wrap(fn: Callable) -> Callable:
 
     Intended call site: wrapping one pure, shape-static training step (for
     example the closure built in ``graph_tracks/benchmark.py``). Gated by
-    ``accel.cuda_graph``; on CPU, without CUDA, or when the switch is off this
-    returns ``fn`` unchanged (a genuine no-op).
+    ``accel.cuda_graph``, which defaults to **off** (this helper has not been
+    exercised on GPU hardware on this host): on CPU, without CUDA, or when the
+    switch is off this returns ``fn`` unchanged (a genuine no-op).
 
     Positional tensor arguments are copied into static capture buffers each
     replay. Keyword arguments, changing shapes/dtypes, or non-tensor arguments
@@ -311,7 +602,7 @@ def cuda_graph_wrap(fn: Callable) -> Callable:
     alias the capture buffers -- treat them read-only. This helper has NOT been
     exercised on GPU hardware on this host.
     """
-    if not (perf_enabled('accel.cuda_graph') and torch.cuda.is_available()):
+    if not (perf_enabled('accel.cuda_graph', default=False) and torch.cuda.is_available()):
         return fn
 
     state: dict[str, Any] = {'static': None, 'graph': None, 'outputs': None}

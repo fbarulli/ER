@@ -8,12 +8,11 @@ owner-module pattern) exactly like colab_runtime/colab_result_sync.
 The ``cli.colab`` module stays the single surface the offline fakes patch and
 the running colab identity (``sys.modules["__colab_runtime_self__"]``) stays
 the only launcher module: SESSION, the CLI state dir, and the ``_timed_colab``
-step decorator are all re-read through ``_hub()`` at call time, never captured.
+step decorator are all re-read through ``colab_hub.hub()`` at call time, never captured.
 """
 from __future__ import annotations
 
 import fcntl
-import functools
 import json
 import os
 import re
@@ -22,30 +21,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cli.colab_hub import hub, timed_colab
 
-def _hub():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    hub = sys.modules.get("__colab_runtime_self__")
-    if hub is not None:
-        return hub
-    import cli.colab as surface
-
-    return surface
-
-
-def _timed_colab(kind: str):
-    """Lazy step-timing shim: cli.colab owns ``_timed_colab`` at call time."""
-    def decorate(function):
-        @functools.wraps(function)
-        def wrapped(*args, **kwargs):
-            return _hub()._timed_colab(kind)(function)(*args, **kwargs)
-        return wrapped
-    return decorate
 
 
 def _colab_launch_lock_path() -> Path:
-    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", _hub().SESSION)
-    return _hub()._COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
+    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", hub().SESSION)
+    return hub()._COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
 
 
 def _process_start_ticks(pid: int) -> int | None:
@@ -78,7 +60,7 @@ def _colab_launch_lock_is_held(lock_path: Path) -> bool:
         handle.close()
 
 
-@_timed_colab("step")
+@timed_colab("step")
 def acquire_colab_launch_lock():
     """Prevent independent launchers from sharing and tearing down one VM.
 
@@ -88,7 +70,7 @@ def acquire_colab_launch_lock():
     that same session.  The resulting kernel 404 is indistinguishable from a
     Colab-side failure, so refuse the second launch before it touches Colab.
     """
-    surface = _hub()
+    surface = hub()
     surface._COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = _colab_launch_lock_path()
     handle = lock_path.open("a+", encoding="utf-8")

@@ -22,17 +22,23 @@ from typing import Any
 
 import yaml
 
-from core.archive_reader import open_archive
-from core.portable_archive import (
-    INVENTORY, RuntimeSnapshot, verify_archive, verify_open_archive, write_archive,
-)
+from core.portable_archive import RuntimeSnapshot
 from core.progress import tracked
 from core.run_log import RunLogger
 from core.step_trace import rss_mb, send, timed, trace_step
+from core.tracing import (
+    ENTITY_ROW_CAP,
+    ENTITY_SAMPLE_PER_REASON,
+    TraceRun,
+)
 from model_tracks.config import load_config
 from model_tracks.preflight import preflight
 
 _LOG = RunLogger(__name__)
+
+#: The stage name prepare_all runs this module as, and the name this stage's
+#: consolidated-trace rows carry (core.tracing ``stage`` column).
+STAGE = 'suite_inputs'
 
 
 def _source_layout_key() -> str:
@@ -42,6 +48,25 @@ def _source_layout_key() -> str:
 
 PACKAGE_MANIFEST = 'model_tracks_package.json'
 RECOVERY_MANIFEST = 'suite_recovery_manifest.json'
+
+
+def _spec():
+    """The bundle contract from config (single source for member names)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
+
+
+def package_manifest() -> str:
+    """The inputs bundle's manifest member name (``bundle.manifest_inputs``).
+
+    The literals above are retired names kept only for readers of the module
+    header; every caller resolves the manifest through the bundle contract.
+    """
+    from core.bundle import BundleRole, manifest_name
+    return manifest_name(BundleRole.inputs)
+
+
+RECOVERY_SCHEMA = 'er-suite-recovery-v1'
 GRAPH_TRACKS = ('gnn_only',)
 #: Lane configs inlined into the package: the trained graph lane plus the
 #: cascade combinator (which consumes those trained artifacts).
@@ -154,20 +179,18 @@ def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, 
 
 
 def _dump_model_json(model, path: Path) -> None:
-    """Stream JSON to a sibling file, replacing the artifact only on success."""
+    """Stream JSON to a sibling file, publishing only on success.
+
+    ``core.manifest.atomic_write_stream`` owns the sibling + fsync + replace
+    mechanism (and its ``.tmp-<pid>`` residue contract), so a large payload is
+    never buffered just to reuse :func:`core.manifest.atomic_write_json`.
+    """
     from model_tracks.training_data import TrainingJSONEncoder
+    from core.manifest import atomic_write_stream
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
-                                     prefix=path.name + '.', suffix='.partial',
-                                     delete=False) as handle:
-        candidate = Path(handle.name)
-        try:
-            json.dump(model, handle, cls=TrainingJSONEncoder, ensure_ascii=False)
-            handle.write('\n')
-            handle.close()
-            candidate.replace(path)
-        finally:
-            candidate.unlink(missing_ok=True)
+    with atomic_write_stream(path) as handle:
+        json.dump(model, handle, cls=TrainingJSONEncoder, ensure_ascii=False)
+        handle.write('\n')
 
 
 @timed
@@ -388,9 +411,16 @@ def package(config: Path, output: Path) -> Path:
         del bundle
         _release_bundle(bundle_path)
     files = _collect_package_sources(cfg, setup, bundle_path)
-    archive = _write_package_archive(output, cfg, setup, files, checks)
-    send(f'[package] archive={archive} rss_mb={rss_mb()}')
-    return archive
+    sealed, inlined = _write_package_archive(output, cfg, setup, files, checks)
+    # The stage's rows into the ONE consolidated trace (core.tracing): the
+    # member census with sizes, and the SEAL the transport actually carries.
+    # Committed after the archive exists so the rows describe published bytes.
+    trace = TraceRun(STAGE)
+    PackageTrace.record(trace, files=files, inlined=inlined, sealed=sealed,
+                        checks=checks)
+    trace.write()
+    send(f'[package] archive={sealed.path} rss_mb={rss_mb()}')
+    return sealed.path
 
 
 def _require_absent_output(output: Path) -> None:
@@ -434,24 +464,199 @@ def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
 
 
 def _write_package_archive(output: Path, cfg, setup: Path,
-                           files: dict, checks: dict) -> Path:
-    """Inline the portable configs, then write the archive for one Colab run."""
+                           files: dict, checks: dict) -> tuple[Any, dict[str, str]]:
+    """Inline the portable configs, then seal the inputs bundle for one run.
+
+    Returns the sealed Bundle (its ``digest`` is the transport token the
+    boundary re-checks) and the inlined config members, so the caller can trace
+    what was sealed without reopening the archive.
+    """
+    from core.bundle import Bundle, BundleRole
     from core.common import git_revision
     _require_absent_output(output)
     with trace_step('package.inline_configs'):
         inline = {name: yaml.safe_dump(value, sort_keys=False)
                   for name, value in _portable_config_models(cfg, setup).items()}
     with trace_step('package.write_archive'):
-        revision = git_revision()
-        return write_archive(output, files, inline=inline, manifest_name=PACKAGE_MANIFEST,
-                             metadata={'schema': 'er-model-tracks-package-v1',
-                                       'revision': revision, 'preflight': checks},
-                             profile=True)
+        # The Bundle owns the one writer (hash-while-writing + one verify), so
+        # the inputs archive is sealed here exactly like every other crossing.
+        sealed = Bundle.seal_archive(
+            output, files, role=BundleRole.inputs, inline=inline, profile=True,
+            metadata={'schema': 'er-model-tracks-package-v1',
+                      'revision': git_revision(), 'preflight': checks})
+    return sealed, inline
+
+
+def _member_bytes(path: Path) -> int:
+    """A member source's size, or 0 when it is not a readable regular file."""
+    try:
+        return int(path.stat().st_size) if path.is_file() else 0
+    except OSError:
+        return 0
+
+
+class PackageTrace:
+    """Stage ``suite_inputs`` in the ONE consolidated trace (``core.tracing``).
+
+    The packaging step sealed one archive and published its member inventory,
+    but reported nothing to the trace: "what shipped, how big, and under which
+    hash" meant reopening the archive, and a shrunk or bloated member set was
+    invisible until a GPU worker failed. Emitted here:
+
+      run   members.collected    collected candidate members -> the members the
+                                 writer actually seals (the manifest member is
+                                 container metadata and is dropped by the
+                                 writer), with the per-group census in detail
+      group member.reason_census one row per member GROUP, EXACT counts
+      ent   member               each sampled member, NAMED, with its byte size
+                                 and its local source path
+      run   member.sample_budget the entity-sampling budget actually spent
+      run   archive.sealed       the sealed archive: whole-file sha256, bytes,
+                                 member count, the inlined portable configs and
+                                 the preflight verdict
+
+    A member's GROUP is a READBACK classification derived from its portable
+    name (:func:`member_group`); it never affects what is collected or sealed.
+    Caps are core.tracing's own (ENTITY_SAMPLE_PER_REASON / ENTITY_ROW_CAP).
+    """
+
+    @staticmethod
+    def member_group(member: str) -> str:
+        """The declared member class of one portable member name (readback only)."""
+        name = str(member)
+        if name.startswith('config/'):
+            return 'config'
+        if name.startswith('scripts/') or name.endswith('.py'):
+            return 'source_code'
+        if name.endswith('.csv'):
+            return 'inputs_csv'
+        if 'text_prepared' in name:
+            return 'text_bundle'
+        if name.endswith('.npz'):
+            return 'graph_tensors'
+        if name.endswith(('.yaml', '.yml', '.json')):
+            return 'declared_config'
+        return 'other'
+
+    @classmethod
+    def records(cls, files: dict, inlined: dict) -> list[dict]:
+        """One record per archive member: its portable name, size and source."""
+        records = [
+            {'member': str(name), 'bytes': _member_bytes(path),
+             'source': str(path), 'group': cls.member_group(name)}
+            for name, path in files.items()
+        ]
+        records.extend(
+            {'member': str(name), 'bytes': len(str(text).encode('utf-8')),
+             'source': 'rendered at seal (package.inline_configs)',
+             'group': cls.member_group(name)}
+            for name, text in inlined.items()
+        )
+        return records
+
+    @classmethod
+    def record(cls, trace: TraceRun, *, files: dict, inlined: dict,
+               sealed, checks) -> None:
+        """The member census, the per-member sizes and the seal of one run."""
+        manifest_member = str(sealed.manifest_name)
+        kept = {name: path for name, path in files.items() if name != manifest_member}
+        records = cls.records(kept, inlined)
+        by_group: dict[str, dict[str, int]] = {}
+        for record in records:
+            bucket = by_group.setdefault(record['group'], {'members': 0, 'bytes': 0})
+            bucket['members'] += 1
+            bucket['bytes'] += record['bytes']
+        collected_bytes = sum(record['bytes'] for record in records)
+        trace.add(
+            'members', 'collected',
+            in_count=len(files), out_count=len(kept),
+            reason=(
+                'every file collected for the package becomes a portable '
+                'member; the bundle manifest is container metadata and is '
+                'refused as a member by the writer, and the inlined portable '
+                'configs are rendered at seal time'
+            ),
+            detail={
+                'target': str(_target()),
+                'manifest_member': manifest_member,
+                'archive_members': len(records),
+                'member_bytes': collected_bytes,
+                'inlined_configs': sorted(str(name) for name in inlined),
+                'by_group': by_group,
+            },
+            source='model_tracks.package._collect_package_sources',
+        )
+        trace.add_entities(
+            'member', records,
+            key_of=lambda record: record['member'],
+            reason_of=lambda record: record['group'],
+            detail_of=lambda record: {'bytes': record['bytes'],
+                                      'source': record['source']},
+            source='the sealed inputs bundle (portable member names)',
+            per_reason=ENTITY_SAMPLE_PER_REASON,
+            total_cap=ENTITY_ROW_CAP,
+        )
+        archive = Path(sealed.path)
+        trace.add(
+            'archive', 'sealed',
+            reason=(
+                'the inputs bundle is the one transport artifact: sealed and '
+                'verified once by its writer, so its whole-file sha256 is the '
+                'token every boundary re-checks'
+            ),
+            detail={
+                'path': str(archive),
+                'sha256': sealed.digest,
+                'bytes': _member_bytes(archive),
+                'members': len(records),
+                'source_bytes': collected_bytes,
+                'manifest_member': manifest_member,
+                'role': str(sealed.role.value),
+                'inline_configs': sorted(str(name) for name in inlined),
+                'schema': str(sealed.manifest.get('schema', '')),
+                'revision': str(sealed.manifest.get('revision', '')),
+                'preflight_checks': (sorted(str(name) for name in checks)
+                                     if isinstance(checks, dict) else []),
+            },
+            source='model_tracks.package._write_package_archive (Bundle.seal_archive)',
+        )
 
 
 @timed
 def verify(path: Path) -> dict:
-    return verify_archive(path, PACKAGE_MANIFEST)
+    """Verify one sealed inputs bundle at its boundary and return its manifest."""
+    from core.bundle import Bundle, BundleRole
+    return Bundle.load(Path(path), BundleRole.inputs).manifest
+
+
+def _assert_recovery_contract(output: Path, files: dict[str, Path]) -> None:
+    """Assert the recovery role positively: all epochs + resume state travel.
+
+    ``_recovery_sources`` is an exclusion walk, so on its own it proves nothing
+    about recovery: it would happily seal a suite whose checkpoint state was
+    pruned. The resume contract is asserted here, before the writer opens the
+    archive, against an independent authority: every member the RESULT role
+    keeps out of a delivered bundle but a resume needs -- every non-selected
+    epoch, and every optimizer/scheduler/scaler file -- must be a member of this
+    recovery bundle. A suite that stopped before writing any checkpoint has
+    nothing to assert (its logs and inputs still travel); a suite that has one
+    can never silently lose it.
+    """
+    from core.bundle import Bundle, BundleRole
+    spec = _spec()
+    tree = Bundle.from_directory(output, BundleRole.result)
+    selected = tree.selected_checkpoint_dirs()
+    resume_state = []
+    for relative in tree.members():
+        checkpoint_state = spec.checkpoint_dir in Path(relative).parts
+        resume_only = Path(relative).name in spec.resume_only_filenames
+        if (checkpoint_state or resume_only) and not tree.is_result_member(
+                relative, selected_checkpoints=selected):
+            resume_state.append(relative)
+    missing = sorted(relative for relative in resume_state if relative not in files)
+    if missing:
+        raise ValueError('recovery bundle pruned resume state: '
+                         + ', '.join(missing[:5]))
 
 
 def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
@@ -462,73 +667,30 @@ def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
         if path.name in {'.env', 'config.local'} or path.resolve() == destination:
             continue
         files[path.relative_to(output).as_posix()] = path
+    _assert_recovery_contract(output, files)
     return files
 
 
 @timed
 def recovery_package(output: Path, destination: Path, run_tag: str, *, input_package: dict | None = None) -> Path:
-    """Capture stopped workers' portable state, pruning caches before traversal."""
+    """Seal stopped workers' portable state as one recovery bundle.
+
+    The recovery role is the ``all epochs + optimizer`` contract: nothing is
+    selected away, and the sealed archive is verified once by its writer.
+    """
+    from core.bundle import Bundle, BundleRole
+    spec = _spec()
     output, destination = Path(output).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(destination)
     with trace_step('recovery_package.check_manifest'):
-        if _read_json(output / 'suite_manifest.json').get('run_tag') != run_tag:
+        if _read_json(output / spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
             raise ValueError('recovery suite run mismatch')
     files = _recovery_sources(output, destination.resolve())
-    return write_archive(destination, files, manifest_name=RECOVERY_MANIFEST,
-                         metadata={'schema': 'er-suite-recovery-v1', 'run_tag': run_tag,
-                                   'input_package': input_package})
-
-
-def _validate_archive_paths(archive) -> None:
-    """Validate before opening any member, even when its manifest is missing."""
-    seen = set()
-    for info in archive.infolist():
-        member = Path(info.filename)
-        if not info.filename or member.is_absolute() or '..' in member.parts:
-            raise ValueError('unsafe archive path')
-        if info.is_dir() or (info.external_attr >> 16) & 0o170000 == 0o120000:
-            raise ValueError('archive member must be a regular file (no symbolic links)')
-        if info.filename in seen:
-            raise ValueError('duplicate archive members')
-        seen.add(info.filename)
-
-
-def _recovery_inventory(source, run_tag: str) -> dict:
-    _validate_archive_paths(source)
-    metadata = _archive_json(source, RECOVERY_MANIFEST)
-    if metadata.get('schema') != 'er-suite-recovery-v1' or metadata.get('run_tag') != run_tag:
-        raise ValueError('recovery suite run mismatch')
-    inventory = INVENTORY.validate_python(metadata['files'])
-    if set(source.namelist()) != set(inventory) | {RECOVERY_MANIFEST}:
-        raise ValueError('archive has undeclared or missing members')
-    if _archive_json(source, 'suite_manifest.json').get('run_tag') != run_tag:
-        raise ValueError('recovery suite manifest mismatch')
-    return inventory
-
-
-def _extract_verified_members(source, staging: Path, inventory: dict) -> None:
-    """Copy and SHA256-check in one pass, keeping only a 1 MiB buffer in RAM."""
-    from core.common import training_cfg
-    buffer_bytes = training_cfg().archives.copy_buffer_bytes
-    for name, expected in tracked(inventory.items(), desc='restore.members'):
-        _copy_member_verified(source, name, expected, staging, buffer_bytes)
-
-
-def _copy_member_verified(source, name: str, expected: str,
-                          staging: Path, buffer_bytes: int) -> None:
-    """Stream one archive member to staging, verifying its digest on the way."""
-    target = staging / name
-    if not target.resolve().is_relative_to(staging):
-        raise ValueError('unsafe recovery archive member')
-    target.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    with source.open(name) as member, target.open('xb') as handle:
-        while chunk := member.read(buffer_bytes):
-            digest.update(chunk)
-            handle.write(chunk)
-    if digest.hexdigest() != expected:
-        raise ValueError('archive integrity mismatch: ' + name)
+    return Bundle.seal_archive(
+        destination, files, role=BundleRole.recovery,
+        metadata={'schema': RECOVERY_SCHEMA, spec.run_tag_key: run_tag,
+                  'input_package': input_package}).path
 
 
 def _publish_recovery(staging: Path, output: Path) -> None:
@@ -544,20 +706,34 @@ def _publish_recovery(staging: Path, output: Path) -> None:
 
 @timed
 def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
-    """Restore ZIP or tar.zst once, publishing only after every digest passes."""
+    """Restore ZIP or tar.zst once through the verified recovery Bundle.
+
+    The archive is verified exactly once at the :meth:`core.bundle.Bundle.load`
+    boundary (member digests, traversal and symlink safety), and the verified
+    tree is then materialized and published only after every digest passed.
+    """
+    from core.bundle import Bundle, BundleRole
+    spec = _spec()
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
-    with open_archive(archive) as source:
-        inventory = _recovery_inventory(source, run_tag)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as temp:
-            staging = Path(temp) / 'payload'
-            staging.mkdir()
-            with trace_step('restore_recovery.unpack', members=len(inventory)):
-                _extract_verified_members(source, staging.resolve(), inventory)
-            _publish_recovery(staging, output)
+    handle = Bundle.load(Path(archive), BundleRole.recovery)
+    if handle.run_tag() != run_tag:
+        raise ValueError('recovery suite run mismatch')
+    if _read_json_member(handle, spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
+        raise ValueError('recovery suite manifest mismatch')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as temp:
+        staging = Path(temp) / 'payload'
+        staging.mkdir()
+        with trace_step('restore_recovery.unpack', members=len(handle.members())):
+            handle.materialize(staging.resolve())
+        _publish_recovery(staging, output)
     return output
+
+
+def _read_json_member(handle, member: str) -> Any:
+    return json.loads(handle.read(member))
 
 
 def main() -> None:

@@ -51,6 +51,7 @@ from cli.kaggle_lifecycle import KernelLifecycle
 from cli.kaggle_kernel_templates import (
     KernelTemplates, BUNDLE_KERNEL_SCRIPT,
     TRAIN_KERNEL_SHARED, TRAIN_KERNEL_BODY,
+    FINALIZE_KERNEL_BODY,
     EMBED_KERNEL_BODY,
 )
 
@@ -82,17 +83,119 @@ CREDENTIALS_PATH = Path.home() / training_cfg().kaggle.files.credentials_file
 
 ACCESS_TOKEN_PATH = Path.home() / training_cfg().kaggle.files.access_token_file
 
-BUNDLE_KERNEL_CODE_FILE = training_cfg().kaggle.files.code_files["bundle"]
-TRAIN_KERNEL_CODE_FILE = training_cfg().kaggle.files.code_files["train"]
-EMBED_KERNEL_CODE_FILE = training_cfg().kaggle.files.code_files["embed"]
+#: The finalize job is the second bundle_steps role and runs as a second version
+#: of the SAME bundling CPU kernel slug (one Kaggle kernel; Kaggle mounts one
+#: code file per pushed version). Its two names cannot live in
+#: ``kaggle.files`` today — ``core.schemas.KaggleSpec`` pins ``code_files`` to
+#: exactly {bundle, train, embed} and ``result_names`` to exactly {train,
+#: embed} — so the lane declares them ONCE here; every surface resolves them
+#: through ``kernel_identity`` below (never a second literal).
+FINALIZE_KERNEL_KIND = "finalize"
+FINALIZE_KERNEL_CODE_FILE = "finalize_cpu.py"
+FINALIZE_RESULT_NAME = "finalized_bundle"
+
+
+class KernelIdentity(BaseModel):
+    """One lane kernel identity, resolved against the config SSOT.
+
+    ``kind`` is the fetch/stage/receipt kind (bundle | train | embed |
+    finalize), ``which`` the watcher identity the ``--kernel`` flag takes,
+    ``slug_attr`` the ``KaggleSpec`` field holding the configured slug, and
+    ``code_file``/``result_name``/``manifest``/``archive`` the pushed script
+    and artifact names. Bundle names its own manifest+archive pair; the others
+    template ``kaggle.files`` with their result name. Every surface that used
+    to rebuild a kind->slug or kind->code-file dict reads this registry.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str
+    which: str
+    slug_attr: str
+    code_file: str
+    result_name: str | None = None
+    manifest: str | None = None
+    archive: str | None = None
+    bundle_role: str | None = None
+
+    def slug(self, spec: Any) -> str | None:
+        return getattr(spec, self.slug_attr)
+
+    def manifest_name(self, files: Any) -> str:
+        return self.manifest or files.result_manifest.format(kind=self.result_name)
+
+    def archive_name(self, files: Any) -> str:
+        return self.archive or files.result_archive.format(kind=self.result_name)
+
+
+def _kernel_identities(files: Any) -> dict[str, KernelIdentity]:
+    """The four lane identities, with the code/result names ``kaggle.files`` declares."""
+    return {
+        "bundle": KernelIdentity(
+            kind="bundle", which="cpu", slug_attr="cpu_kernel_slug",
+            code_file=files.code_files["bundle"],
+            manifest=files.bundle_receipt, archive=files.bundle_archive,
+            bundle_role="inputs"),
+        "train": KernelIdentity(
+            kind="train", which="gpu", slug_attr="gpu_kernel_slug",
+            code_file=files.code_files["train"],
+            result_name=files.result_names["train"],
+            # The train kernel ships the suite's own sealed result Bundle (see
+            # KaggleKernels.TRAIN_RESULT_BUNDLE_SHIP), so its fetched output is
+            # role-loaded at the same boundary the finalize job consumes; the
+            # embed output is not a Bundle role.
+            bundle_role="result"),
+        "embed": KernelIdentity(
+            kind="embed", which="embed", slug_attr="embedding_kernel_slug",
+            code_file=files.code_files["embed"],
+            result_name=files.result_names["embed"]),
+        FINALIZE_KERNEL_KIND: KernelIdentity(
+            kind=FINALIZE_KERNEL_KIND, which="finalize",
+            slug_attr="cpu_kernel_slug",
+            code_file=FINALIZE_KERNEL_CODE_FILE,
+            result_name=FINALIZE_RESULT_NAME,
+            bundle_role="result"),
+    }
+
+
+def kernel_identities(spec: Any | None = None) -> dict[str, KernelIdentity]:
+    """The lane's kernel identities resolved from ``spec`` (default: the SSOT)."""
+    spec = _spec() if spec is None else spec
+    return _kernel_identities(spec.files)
+
+
+def kernel_identity(ref: str, spec: Any | None = None) -> KernelIdentity:
+    """The ONE identity named by ``ref`` (a kind, or a watcher ``which``)."""
+    identities = kernel_identities(spec)
+    index = {identity.kind: identity for identity in identities.values()}
+    index.update({identity.which: identity for identity in identities.values()})
+    if ref not in index:
+        raise RuntimeError(
+            f"unknown kernel identity {ref!r}; known: {sorted(index)}")
+    return index[ref]
+
+
+#: Import-time identities (module constants only; a caller holding its own spec
+#: resolves through ``kernel_identity(..., spec)``).
+KERNEL_IDENTITIES = _kernel_identities(training_cfg().kaggle.files)
+
+BUNDLE_KERNEL_CODE_FILE = KERNEL_IDENTITIES["bundle"].code_file
+TRAIN_KERNEL_CODE_FILE = KERNEL_IDENTITIES["train"].code_file
+EMBED_KERNEL_CODE_FILE = KERNEL_IDENTITIES["embed"].code_file
 
 GPU_KERNEL_KINDS = {"train": (TRAIN_KERNEL_CODE_FILE, TRAIN_KERNEL_BODY),
                     "embed": (EMBED_KERNEL_CODE_FILE, EMBED_KERNEL_BODY)}
 
 COHORT_TAGS = training_cfg().kaggle.cohort_tags
 
-AUTOWATCH_WHICH = {"bundle": "cpu", "cpu": "cpu",
-                   "train": "gpu", "gpu": "gpu", "embed": "embed"}
+# kind/which -> canonical watcher identity, one entry per kind AND per watcher
+# alias. `finalize` is its own watcher identity so its receipt
+# (autowatch_finalize.receipt.json) can never be mistaken for the generation
+# step's (autowatch_bundle.receipt.json) — both run the CPU slug.
+AUTOWATCH_WHICH = {identity.kind: identity.which
+                   for identity in KERNEL_IDENTITIES.values()}
+AUTOWATCH_WHICH.update({identity.which: identity.which
+                        for identity in KERNEL_IDENTITIES.values()})
 
 CHAIN_MAX_POLLS = training_cfg().kaggle.limits.max_polls  # supervise's harvest ceiling, in poll ticks
 from cli.kaggle_cli import KaggleCLI
@@ -134,6 +237,9 @@ _attachment_gate = KaggleKernels._attachment_gate
 stage_bundle_kernel = KaggleKernels.stage_bundle_kernel
 push_bundle_kernel = KaggleKernels.push_bundle_kernel
 stage_gpu_kernel = KaggleKernels.stage_gpu_kernel
+stage_finalize_kernel = KaggleKernels.stage_finalize_kernel
+embed_objective = KaggleKernels.embed_objective
+require_embed_objective = KaggleKernels.require_embed_objective
 push_kernel = KaggleKernels.push_kernel
 kernel_status = KaggleKernels.kernel_status
 stop_kernel = KaggleKernels.stop_kernel

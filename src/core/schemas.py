@@ -3047,6 +3047,9 @@ class BundleSpec(BaseModel):
     manifest_inputs: str = Field(min_length=1)
     manifest_recovery: str = Field(min_length=1)
     manifest_result: str = Field(min_length=1)
+    #: The suite's own run manifest, written by the supervisor and consumed by
+    #: every completion/publication surface.
+    suite_manifest_file: str = "suite_manifest.json"
     # manifest keys
     run_tag_key: str = Field(min_length=1)
     files_key: str = Field(min_length=1)
@@ -3083,8 +3086,27 @@ class BundleSpec(BaseModel):
         "optimizer.pt", "scheduler.pt", "rng_state.pth", "training_args.bin",
         "scaler.pt",
     ))
+    # Files that never travel into a deployed model publication (they exist to
+    # resume or to select, not to serve).
+    deployment_ignored_filenames: tuple[str, ...] = Field(default_factory=lambda: (
+        "optimizer.pt", "scheduler.pt", "rng_state.pth", "training_args.bin",
+        "scaler.pt", "trainer_state.json",
+    ))
     # The default three-track suite config a BundlePipeline prepares from.
     suite_config: str = "config/model_tracks.yaml"
+    # The worker's own frozen lane config inside a track's output tree.
+    worker_config_file: str = "worker.yaml"
+    # Finalize process layout: the prepared inputs a finalize job extracts are
+    # NOT deliverables, so the directory is dropped from the sealed result set.
+    prepared_inputs_dir: str = "local_inputs"
+    # Where finalize ran, recorded in the suite manifest and the sealed manifest
+    # (an operator box is no longer a finalize surface; the lane is remote CPU).
+    postprocess_location_local: str = "local CPU"
+    postprocess_location_bundle: str = "bundle finalize"
+    # Transport sidecars: the whole-archive digest token and the retained
+    # failure-path event log (success folds the events into the result archive).
+    sha256_sidecar_suffix: str = ".sha256"
+    events_sidecar_suffix: str = ".events.jsonl"
 
 
 class PreparationSpec(BaseModel):

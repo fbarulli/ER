@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from sentence_transformers.sentence_transformer.data_collator import SentenceTransformerDataCollator
 
 from core.encoding_inputs import prepare_text_features, tokenization_policy
-from core.perf_switches import perf_enabled
+from core.perf_switches import perf_enabled, perf_int
 from core.run_log import RunLogger
 from core.timing import Timing
 
@@ -28,7 +28,10 @@ _CACHE_BOUND_CONTRACT = perf_enabled("text.bound_task_contract")
 # skip re-padding (and any re-tokenization). The key is the ordered text tuple,
 # so option-order shuffles produce distinct entries; batches containing any
 # dynamic (generated) text are never cached and keep their quota bookkeeping.
+# Bounded FIFO: a shuffled (non-frozen) sampler would otherwise retain one
+# padded batch per distinct batch ever seen.
 _CACHE_PREPROCESSED = perf_enabled("text.cache_preprocessed_batches")
+_PREPROCESSED_CACHE_SIZE = max(1, perf_int("text.preprocessed_cache_size", 8192))
 
 TEXT_COLUMNS = {"sentence1", "sentence2", "anchor", "positive", "negative"}
 COLLATOR_TEXT_COLUMNS = set(TEXT_COLUMNS) | {"label", "dataset_name"}
@@ -285,13 +288,17 @@ class PreparedTokenLookup:
             key = (prompt, tuple(inputs))
             cached = self._preprocessed_cache.get(key)
             if cached is not None:
-                return cached
+                # Hand out a fresh dict: callers may add/pop batch keys, and the
+                # cached entry must not be mutated by any of them.
+                return dict(cached)
             rows = [variant["rows"][self.indices[text]] for text in inputs]
             result = self._padded_rows(
                 rows, self._require_same_feature_keys(rows), variant["constants"]
             )
+            if len(self._preprocessed_cache) >= _PREPROCESSED_CACHE_SIZE:
+                self._preprocessed_cache.pop(next(iter(self._preprocessed_cache)))
             self._preprocessed_cache[key] = result
-            return result
+            return dict(result)
         requested = Counter(inputs[index] for index in dynamic_positions)
         self._require_registered_dynamic(requested)
         dynamic_rows: dict[int, dict] = {}

@@ -30,21 +30,32 @@ INVENTORY = TypeAdapter(dict[str, Digest])
 _DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
 
 
-def _raw_file_digest(path: Path) -> str:
+def raw_file_digest(path: Path | str) -> str:
+    """The ONE uncached whole-file SHA256 implementation.
+
+    Every other file digest in the repository is a *policy* wrapper over this
+    one (``cached_file_digest`` adds the process memo below; ``core.manifest
+    .sha256_file`` and ``graph_tracks.data.FileDigest.of`` forward here), so a
+    digest computed anywhere fingerprints the same bytes the same way.
+    """
     with Path(path).open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
 def cached_file_digest(path: Path | str) -> str:
-    """SHA256 of one regular file, memoized on (abspath, mtime_ns, size)."""
+    """SHA256 of one regular file, memoized on (abspath, mtime_ns, size).
+
+    The memoized half of the one digest home: ``raw_file_digest`` owns the
+    algorithm, this owns the per-process cache policy described above.
+    """
     path = Path(path)
     if not perf_enabled('digest.cache'):
-        return _raw_file_digest(path)
+        return raw_file_digest(path)
     stat = path.stat()
     key = (os.path.abspath(os.fspath(path)), stat.st_mtime_ns, stat.st_size)
     value = _DIGEST_CACHE.get(key)
     if value is None:
-        value = _raw_file_digest(path)
+        value = raw_file_digest(path)
         _DIGEST_CACHE[key] = value
     return value
 
@@ -161,11 +172,12 @@ def _write_zip(candidate, files, inline, manifest_name, manifest):
 
 
 def _write_tar(candidate, files, inline, manifest_name, manifest, *,
-               digests: dict[str, str] | None = None):
+               digests: dict[str, str] | None = None, digest=None):
     """Stream a zstd tar. When ``digests`` is given, record each member's SHA256
     from the bytes handed to the writer, so the caller need not re-read the
-    archive to prove it matches its frozen inventory."""
-    with tar_archive(candidate, 'x') as archive:
+    archive to prove it matches its frozen inventory. ``digest`` records the
+    whole-file SHA256 of the compressed archive as it is written."""
+    with tar_archive(candidate, 'x', digest=digest) as archive:
         for target, source in tracked(files.items(), desc='archive.tar_files'):
             if digests is None:
                 archive.add(source, arcname=target, recursive=False)
@@ -187,8 +199,15 @@ def _add_tar_text(archive, name, value):
     archive.addfile(member, io.BytesIO(payload))
 
 
-def _source_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
-    """Regular-file check then hash: every source once, inline text bytes too."""
+def source_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
+    """The ONE name -> SHA256 inventory builder for archive sources.
+
+    Regular-file check then hash: every source once, inline text bytes too.
+    ``write_archive`` hashes sources through here while it writes, and callers
+    that must mirror that inventory for a legacy manifest (the graph worker
+    package's historical ``files_sha256`` key) reuse it instead of re-hashing
+    the same sources with a second loop.
+    """
     inventory: dict[str, str] = {}
     for target, source in tracked(files.items(), desc='archive.hash_sources'):
         if source.is_symlink() or not source.is_file():
@@ -227,8 +246,14 @@ def _profile_sidecar(output: Path, timings: dict[str, float],
 @timed
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
-                  inventory_key: str = 'files', profile: bool = False) -> Path:
-    """Publish one SHA256-inventoried archive (staging → verify → atomic link)."""
+                  inventory_key: str = 'files', profile: bool = False,
+                  digest=None) -> Path:
+    """Publish one SHA256-inventoried archive (staging → verify → atomic link).
+
+    ``digest`` (a ``hashlib``-style object) receives the sealed archive's
+    whole-file SHA256 during the write, so the transport token costs no extra
+    read of the published bytes.
+    """
     if output.exists():
         raise FileExistsError(output)
     inline = inline or {}
@@ -242,7 +267,7 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     _check_member(manifest_name)
     started = time.monotonic()
     # Reject malformed inventories before expensive source hashing.
-    inventory = _source_inventory(files, inline)
+    inventory = source_inventory(files, inline)
     timings["inventory_hash_seconds"] = time.monotonic() - started
     output.parent.mkdir(parents=True, exist_ok=True)
     candidate = _candidate_path(output)
@@ -255,7 +280,7 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
             with trace_step('archive.zstandard', files=len(files),
                             compression_level=archive_settings().compression_level):
                 _write_tar(candidate, files, inline, manifest_name, manifest,
-                           digests=stream_digests)
+                           digests=stream_digests, digest=digest)
         else:
             # Explicit ZIP outputs remain available for historical callers.
             stream_digests = None
@@ -280,6 +305,12 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         _publish_atomically(candidate, output)
     finally:
         candidate.unlink(missing_ok=True)
+    if digest is not None and not output.name.endswith('.tar.zst'):
+        # The legacy ZIP writer cannot tee its own bytes; the digest token still
+        # costs exactly one sequential read of the published archive.
+        with output.open('rb') as handle:
+            while chunk := handle.read(archive_settings().copy_buffer_bytes):
+                digest.update(chunk)
     if profile:
         _profile_sidecar(output, timings, files)
     return output
@@ -293,13 +324,24 @@ def _check_member(name: str, *, regular: bool = True) -> None:
         raise ValueError('archive member must be a regular file (no symbolic links)')
 
 
-def _check_inventory(metadata, actual, manifest_name, inventory_key):
-    inventory = INVENTORY.validate_python(metadata[inventory_key])
+def compare_inventory(inventory: dict[str, str], actual: dict[str, str], *,
+                      mismatch: str = 'archive integrity mismatch') -> None:
+    """The ONE inventory comparison: exact member set, then per-member digest.
+
+    ``mismatch`` names the surface in the digest-mismatch error so callers that
+    verify a different shape (the graph worker package's installed tree) keep
+    their own message while sharing this comparison.
+    """
     if set(actual) != set(inventory):
         raise ValueError('archive has undeclared or missing members')
     for target, expected in inventory.items():
         if actual[target] != expected:
-            raise ValueError(f'archive integrity mismatch: {target}')
+            raise ValueError(f'{mismatch}: {target}')
+
+
+def _check_inventory(metadata, actual, manifest_name, inventory_key):
+    inventory = INVENTORY.validate_python(metadata[inventory_key])
+    compare_inventory(inventory, actual)
     return metadata
 
 
@@ -329,17 +371,23 @@ def verified_archive(path: Path, manifest_name: str, *, inventory_key: str = 'fi
 
 
 def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files',
-                   digest=None) -> dict[str, Any]:
+                   digest=None, names: list[str] | None = None) -> dict[str, Any]:
     """Verify an archive's manifest and member digests.
 
     When ``digest`` (a ``hashlib``-style object) is given it is updated with the
     archive's whole-file bytes. For a Zstandard tar the hash is folded into the
     same pass that verifies members, so callers that need both (the VM->local
     handoff) read the multi-GB archive exactly once.
+
+    When ``names`` is given, the verified member names are appended to it in one
+    pass, so a boundary can hand a trusted member list to later stages instead
+    of re-parsing (and for a tar, re-inflating) the archive.
     """
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             metadata = verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+            if names is not None:
+                names.extend(archive.namelist())
         if digest is not None:
             with Path(path).open('rb') as handle:
                 while chunk := handle.read(archive_settings().copy_buffer_bytes):
@@ -360,6 +408,8 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
                         if member.name in seen:
                             raise ValueError('duplicate archive members')
                         seen.add(member.name)
+                        if names is not None:
+                            names.append(member.name)
                         with archive.extractfile(member) as handle:
                             if member.name == manifest_name:
                                 metadata = json.load(handle)
@@ -376,8 +426,10 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
 
 
 def verify_archive_digest(path: Path, manifest_name: str, *,
-                          inventory_key: str = 'files') -> tuple[dict[str, Any], str]:
-    """Verify an archive and return its whole-file SHA256 from one streaming pass."""
+                          inventory_key: str = 'files',
+                          names: list[str] | None = None) -> tuple[dict[str, Any], str]:
+    """Verify an archive and return its metadata plus whole-file SHA256."""
     digest = hashlib.sha256()
-    metadata = verify_archive(path, manifest_name, inventory_key=inventory_key, digest=digest)
+    metadata = verify_archive(path, manifest_name, inventory_key=inventory_key,
+                              digest=digest, names=names)
     return metadata, digest.hexdigest()

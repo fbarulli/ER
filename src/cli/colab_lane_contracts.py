@@ -6,18 +6,18 @@ transport dial-ins + receipts + the shared lane contracts (transit-failure
 tolerance, delivery root, delivery member list, checkout-relative guard).
 The ``cli.colab`` module stays the single transport surface the offline fakes
 patch; every dial-in re-reads the module attribute at call time through the
-running colab identity (``sys.modules["__colab_runtime_self__"]``), so the
+shared ``colab_hub.hub()`` (the running ``__colab_runtime_self__`` identity), so the
 facades and the test fakes keep driving every lane through one patch surface.
 """
 from __future__ import annotations
 
-import sys
 import hashlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
+from cli.colab_hub import hub
 from training.prepare_all_trace import timed
 
 DELIVERY_ARCHIVE_NAME = "bundle_delivery.tar.zst"
@@ -42,16 +42,6 @@ RESUME_STATE_UPLOAD_TIMEOUT_SECONDS = 3600
 MAX_PARALLEL_PREP_SESSIONS = 2
 
 
-def _colab_hub() -> Any:
-    """The RUNNING cli.colab module (never a second import copy)."""
-    hub = sys.modules.get("__colab_runtime_self__")
-    if hub is not None:
-        return hub
-    import cli.colab as surface
-
-    return surface
-
-
 def _stamp() -> str:
     """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
     return (f"[colab-lane {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
@@ -74,7 +64,7 @@ class ColabLaneBase:
     @property
     def surface(self) -> Any:
         if self._surface is None:
-            self._surface = _colab_hub()
+            self._surface = hub()
         return self._surface
 
     @property
@@ -116,11 +106,15 @@ class ColabLaneBase:
 
     @staticmethod
     def checkout_relative_guard(value: str, *, message: str) -> None:
-        candidate = Path(value)
-        outside = (candidate.is_absolute() or ".." in candidate.parts
-                   or not candidate.parts or len(candidate.parts) != 1
-                   or any(char in str(value) for char in "\n\r\\*?[]!{}"))
-        if outside:
+        """Refuse a value that is not one repository-relative checkout path.
+
+        The shape rule (traversal, pattern characters, single component) is the
+        shared checkout contract in cli.colab_runtime; this guard only owns the
+        lane's message.
+        """
+        from cli.colab_runtime import is_checkout_relative_path
+
+        if not is_checkout_relative_path(value, single_component=True):
             raise ValueError(message)
 
     def delivery_root(self, run_id: str) -> Path:

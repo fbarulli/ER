@@ -10,17 +10,83 @@ import pandas as pd
 import yaml
 
 
+def _checkout_path(value, *, train_root: Path) -> Path:
+    """One config path value as an absolute checkout path.
+
+    Suite configs name their inputs either absolutely (a prepared tree) or
+    checkout-relative (the committed fixtures); the relative form is the one
+    that survives transport, so both are resolved from the checkout root.
+    """
+    path = Path(value)
+    return path.resolve() if path.is_absolute() else (train_root / path).resolve()
+
+
+def _portable_path(path: Path, *, train_root: Path) -> str:
+    """A written config value that survives transport.
+
+    A fixture must not embed the machine it was built on, so anything inside
+    the checkout is recorded relative to it; a genuinely external path stays
+    absolute rather than being silently rewritten.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(train_root).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+#: The lane-config keys that name an input the smoke must repoint at its own tree.
+_SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache',
+                     'text_index', 'gnn_checkpoint')
+
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
+def _repoint_smoke_paths(settings: dict, *, setup: Path, output: Path,
+                         train_root: Path) -> dict:
+    """Rebase one graph lane's parent inputs onto this smoke's own tree.
+
+    The parent may record absolute paths (a live prepared tree) or
+    checkout-relative ones (a committed fixture); both are resolved from the
+    checkout root before the member's path below the parent setup is re-rooted
+    under ``output``. The written value stays portable, so a checked-in smoke
+    fixture never names the machine that produced it.
+    """
+    for key in _SMOKE_INPUT_KEYS:
+        if not settings.get(key):
+            continue
+        source = _checkout_path(settings[key], train_root=train_root)
+        try:
+            relative = source.relative_to(setup)
+        except ValueError as exc:
+            raise ValueError(
+                f'{key} points outside the smoke parent setup: {settings[key]}') from exc
+        settings[key] = _portable_path(output / relative, train_root=train_root)
+    return settings
+
+
 def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config: Path | None = None):
     setup, output = setup.resolve(), output.resolve()
     from core.common import TRAIN_ROOT
+    train_root = Path(TRAIN_ROOT).resolve()
     from model_tracks.config import load_config
     parent = load_config(suite_config or TRAIN_ROOT/'config/model_tracks.yaml')
     if (TRAIN_ROOT/parent.setup_dir).resolve() != setup:
         raise ValueError('smoke parent suite differs from requested prepared setup')
     from graph_tracks.config import load_config as load_graph_config, load_text_config
-    graph_settings = {track: load_graph_config(setup/f'{track}.yaml', expected_track=track).model_dump()
+    from graph_tracks.setup import (
+        write_setup_frames,
+        write_text_config,
+        write_track_config,
+    )
+    layout = _setup_layout()
+    graph_settings = {track: load_graph_config(setup/layout.track_config(track), expected_track=track).model_dump()
                       for track in ('gnn_only', 'cascade')}
-    text_settings = load_text_config(setup/'text.yaml').model_dump()
+    text_settings = load_text_config(setup/layout.text_config).model_dump()
     from core.common import SEED, training_cfg
     from graph_tracks.data import file_hash
     from graph_tracks.prepare import prepare
@@ -29,9 +95,9 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     from training.prepared_bundle import load_prepared_bundle, prepared_holdout, write_prepared_bundle
     if output.exists():
         raise FileExistsError(output)
-    catalog=pd.read_csv(setup/'eligible_catalog.csv',dtype=str,keep_default_na=False,low_memory=False)
-    splits=pd.read_csv(setup/'listing_splits.csv',dtype=str)
-    pairs=pd.read_csv(setup/'listing_pairs.csv',dtype={'sku_id1':str,'sku_id2':str})
+    catalog=pd.read_csv(setup/layout.catalog,dtype=str,keep_default_na=False,low_memory=False)
+    splits=pd.read_csv(setup/layout.splits,dtype=str)
+    pairs=pd.read_csv(setup/layout.pairs,dtype={'sku_id1':str,'sku_id2':str})
     _,bundle=load_prepared_bundle(setup/'text_prepared.pkl.gz')
     populations=prepared_holdout(bundle,dict(training_cfg().split),seed=SEED)
     roles={normalize_gtin(key):role for role,values in enumerate(populations) for key in values}
@@ -100,10 +166,9 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     assignment=splits[splits.sku_id.isin(chosen)].copy()
     pair_frame=pairs[pairs.sku_id1.isin(chosen)&pairs.sku_id2.isin(chosen)].copy()
     output.mkdir(parents=True)
-    frame.to_csv(output/'eligible_catalog.csv',index=False)
-    assignment.to_csv(output/'listing_splits.csv',index=False)
-    pair_frame.to_csv(output/'listing_pairs.csv',index=False)
-    listings=prepare(output/'eligible_catalog.csv',output/'listing_splits.csv',output/'listing_pairs.csv',output/'prepared')
+    write_setup_frames(output,catalog=frame,splits=assignment,pairs=pair_frame)
+    listings=prepare(output/layout.catalog,output/layout.splits,output/layout.pairs,
+                     output/layout.prepared_dir)
     selected_keys={normalize_gtin(v) for v in frame.gtin}
     source_indices=[i for i,p in enumerate(bundle['df'].sku_id.astype(str)) if p in chosen]
     first_copy=min((int(r['copy_payload_idx']) for r in bundle['mask_audit']+bundle['hard_negative_mask_audit']
@@ -145,6 +210,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         mask=np.array([int(a) in supervised and int(b) in supervised for a,b in source],dtype=bool)
         arrays[field]=np.array([[remap[int(a)],remap[int(b)]] for a,b in source[mask]],dtype=int).reshape(-1,2)
         masks[field]=mask
+    parent_manifest = json.loads((setup/layout.manifest).read_text())
+    # The parent records its baseline checkpoint absolutely (a live tree) or
+    # checkout-relative (a committed fixture), and the child re-records it
+    # portably so a checked-in smoke never names the machine that built it.
+    checkpoint = _checkout_path(parent_manifest['text_checkpoint'], train_root=train_root)
     write_prepared_bundle(output/'text_prepared.pkl.gz',df=bundle['df'].iloc[source_indices].reset_index(drop=True),
         payload=[bundle['payload'][i] for i in indices],structured_features=np.asarray(bundle['structured_features'])[indices],
         row_bc=np.asarray(bundle['row_bc'])[indices],country=np.asarray(bundle['country'])[indices],
@@ -153,12 +223,13 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         train_neg_sources=np.asarray(bundle['train_neg_sources'])[masks['train_neg']],**audits,
         **{key:bundle[key] for key in ('labeled_pairs_csv','canonical_records_csv','gate_results_csv','payload_variant','masking_profile')},
         plan_sample=True,
-        token_checkpoint=str(json.loads((setup/'setup_manifest.json').read_text())['text_checkpoint']),
+        token_checkpoint=_portable_path(checkpoint, train_root=train_root),
         holdout_populations={s:sorted(values) for s,values in zip(('train','dev','test'),populations)})
-    manifest=json.loads((setup/'setup_manifest.json').read_text())
-    manifest.update(smoke=True,source_listing_count=sample,parent_setup_sha256=file_hash(setup/'setup_manifest.json'))
-    write_json(output/'setup_manifest.json',manifest)
-    checkpoint = Path(manifest['text_checkpoint'])
+    manifest=dict(parent_manifest)
+    manifest.update(smoke=True,source_listing_count=sample,
+                    parent_setup_sha256=file_hash(setup/layout.manifest),
+                    text_checkpoint=_portable_path(checkpoint, train_root=train_root))
+    write_json(output/layout.manifest,manifest)
     from graph_tracks.text_cache import checkpoint_hash
     if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
         raise ValueError('smoke baseline differs from the parent checkpoint')
@@ -169,16 +240,15 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
     prepare_baseline(output, checkpoint)
     for track in ('gnn_only','cascade'):
-        settings = graph_settings[track]
-        for key in ('listings','pairs','input_manifest','text_cache','text_index','gnn_checkpoint'):
-            if settings.get(key):
-                settings[key]=str(output/Path(settings[key]).relative_to(setup))
+        settings = _repoint_smoke_paths(graph_settings[track], setup=setup,
+                                        output=output, train_root=train_root)
         settings.update(device='cpu',epochs=1,report_test=False)
-        (output/f'{track}.yaml').write_text(yaml.safe_dump(settings,sort_keys=False))
+        write_track_config(output, track, settings)
     text_settings.update(report_test=False)
-    (output/'text.yaml').write_text(yaml.safe_dump(text_settings,sort_keys=False))
+    write_text_config(output, text_settings)
     cfg = parent.model_dump()
-    cfg.update(setup_dir=str(output),text_bundle=str(output/'text_prepared.pkl.gz'),
+    cfg.update(setup_dir=_portable_path(output, train_root=train_root),
+               text_bundle=_portable_path(output/'text_prepared.pkl.gz', train_root=train_root),
                epochs=1,device='cpu',report_test=False,publish_git=False,
                publish_dvc=False,profiling=True)
     (output/'suite.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False))

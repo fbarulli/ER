@@ -29,6 +29,15 @@ VOCABULARIES. The raw export and the canonical dataset name the SAME
 thirteen columns differently (``sku_name_eng`` vs ``title``). Both vocabularies
 are derived from the single ``column_mapping`` rather than typed out, so a
 rename is a one-line config edit that every lane follows.
+
+ATTRIBUTE DIMENSIONS. The canonical RECORD schema (``schemas.CanonicalRecord``)
+declares one ``<dimension>_set`` column per attribute dimension, plus the
+scalar ``mode_brand``. Six lanes (negative supply, attribute separation, the
+final-validation slice fields, the proceed-precision check, the random-matching
+report, and the laya pair builder) each typed that dimension -> column table a
+different length (6, 7 and 8 dimensions), and one implicit ``"flavor_set" if
+dimension == "flavor" else dimension`` guess. The table is derived from the
+record schema here so a rename in the schema moves every lane at once.
 """
 
 from __future__ import annotations
@@ -36,8 +45,12 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Mapping
 
+from core.schemas import CanonicalRecord
+
 __all__ = [
+    "ATTRIBUTE_DIMENSION_COLUMNS",
     "CANONICAL_COLUMNS",
+    "CANONICAL_SET_COLUMNS",
     "COLUMN_ALIASES",
     "CANONICAL_DATASET_REQUIRED_COLUMNS",
     "COLUMN_MAPPING",
@@ -56,6 +69,38 @@ __all__ = [
     "require_raw_columns",
     "source_row_pairs",
 ]
+
+#: The suffix that marks a canonical record's set-valued evidence columns.
+_SET_SUFFIX = "_set"
+
+
+def _mode_column(dimension: str) -> str:
+    """The record's scalar ``mode_<dimension>`` field; loud when undeclared."""
+    column = f"mode_{dimension}"
+    if column not in CanonicalRecord.model_fields:
+        raise KeyError(
+            f"CanonicalRecord declares no {column!r} scalar for dimension "
+            f"{dimension!r}; the attribute-dimension registry cannot be derived"
+        )
+    return column
+
+
+#: Every set-valued evidence column the record schema declares, in schema order.
+CANONICAL_SET_COLUMNS: tuple[str, ...] = tuple(
+    name for name in CanonicalRecord.model_fields if name.endswith(_SET_SUFFIX)
+)
+
+#: Attribute dimension -> the canonical_records column that carries its
+#: evidence. DERIVED from the record schema: set-valued dimensions strip the
+#: declared ``_set`` suffix, and the one scalar dimension (``brand``) reads the
+#: record's own ``mode_brand`` field. No lane retypes a column name.
+ATTRIBUTE_DIMENSION_COLUMNS: Mapping[str, str] = MappingProxyType(
+    {
+        name[: -len(_SET_SUFFIX)]: name
+        for name in CANONICAL_SET_COLUMNS
+    }
+    | {"brand": _mode_column("brand")}
+)
 
 
 def _cfg():

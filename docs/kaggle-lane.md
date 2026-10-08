@@ -80,45 +80,47 @@ er-kaggle --what download --execute
 er-kaggle --what submission --submission-input in.csv --submission-output out.csv
 ```
 
-## Command inventory (SSOT: `cli.kaggle_lane.main`, src/cli/kaggle_lane.py:1399–1445)
+## Command inventory (SSOT: `cli.kaggle_lane.main` → `KaggleCLI.run`, src/cli/kaggle_cli.py:13–75)
 
 `er-kaggle` (= `PYTHONPATH=src .venv/bin/python -m cli.kaggle_lane`).
 Everything is **dry-run by default**; `--execute` is the only network path.
 
-`--what` choices (kaggle_lane.py:1401–1404, default `package`):
+`--what` choices (kaggle_cli.py:17–22, default `package`):
 `package | upload | download | submission | credentials | bundle-kernel |
-bundle-fetch | kernel-status | train-kernel | embed-kernel | kernel-logs |
-fetch-results | stop | supervise | kernel-stream | chain`
+bundle-fetch | kernel-status | train-kernel | embed-kernel | embed-objective |
+finalize-kernel | kernel-logs | fetch-results | stop | supervise | autowatch |
+kernel-stream | chain`
 
-Flags (kaggle_lane.py:1406–1445): `--dataset-csv`, `--config-json`,
-`--submission-input`, `--submission-output`, `--execute`,
-`--kernel {cpu,gpu,embed}` (default cpu — resolves the configured slug),
-`--kind {bundle,train,embed}` (fetch-results default train;
-supervise default ALL THREE when `--kind` is absent, kaggle_lane.py:1509–1511),
+Flags (kaggle_cli.py:23–73): `--dataset-csv`, `--config-json`,
+`--submission-input`, `--submission-output`, `--execute`, `--no-wait`,
+`--kernel {cpu,gpu,embed,finalize}` (default cpu — resolves the configured slug),
+`--kind {bundle,train,embed,finalize}` (fetch-results default train;
+supervise default ALL THREE when `--kind` is absent, kaggle_cli.py:178),
 `--slug`, `--follow`, `--checkpoint`, `--run-tag`,
 `--cohort {full,50pct,10k}` (default full),
 `--with-embed` (chain: continue into embed-kernel after the train watcher
-completes), `--key-env`, `--revision` (pin; default current HEAD).
+completes), `--with-finalize` (chain: finish with the remote CPU finalize job),
+`--key-env`, `--revision` (pin; default current HEAD).
 
 | operation | what it actually does | preconditions |
 |---|---|---|
-| `credentials` | writes `~/.kaggle/kaggle.json` (0600) from the env token named by `kaggle.api_key_env` (default `KAGGLE_API_KEY`); also writes the 2.x access-token file | `kaggle.username` set; token present in the env; never logged (kaggle_lane.py:687–726) |
-| `package` | builds the Kaggle payload (packaged dataset.csv + metadata + `.receipt.json`) into the staging root; hashes census | `--dataset-csv` or the config dataset binding (kaggle_lane.py:1545–1556) |
+| `credentials` | writes `~/.kaggle/kaggle.json` (0600) from the env token named by `kaggle.api_key_env` (default `KAGGLE_API_KEY`); also writes the 2.x access-token file | `kaggle.username` set; token present in the env; never logged (kaggle_runtime.py:205) |
+| `package` | builds the Kaggle payload (packaged dataset.csv + metadata + `.receipt.json`) into the staging root; hashes census | `--dataset-csv` or the config dataset binding (kaggle_cli.py:23–25; kaggle_datasets.py:36) |
 | `upload` / `download` | kaggle CLI dataset upload/fetch-back of the package | `kaggle.slug` configured (null stays fail-loud), executable present (config `kaggle_executable: kaggle`) |
-| `submission` | packages the external submission frame keeping only `submission_id_columns` (`sku_id`, `item_id`) | `--submission-input` and `--submission-output` required (kaggle_lane.py:1538–1542) |
-| `bundle-kernel --cohort <c>` | stage CPU kernel (metadata + script + `bundle_kernel.receipt.json`) under `results/kaggle_lane/bundle_kernel`; revision pinned at staging; `--execute` pushes it | `kaggle.cpu_kernel_slug`; the cohort export committed at the repo root and listed in `kaggle.export_csvs` (kaggle_lane.py:465–480, 790–866) |
-| `bundle-fetch [--cohort <c>]` | download the CPU kernel output, locate `bundle.receipt.json`, sha256-verify the archive against the receipt/sidecar, install into `results/kaggle_lane/<cohort>/bundle/` with `manifest.json` + `timings.json` sidecars | kernel output available; cohort defaults to the receipt's own cohort, then the config dataset binding (kaggle_lane.py:1069–1072) |
-| `train-kernel` / `embed-kernel` | stage GPU kernels (train attaches the CPU kernel as `kernel_sources` + `kaggle.bundle_dataset_slug`; embed attaches `kaggle.embedding_dataset_slug` + the git-shipped checkpoint); `--execute` pushes | `gpu_kernel_slug` / `embedding_kernel_slug`; embed also needs the request dataset uploaded first and `kaggle.checkpoint` in `checkout_paths` (`artifacts/models`) (kaggle_lane.py:894–999) |
-| `kernel-status [--kernel]` | `kaggle kernels status`; normalizes 2.x `KernelWorkerStatus.` prefixes → `complete/cancelAcknowledged/cancelRequested/running/queued/error` | slug configured; executable present (kaggle_lane.py:868–887) |
-| `kernel-logs [--kernel --slug --follow]` | poll status at `kaggle.logs_poll_seconds` (15 s); on a terminal state fetch the kernel's own output log into `logs/kaggle` | same as status (kaggle_lane.py:1347–1387) |
-| `kernel-stream` | live SSE log follower (kagglesdk `GetKernelSessionLogsStream`); writes decoded payloads to `logs/kaggle/<slug>.stream.log` (UTF-8-safe): `/r`-separated tqdm frames are expanded to grep-able lines and the last bar tagged, by the shared formatter `cli.log_capture.progress_frames_to_lines`; reconnects ≤5 times, re-truncating because SSE replay restarts at the first line | kagglesdk package; returns the `kernel_session_id` the manual kill switch needs (kaggle_lane.py:1269–1344) |
-| `fetch-results --kind <k>` | contract fetch + sha256 verification: bundle→`bundle.receipt.json`/`all_tracks_inputs.tar.zst`; train→`result_bundle.manifest.json`/`result_bundle.tar.zst`; embed→`vectors.tar.zst`; installs under `results/kaggle_lane/<cohort>/<kind>/` | the kernel reached output-producing state; `--kind` is singular (kaggle_lane.py:1002–1092) |
-| `stop --kernel <k>` | no cancel verb exists on the public CLI: pushes a `cancel_stub.py` version replace — the platform tears the session down to run version N+1 and frees quota | slug configured (kaggle_lane.py:1218–1266, staging `results/kaggle_lane/<which>_stop`); specimens in `results/kaggle_lane/cancel_stub`, `cpu_stop`, `gpu_stop` |
-| `supervise --kind <k>` | dependable harvest: one stream thread per kind + status polling to a terminal state; on `complete` fetch + verify; on any other terminal state download and verify partial artifacts plus the session log, and **auto-release the session via the stop-kernel stub replace**; receipt at `results/kaggle_lane/supervise.receipt.json` | slugs configured for every requested kind; polling holds neither session nor quota; idempotent on rerun (kaggle_lane.py:1119–1215) |
+| `submission` | packages the external submission frame keeping only `submission_id_columns` (`sku_id`, `item_id`) | `--submission-input` and `--submission-output` required (kaggle_cli.py:204–205) |
+| `bundle-kernel --cohort <c>` | stage CPU kernel (metadata + script + `bundle_kernel.receipt.json`) under `results/kaggle_lane/bundle_kernel`; revision pinned at staging; `--execute` pushes it | `kaggle.cpu_kernel_slug`; the cohort export committed at the repo root and listed in `kaggle.export_csvs` (kaggle_kernels.py:221, 315) |
+| `bundle-fetch [--cohort <c>]` | download the CPU kernel output, locate `bundle.receipt.json`, sha256-verify the archive against the receipt/sidecar, install into `results/kaggle_lane/<cohort>/bundle/` with `manifest.json` + `timings.json` sidecars | kernel output available; cohort defaults to the receipt's own cohort, then the config dataset binding (kaggle_outputs.py:207) |
+| `train-kernel` / `embed-kernel` | stage GPU kernels (train attaches the CPU kernel as `kernel_sources` + `kaggle.bundle_dataset_slug`; embed attaches `kaggle.embedding_dataset_slug` + the git-shipped checkpoint); `--execute` pushes | `gpu_kernel_slug` / `embedding_kernel_slug`; embed also needs the request dataset uploaded first and `kaggle.checkpoint` in `checkout_paths` (`artifacts/models`) (kaggle_kernels.py:340) |
+| `kernel-status [--kernel]` | `kaggle kernels status`; normalizes 2.x `KernelWorkerStatus.` prefixes → `complete/cancelAcknowledged/cancelRequested/running/queued/error` | slug configured; executable present (kaggle_kernels.py:616) |
+| `kernel-logs [--kernel --slug --follow]` | poll status at `kaggle.logs_poll_seconds` (15 s); on a terminal state fetch the kernel's own output log into `logs/kaggle` | same as status (kaggle_monitor.py:476) |
+| `kernel-stream` | live SSE log follower (kagglesdk `GetKernelSessionLogsStream`); writes decoded payloads to `logs/kaggle/<slug>.stream.log` (UTF-8-safe): `/r`-separated tqdm frames are expanded to grep-able lines and the last bar tagged, by the shared formatter `cli.log_capture.progress_frames_to_lines`; reconnects ≤5 times, re-truncating because SSE replay restarts at the first line | kagglesdk package; returns the `kernel_session_id` the manual kill switch needs (kaggle_monitor.py:230) |
+| `fetch-results --kind <k>` | contract fetch + sha256 verification: bundle→`bundle.receipt.json`/`all_tracks_inputs.tar.zst`; train→`result_bundle.manifest.json`/`result_bundle.tar.zst`; embed→`vectors.tar.zst`; installs under `results/kaggle_lane/<cohort>/<kind>/` | the kernel reached output-producing state; `--kind` is singular (kaggle_outputs.py:17) |
+| `stop --kernel <k>` | no cancel verb exists on the public CLI: pushes a `cancel_stub.py` version replace — the platform tears the session down to run version N+1 and frees quota | slug configured (kaggle_kernels.py:640, staging `results/kaggle_lane/<which>_stop`); specimens in `results/kaggle_lane/cancel_stub`, `cpu_stop`, `gpu_stop` |
+| `supervise --kind <k>` | dependable harvest: one stream thread per kind + status polling to a terminal state; on `complete` fetch + verify; on any other terminal state download and verify partial artifacts plus the session log, and **auto-release the session via the stop-kernel stub replace**; receipt at `results/kaggle_lane/supervise.receipt.json` | slugs configured for every requested kind; polling holds neither session nor quota; idempotent on rerun (kaggle_monitor.py:132) |
 | `chain [--cohort <c>] [--with-embed]` | ONE command runs the whole kaggle loop supervised end-to-end: bundle-kernel push (cohort pinned at chain HEAD) → spawned watcher supervises + verifies the fetch + releases → publish default (fresh `fbarulli/er-10k-bundle` version) → train-kernel push via the standard path (single watcher, chain waits on the watcher receipt) → optionally embed-kernel after the train watcher completes; receipt `results/kaggle_lane/chain.receipt.json` with revision pins + fetch shas + dataset version + spawn confirmations | `cpu/gpu/embed` kernel slugs + `kaggle.bundle_dataset_slug` configured; `--execute` (dry-run prints the plan only); no other flags required |
 | (any verified fetch) → publishes automatically | after the sha verification of `fetch_kernel_output(kind='bundle'\|'train')` — autowatch, supervise, `bundle-fetch`, `fetch-results`, chain — `publish_bundle_dataset` publishes a fresh `kaggle.bundle_dataset_slug` version from `results/kaggle_lane/<cohort>_bundle_dataset` and records the version + mount pin | verified install present; slug set; cohort slug marker must agree with the fetch's cohort (fail loud otherwise); no hand-invoke |
 
-## Cohorts (kaggle_lane.py:465–480; config `kaggle.export_csvs`)
+## Cohorts (kaggle_lane.py:184; kaggle_runtime.py:70; config `kaggle.export_csvs`)
 
 | cohort | export the CPU kernel remaps onto `dataset.csv` | checksum/tag |
 |---|---|---|
@@ -127,7 +129,7 @@ completes), `--key-env`, `--revision` (pin; default current HEAD).
 | `10k` | `dataset_10k.csv` | `ER_COHORT_TAG=10k` |
 
 The remap is copy-on-checkout — the commit carries the bytes, no upload round
-trip (kaggle_lane.py:407–415). Ablation staging lives in the CPU data bundle:
+trip (kaggle_kernel_templates.py:146–147). Ablation staging lives in the CPU data bundle:
 `training.prepare_all` → `model_tracks.package._prepare_exports` mints the
 per-track `ablation_templates/` on the prep machine, so the bundle ships them
 and every training suite session (CPU or GPU) forwards from the shipped
@@ -141,11 +143,11 @@ never a full tree:
 
 - **bundle kernel**: launch `kaggle_kernel_templates.py:110–121`; patterns
   `checkout_members((*kaggle.checkout_paths, cohort_dataset))`
-  (`cli/kaggle_kernels.py:218`).
+  (`cli/kaggle_kernels.py:266`).
 - **train/embed kernels**: `clone_pinned()`
-  `kaggle_kernel_templates.py:219–233`; patterns
+  `kaggle_kernel_templates.py:229–233`; patterns
   `checkout_members(kaggle.checkout_paths, lane="training")`
-  (`cli/kaggle_kernels.py:373`).
+  (`cli/kaggle_kernels.py:427`).
 
 `core.runtime_inputs.checkout_members` (`src/core/runtime_inputs.py:22`) is
 the SSOT: `src scripts config requirements artifacts/wheels artifacts/evidence
@@ -161,7 +163,7 @@ drift.
 
 **laya exception.** The laya payloads never clone: `src/cli/laya_lane.py` rides
 attached Kaggle datasets (base model, corpus, decisions) and its only git
-dependency is the `require_published_tip_match` gate (`laya_lane.py:2174`) that
+dependency is the `core.runtime_inputs.require_published_tip_match` gate that
 pins `HEAD == origin/<branch>` before it stages.
 
 ## Config (SSOT: `config/training.yaml` → `kaggle:`)
@@ -245,7 +247,7 @@ publish to the wrong target.
 - Every lane status line carries a Europe/Paris local stamp (CET/CEST):
   `[kaggle-lane <YYYY-MM-DDTHH:MM:SS CET|CEST>]`;
   every kaggle CLI invocation is echoed and its rc logged (`_run_kaggle`,
-  kaggle_lane.py:729–769). Console + append-only `logs/kaggle/lane.log` (canonical logs root).
+  kaggle_runtime.py:154). Console + append-only `logs/kaggle/lane.log` (canonical logs root).
 - Poll cadences: `kaggle.logs_poll_seconds` (15 s) for logs/supervise.
 
 | path | content |
@@ -271,9 +273,9 @@ publish to the wrong target.
   bundles.
 - The train kernel refuses a moved tip (`branch tip moved: cloned %s but the
   kernel pins %s`) — regenerate the kernel rather than chasing HEAD
-  (kaggle_lane.py:396–401, 565–569).
+  (kaggle_kernel_templates.py:132, 239).
 - Stop = version replace, never an in-place cancel: Kaggle's CLI exposes no
-  cancel verb (kaggle_lane.py:1222–1226).
+  cancel verb (kaggle_kernels.py:640).
 
 ## What does X run now? (intent → command → remote surface → artifacts → teardown)
 

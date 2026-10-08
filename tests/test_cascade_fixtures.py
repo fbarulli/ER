@@ -20,8 +20,13 @@ from graph_tracks.config import load_config as load_graph_config
 from graph_tracks.config import load_text_config
 from model_tracks.config import load_config as load_suite_config
 
+#: Smoke children a checked-in fixture may carry (portable, checkout-relative).
+SMOKE_FIXTURES = ("data/prepared/smoke_200", "data/prepared/smoke_500")
 #: Prepared setup directories regenerated to the current contract.
-REGENERATED = ("data/prepared/smoke_200", "data/track_setup")
+REGENERATED = (*SMOKE_FIXTURES, "data/track_setup")
+
+#: Lane-config inputs a smoke child re-roots under its own tree.
+LANE_INPUT_KEYS = ("listings", "pairs", "input_manifest", "text_index", "gnn_checkpoint")
 
 
 def _setup(name: str) -> Path:
@@ -51,6 +56,37 @@ def test_cascade_and_companion_configs_load(name):
     assert gnn.track == "gnn_only"
     assert gnn.text_cache is None
     assert load_text_config(setup / "text.yaml").track == "text"
+
+
+def test_committed_lane_configs_are_portable_and_resolve(monkeypatch):
+    """A checked-in smoke names checkout-relative paths that resolve here.
+
+    The retired failure mode was a fixture carrying the machine that built it
+    (``/tmp/...``) or a path relative to nothing. Every declared input must
+    resolve from the checkout root; a tracked index/checkpoint is an output the
+    smoke itself produces, so only its form is asserted.
+    """
+    checkout = TRAIN_ROOT
+    for name in SMOKE_FIXTURES:
+        setup = _setup(name)
+        if not setup.is_dir():
+            pytest.skip(f"{name} not present in this checkout")
+        for track in ("gnn_only", "cascade"):
+            lane = load_graph_config(setup / f"{track}.yaml", expected_track=track)
+            for key in LANE_INPUT_KEYS:
+                value = getattr(lane, key, None)
+                if not value:
+                    continue
+                assert not Path(value).is_absolute(), f"{name}/{track}: {key} is machine-local"
+                assert Path(value).parts[:2] == Path(name).parts[:2], \
+                    f"{name}/{track}: {key} does not name this suite's tree"
+            for key in ("listings", "pairs", "input_manifest"):
+                path = checkout / getattr(lane, key)
+                assert path.is_file(), f"{name}/{track}: {key} does not resolve ({path})"
+        suite = load_suite_config(setup / "suite.yaml")
+        assert not Path(suite.setup_dir).is_absolute()
+        assert not Path(suite.text_bundle).is_absolute()
+        assert (checkout / suite.text_bundle).is_file()
 
 
 def test_smoke_200_suite_binds_cpu_and_cascade_configs():

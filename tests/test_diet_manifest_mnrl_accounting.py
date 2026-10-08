@@ -128,5 +128,86 @@ class NegativeAnchorsTest(unittest.TestCase):
         self.assertEqual(_negative_anchors(np.empty((0, 2), dtype=int)), set())
 
 
+def _plan(folds):
+    """A complete frozen MNRL plan over (fold_i, triples) pairs."""
+    return {
+        "identity": {"loss": "mnrl"},
+        "inputs": {
+            "folds": [
+                {
+                    "fold_i": label,
+                    "objective": {
+                        "triples": triples,
+                        "dataset": {
+                            "anchor": [t[0] for t in triples],
+                            "positive": [t[1] for t in triples],
+                            "negative": [t[2] for t in triples],
+                        },
+                    },
+                }
+                for label, triples in folds
+            ]
+        },
+    }
+
+
+class MaskedPositiveFoldCoverageTest(unittest.TestCase):
+    """TODO "compute coverage PER FOLD": the objective decides, not a heuristic."""
+
+    def test_coverage_is_measured_per_fold_and_unioned(self):
+        from training.diet_coverage import folded_objectives, masked_positive_coverage
+
+        # Copy 20 trains in fold 0 only, copy 21 in fold 1 only, copy 22 in
+        # neither: a bundle-level count could not tell these apart.
+        data = {"training_plan": _plan([
+            (0, [[20, 5, 9]]),
+            (1, [[21, 6, 9]]),
+        ])}
+        audit = [
+            {"copy_payload_idx": 20, "anchor_payload_idx": 1},
+            {"copy_payload_idx": 21, "anchor_payload_idx": 2},
+            {"copy_payload_idx": 22, "anchor_payload_idx": 3},
+        ]
+        coverage = masked_positive_coverage(audit, folded_objectives(data))
+        self.assertEqual(
+            [(f["fold"], f["trained"], f["coverage"]) for f in coverage["folds"]],
+            [(0, 1, 1 / 3), (1, 1, 1 / 3)],
+        )
+        self.assertEqual(coverage["trained_union"], 2)
+        self.assertEqual(coverage["never_trained"], 1)
+
+    def test_twin_lineage_copies_are_not_reported_dead(self):
+        """The 980/1,200 mis-measurement: no train_neg anchor, but trained.
+
+        The copy's source anchor owns no explicit negative in ``train_neg``
+        (the bundle-level heuristic calls it dead), yet the frozen objective
+        trains it through the minted-twin negative lineage. Per-fold coverage
+        must report it as trained and NOT subtract it from pos_views.
+        """
+        from training.diet_coverage import folded_objectives, masked_positive_coverage
+
+        data = {"training_plan": _plan([(0, [[100, 4, 7]])])}
+        audit = [{"copy_payload_idx": 100, "anchor_payload_idx": 3}]
+        train_neg = np.array([[1, 50], [2, 51]], dtype=int)  # no anchor 3
+        coverage = masked_positive_coverage(
+            audit, folded_objectives(data), source_negatives=train_neg
+        )
+        self.assertEqual(coverage["trained_union"], 1)
+        self.assertEqual(coverage["never_trained"], 0)
+        # The bundle-level lower bound is reported as a LOWER BOUND, not survival.
+        self.assertEqual(coverage["source_anchor_covered"], 0)
+
+    def test_incomplete_frozen_objective_fails_loud(self):
+        from training.diet_coverage import folded_objectives
+
+        with self.assertRaisesRegex(ValueError, "complete frozen objective"):
+            folded_objectives({
+                "training_plan": {
+                    "identity": {"loss": "mnrl"},
+                    "inputs": {"skipped": ["fold-0"], "folds": []},
+                }
+            })
+
+
 if __name__ == "__main__":
     unittest.main()

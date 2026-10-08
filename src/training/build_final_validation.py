@@ -65,6 +65,28 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
   part of this module's byte-identical byte-for-byte surface and pinned by
   the pinned-update convention comments).
 - :func:`build` — the stage pipeline that threads these owners together.
+
+TRACE ROWS (core.tracing, the ONE consolidated trace)
+-----------------------------------------------------
+Stage ``final_validation``. Emitted:
+  run   graph.merged_component_graph   base positives -> merged graph entities
+  run   split.fold_assignment          graph entities -> quarter folds
+  run   labeled_census.batch_<i>       BATCH grain: one row per traced chunk of
+                                       labeled pairs (in = pairs, out = rows)
+  run   labeled_census.batch_census    batches walked / traced / omitted
+  run   labeled_census.assembled       labeled pairs -> emitted rows, with the
+                                       unresolved-endpoint and
+                                       both-endpoints-in-train counts as drops
+  group labeled_census.reason_census   one EXACT census row per outcome
+  ent   labeled_census.*               the named PAIRS behind each outcome
+                                       (gtin1|gtin2 + folds + exact reason)
+  run   policy.evidence_measured       negatives -> the scored halves' negatives
+  run   fold_map.published             every graph entity's fold (in == out)
+  run   output.published               the CSV + manifest publication
+Batch caps: ``_BATCH_PAIRS`` pairs per traced batch row and at most
+``_MAX_BATCH_ROWS`` batch rows, both written into the batch rows' detail.
+Sampling caps are core.tracing's (ENTITY_SAMPLE_PER_REASON / ENTITY_ROW_CAP).
+Nothing here is unbounded.
 """
 from __future__ import annotations
 
@@ -75,10 +97,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
 from core.common import F, RESULTS, SEED, load_dataset_deduped, training_cfg
 from core.manifest import atomic_write_csv
 from core.run_log import RunLogger
 from core.schemas import check_canonical_records_frame, upgrade_canonical_records_frame
+from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
 from training.folds import (
     component_ids,
     derive_holdout,
@@ -89,17 +113,42 @@ from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
 
+#: The pipeline stage these rows belong to (core.tracing ``stage`` column).
+STAGE = "final_validation"
+
+# ── batch-grain budget (documented where it is spent) ──────────────────────
+# The assembler walks one labeled pair at a time; 4,096 pairs per BATCH row keeps
+# a real census to a handful of rows, and 16 traced batches bound the file while
+# the remainder is announced in ``labeled_census.batch_census``.
+_BATCH_PAIRS = 4096
+_MAX_BATCH_ROWS = 16
+
+#: The three outcomes a labeled pair can have in the assembler. These strings are
+#: the trace's reason labels, so a reader greps outcomes, not prose.
+OUTCOME_SCORED = "scored_row"
+OUTCOME_UNRESOLVED = "unresolved_endpoint"
+OUTCOME_BOTH_IN_TRAIN = "both_endpoints_in_train"
+
 # The six fields P0 keeps as gates. `pulp_set` is deliberately absent: it is
 # populated in 2.3% of canonical records and 0.5% of verified positives, which
 # is 2 pairs in this validation half -- population scarcity, not a parsing
 # defect, and no gate at any budget that respects the component constraint.
-SLICE_FIELDS: tuple[tuple[str, str], ...] = (
-    ("volume", "volume_set"),
-    ("pack", "pack_set"),
-    ("package_type", "package_type_set"),
-    ("sweetener", "sweetener_set"),
-    ("flavor", "flavor_set"),
-    ("carbonation", "carbonation_set"),
+#
+# The ORDER is this lane's own frozen composition order (the v1_*/v2_* CSV
+# columns are emitted in it); the dimension -> canonical_records column pairs
+# are DERIVED from the record schema (core.columns.ATTRIBUTE_DIMENSION_COLUMNS),
+# so no column name is retyped here.
+SLICE_DIMENSIONS: tuple[str, ...] = (
+    "volume",
+    "pack",
+    "package_type",
+    "sweetener",
+    "flavor",
+    "carbonation",
+)
+SLICE_FIELDS: tuple[tuple[str, str], ...] = tuple(
+    (dimension, ATTRIBUTE_DIMENSION_COLUMNS[dimension])
+    for dimension in SLICE_DIMENSIONS
 )
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -169,6 +218,21 @@ SLICE_FIELDS: tuple[tuple[str, str], ...] = (
 # evidence and is no longer a decision criterion; A's emit guard enforces
 # A's own-evidence criterion (both scored halves usable) instead of the
 # old cross-policy thin ordering.
+# RE-DECIDED 2026-10-08 (TODO "Balance dev/test negatives"): the structural
+# disqualification that parked B was never MADE MEASURABLE, so the pin rested
+# on prose. The evidence surface now measures it per policy
+# (``scored_negatives_with_trained_on_endpoint``) and the emit guard refuses a
+# policy that leaks. MEASURED on the committed census: B assigns the dev/test
+# straddlers A can only drop (A: every straddler scores nowhere; B: fold_a, so
+# the straddlers split ~evenly and BOTH scored halves roughly double) and both
+# policies measure ZERO scored negatives with a trained-on endpoint — B's
+# train-endpoint pairs are parked in the train fold by rule, exactly like A's.
+# A's remaining defect is the one the TODO names: the scored halves are
+# dominated by positives (dev/dev negatives in the single digits), so the
+# Youden fit and the false-positive rate have almost no support. B doubles
+# the scored negatives on both halves with no leak, so the pin moves to B
+# (config/training.yaml split.negative_fold_policy) and both emit guards keep
+# re-measuring the leak property at every artifact.
 # ════════════════════════════════════════════════════════════════════════════
 
 # Policy names. Both stay load-valid; config/training.yaml pins the winner.
@@ -550,14 +614,48 @@ class NegativeFoldPolicy:
         dev, test = n_folds - 2, n_folds - 1
         in_dev_pos = pos["fold"].astype(int) == dev
         in_test_pos = pos["fold"].astype(int) == test
+        raw_first = neg["fold"].astype(int)
+        raw_second = neg["fold_2"].astype(int)
         in_dev_neg, in_test_neg = cls.scored_masks(
-            policy, neg["fold"], neg["fold_2"], n_folds
+            policy, raw_first, raw_second, n_folds
         )
+        # The qualitative criterion in code: a scored negative may never carry
+        # an endpoint in a TRAIN fold. It is a property of the assignment, so
+        # it is MEASURED per policy (on the raw endpoint folds the masks were
+        # built from) instead of asserted in prose — the 2026-10-01 rejection
+        # of ``train_side`` rested on this claim, so it has to be checkable.
+        import numpy as np
+
+        trained_on_endpoint = (
+            np.minimum(raw_first, raw_second) < n_folds - 2
+        )
+        scored_negatives = in_dev_neg | in_test_neg
+        dev_neg, test_neg = int(in_dev_neg.sum()), int(in_test_neg.sum())
+        dev_pos, test_pos = int(in_dev_pos.sum()), int(in_test_pos.sum())
+
+        def _half(positives: int, negatives: int) -> dict[str, object]:
+            total = positives + negatives
+            return {
+                "positives": positives,
+                "negatives": negatives,
+                # The imbalance the TODO records (dev 1286/9, test 1276/7): a
+                # scored half with a near-zero negative share cannot fit a
+                # threshold or measure a false-positive rate.
+                "negative_share": (negatives / total) if total else 0.0,
+            }
+
         return {
-            "scored_dev_negatives": int(in_dev_neg.sum()),
-            "scored_test_negatives": int(in_test_neg.sum()),
-            "scored_dev_positives": int(in_dev_pos.sum()),
-            "scored_test_positives": int(in_test_pos.sum()),
+            "scored_dev_negatives": dev_neg,
+            "scored_test_negatives": test_neg,
+            "scored_dev_positives": dev_pos,
+            "scored_test_positives": test_pos,
+            "scored_negatives_with_trained_on_endpoint": int(
+                (scored_negatives & trained_on_endpoint).sum()
+            ),
+            "scored_half_balance": {
+                "dev": _half(dev_pos, dev_neg),
+                "test": _half(test_pos, test_neg),
+            },
             "negatives_withheld_from_scored_half": int(
                 len(neg) - (in_dev_neg.sum() + in_test_neg.sum())
             ),
@@ -582,13 +680,18 @@ class NegativeFoldPolicy:
         results: dict[str, dict[str, dict[str, int]]] = {}
         neg = frame[frame.true_label == 0]
         if not len(neg):
+            # Same nesting as the populated path (policy -> half -> census):
+            # the old shape (policy -> census -> half) made _scored_contract
+            # raise KeyError on any negative-free census.
             empty: dict[str, dict[str, int]] = {
                 half: {name: 0 for name, _col in SLICE_FIELDS}
                 for half in ("dev", "test")
             }
             return {
-                policy: {"populated": {h: dict(empty[h]) for h in empty},
-                         "thin": {h: dict(empty[h]) for h in empty}}
+                policy: {
+                    half: {"populated": dict(empty[half]), "thin": dict(empty[half])}
+                    for half in ("dev", "test")
+                }
                 for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD,
                                NEGATIVE_FOLD_POLICY_TRAIN_SIDE)
             }
@@ -676,18 +779,30 @@ class ValidationRowAssembler:
         self._slice_values = slice_values
         self._n_folds = n_folds
         self.unresolved = 0
+        #: Pairs whose BOTH endpoints sit in the training quarters: not validation
+        #: rows, and a distinct outcome from an unresolvable endpoint. Counted
+        #: rather than inferred so the trace can state the drop exactly.
+        self.both_in_train = 0
 
-    def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
+    def assemble_with_reason(
+        self, g1: str, g2: str, label: object
+    ) -> tuple[dict[str, object] | None, str]:
+        """The output row (or None) AND the exact reason for that outcome.
+
+        ``assemble`` stays the public, row-only face; this is the trace's view,
+        where an outcome that produced no row is named rather than silent.
+        """
         k1 = self._resolver.resolve(g1)
         k2 = self._resolver.resolve(g2)
         if k1 is None or k2 is None:
             # An endpoint outside the graph entirely: it has no fold, so it
             # cannot be part of a fold-2+3 population.
             self.unresolved += 1
-            return None
+            return None, OUTCOME_UNRESOLVED
         f1, f2 = self._resolver.fold(k1), self._resolver.fold(k2)
         if f1 < self._n_folds - 2 and f2 < self._n_folds - 2:
-            return None  # both sides in train -> not validation
+            self.both_in_train += 1
+            return None, OUTCOME_BOTH_IN_TRAIN  # both sides in train -> not validation
         row: dict[str, object] = {
             "gtin1": k1,
             "gtin2": k2,
@@ -706,23 +821,103 @@ class ValidationRowAssembler:
         for name, _col in SLICE_FIELDS:
             row[f"v1_{name}"] = c1.get(name, "")
             row[f"v2_{name}"] = c2.get(name, "")
-        return row
+        return row, OUTCOME_SCORED
+
+    def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
+        return self.assemble_with_reason(g1, g2, label)[0]
 
     def assemble_all(self, labeled: pd.DataFrame) -> pd.DataFrame:
         """Run the census through :meth:`assemble` with the pipeline's bar."""
+        return self.assemble_all_with_trace(labeled, None)[0]
+
+    def assemble_all_with_trace(
+        self, labeled: pd.DataFrame, trace: TraceRun | None
+    ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
+        """The census frame AND the per-pair outcome records for the trace.
+
+        The iteration, order and progress bar are unchanged; the batch boundary
+        is read off the existing loop and the outcome records are the exact
+        per-pair facts (never a second pass over the data).
+        """
         rows: list[dict[str, object]] = []
+        records: list[dict[str, object]] = []
         columns = (labeled["gtin1"], labeled["gtin2"], labeled["true_label"])
         triples = zip(
             columns[0].tolist(), columns[1].tolist(), columns[2].tolist()
         )
         triples_list = list(triples)
+        pairs_in_batch = 0
+        rows_in_batch = 0
+        batches = traced = 0
+        first_pair = last_pair = ""
         for g1, g2, label in _LOG.progress(
             triples_list, desc="final_validation_rows", unit="pair"
         ):
-            row = self.assemble(g1, g2, label)
+            if pairs_in_batch == 0:
+                first_pair = f"{g1}|{g2}"
+                rows_in_batch = 0
+            last_pair = f"{g1}|{g2}"
+            pairs_in_batch += 1
+            row, reason = self.assemble_with_reason(g1, g2, label)
+            folded = {
+                "pair": last_pair,
+                "reason": reason,
+                "label": int(label),
+                "fold": row["fold"] if row is not None else "",
+                "fold_2": row["fold_2"] if row is not None else "",
+                "endpoint_in_train": (
+                    bool(row["endpoint_in_train"]) if row is not None else ""
+                ),
+            }
+            records.append(folded)
             if row is not None:
                 rows.append(row)
-        return pd.DataFrame(rows)
+                rows_in_batch += 1
+            if pairs_in_batch >= _BATCH_PAIRS or pairs_in_batch == len(triples_list):
+                batches += 1
+                if trace is not None and traced < _MAX_BATCH_ROWS:
+                    traced += 1
+                    trace.add(
+                        "labeled_census",
+                        f"batch_{batches - 1:04d}",
+                        in_count=pairs_in_batch,
+                        out_count=rows_in_batch,
+                        reason=(
+                            "labeled pairs walked -> emitted rows; an unresolvable "
+                            "endpoint or a pair with both sides in train emits none"
+                        ),
+                        detail={
+                            "first_pair": first_pair,
+                            "last_pair": last_pair,
+                            "batch_pairs": _BATCH_PAIRS,
+                            "max_batch_rows": _MAX_BATCH_ROWS,
+                            "rows_in_batch": rows_in_batch,
+                        },
+                        source="data/labeled_pairs.csv over the merged component graph",
+                    )
+                pairs_in_batch = 0
+        if trace is not None:
+            trace.add(
+                "labeled_census",
+                "batch_census",
+                in_count=batches,
+                out_count=traced,
+                reason=(
+                    "batches traced individually; the remainder is summed here so "
+                    "no chunk is silent"
+                ),
+                detail={
+                    "pairs": len(triples_list),
+                    "rows": len(rows),
+                    "batches": batches,
+                    "batches_traced": traced,
+                    "batches_omitted": batches - traced,
+                    "batch_pairs": _BATCH_PAIRS,
+                    "max_batch_rows": _MAX_BATCH_ROWS,
+                },
+                source="data/labeled_pairs.csv over the merged component graph",
+            )
+        return pd.DataFrame(rows), records
 
 
 class LeakGuards:
@@ -765,9 +960,34 @@ class LeakGuards:
             assert_pinned_evidence_withhold(policy_name, evidence)
 
 
+def _assert_no_trained_on_endpoint(policy_name: str, evidence: dict) -> None:
+    """The qualitative criterion, enforced (2026-10-08).
+
+    ``train_side`` was parked 2026-10-01 on the claim that its scored halves
+    carry trained-on endpoints. The evidence surface now MEASURES that
+    property per policy (``scored_negatives_with_trained_on_endpoint``), so a
+    policy that really leaks can no longer be selected and a policy that does
+    not is no longer rejected on prose. Refusing here keeps both directions
+    honest at every emit.
+    """
+    leaked = int(evidence[policy_name].get(
+        "scored_negatives_with_trained_on_endpoint", 0
+    ))
+    if leaked:
+        raise SystemExit(
+            "the pinned scored-half decision no longer holds: policy "
+            f"{policy_name!r} scores {leaked} negatives that carry a "
+            f"trained-on endpoint (evidence={evidence}). A scored half may "
+            "never contain a trained-on endpoint — re-decide, update the "
+            "config and the DECISION block together."
+        )
+
+
 def assert_pinned_evidence_train_side(policy_name, evidence, min_test_negatives):
     """Policy B's emit guard: B must score MORE negatives per scored half
-    than A, and must not score MORE thin-heavy negatives."""
+    than A, must not score MORE thin-heavy negatives, and must score ZERO
+    negatives with a trained-on endpoint (the criterion it was parked on)."""
+    _assert_no_trained_on_endpoint(policy_name, evidence)
     was, now = (evidence[NEGATIVE_FOLD_POLICY_WITHHOLD], evidence[policy_name])
     if not (
         now["scored_test_negatives"] > was["scored_test_negatives"]
@@ -814,7 +1034,13 @@ def assert_pinned_evidence_withhold(policy_name, evidence):
     disqualified structurally regardless — its scored negatives carry
     trained-on endpoints, which negative_policy_evidence refuses to
     certify), so thinness is no longer a decision criterion between the
-    two."""
+    two.
+
+    2026-10-08: the structural disqualification is now MEASURED instead of
+    asserted (``scored_negatives_with_trained_on_endpoint``); A stays clean
+    here and its own-evidence criterion (both halves usable) is unchanged.
+    """
+    _assert_no_trained_on_endpoint(policy_name, evidence)
     now = evidence[policy_name]
     empty_halves = [
         half for half in ("dev", "test")
@@ -903,6 +1129,7 @@ def write_manifest(
     seed: int,
     fold_map: pd.DataFrame | None = None,
     fold_map_path: Path | None = None,
+    trace: TraceRun | None = None,
 ) -> dict:
     pos = frame[frame.true_label == 1]
     neg = frame[frame.true_label == 0]
@@ -941,6 +1168,29 @@ def write_manifest(
     # Atomic publish: the manifest keys fuel resume; a truncated frame or a
     # truncated fold map must never be observable in place of a full one.
     atomic_write_csv(frame, path, index=False)
+    if trace is not None:
+        trace.add(
+            "output",
+            "published",
+            in_count=int(len(frame)),
+            out_count=int(len(frame)),
+            reason=(
+                "the validation population is written atomically after the leak "
+                "guards passed; the manifest records the same numbers"
+            ),
+            detail={
+                "path": str(path),
+                "rows": int(len(frame)),
+                "positives": int(len(pos)),
+                "negatives": int(len(neg)),
+                "pairs_endpoint_unresolvable": int(
+                    stats.get("pairs_endpoint_unresolvable", 0)
+                ),
+                "negative_fold_policy": str(training_cfg().split.negative_fold_policy),
+                "manifest": str(RESULTS / "manifests" / "final_validation.json"),
+            },
+            source=str(path),
+        )
     if fold_map is not None and fold_map_path is not None:
         fold_map_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_csv(fold_map, fold_map_path, index=False)
@@ -949,6 +1199,24 @@ def write_manifest(
         manifest["fold_map_fold_counts"] = {
             str(k): int(v) for k, v in fold_map["fold"].value_counts().items()
         }
+        if trace is not None:
+            trace.add(
+                "fold_map",
+                "published",
+                in_count=int(len(fold_map)),
+                out_count=int(len(fold_map)),
+                reason=(
+                    "every graph entity's fold is published, so a consumer can tell "
+                    "a pair withheld because the model trained on it from a pair "
+                    "that is simply missing"
+                ),
+                detail={
+                    "path": str(fold_map_path),
+                    "rows": int(len(fold_map)),
+                    "fold_counts": manifest["fold_map_fold_counts"],
+                },
+                source=str(fold_map_path),
+            )
     (RESULTS / "manifests" / "final_validation.json").write_text(
         json.dumps(manifest, indent=2) + "\n"
     )
@@ -961,8 +1229,17 @@ def build(
     *,
     seed: int = SEED,
     n_folds: int | None = None,
+    trace: TraceRun | None = None,
 ) -> pd.DataFrame:
-    """Derive the merged graph, cut the split, and return the validation rows."""
+    """Derive the merged graph, cut the split, and return the validation rows.
+
+    ``trace`` is this stage's ONE consolidated-trace writer; with none supplied a
+    standalone ``build()`` still traces, since the rows are the stage's evidence
+    and a caller running it directly deserves them.
+    """
+    own = trace is None
+    if own:
+        trace = TraceRun(STAGE)
     df = load_dataset_deduped()
     from training.base_data import load_base_data
 
@@ -971,6 +1248,7 @@ def build(
     row_bc = data["row_bc"]
 
     merged_pos, graph_bc, stats = merged_component_graph(pos, row_bc)
+    _record_graph(trace, stats)
     split = training_cfg().split
     n_folds = int(n_folds or split.holdout_component_folds)
     # Routed through the SINGLE entry point, not `holdout_split`. The selftest
@@ -987,6 +1265,7 @@ def build(
     # internally, so these are the identical objects it split on.
     comp_of = component_ids(merged_pos, graph_bc)
     fold_of = _resolve_quarter_folds(train_bc, dev_bc, test_bc, n_folds)
+    _record_folds(trace, row_bc, train_bc, dev_bc, test_bc, n_folds)
     resolver = FoldResolver(fold_of)
 
     labeled = pd.read_csv(
@@ -996,8 +1275,9 @@ def build(
     slice_values = SliceFieldGrid().canonical_values()
     assembler = ValidationRowAssembler(resolver, comp_of, slice_values, n_folds)
     with _LOG.section("final_validation.assemble_rows"):
-        out = assembler.assemble_all(labeled)
+        out, outcomes = assembler.assemble_all_with_trace(labeled, trace)
     stats["pairs_endpoint_unresolvable"] = assembler.unresolved
+    _record_census(trace, labeled, out, outcomes, assembler)
 
     # ── the leak guarantee, asserted before anything hits disk ──
     LeakGuards.assert_no_positive_straddle(out)
@@ -1009,6 +1289,7 @@ def build(
     with _LOG.section("final_validation.policy_evidence"):
         evidence = negative_policy_evidence(out, min_test_negatives, n_folds)
     LeakGuards.assert_pinned_evidence(policy_name, evidence, min_test_negatives)
+    _record_policy(trace, out, evidence, policy_name)
     stats["negative_fold_policy"] = policy_name
     stats["negative_policy_evidence"] = evidence
     with _LOG.section("final_validation.apply_policy"):
@@ -1021,8 +1302,170 @@ def build(
             seed=seed,
             fold_map=_fold_map(fold_of, comp_of),
             fold_map_path=Path(F["validation_fold_map"]),
+            trace=trace,
         )
+    if own:
+        trace.write()
     return out
+
+
+# ── the stage's trace rows (real counts, named reasons) ─────────────────────
+def _record_graph(trace: TraceRun, stats: dict) -> None:
+    """Validation edges added to the graph, then the merged graph's census.
+
+    The funnel is labeled positives -> edges ADDED: a positive is charged to
+    ``endpoints_unresolved`` (an endpoint outside the graph), to
+    ``self_edges_skipped`` (both endpoints the same row) or to the edge. The
+    union itself is a census, not a funnel (the merged population is LARGER than
+    the training population by construction), so it carries no counts and states
+    every number in its detail rather than forcing a fake in/out pair.
+    """
+    positives = int(stats.get("labeled_positives", 0))
+    added = int(stats.get("edges_added", 0))
+    trace.add(
+        "graph",
+        "validation_edges_added",
+        in_count=positives,
+        out_count=added,
+        reason=(
+            "labeled POSITIVES are unioned into the split graph as edges: a "
+            "positive with an endpoint outside the graph adds no edge, and a "
+            "self edge is skipped; negatives are NOT identity claims and are "
+            "never unioned"
+        ),
+        detail={
+            "labeled_positives": positives,
+            "edges_added": added,
+            "endpoints_unresolved": int(stats.get("endpoints_unresolved", 0)),
+            "self_edges_skipped": int(stats.get("self_edges_skipped", 0)),
+            "identity_review_pairs_excluded": int(
+                stats.get("identity_review_pairs_excluded", 0)
+            ),
+        },
+        source="training.folds.merged_component_graph",
+    )
+    trace.add(
+        "graph",
+        "merged_census",
+        reason=(
+            "the merged component graph is a UNION (training positives + "
+            "validation edges), so it is recorded as a census: no in/out pair "
+            "would be honest"
+        ),
+        detail={key: int(value) for key, value in sorted(stats.items())},
+        source="training.folds.merged_component_graph",
+    )
+
+
+def _record_folds(
+    trace: TraceRun,
+    row_bc,
+    train_bc: set[str],
+    dev_bc: set[str],
+    test_bc: set[str],
+    n_folds: int,
+) -> None:
+    """Every graph entity -> its quarter fold (train / dev = n-2 / test = n-1)."""
+    entities = len(row_bc)
+    assigned = len(train_bc) + len(dev_bc) + len(test_bc)
+    trace.add(
+        "split",
+        "fold_assignment",
+        in_count=entities,
+        out_count=assigned,
+        reason=(
+            "every graph entity gets a quarter fold; dev and test are the LAST "
+            f"two of {int(n_folds)} quarters, so validation means neither side is "
+            "a training gtin"
+        ),
+        detail={
+            "n_folds": int(n_folds),
+            "graph_entities": entities,
+            "train": len(train_bc),
+            "dev": len(dev_bc),
+            "test": len(test_bc),
+            "unassigned": entities - assigned,
+        },
+        source="training.folds.derive_holdout",
+    )
+
+
+def _record_census(
+    trace: TraceRun,
+    labeled: pd.DataFrame,
+    out: pd.DataFrame,
+    outcomes: list[dict[str, object]],
+    assembler,
+) -> None:
+    """Labeled pairs -> emitted rows, with every non-row outcome named."""
+    trace.add(
+        "labeled_census",
+        "assembled",
+        in_count=int(len(labeled)),
+        out_count=int(len(out)),
+        reason=(
+            "a labeled pair becomes a validation row only when at least one "
+            "endpoint is scored (fold >= n_folds-2) and every endpoint resolves "
+            "in the graph"
+        ),
+        detail={
+            "labeled_pairs": int(len(labeled)),
+            "rows": int(len(out)),
+            "unresolved_endpoints": int(assembler.unresolved),
+            "both_endpoints_in_train": int(assembler.both_in_train),
+        },
+        source="data/labeled_pairs.csv over the merged component graph",
+    )
+    trace.add_entities(
+        "labeled_census",
+        outcomes,
+        key_of=lambda record: record["pair"],
+        reason_of=lambda record: record["reason"],
+        detail_of=lambda record: {
+            "label": record["label"],
+            "fold": record["fold"],
+            "fold_2": record["fold_2"],
+            "endpoint_in_train": record["endpoint_in_train"],
+        },
+        source="data/labeled_pairs.csv over the merged component graph",
+        per_reason=ENTITY_SAMPLE_PER_REASON,
+        total_cap=ENTITY_ROW_CAP,
+    )
+
+
+def _record_policy(
+    trace: TraceRun, out: pd.DataFrame, evidence: dict, policy_name: str
+) -> None:
+    """The pinned policy's re-measured evidence over the RAW endpoint folds.
+
+    The funnel is negatives -> negatives the pinned policy scores: a negative
+    parked on the train side or withheld is the drop, and the evidence dict (the
+    decision's own measurement, re-computed here at every emit) is the detail.
+    """
+    negatives = int((out.true_label == 0).sum()) if len(out) else 0
+    measured = evidence.get(policy_name, {}) if isinstance(evidence, dict) else {}
+    scored = sum(
+        int(measured.get(f"scored_{half}_negatives", 0))
+        for half in ("dev", "test")
+    )
+    trace.add(
+        "policy",
+        "evidence_measured",
+        in_count=negatives,
+        out_count=scored,
+        reason=(
+            f"the pinned negative-fold policy {policy_name!r} is re-measured at "
+            "every emit on the RAW endpoint folds; the scored halves' negatives "
+            "are the retained population and the rest are parked/withheld"
+        ),
+        detail={
+            "policy": str(policy_name),
+            "negatives": negatives,
+            "scored_negatives": scored,
+            "evidence": measured,
+        },
+        source="training.build_final_validation.negative_policy_evidence",
+    )
 
 
 def main() -> None:
@@ -1031,7 +1474,12 @@ def main() -> None:
     ap.add_argument("--output", default=None)
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
-    frame = build(Path(args.output) if args.output else None, seed=args.seed)
+    # ONE writer for the stage: graph, folds, census, policy and publication are
+    # one flow in the consolidated trace, committed once.
+    trace = TraceRun(STAGE)
+    frame = build(Path(args.output) if args.output else None, seed=args.seed,
+                  trace=trace)
+    trace.write()
     pos = frame[frame.true_label == 1]
     neg = frame[frame.true_label == 0]
     print(

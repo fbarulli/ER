@@ -9,13 +9,12 @@ colab_result_sync / colab_launch / the prewarm modules.
 
 Collaborators still owned by cli.colab (the CLI state paths, config constants,
 the live/training log state and helpers, the bootstrap preamble, receipts) are
-re-read through ``_hub()`` at call time, so the legacy ``from cli import colab``
+re-read through ``colab_hub.hub()`` at call time, so the legacy ``from cli import colab``
 monkeypatch surface keeps driving every call and the running colab identity
 never sees a stale second copy.
 """
 from __future__ import annotations
 
-import functools
 import json
 import re
 import shutil
@@ -28,30 +27,12 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def _hub():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    hub = sys.modules.get("__colab_runtime_self__")
-    if hub is not None:
-        return hub
-    import cli.colab as surface
-
-    return surface
-
-
-def _timed_colab(kind: str):
-    """Lazy step-timing shim: cli.colab owns ``_timed_colab`` at call time."""
-    def decorate(function):
-        @functools.wraps(function)
-        def wrapped(*args, **kwargs):
-            return _hub()._timed_colab(kind)(function)(*args, **kwargs)
-        return wrapped
-    return decorate
+from cli.colab_hub import hub, timed_colab
 
 
 def _colab_command(*args: str) -> list[str]:
     """Build every Colab CLI command through the shared safe entrypoint."""
-    surface = _hub()
+    surface = hub()
     surface._COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
     colab_executable = shutil.which("colab")
     if not colab_executable:
@@ -81,10 +62,10 @@ def _serialize_colab_control(function):
 
 
 @_serialize_colab_control
-@_timed_colab("event")
+@timed_colab("event")
 def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
     """Run a Colab CLI subcommand through the shared safe entrypoint."""
-    surface = _hub()
+    surface = hub()
     display_cmd = ["colab", *args]
     cmd = surface._colab_command(*args)
     try:
@@ -99,10 +80,10 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
         raise
 
 
-@_timed_colab("event")
+@timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
     """Retry transient Colab upload/control-channel failures."""
-    surface = _hub()
+    surface = hub()
     for attempt in range(1, surface._REMOTE_UPLOAD_RETRIES + 1):
         try:
             surface.colab("upload", "-s", surface.SESSION, str(source), remote, timeout=timeout)
@@ -121,7 +102,7 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
 
 
 @_serialize_colab_control
-@_timed_colab("event")
+@timed_colab("event")
 def run_colab_exec_stream(
     session: str,
     script: str,
@@ -139,7 +120,7 @@ def run_colab_exec_stream(
     once per run, line-flushed, and survives VM teardown so every Colab stage
     is inspectable in one chronological log.
     """
-    surface = _hub()
+    surface = hub()
     if surface._live_log and log_name:
         print(surface._stamp(), f"\n===== {log_name} =====", flush=True)
 
@@ -273,7 +254,7 @@ def run_colab_exec_stream(
 
 
 @_serialize_colab_control
-@_timed_colab("event")
+@timed_colab("event")
 def run_colab_exec_capture(
     session: str, script: str, timeout: int, *, training_output: bool = False,
 ) -> str:
@@ -282,7 +263,7 @@ def run_colab_exec_capture(
     Probes serve the live training log.  They must reveal control-channel
     failures promptly instead of becoming an opaque multi-minute wait.
     """
-    surface = _hub()
+    surface = hub()
 
     def report_probe_progress(message: str) -> None:
         """Make a blocked training-log probe observable in its durable log."""
@@ -377,10 +358,10 @@ def _parse_remote_json(output: str) -> dict:
     raise RuntimeError(f"remote log probe returned no JSON: {clean_output[-1000:]}")
 
 
-@_timed_colab("event")
+@timed_colab("event")
 def run_detached_stage(stage: str, command_expr: list[str], timeout: int) -> None:
     """Run a VM stage outside the notebook kernel and stream its durable log."""
-    surface = _hub()
+    surface = hub()
     # Two launches can occur within the same UTC second (especially after a
     # failed preflight). Microseconds keep the remote result root unique and
     # prevent FileExistsError from aborting before workers launch.
@@ -541,7 +522,7 @@ def _download_file_with_visibility(
     run_id: str,
 ) -> int:
     """Download one result while exposing progress and connection failures."""
-    surface = _hub()
+    surface = hub()
     relative = local.relative_to(surface.TRAINING_RESULTS / run_id)
     worker_label = str(worker) if worker is not None else "all"
     print(

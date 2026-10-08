@@ -1,12 +1,40 @@
+retrieval_ks:
+- 1
+- 5
+- 10
+- 50
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
+report_test: false
+build_index: true
 track: gnn_only
-listings: /tmp/opencode/er-rename/data/prepared/smoke_500/prepared/listings.json
-pairs: /tmp/opencode/er-rename/data/prepared/smoke_500/prepared/pairs.csv
+listings: data/prepared/smoke_500/prepared/listings.json
+pairs: data/prepared/smoke_500/prepared/pairs.csv
 output_dir: results/graph_tracks
+text_cache: null
+text_checkpoint_sha256: null
+text_index: null
+gnn_checkpoint: null
+input_manifest: data/prepared/smoke_500/prepared/input_manifest.json
+allow_unmanifested_inputs: false
+wandb:
+  project: e-r
+  mode: offline
+dvc:
+  enabled: false
+  remote: null
+  push: false
+include_inputs: true
+postprocess: true
+inference_batch_size: 1024
 hidden_dim: 64
 output_dim: 128
 epochs: 1
 learning_rate: 0.001
 weight_decay: 0.0001
+optimizer_backend: cuda_fused
+aggregation_backend: cuda_segment
 early_stopping_patience: 3
 early_stopping_threshold: 0.001
 lr_scheduler: plateau
@@ -19,23 +47,3 @@ graph_enabled: true
 metric_weight: 1.0
 negative_margin: 0.3
 max_grad_norm: 1.0
-input_manifest: /tmp/opencode/er-rename/data/prepared/smoke_500/prepared/input_manifest.json
-wandb:
-  project: e-r
-  mode: offline
-dvc:
-  enabled: true
-  remote: null
-  push: false
-postprocess: true
-report_test: false
-build_index: true
-inference_batch_size: 1024
-retrieval_ks:
-- 1
-- 5
-- 10
-- 50
-hnsw_m: 16
-hnsw_ef_construction: 200
-hnsw_ef_search: 100

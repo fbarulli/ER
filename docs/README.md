@@ -41,7 +41,7 @@ itself runs on a Colab GPU; all data preparation stays local.
 | **fallback** | Evidence is contradictory or missing. Never labeled — goes to review. |
 | **component** | A group of GTINs connected by verified-same-product edges. The unit of splitting. |
 | **MNRL** | MultipleNegativesRankingLoss — the shipped training loss (in-batch ranking). |
-| **A / B / C track** | text / `gnn_only` / `hybrid`. See [training.md](training.md). |
+| **A / B / C track** | text / `gnn_only` / `cascade`. See [training.md](training.md). |
 | **JEV** | An LLM used as an independent second opinion on gate decisions. |
 
 ## Rules of the road
@@ -64,7 +64,7 @@ dataset.csv              the only raw input; git-tracked, 54 MB
 config/                  all thresholds and paths (training.yaml, paths.yaml, model_tracks.yaml)
 src/core/                shared primitives: config, manifests, hashing, gtin, schemas
 src/training/            data prep + trainer
-src/graph_tracks/        GNN and hybrid tracks
+src/graph_tracks/        GNN-only training + the cascade combinator
 src/model_tracks/        three-track suite: launch, workers, packaging, reports
 src/cli/                 the Colab launcher
 scripts/                 audit and maintenance scripts

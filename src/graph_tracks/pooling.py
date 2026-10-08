@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import torch
 
+from core.perf_switches import perf_enabled
 from graph_tracks.data import GraphBatch
 
 
@@ -30,6 +31,23 @@ def _segment_degrees(target: torch.Tensor, count: int,
     sizes.index_add_(0, target, torch.ones(len(target), dtype=dtype, device=target.device))
     target._er_segment_degrees = (version, count, dtype, sizes)
     return sizes
+
+
+def _segment_denominators(target: torch.Tensor, count: int,
+                          dtype: torch.dtype) -> torch.Tensor:
+    """Clamped ``(count, 1)`` denominators, derived from the cached degrees.
+
+    Same identity as ``topology(...)[2]`` (``clamp_min(1).unsqueeze(1)``, so an
+    empty relation row divides by ``1``), but cached alongside the degrees so a
+    repeated :func:`fused_pool` neither re-scatters nor re-allocates.
+    """
+    cached = getattr(target, '_er_segment_denominators', None)
+    version = None if torch.is_inference(target) else target._version
+    if cached is not None and cached[0] == version and cached[1] == count and cached[2] == dtype:
+        return cached[3]
+    denominators = _segment_degrees(target, count, dtype).clamp_min(1).unsqueeze(1)
+    target._er_segment_denominators = (version, count, dtype, denominators)
+    return denominators
 
 
 def topology(batch: GraphBatch, relation: str, *, attribute: bool = False,
@@ -77,25 +95,46 @@ def pool(values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor):
 
 
 def fused_pool(values: torch.Tensor, target: torch.Tensor, count: int,
-               *, dtype: torch.dtype | None = None):
+               *, dtype: torch.dtype | None = None,
+               single_scatter: bool | None = None):
     """Mean pooling that fuses the value and degree scattering passes.
 
-    The value sum is the only ``index_add_`` executed per call; the clamped
-    denominators come from :func:`_segment_degrees`, which scatters ``count``
-    degrees once per fixed ``(target, count, dtype)`` topology and reuses them
-    afterwards. Semantics -- including the ``clamp_min(1)`` empty-segment rule
-    -- are bit-identical to ``pool(values, target, topology(...)[2])`` and the
-    result stays differentiable with respect to ``values``.
+    The value sum is the only ``index_add_`` executed per call: the clamped
+    denominators come from :func:`_segment_denominators`, which scatters
+    ``count`` degrees once per fixed ``(target, count, dtype)`` topology and
+    reuses them afterwards. Semantics -- including the ``clamp_min(1)``
+    empty-segment rule -- are bit-identical to
+    ``pool(values, target, topology(...)[2])`` and the result stays
+    differentiable with respect to ``values``.
+
+    ``single_scatter`` (default ``perf_enabled('graph.fused_pool_single_scatter')``,
+    off) collapses the two passes into literally one segmented scatter by
+    appending a column of ones to ``values`` and scattering the combined
+    ``(E, F + 1)`` block. That saves a kernel launch but copies the whole
+    payload, so it only pays off for tall, narrow messages; the default keeps
+    the cached-degree fusion, which moves far less memory for wide feature
+    blocks. The single-scatter variant is restricted to float32/float64 because
+    the appended ones column must represent every degree exactly (float32 is
+    exact to 2**24 edges). Both settings are bit-identical to ``pool``.
     """
     if values.ndim != 2 or target.ndim != 1 or values.shape[0] != target.shape[0]:
         raise ValueError('fused pool values must match the edge population')
     if values.device != target.device:
         raise ValueError('fused pool values and topology must share a device')
     dtype = values.dtype if dtype is None else dtype
-    sizes = _segment_degrees(target, count, dtype)
+    if single_scatter is None:
+        single_scatter = perf_enabled('graph.fused_pool_single_scatter', default=False)
+    if single_scatter and values.dtype in (torch.float32, torch.float64):
+        ones = torch.ones(values.shape[0], 1, dtype=values.dtype, device=values.device)
+        combined = values.new_zeros((count, values.shape[-1] + 1))
+        combined.index_add_(0, target, torch.cat([values, ones], dim=1))
+        total, degrees = combined[:, :-1], combined[:, -1].unsqueeze(1)
+        if degrees.dtype != dtype:
+            degrees = degrees.to(dtype)
+        return total / degrees.clamp_min(1)
     total = values.new_zeros((count, values.shape[-1]))
     total.index_add_(0, target, values)
-    return total / sizes.clamp_min(1).unsqueeze(1)
+    return total / _segment_denominators(target, count, dtype)
 
 
 @dataclass(frozen=True)

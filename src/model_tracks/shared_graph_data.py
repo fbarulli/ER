@@ -25,6 +25,14 @@ from model_tracks.training_data import (
 # projection rebuild starts from. Named here so a rename cannot orphan an
 # existing backup and silently snapshot already-projected inputs.
 CLEAN_BACKUP_SUFFIX = '__clean_shared_inputs'
+
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
 #: Tracks that consume the shared graph projection. Only the trained gnn_only
 #: lane does; the cascade declares no shared projection (it composes trained
 #: artifacts), and text has its own objective.
@@ -106,11 +114,13 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     """Run locally; replace supervised train rows, keep clean evaluation intact."""
     from graph_tracks.data import file_hash, load_records
     from graph_tracks.report_attributes import FILENAME, write_inputs
+    from graph_tracks.setup import write_setup_frames
     from graph_tracks.train import load_pairs, write_json
     from core.sku_identity import row_identity
     shared_hash = shared.fingerprint
+    layout = _setup_layout()
     setup = Path(setup)
-    prepared = setup / 'prepared'
+    prepared = setup / layout.prepared_dir
     manifest_path = prepared / 'input_manifest.json'
     old_manifest = json.loads(manifest_path.read_text())
     if old_manifest.get('shared_training_data_sha256') == shared_hash:
@@ -126,15 +136,15 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     # Rebuilding a different contract always starts from those immutable inputs.
     backup_root = setup.parent / (setup.name + CLEAN_BACKUP_SUFFIX)
     backup_root.mkdir(parents=True, exist_ok=True)
-    backups = {setup / 'eligible_catalog.csv': backup_root / 'eligible_catalog.csv',
-               setup / 'listing_splits.csv': backup_root / 'listing_splits.csv',
+    backups = {setup / layout.catalog: backup_root / layout.catalog,
+               setup / layout.splits: backup_root / layout.splits,
                prepared / 'listings.json': backup_root / 'listings.json',
                prepared / 'pairs.csv': backup_root / 'pairs.csv',
                prepared / FILENAME: backup_root / FILENAME}
     for source, backup in backups.items():
         if not backup.exists() or not old_manifest.get('shared_training_data_sha256'):
             shutil.copyfile(source, backup)
-    clean_catalog = pd.read_csv(backup_root / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
+    clean_catalog = pd.read_csv(backup_root / layout.catalog, dtype=str, keep_default_na=False)
     catalog_rows = clean_catalog.to_dict('records')
     records = load_records(backup_root / 'listings.json')
     by_id = {record['sku_id']: record for record in records}
@@ -257,10 +267,8 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     evaluation['example_id'] = ''
     pairs = pd.concat([pd.DataFrame(projected), evaluation], ignore_index=True)
     catalog = pd.DataFrame(catalog_rows).fillna('')
-    catalog.to_csv(setup / 'eligible_catalog.csv', index=False)
     splits = pd.DataFrame([{'sku_id': r['sku_id'], 'split': r['split']} for r in records])
-    splits.to_csv(setup / 'listing_splits.csv', index=False)
-    pairs.to_csv(setup / 'listing_pairs.csv', index=False)
+    write_setup_frames(setup, catalog=catalog, splits=splits, pairs=pairs)
     pairs.to_csv(prepared / 'pairs.csv', index=False)
     write_json(prepared / 'listings.json', {'schema': 'er-graph-listings-v1', 'listings': records})
     write_inputs(prepared, report_rows)
@@ -275,17 +283,17 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         track_bindings=bindings, train_pair_rows=len(projected), train_pair_order_sha256=_hash_rows(projected),
         virtual_counts=virtual_counts, listings_sha256=file_hash(prepared / 'listings.json'),
         pairs_sha256=file_hash(prepared / 'pairs.csv'), clean_evaluation_pairs_sha256=evaluation_hash)
-    write_json(setup / 'shared_training_projection.json', projection.model_dump(mode='json', by_alias=True))
+    write_json(setup / layout.shared_training_projection, projection.model_dump(mode='json', by_alias=True))
     # Bind graph provenance to the shared contract and the new catalog/features.
     manifest = json.loads(manifest_path.read_text())
-    manifest.update(catalog_sha256=file_hash(setup / 'eligible_catalog.csv'),
-        splits_sha256=file_hash(setup / 'listing_splits.csv'), pairs_sha256=projection.pairs_sha256,
+    manifest.update(catalog_sha256=file_hash(setup / layout.catalog),
+        splits_sha256=file_hash(setup / layout.splits), pairs_sha256=projection.pairs_sha256,
         listings_sha256=projection.listings_sha256, report_attributes_sha256=file_hash(prepared / FILENAME),
         shared_training_data_sha256=shared_hash,
-        shared_training_projection_sha256=file_hash(setup / 'shared_training_projection.json'),
+        shared_training_projection_sha256=file_hash(setup / layout.shared_training_projection),
         augmentation='shared frozen text objective; masked, swapped and counterfactual endpoints retained')
-    lineage_path = prepared / 'pair_lineage.json'
-    clean_lineage = backup_root / 'pair_lineage.json'
+    lineage_path = prepared / layout.pair_lineage
+    clean_lineage = backup_root / layout.pair_lineage
     if lineage_path.exists() and (not clean_lineage.exists() or not old_manifest.get('shared_training_data_sha256')):
         clean_lineage.write_bytes(lineage_path.read_bytes())
     lineage = json.loads(clean_lineage.read_text()) if clean_lineage.exists() else {'schema': 'er-graph-pair-lineage-v1', 'pairs': []}
@@ -296,12 +304,12 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     lineage['pairs'] = retained_lineage + [
         {**row, 'origins': [{'kind': 'shared_frozen_objective', 'example_id': row['example_id'],
                            'shared_training_data_sha256': shared_hash}]} for row in projected]
-    lineage.update(listing_pairs_sha256=file_hash(setup / 'listing_pairs.csv'),
+    lineage.update(listing_pairs_sha256=file_hash(setup / layout.pairs),
                    augmentation=manifest['augmentation'])
     write_json(lineage_path, lineage)
     manifest['pair_lineage_sha256'] = file_hash(lineage_path)
     write_json(manifest_path, manifest)
-    setup_manifest_path = setup / 'setup_manifest.json'
+    setup_manifest_path = setup / layout.manifest
     setup_manifest = json.loads(setup_manifest_path.read_text())
     setup_manifest.update(shared_training_data_sha256=shared_hash,
         pair_protocol='shared frozen training objective; clean listing-only dev/test evaluation',
@@ -310,7 +318,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         pair_counts={split: {str(label): int(count) for label, count in group.label.value_counts().items()}
                      for split, group in pairs.groupby('split')})
     write_json(setup_manifest_path, setup_manifest)
-    cache = setup / 'shared_minilm__embeddings.npz'
+    cache = setup / layout.shared_embeddings
     if cache.exists():
         shutil.move(cache, backup_root / ('shared_minilm__' + file_hash(cache)[:16] + '.npz'))
     # The package command rebuilds topology next. Keep stale plans outside the
@@ -322,15 +330,16 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         if stale.exists():
             shutil.move(stale, backup_root / (previous + '__' + filename))
     from graph_tracks.data import census, fit_vocabulary
-    write_json(setup / 'graph_census.json', census(records, fit_vocabulary(records)))
+    write_json(setup / layout.census, census(records, fit_vocabulary(records)))
     return projection.model_dump(mode='json', by_alias=True)
 
 
 def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
     """Check exact supervised rows and their multiplicity before graph loading."""
     from graph_tracks.data import file_hash
+    layout = _setup_layout()
     shared_hash = shared.fingerprint
-    projection = SharedGraphProjection.model_validate_json((setup / 'shared_training_projection.json').read_text())
+    projection = SharedGraphProjection.model_validate_json((setup / layout.shared_training_projection).read_text())
     projection.track_bindings[track].validate_data(shared)
     if (projection.shared_data_sha256 != shared_hash
             or projection.example_ids != [row.example_id for row in shared.examples]
@@ -345,7 +354,7 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
                        augmentation_node_id(endpoint.payload_index))
         if projection.node_map[str(endpoint.payload_index)] != expected_id:
             raise ValueError('shared graph stable endpoint ID mismatch')
-    pairs = pd.read_csv(setup / 'prepared/pairs.csv', dtype=str, keep_default_na=False)
+    pairs = pd.read_csv(setup / layout.prepared_dir / 'pairs.csv', dtype=str, keep_default_na=False)
     expected = [dict(example_id=row['example_id'], sku_id1=projection.node_map[str(row['payload_index1'])],
                      sku_id2=projection.node_map[str(row['payload_index2'])], label=str(row['label']), split='train')
                 for row in shared.iter_pair_rows()]
@@ -357,12 +366,12 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
     if _hash_rows(_pair_rows(pairs[pairs.split != 'train'])) != projection.clean_evaluation_pairs_sha256:
         raise ValueError('shared graph projection changed clean evaluation')
     for name, expected_hash in [('listings.json', projection.listings_sha256), ('pairs.csv', projection.pairs_sha256)]:
-        if file_hash(setup / 'prepared' / name) != expected_hash:
+        if file_hash(setup / layout.prepared_dir / name) != expected_hash:
             raise ValueError('shared graph projection input hash mismatch')
-    manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
-    for key, path in [('catalog_sha256', setup / 'eligible_catalog.csv'),
-                      ('splits_sha256', setup / 'listing_splits.csv'),
-                      ('report_attributes_sha256', setup / 'prepared/report_attributes.json')]:
+    manifest = json.loads((setup / layout.prepared_dir / 'input_manifest.json').read_text())
+    for key, path in [('catalog_sha256', setup / layout.catalog),
+                      ('splits_sha256', setup / layout.splits),
+                      ('report_attributes_sha256', setup / layout.prepared_dir / 'report_attributes.json')]:
         if manifest.get(key) != file_hash(path):
             raise ValueError('shared graph projection catalog/provenance mismatch')
     return projection

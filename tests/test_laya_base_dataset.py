@@ -352,7 +352,19 @@ def _fake_laya_train():
                 "brier": 0.1, "mean_confidence": 0.95}
 
     def fit_temperature_map(records):
-        return {"temperature": [1.0, 1.0], "temperature_by_options": {}}
+        return {"temperature": [1.0, 1.0], "temperature_by_options": {},
+                "n_by_bucket": {"noul:2": len(records)}}
+
+    train.fit_abstention_calls = []
+
+    def fit_abstention_thresholds(records, temperature, temperature_by_options,
+                                  *, target_error=0.10, min_bucket_n=100,
+                                  binning_map=None, conservative=True):
+        train.fit_abstention_calls.append({
+            "temperature": temperature,
+            "temperature_by_options": temperature_by_options,
+            "target_error": target_error, "min_bucket_n": min_bucket_n})
+        return {"noul:2": 0.85}
 
     train.load_checkpoint = load_checkpoint
     train.uses_parallel_layout = uses_parallel_layout
@@ -361,6 +373,7 @@ def _fake_laya_train():
     train.calibration_records = calibration_records
     train.evaluate_records = evaluate_records
     train.fit_temperature_map = fit_temperature_map
+    train.fit_abstention_thresholds = fit_abstention_thresholds
     laya = types.ModuleType("laya")
     laya.train = train
     return laya, train
@@ -401,3 +414,178 @@ def test_local_eval_helper_fails_loud_on_missing_checkpoint(
     with pytest.raises(FileNotFoundError, match="rl_agent_config.json"):
         laya_lane.local_eval_checkpoint(tmp_path / "nope",
                                         eval_data=tmp_path / "x.jsonl")
+
+
+# ── the eval path's calibration/abstention selection is reported ───────────
+def test_rendered_eval_kernel_bakes_the_calibration_selection(
+        tmp_path, monkeypatch):
+    """`laya.eval_calibration` flows YAML -> EVAL_CALIBRATION -> the kernel."""
+    import ast
+
+    _spec(tmp_path, monkeypatch)
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_finetune_eval_kernel(run_tag="laya_test")
+    script = (Path(receipt["staged"]) / "laya_finetune_eval.py").read_text()
+    baked = None
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "EVAL_CALIBRATION":
+                    baked = ast.literal_eval(node.value)
+    # the default selection reproduces the landed eval exactly
+    assert baked == {"temperature": True, "abstention": False,
+                     "target_error": 0.10, "min_abstain_n": 10,
+                     "min_confidence": None}
+    assert receipt["eval_calibration"] == baked
+    # the kernel CONSUMES laya's own fits and never reimplements them
+    assert "fit_temperature_map(" in script
+    assert "fit_abstention_thresholds(" in script
+    assert "def fit_eval_calibration" in script
+    # the fitted values are reported (temperature always; abstention opt-in)
+    assert '"temperature": calibration["temperature"]' in script
+    assert '"abstention_thresholds"' in script
+    assert '"min_confidence"' in script
+
+
+def test_rendered_eval_kernel_honours_non_default_calibration(
+        tmp_path, monkeypatch):
+    import ast
+
+    _spec(tmp_path, monkeypatch, eval_calibration={
+        "abstention": True, "target_error": 0.3, "min_abstain_n": 4,
+        "min_confidence": 0.75})
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_finetune_eval_kernel(run_tag="laya_test")
+    script = (Path(receipt["staged"]) / "laya_finetune_eval.py").read_text()
+    baked = None
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "EVAL_CALIBRATION":
+                    baked = ast.literal_eval(node.value)
+    assert baked == {"temperature": True, "abstention": True,
+                     "target_error": 0.3, "min_abstain_n": 4,
+                     "min_confidence": 0.75}
+    assert receipt["eval_calibration"]["abstention"] is True
+
+
+def _local_eval(tmp_path, monkeypatch, **updates):
+    import sys
+
+    spec = _spec(tmp_path, monkeypatch, **updates)
+    ckpt = tmp_path / "checkpoint"
+    ckpt.mkdir(exist_ok=True)
+    (ckpt / "rl_agent_config.json").write_text("{}", encoding="utf-8")
+    data = tmp_path / "test.jsonl"
+    data.write_text('{"state": "s"}\n', encoding="utf-8")
+    laya, train = _fake_laya_train()
+    monkeypatch.setitem(sys.modules, "laya", laya)
+    monkeypatch.setitem(sys.modules, "laya.train", train)
+    out = tmp_path / "out"
+    report = laya_lane.local_eval_checkpoint(
+        ckpt, eval_data=data, out_dir=out, split="test")
+    receipt = json.loads(
+        (out / "laya_finetune-eval.receipt.json").read_text())
+    return spec, report, receipt, train
+
+
+def test_local_eval_default_report_shape_is_unchanged(tmp_path, monkeypatch):
+    """Default config: no new report keys, no abstention fit call."""
+    _spec_, report, receipt, train = _local_eval(tmp_path, monkeypatch)
+    assert "abstention_thresholds" not in report
+    assert "min_confidence" not in report
+    assert "n_by_bucket" not in report
+    assert report["temperature"] == [1.0, 1.0]
+    assert train.fit_abstention_calls == []
+    assert receipt["eval_calibration"] == {
+        "temperature": True, "abstention": False, "target_error": 0.10,
+        "min_abstain_n": 10, "min_confidence": None}
+
+
+def test_local_eval_reports_fitted_abstention_and_min_confidence(
+        tmp_path, monkeypatch):
+    _spec_, report, receipt, train = _local_eval(
+        tmp_path, monkeypatch,
+        eval_calibration={"abstention": True, "target_error": 0.2,
+                          "min_abstain_n": 3, "min_confidence": 0.75})
+    # the fitted per-bucket thresholds ride the report (laya's own fit)
+    assert report["abstention_thresholds"] == {"noul:2": 0.85, "default": 0.75}
+    assert report["min_confidence"] == 0.75
+    assert report["n_by_bucket"] == {"noul:2": 2}
+    # the fit consumed laya's calibrated temperature + the YAML knobs
+    assert train.fit_abstention_calls == [{
+        "temperature": [1.0, 1.0], "temperature_by_options": {},
+        "target_error": 0.2, "min_bucket_n": 3}]
+    assert receipt["eval_calibration"]["min_confidence"] == 0.75
+
+
+def _metric_block(items=2):
+    return {"items": items, "loss": 0.5, "accuracy": 1.0,
+            "mean_confidence": 0.95, "ece": 0.05, "brier": 0.1,
+            "brier_top1": 0.1}
+
+
+def test_corpus_traceability_reports_the_min_confidence():
+    """The lane adapter surfaces the reported abstention scalar (additive)."""
+    digest = "a" * 64
+    report = {"after": _metric_block(), "rows": 2, "items": 2,
+              "eval_split": "test", "batch_size": 16,
+              "abstention_thresholds": {"noul:2": 0.7}}
+    document = laya_lane.corpus_traceability(
+        report, model_id="laya", digests={"corpus_sha256": digest})
+    # the fitted map's "default" sentinel is the gate when nothing is pinned
+    assert document.provenance.min_confidence is None
+    report["abstention_thresholds"] = {"noul:2": 0.7, "default": 0.7}
+    document = laya_lane.corpus_traceability(
+        report, model_id="laya", digests={"corpus_sha256": digest})
+    assert document.provenance.min_confidence == 0.7
+    # an explicit pin wins over the fitted default
+    report["min_confidence"] = 0.9
+    document = laya_lane.corpus_traceability(
+        report, model_id="laya", digests={"corpus_sha256": digest})
+    assert document.provenance.min_confidence == 0.9
+
+
+def test_kernel_and_lane_calibration_helpers_stay_in_lockstep(
+        tmp_path, monkeypatch):
+    """The staged kernel helper and the local lane helper agree exactly.
+
+    The kernel is a staged string (it cannot import `cli.laya_lane`), so its
+    `fit_eval_calibration` is a deliberate twin of the lane's. This pins that
+    the twin is never allowed to drift: same inputs -> same result.
+    """
+    import ast
+
+    _spec(tmp_path, monkeypatch, eval_calibration={
+        "abstention": True, "target_error": 0.2, "min_abstain_n": 3,
+        "min_confidence": 0.75})
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_finetune_eval_kernel(run_tag="laya_test")
+    script = (Path(receipt["staged"]) / "laya_finetune_eval.py").read_text()
+    tree = ast.parse(script)
+    baked = None
+    node = None
+    for item in tree.body:
+        if isinstance(item, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "EVAL_CALIBRATION"
+                for t in item.targets):
+            baked = ast.literal_eval(item.value)
+        if isinstance(item, ast.FunctionDef) and \
+                item.name == "fit_eval_calibration":
+            node = item
+    assert baked is not None and node is not None
+    namespace = {"EVAL_CALIBRATION": baked}
+    exec(ast.get_source_segment(script, node), namespace)
+    kernel_helper = namespace["fit_eval_calibration"]
+
+    laya, train = _fake_laya_train()
+    records = [(0, [0.1, 0.9], [0, 1], 2)]
+    assert kernel_helper(train, records) == laya_lane.fit_eval_calibration(
+        train, records, baked) == {
+            "temperature": [1.0, 1.0], "temperature_by_options": {},
+            "n_by_bucket": {"noul:2": 1},
+            "abstention_thresholds": {"noul:2": 0.85, "default": 0.75},
+            "min_confidence": 0.75}

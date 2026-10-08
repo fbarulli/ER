@@ -76,12 +76,70 @@ from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
 from core.timing import emit_timing
 from core.step_trace import send, timed, trace_step
+from core.tracing import (
+    SCOPE_ENTITY,
+    SCOPE_GROUP,
+    SCOPE_RUN,
+    flush_stage_trace,
+    stage_trace,
+)
 from core.perf_switches import perf_enabled
 
 # D7 telemetry: wall seconds spent inside load_config's deepcopy, keyed by
 # call-site label (fold{n}.* for per-fold sites); aggregated per fold and
 # emitted by train_one_config before it returns.
 _CFG_DEEPCOPY_TOTALS: dict[str, float] = {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONSOLIDATED TRACE — the "training" stage (owner contract: core/tracing.py)
+# ═══════════════════════════════════════════════════════════════════════════
+# Why a stage-level owner here: core.tracing commits ONE stage per (run, stage)
+# and REPLACES that stage's rows in place (see its "run identity" doctrine), so
+# a stage must have exactly one writer. train.py is the run entry point; this
+# module is where the folds/epochs/batches actually happen, so the writer lives
+# here and train.py flushes it once when the run is over. Every row this module
+# adds therefore lands in the SAME commit, in flow order, joined to the
+# data-prep rows by the run id core.tracing already resolves (EUROMONITOR_RUN_ID
+# / content fingerprint) — never a second id scheme and never a second file.
+TRAINING_STAGE = "training"
+
+#: The training side's trace-writer slot: the shared shim's (see
+#: :func:`core.tracing.stage_trace`), ``None`` until first use. The ONE
+#: reset-on-flush variant in the tree (``flush_training_trace``).
+_TRAINING_TRACE = None
+
+
+def training_trace(stage: str | None = None):
+    """The ONE writer for the training-side stage of the current run.
+
+    The laziness and the run id resolution live in the shared shim
+    (:func:`core.tracing.stage_trace`); this module owns only its slot.
+
+    ``stage`` pins the process's stage (the --prepare-bundle lane runs under
+    the orchestrator's ``full_bundle`` stage, not ``training``). Pinning is
+    all-or-nothing: an already-created writer may not be re-labelled, because
+    rows already recorded carry the old stage and core.tracing commits a
+    writer's rows as ONE stage.
+    """
+    global _TRAINING_TRACE
+    _TRAINING_TRACE = stage_trace(TRAINING_STAGE, _TRAINING_TRACE, pinned=stage)
+    return _TRAINING_TRACE
+
+
+def flush_training_trace():
+    """Commit this process's training-side stage rows once (no-op when empty).
+
+    Called by the run entry point (train.py) after the run is over. This is the
+    ONE reset-on-flush variant in the tree (see :func:`core.tracing.stage_trace`):
+    the writer is released, so a later phase opens a fresh one for the next run
+    id instead of re-committing stale rows.
+    """
+    global _TRAINING_TRACE
+    path = flush_stage_trace(_TRAINING_TRACE)
+    if path is not None:
+        _TRAINING_TRACE = None
+    return path
 
 
 @timed
@@ -1681,6 +1739,606 @@ class _RuntimeTelemetry:
             for source, target in names.items()
             if source in values
         }
+
+
+def _loss_trace_path(run_tag: str, fold_i: int) -> Path:
+    """This fold's loss/backprop CSV (ProgressCallback's own trace target)."""
+    return RESULTS / "logs" / run_tag / f"loss_backprop_fold{fold_i}.csv"
+
+
+def _collapse_pair_trace_path(run_tag: str, fold_i: int) -> Path:
+    """The per-pair collapse CSV the live diagnostic writes for this fold.
+
+    Same derivation as ``_CollapseReporter._metrics`` (the loss trace's stem
+    plus ``_collapse_pairs``), from the same run tag, so the consolidated trace
+    can never read a different file than the diagnostic wrote.
+    """
+    loss = _loss_trace_path(run_tag, fold_i)
+    return loss.with_name(f"{loss.stem}_collapse_pairs.csv")
+
+
+class _BatchStepTrace(TrainerCallback):
+    """Per-optimizer-step capture for the consolidated trace (read-only).
+
+    The owner directive asks to follow a run at BATCH grain, not only at
+    stage/step grain. HF exposes a step's geometry at ``on_step_end`` (epoch,
+    step index, batch size — one optimizer step == one batch at the configured
+    batch size) but NOT its loss, so this collector reads the loss from the one
+    hook every SentenceTransformers loss in this lane computes through,
+    ``compute_loss_from_embeddings``, by wrapping that method ON THE LOSS
+    INSTANCE. The wrapper returns the original tensor untouched: it observes
+    the batch loss, it never recomputes, rescales or replaces it.
+
+    grad_norm is not handed to callbacks at all; it is recorded at log cadence
+    in the per-epoch rows, and the batch rows say so explicitly instead of
+    carrying a fabricated value.
+
+    The collector does NOT write the trace (one writer per stage): it
+    accumulates rows that ``train_one_config`` hands to
+    ``TraceRun.add_entities`` once per call, where core.tracing's sampling caps
+    bound what reaches the file.
+    """
+
+    # The trace's own caps (core/tracing.py) are the ONE volume policy; the
+    # collector never picks its own budget.
+    def __init__(self, *, fold_i: int, optimizer=None) -> None:
+        self.fold = int(fold_i)
+        self._optimizer = optimizer
+        self.loss_hook_attached = False
+        self.rows: list[dict[str, object]] = []
+        self._step_losses: list[float] = []
+
+    def attach(self, loss_fn) -> bool:
+        """Observe each batch loss through the loss' own embeddings hook."""
+        hook = getattr(loss_fn, "compute_loss_from_embeddings", None)
+        if not callable(hook):
+            return False
+
+        def observed(*args, **kwargs):
+            value = hook(*args, **kwargs)
+            self._observe_loss(value)
+            return value
+
+        loss_fn.compute_loss_from_embeddings = observed
+        self.loss_hook_attached = True
+        return True
+
+    def _observe_loss(self, value) -> None:
+        """Keep the scalar the trainer actually computed; refuse anything else."""
+        detached = getattr(value, "detach", None)
+        try:
+            item = float(detached() if callable(detached) else value)
+        except (TypeError, ValueError):
+            return
+        if np.isfinite(item):
+            self._step_losses.append(item)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """One row per completed optimizer step (== one batch of this run)."""
+        losses = self._step_losses
+        self._step_losses = []
+        optimizer = kwargs.get("optimizer") or self._optimizer
+        learning_rate = None
+        if optimizer is not None and getattr(optimizer, "param_groups", None):
+            learning_rate = float(optimizer.param_groups[0]["lr"])
+        epoch = float(state.epoch or 0.0)
+        # HF's convention: state.epoch is 1.0 at the END of the first epoch, so
+        # the zero-based index of the epoch in progress is ceil(epoch) - 1.
+        self.rows.append(
+            {
+                "fold": self.fold,
+                "epoch": epoch,
+                "epoch_index": max(0, int(np.ceil(epoch)) - 1),
+                "global_step": int(state.global_step),
+                "max_steps": int(state.max_steps or 0),
+                "batch_size": int(getattr(args, "per_device_train_batch_size", 0) or 0),
+                "micro_batches": len(losses),
+                "loss": (float(np.mean(losses)) if losses else None),
+                "loss_source": (
+                    "loss.compute_loss_from_embeddings (observed, unchanged)"
+                    if self.loss_hook_attached
+                    else "unavailable: loss exposes no embeddings hook"
+                ),
+                "learning_rate": learning_rate,
+            }
+        )
+        return control
+
+
+def _emit_batch_rows(
+    trace, rows: list[dict], *, source: str, total_cap: int
+) -> dict[str, object]:
+    """Publish the per-batch grain through the trace's sampling contract.
+
+    ``add_entities`` censuses every bucket EXACTLY (one group row per
+    fold/epoch with the real batch count) and publishes a bounded stratified
+    sample of the batch rows; the accompanying ``sample_budget`` row records
+    the caps that were spent. ``total_cap=0`` keeps the exact census and
+    withholds the entity sample (used for sweep/selection folds, whose
+    per-batch volume is bounded by the census alone).
+    """
+    from core.tracing import ENTITY_SAMPLE_PER_REASON, ENTITY_ROW_CAP
+
+    cap = int(ENTITY_ROW_CAP if total_cap is None else total_cap)
+    return trace.add_entities(
+        "batch.record",
+        rows,
+        key_of=lambda r: f"fold{r['fold']}/step{r['global_step']}",
+        reason_of=lambda r: f"fold{r['fold']}/epoch{r['epoch_index']}",
+        detail_of=lambda r: {
+            "fold": r["fold"],
+            "epoch": round(float(r["epoch"]), 4),
+            "global_step": r["global_step"],
+            "max_steps": r["max_steps"],
+            "batch_size": r["batch_size"],
+            "micro_batches": r["micro_batches"],
+            "loss": None if r["loss"] is None else round(float(r["loss"]), 6),
+            "loss_source": r["loss_source"],
+            "learning_rate": r["learning_rate"],
+            "grad_norm": None,
+            "grad_norm_note": (
+                "the HF callback contract does not expose grad_norm per step; "
+                "it is recorded at log cadence in the step/epoch rows"
+            ),
+        },
+        source=source,
+        per_reason=int(ENTITY_SAMPLE_PER_REASON),
+        total_cap=cap,
+    )
+
+
+# ── collapse evidence: the EXACT sample and the responsible attribute ──────
+_COLLAPSE_ATTRIBUTION_UNKNOWN = "attribution_unknown"
+
+
+def _shared_payload_tokens(left: object, right: object) -> list[str]:
+    """Tokens present in BOTH payloads (the collapse candidates)."""
+    from training.uniformity import _tokens
+
+    return sorted(_tokens(left) & _tokens(right))
+
+
+def _token_document_frequency(payload: list[str], tokens: set[str]) -> dict[str, int]:
+    """How many source payloads carry each of ``tokens`` (real df, no estimate)."""
+    from training.uniformity import _tokens
+
+    counts = {token: 0 for token in tokens}
+    if not tokens:
+        return counts
+    for text in payload:
+        for token in _tokens(text) & tokens:
+            counts[token] += 1
+    return counts
+
+
+def _collapse_attribution(
+    left: object,
+    right: object,
+    *,
+    shared_attributes: dict[str, str],
+    document_frequency: dict[str, int],
+    frequency_limit: float,
+) -> tuple[str, dict[str, object]]:
+    """Name the cause of one collapse, or say plainly that it is unknown.
+
+    Selection requires different brand/category and excludes every token whose
+    document frequency exceeds ``max_token_frequency * n``, so a pair that WAS
+    selected can only share tokens above that limit: those shared tokens are
+    the real, checkable candidates for the collapse. When a breaching pair has
+    no shared token and no shared attribute value, the cause is NOT invented.
+    """
+    shared = _shared_payload_tokens(left, right)
+    if shared:
+        # Highest document frequency wins (the most boilerplate token is the
+        # strongest candidate); alphabetical tie-break keeps it deterministic.
+        driver = max(shared, key=lambda token: (document_frequency.get(token, 0), token))
+        detail = {
+            "attribution_reason": f"shared_high_frequency_token:{driver}",
+            "shared_tokens": [
+                {
+                    "token": token,
+                    "document_frequency": int(document_frequency.get(token, 0)),
+                    "frequency_limit": float(frequency_limit),
+                    "above_limit": bool(document_frequency.get(token, 0) > frequency_limit),
+                }
+                for token in shared
+            ],
+        }
+        return detail["attribution_reason"], detail
+    if shared_attributes:
+        column = sorted(shared_attributes)[0]
+        detail = {
+            "attribution_reason": f"shared_attribute:{column}",
+            "shared_tokens": [],
+            "shared_attributes": shared_attributes,
+        }
+        return detail["attribution_reason"], detail
+    return (
+        _COLLAPSE_ATTRIBUTION_UNKNOWN,
+        {
+            "attribution_reason": _COLLAPSE_ATTRIBUTION_UNKNOWN,
+            "shared_tokens": [],
+            "shared_attributes": {},
+            "attribution_note": (
+                "no shared payload token and no shared attribute value between "
+                "the two sides; the breach is real (cosine >= operating "
+                "threshold) but this diagnostic cannot attribute it to a "
+                "surface token/attribute"
+            ),
+        },
+    )
+
+
+def collapse_pair_records(
+    df: pd.DataFrame,
+    payload,
+    *,
+    pair_trace_path,
+    guardrail: dict,
+    fold=None,
+) -> list[dict]:
+    """One record per BREACHING unrelated pair: exact sample + responsible cause.
+
+    Reads the per-pair CSV the live collapse diagnostic already writes
+    (``training.uniformity._write_pair_trace``: one row per scored pair with
+    its cosine, its evaluation step, and BOTH sides' full source metadata) and
+    returns the pairs whose cosine crossed
+    ``collapse_guardrail.operating_threshold``. Each record carries the exact
+    sample identity (both ``sku_id``s, both row indices, both payloads), the
+    accounting (cosine vs threshold, per-observation cosines), and the
+    attribution produced by :func:`_collapse_attribution`.
+
+    Purely additive: this reads the diagnostic's own evidence, it does not
+    re-encode, re-score or change any accept/reject decision.
+    """
+    path = Path(pair_trace_path)
+    if not path.is_file():
+        return []
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    threshold = float(guardrail["operating_threshold"])
+    max_token_frequency = float(guardrail["max_token_frequency"])
+    from training.uniformity import aligned_payload_for_diagnostics
+
+    aligned = aligned_payload_for_diagnostics(df, payload)
+    n_valid = len(aligned) or 1
+    frequency_limit = max_token_frequency * n_valid
+
+    # Aggregate every observation of a pair across the fold's evaluation steps:
+    # a breach is the WORST cosine it ever reached, and the observation list
+    # shows when it started collapsing.
+    grouped: dict[tuple[str, str], dict] = {}
+    for row in frame.to_dict("records"):
+        try:
+            cosine = float(row["cosine"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        left_row, right_row = row.get("a_row_index", ""), row.get("b_row_index", "")
+        identity = (str(left_row), str(right_row))
+        observation = {
+            "evaluation_step": _collapse_step_value(row.get("evaluation_step")),
+            "cosine": round(cosine, 6),
+        }
+        entry = grouped.setdefault(identity, {"observations": []})
+        entry["observations"].append(observation)
+        if "worst" not in entry or cosine > entry["worst"]:
+            entry["worst"] = cosine
+            entry["row"] = row
+    records: list[dict] = []
+    for entry in grouped.values():
+        if float(entry["worst"]) < threshold:
+            continue
+        row = entry["row"]
+        left = row.get("a_payload", "")
+        right = row.get("b_payload", "")
+        attributes = {}
+        for column in df.columns:
+            key = f"a_{column}"
+            other = f"b_{column}"
+            if key not in row or other not in row or column == "sku_id":
+                continue
+            value, peer = str(row[key]).strip(), str(row[other]).strip()
+            if value and value == peer:
+                attributes[str(column)] = value
+        shared_tokens = _shared_payload_tokens(left, right)
+        document_frequency = _token_document_frequency(aligned, set(shared_tokens))
+        reason, attribution = _collapse_attribution(
+            left,
+            right,
+            shared_attributes=attributes,
+            document_frequency=document_frequency,
+            frequency_limit=frequency_limit,
+        )
+        sku_a = str(row.get("a_sku_id", "")) or f"row{entry['row'].get('a_row_index', '')}"
+        sku_b = str(row.get("b_sku_id", "")) or f"row{entry['row'].get('b_row_index', '')}"
+        records.append(
+            {
+                "key": f"{sku_a}|{sku_b}",
+                "reason": reason,
+                "fold": fold,
+                "sku_id1": sku_a,
+                "sku_id2": sku_b,
+                "row_index1": _collapse_step_value(row.get("a_row_index")),
+                "row_index2": _collapse_step_value(row.get("b_row_index")),
+                "cosine": round(float(entry["worst"]), 6),
+                "operating_threshold": threshold,
+                "crossed": True,
+                "observations": entry["observations"],
+                "n_observations": len(entry["observations"]),
+                "payload1": left,
+                "payload2": right,
+                **attribution,
+            }
+        )
+    return records
+
+
+def _collapse_step_value(value):
+    """Integral CSV cells as ints, anything else verbatim (never fabricated)."""
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return text
+
+
+def _emit_collapse_rows(
+    trace, records: list[dict], *, guardrail: dict, source: str, evidence_folds: int
+) -> int:
+    """Publish the collapse grain: exact census per cause + sampled entity rows.
+
+    Reuses core.tracing's entity contract (SCOPE_ENTITY rows sampled by
+    ``reason``, bounded by ENTITY_SAMPLE_PER_REASON/ENTITY_ROW_CAP), so a flood
+    of collapse events stays readable while the per-cause census stays exact.
+    """
+    from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON
+
+    summary = trace.add_entities(
+        "collapse.pairs",
+        records,
+        key_of=lambda r: r["key"],
+        reason_of=lambda r: r["reason"],
+        detail_of=lambda r: {
+            "fold": r["fold"],
+            "sku_id1": r["sku_id1"],
+            "sku_id2": r["sku_id2"],
+            "row_index1": r["row_index1"],
+            "row_index2": r["row_index2"],
+            "cosine": r["cosine"],
+            "operating_threshold": r["operating_threshold"],
+            "crossed": r["crossed"],
+            "attribution_reason": r["reason"],
+            "shared_tokens": r.get("shared_tokens", []),
+            "shared_attributes": r.get("shared_attributes", {}),
+            "attribution_note": r.get("attribution_note", ""),
+            "n_observations": r["n_observations"],
+            "observations": r["observations"],
+            "payload1": r["payload1"],
+            "payload2": r["payload2"],
+        },
+        source=source,
+        per_reason=int(ENTITY_SAMPLE_PER_REASON),
+        total_cap=int(ENTITY_ROW_CAP),
+    )
+    trace.add(
+        "collapse",
+        "breach_summary",
+        in_count=None,
+        out_count=len(records),
+        reason=(
+            "one entity row per breaching unrelated pair (cosine >= "
+            "collapse_guardrail.operating_threshold); the census rows above "
+            "name every cause bucket exactly"
+        ),
+        detail={
+            "operating_threshold": float(guardrail["operating_threshold"]),
+            "breaching_pairs": len(records),
+            "buckets": summary["per_reason"],
+            "sampled": summary["sampled"],
+            "omitted": summary["omitted"],
+            "folds_with_pair_evidence": int(evidence_folds),
+            "evidence_note": (
+                "read from each fold's diagnostic pair CSV "
+                "(loss_backprop_fold<i>_collapse_pairs.csv); a fold with no "
+                "pair evidence under the enabled guardrail was never "
+                "diagnosed, which is why it is counted here explicitly"
+            ),
+        },
+        source=source,
+    )
+    return len(records)
+
+
+def _fold_step_events(hist: list[dict]) -> list[dict]:
+    """The trainer's own log events: one per logging/eval step, with epoch+step.
+
+    This is the source the early-stopper watched, so the trace reads it rather
+    than re-deriving metrics. Its volume is bounded by the run's own
+    ``logging_steps``/``eval_steps`` cadence (EVAL_STEPS_PER_EPOCH per epoch),
+    not by the batch count.
+    """
+    events = []
+    for event in hist:
+        if event.get("epoch") is None:
+            continue
+        if event.get("loss") is None and event.get("eval_loss") is None and not any(
+            key.startswith("eval_dev_cosine_") for key in event
+        ):
+            continue
+        events.append(event)
+    return events
+
+
+def _trace_fold_outcome(
+    trace,
+    *,
+    fold_i,
+    hist: list[dict],
+    trainer_state,
+    cfg: dict,
+    planned_steps: int,
+    best_metric_key: str | None,
+    guardrail: dict,
+    collapse_records: list[dict],
+) -> dict[str, object]:
+    """Per-fold training rows: logging-step metrics, checkpoint, early stop.
+
+    Returns the fold summary (real numbers, reused by the caller); every count
+    comes from the trainer's own state/log history — nothing is estimated.
+    """
+    planned_epochs = int(cfg["epochs"])
+    executed = int(trainer_state.global_step or 0)
+    max_steps = int(trainer_state.max_steps or 0)
+    planned = int(planned_steps or max_steps or 0)
+    epochs_run = 0.0
+    for event in hist:
+        if event.get("epoch") is not None:
+            epochs_run = max(epochs_run, float(event["epoch"]))
+    events = _fold_step_events(hist)
+    for event in events:
+        step = event.get("step")
+        eval_metrics = {
+            key: number
+            for key, value in event.items()
+            if key.startswith("eval_")
+            for number in (_optional_float(value),)
+            if number is not None
+        }
+        trace.add(
+            "step",
+            "metrics",
+            scope=SCOPE_ENTITY,
+            key=f"fold{fold_i}/step{step}",
+            in_count=None,
+            out_count=None,
+            reason=(
+                "the trainer's own log event (the source the early-stopper "
+                "watched); one row per logging/eval step"
+            ),
+            detail={
+                "fold": int(fold_i),
+                "step": None if step is None else int(step),
+                "epoch": round(float(event["epoch"]), 4),
+                "train_loss": _optional_float(event.get("loss")),
+                "learning_rate": _optional_float(event.get("learning_rate")),
+                "grad_norm": _optional_float(event.get("grad_norm")),
+                **eval_metrics,
+            },
+            source="hf trainer state.log_history",
+        )
+    epochs_saved = max(0.0, float(planned_epochs) - epochs_run)
+    # Counts for the two epoch/step funnels. ``ceil`` of HF's fractional epoch
+    # is the completed-epoch count; the entrance is the LARGER of planned and
+    # observed so a `dropped_count` can never go negative (core.schemas.TraceRow
+    # requires ge=0 and the derived drop must mean attrition, never overshoot).
+    epochs_completed = int(np.ceil(epochs_run)) if epochs_run else 0
+    epoch_funnel_in = max(planned_epochs, epochs_completed)
+    step_funnel_in = max(planned, executed)
+    trace.add(
+        "fold",
+        "early_stop",
+        scope=SCOPE_ENTITY,
+        key=fold_i,
+        in_count=epoch_funnel_in,
+        out_count=epochs_completed,
+        reason=(
+            "epochs planned vs epochs actually run; HF EarlyStoppingCallback "
+            "on the dev metric ends the fold when patience is exhausted"
+        ),
+        detail={
+            "patience": cfg.get("patience"),
+            "es_threshold": cfg.get("es_threshold"),
+            "epochs_planned": planned_epochs,
+            "epochs_run": round(epochs_run, 4),
+            "epochs_saved": round(epochs_saved, 4),
+            "stopped_early": int(epochs_run < planned_epochs),
+            "metric_for_best_model": best_metric_key,
+        },
+        source="training.training ResumableSentenceTransformerTrainer",
+    )
+    best_checkpoint = getattr(trainer_state, "best_model_checkpoint", None)
+    trace.add(
+        "checkpoint",
+        "select",
+        scope=SCOPE_ENTITY,
+        key=fold_i,
+        in_count=max(epochs_completed, 1 if best_checkpoint else 0),
+        out_count=1 if best_checkpoint else 0,
+        reason=(
+            "checkpoint selection: load_best_model_at_end keeps the epoch that "
+            "maximised the dev metric; the remaining checkpoints stay on disk"
+        ),
+        detail={
+            "best_model_checkpoint": None if best_checkpoint is None else str(best_checkpoint),
+            "best_metric": _optional_float(getattr(trainer_state, "best_metric", None)),
+            "metric_for_best_model": best_metric_key,
+            "global_step": executed,
+            "last_epoch": round(epochs_run, 4),
+        },
+        source="hf trainer state.best_model_checkpoint",
+    )
+    trace.add(
+        "fold",
+        "complete",
+        scope=SCOPE_ENTITY,
+        key=fold_i,
+        in_count=step_funnel_in,
+        out_count=executed,
+        reason=(
+            "planned optimizer steps vs executed steps; the difference is "
+            "exactly what early stopping saved"
+        ),
+        detail={
+            "planned_steps": planned,
+            "executed_steps": executed,
+            "max_steps": max_steps,
+            "steps_saved": max(0, planned - executed),
+            "epochs_run": round(epochs_run, 4),
+            "collapse_breaches": len(collapse_records),
+            "collapse_breach_reasons": _collapse_reason_counts(collapse_records),
+            "operating_threshold": float(guardrail["operating_threshold"]),
+        },
+        source="hf trainer state.global_step",
+    )
+    return {
+        "fold": int(fold_i),
+        "epochs_run": round(epochs_run, 4),
+        "executed_steps": executed,
+        "planned_steps": planned,
+        "best_metric": _optional_float(getattr(trainer_state, "best_metric", None)),
+        "breaches": len(collapse_records),
+    }
+
+
+def _optional_float(value) -> float | None:
+    """A finite float, or None — never a fabricated number."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _optional_int(value) -> int | None:
+    """An integral count, or None — a missing count is never a zero."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _collapse_reason_counts(records: list[dict]) -> dict[str, int]:
+    """Per-cause census of a fold's breaching pairs (exact counts)."""
+    counts: dict[str, int] = {}
+    for record in records:
+        reason = str(record["reason"])
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
 
 
 class _CollapseReporter:
@@ -4828,10 +5486,24 @@ def train_one_config(
     # Explicit callers can withhold test evaluation independently of HPO settings.
     skip_test_eval: bool = False,
     wandb_ctx=None,
+    # Consolidated trace (core/tracing.py stage "training"): the caller may pass
+    # the run's single stage writer; the default is this module's process-scoped
+    # owner, so a caller that does not know about the trace (hpo lanes, model
+    # tracks) still lands its folds in the same stage. Nothing here WRITES the
+    # trace — train.py flushes the stage once, which is what keeps one commit
+    # per stage and the flow order intact.
+    trace=None,
 ) -> list[dict]:
     """Train cfg across the group-aware folds. Returns fold metric rows
     (failures included, with traceback)."""
     import torch
+    trace = trace if trace is not None else training_trace()
+    # Per-batch rows are published for the lanes a reader follows step by step;
+    # a SWEEP lane (grid/tpe trial, or an explicit selection-mode caller) keeps
+    # the exact per-epoch batch CENSUS but withholds the entity sample, whose
+    # volume is bounded by the trial count rather than by the run. The policy is
+    # stated in the sample_budget row and in the batch.capture row below.
+    batch_entity_cap = 0 if (selection_mode or skip_test_eval) else None
     with trace_step('training.train_one_config.config_validation'):
         if dynamic_mask_lo is None or dynamic_mask_hi is None:
             raise ValueError(
@@ -4879,6 +5551,52 @@ def train_one_config(
             prepared_payload_digest = payload_sha256(payload)
         else:
             prepared_payload_digest = None
+    # ── CONSOLIDATED TRACE: one config-level row + the per-grain accumulators
+    # that are published once, after the fold loop, so the stage keeps ONE
+    # commit (train.py) and the row volume stays inside core.tracing's caps.
+    _batch_records: list[dict] = []
+    _collapse_records: list[dict] = []
+    _collapse_evidence_folds = 0
+    trace.add(
+        "run",
+        "train_config",
+        in_count=None,
+        out_count=None,
+        reason=(
+            "one train_one_config call: the config scale + folds trained "
+            "(failures included in the returned rows). No in/out counts: the "
+            "inputs (source rows) and the outputs (folds) are different "
+            "units, so any derived dropped_count would be meaningless"
+        ),
+        detail={
+            "loss": loss,
+            "model_id": model_id,
+            "run_tag": run_tag,
+            "sample": bool(sample),
+            "selection_mode": bool(selection_mode),
+            "skip_test_eval": bool(skip_test_eval),
+            "epochs": cfg.get("epochs"),
+            "n_source_rows": int(len(df)),
+            "n_folds": int(len(fixed_inputs["folds"])),
+            "learning_rate": cfg.get("lr"),
+            "batch_size_cpu": BATCH_SIZE_CPU,
+            "batch_size_cuda": BATCH_SIZE_CUDA,
+            "n_train_pos": int(len(pos)),
+            "n_hp_pairs": int(len(hp_pairs)) if hp_pairs is not None else 0,
+            "n_neg_pairs": int(len(neg_pairs)) if neg_pairs is not None else 0,
+            "train_frac": train_frac,
+            "cv_folds": cv_folds,
+            "folds": [int(fold["fold_i"]) for fold in fixed_inputs["folds"]],
+            "batch_entity_cap": batch_entity_cap,
+            "batch_rows_policy": (
+                "entity sample withheld (sweep/selection lane): the exact "
+                "per-fold-epoch batch census is still emitted"
+                if batch_entity_cap == 0
+                else "entity sample emitted under core.tracing's ENTITY caps"
+            ),
+        },
+        source="training.train_one_config",
+    )
     for fold_inputs in fixed_inputs["folds"]:
         fold_i = fold_inputs["fold_i"]
         try:
@@ -4927,6 +5645,47 @@ def train_one_config(
                     print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
 
                 ensure_parent(checkpoint_dir)
+                # ── CONSOLIDATED TRACE: the fold's input populations ──────────
+                # The fold boundary is where the split becomes real, so it is
+                # recorded per fold (entity scope, key = fold) with the counts
+                # the objective actually receives: train pairs enter it, the
+                # dev/test pairs are HELD OUT (a different destiny, stated in
+                # words — never silently counted as a drop).
+                trace.add(
+                    "fold",
+                    "inputs",
+                    scope=SCOPE_ENTITY,
+                    key=fold_i,
+                    in_count=(
+                        int(len(train_all)) + int(len(dev_pos)) + int(len(test_pos))
+                    ),
+                    out_count=int(len(train_all)),
+                    reason=(
+                        "fold split: train pairs enter the objective; dev/test "
+                        "pairs are held out for early stopping / evaluation"
+                    ),
+                    detail={
+                        "n_train": int(len(train_all)),
+                        "n_dev": int(len(dev_pos)),
+                        "n_test": int(len(test_pos)),
+                        "n_train_pos": int(len(train_pos)),
+                        "n_gate_kept": int(n_gate_kept),
+                        "n_train_hard_neg": int(n_train_hard_neg),
+                        "n_train_random_easy_neg": int(n_train_random_easy_neg),
+                        "n_train_random_easy_unique_candidates": int(
+                            random_easy_unique_candidates
+                        ),
+                        "n_train_neg": int(len(tr_negs)),
+                        "n_test_gate_neg": int(len(hard_test)),
+                        "static_masked_positives": int(static_masked_pos),
+                        "static_positive_pct": float(static_positive_pct),
+                        "train_neg_sources": dict(train_neg_source_counts),
+                        "held_out_dev": int(len(dev_pos)),
+                        "held_out_test": int(len(test_pos)),
+                    },
+                    source="training.prepare_fixed_training_inputs",
+                )
+            batch_trace = None
 
             # Tied-weight two-tower retrieval model: the trainer receives
             # (SKU text, canonical text) pairs; each side is encoded on its
@@ -5480,10 +6239,7 @@ def train_one_config(
                     ProgressCallback(
                         wandb_ctx,
                         tracked_loss=loss_fn,
-                        trace_path=RESULTS
-                        / "logs"
-                        / run_tag
-                        / f"loss_backprop_fold{fold_i}.csv",
+                        trace_path=_loss_trace_path(run_tag, fold_i),
                         collapse_model=model,
                         collapse_df=df,
                         collapse_payload=payload,
@@ -5502,6 +6258,13 @@ def train_one_config(
                         early_stopping_threshold=cfg["es_threshold"],
                     ),
                 ]
+                # BATCH GRAIN (consolidated trace): one row per optimizer step.
+                # Observer only — the loss hook returns the original tensor, and
+                # the collector never writes the trace itself (train_one_config
+                # publishes its rows through the trace's sampling caps).
+                batch_trace = _BatchStepTrace(fold_i=fold_i, optimizer=optimizer)
+                batch_trace.attach(loss_fn)
+                callbacks.append(batch_trace)
                 if not checkpoint_publication_deferred():
                     callbacks.append(DvcCheckpointCallback())
                 if (
@@ -5790,6 +6553,33 @@ def train_one_config(
             # final training loss + best dev AP from the trainer's own log
             # history (the source the early-stopper actually used)
             hist = trainer.state.log_history
+            # ── CONSOLIDATED TRACE: this fold's training steps, checkpoint
+            # selection and early stop — plus the per-batch rows the collector
+            # captured (published after the fold loop, under the trace's caps)
+            # and the collapse breaches this fold's diagnostic evidenced.
+            _fold_collapse_records = collapse_pair_records(
+                df,
+                payload,
+                pair_trace_path=_collapse_pair_trace_path(run_tag, fold_i),
+                guardrail=calibration_config["collapse_guardrail"],
+                fold=int(fold_i),
+            )
+            if _collapse_pair_trace_path(run_tag, fold_i).is_file():
+                _collapse_evidence_folds += 1
+            _collapse_records.extend(_fold_collapse_records)
+            _trace_fold_outcome(
+                trace,
+                fold_i=fold_i,
+                hist=hist,
+                trainer_state=trainer.state,
+                cfg=cfg,
+                planned_steps=n_steps_per_epoch * cfg["epochs"],
+                best_metric_key=getattr(args_hf, "metric_for_best_model", None),
+                guardrail=calibration_config["collapse_guardrail"],
+                collapse_records=_fold_collapse_records,
+            )
+            if batch_trace is not None and batch_trace.rows:
+                _batch_records.extend(batch_trace.rows)
             train_losses = [e["loss"] for e in hist if "loss" in e]
             dev_aps = [
                 e["eval_dev_cosine_ap"] for e in hist if "eval_dev_cosine_ap" in e
@@ -6521,6 +7311,49 @@ def train_one_config(
                     **calibration_metrics,
                 }
                 rows.append(row)
+                # ── CONSOLIDATED TRACE: the fold's final evaluation, as reported
+                trace.add(
+                    "fold",
+                    "test_metrics",
+                    scope=SCOPE_ENTITY,
+                    key=fold_i,
+                    in_count=_optional_int(row.get("n_pos")) + _optional_int(row.get("n_neg"))
+                    if row.get("n_pos") is not None or row.get("n_neg") is not None
+                    else None,
+                    out_count=None,
+                    reason=(
+                        "final per-fold evaluation: the test-side pairs scored at "
+                        "the dev-picked operating threshold (test read once)"
+                    ),
+                    detail={
+                        "fold": int(fold_i),
+                        "status": row.get("status"),
+                        "auc": _optional_float(row.get("auc")),
+                        "pr_auc": _optional_float(row.get("pr_auc")),
+                        "average_precision": _optional_float(row.get("average_precision")),
+                        "acc_at_thr": _optional_float(row.get("acc_at_thr")),
+                        "youden_thr": _optional_float(row.get("youden_thr")),
+                        "n_pos": _optional_int(row.get("n_pos")),
+                        "n_neg": _optional_int(row.get("n_neg")),
+                        "best_dev_ap": _optional_float(row.get("best_dev_ap")),
+                        "final_train_loss": _optional_float(row.get("final_train_loss")),
+                        "lr_groups": row.get("lr_groups"),
+                        "es_saved_pct": _optional_float(row.get("es_saved_pct")),
+                        "fold_s": _optional_float(row.get("fold_s")),
+                        "calibration_status": row.get("calibration_status"),
+                        "test_eval": row.get("test_eval"),
+                        "train_collapse_median_cosine": _optional_float(
+                            row.get("train_collapse_median_cosine")
+                        ),
+                        "train_collapse_crossing_rate": _optional_float(
+                            row.get("train_collapse_crossing_rate")
+                        ),
+                        "train_collapse_healthy": _optional_int(
+                            row.get("train_collapse_healthy")
+                        ),
+                    },
+                    source="training.training fold metrics row",
+                )
 
             # ── per-fold pair dump: the failure-analysis ground truth ─────
             # every scored pair with its sku_ids, score, label and stratum —
@@ -6756,8 +7589,86 @@ def train_one_config(
                 exc, (RequiredCalibrationError, CalibrationEvaluatorError)
             ):
                 raise
+            # ── CONSOLIDATED TRACE: a failed fold is part of the run's story
+            trace.add(
+                "fold",
+                "failed",
+                scope=SCOPE_ENTITY,
+                key=fold_i,
+                in_count=None,
+                out_count=None,
+                reason="fold raised; the failure is recorded, never silent",
+                detail={
+                    "fold": int(fold_i),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "cuda_oom": int("out of memory" in str(exc).lower()),
+                },
+                source="training.train_one_config fold loop",
+            )
             rows.append({"fold": fold_i, "status": "failed", "traceback": tb})
 
+    # ── CONSOLIDATED TRACE: publish the two bounded grains ONCE, so the stage
+    # keeps a single commit and the volume is governed by core.tracing's caps
+    # rather than by the fold count. Order = flow order: batches (inside the
+    # folds) then the collapse evidence they produced.
+    _batch_summary = _emit_batch_rows(
+        trace,
+        _batch_records,
+        source=f"training.training fold batches (run_tag={run_tag})",
+        total_cap=batch_entity_cap,
+    )
+    trace.add(
+        "batch",
+        "capture",
+        in_count=len(_batch_records),
+        out_count=None,
+        reason=(
+            "one row per optimizer step (== one batch at the configured batch "
+            "size), observed read-only at on_step_end; published through "
+            "core.tracing's entity sampling so a 38k-step run stays readable"
+        ),
+        detail={
+            "captured_rows": len(_batch_records),
+            "census_buckets": _batch_summary["per_reason"],
+            "sampled": _batch_summary["sampled"],
+            "omitted": _batch_summary["omitted"],
+            "entity_cap": batch_entity_cap,
+            "sampling_contract": "core.tracing ENTITY_ROW_CAP / ENTITY_SAMPLE_PER_REASON",
+            "loss_observed_by": "loss.compute_loss_from_embeddings (returns unchanged)",
+            "grad_norm": None,
+            "grad_norm_note": (
+                "not exposed by the HF step callback; recorded at log cadence "
+                "in the step.metrics rows"
+            ),
+        },
+        source="training.training _BatchStepTrace",
+    )
+    guardrail_cfg = calibration_config["collapse_guardrail"]
+    if bool(guardrail_cfg["enabled"]):
+        _emit_collapse_rows(
+            trace,
+            _collapse_records,
+            guardrail=guardrail_cfg,
+            source=f"training.uniformity collapse diagnostic (run_tag={run_tag})",
+            evidence_folds=_collapse_evidence_folds,
+        )
+    else:
+        trace.add(
+            "collapse",
+            "disabled",
+            in_count=None,
+            out_count=0,
+            reason=(
+                "collapse_guardrail.enabled is false, so no unrelated-pair "
+                "diagnostic ran and there is no per-sample collapse evidence "
+                "to publish (this row states that explicitly)"
+            ),
+            detail={
+                "enabled": False,
+                "operating_threshold": float(guardrail_cfg["operating_threshold"]),
+            },
+            source="config collapse_guardrail",
+        )
     # D7 telemetry: aggregate load_config deepcopy cost per fold, one line each.
     _fold_aggregate: dict[str, float] = {}
     for _key, _seconds in _CFG_DEEPCOPY_TOTALS.items():
@@ -7264,14 +8175,46 @@ class OptunaObjectiveOwner:
             for r in proxy_rows
             if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
         ]
-        if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
+        reject_median = bool(
+            collapse_medians and max(collapse_medians) > float(guardrail["reject_median"])
+        )
+        reject_crossing = bool(
+            collapse_crossing_rates
+            and max(collapse_crossing_rates) > float(guardrail["crossing_rate_ceiling"])
+        )
+        if reject_median or reject_crossing:
+            # ── CONSOLIDATED TRACE: the trial-pruning decision, with the
+            # aggregate breach that caused it. The PER-SAMPLE evidence for the
+            # same trial is in the `collapse.pairs` entity rows its folds emit.
+            training_trace().add(
+                "hpo",
+                "guardrail_reject",
+                in_count=len(proxy_rows),
+                out_count=0,
+                reason=(
+                    "trial pruned: collapse guardrail breached before the "
+                    "objective value became meaningful"
+                ),
+                detail={
+                    "median_max": max(collapse_medians) if collapse_medians else None,
+                    "median_ceiling": float(guardrail["reject_median"]),
+                    "median_breach": int(reject_median),
+                    "crossing_rate_max": (
+                        max(collapse_crossing_rates) if collapse_crossing_rates else None
+                    ),
+                    "crossing_rate_ceiling": float(guardrail["crossing_rate_ceiling"]),
+                    "crossing_rate_breach": int(reject_crossing),
+                    "folds": [int(r["fold"]) for r in proxy_rows if "fold" in r],
+                    "per_sample_evidence": "collapse.pairs entity rows for this trial's folds",
+                },
+                source="training.training _HpoStream collapse guardrail",
+            )
+        if reject_median:
             raise optuna.TrialPruned(
                 "collapse guardrail rejected trial: "
                 f"median_cosine={max(collapse_medians):.4f}"
             )
-        if collapse_crossing_rates and max(collapse_crossing_rates) > float(
-            guardrail["crossing_rate_ceiling"]
-        ):
+        if reject_crossing:
             raise optuna.TrialPruned(
                 "collapse guardrail rejected trial: "
                 f"crossing_rate={max(collapse_crossing_rates):.4f} "

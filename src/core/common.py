@@ -112,6 +112,26 @@ def _read_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def load_validated_yaml(path: Path, model: type, *, label: str) -> Any:
+    """Read ONE YAML document and validate it against ``model`` — the ONE home.
+
+    The project-config SSOT above is the only reader of ``config/*.yaml``; this
+    helper is its twin for the per-run documents a lane consumes by path (a
+    model-tracks suite manifest, a graph-lane YAML). Both used to spell the
+    read + ``model_validate`` + ``add_note`` dance themselves, so a bad
+    document could lose its file name in one lane and keep it in another. A
+    failure raises the model's own field error with a note naming ``label`` and
+    the file, never a bare YAML/validation traceback.
+    """
+    from pydantic import ValidationError
+
+    try:
+        return model.model_validate(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+    except (ValidationError, yaml.YAMLError) as exc:
+        exc.add_note(f"{label}: {path}")
+        raise
+
+
 _REQUIRED_VOCABULARY_LISTS = ("STOPWORDS", "MINIMAL_STOPWORDS", "ENGLISH_STOP_WORDS")
 
 

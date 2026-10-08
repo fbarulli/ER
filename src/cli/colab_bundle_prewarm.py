@@ -9,7 +9,7 @@ colab_result_sync / colab_launch.
 
 Collaborators still owned by cli.colab (config constants, ``RESULTS``/``F``,
 the input resolver, the legacy validation gates, transport) are re-read through
-``_hub()`` at call time, so the legacy ``from cli import colab`` monkeypatch
+``colab_hub.hub()`` at call time, so the legacy ``from cli import colab`` monkeypatch
 surface keeps driving every phase and the running colab identity never sees a
 stale second copy.  The in-flight prewarm slot stays on the hub
 (``_BUNDLE_PREWARM``) for the same reason.
@@ -17,7 +17,6 @@ stale second copy.  The in-flight prewarm slot stays on the hub
 from __future__ import annotations
 
 import argparse
-import functools
 import hashlib
 import json
 import os
@@ -30,26 +29,7 @@ from pathlib import Path
 
 from core.common import TRAIN_ROOT, resolve_model, training_cfg
 from core.manifest import sha256_file
-
-
-def _hub():
-    """The RUNNING cli.colab module (never a second import copy)."""
-    hub = sys.modules.get("__colab_runtime_self__")
-    if hub is not None:
-        return hub
-    import cli.colab as surface
-
-    return surface
-
-
-def _timed_colab(kind: str):
-    """Lazy step-timing shim: cli.colab owns ``_timed_colab`` at call time."""
-    def decorate(function):
-        @functools.wraps(function)
-        def wrapped(*args, **kwargs):
-            return _hub()._timed_colab(kind)(function)(*args, **kwargs)
-        return wrapped
-    return decorate
+from cli.colab_hub import hub, timed_colab
 
 
 def _expand_worker_profiles(raw: str, workers: int, label: str) -> list[str]:
@@ -71,8 +51,8 @@ def _training_bundle_profiles(masking_profile: str | None, workers: int) -> list
     `main` (which may start that build early), so a prewarm can never be built
     for a different request than the run asks for.
     """
-    return _hub()._expand_worker_profiles(
-        masking_profile or _hub()._MASKING_PROFILE, workers, "masking"
+    return hub()._expand_worker_profiles(
+        masking_profile or hub()._MASKING_PROFILE, workers, "masking"
     )
 
 
@@ -98,19 +78,19 @@ class _BundlePrewarm:
 
     def __init__(self, request: dict) -> None:
         self.request = request
-        self.key = _hub()._bundle_request_key(request)
+        self.key = hub()._bundle_request_key(request)
         self.bundles: list[Path] | None = None
         self.error: BaseException | None = None
         self.thread = threading.Thread(target=self._build, daemon=True)
 
     def _build(self) -> None:
         try:
-            self.bundles = _hub()._build_local_training_bundles(**self.request)
+            self.bundles = hub()._build_local_training_bundles(**self.request)
         except BaseException as exc:  # re-raised in the owning run_train call
             self.error = exc
             # Also print: a prewarm abandoned by a mismatched request would
             # otherwise fail invisibly (no silent drops).
-            print(_hub()._stamp(), f"[local-prepare] concurrent build failed: {exc!r}", flush=True)
+            print(hub()._stamp(), f"[local-prepare] concurrent build failed: {exc!r}", flush=True)
 
     def join(self) -> list[Path]:
         self.thread.join()
@@ -121,10 +101,10 @@ class _BundlePrewarm:
         return self.bundles
 
 
-@_timed_colab("step")
+@timed_colab("step")
 def start_local_bundle_prewarm(**request) -> None:
     """Build this lane's prepared bundles while the VM installs its runtime."""
-    surface = _hub()
+    surface = hub()
     prewarm = _BundlePrewarm(request)
     surface._BUNDLE_PREWARM = prewarm
     prewarm.thread.start()
@@ -139,7 +119,7 @@ def start_local_bundle_prewarm(**request) -> None:
 
 def drain_local_bundle_prewarm() -> None:
     """Never leave a prewarm thread writing into a closing live log."""
-    surface = _hub()
+    surface = hub()
     prewarm, surface._BUNDLE_PREWARM = surface._BUNDLE_PREWARM, None
     if prewarm is not None and prewarm.thread.is_alive():
         print(surface._stamp(), "[local-prepare] waiting for the concurrent build to finish ...", flush=True)
@@ -148,7 +128,7 @@ def drain_local_bundle_prewarm() -> None:
 
 def _take_prewarmed_bundles(**request) -> list[Path] | None:
     """Hand over the in-flight build when it matches this exact request."""
-    surface = _hub()
+    surface = hub()
     prewarm, surface._BUNDLE_PREWARM = surface._BUNDLE_PREWARM, None
     if prewarm is None:
         return None
@@ -188,7 +168,7 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     else:
         return None
     request = {
-        "profiles": _hub()._training_bundle_profiles(args.masking_profile, workers),
+        "profiles": hub()._training_bundle_profiles(args.masking_profile, workers),
         "model": args.model,
         "sample": sample,
     }
@@ -236,7 +216,7 @@ def _bundle_cache_dir(
     training_dataset: Path,
 ) -> Path | None:
     """Content address for one bundle request, or None when caching is off."""
-    surface = _hub()
+    surface = hub()
     if not surface._CACHE_PREPARED_BUNDLES:
         return None
     request = json.dumps(
@@ -285,7 +265,7 @@ def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | Non
     the current encoder-text contract and refuses a mismatch, so a cached
     bundle cannot outlive the model-input spec even if the digest missed it.
     """
-    surface = _hub()
+    surface = hub()
     expected = [
         cache_dir / f"worker_{number}_{profile}.pkl.gz"
         for number, profile in enumerate(profiles, start=1)
@@ -316,7 +296,7 @@ def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | Non
 
 def _populate_bundle_cache(cache_dir: Path, bundles: list[Path]) -> None:
     """Publish freshly built bundles under their content address."""
-    surface = _hub()
+    surface = hub()
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         for bundle in bundles:
@@ -349,7 +329,7 @@ def _build_local_training_bundles(
     source file, every config file, and the requested model/profile/payload —
     are byte-identical to one already built.
     """
-    surface = _hub()
+    surface = hub()
     if sample is not None:
         raise ValueError(
             'legacy sampled preparation does not preserve the shared component split; '
@@ -457,7 +437,7 @@ def _prepare_local_training_bundles(
     The only entry point that consumes a prewarm, so the build it hands over
     runs once and the overlap in `start_local_bundle_prewarm` is real.
     """
-    surface = _hub()
+    surface = hub()
     request = {
         "profiles": profiles,
         "model": model,
@@ -478,7 +458,7 @@ def _upload_prepared_bundles(
     bundles: list[Path],
 ) -> list[str]:
     """Upload only the locally prepared bundles and their manifests."""
-    surface = _hub()
+    surface = hub()
     remote_dir = f"{surface.REMOTE_ROOT}/prepared_training/{run_id}"
     worker_dirs = [
         f"{remote_dir}/worker_{number}" for number in range(1, len(bundles) + 1)

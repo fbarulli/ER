@@ -81,6 +81,22 @@ class NERTrainingConfig(BaseModel):
 
 
 def _resolve_config_value(value: Any) -> Any:
+    """Expand the config's ``${base_dir}``/``${results_dir}`` references.
+
+    PINNED as the ONE allowed copy of this expansion outside ``core`` (audit
+    2026-10-08, finding 2): the dead ``ner/config_loader._expand_variables`` was
+    deleted and ``core.common`` is the owner of the corresponding paths
+    (``TRAIN_ROOT``/``RESULTS``, themselves the resolved ``base_dir`` /
+    ``results_dir``). A shared helper cannot replace this one: the bare Colab
+    runtime imports this module with ``core.common`` deliberately absent (the
+    ``ModuleNotFoundError`` fallback above), so a helper living in
+    ``core.common`` would pull ``core`` -- matplotlib/pandas/yaml -- into that
+    bare runtime. The spelling and behavior mirror the shared loader and the
+    live sibling ``ner.colab_ner.expand_vars``: only these two declared names are
+    substituted, recursing through dicts/lists, and no environment variable is
+    expanded (the old extra ``os.path.expandvars`` call diverged from every other
+    loader and could rewrite an absolute path containing ``$``).
+    """
     if isinstance(value, dict):
         return {
             key: _resolve_config_value(item)
@@ -108,7 +124,6 @@ def _resolve_config_value(value: Any) -> Any:
             replacement,
         )
 
-    resolved = os.path.expandvars(resolved)
     return resolved
 
 
@@ -463,7 +478,17 @@ def _make_model_archive(nlp, destination: Path):
 
 
 def _sha256_file(path: Path) -> str:
-    """Return a streaming content hash for a final NER artifact."""
+    """Return a streaming content hash for a final NER artifact.
+
+    PINNED STANDALONE COPY — the ONE allowed copy of the digest outside
+    ``core``. `ner.py` also runs on a bare Colab/remote runtime that receives
+    only `ner.py` + `core/archive_reader.py` (see `colab_ner.upload_inputs`),
+    so `core.manifest` / `core.portable_archive` are not importable there. The
+    algorithm is the shared one (lowercase hex, streamed), and
+    `tests/test_bundle_standalone.py::test_ner_producer_digest_agrees_with_the_shared_primitive`
+    pins it byte-for-byte against `core.manifest.sha256_file` (the consumer
+    side, `colab_ner._sha256_file`, delegates to that shared primitive).
+    """
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -472,7 +497,20 @@ def _sha256_file(path: Path) -> str:
 
 
 def _write_artifact_manifest(artifacts: list[Path]) -> Path:
-    """Publish the final-artifact hashes last for Colab transfer validation."""
+    """Publish the final-artifact hashes last for Colab transfer validation.
+
+    This IS the NER result integrity boundary, and it is deliberately NOT a
+    `Bundle`: the three final artifacts (the spaCy model tar, training_metadata
+    and ner_errors) travel as SEPARATE objects to Hugging Face, not as members
+    of one sealed archive, and the model tar is extracted as a model directory
+    (`nlp.to_disk` / `spacy.load`) so it can carry no role manifest. The
+    inventory is therefore a SIDECAR written after every artifact is complete
+    (the write-last doctrine, so a truncated run never publishes one), and the
+    consumer checks each transferred object exactly once against it
+    (`colab_ner.download_results` -> `_verify_download`) — the same
+    single-boundary-check shape `Bundle.load` uses for an archive. Pinned in
+    `tests/test_bundle_standalone.py::test_ner_model_tar_has_no_bundle_role_manifest`.
+    """
     entries: dict[str, dict[str, int | str]] = {}
     for artifact in artifacts:
         if not artifact.is_file():
@@ -485,6 +523,11 @@ def _write_artifact_manifest(artifacts: list[Path]) -> Path:
         }
 
     manifest_path = RESULTS_DIR / ARTIFACT_MANIFEST_NAME
+    # PINNED STANDALONE COPY of the atomic manifest publish: this runs on the
+    # bare remote runtime (only `ner.py` + `core/archive_reader.py` ship), so
+    # `core.manifest.atomic_write_json` is not importable here. Naming, the
+    # write-last ordering and the `<name>.tmp-<pid>` residue form are the ones
+    # that home defines, so the consumer's manifest contract is unchanged.
     temporary = manifest_path.with_name(
         f"{manifest_path.name}.tmp-{os.getpid()}"
     )

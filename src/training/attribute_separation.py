@@ -34,8 +34,16 @@ import argparse
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core.coverage_contracts import Count, require_keys
+from core.coverage_contracts import (
+    UNKNOWN_DIMENSION_VALUE,
+    Count,
+    DimensionAccounting,
+    ReportCoverageContract,
+    TaggedDimensionRecord,
+    require_keys,
+)
 
+from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
 from core.common import F, ensure_parent, load_config
 from core.schemas import (
     SEPARATION_SUMMARY_COLUMNS,
@@ -45,20 +53,26 @@ from core.schemas import (
     SeparationValueRow,
 )
 
-# Attribute -> (canonical_records column, is_numeric).  This mirrors the
-# structured-attribute schema in core.structured_features; it is a
-# schema-bound constant, not a tunable, so it is deliberately not config.
-# ``category`` has no column in canonical_records.csv (verified), so it is not
-# silently omitted from the table — see ATTRIBUTE_UNAVAILABLE.
+# Attribute -> the read KIND ``_values`` parses the cell with. The COLUMN side
+# is DERIVED from the record schema (core.columns.ATTRIBUTE_DIMENSION_COLUMNS),
+# never retyped here: a rename in CanonicalRecord moves every lane at once. The
+# registry mirrors the structured-attribute schema in core.structured_features;
+# it is a schema-bound constant, not a tunable, so it is deliberately not
+# config. ``category`` has no column in canonical_records.csv (verified), so it
+# is not silently omitted from the table — see ATTRIBUTE_UNAVAILABLE.
+_ATTRIBUTE_KINDS: dict[str, str] = {
+    "brand": "scalar",
+    "volume": "volume_set",
+    "pack": "pack_set",
+    "package_type": "string_set",
+    "flavor": "string_set",
+    "carbonation": "string_set",
+    "sweetener": "string_set",
+    "pulp": "string_set",
+}
 ATTRIBUTE_SOURCES: dict[str, tuple[str, str]] = {
-    "brand": ("mode_brand", "scalar"),
-    "volume": ("volume_set", "volume_set"),
-    "pack": ("pack_set", "pack_set"),
-    "package_type": ("package_type_set", "string_set"),
-    "flavor": ("flavor_set", "string_set"),
-    "carbonation": ("carbonation_set", "string_set"),
-    "sweetener": ("sweetener_set", "string_set"),
-    "pulp": ("pulp_set", "string_set"),
+    attribute: (ATTRIBUTE_DIMENSION_COLUMNS[attribute], kind)
+    for attribute, kind in _ATTRIBUTE_KINDS.items()
 }
 ATTRIBUTE_UNAVAILABLE: dict[str, str] = {
     "category": (
@@ -90,6 +104,83 @@ class AttributeSeparationCoverage(BaseModel):
         if any(row.attribute not in ATTRIBUTE_SOURCES for row in self.values):
             raise ValueError('unregistered per-value attribute')
         return self
+
+
+def attribute_coverage_contract(
+    population: pd.DataFrame, summaries: list[SeparationSummaryRow]
+) -> ReportCoverageContract:
+    """Validate the attribute axis through the GENERAL coverage contract.
+
+    The records are the REAL pair rows, read straight off the
+    ``separation_population`` frame: a pair is tagged with the attributes it is
+    OBSERVABLE for (at least one side carries a value for that attribute), and a
+    pair observable for NO registry attribute is tagged with the explicit unknown
+    value rather than dropped. The census the contract re-derives is therefore a
+    property of the DATA, not of the summaries being validated.
+
+    The declared census is the one the PRODUCED summary rows report (their
+    observable pairs, ``n_positive + n_negative``), which is what makes the
+    contract non-tautological: a summary that over- or under-states its
+    observable support is rejected (``declared counts coverage mismatch``), and
+    so is an attribute no row supports. Zero-support attributes are declared in
+    the SUMMARY and deliberately absent from the census - a census lists what the
+    records carry - so an attribute the rows do carry while the summaries deny it
+    fails as a missing stratum.
+
+    Multiplicity is ``overlap``: one pair belongs to every attribute's membership
+    at once, and a ``partition`` claim would be false for a pair observable for
+    several attributes. An empty population cannot claim coverage at all (the
+    contract requires at least one carried record).
+    """
+    require_keys({row.attribute for row in summaries}, ATTRIBUTE_SOURCES, 'attribute census')
+    needed = [f'{attribute}__{side}' for attribute in ATTRIBUTE_SOURCES
+              for side in (1, 2)]
+    missing = [name for name in needed if name not in population.columns]
+    if missing:
+        raise ValueError(
+            'attribute coverage needs the separation population columns '
+            f'{missing}; build it with separation_population')
+    rows = len(population)
+    for row in summaries:
+        if row.n_positive + row.n_negative + row.n_unobservable != rows:
+            raise ValueError(
+                f'{row.attribute}: pair coverage does not close over the population')
+
+    observable = {
+        attribute: (population[f'{attribute}__1'].ne(frozenset())
+                    | population[f'{attribute}__2'].ne(frozenset()))
+        for attribute in ATTRIBUTE_SOURCES
+    }
+    tags = [
+        tuple(attribute for attribute, flag in observable.items()
+              if bool(flag.iloc[position])) or (UNKNOWN_DIMENSION_VALUE,)
+        for position in range(rows)
+    ]
+    declared = {
+        row.attribute: row.n_positive + row.n_negative
+        for row in summaries if row.n_positive + row.n_negative
+    }
+    unobservable_all = sum(1 for tag in tags if tag == (UNKNOWN_DIMENSION_VALUE,))
+    if unobservable_all and unobservable_all > min(
+            row.n_unobservable for row in summaries):
+        raise ValueError(
+            f'{unobservable_all} pairs are unobservable for every attribute, but a '
+            'summary reports fewer unobservable pairs than that')
+    if unobservable_all:
+        declared[UNKNOWN_DIMENSION_VALUE] = unobservable_all
+    return ReportCoverageContract(
+        records=tuple(
+            TaggedDimensionRecord(record_id=f'pair:{position}',
+                                  dimensions={'attribute': tags[position]})
+            for position in range(rows)),
+        dimensions={'attribute': DimensionAccounting(
+            policy='overlap', counts=declared,
+            unknown_policy=(
+                'a pair observable for no registry attribute is counted under '
+                f'{UNKNOWN_DIMENSION_VALUE!r}; a pair observable for an attribute '
+                "is counted in that attribute's census, never dropped"),
+        )},
+    )
 
 
 def separation_spec() -> AttributeSeparationSpec:
@@ -161,6 +252,7 @@ def attribute_separation(
     positive = population["true_label"].eq(1)
     negative = population["true_label"].eq(0)
     summary: list[dict[str, object]] = []
+    summary_rows: list[SeparationSummaryRow] = []
     by_value: list[dict[str, object]] = []
 
     for attribute in ATTRIBUTE_SOURCES:
@@ -178,20 +270,20 @@ def attribute_separation(
             n_pos >= spec.min_pairs_per_class and n_neg >= spec.min_pairs_per_class
         )
         separation = p_pos - p_neg
-        summary.append(
-            SeparationSummaryRow(
-                attribute=attribute,
-                n_positive=n_pos,
-                n_negative=n_neg,
-                n_unobservable=int((~observable).sum()),
-                p_agree_positive=p_pos,
-                p_agree_negative=p_neg,
-                separation=separation,
-                reportable=reportable,
-                flagged_weak=bool(reportable and separation <= spec.flag_below),
-                negative_class_saturated=bool(n_neg and p_neg == 1.0),
-            ).model_dump()
+        row = SeparationSummaryRow(
+            attribute=attribute,
+            n_positive=n_pos,
+            n_negative=n_neg,
+            n_unobservable=int((~observable).sum()),
+            p_agree_positive=p_pos,
+            p_agree_negative=p_neg,
+            separation=separation,
+            reportable=reportable,
+            flagged_weak=bool(reportable and separation <= spec.flag_below),
+            negative_class_saturated=bool(n_neg and p_neg == 1.0),
         )
+        summary_rows.append(row)
+        summary.append(row.model_dump())
 
         for value in sorted({v for values in left for v in values}):
             carries = left.map(lambda vs, v=value: v in vs)
@@ -228,6 +320,11 @@ def attribute_separation(
             )
 
     AttributeSeparationCoverage(pair_rows=len(population), summaries=summary, values=by_value)
+    # ADDITIVE: the same axis, validated as the GENERAL per-dimension contract
+    # against the REAL pair rows. The census it re-derives comes from those rows
+    # (a summary that mis-states its observable support is rejected), and it
+    # emits nothing, so the two report frames below are byte-identical.
+    attribute_coverage_contract(population, summary_rows)
     return (
         pd.DataFrame(summary, columns=list(SEPARATION_SUMMARY_COLUMNS)),
         pd.DataFrame(by_value, columns=list(SEPARATION_VALUE_COLUMNS)).sort_values(

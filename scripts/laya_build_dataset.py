@@ -52,6 +52,17 @@ above; both are OPT-IN so the hermetic builder tests are unchanged):
 Deterministic: seed 1729, no wall-clock, no set-iteration order leaks into
 the output; a rerun reproduces every byte.
 
+Config (config/laya.question.json, optional top-level "corpus" block — the
+config SSOT for this builder; every key defaults to the historical behaviour,
+so a schema without the block reproduces the landed corpus byte-for-byte):
+  * seed                            -> the deterministic shuffle seed;
+  * hard_no_cap                     -> the gate hard_no negative ceiling;
+  * identity_negative_target_ratio  -> negatives-per-positive target applied
+    AFTER the minted growth (the corpus ran ~1:14); only pipeline-MINTED
+    negatives are thinned, ground-truth negatives are never dropped;
+  * sources                         -> optional path overrides (catalog,
+    pairs, gate, bundle, labeled_pairs, output_dir) resolved against ROOT.
+
 Outputs (data/laya/): train.jsonl, dev.jsonl, test.jsonl, unknown_pairs.csv,
 receipt.json.
 """
@@ -86,6 +97,39 @@ SEED = 1729
 # negatives are subtracted to get the hard_no sample size.
 HARD_NO_CAP = 1000
 SPLIT_ORDER = ("train", "dev", "test")
+
+# ── the corpus-composition config (config-owned; every knob defaults to the
+#    historical behaviour) ───────────────────────────────────────────────────
+# `config/laya.question.json` is ALREADY this builder's schema source, so its
+# optional top-level `corpus` block owns the composition knobs rather than
+# code literals (config SSOT). A schema without the block (or with every key
+# null) resolves to the defaults below and reproduces the landed corpus
+# byte-for-byte. Keys:
+#   * seed                          — the deterministic shuffle seed;
+#   * hard_no_cap                   — gate hard_no negative ceiling;
+#   * identity_negative_target_ratio— negatives-per-positive TARGET applied
+#     AFTER the minted growth is folded in (item: the corpus ran ~1:14). Only
+#     pipeline-MINTED negatives are thinned to reach it; ground-truth
+#     negatives (listing pairs, gate hard_no, labeled pairs) are never
+#     dropped. null = no cap (the historical behaviour);
+#   * sources                       — optional path overrides for the
+#     hardcoded defaults (portable names relative to the repo root).
+CORPUS_CONFIG_DEFAULTS: dict = {
+    "seed": None,
+    "hard_no_cap": None,
+    "identity_negative_target_ratio": None,
+    "sources": None,
+}
+CORPUS_SOURCE_KEYS = ("catalog", "pairs", "gate", "bundle", "labeled_pairs",
+                      "output_dir")
+CORPUS_SOURCE_DEFAULTS = {
+    "catalog": CATALOG_PATH,
+    "pairs": PAIRS_PATH,
+    "gate": GATE_PATH,
+    "bundle": BUNDLE_PATH,
+    "labeled_pairs": LABELED_PAIRS_PATH,
+    "output_dir": OUTPUT_DIR,
+}
 
 # package_state rule. The laya question asks for "explicit package-quantity
 # evidence (a pack count or a unit volume)". A measured unit volume
@@ -301,6 +345,99 @@ def gate_reason_family(reason: str) -> str:
     """Free-form gate_reason -> its bounded family (text before ':')."""
     prefix = str(reason).split(":", 1)[0].strip()
     return GATE_REASON_FAMILIES.get(prefix, "unclassified")
+
+
+def _corpus_config(document: dict, override: dict | None = None) -> dict:
+    """Resolve the `corpus` composition block from the question-schema file.
+
+    `override` (when given) replaces the file's block wholesale — the explicit
+    caller wins over config SSOT. Unknown keys fail loud (a typo must never
+    silently fall back to a default), a null value means "keep the default",
+    and a config with no block resolves to `CORPUS_CONFIG_DEFAULTS` exactly.
+    """
+    config = dict(CORPUS_CONFIG_DEFAULTS)
+    block = override if override is not None else (document.get("corpus") or {})
+    if not isinstance(block, dict):
+        raise ValueError(
+            f"laya corpus config must be a mapping, got {type(block).__name__}")
+    unknown = sorted(set(block) - set(config))
+    if unknown:
+        raise ValueError(f"unknown laya corpus knob(s): {unknown}")
+    for key, value in block.items():
+        if value is not None:
+            config[key] = value
+    if isinstance(config["sources"], dict):
+        unknown = sorted(set(config["sources"]) - set(CORPUS_SOURCE_KEYS))
+        if unknown:
+            raise ValueError(f"unknown laya corpus source(s): {unknown}")
+    return config
+
+
+def resolve_corpus_sources(config: dict) -> dict:
+    """The builder's input paths: the hardcoded defaults + config overrides.
+
+    A config path is resolved against the repo root (`ROOT`), never the cwd,
+    so the same config resolves identically from any working directory.
+    """
+    sources = dict(CORPUS_SOURCE_DEFAULTS)
+    for key, value in (config.get("sources") or {}).items():
+        if value is None:
+            continue
+        candidate = Path(value)
+        sources[key] = candidate if candidate.is_absolute() else ROOT / candidate
+    return sources
+
+
+def corpus_config_is_default(config: dict) -> bool:
+    """True when NO knob (nor any source path) is set — the null block case."""
+    if any(config.get(key) is not None for key in
+           ("seed", "hard_no_cap", "identity_negative_target_ratio")):
+        return False
+    return not any(value is not None
+                   for value in (config.get("sources") or {}).values())
+
+
+def _rebalance_identity_negatives(
+    aug_records: list[dict], origins: dict[str, str], *,
+    positives_total: int, ground_negative_total: int, ratio: float | None,
+    seed: int,
+) -> tuple[list[dict], dict]:
+    """Thin the pipeline-MINTED identity negatives toward `ratio` x positives.
+
+    `ratio is None` (the default) is a no-op, so the landed corpus is
+    reproduced byte-for-byte. When set, only records the growth fold MINTED
+    (origin `bundle`: counterfactual/twin/swap augmentation) may be dropped;
+    ground-truth negatives (listing pairs, gate `hard_no`, labeled pairs) are
+    never touched. The drop is deterministic (`seed` over a sorted state
+    list), so a rerun reproduces every byte, and a target already satisfied
+    drops nothing.
+    """
+    if ratio is None:
+        return aug_records, {"enabled": False}
+    if ratio < 0:
+        raise ValueError(
+            f"identity_negative_target_ratio must be >= 0, got {ratio!r}")
+    minted = sorted(
+        record["state"] for record in aug_records
+        if origins.get(record["state"]) == "bundle"
+        and record["expected"].get("identity_claim") == "false")
+    target_negatives = int(round(ratio * positives_total))
+    keep = max(0, target_negatives - ground_negative_total)
+    census = {
+        "enabled": True,
+        "target_ratio": ratio,
+        "positives_total": positives_total,
+        "ground_truth_negatives": ground_negative_total,
+        "target_negatives": target_negatives,
+        "minted_negatives_available": len(minted),
+        "minted_negatives_kept": min(len(minted), keep),
+        "minted_negatives_dropped": max(0, len(minted) - keep),
+    }
+    if len(minted) <= keep:
+        return aug_records, census
+    dropped = set(random.Random(seed).sample(minted, len(minted) - keep))
+    kept = [record for record in aug_records if record["state"] not in dropped]
+    return kept, census
 
 
 def _allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
@@ -558,12 +695,15 @@ def _side_from_payload(text: str) -> dict[str, str]:
 def _ingest_masking_and_augmentation(
     *, bundle_path, labeled_pairs_path, by_gtin, existing_pair_states,
     questions,
-) -> tuple[list[dict], list[dict], dict]:
+) -> tuple[list[dict], list[dict], dict, dict]:
     """Fold the pipeline's minted masking/augmentation into corpus records.
 
-    Returns `(mask_records, aug_records, census)`. Deterministic: inputs are
-    walked in file/pickle order, membership sets are never iterated, and the
-    only RNG (split assignment) lives in the caller.
+    Returns `(mask_records, aug_records, census, origins)`. `origins` maps each
+    augmentation PAIR state to its source ("bundle" for the pipeline-minted
+    counterfactual/twin/swap negatives, "labeled_pairs" for the ground-truth
+    labeled pairs), so the rebalance knob can thin ONLY the minted population.
+    Deterministic: inputs are walked in file/pickle order, membership sets are
+    never iterated, and the only RNG (split assignment) lives in the caller.
     """
     census: dict = {
         "bundle": str(bundle_path) if bundle_path else None,
@@ -590,6 +730,7 @@ def _ingest_masking_and_augmentation(
     }
     mask_records: list[dict] = []
     aug_records: list[dict] = []
+    origins: dict[str, str] = {}
     mask_seen: set[str] = set()
     aug_seen: set[str] = set(existing_pair_states)
 
@@ -656,6 +797,7 @@ def _ingest_masking_and_augmentation(
             aug_records.append(
                 _record(state, questions, expected,
                         **_pair_meta(side_one, side_two)))
+            origins[state] = "bundle"
             aug_seen.add(state)
             census[f"aug_pair_{'positive' if label == 'true' else 'negative'}"] += 1
             if is_counterfactual == "true":
@@ -689,20 +831,30 @@ def _ingest_masking_and_augmentation(
             aug_records.append(
                 _record(state, questions, expected,
                         **_pair_meta(side_one, side_two)))
+            origins[state] = "labeled_pairs"
             aug_seen.add(state)
             census["labeled_pairs_added"] += 1
             census[f"aug_pair_{'positive' if label == 'true' else 'negative'}"] += 1
 
     census["mask_cases"] = len(mask_records)
     census["aug_pair_cases"] = len(aug_records)
-    return mask_records, aug_records, census
+    return mask_records, aug_records, census, origins
 
 
 def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
           gate_path: Path = GATE_PATH, question_path: Path = QUESTION_PATH,
-          output_dir: Path = OUTPUT_DIR, seed: int = SEED,
-          hard_no_cap: int = HARD_NO_CAP, bundle_path: Path | None = None,
-          labeled_pairs_path: Path | None = None) -> dict:
+          output_dir: Path = OUTPUT_DIR, seed: int | None = None,
+          hard_no_cap: int | None = None, bundle_path: Path | None = None,
+          labeled_pairs_path: Path | None = None,
+          identity_negative_target_ratio: float | None = None,
+          corpus_config: dict | None = None) -> dict:
+    """Build the corpus.
+
+    Every composition knob resolves `explicit argument > config/laya.question
+    .json "corpus" block > historical default`, so an `int`/`float` argument
+    wins over config SSOT and a caller that passes NOTHING (or a schema with no
+    block) reproduces the landed corpus byte-for-byte.
+    """
     catalog_path = Path(catalog_path)
     pairs_path = Path(pairs_path)
     gate_path = Path(gate_path)
@@ -722,8 +874,19 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
     for row in sorted(catalog, key=lambda r: r["sku_id"]):
         by_gtin.setdefault((row["gtin"] or "").strip(), row)
 
-    questions = json.loads(question_path.read_text(encoding="utf-8"))["questions"]
+    document = json.loads(question_path.read_text(encoding="utf-8"))
+    questions = document["questions"]
     question_sha = _sha256(question_path)
+    # corpus composition: explicit argument > config block > historical default.
+    corpus = _corpus_config(document, corpus_config)
+    if seed is None:
+        seed = corpus["seed"] if corpus["seed"] is not None else SEED
+    if hard_no_cap is None:
+        hard_no_cap = (corpus["hard_no_cap"]
+                       if corpus["hard_no_cap"] is not None else HARD_NO_CAP)
+    if identity_negative_target_ratio is None:
+        identity_negative_target_ratio = corpus[
+            "identity_negative_target_ratio"]
 
     pairs_header, pairs = _read_csv(pairs_path)
     if pairs_header != ["sku_id1", "sku_id2", "label", "split"]:
@@ -860,11 +1023,35 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         for key in SPLIT_ORDER
         for record in (pair_by_split[key] + gate_records_by_split[key])
     }
-    mask_records, aug_records, growth_census = (
+    mask_records, aug_records, growth_census, aug_origins = (
         _ingest_masking_and_augmentation(
             bundle_path=bundle_path, labeled_pairs_path=labeled_pairs_path,
             by_gtin=by_gtin, existing_pair_states=existing_pair_states,
             questions=questions))
+    # ── IDENTITY REBALANCE (config-owned; no-op by default) ─────────────
+    # The minted counterfactual/twin negatives dominate the identity prior
+    # (~1:14). The knob thins ONLY that minted population, deterministically,
+    # never the ground-truth negatives.
+    identity_negatives_growth = growth_census["aug_pair_negative"]
+    positives_growth = growth_census["aug_pair_positive"]
+    minted_negatives = sum(
+        1 for record in aug_records
+        if aug_origins.get(record["state"]) == "bundle"
+        and record["expected"].get("identity_claim") == "false")
+    # Ground truth = every negative that is NOT pipeline-minted: the listing
+    # pairs, the gate hard_no sample and the labeled pairs.
+    ground_negative_total = (listing_negatives + len(sampled)
+                             + identity_negatives_growth - minted_negatives)
+    aug_records, rebalance_census = _rebalance_identity_negatives(
+        aug_records, aug_origins,
+        positives_total=positives + positives_growth,
+        ground_negative_total=ground_negative_total,
+        ratio=identity_negative_target_ratio, seed=seed)
+    identity_negatives_emitted = sum(
+        1 for record in aug_records
+        if record["expected"].get("identity_claim") == "false")
+    identity_negatives_total = (listing_negatives + len(sampled)
+                                + identity_negatives_emitted)
     mask_splits = _assign_splits(mask_records, ratios, seed)
     aug_splits = _assign_splits(aug_records, ratios, seed)
 
@@ -989,10 +1176,8 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
             # the counterfactual/twin negatives are hard and numerous, so the
             # operator can see the balance (and tune the source) at a glance.
             "identity_positive_total_with_growth": (
-                positives + growth_census["aug_pair_positive"]),
-            "identity_negative_total_with_growth": (
-                listing_negatives + len(sampled)
-                + growth_census["aug_pair_negative"]),
+                positives + positives_growth),
+            "identity_negative_total_with_growth": identity_negatives_total,
         },
         "growth": growth_census,
         "gate_reason_sample": dict(sorted(gate_reason_sample.items())),
@@ -1023,6 +1208,12 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
     for key in SPLIT_ORDER:
         corpus_digest.update(split_paths[key].read_bytes())
     receipt["corpus_sha256"] = corpus_digest.hexdigest()
+    # Additive: the composition-census blocks land ONLY when a knob is set, so
+    # a default config keeps the landed receipt bytes exactly.
+    if rebalance_census.get("enabled"):
+        receipt["identity_rebalance"] = rebalance_census
+    if not corpus_config_is_default(corpus):
+        receipt["corpus_config"] = corpus
     receipt_path = output_dir / "receipt.json"
     receipt_path.write_text(
         json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
@@ -1031,21 +1222,37 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
 
 
 def main() -> None:
-    for path in (CATALOG_PATH, PAIRS_PATH, GATE_PATH, QUESTION_PATH):
-        if not Path(path).is_file():
-            raise FileNotFoundError(f"required source missing: {path}")
+    # The question schema is the config SSOT for this builder: its optional
+    # `corpus` block owns the composition knobs AND the input/output paths
+    # (hardcoded defaults otherwise), so a run never depends on code literals.
+    if not Path(QUESTION_PATH).is_file():
+        raise FileNotFoundError(f"required source missing: {QUESTION_PATH}")
+    corpus_cfg = _corpus_config(
+        json.loads(Path(QUESTION_PATH).read_text(encoding="utf-8")))
+    sources = resolve_corpus_sources(corpus_cfg)
+    for key in ("catalog", "pairs", "gate"):
+        if not Path(sources[key]).is_file():
+            raise FileNotFoundError(
+                f"required source missing ({key}): {sources[key]}")
     # Fold the pipeline's minted masking/augmentation in when the artifacts
     # are present (read, never invented); absent sources are reported, not
     # fabricated. `build()` still runs the base corpus without them.
-    bundle = BUNDLE_PATH if BUNDLE_PATH.is_file() else None
-    labeled = LABELED_PAIRS_PATH if LABELED_PAIRS_PATH.is_file() else None
+    bundle = sources["bundle"] if Path(sources["bundle"]).is_file() else None
+    labeled = (sources["labeled_pairs"]
+               if Path(sources["labeled_pairs"]).is_file() else None)
     if bundle is None:
         print(f"[laya-build-dataset] masking/augmentation source absent: "
-              f"{BUNDLE_PATH} (base corpus only)")
+              f"{sources['bundle']} (base corpus only)")
     if labeled is None:
         print(f"[laya-build-dataset] labeled pairs source absent: "
-              f"{LABELED_PAIRS_PATH} (base corpus only)")
-    receipt = build(bundle_path=bundle, labeled_pairs_path=labeled)
+              f"{sources['labeled_pairs']} (base corpus only)")
+    if not corpus_config_is_default(corpus_cfg):
+        print("[laya-build-dataset] corpus_config=" + json.dumps(corpus_cfg))
+    receipt = build(
+        catalog_path=sources["catalog"], pairs_path=sources["pairs"],
+        gate_path=sources["gate"], output_dir=sources["output_dir"],
+        question_path=QUESTION_PATH, corpus_config=corpus_cfg,
+        bundle_path=bundle, labeled_pairs_path=labeled)
     counts = receipt["counts"]
     print(
         "[laya-build-dataset] states=%d (pkg true=%d false=%d) "
@@ -1076,10 +1283,14 @@ def main() -> None:
     print("[laya-build-dataset] tag_gate_reason_census="
           + json.dumps(receipt["tag_gate_reason_census"]))
     print("[laya-build-dataset] growth=" + json.dumps(receipt["growth"]))
+    if "identity_rebalance" in receipt:
+        print("[laya-build-dataset] identity_rebalance="
+              + json.dumps(receipt["identity_rebalance"]))
     for name, digest in receipt["sha256"].items():
         print(f"[laya-build-dataset] sha256 {name} {digest}")
     print(f"[laya-build-dataset] corpus_sha256={receipt['corpus_sha256']}")
-    print("[laya-build-dataset] -> " + str(OUTPUT_DIR / "receipt.json"))
+    print("[laya-build-dataset] -> "
+          + str(Path(sources["output_dir"]) / "receipt.json"))
 
 
 if __name__ == "__main__":

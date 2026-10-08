@@ -4,7 +4,6 @@ from pathlib import Path
 import os
 import shutil
 
-from core.portable_archive import write_archive
 from core.archive_reader import archive_sidecar, archive_settings
 from core.run_log import RunLogger
 from model_tracks.publish import persist_results
@@ -12,17 +11,26 @@ from model_tracks.publish import persist_results
 _LOG = RunLogger(__name__)
 
 
-def _publish(archive, tag):
+def _spec():
+    """The bundle contract from config (single source for member names)."""
+    from core.bundle import _bundle_spec
+    return _bundle_spec()
+
+
+def _publish(bundle, tag):
     # Linux priorities are per-thread; children launched by this upload
     # thread inherit its lower priority, without slowing the trainer thread.
     if hasattr(os, 'setpriority'):
         import threading
         os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
-    receipt = persist_results(archive, tag)
+    # ``bundle`` is the writer's verified handle: persist_results reads the
+    # archive's digest and run tag off it, so the bytes this thread just sealed
+    # are never re-opened (one integrity check per archive per VM crossing).
+    receipt = persist_results(bundle.path, tag, bundle=bundle)
     # Verified remote storage and the receipt retain the generation; avoid
     # accumulating duplicate checkpoint bytes on the Colab disk.
-    shutil.rmtree(archive_sidecar(archive, '.publication'))
-    archive.unlink()
+    shutil.rmtree(archive_sidecar(bundle.path, '.publication'))
+    bundle.path.unlink()
     return receipt
 
 
@@ -38,19 +46,32 @@ class ArtifactPublisher:
             return
         self.check()
         tag = f"{os.environ['EUROMONITOR_RUN_ID']}-{generation}"
-        directory = self.output / '_artifact_publications'
-        directory.mkdir(exist_ok=True)
         files = {}
         for path in paths:
             for item in ([path] if path.is_file() else path.rglob('*')):
                 if item.is_file() and not item.is_symlink():
                     files[item.relative_to(self.output).as_posix()] = item
+        if not files:
+            # A generation with no files has nothing to publish, and an empty
+            # bundle is not a thing (Bundle.seal_archive refuses it): the call
+            # is an explicit no-op, never a crash on a smoke invocation.
+            _LOG.info(f'[incremental] generation {generation} has no files; '
+                      'nothing to publish')
+            return
+        directory = self.output / '_artifact_publications'
+        directory.mkdir(exist_ok=True)
         # Snapshot before returning: checkpoint rotation and mutable reports
-        # cannot change the bytes read by the background DVC publisher.
+        # cannot change the bytes read by the background DVC publisher. The
+        # Bundle owns the writer (hash-while-writing + one verify).
+        from core.bundle import Bundle, BundleRole
         with _LOG.section('incremental.archive', files=len(files), generation=generation):
-            archive = write_archive(directory / f'{tag}.{archive_settings().format}', files,
-                                    manifest_name='suite_bundle_manifest.json', metadata={'run_tag': tag})
-        self.futures.append(self.executor.submit(_publish, archive, tag))
+            sealed = Bundle.seal_archive(
+                directory / f'{tag}.{archive_settings().format}', files,
+                role=BundleRole.result, metadata={_spec().run_tag_key: tag})
+        # Ship the writer's handle, not its path: the background publisher reads
+        # the transport digest and run tag from it without re-verifying bytes the
+        # sealing writer already hashed while writing.
+        self.futures.append(self.executor.submit(_publish, sealed, tag))
 
     def check(self):
         for future in self.futures:

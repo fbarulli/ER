@@ -7,13 +7,18 @@ TRUNCATED file on the FINAL path — and a re-run that skips existing
 outputs would then treat the partial artifact as good.  Every helper
 here removes that class of silent corruption:
 
-  sha256_file      chunked 1 MiB read -> lowercase hex digest (the
-                   content fingerprint that manifests record; pattern
-                   ported from training/data_quality_audit._sha256)
+  sha256_file      forwarding name for the ONE file-digest implementation,
+                   which lives in ``core.portable_archive``
+                   (``raw_file_digest``/``cached_file_digest``); kept public
+                   because manifests and their consumers import it
   atomic_write*    write to a `.tmp-<pid>` SIBLING in the same
                    directory, flush + fsync, then `os.replace` onto the
                    final path — a reader never observes a partial file,
                    and any exception unlinks the temp sibling
+  publish_replacing  the publish half alone, for callers that streamed
+                   their own payload to the sibling
+  atomic_write_stream  the same mechanism for payloads too large to
+                   buffer (``json.dump``/``to_csv`` onto the sibling)
   count_drop       the row-accounting atom (before/after/dropped) later
                    tasks pour into manifests and loss guards
 
@@ -42,9 +47,10 @@ import json
 import os
 import platform
 import subprocess
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, TextIO
 
 import pandas as pd
 
@@ -57,22 +63,20 @@ from core.common import (
 )
 from core.schemas import ManifestFile, StageManifest
 
-# 1 MiB per read — matches data_quality_audit._sha256, keeps the 53MB
-# dataset hashable without loading it into memory.
-_CHUNK_BYTES = 1024 * 1024
-
 
 def sha256_file(path: str | Path) -> str:
-    """Lowercase hex sha256 of a file, read in 1 MiB chunks.
+    """Lowercase hex sha256 of a file, streamed by the shared implementation.
 
     Raises FileNotFoundError naturally when `path` does not exist.
+
+    Forwarding name only: the ONE digest implementation lives in
+    ``core.portable_archive`` (``raw_file_digest`` uncached,
+    ``cached_file_digest`` memoized). Manifests and their consumers keep
+    importing this name, so the algorithm still exists exactly once.
     """
-    file_path = Path(path)
-    digest = hashlib.sha256()
-    with file_path.open("rb") as stream:
-        for block in iter(lambda: stream.read(_CHUNK_BYTES), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    from core.portable_archive import raw_file_digest
+
+    return raw_file_digest(path)
 
 
 def _temp_path(final: Path) -> Path:
@@ -114,6 +118,40 @@ def atomic_write(path: str | Path, data: bytes) -> Path:
         temp.unlink(missing_ok=True)
         raise
     return final
+
+
+def publish_replacing(temp: str | Path, final: str | Path) -> Path:
+    """Publish a COMPLETED sibling onto ``final``: fsync, then ``os.replace``.
+
+    The publish half of :func:`atomic_write`, exposed for callers that streamed
+    their payload into the sibling themselves (a verified download, a streamed
+    JSON dump, an external writer). ``os.replace`` overwrites an existing
+    ``final`` atomically; nothing is published while the payload is incomplete.
+    """
+    return _fsync_and_publish(Path(temp), Path(final))
+
+
+@contextmanager
+def atomic_write_stream(path: str | Path, *, encoding: str = "utf-8",
+                        newline: str | None = None) -> Iterator[TextIO]:
+    """``atomic_write`` for payloads streamed rather than buffered as bytes.
+
+    Yields the ``<name>.tmp-<pid>`` sibling open for text writing; on clean
+    exit it is closed, fsynced and `os.replace`d onto ``path``, and on any
+    exception it is unlinked — the same publication, O_EXCL collision and
+    ``.tmp-*`` residue semantics as :func:`atomic_write`. Use it when the
+    payload is too large to build in memory (``json.dump`` / ``df.to_csv``).
+    """
+    final = Path(path)
+    temp = _temp_path(final)
+    stream = temp.open("x", encoding=encoding, newline=newline)
+    try:
+        with stream:
+            yield stream
+        _fsync_and_publish(temp, final)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def atomic_write_text(path: str | Path, text: str) -> Path:

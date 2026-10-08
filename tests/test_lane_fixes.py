@@ -14,6 +14,7 @@ still needs a kernel run (this box has no cuda).
 """
 from __future__ import annotations
 
+import re
 import sys
 import types
 
@@ -151,6 +152,9 @@ def test_finetune_payload_embeds_patch_and_passes_gates():
     # both template markers were substituted
     assert "@DEVICE_PATCH@" not in script
     assert "@PERF_PATCH@" not in script
+    # and no marker of ANY kind survives: a value missing from the render would
+    # leave `@SOMETHING@` in the staged kernel unnoticed
+    assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
     # config-driven kernel: the FULL TrainConfig is baked and constructed
     # in-process (the laya-train CLI subprocess is gone)
     assert "def run_laya_finetune" in script

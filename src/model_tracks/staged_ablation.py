@@ -29,18 +29,46 @@ import torch
 import yaml
 from core.model_input import model_input_composition
 from core.run_log import RunLogger
+from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from core.timing import Timing
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
 from graph_tracks.text_cache import checkpoint_hash
-from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors
+from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors, file_hash, source_name
 from model_tracks.ablation_cohort import prepare_cohort
 from model_tracks.package import package_member
 
 _LOG = RunLogger(__name__)
 
 _BINDING_UNSET = object()
+
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
+#: The stage name this module owns in the ONE consolidated pipeline trace.
+STAGE = "staged_ablation"
+
+#: The module's trace writer: the shared shim's slot (``None`` until first use;
+#: see :func:`core.tracing.stage_trace`), so importing this module never touches
+#: the trace layout.
+_TRACE = None
+
+
+def trace():
+    """The ONE writer for the ``staged_ablation`` stage of the current run."""
+    global _TRACE
+    _TRACE = stage_trace(STAGE, _TRACE)
+    return _TRACE
+
+
+def flush_trace():
+    """Commit this process's staged-ablation rows once; a no-op while empty."""
+    return flush_stage_trace(_TRACE)
 
 
 @timed
@@ -60,6 +88,16 @@ def _cohort_gate(setup,cfg,bundle):
         if bundle is None:
             raise ValueError('exhaustive ablation requires the prepared training bundle')
         cohort = prepare_cohort(setup, bundle)
+    trace().add(
+        "prepare_suite", "cohort_gate",
+        in_count=1, out_count=1 if cohort is not None else 0,
+        reason=("coverage='all' freezes ONE suite cohort over the prepared training bundle"
+                if cohort is not None else
+                "coverage='sampled' samples each lane's own dev pairs, so no suite cohort is frozen"),
+        detail={'coverage': cfg.coverage, 'bundle_supplied': bundle is not None,
+                'cohort_folder': None if cohort is None else source_name(cohort)},
+        source='config attribute_ablation.yaml (Settings.coverage)',
+    )
     return cohort
 
 
@@ -77,11 +115,21 @@ def _freeze_config(setup,cfg):
 def _frozen_support(setup):
     """The training-population support records and prepared vocabulary."""
     with _LOG.section('ablation_support.load'):
-        records = load_records(setup/'prepared/listings.json')
-        graph_plan,graph_arrays = load_plan(setup/'prepared/listings.json',setup/'prepared/pairs.csv')
+        layout = _setup_layout()
+        records = load_records(setup/layout.prepared_dir/'listings.json')
+        graph_plan,graph_arrays = load_plan(setup/layout.prepared_dir/'listings.json',setup/layout.prepared_dir/'pairs.csv')
         graph_arrays.close()
         support = [records[n] for n in graph_plan['populations']['train']]
         vocabulary = graph_plan['vocabulary']
+    trace().add(
+        "prepare_suite", "support_vocabulary",
+        in_count=len(records), out_count=len(support),
+        reason='the frozen templates carry the TRAIN-population support and its vocabulary, fixed '
+               'before any model is trained',
+        detail={'listing_records': len(records), 'train_support': len(support),
+                'vocabulary': len(vocabulary)},
+        source=source_name(setup / layout.prepared_dir / 'listings.json'),
+    )
     return support,vocabulary
 
 
@@ -102,9 +150,10 @@ def _template_checkpoint(setup,baseline,track,vocabulary,support):
 def _track_request(setup,checkpoint,track,*,cohort,frozen_config,baseline,composer=None,token_cache=None):
     """prepare() the track's tokens/tensors and read back its emitted request."""
     with _LOG.section('ablation_template.request'):
-        path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
-            cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
-            listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
+        layout = _setup_layout()
+        path = prepare(cohort/'catalog.csv' if cohort else setup/layout.catalog,
+            cohort/'pairs.csv' if cohort else setup/layout.prepared_dir/'pairs.csv',checkpoint,track=track,
+            listings=(cohort/'listings.json' if cohort else setup/layout.prepared_dir/'listings.json') if track != 'text' else None,
             text_checkpoint=None,config=frozen_config,
             composer=composer,token_cache=token_cache)
         request = json.loads(path.read_text())
@@ -177,6 +226,22 @@ def _drop_staging(setup):
                if path.is_dir() and path.name not in {'text','gnn_only'}]
     for path in _LOG.progress(staging,desc='ablation_staging_cleanup',unit='dir'):
         shutil.rmtree(path)
+    trace().add(
+        "prepare_suite", "cleanup_staging",
+        in_count=len(staging), out_count=0,
+        reason='generated content-addressed staging dirs are removed; one fixed template per '
+               'trained track is retained',
+        detail={'staging_dirs': len(staging), 'retained': ['text', 'gnn_only'],
+                'sample_removed': [source_name(path) for path in staging[:5]]},
+        source=source_name(setup / 'ablation_templates'),
+    )
+    trace().add_entities(
+        "prepare_suite.removed_staging", staging,
+        key_of=lambda path: path.name,
+        reason_of=lambda path: 'content_addressed_staging_dir',
+        detail_of=lambda path: {'path': source_name(path)},
+        source=source_name(setup / 'ablation_templates'),
+    )
 
 
 @timed
@@ -201,6 +266,15 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     with _LOG.section('ablation_suite.cleanup_staging'):
         _drop_staging(setup)
     timing.mark('cleanup_staging')
+    trace().add(
+        "prepare_suite", "completed",
+        in_count=len(tracks), out_count=len(tracks),
+        reason='one frozen template per trained track; the cascade trains nothing and ships none',
+        detail={'tracks': list(tracks), 'templates': source_name(setup / 'ablation_templates'),
+                'common_cohort': common_cohort},
+        source=source_name(setup / 'ablation_templates'),
+    )
+    flush_trace()
     return setup/'ablation_templates'
 
 
@@ -241,15 +315,29 @@ def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
     if checkpoint_role not in {'selected','baseline'}:
         raise ValueError('unknown ablation checkpoint role')
     old_checkpoint = request['checkpoint']
+    identity = checkpoint_identity(checkpoint)
     if checkpoint_role == 'baseline':
-        if track != 'text' or request['sources'][old_checkpoint] != checkpoint_identity(checkpoint):
+        if track != 'text' or request['sources'][old_checkpoint] != identity:
             raise ValueError('baseline ablation differs from frozen text checkpoint')
+        bound = old_checkpoint
     else:
         selected = '@suite/'+checkpoint.relative_to(output.parent).as_posix()
         request['sources'].pop(old_checkpoint)
         request['checkpoint'] = selected
-        request['sources'][selected] = checkpoint_identity(checkpoint)
+        request['sources'][selected] = identity
+        bound = selected
     request['checkpoint_role'] = checkpoint_role
+    trace().add(
+        "forward", "checkpoint_select",
+        scope=SCOPE_ENTITY, in_count=1, out_count=1, key=track,
+        reason=('the frozen baseline checkpoint is bound, never a trained one'
+                if checkpoint_role == 'baseline' else
+                'the trained selected checkpoint is bound as the ablated model'),
+        detail={'role': checkpoint_role, 'checkpoint': source_name(checkpoint),
+                'checkpoint_sha256': identity, 'bound_source': bound,
+                'replaced_source': old_checkpoint},
+        source=source_name(checkpoint),
+    )
 
 
 @timed
@@ -284,13 +372,31 @@ def _encode_vectors(path,vectors,*,device,saved_text,text_model,graph_encoder):
 def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
     """Validated existing vectors win; otherwise the device owner encodes."""
     vectors = folder/'vectors.npz'
-    if vectors.exists():
+    existed = vectors.exists()
+    if existed:
         validate_vectors(path,vectors)
     else:
         saved_text = _saved_text_default(request,output=output,setup=setup,
             track=track,saved_text=saved_text)
         _encode_vectors(path,vectors,device=device,saved_text=saved_text,
             text_model=text_model,graph_encoder=graph_encoder)
+    # ``vectors_present`` is read AFTER the call: a lane whose encoder silently
+    # produced nothing shows up here as present=false instead of a missing row.
+    present = vectors.is_file()
+    trace().add(
+        "forward", "vectors",
+        scope=SCOPE_ENTITY, in_count=1, out_count=1, key=track,
+        reason=('an existing export was validated against its request and reused'
+                if existed else
+                'no valid export existed, so the lane encoded it on the frozen checkpoint'),
+        detail={'vectors': source_name(vectors),
+                'sha256': file_hash(vectors) if present else None,
+                'bytes': vectors.stat().st_size if present else 0,
+                'reused_existing_export': existed, 'vectors_present': present,
+                'device': device,
+                'checkpoint_role': request.get('checkpoint_role')},
+        source=source_name(vectors),
+    )
 
 
 @timed
@@ -298,6 +404,16 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
     """Bind the selected/baseline checkpoint onto its template and encode vectors."""
     with _LOG.section('ablation_forward.bind_template'):
         template,request = _bind_template(setup,track)
+    trace().add(
+        "forward", "template",
+        scope=SCOPE_ENTITY, in_count=1, out_count=1, key=track,
+        reason='the track template frozen before training supplies the interventions and tensors',
+        detail={'track': track, 'template': source_name(template),
+                'portable_setup': request.get('portable_setup'),
+                'cohort_sha256': request.get('cohort_sha256'),
+                'variants': len(request.get('variants', []))},
+        source=source_name(template / 'request.json'),
+    )
     if track != 'text':
         with _LOG.section('ablation_forward.graph_binding'):
             _check_graph_binding(checkpoint,track,request)
@@ -309,4 +425,16 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
     with _LOG.section('ablation_forward.vectors'):
         _reuse_or_encode(path,folder,request,output=output,setup=setup,track=track,
             saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
+    trace().add(
+        "forward", "completed",
+        # A UNIT row, not a funnel: one bound request comes out of this step, so
+        # there is no in-vs-out attrition to state (a track with no variants
+        # would otherwise report dropped_count=-1).
+        scope=SCOPE_ENTITY, in_count=None, out_count=1, key=track,
+        reason='the bound request and its encoded vectors are the lane output the report consumes',
+        detail={'request_path': source_name(path), 'folder': source_name(folder),
+                'device': device, 'checkpoint_role': checkpoint_role},
+        source=source_name(path),
+    )
+    flush_trace()
     return path

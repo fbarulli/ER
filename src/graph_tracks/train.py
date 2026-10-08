@@ -20,6 +20,7 @@ from pathlib import Path
 import random
 import subprocess
 import shutil
+import sys
 import time
 
 import numpy as np
@@ -35,9 +36,55 @@ from graph_tracks.data import census, file_hash, fit_vocabulary, load_records, l
 from graph_tracks.model import AttributeGNN, PairScorer
 from core.perf_switches import perf_enabled
 from core.run_log import RunLogger
+from core.tracing import SCOPE_ENTITY, TraceRun
 from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
+
+# ── CONSOLIDATED TRACE (stage "graph_train") ─────────────────────────────
+# The graph worker is its own module entry point (the cascade/text lanes never
+# import it), so it owns one stage in the ONE consolidated trace. Rows are
+# committed by the single flush in train()'s finally, and the run id is
+# resolved by core.tracing (EUROMONITOR_RUN_ID or the run-artifact
+# fingerprint) — the lane's own --run-tag rides in each row's detail, never as
+# a second id scheme.
+GRAPH_STAGE = "graph_train"
+
+
+def _setup_layout():
+    """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import training_cfg
+    return training_cfg().preparation.graph_setup
+
+
+def flush_graph_trace(trace: TraceRun, logger: logging.Logger) -> None:
+    """Commit this run's rows once; never mask a training failure."""
+    if len(trace) == 0:
+        return
+    try:
+        path = trace.write()
+    except Exception:
+        logger.exception("[graph-trace] failed to commit the graph_train trace")
+        if sys.exc_info()[0] is None:
+            raise
+        return
+    logger.info("[graph-trace] committed %d rows to %s", len(trace), path)
+
+
+def _metric(value):
+    """A finite float from a metrics mapping, or None.
+
+    Trace rows must never be the reason a certified run fails: a metric this
+    lane did not produce (a stubbed evaluator in a test, a partial dict) is
+    recorded as absent, never hard-indexed.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
 
 # Performance switches (see core.perf_switches). Each is individually off under
 # ER_PERF_LEGACY=1 so the pre-optimization path stays reachable.
@@ -167,6 +214,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
     # Use the repository's path/config conventions; existing code is read only.
     from core.common import TRAIN_ROOT
     resolve = lambda raw: (TRAIN_ROOT / raw).resolve()
+    layout = _setup_layout()
     output = Path(os.environ.get("EUROMONITOR_RESULTS_DIR", resolve(cfg.output_dir))).resolve()
     if not run_tag or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in run_tag):
         raise ValueError("run tag must contain only letters, digits, underscores, hyphens")
@@ -183,6 +231,37 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
     for handler in handlers:
         handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         logger.addHandler(handler)
+    # ── CONSOLIDATED TRACE: the stage writer for this run. All rows below are
+    # committed by the single flush in `finally`.
+    trace = TraceRun(GRAPH_STAGE)
+    trace.add(
+        "run",
+        "config",
+        in_count=None,
+        out_count=None,
+        reason="graph training knobs resolved from the validated GraphConfig",
+        detail={
+            "run_tag": run_tag,
+            "track": cfg.track,
+            "device": cfg.device,
+            "seed": cfg.seed,
+            "epochs": cfg.epochs,
+            "learning_rate": cfg.learning_rate,
+            "weight_decay": cfg.weight_decay,
+            "hidden_dim": cfg.hidden_dim,
+            "output_dim": cfg.output_dim,
+            "graph_enabled": cfg.graph_enabled,
+            "aggregation_backend": cfg.aggregation_backend,
+            "metric_weight": cfg.metric_weight,
+            "negative_margin": cfg.negative_margin,
+            "max_grad_norm": cfg.max_grad_norm,
+            "early_stopping_patience": cfg.early_stopping_patience,
+            "early_stopping_threshold": cfg.early_stopping_threshold,
+            "lr_scheduler": cfg.lr_scheduler,
+            "resume": None if resume is None else str(resume),
+        },
+        source="graph_tracks.config.load_config",
+    )
     try:
         if cfg.device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("cuda configured but unavailable; no silent CPU fallback")
@@ -201,6 +280,41 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         logger.info("[graph-phase] input_validation complete split_pairs=%s text_shape=%s",
                     {split: {'positive': int(labels.sum()), 'negative': int((labels == 0).sum())}
                      for split, (_, labels) in pairs.items()}, None if vectors is None else vectors.shape)
+        # ── CONSOLIDATED TRACE: the supervised-pair census this run trains on
+        # (one row per split inside detail; the count columns are the totals).
+        trace.add(
+            "inputs",
+            "load",
+            in_count=None,
+            out_count=int(sum(len(labels) for _, labels in pairs.values())),
+            reason=(
+                "listings + supervised pair census validated: every split is "
+                "accounted here (positive/negative are the labels that "
+                "survive). No in_count: listings and pair rows are different "
+                "units, so a derived dropped_count would be meaningless"
+            ),
+            detail={
+                "run_tag": run_tag,
+                "listings": str(resolve(cfg.listings)),
+                "pairs": str(resolve(cfg.pairs)),
+                "n_listings": int(len(records)),
+                "n_pair_rows": int(
+                    sum(len(labels) for _, labels in pairs.values())
+                ),
+                "text_shape": None if vectors is None else [int(x) for x in vectors.shape],
+                "text_metadata": text_metadata,
+                "splits": {
+                    split: {
+                        "positive": int(labels.sum()),
+                        "negative": int((labels == 0).sum()),
+                        "total": int(len(labels)),
+                    }
+                    for split, (_, labels) in pairs.items()
+                },
+                "input_manifest": None if input_manifest is None else str(cfg.input_manifest),
+            },
+            source="graph_tracks.preflight.load_inputs",
+        )
         logger.info("[graph-phase] features start graph_enabled=%s hidden_dim=%d output_dim=%d",
                     cfg.graph_enabled, cfg.hidden_dim, cfg.output_dim)
         from graph_tracks.prepared_inputs import PLAN, load_plan, load_batch
@@ -211,7 +325,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError('prepared graph ID order mismatch')
         elif cfg.device == 'cuda':
             raise ValueError('CUDA training requires locally prepared graph tensors; run graph_tracks.prepared_inputs locally')
-        vocabulary = prepared_plan['vocabulary'] if prepared_plan else fit_vocabulary(records)
+        vocabulary = (
+            prepared_plan['vocabulary']
+            if prepared_plan
+            else fit_vocabulary(records)
+        )
         support_indices = [i for i, r in enumerate(records) if r["split"] == "train"]
         support_records = [records[i] for i in support_indices]
         dev_indices = [i for i, record in enumerate(records) if record['split'] == 'dev']
@@ -265,6 +383,31 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         logger.info("[graph-amp] enabled=%s device=%s dtype=%s grad_scaler=%s",
                     amp_enabled, cfg.device, amp_dtype if amp_enabled else None, grad_scaler is not None)
         stopping_best, bad_epochs = -1., 0
+        # ── CONSOLIDATED TRACE: the graph lane's grain statement. This lane is
+        # FULL-BATCH: one optimizer step per epoch, so the per-epoch rows below
+        # ARE the per-batch grain (there are no sub-epoch batches to sample, and
+        # epoch count is bounded by GraphConfig.epochs — no cap needed).
+        trace.add(
+            "batch",
+            "capture",
+            in_count=None,
+            out_count=None,
+            reason=(
+                "graph lane is full-batch: one optimizer step per epoch, so "
+                "epoch.record rows carry the batch grain (loss components, "
+                "learning rate, dev metrics); epochs are bounded by config. "
+                "No in/out counts: this row states the grain, it is not a "
+                "funnel (train pairs and epochs are different units)"
+            ),
+            detail={
+                "batch_grain": "one optimizer step per epoch (full batch)",
+                "train_pairs": int(len(train_pair_indices)),
+                "dev_pairs": int(len(dev_pair_indices)),
+                "epochs_planned": int(cfg.epochs),
+                "sampling": "not needed: epoch rows <= epochs",
+            },
+            source="graph_tracks.train epoch loop",
+        )
         logger.info("[graph-phase] features complete listings=%d training_support=%d text_dim=%d parameters=%d",
                     len(records), len(support_records), model.text_dim,
                     sum(parameter.numel() for parameter in model.parameters()) +
@@ -364,8 +507,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         provenance = input_dir / 'text_provenance'
                         provenance.mkdir(exist_ok=True)
                         target = provenance / source.name
-                        for relative in ('embedding_inputs.json', 'eligible_catalog.csv',
-                                         'prepared/input_manifest.json', 'prepared/listings.json'):
+                        for relative in (layout.embedding_request, layout.catalog,
+                                         f'{layout.prepared_dir}/input_manifest.json',
+                                         f'{layout.prepared_dir}/listings.json'):
                             origin = source.parent / relative
                             copied = provenance / relative
                             copied.parent.mkdir(parents=True, exist_ok=True)
@@ -382,13 +526,13 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 input_artifacts['report_attributes'] = str(target.relative_to(output))
             manifest["input_artifacts"] = input_artifacts
             from graph_tracks.prepared_inputs import ARRAYS
-            for filename in (PLAN, ARRAYS, 'pair_lineage.json'):
+            for filename in (PLAN, ARRAYS, layout.pair_lineage):
                 source = resolve(cfg.listings).parent / filename
                 target = input_dir / filename
                 if source.is_file() and source.resolve() != target.resolve():
                     shutil.copy2(source, target)
         write_json(output / name(cfg.track, "run_manifest.json"), manifest)
-        write_json(output / name(cfg.track, "graph_census.json"), census(records, vocabulary))
+        write_json(output / name(cfg.track, layout.census), census(records, vocabulary, trace=trace))
         train_pairs = torch.tensor(train_pair_indices, device=cfg.device)
         train_labels = torch.tensor(pairs["train"][1], device=cfg.device)
         dev_pairs = torch.tensor(dev_pair_indices, device=cfg.device)
@@ -501,6 +645,56 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 checkpoint = checkpoint_dir / name(cfg.track, "graph_model.pt")
                 if improved:
                     best_metric, best_path = metrics["dev_pr_auc"], checkpoint
+                # ── CONSOLIDATED TRACE: this epoch IS this lane's batch
+                # (full-batch step). Counts are the pairs the step optimised /
+                # the pairs the dev evaluation scored; the loss components, the
+                # learning rate and the selection decision are the readback.
+                trace.add(
+                    "epoch",
+                    "record",
+                    scope=SCOPE_ENTITY,
+                    key=epoch,
+                    in_count=None,
+                    out_count=None,
+                    reason=(
+                        "one full-batch optimizer step: train pairs optimised, "
+                        "dev pairs scored for early-stop selection. No in/out "
+                        "counts: the trained and evaluated pair populations are "
+                        "different sets, so no funnel exists"
+                    ),
+                    detail={
+                        "run_tag": run_tag,
+                        "epoch": int(epoch),
+                        "epochs_planned": int(cfg.epochs),
+                        "train_loss": _metric(metrics.get("train_loss")),
+                        "train_classification_loss": _metric(
+                            metrics.get("train_classification_loss")
+                        ),
+                        "train_metric_loss": _metric(metrics.get("train_metric_loss")),
+                        "dev_pr_auc": _metric(metrics.get("dev_pr_auc")),
+                        "dev_precision_at_recall": _metric(
+                            metrics.get("dev_precision_at_recall")
+                        ),
+                        "dev_positive_pairs": metrics.get("dev_positive_pairs"),
+                        "dev_negative_pairs": metrics.get("dev_negative_pairs"),
+                        "learning_rate": _metric(metrics.get("learning_rate")),
+                        "next_learning_rate": _metric(metrics.get("next_learning_rate")),
+                        "early_stopping_bad_epochs": int(bad_epochs),
+                        "selected_this_epoch": int(bool(improved)),
+                        "previous_best": _metric(previous_best),
+                        "best_metric": _metric(best_metric),
+                        "checkpoint": str(checkpoint),
+                        "epoch_seconds": _metric(metrics.get("epoch_seconds")),
+                        "grad_norm": None,
+                        "grad_norm_note": (
+                            "per-parameter gradient norms are written to "
+                            "gradient_metrics.jsonl and clipped at "
+                            "max_grad_norm; the callback/step contract does not "
+                            "expose a single scalar here"
+                        ),
+                    },
+                    source="graph_tracks.train epoch loop",
+                )
                 payload = {"schema": "er-graph-checkpoint-v1", "manifest": manifest,
                            "vocabulary": vocabulary, "support_records": support_records,
                            "support_text": support_text_cpu,
@@ -546,9 +740,70 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if bad_epochs >= cfg.early_stopping_patience:
                     logger.info("[graph-early-stop] epoch=%d patience=%d threshold=%s",
                                 epoch, cfg.early_stopping_patience, cfg.early_stopping_threshold)
+                    trace.add(
+                        "early_stop",
+                        "triggered",
+                        in_count=int(cfg.epochs),
+                        out_count=int(epoch),
+                        reason=(
+                            "dev PR-AUC did not improve for "
+                            "early_stopping_patience epochs (threshold "
+                            "early_stopping_threshold); training stopped here"
+                        ),
+                        detail={
+                            "run_tag": run_tag,
+                            "epoch": int(epoch),
+                            "epochs_planned": int(cfg.epochs),
+                            "patience": int(cfg.early_stopping_patience),
+                            "threshold": float(cfg.early_stopping_threshold),
+                            "bad_epochs": int(bad_epochs),
+                            "best_metric": float(best_metric),
+                        },
+                        source="graph_tracks.train early-stopping rule",
+                    )
                     break
             logger.info("[graph-selection] training complete completed_epochs=%d selected_checkpoint=%s best_dev_pr_auc=%.6f criterion=max_dev_pr_auc",
                         completed_epochs, best_path, best_metric)
+            # ── CONSOLIDATED TRACE: the run-level rollup of the epoch rows:
+            # how many epochs ran, which checkpoint was selected and why.
+            trace.add(
+                "epochs",
+                "completed",
+                in_count=int(cfg.epochs),
+                out_count=int(completed_epochs),
+                reason=(
+                    "epochs planned vs run; the difference is what early "
+                    "stopping saved on this run"
+                ),
+                detail={
+                    "run_tag": run_tag,
+                    "epochs_planned": int(cfg.epochs),
+                    "epochs_run": int(completed_epochs),
+                    "start_epoch": int(start_epoch),
+                    "resumed": int(resume is not None),
+                },
+                source="graph_tracks.train epoch loop",
+            )
+            trace.add(
+                "checkpoint",
+                "select",
+                in_count=None,
+                out_count=1 if best_path is not None else 0,
+                reason=(
+                    "selection criterion is max dev PR-AUC (manifest "
+                    "selection_metric); the selected checkpoint is copied into "
+                    "this run's _checkpoints tree. No in_count: on a resume the "
+                    "selected checkpoint can predate this invocation's epochs"
+                ),
+                detail={
+                    "run_tag": run_tag,
+                    "selected_checkpoint": None if best_path is None else str(best_path),
+                    "best_dev_pr_auc": float(best_metric),
+                    "criterion": "max_dev_pr_auc",
+                    "completed_epochs": int(completed_epochs),
+                },
+                source="graph_tracks.train selection rule",
+            )
             # Flush the measured operator trace before CPU reporting consumes it.
             profiler.close()
             completion = None
@@ -576,12 +831,35 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 for row in completion["summary"]:
                     wandb.set_summary({f"{row['split']}/{key}": value for key, value in row.items()
                                        if isinstance(value, (int, float, bool))})
+                # ── CONSOLIDATED TRACE: the reporting handoff (test-side readback
+                # produced from the SELECTED checkpoint, never from the last one).
+                trace.add(
+                    "handoff",
+                    "report",
+                    in_count=int(len(completion.get("summary", []))),
+                    out_count=None,
+                    reason=(
+                        "postprocess ran on the selected checkpoint and wrote "
+                        "the completion report for this run"
+                    ),
+                    detail={
+                        "run_tag": run_tag,
+                        "selected_checkpoint": None if best_path is None else str(best_path),
+                        "report_test": bool(cfg.report_test),
+                        "completion_root": str(completion_root),
+                        "summary": [
+                            {str(key): value for key, value in row.items()}
+                            for row in completion.get("summary", [])
+                        ],
+                    },
+                    source="graph_tracks.report.complete",
+                )
             if not cfg.postprocess:
                 logger.info("[graph-phase] postprocess skipped reason=postprocess_false")
             wandb.set_summary({"best_dev_pr_auc": best_metric, "best_checkpoint": best_path.name,
                                "track": cfg.track, "postprocess_complete": bool(completion)})
             artifacts = [output / name(cfg.track, stem) for stem in
-                ("run_manifest.json", "graph_census.json", "epoch_metrics.jsonl", "best_checkpoint.json",
+                ("run_manifest.json", layout.census, "epoch_metrics.jsonl", "best_checkpoint.json",
                  "listing_usage.csv", "gradient_metrics.jsonl")]
             artifacts.append(output / "_checkpoints" / cfg.track)
             if cfg.include_inputs:
@@ -592,6 +870,29 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             write_json(output / name(cfg.track, "graph_worker_result.json"), {
                 "status": "ok", "best_checkpoint": str(best_path), "best_dev_pr_auc": best_metric,
                 "track": cfg.track, "completed_epochs": completed_epochs, "early_stopped": bad_epochs >= cfg.early_stopping_patience, "postprocess_complete": bool(completion), "wandb_run_id": wandb.run_id})
+            # ── CONSOLIDATED TRACE: the worker handoff the launcher collects.
+            trace.add(
+                "handoff",
+                "worker_result",
+                in_count=None,
+                out_count=1,
+                reason=(
+                    "graph_worker_result.json written: the run's collectable "
+                    "status, selected checkpoint and early-stop flag. No "
+                    "in_count: epochs and artifacts are different units"
+                ),
+                detail={
+                    "run_tag": run_tag,
+                    "status": "ok",
+                    "best_checkpoint": None if best_path is None else str(best_path),
+                    "best_dev_pr_auc": float(best_metric),
+                    "completed_epochs": int(completed_epochs),
+                    "early_stopped": int(bad_epochs >= cfg.early_stopping_patience),
+                    "postprocess_complete": int(bool(completion)),
+                    "result_path": str(output / name(cfg.track, "graph_worker_result.json")),
+                },
+                source="graph_tracks.train graph_worker_result.json",
+            )
             if cfg.dvc.enabled:
                 from graph_tracks.dvc import snapshot
                 logger.info("[graph-dvc] snapshot started track=%s push=%s", cfg.track, cfg.dvc.push)
@@ -610,12 +911,24 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         return best_path
     except BaseException as error:
         logger.exception("[graph-train] failed")
+        # ── CONSOLIDATED TRACE: a failed graph run is part of the story; the
+        # rows recorded up to the failure survive (flushed in `finally`).
+        trace.add(
+            "run",
+            "failed",
+            in_count=None,
+            out_count=None,
+            reason="graph training aborted; rows recorded so far still describe the run",
+            detail={"run_tag": run_tag, "error": f"{type(error).__name__}: {error}"},
+            source="graph_tracks.train",
+        )
         write_json(output / name(cfg.track, "graph_worker_result.json"), {"status": "failed", "error": str(error)})
         raise
     finally:
         for handler in handlers:
             logger.removeHandler(handler)
             handler.close()
+        flush_graph_trace(trace, logger)
 
 
 def main() -> None:
