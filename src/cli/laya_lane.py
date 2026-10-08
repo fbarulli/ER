@@ -27,6 +27,7 @@ import argparse
 import ast
 import csv
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -63,6 +64,7 @@ from core.eval_trace import (
 )
 from core.laya_config import LayaSpec
 from core.manifest import atomic_write_json, sha256_file
+from core import laya_controls
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
@@ -166,6 +168,39 @@ def finetune_config(spec: Any | None = None) -> dict[str, Any]:
     config = {name: getattr(ft, name) for name in FINETUNE_CONFIG_FIELDS}
     config["shuffle_options"] = tuple(config["shuffle_options"])
     return config
+
+
+# The training-CONTROL surface the staged perf patch reads (SSOT). These knobs
+# are deliberately NOT in FINETUNE_CONFIG_FIELDS: laya's `TrainConfig` rejects
+# unknown kwargs, so they travel as a SEPARATE `FINETUNE_CONTROL` JSON/repr
+# block the perf patch reads from a module global. One tuple, so the shadowing
+# lint proves every declared knob reaches the baked literal.
+FINETUNE_CONTROL_FIELDS = (
+    # Phase 1 (default-ON)
+    "eval_dev", "early_stop", "early_stop_patience", "early_stop_min_delta",
+    "early_stop_metric", "keep_best", "save_each_epoch", "resume",
+    "lr_scheduler", "warmup_frac", "warmup_steps", "plateau_patience",
+    "abstain_confidence",
+    # Phase 2 (default-OFF)
+    "unfreeze_after_epoch", "layer_decay", "ema", "ema_decay", "swa", "swa_lr",
+    "swa_start_frac", "optimizer",
+    # Phase 3 (default-OFF)
+    "class_weight", "balanced_sample", "hard_example_frac", "curriculum",
+    "adv_eps", "adv_kind", "temperature_scale",
+    # Phase 4 (default-OFF except log_grad_norm)
+    "compile_model", "amp_dtype", "tf32", "log_grad_norm",
+    "write_error_artifacts", "deterministic",
+)
+
+
+def finetune_control(spec: Any | None = None) -> dict[str, Any]:
+    """The training-control kwargs the perf patch bakes (SSOT).
+
+    Distinct from `finetune_config`: these NEVER reach `TrainConfig`. Defaults
+    are the `FinetuneSpec` defaults (Phase 1 on, Phases 2-4 off).
+    """
+    ft = (spec or _spec()).finetune
+    return {name: getattr(ft, name) for name in FINETUNE_CONTROL_FIELDS}
 
 
 # The `EvalCalibrationSpec` surface the held-out eval kernels consume: the
@@ -1609,7 +1644,37 @@ def apply_device_patch():
 # recipe flags, grad-accum window, clipping, scheduler and seed paths are
 # unchanged. Opt out (patch AND sampler) with ER_LAYA_PERF_PATCH=0; force the
 # single-process fallback with ER_LAYA_DDP=0. Injected at `@PERF_PATCH@`.
-FINETUNE_PERF_PATCH_SOURCE = '''\
+#
+# The pure control logic (early stop, scheduler factory, control parse, metric
+# flatten) lives in `core.laya_controls` and is injected here VERBATIM via
+# `inspect.getsource`: one source of truth, unit-tested on the host and
+# executed byte-for-byte in the kernel (which cannot import the repo).
+FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
+    inspect.getsource(function) for function in (
+        laya_controls.parse_control,
+        laya_controls.metric_is_better,
+        laya_controls.early_stop_step,
+        laya_controls.effective_warmup_steps,
+        laya_controls.build_lr_scheduler,
+        laya_controls.flatten_epoch_metrics,
+        laya_controls.derive_abstain_coverage,
+    )
+)
+
+_FINETUNE_PERF_PATCH_TEMPLATE = '''\
+@CONTROL_LOGIC@
+
+# The kernel template defines the wandb helpers BEFORE this patch is injected;
+# the offline DDP unit test execs this source alone, so fall back to no-ops.
+try:
+    wandb_log_epoch
+except NameError:
+    def wandb_log_epoch(epoch, mean, extra=None):
+        return None
+
+    def wandb_log_control_summary(result):
+        return None
+
 PERF_PATCH_ENV = "ER_LAYA_PERF_PATCH"
 
 
@@ -1743,20 +1808,291 @@ def launch_finetune(worker):
     return nprocs
 
 
+def _unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
+
+def _control_checkpoint_dir():
+    # Set by the kernel before finetune(); absent in the offline DDP test.
+    output_dir = globals().get("FINETUNE_OUTPUT_DIR")
+    if not output_dir:
+        return None
+    return os.path.join(str(output_dir), "checkpoints")
+
+
+def _save_control_checkpoint(torch, model, optimizer, scheduler, epoch, best,
+                             bad_epochs):
+    if not is_rank0():
+        return
+    path = _control_checkpoint_dir()
+    if not path:
+        return
+    os.makedirs(path, exist_ok=True)
+    torch.save({
+        "epoch": int(epoch),
+        "model": _unwrap_model(model).state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "best": best,
+        "bad_epochs": int(bad_epochs),
+    }, os.path.join(path, "epoch_%d.pt" % int(epoch)))
+
+
+def _resume_control_checkpoint(torch, model, optimizer, scheduler, device):
+    path = _control_checkpoint_dir()
+    if not path or not os.path.isdir(path):
+        return 0, None, 0
+    names = [name for name in os.listdir(path)
+             if name.startswith("epoch_") and name.endswith(".pt")
+             and name[len("epoch_"):-3].isdigit()]
+    if not names:
+        return 0, None, 0
+    names.sort(key=lambda name: int(name[len("epoch_"):-3]))
+    try:
+        state = torch.load(os.path.join(path, names[-1]), map_location=device,
+                           weights_only=False)
+        _unwrap_model(model).load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"])
+    except Exception as error:
+        print("[perf-patch] resume skipped: " + str(error)[:200], flush=True)
+        return 0, None, 0
+    print("[perf-patch] resumed " + names[-1] + " (next epoch "
+          + str(int(state.get("epoch", 0)) + 2) + ")", flush=True)
+    return (int(state.get("epoch", 0)) + 1, state.get("best"),
+            int(state.get("bad_epochs", 0)))
+
+
+def _make_optimizer(torch, groups, config, control):
+    kind = str(control.get("optimizer") or "adamw").lower()
+    fused = any(param.is_cuda for group in groups for param in group["params"])
+    if kind == "adafactor":
+        try:
+            return torch.optim.Adafactor(groups, lr=config.head_lr,
+                                         weight_decay=config.weight_decay)
+        except Exception:
+            print("[perf-patch] Adafactor unavailable; AdamW", flush=True)
+    if kind == "lamb":
+        try:
+            from torch_optimizer import Lamb
+            return Lamb(groups, lr=config.head_lr,
+                        weight_decay=config.weight_decay)
+        except Exception:
+            try:
+                from transformers.optimization import Lamb
+                return Lamb(groups, lr=config.head_lr,
+                            weight_decay=config.weight_decay)
+            except Exception:
+                print("[perf-patch] Lamb unavailable; AdamW", flush=True)
+    return torch.optim.AdamW(groups, weight_decay=config.weight_decay,
+                             fused=fused)
+
+
+def _apply_layer_decay(model, groups, layer_decay):
+    import re as _re
+    depths = {}
+    for name, param in model.named_parameters():
+        match = _re.search(r"(?:layers?|layer)[.]([0-9]+)[.]", name)
+        if match:
+            depths[id(param)] = int(match.group(1))
+    if not depths:
+        return groups
+    deepest = max(depths.values())
+    decayed = []
+    for group in groups:
+        base_lr = float(group.get("lr"))
+        for param in group["params"]:
+            depth = depths.get(id(param))
+            lr = base_lr if depth is None else base_lr * (
+                layer_decay ** (deepest - depth))
+            decayed.append({"params": [param], "lr": lr})
+    return decayed
+
+
+def _class_weights(torch, items, device):
+    counts = {}
+    for item in items:
+        try:
+            target = item["target"]
+            label = max(range(len(target)), key=lambda i: float(target[i]))
+        except Exception:
+            continue
+        counts[label] = counts.get(label, 0) + 1
+    if not counts:
+        return None
+    classes = max(counts) + 1
+    total = sum(counts.values())
+    weights = [0.0] * classes
+    for label in range(classes):
+        count = counts.get(label, 0)
+        weights[label] = (total / (classes * count)) if count else 0.0
+    return torch.tensor(weights, dtype=torch.float32, device=device)
+
+
+def _weighted_soft_ce(torch, logits, target, mask, weights):
+    logp = torch.log_softmax(logits.masked_fill(~mask, -1e9), -1)
+    per_row = -(target * logp * mask).sum(-1)
+    labels = target.argmax(dim=-1)
+    row_w = weights.to(logits.device)[labels]
+    return (per_row * row_w).mean()
+
+
+def _per_row_loss(torch, logits, target, mask):
+    logp = torch.log_softmax(logits.masked_fill(~mask, -1e9), -1)
+    return (-(target * logp * mask).sum(-1)).detach()
+
+
+def _forward_dtype(torch, laya_train, model, batch, device, amp,
+                   freeze_encoder, amp_dtype):
+    if (not amp) or amp_dtype != "bf16" or not hasattr(torch, "autocast"):
+        return laya_train._forward(model, batch, device, amp, freeze_encoder)
+    args = (batch["input_ids"].to(device),
+            batch["attention_mask"].to(device),
+            batch["marker_pos"].to(device),
+            batch["marker_mask"].to(device),
+            batch["qtype"].to(device))
+    kwargs = {"detach_encoder": freeze_encoder}
+    if "option_ids" in batch:
+        kwargs.update(position_ids=batch["position_ids"].to(device),
+                      option_ids=batch["option_ids"].to(device))
+    with torch.autocast(device.type, dtype=torch.bfloat16):
+        logits, _act = model(*args, **kwargs)
+    return logits.float()
+
+
+def _broadcast_values(torch, values, device):
+    if not is_distributed():
+        return [float(value) for value in values]
+    import torch.distributed as dist
+    tensor = torch.tensor([float(value) for value in values], device=device)
+    dist.broadcast(tensor, src=0)
+    return [float(value) for value in tensor.tolist()]
+
+
+def _select_epoch_items(control, items, epoch, config, seed):
+    selected = list(items)
+    if control.get("curriculum"):
+        keep = max(1, int(round(len(selected) * (epoch + 1) / config.epochs)))
+        rng = random.Random(seed + 7919 * epoch)
+        rng.shuffle(selected)
+        selected = selected[:keep]
+    if control.get("balanced_sample"):
+        buckets = {}
+        for item in selected:
+            try:
+                label = max(range(len(item["target"])),
+                            key=lambda i: float(item["target"][i]))
+            except Exception:
+                label = -1
+            buckets.setdefault(label, []).append(item)
+        if len(buckets) > 1:
+            per = max(len(bucket) for bucket in buckets.values())
+            rng = random.Random(seed + 104729 * epoch)
+            balanced = []
+            for bucket in buckets.values():
+                balanced.extend(rng.choice(bucket) for _ in range(per))
+            rng.shuffle(balanced)
+            selected = balanced
+    frac = float(control.get("hard_example_frac") or 0.0)
+    scores = globals().get("FINETUNE_HARD_SCORES")
+    if frac > 0.0 and isinstance(scores, dict) and scores:
+        ranked = sorted(selected,
+                        key=lambda item: scores.get(id(item), 0.0),
+                        reverse=True)
+        selected = ranked[:max(1, int(round(len(ranked) * frac)))]
+    return selected
+
+
+def _dev_metrics(laya_train, model, tok, dev_items, device, max_len,
+                 head_max_len, parallel, control):
+    batch_size = int(control.get("dev_batch_size") or 16)
+    records = laya_train.calibration_records(
+        model, tok, dev_items, device, max_len, head_max_len,
+        batch_size=batch_size, parallel=parallel)
+    metrics = laya_train.evaluate_records(records)
+    rate, coverage = derive_abstain_coverage(
+        records, control.get("abstain_confidence", 0.5))
+    return {
+        "accuracy": float(metrics.get("accuracy") or 0.0),
+        "loss": float(metrics.get("loss") or 0.0),
+        "abstain_rate": rate,
+        "coverage": coverage,
+        "ece": metrics.get("ece"),
+        "brier": metrics.get("brier"),
+        "brier_top1": metrics.get("brier_top1"),
+        "mean_confidence": metrics.get("mean_confidence"),
+    }
+
+
+def _error_artifacts(laya_train, model, tok, dev_items, device, max_len,
+                     head_max_len, parallel, control):
+    """ECE/confusion (+ optional post-hoc temperature) on the dev records."""
+    records = laya_train.calibration_records(
+        model, tok, dev_items, device, max_len, head_max_len,
+        batch_size=int(control.get("dev_batch_size") or 16), parallel=parallel)
+    metrics = laya_train.evaluate_records(records)
+    confusion = {}
+    for qtype, logits, target, k in records:
+        try:
+            import numpy as np
+            z = np.asarray(logits, dtype=float)[:int(k)]
+            pred = int(z.argmax())
+            gold = int(np.asarray(target, dtype=float)[:int(k)].argmax())
+        except Exception:
+            continue
+        bucket = confusion.setdefault(str(qtype), {})
+        row = bucket.setdefault(str(gold), {})
+        row[str(pred)] = row.get(str(pred), 0) + 1
+    temperature = None
+    if control.get("temperature_scale"):
+        try:
+            temperature = laya_train.fit_temperature_map(
+                records).get("temperature")
+        except Exception as error:
+            print("[perf-patch] temperature fit skipped: "
+                  + str(error)[:120], flush=True)
+    return {
+        "items": len(records),
+        "accuracy": metrics.get("accuracy"),
+        "ece": metrics.get("ece"),
+        "brier": metrics.get("brier"),
+        "brier_top1": metrics.get("brier_top1"),
+        "confusion": confusion,
+        "temperature": temperature,
+    }
+
+
 def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                       on_epoch_end=None, parallel=False):
-    # Faithful copy of laya.train.train_model (0.3.29) with the three
-    # recipe-neutral changes described in the source header.
+    # Faithful copy of laya.train.train_model (0.3.29) carrying the three
+    # recipe-neutral perf changes AND the YAML-driven training controls read
+    # from the baked FINETUNE_CONTROL block (never a TrainConfig kwarg).
+    import time
     import torch
     from laya import train as laya_train
 
+    control = parse_control(globals().get("FINETUNE_CONTROL"), {})
     config.validate()
     if not items:
         raise ValueError("no training items")
     amp = (device.type == "cuda") if config.amp is None else bool(config.amp)
+    amp_dtype = str(control.get("amp_dtype") or "fp16").lower()
+    if control.get("tf32") and device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    if control.get("deterministic"):
+        try:
+            torch.use_deterministic_algorithms(True)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        except Exception as error:
+            print("[perf-patch] determinism unavailable: "
+                  + str(error)[:120], flush=True)
     checkpointing = (amp if config.gradient_checkpointing is None
                      else bool(config.gradient_checkpointing))
-    if config.freeze_encoder:
+    unfreeze_after = control.get("unfreeze_after_epoch")
+    gradual = (unfreeze_after is not None) and (not config.freeze_encoder)
+    if config.freeze_encoder or gradual:
         for p in model.encoder.parameters():
             p.requires_grad_(False)
     elif checkpointing and hasattr(model.encoder,
@@ -1765,19 +2101,22 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             gradient_checkpointing_kwargs={"use_reentrant": False})
     model.head_checkpointing = checkpointing
     model.to(device).train()
-    if config.freeze_encoder:
+    if config.freeze_encoder or gradual:
         model.encoder.eval()
 
-    groups = [{"params": [p for n, p in model.named_parameters()
-                          if not n.startswith("encoder.") and p.requires_grad],
-               "lr": config.head_lr}]
+    head_params = [p for n, p in model.named_parameters()
+                   if not n.startswith("encoder.") and p.requires_grad]
+    groups = [{"params": head_params, "lr": config.head_lr}]
     if not config.freeze_encoder:
-        groups.insert(0, {
-            "params": [p for n, p in model.named_parameters()
-                       if n.startswith("encoder.") and p.requires_grad],
-            "lr": config.encoder_lr})
-    optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay,
-                                 fused=(device.type == "cuda"))
+        encoder_params = ([p for _n, p in model.named_parameters()
+                           if _n.startswith("encoder.")] if gradual else
+                          [p for _n, p in model.named_parameters()
+                           if _n.startswith("encoder.") and p.requires_grad])
+        groups.insert(0, {"params": encoder_params, "lr": config.encoder_lr})
+    layer_decay = float(control.get("layer_decay") or 1.0)
+    if 0.0 < layer_decay < 1.0:
+        groups = _apply_layer_decay(model, groups, layer_decay)
+    optimizer = _make_optimizer(torch, groups, config, control)
     # DDP: wrap the model (grads averaged across ranks) and shard the items
     # with a per-rank DistributedSampler. The shard length is equal on every
     # rank (pad-to-even), so the grad-accum window and the optimizer steps
@@ -1799,14 +2138,28 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 model, find_unused_parameters=True)
         print("[perf-patch] ddp: rank %d/%d, %d local items"
               % (rank, world_size, len(ddp_sampler)), flush=True)
+    elif control.get("compile_model"):
+        try:
+            model = torch.compile(model)
+            print("[perf-patch] torch.compile enabled", flush=True)
+        except Exception as error:
+            print("[perf-patch] torch.compile skipped: "
+                  + str(error)[:120], flush=True)
     epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
     steps_per_epoch = math.ceil(epoch_len / config.micro_batch)
     updates = max(1, math.ceil(steps_per_epoch / config.grad_accum)
                   * config.epochs)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=updates, eta_min=config.min_lr)
-    scaler = (torch.amp.GradScaler("cuda")
-              if amp and device.type == "cuda" else None)
+    warmup = effective_warmup_steps(control.get("warmup_steps", 0),
+                                    control.get("warmup_frac", 0.0), updates)
+    scheduler_kind = str(control.get("lr_scheduler") or "cosine").lower()
+    plateau = scheduler_kind == "plateau"
+    early_metric = str(control.get("early_stop_metric") or "dev_accuracy")
+    lower_is_better = early_metric == "dev_loss"
+    scheduler = build_lr_scheduler(
+        optimizer, scheduler_kind, updates, config.min_lr, warmup,
+        plateau_mode="min" if lower_is_better else "max")
+    use_scaler = (amp and device.type == "cuda" and amp_dtype != "bf16")
+    scaler = torch.amp.GradScaler("cuda") if use_scaler else None
 
     torch.manual_seed(config.seed)
     order_rng = random.Random(config.seed)
@@ -1814,7 +2167,40 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     history = []
     cache = {}
     hits = lookups = 0
-    for epoch in range(config.epochs):
+    # ── control state ────────────────────────────────────────────────────
+    dev_rows = globals().get("FINETUNE_DEV_ROWS")
+    dev_items = None
+    if control.get("eval_dev") and dev_rows:
+        dev_items, dev_skipped = laya_train.items_from_rows(
+            tok, dev_rows, max_len, head_max_len, label_smoothing=0.0)
+        print("[perf-patch] dev eval items %d (skipped %r)"
+              % (len(dev_items), dev_skipped), flush=True)
+    class_weights = (_class_weights(torch, items, device)
+                     if control.get("class_weight") else None)
+    adv_eps = float(control.get("adv_eps") or 0.0)
+    ema_decay = float(control.get("ema_decay") or 0.999)
+    ema_state = ({id(p): p.detach().clone() for p in params}
+                 if control.get("ema") else None)
+    swa_state = ({id(p): p.detach().clone() for p in params}
+                 if control.get("swa") else None)
+    swa_count = 0
+    swa_start = int(round(float(control.get("swa_start_frac") or 0.75)
+                          * config.epochs))
+    start_epoch, best, bad_epochs = 0, None, 0
+    if control.get("resume"):
+        start_epoch, best, bad_epochs = _resume_control_checkpoint(
+            torch, model, optimizer, scheduler, device)
+    best_acc = None
+    best_state = None
+    stopped = False
+    stopped_epoch = None
+
+    for epoch in range(start_epoch, config.epochs):
+        epoch_started = time.time()
+        if gradual and epoch >= int(unfreeze_after):
+            for p in model.encoder.parameters():
+                p.requires_grad_(True)
+            model.encoder.train()
         if ddp_sampler is not None:
             # Per-epoch reseed: every rank shuffles identically then takes a
             # disjoint stride slice, so no item is trained twice per epoch.
@@ -1823,13 +2209,18 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         else:
             epoch_items = list(items)
             random.Random(config.seed + epoch).shuffle(epoch_items)
+            epoch_items = _select_epoch_items(control, epoch_items, epoch,
+                                              config, config.seed)
+        hard_scores = ({} if control.get("hard_example_frac") else None)
         sigma = laya_train.sigma_at(epoch, config.epochs, config.sigma_start,
                                     config.sigma_end)
         total, n_steps = None, 0
+        grad_norm_sum, grad_steps = 0.0, 0
         optimizer.zero_grad(set_to_none=True)
         for start in range(0, len(epoch_items), config.micro_batch):
+            chunk_items = epoch_items[start:start + config.micro_batch]
             chunk = []
-            for it in epoch_items[start:start + config.micro_batch]:
+            for it in chunk_items:
                 order = laya_train.draw_option_order(
                     it, order_rng, config.shuffle_options)
                 key = (id(it), tuple(order) if order is not None else None,
@@ -1849,12 +2240,15 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             mask = batch["marker_mask"].to(device)
             target = batch["target"].to(device)
             qtype = batch["qtype"].to(device)
-            logits = laya_train._forward(model, batch, device, amp,
-                                         config.freeze_encoder)
+            logits = _forward_dtype(torch, laya_train, model, batch, device,
+                                    amp, config.freeze_encoder, amp_dtype)
             if config.loss == "rlcd":
                 loss = laya_train.rlcd_loss(logits, target, mask, qtype, sigma,
                                             config.rl_samples, config.w_sph,
                                             config.w_rps)
+            elif class_weights is not None:
+                loss = _weighted_soft_ce(torch, logits, target, mask,
+                                         class_weights)
             else:
                 loss = laya_train.soft_ce_loss(logits, target, mask)
             window_start = (n_steps // config.grad_accum) * config.grad_accum
@@ -1865,19 +2259,62 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 scaler.scale(scaled).backward()
             else:
                 scaled.backward()
+            if adv_eps > 0.0:
+                # AWP: perturb trainable weights by eps along the grad
+                # direction, take an extra backward, then restore the weights.
+                deltas = []
+                total_sq = 0.0
+                for p in params:
+                    if p.grad is None:
+                        continue
+                    total_sq += float(p.grad.detach().pow(2).sum())
+                norm = math.sqrt(total_sq) + 1e-12
+                with torch.no_grad():
+                    for p in params:
+                        if p.grad is None:
+                            continue
+                        delta = (adv_eps / norm) * p.grad.detach()
+                        p.add_(delta)
+                        deltas.append((p, delta))
+                adv_logits = _forward_dtype(
+                    torch, laya_train, model, batch, device, amp,
+                    config.freeze_encoder, amp_dtype)
+                adv_loss = laya_train.soft_ce_loss(adv_logits, target, mask)
+                adv_scaled = adv_loss / window_size
+                if scaler is not None:
+                    scaler.scale(adv_scaled).backward()
+                else:
+                    adv_scaled.backward()
+                with torch.no_grad():
+                    for p, delta in deltas:
+                        p.sub_(delta)
             n_steps += 1
             if (n_steps % config.grad_accum == 0
                     or start + config.micro_batch >= len(epoch_items)):
                 if scaler is not None:
                     scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
+                grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
+                if control.get("log_grad_norm") and grad_norm is not None:
+                    grad_norm_sum += min(float(grad_norm), config.grad_clip)
+                    grad_steps += 1
                 if scaler is not None:
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     optimizer.step()
-                scheduler.step()
+                if not plateau:
+                    scheduler.step()
+                if ema_state is not None:
+                    with torch.no_grad():
+                        for p in params:
+                            shadow = ema_state[id(p)]
+                            shadow.mul_(ema_decay).add_(
+                                p.detach(), alpha=1.0 - ema_decay)
                 optimizer.zero_grad(set_to_none=True)
+            if hard_scores is not None:
+                per_row = _per_row_loss(torch, logits, target, mask)
+                for item, value in zip(chunk_items, per_row.tolist()):
+                    hard_scores[id(item)] = float(value)
             # (1) stay on-GPU: accumulate the loss, sync once per epoch.
             detached = loss.detach()
             total = detached if total is None else total + detached
@@ -1888,6 +2325,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 print("epoch %d/%d step %d loss %.4f" % (
                     epoch + 1, config.epochs, n_steps,
                     float(detached.item())), flush=True)
+        if hard_scores is not None:
+            globals()["FINETUNE_HARD_SCORES"] = hard_scores
         mean = (float(total.item() / max(1, n_steps))
                 if total is not None else 0.0)
         # DDP already averages the gradients; report the rank-averaged scalar
@@ -1900,9 +2339,130 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         history.append(mean)
         print("epoch %d/%d mean loss %.4f (encode memo hits %d/%d)"
               % (epoch + 1, config.epochs, mean, hits, lookups), flush=True)
-        wandb_log_epoch(epoch, mean)
+        epoch_time = max(0.0, time.time() - epoch_started)
+        lr_now = float(optimizer.param_groups[0]["lr"])
+        grad_norm_mean = (grad_norm_sum / grad_steps) if grad_steps else None
+        # ── per-epoch dev evaluation (rank 0) + broadcast ───────────────
+        dev = None
+        if dev_items:
+            if is_rank0():
+                dev = _dev_metrics(laya_train, model, tok, dev_items, device,
+                                   max_len, head_max_len, parallel, control)
+                # calibration_records() left the model in eval mode: restore the
+                # training mode (and the frozen-encoder eval that train()
+                # undoes).
+                model.train()
+                if config.freeze_encoder or gradual:
+                    model.encoder.eval()
+            has_dev = 1.0 if dev is not None else 0.0
+            payload = [has_dev,
+                       float(dev["accuracy"]) if dev else 0.0,
+                       float(dev["loss"]) if dev else 0.0,
+                       float(dev["abstain_rate"]) if dev and dev["abstain_rate"]
+                       is not None else -1.0,
+                       float(dev["coverage"]) if dev and dev["coverage"]
+                       is not None else -1.0]
+            has_dev, dev_acc, dev_loss, dev_abstain, dev_cov = _broadcast_values(
+                torch, payload, device)
+            if has_dev >= 0.5:
+                dev = {"accuracy": dev_acc, "loss": dev_loss,
+                       "abstain_rate": None if dev_abstain < 0 else dev_abstain,
+                       "coverage": None if dev_cov < 0 else dev_cov}
+            elif not is_rank0():
+                dev = None
+        # ── best tracking + early stop + plateau + checkpointing ────────
+        extra = {"epoch": epoch + 1, "train/lr": lr_now,
+                 "epoch_time_s": epoch_time}
+        if grad_norm_mean is not None:
+            extra["train/grad_norm"] = grad_norm_mean
+        if dev is not None:
+            if best_acc is None or dev["accuracy"] > best_acc:
+                best_acc = dev["accuracy"]
+                if control.get("keep_best") and is_rank0():
+                    best_state = {key: value.detach().cpu().clone()
+                                  for key, value in
+                                  _unwrap_model(model).state_dict().items()}
+            extra["dev/accuracy"] = dev["accuracy"]
+            extra["dev/loss"] = dev["loss"]
+            extra["dev/abstain_rate"] = dev["abstain_rate"]
+            extra["dev/coverage"] = dev["coverage"]
+            metric_value = dev_acc if not lower_is_better else dev_loss
+            patience = int(control.get("early_stop_patience") or 0)
+            min_delta = float(control.get("early_stop_min_delta") or 0.0)
+            best, bad_epochs, improved, stop = early_stop_step(
+                metric_value, best, bad_epochs, patience, min_delta,
+                lower_is_better)
+            stop_flag = stop and bool(control.get("early_stop"))
+            stop_flag = bool(_broadcast_values(
+                torch, [1.0 if stop_flag else 0.0], device)[0] >= 0.5)
+            if plateau:
+                scheduler.step(metric_value)
+        else:
+            stop_flag = False
+        extra["select/best_dev_accuracy"] = best_acc
+        extra["select/bad_epochs"] = bad_epochs
+        wandb_log_epoch(epoch, mean, extra)
         if on_epoch_end is not None:
             on_epoch_end(epoch, mean)
+        if (control.get("save_each_epoch")
+                and (epoch + 1) % 1 == 0):
+            _save_control_checkpoint(torch, model, optimizer, scheduler,
+                                     epoch, best, bad_epochs)
+        if swa_state is not None and epoch >= swa_start:
+            with torch.no_grad():
+                for p in params:
+                    swa_state[id(p)].add_(p.detach())
+                swa_count += 1
+        if stop_flag:
+            stopped = True
+            stopped_epoch = epoch + 1
+            print("[perf-patch] early stop at epoch %d (%s=%s best=%s)"
+                  % (epoch + 1, early_metric, metric_value, best), flush=True)
+            break
+    # ── end-of-training weight selection (rank 0 only) ──────────────────
+    if is_rank0():
+        if control.get("keep_best") and best_state is not None:
+            _unwrap_model(model).load_state_dict(best_state)
+            print("[perf-patch] restored best dev_accuracy=%.4f" % best_acc,
+                  flush=True)
+        elif swa_state is not None and swa_count > 0:
+            with torch.no_grad():
+                for p in params:
+                    p.copy_(swa_state[id(p)] / float(swa_count))
+            print("[perf-patch] restored SWA average (%d epochs)" % swa_count,
+                  flush=True)
+        elif ema_state is not None:
+            with torch.no_grad():
+                for p in params:
+                    p.copy_(ema_state[id(p)])
+            print("[perf-patch] restored EMA weights", flush=True)
+    result = {
+        "epochs_run": len(history),
+        "stopped": bool(stopped),
+        "stopped_epoch": stopped_epoch,
+        "best_dev_accuracy": best_acc,
+        "best_metric": best,
+        "bad_epochs": bad_epochs,
+        "scheduler": scheduler_kind,
+        "warmup_steps": warmup,
+        "history": [float(value) for value in history],
+    }
+    if dev_items and is_rank0() and (
+            control.get("write_error_artifacts")
+            or control.get("temperature_scale")):
+        try:
+            model.eval()
+            result["error_artifacts"] = _error_artifacts(
+                laya_train, model, tok, dev_items, device, max_len,
+                head_max_len, parallel, control)
+        except Exception as error:
+            result["error_artifacts_error"] = (
+                type(error).__name__ + ": " + str(error)[:200])
+    globals()["FINETUNE_CONTROL_RESULT"] = result
+    try:
+        wandb_log_control_summary(result)
+    except Exception:
+        pass
     model.eval()
     return history
 
@@ -1976,6 +2536,9 @@ def summarize_gpu_usage(path):
     }
 '''
 
+FINETUNE_PERF_PATCH_SOURCE = _FINETUNE_PERF_PATCH_TEMPLATE.replace(
+    "@CONTROL_LOGIC@", FINETUNE_CONTROL_LOGIC_SOURCE)
+
 
 FINETUNE_KERNEL_SCRIPT = '''\
 """ER laya fine-tune on a Kaggle GPU session (cli.laya_lane).
@@ -2019,6 +2582,10 @@ BASE_MODEL_ARCHIVE = "@BASE_MODEL_ARCHIVE@"
 BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
 FINETUNE_DEVICE = "@FINETUNE_DEVICE@"
 FINETUNE_CONFIG = @FINETUNE_CONFIG@
+# YAML-driven training controls for the perf patch (NOT TrainConfig kwargs:
+# laya's TrainConfig rejects unknown keys). Baked as ONE repr literal and read
+# by `_perf_train_model` from this module global.
+FINETUNE_CONTROL = @FINETUNE_CONTROL@
 HELD_OUT_BATCH = @HELD_OUT_BATCH@
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
@@ -2029,6 +2596,10 @@ REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
 
 WANDB_RUN = None
+# Per-epoch dev rows + the checkpoint root, set by run_laya_finetune() before
+# finetune() so the perf patch (same module namespace) can evaluate/checkpoint.
+FINETUNE_DEV_ROWS = None
+FINETUNE_OUTPUT_DIR = None
 
 
 def wandb_init():
@@ -2055,9 +2626,31 @@ def wandb_init():
     return WANDB_RUN
 
 
-def wandb_log_epoch(epoch, mean):
-    if WANDB_RUN is not None:
-        WANDB_RUN.log({"epoch": epoch + 1, "train/mean_loss": mean}, step=epoch)
+def wandb_log_epoch(epoch, mean, extra=None):
+    if WANDB_RUN is None:
+        return
+    payload = {"epoch": epoch + 1, "train/mean_loss": mean}
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                payload[key] = value
+    WANDB_RUN.log(payload, step=epoch)
+
+
+def wandb_log_control_summary(result):
+    """Log the end-of-run selection/early-stop scalars (rank 0 only)."""
+    if WANDB_RUN is None or not isinstance(result, dict):
+        return
+    payload = {
+        "early_stop/stopped": 1 if result.get("stopped") else 0,
+        "early_stop/stopped_epoch": result.get("stopped_epoch"),
+        "select/best_dev_accuracy": result.get("best_dev_accuracy"),
+        "select/bad_epochs": result.get("bad_epochs"),
+    }
+    payload = {key: value for key, value in payload.items()
+               if value is not None}
+    if payload:
+        WANDB_RUN.log(payload)
 
 
 def wandb_log_metrics(report):
@@ -2200,7 +2793,18 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
     config = laya_train.TrainConfig(**FINETUNE_CONFIG,
                                     eval_data=str(dev_path))
     config.validate()
+    # Stash the attached dev split + the checkpoint root for the perf patch
+    # (same module namespace): per-epoch dev eval and epoch_<n>.pt resume/
+    # checkpointing read these globals.
+    globals()["FINETUNE_OUTPUT_DIR"] = str(out_dir)
+    if FINETUNE_CONTROL.get("eval_dev"):
+        try:
+            globals()["FINETUNE_DEV_ROWS"] = laya_train.read_jsonl(
+                str(dev_path))
+        except Exception as error:
+            log("dev rows load skipped: " + str(error)[:200])
     log("TrainConfig: " + json.dumps(FINETUNE_CONFIG, sort_keys=True))
+    log("FINETUNE_CONTROL: " + json.dumps(FINETUNE_CONTROL, sort_keys=True))
     # laya evaluates the dev split before training and prints nothing while it
     # does (27k items here -> several minutes of silence). Say so, so the quiet
     # stretch is not mistaken for a hang.
@@ -2324,6 +2928,7 @@ def _finetune_session(distributed, session):
             "world_size": dist_env()[2],
             "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
             "recipe": FINETUNE_CONFIG,
+            "control": FINETUNE_CONTROL,
             "output_dir": str(WORKING / "checkpoint"),
             "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
                               DEV_JSONL: sha256_of(dev),
@@ -2334,6 +2939,9 @@ def _finetune_session(distributed, session):
                         "temperature", "epoch_loss"):
                 if key in summary:
                     receipt[key] = summary[key]
+        control_result = globals().get("FINETUNE_CONTROL_RESULT")
+        if isinstance(control_result, dict):
+            receipt["control_result"] = control_result
         report = WORKING / "checkpoint" / "train_report.json"
         if report.is_file():
             receipt["train_report"] = json.loads(report.read_text())
@@ -3540,6 +4148,9 @@ def stage_finetune_kernel(*, revision: str | None = None,
         # The FULL TrainConfig surface rides one repr-baked Python literal:
         # the kernel constructs `TrainConfig(**FINETUNE_CONFIG)` directly.
         "FINETUNE_CONFIG": repr(recipe),
+        # The training controls ride a SEPARATE repr literal (TrainConfig
+        # rejects unknown kwargs): the perf patch reads this global.
+        "FINETUNE_CONTROL": repr(finetune_control(spec)),
         "FINETUNE_DEVICE": spec.finetune.device,
         "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
         # wandb mirror: the key is read from .env at staging and baked in
@@ -3580,6 +4191,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
                        "archive": spec.base_model_archive,
                        "dir": spec.base_model_dir},
         "recipe": recipe,
+        "control": finetune_control(spec),
         "device": spec.finetune.device,
         "corpus_dir": str(TRAIN_ROOT / spec.finetune_corpus_dir),
         "published_pin": {"repository": repository, "branch": branch,

@@ -70,6 +70,56 @@ class FinetuneSpec(BaseModel):
     log_every: int = Field(default=100, ge=0)
     device: str = "auto"
 
+    # ── training controls (NOT TrainConfig fields; baked as FINETUNE_CONTROL) ─
+    # These knobs drive the staged perf patch, never `laya.train.TrainConfig`
+    # (which rejects unknown kwargs). They are OUT of FINETUNE_CONFIG_FIELDS so
+    # the baked TrainConfig surface is byte-identical to the landed recipe.
+    # Phase 1 (DEFAULT-ON): per-epoch dev eval, early stop, best tracking,
+    # per-epoch checkpoint/resume and the LR-scheduler menu.
+    eval_dev: bool = True
+    early_stop: bool = True
+    early_stop_patience: int = Field(default=2, ge=0, le=64)
+    early_stop_min_delta: float = Field(default=0.0, ge=0.0)
+    early_stop_metric: Literal["dev_accuracy", "dev_loss"] = "dev_accuracy"
+    keep_best: bool = True
+    save_each_epoch: bool = True
+    resume: bool = True
+    lr_scheduler: Literal["cosine", "linear", "constant", "onecycle",
+                          "plateau"] = "cosine"
+    warmup_frac: float = Field(default=0.0, ge=0.0, le=1.0)
+    warmup_steps: int = Field(default=0, ge=0)
+    plateau_patience: int = Field(default=2, ge=0, le=64)
+    # Confidence cut used only to derive the dev abstain_rate/coverage wandb
+    # metrics (laya's evaluate_records emits neither).
+    abstain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Phase 2 (default-OFF): gradual unfreezing, layer-wise LR decay, EMA,
+    # SWA/SWA-LR and the optimizer menu.
+    unfreeze_after_epoch: int | None = Field(default=None, ge=0)
+    layer_decay: float = Field(default=1.0, gt=0.0, le=1.0)
+    ema: bool = False
+    ema_decay: float = Field(default=0.999, gt=0.0, lt=1.0)
+    swa: bool = False
+    swa_lr: float | None = Field(default=None, gt=0.0)
+    swa_start_frac: float = Field(default=0.75, ge=0.0, lt=1.0)
+    optimizer: Literal["adamw", "adafactor", "lamb"] = "adamw"
+    # Phase 3 (default-OFF): class weighting / balanced sampling, hard-example
+    # mining, curriculum, adversarial training and post-hoc temperature scaling.
+    class_weight: bool = False
+    balanced_sample: bool = False
+    hard_example_frac: float = Field(default=0.0, ge=0.0, lt=1.0)
+    curriculum: bool = False
+    adv_eps: float = Field(default=0.0, ge=0.0)
+    adv_kind: Literal["fgm", "awp"] = "fgm"
+    temperature_scale: bool = False
+    # Phase 4 (default-OFF, except log_grad_norm): torch.compile, AMP dtype,
+    # TF32, grad-norm logging, ECE/confusion artifacts and determinism.
+    compile_model: bool = False
+    amp_dtype: Literal["fp16", "bf16"] = "fp16"
+    tf32: bool = False
+    log_grad_norm: bool = True
+    write_error_artifacts: bool = False
+    deterministic: bool = False
+
 
 class EvalCalibrationSpec(BaseModel):
     """laya.eval_calibration — the held-out EVAL path's calibration knobs.
