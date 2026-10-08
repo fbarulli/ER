@@ -164,14 +164,67 @@ def ensure_session() -> None:
     print(_hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
     _hub()._verify_session_handshake()
 
+# --- Runtime checkout contract -------------------------------------------------
+# The prepared Colab lanes sparse-check out only the paths below; the VM never
+# clones the full tree. Any repo-root file a remote stage reads at REMOTE_ROOT
+# must be listed in RUNTIME_REQUIRED_ROOT_FILES and committed to the pushed
+# branch -- the VM sees that branch, not this working tree. A missing or
+# uncommitted entry surfaces as a FileNotFoundError on the VM, so
+# validate_runtime_checkout() fails loud locally, before any VM is allocated.
+RUNTIME_DIRECTORY_PATHS = (
+    'src/', 'config/', 'scripts/', 'artifacts/wheels/', 'artifacts/evidence/',
+)
+RUNTIME_REQUIRED_ROOT_FILES = (
+    'pyproject.toml', 'requirements.txt', 'colab_backend.py',
+    'model_tracks_package.json',
+)
+
+
+def runtime_checkout_paths() -> tuple[str, ...]:
+    """The no-cone sparse patterns every prepared runtime lane checks out."""
+    return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS, *RUNTIME_REQUIRED_ROOT_FILES))
+
+
+def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
+    """Fail before provisioning when the VM's sparse checkout cannot be complete.
+
+    The VM clones ``<branch>`` and sparse-checks out the declared directories,
+    the required root files, and this launch's ``extra_paths`` (the published
+    inputs transport and the text-model directory). Every one must exist in the
+    cloned revision -- the VM sees that branch, not this working tree -- and the
+    root files must also be present locally, so a contract typo fails with a
+    clear message. Runs locally: nothing is allocated when it raises, mirroring
+    the "validate before provisioning" launch-lifecycle rule.
+    """
+    import subprocess
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(['git', *args], cwd=TRAIN_ROOT,
+                              capture_output=True, text=True)
+
+    branch = training_cfg().colab.branch
+    revision = (f'origin/{branch}'
+                if git('rev-parse', '--verify', '--quiet', f'origin/{branch}').returncode == 0
+                else 'HEAD')
+    for name in RUNTIME_REQUIRED_ROOT_FILES:
+        if not (TRAIN_ROOT / name).is_file():
+            raise FileNotFoundError(
+                f"runtime checkout file {name!r} is missing from the working tree; "
+                'the Colab runtime cannot start without it')
+    for name in (*RUNTIME_DIRECTORY_PATHS, *RUNTIME_REQUIRED_ROOT_FILES, *extra_paths):
+        if git('cat-file', '-e', f'{revision}:{name.rstrip("/")}').returncode != 0:
+            raise RuntimeError(
+                f'runtime checkout path {name!r} is not in {revision}; the Colab '
+                f'VM clones branch {branch!r} and will not see it -- commit and '
+                'push it before launching')
+
+
 @_timed_colab("step")
 def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[str, ...] = ()) -> None:
     """Fetch a shallow prepared runtime, selecting only this suite's inputs."""
     if sparse_paths and not minimal_runtime:
         raise ValueError('sparse checkout requires a prepared runtime')
-    patterns = ['/src/', '/config/', '/scripts/', '/artifacts/wheels/',
-                '/artifacts/evidence/',
-                '/pyproject.toml', '/requirements.txt', '/colab_backend.py']
+    patterns = list(runtime_checkout_paths())
     for value in sparse_paths:
         path = Path(value)
         if (path.is_absolute() or '..' in path.parts or not path.parts

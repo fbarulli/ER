@@ -40,7 +40,7 @@ sims | mixed | smoke | bundle | stop`. Flags:
 | flag | meaning (source anchor) |
 |---|---|
 | `--tracks-config <yaml>` | all-track suite; applies to train/tracks/smoke only (colab.py:4576–4577); forces `--what tracks` (colab.py:4616) |
-| `--prepared-input-package <tar.zst>` | reuse a `training.prepare_all` `all_tracks_inputs` package after freshness verification; suite-only (colab.py:4573–4574), verified then copied to `results/model_tracks/<tag>__inputs.<fmt>` (colab.py:4603–4607) |
+| `--prepared-input-package <path>` | reuse a `training.prepare_all` `all_tracks_inputs` package after freshness verification; suite-only; verified then copied to `results/model_tracks/<tag>__inputs.<fmt>`. `<path>` may be the archive, a bundle directory (resolved through its `bundle.receipt.json`'s `archive`, else the canonical `all_tracks_inputs.tar.zst`), so `results/kaggle_lane/full/bundle` works directly. A path that resolves to nothing fails before the VM with every known bundle + cohort/revision (`resolve_prepared_input_package`, `prepared_package_candidates`) |
 | `--dataset-csv` | raw export for `--what bundle` only (colab.py:4464–4468) |
 | `--train-frac`, `--epochs`, `--workers`, `--model`, `--loss`, `--run-label`, `--masking-profile`, `--collapse-guardrail-profile` | plain `train`/`dual-train`/`hpo` knobs (colab.py:4469–4509) |
 | `--sample` | sampled-training cap; requires `--tracks-config` frozen parent splits (colab.py:4623–4625) |
@@ -175,10 +175,28 @@ The Colab lane uses a **sparse checkout** (`git sparse-checkout set --no-cone`) 
 
 ```
 /src/  /config/  /scripts/  /artifacts/wheels/  /artifacts/evidence/
-/pyproject.toml  /requirements.txt  /colab_backend.py
+/pyproject.toml  /requirements.txt  /colab_backend.py  /model_tracks_package.json
 ```
 
 For a prepared-train launch (`--what tracks --prepared-input-package ...`), two more paths are appended from the suite config: the `suite_git_inputs` archive and the resolved text-model directory (e.g. `artifacts/models/all-MiniLM-L6-v2`). The clone is `--depth=1 --single-branch --filter=blob:none --no-tags` (colab_runtime.py:168–245).
+
+**Runtime checkout contract.** Because the VM never clones the full tree, every
+path the remote stage needs from the checkout — the declared directories, every
+repo-root file it opens at `REMOTE_ROOT`, and each launch's published inputs
+transport and text-model directory — must exist in the pushed branch. Adding a
+dependency means adding it to `RUNTIME_REQUIRED_ROOT_FILES` (or the per-launch
+`extra_paths`) in the same change that starts reading it.
+`validate_runtime_checkout()` runs locally before `ensure_session` and checks
+the whole contract against `origin/<branch>` (falling back to `HEAD`), so
+anything missing or unpushed fails loud with the path and the fix instead of a
+`FileNotFoundError` mid-recovery on the VM. The list is covered by
+`tests/test_colab_sparse_checkout.py`.
+
+A regression to remember: `e1fc9e0` committed the bundle manifest
+`model_tracks_package.json` at the repo root assuming "sparse checkout is
+disabled"; the prepared lane has always sparse-checked out
+(`prepared_runtime=True`), so the manifest stayed off the VM and `tracks_recovery`
+read nothing.
 
 ## Artifacts and paths
 

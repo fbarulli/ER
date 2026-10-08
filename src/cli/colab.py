@@ -2145,6 +2145,80 @@ def _suite_freshness_gate(suite) -> None:
     print(_stamp(), f'[suite-freshness] manifest verified for {suite.setup_dir} '
           f'(written: {manifest.timestamp})', flush=True)
 
+
+def prepared_package_candidates() -> list[tuple[Path, dict]]:
+    """Known prepared all_tracks_inputs archives with receipt metadata, newest first.
+
+    There are three legitimate homes for the same bundle -- the kaggle lane
+    install (``results/kaggle_lane/<cohort>/bundle``), a training_prep run dir,
+    and a published model_tracks ``__inputs`` archive -- so anything that helps
+    the operator point at "the" bundle must know them all.
+    """
+    found: list[tuple[Path, dict]] = []
+
+    def add(archive: Path, receipt: Path | None) -> None:
+        if not archive.is_file():
+            return
+        metadata: dict = {}
+        if receipt is not None and receipt.is_file():
+            try:
+                metadata = json.loads(receipt.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError):
+                metadata = {}
+        found.append((archive, metadata))
+
+    kaggle_root = RESULTS / 'kaggle_lane'
+    if kaggle_root.is_dir():
+        for install in sorted(p for p in kaggle_root.iterdir() if p.is_dir()):
+            bundle = install / 'bundle'
+            add(bundle / 'all_tracks_inputs.tar.zst', bundle / 'bundle.receipt.json')
+    prep_root = RESULTS / 'training_prep'
+    if prep_root.is_dir():
+        for run in sorted(p for p in prep_root.iterdir() if p.is_dir()):
+            add(run / 'all_tracks_inputs.tar.zst', run / 'manifest.json')
+            add(run / 'before' / 'all_tracks_inputs.tar.zst', None)
+    tracks_root = RESULTS / 'model_tracks'
+    if tracks_root.is_dir():
+        for archive in sorted(tracks_root.glob('*__inputs.tar.zst')):
+            add(archive, None)
+    return sorted(found, key=lambda item: item[0].stat().st_mtime, reverse=True)
+
+
+def resolve_prepared_input_package(value: Path) -> Path:
+    """Resolve --prepared-input-package to the archive the lane loads.
+
+    Accepts the archive, or a bundle directory resolved through its
+    ``bundle.receipt.json`` (the archive it names) or the canonical
+    ``all_tracks_inputs.tar.zst``. A path that resolves to nothing fails loud
+    with every known bundle and its cohort/revision, so the operator never has
+    to guess which of ``results/kaggle_lane``, ``results/training_prep`` or
+    ``results/model_tracks`` holds the right copy.
+    """
+    value = Path(value)
+    if value.is_file():
+        return value
+    if value.is_dir():
+        receipt_path = value / 'bundle.receipt.json'
+        if receipt_path.is_file():
+            try:
+                archive_name = json.loads(receipt_path.read_text(encoding='utf-8')).get('archive')
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f'unreadable bundle receipt {receipt_path}: {exc}') from exc
+            if archive_name and (value / archive_name).is_file():
+                return value / archive_name
+        canonical = value / 'all_tracks_inputs.tar.zst'
+        if canonical.is_file():
+            return canonical
+    listing = '\n'.join(
+        f'  {archive}'
+        + (f"  (cohort={metadata.get('cohort')}, revision={str(metadata.get('revision'))[:12]})"
+           if metadata else '')
+        for archive, metadata in prepared_package_candidates()) or '  (none found)'
+    raise FileNotFoundError(
+        f'no prepared all_tracks_inputs package at {value!s}; pass the archive, a '
+        f'bundle directory, or one of:\n{listing}')
+
+
 def main() -> None:
     RunLogger.configure_console()
     global GPU
@@ -2155,7 +2229,10 @@ def main() -> None:
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument('--prepared-input-package', type=Path, default=None,
-                    help='reuse a training.prepare_all all_tracks_inputs package (.tar.zst) after freshness validation')
+                    help='reuse a training.prepare_all all_tracks_inputs package '
+                         '(.tar.zst) after freshness validation; may be the archive, '
+                         'a bundle directory (resolved via bundle.receipt.json), or a '
+                         'results/kaggle_lane/<cohort>/bundle dir')
     ap.add_argument('--dataset-csv', type=Path, default=None,
                     help="raw export to upload for --what bundle "
                          "(default: config/paths.yaml dataset = repo:dataset.csv; "
@@ -2283,6 +2360,8 @@ def main() -> None:
         print(_stamp(), f"[self-watch] receipt released: {plan['receipt']}")
         return
 
+    if args.prepared_input_package is not None:
+        args.prepared_input_package = resolve_prepared_input_package(args.prepared_input_package)
     suite_archive = None
     suite_run_tag = None
     suite_git_inputs = None
@@ -2456,6 +2535,16 @@ def main() -> None:
             # run keeps its existing identity and uploads serially.
             if bundle_request is not None and not args.resume_run:
                 start_validation_upload_prewarm()
+            # Runtime checkout contract: the VM sparse-checks out only the declared
+            # paths, plus this launch's transport and text model. Anything missing
+            # or unpushed must fail here -- before ensure_session allocates an
+            # accelerator -- not mid-recovery on the VM.
+            runtime_paths: tuple[str, ...] = ()
+            if suite_git_inputs is not None:
+                from core.common import resolve_model
+                runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
+                                      for path in (suite_git_inputs, Path(resolve_model(suite.text_model))))
+            validate_runtime_checkout(extra_paths=runtime_paths)
             ensure_session()
             # The session exists now, so the prewarmed upload can run for real.  It
             # travels alongside prepare_remote_layout/install_deps below instead of
@@ -2470,9 +2559,6 @@ def main() -> None:
                 # indefinitely.
                 stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
             if suite_git_inputs is not None:
-                from core.common import resolve_model
-                runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
-                                      for path in (suite_git_inputs, Path(resolve_model(suite.text_model))))
                 prepare_remote_layout(minimal_runtime=True, sparse_paths=runtime_paths)
             else:
                 prepare_remote_layout(minimal_runtime=prepared_train_runtime)
@@ -2679,6 +2765,7 @@ from cli.colab_runtime import (
     prepare_remote_layout,
     run_data_prep,
     stop_keep_alive_daemon,
+    validate_runtime_checkout,
     verify_remote_models,
     verify_training_inputs,
 )  # split phase C
