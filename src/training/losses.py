@@ -105,9 +105,17 @@ def _tracking_contrastive_loss(
             self._current_epoch = 0
             self._uniformity_active_batches = 0
             self._uniformity_below_min_batches = 0
+            # Mutable so a loss-weight schedule can ramp it per epoch.
+            self._uniformity_weight = float(uniformity_weight)
+
+        def set_uniformity_weight(self, value: float) -> None:
+            self._uniformity_weight = float(value)
+
+        def set_margin(self, value: float) -> None:
+            self.margin = float(value)
 
         def _uniformity_penalty(self, embeddings):
-            if uniformity_weight <= 0:
+            if self._uniformity_weight <= 0:
                 return embeddings[0].sum() * 0.0
             vectors = torch.cat(embeddings, dim=0)
             if len(vectors) < uniformity_min_batch_size:
@@ -207,7 +215,7 @@ def _tracking_contrastive_loss(
                 )
             )
             uniformity_loss = self._uniformity_penalty(embeddings)
-            anti_collapse_loss = uniformity_weight * uniformity_loss
+            anti_collapse_loss = self._uniformity_weight * uniformity_loss
             loss_value = (
                 positive_loss
                 + negative_loss

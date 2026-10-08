@@ -1628,6 +1628,20 @@ class UniformityRegularizationSpec(BaseModel):
     min_batch_size: int = Field(ge=2)
 
 
+class BatchSizeRampSpec(BaseModel):
+    """Effective-batch ramp (training.batch_size_ramp); default OFF.
+
+    The frozen sampler owns the MICRO batch, so the ramp scales gradient
+    accumulation only (epoch 1 at ``start_frac`` of base accumulation).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    start_frac: float = Field(default=0.25, gt=0.0, le=1.0)
+    ramp_epochs: int = Field(default=3, ge=1)
+
+
 class TrainingSpec(BaseModel):
     """Training runtime knobs (config/training.yaml training:).
 
@@ -1880,6 +1894,7 @@ class TrainingSpec(BaseModel):
     batch_sampler: BatchSamplerSpec = Field(
         default_factory=lambda: TrainingSpec.BatchSamplerSpec()
     )
+    batch_size_ramp: BatchSizeRampSpec = Field(default_factory=BatchSizeRampSpec)
 
 
 class PairsSpec(BaseModel):
@@ -3423,6 +3438,99 @@ class AdvancedSpec(BaseModel):
     graph: GraphAdvancedSpec = Field(default_factory=GraphAdvancedSpec)
 
 
+class OptimizerSpec(BaseModel):
+    """Optimizer knobs shared by the text + GNN lanes (config/training.yaml optimizer:).
+
+    Complements the existing ``training.optimizer_backend`` (fused/foreach) —
+    it does not replace it. ``lr_scaling`` scales the reference
+    ``training.lr``/GraphConfig.learning_rate by the effective batch ratio;
+    ``state_dtype`` casts Adam moments to bf16 for memory.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    no_decay_bias_norm: bool = False
+    state_dtype: Literal["fp32", "bf16"] = "fp32"
+    lr_scaling: Literal["none", "linear", "sqrt"] = "none"
+    base_batch: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _base_batch_required_when_scaling(self) -> "OptimizerSpec":
+        if self.lr_scaling != "none" and self.base_batch is None:
+            raise ValueError(
+                "optimizer.base_batch is required when optimizer.lr_scaling != none"
+            )
+        return self
+
+
+class RDropSpec(BaseModel):
+    """R-Drop regularization (regularization.r_drop); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    alpha: float = Field(default=0.0, ge=0.0)
+
+
+class DropPathSpec(BaseModel):
+    """Stochastic depth (regularization.drop_path); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    rate: float = Field(default=0.0, ge=0.0, lt=1.0)
+    schedule: Literal["linear", "constant"] = "constant"
+
+
+class RegularizationSpec(BaseModel):
+    """Regularization knobs (config/training.yaml regularization:)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    r_drop: RDropSpec = Field(default_factory=RDropSpec)
+    drop_path: DropPathSpec = Field(default_factory=DropPathSpec)
+
+
+class DynamicPaddingSpec(BaseModel):
+    """Dynamic padding (data.dynamic_padding); default OFF.
+
+    The prepared-token path already pads to the longest row in the batch; this
+    only rounds that width up to ``pad_to_multiple`` for kernel alignment.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    pad_to_multiple: int = Field(default=8, ge=1)
+
+
+class DataSpec(BaseModel):
+    """Data-lane knobs (config/training.yaml data:)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dynamic_padding: DynamicPaddingSpec = Field(default_factory=DynamicPaddingSpec)
+
+
+class LossScheduleSpec(BaseModel):
+    """Epoch-wise loss-term weight schedules (config/training.yaml loss_schedules:).
+
+    Composes with the existing SSOT weights — it never adds a second home:
+    ``uniformity`` schedules ``training.uniformity_regularization.weight``,
+    ``margin`` schedules ``training.contrastive_margin``, ``auxiliary``
+    schedules the GNN metric weight.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    warmup_epochs: int = Field(default=2, ge=1)
+    schedule: Literal["linear", "cosine", "constant"] = "linear"
+    uniformity: bool = False
+    margin: bool = False
+    auxiliary: bool = False
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -3479,6 +3587,12 @@ class TrainingConfig(BaseModel):
     # TASK B training additions (additive; default factory so configs that
     # predate the block still validate). All switches default OFF.
     advanced: AdvancedSpec = Field(default_factory=AdvancedSpec)
+    # Optimizer/regularization/data/loss-schedule knobs (additive, default OFF;
+    # each key has a live text/GNN consumer).
+    optimizer: OptimizerSpec = Field(default_factory=OptimizerSpec)
+    regularization: RegularizationSpec = Field(default_factory=RegularizationSpec)
+    data: DataSpec = Field(default_factory=DataSpec)
+    loss_schedules: LossScheduleSpec = Field(default_factory=LossScheduleSpec)
     archives: ArchiveSpec
     packaging: PackagingSpec
     # One sealed Bundle contract (roles/manifests/checkpoints/markers/ablation);

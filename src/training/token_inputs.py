@@ -169,8 +169,12 @@ def payload_sha256(payload) -> str:
 class PreparedTokenLookup:
     """No fixed-text tokenizer calls; explicitly registered dynamic text only."""
 
-    def __init__(self, model, table, payload, *, payload_digest: str | None = None):
+    def __init__(self, model, table, payload, *, payload_digest: str | None = None,
+                 pad_to_multiple: int = 1):
         self._require_policy(model, table)
+        if pad_to_multiple < 1:
+            raise ValueError("pad_to_multiple must be >= 1")
+        self._pad_to_multiple = int(pad_to_multiple)
         digest = payload_sha256(payload) if payload_digest is None else payload_digest
         self._require_payload(table, payload, digest)
         self.table = table
@@ -262,10 +266,22 @@ class PreparedTokenLookup:
         return keys
 
     def _padded_rows(self, rows, keys: set, constants: dict) -> dict:
-        """Pad the (possibly mixed fixed/dynamic) rows into one batch."""
-        width = max(len(row["input_ids"]) for row in rows)
-        if width > self.table["policy"]["input_token_limit"]:
+        """Pad the (possibly mixed fixed/dynamic) rows into one batch.
+
+        The longest row in the batch sets the width (dynamic padding); with
+        ``data.dynamic_padding`` enabled the width is rounded up to
+        ``pad_to_multiple`` for kernel alignment. The zero-truncation limit is
+        checked against the UNROUNDED longest row so rounding cannot false-fail.
+        """
+        from training.optim_components import dynamic_pad_width
+
+        longest = max(len(row["input_ids"]) for row in rows)
+        if longest > self.table["policy"]["input_token_limit"]:
             raise ValueError("zero truncation required: prepared token input exceeds checkpoint limit")
+        width = dynamic_pad_width(
+            [len(row["input_ids"]) for row in rows],
+            pad_to_multiple=self._pad_to_multiple,
+        )
         result = dict(constants)
         for name in keys:
             pad = self.model.tokenizer.pad_token_id if name == "input_ids" else 0

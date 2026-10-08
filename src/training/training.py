@@ -3084,6 +3084,78 @@ def checkpoint_publication_deferred() -> bool:
     return _CheckpointPublisher._publication_deferred()
 
 
+class _OptimizerStatePrecisionCallback(TrainerCallback):
+    """Cast Adam moments to optimizer.state_dtype after every step."""
+
+    def __init__(self, precision, optimizer):
+        self.precision = precision
+        self.optimizer = optimizer
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero and self.precision.enabled:
+            self.precision.cast_(self.optimizer)
+        return control
+
+
+class _BatchSizeRampCallback(TrainerCallback):
+    """Ramp gradient accumulation (effective batch) across the first epochs."""
+
+    def __init__(self, ramp, base_grad_accum: int):
+        self.ramp = ramp
+        self.base_grad_accum = int(base_grad_accum)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero or not self.ramp.enabled:
+            return control
+        epoch = int(state.epoch or 0) + 1
+        accum = self.ramp.grad_accum(epoch, self.base_grad_accum)
+        args.gradient_accumulation_steps = accum
+        print(
+            f"    [optim] batch_size_ramp epoch={epoch} "
+            f"grad_accum={accum} (base={self.base_grad_accum})",
+            flush=True,
+        )
+        return control
+
+
+class _LossWeightScheduleCallback(TrainerCallback):
+    """Ramp configured loss-term weights (uniformity/margin) per epoch."""
+
+    def __init__(self, schedule, loss_fn, uniformity_base: float, margin_base: float):
+        self.schedule = schedule
+        self.loss_fn = loss_fn
+        self.uniformity_base = float(uniformity_base)
+        self.margin_base = float(margin_base)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero or not self.schedule.enabled:
+            return control
+        epoch = int(state.epoch or 0) + 1
+        if self.schedule.terms["uniformity"] and hasattr(
+            self.loss_fn, "set_uniformity_weight"
+        ):
+            self.loss_fn.set_uniformity_weight(
+                self.schedule.scheduled("uniformity", self.uniformity_base, epoch)
+            )
+        if self.schedule.terms["margin"] and hasattr(self.loss_fn, "set_margin"):
+            self.loss_fn.set_margin(
+                self.schedule.scheduled("margin", self.margin_base, epoch)
+            )
+        return control
+
+
+class _DropPathEpochCallback(TrainerCallback):
+    """Advance the drop-path linear schedule at each epoch boundary."""
+
+    def __init__(self, set_epoch):
+        self.set_epoch = set_epoch
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.set_epoch(int(state.epoch or 0) + 1)
+        return control
+
+
 class DvcCheckpointCallback(TrainerCallback):
     """Stage immutable checkpoints and publish them together at train end."""
 
@@ -5802,11 +5874,44 @@ def train_one_config(
                         f"    [accel] text encoder compile requested mode={_accel.compile_mode}",
                         flush=True,
                     )
+                # Drop path / stochastic depth on the encoder's residual branches
+                # (regularization.drop_path; default OFF). Wired only where
+                # per-block modules exist (text encoder); the GNN lane has none.
+                _drop_path_cfg = training_cfg().regularization.drop_path
+                _set_drop_path_epoch = None
+                if _drop_path_cfg.enabled:
+                    from training.optim_components import (
+                        apply_drop_path, drop_path_rate,
+                    )
+                    _encoder = model[0].auto_model
+                    _branches = []
+                    for _layer in _encoder.encoder.layer:
+                        _branches.append(_layer.attention.output)
+                        _branches.append(_layer.output)
+                    _epochs = int(cfg["epochs"])
+                    _set_drop_path_epoch = apply_drop_path(
+                        _branches,
+                        lambda epoch: drop_path_rate(
+                            float(_drop_path_cfg.rate), epoch, _epochs,
+                            schedule=str(_drop_path_cfg.schedule),
+                        ),
+                    )
+                    _set_drop_path_epoch(1)
+                    print(
+                        f"    [regularization] drop_path rate={_drop_path_cfg.rate} "
+                        f"schedule={_drop_path_cfg.schedule} blocks={len(_branches)}",
+                        flush=True,
+                    )
                 token_lookup = None
                 if prepared_tokens is not None:
                     from training.token_inputs import PreparedTokenLookup
+                    _dp = training_cfg().data.dynamic_padding
                     token_lookup = PreparedTokenLookup(
-                        model, prepared_tokens, payload, payload_digest=prepared_payload_digest
+                        model, prepared_tokens, payload,
+                        payload_digest=prepared_payload_digest,
+                        pad_to_multiple=(
+                            int(_dp.pad_to_multiple) if _dp.enabled else 1
+                        ),
                     )
 
                 # ── build the training dataset FIRST (steps derive from it) ──
@@ -6263,7 +6368,38 @@ def train_one_config(
                 # LR. Per-layer multiplicative decay (0.9^k), bottom to top.
                 # Dedup by tensor id: some architectures tie/share weights
                 # (embeddings<->pooler etc.) — AdamW REJECTS a param in two groups.
-                base_lr = cfg["lr"]
+                # OPTIMIZER KNOBS (config optimizer:): LR scaling from the
+                # effective batch. Precedence: with lr_scaling none the explicit
+                # cfg["lr"] is used verbatim; otherwise it is the reference peak
+                # at optimizer.base_batch and is scaled by the batch ratio.
+                from training.optim_components import (
+                    BatchSizeRamp as _BatchSizeRamp,
+                    LossWeightSchedule,
+                    LrScalingRule as _LrScalingRule,
+                    NoDecayParamGroups as _NoDecay,
+                    OptimizerStatePrecision as _StatePrecision,
+                )
+
+                _opt_cfg = training_cfg().optimizer
+                _world_size = (
+                    torch.distributed.get_world_size()
+                    if torch.distributed.is_initialized() else 1
+                )
+                _accum = int(training_cfg().advanced.gradient_accumulation_steps)
+                _lr_rule = _LrScalingRule(_opt_cfg.lr_scaling, _opt_cfg.base_batch)
+                base_lr = _lr_rule.peak_lr(
+                    float(cfg["lr"]),
+                    micro_batch=int(batch_size),
+                    grad_accum=_accum,
+                    world_size=_world_size,
+                )
+                if _opt_cfg.lr_scaling != "none":
+                    print(
+                        f"    [optim] lr_scaling={_opt_cfg.lr_scaling} "
+                        f"effective_batch={_lr_rule.effective_batch(int(batch_size), _accum, _world_size)} "
+                        f"base_batch={_opt_cfg.base_batch} -> peak_lr {base_lr:.3e}",
+                        flush=True,
+                    )
                 # AUDIT FIX (round 2 F09, round 3): the single-LR fallback stays
                 # (sanctioned: it is visible in stdout and the run continues),
                 # but it is now QUERYABLE downstream — `lr_groups` lands in the
@@ -6287,6 +6423,29 @@ def train_one_config(
                         flush=True,
                     )
                     groups = [{"params": model.parameters(), "lr": base_lr}]
+                # no-decay param groups: split bias/LayerNorm/norm out of weight
+                # decay (training.weight_decay still applies to everything else).
+                _names_by_id = {id(p): n for n, p in model.named_parameters()}
+                groups = _NoDecay(
+                    float(cfg["weight_decay"]), bool(_opt_cfg.no_decay_bias_norm)
+                ).apply(groups, _names_by_id)
+                if _opt_cfg.no_decay_bias_norm:
+                    _n_no_decay = sum(
+                        len(group["params"]) for group in groups
+                        if group.get("weight_decay") == 0.0
+                    )
+                    print(
+                        f"    [optim] no_decay_bias_norm: {_n_no_decay} params "
+                        f"excluded from weight decay",
+                        flush=True,
+                    )
+                _state_precision = _StatePrecision(str(_opt_cfg.state_dtype))
+                if _state_precision.enabled:
+                    print(
+                        f"    [optim] state_dtype={_opt_cfg.state_dtype} "
+                        f"(Adam moments cast after each step)",
+                        flush=True,
+                    )
 
                 from torch import optim
 
@@ -6359,6 +6518,42 @@ def train_one_config(
                         early_stopping_threshold=cfg["es_threshold"],
                     ),
                 ]
+                # OPTIMIZER / SCHEDULE KNOBS (default OFF).
+                if _state_precision.enabled:
+                    callbacks.append(
+                        _OptimizerStatePrecisionCallback(_state_precision, optimizer)
+                    )
+                _ramp_cfg = training_cfg().training.batch_size_ramp
+                if _ramp_cfg.enabled:
+                    callbacks.append(
+                        _BatchSizeRampCallback(
+                            _BatchSizeRamp(
+                                enabled=True,
+                                start_frac=float(_ramp_cfg.start_frac),
+                                ramp_epochs=int(_ramp_cfg.ramp_epochs),
+                            ),
+                            base_grad_accum=_accum,
+                        )
+                    )
+                if _set_drop_path_epoch is not None:
+                    callbacks.append(_DropPathEpochCallback(_set_drop_path_epoch))
+                _ls_cfg = training_cfg().loss_schedules
+                if _ls_cfg.enabled:
+                    callbacks.append(
+                        _LossWeightScheduleCallback(
+                            LossWeightSchedule(
+                                enabled=True,
+                                warmup_epochs=int(_ls_cfg.warmup_epochs),
+                                schedule=str(_ls_cfg.schedule),
+                                uniformity=bool(_ls_cfg.uniformity),
+                                margin=bool(_ls_cfg.margin),
+                                auxiliary=bool(_ls_cfg.auxiliary),
+                            ),
+                            loss_fn,
+                            uniformity_base=float(cfg["uniformity_weight"]),
+                            margin_base=float(_SSOT_MARGIN),
+                        )
+                    )
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
                 # the collector never writes the trace itself (train_one_config

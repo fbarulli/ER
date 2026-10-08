@@ -391,10 +391,57 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         logger.info("[graph-scorer] initialization=%s", json.dumps(scorer.calibration_metrics()))
         from core.gpu_execution import GradientStatistics, OptimizerExecution
         from core.execution_policy import resolve_aggregation
+        # OPTIMIZER KNOBS (config optimizer:): no-decay groups, bf16 state,
+        # LR scaling from the effective (full) batch.
+        from training.optim_components import (
+            LossWeightSchedule as _LossWeightSchedule,
+            LrScalingRule as _LrScalingRule,
+            NoDecayParamGroups as _NoDecay,
+            OptimizerStatePrecision as _StatePrecision,
+            RDropRegularizer as _RDrop,
+        )
+        _opt_cfg = _training_cfg().optimizer
+        _reg_cfg = _training_cfg().regularization
+        _ls_cfg = _training_cfg().loss_schedules
+        _lr_rule = _LrScalingRule(_opt_cfg.lr_scaling, _opt_cfg.base_batch)
+        _effective_batch = len(train_pair_indices)
+        _peak_lr = _lr_rule.peak_lr(
+            float(cfg.learning_rate), micro_batch=_effective_batch,
+            grad_accum=1, world_size=1,
+        )
+        _named = list(model.named_parameters()) + [
+            (f"scorer.{n}", p) for n, p in scorer.named_parameters()
+        ]
+        _names_by_id = {id(p): n for n, p in _named}
+        _param_groups = _NoDecay(
+            float(cfg.weight_decay), bool(_opt_cfg.no_decay_bias_norm)
+        ).apply([{"params": [p for _, p in _named], "lr": _peak_lr}], _names_by_id)
         optimizer_policy = OptimizerExecution(backend=cfg.optimizer_backend)
-        optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
-                                      lr=cfg.learning_rate, weight_decay=cfg.weight_decay,
+        optimizer = torch.optim.AdamW(_param_groups,
+                                      lr=_peak_lr, weight_decay=cfg.weight_decay,
                                       **optimizer_policy.kwargs(cfg.device))
+        _state_precision = _StatePrecision(str(_opt_cfg.state_dtype))
+        _r_drop = _RDrop(_reg_cfg.r_drop.alpha if _reg_cfg.r_drop.enabled else 0.0)
+        if _reg_cfg.r_drop.enabled and float(_adv.arch.dropout) <= 0.0:
+            # R-Drop needs two DIFFERENT dropout masks; with dropout=0 the two
+            # forwards are identical and the penalty is exactly 0 (a no-op dial).
+            logger.warning("[graph-r-drop] disabled: advanced.graph.arch.dropout=0 "
+                           "(R-Drop requires dropout > 0)")
+            _r_drop = _RDrop(0.0)
+        _loss_weight_schedule = _LossWeightSchedule(
+            enabled=bool(_ls_cfg.enabled),
+            warmup_epochs=int(_ls_cfg.warmup_epochs),
+            schedule=str(_ls_cfg.schedule),
+            uniformity=bool(_ls_cfg.uniformity),
+            margin=bool(_ls_cfg.margin),
+            auxiliary=bool(_ls_cfg.auxiliary),
+        )
+        if _opt_cfg.lr_scaling != "none" or _opt_cfg.no_decay_bias_norm or _state_precision.enabled:
+            logger.info("[graph-optim] lr_scaling=%s base_batch=%s peak_lr=%.3e "
+                        "no_decay_bias_norm=%s state_dtype=%s effective_batch=%d",
+                        _opt_cfg.lr_scaling, _opt_cfg.base_batch, _peak_lr,
+                        _opt_cfg.no_decay_bias_norm, _opt_cfg.state_dtype,
+                        _effective_batch)
         scheduler = (torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="max", factor=cfg.lr_factor, patience=cfg.lr_patience,
             threshold=cfg.early_stopping_threshold, threshold_mode="abs", min_lr=cfg.min_lr)
@@ -618,19 +665,37 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
                     embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
                     scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs)
-                    if _adv.focal.enabled:
-                        classification = sigmoid_focal_bce_with_logits(
-                            scores.logits, train_labels,
-                            gamma=float(_adv.focal.gamma),
-                            alpha=_adv.focal.alpha,
-                            pos_weight=_adv.focal.pos_weight,
-                        )
+                    if _r_drop.enabled:
+                        # R-Drop: a second forward under a fresh dropout mask.
+                        initial2 = model.initial(support, support_text)
+                        states2 = model.context(support, support_text, initial=initial2)
+                        embeddings2 = model.encode(support, states2, support_text, initial=initial2)
+                        scores2 = scorer.score(embeddings2, train_pairs)
                     else:
-                        classification = F.binary_cross_entropy_with_logits(scores.logits, train_labels)
+                        scores2 = None
+
+                    def _classify(logits):
+                        if _adv.focal.enabled:
+                            return sigmoid_focal_bce_with_logits(
+                                logits, train_labels,
+                                gamma=float(_adv.focal.gamma),
+                                alpha=_adv.focal.alpha,
+                                pos_weight=_adv.focal.pos_weight,
+                            )
+                        return F.binary_cross_entropy_with_logits(logits, train_labels)
+
+                    classification = _classify(scores.logits)
+                    if scores2 is not None:
+                        classification = 0.5 * (
+                            classification + _classify(scores2.logits)
+                        ) + _r_drop.penalty(scores.logits, scores2.logits)
                     cos = scores.cosine
                     metric = (train_labels * (1 - cos) + (1 - train_labels)
                               * F.relu(cos - cfg.negative_margin)).mean()
-                    loss = classification + cfg.metric_weight * metric
+                    _metric_weight = _loss_weight_schedule.scheduled(
+                        "auxiliary", float(cfg.metric_weight), epoch
+                    )
+                    loss = classification + _metric_weight * metric
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
                 with _LOG.section("graph.train_update", epoch=epoch):
@@ -665,6 +730,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         grad_scaler.update()
                     else:
                         profiler.call('graph/optimizer', optimizer.step)
+                    if _state_precision.enabled:
+                        _state_precision.cast_(optimizer)
                 scorer.project_similarity_weights()
                 if _ema_model is not None:
                     # TASK B item 1: fold the just-updated online weights into

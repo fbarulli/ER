@@ -1075,6 +1075,13 @@ training:
       triplet:
         triplet: 1
     seed: 42
+  # Effective-batch warmup ramp. The frozen sampler owns the micro batch, so
+  # this scales GRADIENT ACCUMULATION only (never the frozen composition).
+  # Default OFF -> constant accumulation.
+  batch_size_ramp:
+    enabled: false
+    start_frac: 0.25
+    ramp_epochs: 3
 
 # ── pair-selection thresholds (owner's label semantics) ─────────────────────
 # thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml
@@ -1203,6 +1210,50 @@ advanced:
       gated_pool: false
     telemetry:
       nvml: false
+
+# ── optimizer knobs (config/training.yaml optimizer:) ──────────────────────
+# Additive to training.optimizer_backend (which selects the fused/foreach
+# implementation); this block owns decay grouping, state precision and LR
+# scaling. ALL default OFF. Components: src/training/optim_components.py.
+optimizer:
+  # Exclude bias / LayerNorm / norm params from weight decay; training.
+  # weight_decay still applies to every other param. OFF -> one decay.
+  no_decay_bias_norm: false
+  # Adam moment precision: fp32 (baseline) or bf16 (memory). Composes with AMP.
+  state_dtype: "fp32"
+  # Scale the reference peak LR (training.lr / GraphConfig.learning_rate) by
+  # the effective-batch ratio (micro*grad_accum*world_size / base_batch).
+  # none -> the explicit LR is used verbatim (explicit wins).
+  lr_scaling: "none"
+  base_batch: null
+
+# ── regularization knobs (config/training.yaml regularization:) ────────────
+regularization:
+  r_drop:              # two dropout-mask forwards + alpha*KL (GNN-lane wired)
+    enabled: false
+    alpha: 0.0
+  drop_path:           # stochastic depth on residual branches (text encoder)
+    enabled: false
+    rate: 0.0
+    schedule: "constant"   # linear | constant
+
+# ── data knobs (config/training.yaml data:) ────────────────────────────────
+data:
+  dynamic_padding:     # prepared-token path already pads to longest-in-batch;
+    enabled: false     # this rounds that width up to a multiple (kernel align)
+    pad_to_multiple: 8
+
+# ── loss-term weight schedules (config/training.yaml loss_schedules:) ──────
+# Epoch-wise ramps that COMPOSE with the existing SSOT weights (never a second
+# home): uniformity -> training.uniformity_regularization.weight,
+# margin -> training.contrastive_margin, auxiliary -> GNN metric_weight.
+loss_schedules:
+  enabled: false
+  warmup_epochs: 2
+  schedule: "linear"    # linear | cosine | constant
+  uniformity: false
+  margin: false
+  auxiliary: false
 
 # ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
 # second07's fixed grid, verbatim (epochs x lr x warmup%), + the TPE
