@@ -101,7 +101,8 @@ _LOG = RunLogger(__name__)
 # surface — stdout/stderr system transcript, trainer/worker view, setup
 # timing, and streamed per-stage output — folds into this single file under
 # the canonical logs root, exactly like the Kaggle lane's lane.log.
-LANE_LOG_NAME = "lane.log"
+# LANE_LOG_NAME is set just below, after SESSION: the lane transcript is
+# session-scoped so two concurrent lanes never truncate one shared file.
 
 # Smoke and normal training defaults come from the Colab runtime config.
 # Sweep fractions remain exclusive to the sweep lane.
@@ -123,6 +124,10 @@ GIT_REMOTE_NAME = _COLAB.git_remote_name
 # Keep the config session as the default, while allowing concurrent launches
 # to select an isolated named VM without editing the shared configuration.
 SESSION = os.environ.get("EUROMONITOR_COLAB_SESSION", _COLAB.session)
+# One transcript per session: the default session keeps the historical
+# logs/colab/lane.log; an isolated EUROMONITOR_COLAB_SESSION gets its own
+# lane_<session>.log so concurrent lanes never truncate each other.
+LANE_LOG_NAME = "lane.log" if SESSION == _COLAB.session else f"lane_{SESSION}.log"
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
