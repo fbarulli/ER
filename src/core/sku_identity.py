@@ -236,13 +236,8 @@ def flavor_vocabulary() -> frozenset[str]:
 
 
 # ── normalization ──────────────────────────────────────────────────────────
-def normalize_brand(raw: object) -> frozenset[str]:
-    """Brand cell -> a comparable token set.
-
-    "by Concord Foods" (the export prefixes some brands), "Peet's", `Peet""S`
-    and "Peet S" all reduce to one key. The apostrophe and doubled-quote OCR
-    damage are measured cases, not hypotheticals.
-    """
+@lru_cache(maxsize=65536)
+def _normalize_brand_cached(raw: object) -> frozenset[str]:
     text = _BRAND_NOISE_RE.sub(" ", normalize_text(str(raw or "")))
     tokens = [t for t in _ALPHA_RE.findall(text) if t not in _BRAND_SUFFIX]
     if not tokens:
@@ -264,28 +259,66 @@ def normalize_brand(raw: object) -> frozenset[str]:
     return frozenset(folded)
 
 
+def normalize_brand(raw: object) -> frozenset[str]:
+    """Brand cell -> a comparable token set.
+
+    "by Concord Foods" (the export prefixes some brands), "Peet's", `Peet""S`
+    and "Peet S" all reduce to one key. The apostrophe and doubled-quote OCR
+    damage are measured cases, not hypotheticals.
+
+    Memoized: the token fold is a pure function of the cell and the same cell
+    is re-read by the identity bundle and the conflict miner.
+    """
+    try:
+        return _normalize_brand_cached(raw)
+    except TypeError:
+        return _normalize_brand_uncached(raw)
+
+
+def _normalize_brand_uncached(raw: object) -> frozenset[str]:
+    return _normalize_brand_cached.__wrapped__(raw)
+
+
+def _alias_fold_impl(tokens: Iterable[str], *, qualifiers: bool = False) -> frozenset[str]:
+    out: set[str] = set()
+    add = out.add
+    concepts = concept_folds()
+    concepts_get = concepts.get
+    flatten_get = FLAVOR_ALIASES.get
+    for token in tokens:
+        token = str(token).strip().lower()
+        if not token:
+            continue
+        add(token)
+        singular = flatten_get(token)
+        if singular:
+            add(singular)
+        concept = concepts_get(token)
+        if concept:
+            add(concept)
+        if qualifiers:
+            out |= QUALIFIER_ALIASES.get(token, frozenset())
+    return frozenset(out)
+
+
+@lru_cache(maxsize=131072)
+def _alias_fold_cached(tokens: frozenset[str], qualifiers: bool) -> frozenset[str]:
+    return _alias_fold_impl(tokens, qualifiers=qualifiers)
+
+
 def alias_fold(tokens: Iterable[str], *, qualifiers: bool = False) -> frozenset[str]:
     """Vocabulary folding: plural -> singular, concept -> canonical, synonyms.
 
     `qualifiers=True` additionally applies the flavor synonym map, which is
     deliberately NOT applied to package/carbonation dimensions.
+
+    Memoized on the token SET (order and repetition are already irrelevant to
+    the fold), keyed with the ``qualifiers`` flag; the result is a frozenset.
     """
-    out: set[str] = set()
-    concepts = concept_folds()
-    for token in tokens:
-        token = str(token).strip().lower()
-        if not token:
-            continue
-        out.add(token)
-        singular = FLAVOR_ALIASES.get(token)
-        if singular:
-            out.add(singular)
-        concept = concepts.get(token)
-        if concept:
-            out.add(concept)
-        if qualifiers:
-            out |= QUALIFIER_ALIASES.get(token, frozenset())
-    return frozenset(out)
+    try:
+        return _alias_fold_cached(frozenset(tokens), qualifiers)
+    except TypeError:
+        return _alias_fold_impl(tokens, qualifiers=qualifiers)
 
 
 def _string_set(values: object) -> frozenset[str]:
@@ -319,10 +352,14 @@ def completeness(row: Mapping[str, Any] | Any) -> int:
     get = (lambda k: row.get(k, "")) if isinstance(row, Mapping) else (
         lambda k: getattr(row, k, "")
     )
-    return sum(
-        1 for col in DESCRIPTOR_COLUMNS
-        if not pd.isna(get(col)) and str(get(col)).strip()
-    )
+    # One read per column: the two-access form read and stringified every
+    # descriptor cell twice for a boolean.
+    populated = 0
+    for col in DESCRIPTOR_COLUMNS:
+        value = get(col)
+        if value is not None and not pd.isna(value) and str(value).strip():
+            populated += 1
+    return populated
 
 
 def completeness_frame(frame: pd.DataFrame) -> pd.Series:
@@ -339,16 +376,44 @@ def completeness_frame(frame: pd.DataFrame) -> pd.Series:
     return scores
 
 
+@lru_cache(maxsize=32)
+def _attr_token_re(key: str) -> re.Pattern[str]:
+    r"""`<key>\s*:\s*([^;]+)` compiled once per key.
+
+    The key is the caller's field pattern (`flavou?r`, `roast\s*type`,
+    `pack\s*material\s*type`), so the source text is constant per key: a
+    per-key cache keeps the module-level `re.search` wrapper — and its string
+    cache lookup — out of every row's attribute-cell scan.
+    """
+    return re.compile(key + r"\s*:\s*([^;]+)", re.I)
+
+
+@lru_cache(maxsize=65536)
+def _attr_token_set_cached(attr: object, key: str) -> frozenset[str]:
+    match = _attr_token_re(key).search(str(attr or ""))
+    if not match:
+        return frozenset()
+    return frozenset(_TOKEN_RE.findall(normalize_text(match.group(1))))
+
+
 def attr_token_set(attr: object, key: str) -> frozenset[str]:
     """`Key: value; ...` cell -> token set, normalized THEN tokenized.
 
     Order matters: normalizing first is what makes "coffee, vanilla" and
-    "vanilla coffee" the same set.
+    "vanilla coffee" the same set. Memoized; the result is a frozenset.
     """
-    match = re.search(key + r"\s*:\s*([^;]+)", str(attr or ""), re.I)
-    if not match:
-        return frozenset()
-    return frozenset(_TOKEN_RE.findall(normalize_text(match.group(1))))
+    try:
+        return _attr_token_set_cached(attr, key)
+    except TypeError:
+        return _attr_token_set_cached.__wrapped__(attr, key)
+
+
+@lru_cache(maxsize=65536)
+def _identity_tokens_set_cached(attributes: object) -> frozenset[str]:
+    out: set[str] = set()
+    for field_re in _FLAVOR_FIELDS:
+        out |= _attr_token_set_cached(attributes, field_re)
+    return frozenset(out)
 
 
 def identity_tokens_set(attributes: object) -> frozenset[str]:
@@ -356,16 +421,21 @@ def identity_tokens_set(attributes: object) -> frozenset[str]:
 
     Roast is a product splitter that lives in `Roast Type`, not `Flavour`:
     "French Roast" and "Vanilla" both declare "Flavour: coffee", so flavor
-    alone cannot separate them.
+    alone cannot separate them. Memoized; the result is a frozenset.
     """
-    out: set[str] = set()
-    for field_re in _FLAVOR_FIELDS:
-        out |= attr_token_set(attributes, field_re)
-    return frozenset(out)
+    try:
+        return _identity_tokens_set_cached(attributes)
+    except TypeError:
+        return _identity_tokens_set_cached.__wrapped__(attributes)
 
 
 def _gtin_facts(gtin: object) -> tuple[bool, str]:
-    """(trusted, normalized key) using structural validation and review policy."""
+    """(trusted, normalized key) using structural validation and review policy.
+
+    Deliberately NOT memoized: the reviewed-identity policy is allowed to
+    change within a process (pinned by test_gtin_scalar_facts), so this must
+    read the current policy on every call.
+    """
     from core.gtin import normalize_gtin_value
     from core.identity_policy import held_keys
 
@@ -373,6 +443,29 @@ def _gtin_facts(gtin: object) -> tuple[bool, str]:
     if not valid or key.zfill(14) in held_keys():
         return False, ""
     return True, "" if key is None else str(key)
+
+
+@lru_cache(maxsize=65536)
+def _row_dimensions_cached(items: tuple) -> DimensionEvidence:
+    return row_dimensions(dict(items))
+
+
+def _row_dimensions_memo(row: Mapping[str, Any] | Any) -> DimensionEvidence:
+    """Memoized :func:`row_dimensions` for all-string mapping rows.
+
+    Row-dimension parsing and context resolution are pure in the row's cells.
+    Keying is restricted to rows whose values are all ``str`` so the cached
+    call receives byte-identical inputs (the export path is dtype=str); any
+    other row shape falls through to the uncached parser unchanged.
+    """
+    if isinstance(row, Mapping):
+        items = tuple(row.items())
+        if all(isinstance(value, str) for _, value in items):
+            try:
+                return _row_dimensions_cached(tuple(sorted(items)))
+            except TypeError:
+                pass
+    return row_dimensions(row)
 
 
 def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
@@ -444,7 +537,7 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
         gtin_key=key,
         identity_review_reason=held_reason,
         completeness=completeness(row),
-        dimensions=row_dimensions(row if isinstance(row, Mapping) else {
+        dimensions=_row_dimensions_memo(row if isinstance(row, Mapping) else {
             name: get(name, "") for name in DESCRIPTOR_COLUMNS + tuple(NON_DESCRIPTOR_COLUMNS)
         }),
     )

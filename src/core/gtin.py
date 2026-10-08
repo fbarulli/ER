@@ -42,6 +42,7 @@ re-pad node keys; raw-key grouping elsewhere stays untouched.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -91,13 +92,29 @@ def _longest_digit_run(raw: str) -> str:
     return max(candidates, key=len) if candidates else ''
 
 
+@lru_cache(maxsize=65536)
+def _normalize_gtin_value_cached(raw: str) -> tuple[str | None, bool]:
+    return _normalize_gtin_value_impl(raw)
+
+
 def normalize_gtin_value(raw: object) -> tuple[str | None, bool]:
     """Scalar form of the shared structural facts, without singleton pandas work.
 
     Preserves longest-run/earliest-tie extraction, zero placeholders, UPC
     canonicalization, plausible lengths and shared GS1 checksum semantics.
     Policy eligibility remains the caller's separate, current-policy check.
+
+    Memoized on the ``str`` fast path only: the extraction/checksum is a pure
+    structural function of the cell (no reviewed-policy input). Non-str cells
+    (NaN, NA, numeric) keep the exact uncached coercion path, which also
+    avoids a NaN cache key that never compares equal to itself.
     """
+    if isinstance(raw, str):
+        return _normalize_gtin_value_cached(raw)
+    return _normalize_gtin_value_impl(raw)
+
+
+def _normalize_gtin_value_impl(raw: object) -> tuple[str | None, bool]:
     if pd.isna(raw):
         return None, False
     cleaned = _longest_digit_run(str(raw))

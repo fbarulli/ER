@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 
 import numpy as np
 
@@ -126,6 +127,28 @@ def info_from_sets(
     }
 
 
+@lru_cache(maxsize=65536)
+def _extract_all_cached(
+    title: str,
+    attributes: str,
+    description: str,
+    url: str,
+    image_url: str,
+    breadcrumbs_eng: str,
+    category: str,
+) -> dict:
+    """Memoized ``pipeline.extract_all`` for the identity/model-info lane.
+
+    ``extract_all`` is a pure per-value parser of the seven source cells:
+    the same listing is re-extracted when a prepared row, a graph node and a
+    text cache each build their model info. The cached object is only ever
+    READ here (the returned sets/dicts are rebuilt fresh by
+    ``info_from_sets``), so no caller can observe a mutation through it.
+    """
+    from pipeline import extract_all
+    return extract_all(title, attributes, description, url, image_url, breadcrumbs_eng, category)
+
+
 def sku_info(
     title: object,
     attributes: object,
@@ -140,15 +163,13 @@ def sku_info(
     Accepts the same evidence columns extract_all does — url, image_url,
     breadcrumbs_eng, category — defaulting to "" for backward compatibility.
     """
-    from pipeline import extract_all
-
     values = []
     for value in (description, url, image_url, breadcrumbs_eng, category):
         if value is None or (isinstance(value, float) and np.isnan(value)):
             value = ""
         values.append(str(value))
     desc, url_s, img_s, cat_path_s, cat_s = values
-    extracted = extract_all(str(title), str(attributes), desc, url_s, img_s, cat_path_s, cat_s)
+    extracted = _extract_all_cached(str(title), str(attributes), desc, url_s, img_s, cat_path_s, cat_s)
     flags = _as_string_set(
         extracted.get("attribute_consistency_flags"),
         kind="attribute_consistency_flags",

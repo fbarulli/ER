@@ -1,0 +1,123 @@
+{
+  "a": "/tmp/opc/reg2-A-r18/src",
+  "b": "/tmp/opc/ER-reg2-A/src",
+  "best_a": {
+    "identity": 0.178398,
+    "model_input": 1.121713,
+    "norm_attr_keys": 0.004642,
+    "sku_text": 0.030989,
+    "volume_evidence": 0.045683
+  },
+  "best_b": {
+    "identity": 0.179222,
+    "model_input": 1.111221,
+    "norm_attr_keys": 0.004663,
+    "sku_text": 0.026557,
+    "volume_evidence": 0.045697
+  },
+  "digests_a": [
+    "62162cb9ee72b548d1b5bc662af39fcc000c3ea17a1e4b52ce2bbdf1ced7f909"
+  ],
+  "digests_b": [
+    "62162cb9ee72b548d1b5bc662af39fcc000c3ea17a1e4b52ce2bbdf1ced7f909"
+  ],
+  "loadavg_per_run": [
+    {
+      "after": [
+        3.05,
+        4.25,
+        4.24
+      ],
+      "before": [
+        2.97,
+        4.28,
+        4.25
+      ],
+      "round": 0,
+      "tree": "a"
+    },
+    {
+      "after": [
+        3.05,
+        4.23,
+        4.23
+      ],
+      "before": [
+        3.05,
+        4.25,
+        4.24
+      ],
+      "round": 0,
+      "tree": "b"
+    },
+    {
+      "after": [
+        3.2,
+        4.22,
+        4.23
+      ],
+      "before": [
+        3.05,
+        4.23,
+        4.23
+      ],
+      "round": 1,
+      "tree": "a"
+    },
+    {
+      "after": [
+        3.17,
+        4.18,
+        4.22
+      ],
+      "before": [
+        3.2,
+        4.22,
+        4.23
+      ],
+      "round": 1,
+      "tree": "b"
+    },
+    {
+      "after": [
+        3.15,
+        4.16,
+        4.21
+      ],
+      "before": [
+        3.17,
+        4.18,
+        4.22
+      ],
+      "round": 2,
+      "tree": "a"
+    },
+    {
+      "after": [
+        3.35,
+        4.17,
+        4.21
+      ],
+      "before": [
+        3.15,
+        4.16,
+        4.21
+      ],
+      "round": 2,
+      "tree": "b"
+    }
+  ],
+  "reps": 3,
+  "rounds": 3,
+  "tag": "ab",
+  "totals_a": [
+    1.396679,
+    1.384638,
+    1.381879
+  ],
+  "totals_b": [
+    1.36971,
+    1.370698,
+    1.36749
+  ]
+}

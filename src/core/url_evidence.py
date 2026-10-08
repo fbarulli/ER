@@ -43,6 +43,9 @@ from core.text import PACK_RE, extract_volume_evidence, normalize_text
 
 __all__ = ["PATH_SCHEMA_WORDS", "UNITS", "is_evidentiary", "url_text"]
 
+_SPEC_VIEW = None
+
+
 def _spec():
     """The config-owned vocabulary + thresholds (config/paths.yaml url_evidence).
 
@@ -52,15 +55,28 @@ def _spec():
     SSOT rule exists to prevent. The config is now the ONLY copy; these two
     names are derived views of it, kept as module attributes because callers
     (and the regression tests) refer to them by name.
-    """
-    from core.common import data_cfg
 
-    return data_cfg().url_evidence
+    The resolved view is memoized: this module already freezes the same view
+    into PATH_SCHEMA_WORDS/UNITS at import (so it already treats the config as
+    immutable for the life of the process), while _is_noise called the
+    accessor once per token — 124,407 times in the lane profile, each paying
+    an `import` statement plus a function call to re-read a constant.
+    """
+    spec = _SPEC_VIEW
+    if spec is None:
+        from core.common import data_cfg
+
+        spec = data_cfg().url_evidence
+        globals()["_SPEC_VIEW"] = spec
+    return spec
 
 
 # Derived, not authored: config/paths.yaml `url_evidence` is the single source.
 PATH_SCHEMA_WORDS: frozenset[str] = frozenset(_spec().path_schema_words)
 UNITS: frozenset[str] = frozenset(_spec().units)
+# Longest-first, computed once. Equal-length units cannot both be a suffix of
+# one token, so the (hash-order-dependent) tie order cannot matter.
+_UNITS_BY_LENGTH: tuple[str, ...] = tuple(sorted(UNITS, key=len, reverse=True))
 
 _EXTENSION = re.compile(r"\.(jpe?g|png|gif|webp|svg|html?|php|aspx|jsp)$", re.I)
 _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
@@ -80,6 +96,26 @@ _UUID = re.compile(
 # (.../small_image/220x/…). Real pack notation carries its unit — "12x355ml"
 # — so it survives the numeric-noise and dimension rules intact.
 _IMAGE_DIM = re.compile(r"^\d+x$")
+# The two "this token is a bare quantity" shapes _is_noise tests, as ONE
+# compiled pattern: \d+(\.\d+)? and the media-dimension \d+x. Kept separate
+# from _NUMERIC (below) because url_text's token filter must NOT treat "220x"
+# as a quantity.
+_QUANTITY_OR_DIM = re.compile(r"\d+(?:\.\d+)?|\d+x")
+# url_text's numeric-token test: a bare decimal is product evidence ONLY inside
+# a recognized quantity span, so it must stay narrower than _QUANTITY_OR_DIM.
+_NUMERIC = re.compile(r"\d+(?:\.\d+)?")
+# The same numeric shape, anchored by callers, for _has_unit_suffix.
+_NUMERIC_FULL = re.compile(r"(?:\d+(?:\.\d+)?|\.\d+)")
+_SLUG_SEPARATOR = re.compile(r"[-_]")
+_SLUG_SEPARATOR_RUN = re.compile(r"[-_+]+")
+_FL_OZ = re.compile(r"\bfl-oz\b", re.I)
+_NON_SPACE = re.compile(r"\S+")
+_CASE_OF = re.compile(r"\bcases?\s+of\s+\d+\b", re.I)
+_IS_DIGIT = str.isdigit
+# PACK_RE (core.text) can only match when one of its literals occurs in the
+# slug, so this is a sound pre-filter, not a heuristic: "packet"/"packets" are
+# covered by "pack" and "bottles" by "bottle". Measured on the lane corpus it
+# skips the scan for 82% of slugs and cuts that scan's cost 2.9x.
 # Observed slug decimals (zeroh 0-8l; Sierra 7-5oz) must survive number
 # stripping. Require the complete configured volume-unit suffix before
 # reconstructing punctuation; this is sanitation, not a conversion parser.
@@ -113,6 +149,24 @@ def _slug_unit_resolvers():
     from core.text import _unit_spec
 
     pairs = [(re.compile(entry.pattern, re.I), float(entry.ml_per_unit))
+             for entry in _unit_spec().volume]
+    return sorted(pairs, key=lambda item: -len(item[0].pattern))
+
+
+@lru_cache(maxsize=1)
+def _slug_unit_probes():
+    """(unit-match probe, millilitres) pairs, longest first.
+
+    `_reconstruct_slug_decimals` reads a candidate's own trailing unit with
+    `(?:-?(?:unit))` anchored at the match end. The probe used to be BUILT as a
+    string and handed to module-level `re.match` for every resolver tried, per
+    candidate — the string concatenation, the `re` cache lookup and the
+    wrapper call all repeated for a pattern that never changes.
+    """
+    from core.text import _unit_spec
+
+    pairs = [(re.compile(r'(?:-?(?:' + entry.pattern + r'))', re.I),
+              float(entry.ml_per_unit))
              for entry in _unit_spec().volume]
     return sorted(pairs, key=lambda item: -len(item[0].pattern))
 
@@ -171,9 +225,12 @@ def _reconstruct_slug_decimals(slug: str) -> str:
         # shape the lookahead allows) matched NO branch — measured: unit=''
         # killed corroboration for every late-branch unit (iper.it "25-05-l").
         unit_key = ''
-        for resolver, _ml_per_unit in _slug_unit_resolvers():
-            probe = re.match(r'(?:-?(?:' + resolver.pattern + '))',
-                             slug[match.end():], re.I)
+        for probe_pattern, _ml_per_unit in _slug_unit_probes():
+            # Sliced, not `match(slug, end)`: the slice is what the audited
+            # behaviour was measured against, and a future configured unit
+            # pattern carrying a leading \b or lookbehind would see one
+            # character of context under `pos` that it does not see here.
+            probe = probe_pattern.match(slug[match.end():])
             if probe:
                 unit_key = probe.group(0).lstrip('-')
                 break
@@ -219,6 +276,7 @@ def _reconstruct_slug_decimals(slug: str) -> str:
 _VOWELS = frozenset("aeiou")
 
 
+@lru_cache(maxsize=8)
 def _short_code_pattern(letters: int) -> re.Pattern:
     """Retailer media codes: a short run of letters welded to digits ("k6rmm",
     "ab12"). Built from the configured letter budget instead of a literal, so
@@ -228,6 +286,7 @@ def _short_code_pattern(letters: int) -> re.Pattern:
     return re.compile(rf"^(?:[a-z]{{1,{letters}}}\d+|\d+[a-z]{{1,{letters}}})$")
 
 
+@lru_cache(maxsize=262144)
 def _is_noise(token: str) -> bool:
     """True when ``token`` is storefront scaffolding rather than product text.
 
@@ -248,6 +307,11 @@ def _is_noise(token: str) -> bool:
         and "2l" died (34 and 9 occurrences). Those are the size tokens the
         pack gate reads. Now a unit-bearing token is exempt, because the unit
         is evidence and the digits are quantity.
+
+    Memoized: the rule set depends only on the config-owned vocabulary (already
+    frozen into PATH_SCHEMA_WORDS/UNITS at import) and the token, and slug
+    vocabulary is far smaller than slug length — 32,555 token classifications
+    per lane pass over only 4,693 distinct tokens, an 85.6% hit rate.
     """
     spec = _spec()
     if len(token) < spec.min_token_length:
@@ -260,7 +324,7 @@ def _is_noise(token: str) -> bool:
         return False
     if token in PATH_SCHEMA_WORDS:
         return True
-    if re.fullmatch(r'\d+(?:\.\d+)?', token) or _IMAGE_DIM.match(token):
+    if _QUANTITY_OR_DIM.fullmatch(token):
         return True
     # UNIT CHECK FIRST. Order matters and the first attempt got it wrong:
     # "250ml" is 5 characters and contains no vowel, so the no-vowel rule ate
@@ -275,7 +339,7 @@ def _is_noise(token: str) -> bool:
     if _short_code_pattern(spec.short_code_letters).match(token):
         return True
     if len(token) >= spec.bare_hash_min_length and (
-        sum(ch.isdigit() for ch in token) >= spec.bare_hash_min_digits
+        sum(map(_IS_DIGIT, token)) >= spec.bare_hash_min_digits
     ):
         # long AND carries digits: a content hash. Long and all letters was the
         # old bug — "sparkling" is 9 letters and is a product word.
@@ -283,7 +347,19 @@ def _is_noise(token: str) -> bool:
     return False
 
 
-def _has_unit_suffix(token: str, spec) -> bool:
+def _has_unit_suffix(token: str, spec=None) -> bool:
+    """True when ``token`` is a SIZE token: a declared unit, with a quantity.
+
+    Memoized on ``token`` alone (PERF opt-url-evidence attempt 3): the unit
+    table is fixed at import and ``spec`` is accepted for API compatibility
+    but never consulted by the body.  The slug vocabulary recurs across rows
+    (162k calls over the lane cohort), so the repeat rate is high.
+    """
+    return _has_unit_suffix_cached(token)
+
+
+@lru_cache(maxsize=262144)
+def _has_unit_suffix_cached(token: str) -> bool:
     """True when ``token`` is a SIZE token: a declared unit, with a quantity.
 
     Recognises the three shapes that actually appear in listing slugs:
@@ -301,14 +377,14 @@ def _has_unit_suffix(token: str, spec) -> bool:
     slugs — and those are precisely the size tokens the pack gate reads, so
     losing them silently removed pack evidence rather than noise.
     """
-    for unit in sorted(UNITS, key=len, reverse=True):
+    for unit in _UNITS_BY_LENGTH:
         if not token.endswith(unit):
             continue
         head = token[: -len(unit)]
         if not head:
             # the unit itself: kept by the UNITS check in _is_noise
             return True
-        if re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', head):
+        if _NUMERIC_FULL.fullmatch(head):
             return True
         # pack notation: every "x"-separated part must itself be a size
         # token — integer, decimal, or unit-bearing. Decimal heads are
@@ -318,8 +394,8 @@ def _has_unit_suffix(token: str, spec) -> bool:
         parts = head.split("x")
         if len(parts) > 1 and all(
             part.isdigit()
-            or re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', part) is not None
-            or _has_unit_suffix(part, spec)
+            or _NUMERIC_FULL.fullmatch(part) is not None
+            or _has_unit_suffix_cached(part)
             for part in parts
         ):
             return True
@@ -350,34 +426,35 @@ def url_text(url: object) -> str:
     # before splitting it, so the fragment cannot invent product volume.
     basename = slug.rsplit('/', 1)[-1]
     stem, marker, _transform = basename.partition('._')
-    prefix = re.split(r'[-_]', stem, maxsplit=1)[0].lower()
+    prefix = _SLUG_SEPARATOR.split(stem, 1)[0].lower()
     spec = _spec()
     if (
         marker and len(stem) >= spec.bare_hash_min_length
         and prefix[:1].isdigit() and any(char.isalpha() for char in prefix)
-        and sum(char.isdigit() for char in stem) >= spec.bare_hash_min_digits
+        and sum(map(_IS_DIGIT, stem)) >= spec.bare_hash_min_digits
         and not _has_unit_suffix(prefix, spec)
     ):
         slug = slug[:-len(basename)]
     slug = _UUID.sub(" ", slug)
-    slug = re.sub(r'\bfl-oz\b', 'fl oz', slug, flags=re.I)
+    slug = _FL_OZ.sub('fl oz', slug)
     slug = _reconstruct_slug_decimals(slug)
-    slug = re.sub(r"[-_+]+", " ", slug)
+    slug = _SLUG_SEPARATOR_RUN.sub(" ", slug)
     slug = normalize_text(slug)
     # A bare retailer id is noise; a number in an explicit measurement or
     # pack phrase is product evidence. Preserve only recognized spans, using
     # the same grammar as downstream readers (including multiword fl oz).
     quantity_spans = [(entry['start'], entry['end']) for entry in extract_volume_evidence(slug)]
-    quantity_spans.extend(match.span() for match in PACK_RE.finditer(slug))
+    if ("x" in slug or "pack" in slug or "ct" in slug or "pk" in slug
+            or "count" in slug or "pcs" in slug or "bottle" in slug):
+        quantity_spans.extend(match.span() for match in PACK_RE.finditer(slug))
     # Retain the count in "case of 6 33.8 oz". Dropping the 6 previously
     # manufactured "case of 8 oz" after decimal fragments were filtered.
-    quantity_spans.extend(match.span() for match in re.finditer(
-        r'\bcases?\s+of\s+\d+\b', slug, re.I))
+    quantity_spans.extend(match.span() for match in _CASE_OF.finditer(slug))
     tokens = [
         token
-        for match in re.finditer(r'\S+', slug)
+        for match in _NON_SPACE.finditer(slug)
         for token in [match.group().rstrip('.')]
-        if (re.fullmatch(r'\d+(?:\.\d+)?', token)
+        if (_NUMERIC.fullmatch(token)
             and any(start <= match.start() and match.end() <= end for start, end in quantity_spans))
         or not _is_noise(token)
     ]
