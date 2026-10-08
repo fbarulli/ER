@@ -1,0 +1,20 @@
+{
+  "rows": 1758,
+  "components": 1042,
+  "by_source": {
+    "final_validation": 28,
+    "gate_results": 1154,
+    "listing_pairs": 576
+  },
+  "by_stratum": {
+    "gate_fallback": 1132,
+    "gate_proceed": 22,
+    "p0_disjoint": 9,
+    "p0_overlap": 19,
+    "real_listing": 576
+  },
+  "labelled_rows": 604,
+  "positives": 568,
+  "negatives": 36,
+  "note": "component-disjoint real holdout; gate hard_no excluded (not truth); gate proceed/fallback are label-less difficulty tags"
+}
