@@ -140,6 +140,9 @@ class DataFilesSpec(BaseModel):
     decision_visibility: str
     decision_ablation_report: str
     decision_attribute_census: str
+    # Config files code reads by path (bound here so no module spells
+    # config/<name> itself): the dimension-policy YAML.
+    identity_dimensions: str
 
     dataset: str
     dataset_deduped: str

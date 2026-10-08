@@ -37,8 +37,8 @@ class DimensionPolicy(BaseModel):
 
 @lru_cache(maxsize=1)
 def dimension_policy() -> DimensionPolicy:
-    from core.common import TRAIN_ROOT
-    path = TRAIN_ROOT / "config" / "identity_dimensions.yaml"
+    from core.common import F
+    path = F["identity_dimensions"]
     return DimensionPolicy.model_validate(yaml.safe_load(path.read_text()))
 
 

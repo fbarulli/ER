@@ -472,8 +472,6 @@ class Bundle(BaseModel):
             return False
         if "_artifact_publications" in parts and not relative.endswith(".json"):
             return False
-        if ".dvc" in parts and "cache" in parts:
-            return False
         if spec.checkpoint_dir in parts:
             if not selected_checkpoints:
                 return False

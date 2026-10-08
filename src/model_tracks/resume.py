@@ -280,11 +280,11 @@ def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> di
     identity['setup'] = {path.relative_to(setup).as_posix(): digest(path)
                          for path in setup.rglob('*') if path.is_file()
                          and (path.parent == setup and path.name in frozen_names
-                              or 'prepared' in path.relative_to(setup).parts and path.suffix in {'.csv', '.json'})}
+                              or layout.prepared_dir in path.relative_to(setup).parts and path.suffix in {'.csv', '.json'})}
     from graph_tracks.config import load_config as load_graph_config, load_text_config
     lanes = {}
     for track in ('gnn_only', 'cascade', 'text'):
-        path = setup / (track + '.yaml')
+        path = setup / (track + layout.track_config_suffix)
         lane = (load_text_config(path) if track == 'text' else load_graph_config(path, expected_track=track)).model_dump()
         # Input hashes bind content; locations differ in the portable archive.
         for key in ('listings', 'pairs', 'input_manifest', 'text_cache',

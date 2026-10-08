@@ -293,9 +293,10 @@ def _prepare_exports(cfg, setup, bundle):
         # staging, and the bundle is verified to actually carry the templates.
         if cfg.post_training_ablation:
             from model_tracks.staged_ablation import prepare_suite
+            from model_tracks.post_training_ablation import ABLATION_TRACKS
             spec = bundle_spec()
             prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
-            missing = [track for track in ('text','gnn_only')
+            missing = [track for track in ABLATION_TRACKS
                        if not (setup/spec.ablation_templates_dir/track/spec.ablation_request_file).is_file()]
             if missing:
                 raise RuntimeError(

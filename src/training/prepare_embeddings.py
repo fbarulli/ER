@@ -19,7 +19,7 @@ def _setup_layout():
 
 
 def input_identity(setup: Path, checkpoint: Path) -> dict:
-    from core.common import TRAIN_ROOT
+    from core.common import F, TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
     from core.model_input import model_input_composition
     layout = _setup_layout()
@@ -28,7 +28,7 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
     expected = {
         'catalog_sha256': file_hash(setup / layout.catalog),
         'identity_policy_sha256': file_hash(POLICY_PATH),
-        'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
+        'identity_dimensions_sha256': file_hash(F['identity_dimensions']),
         'checkpoint_sha256': checkpoint_hash(checkpoint),
         'composition': model_input_composition().model_dump(mode='json'),
         'composition_implementation_sha256': composition_fingerprint(),

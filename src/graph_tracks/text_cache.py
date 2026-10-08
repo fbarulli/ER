@@ -19,13 +19,15 @@ def composition_fingerprint():
     write to them changes mtime_ns and forces a re-hash; only repeated
     READS within a process reuse the digest.
     """
-    from core.common import TRAIN_ROOT
+    from core.common import TRAIN_ROOT, training_cfg
     files = list((TRAIN_ROOT / 'src/core').rglob('*.py'))
     files += list((TRAIN_ROOT / 'src/ner').rglob('*.py'))
     files += [TRAIN_ROOT / 'src/graph_tracks/text_cache.py', TRAIN_ROOT / 'src/pipeline.py']
-    files += [TRAIN_ROOT / 'config' / name for name in (
-        'paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
-        'identity_reviews.json', 'vocabulary.json')]
+    # The pinned config set is declared ONCE (config/training.yaml packaging
+    # block, the same list the runtime snapshot ships); the cache key lists
+    # exactly those files, so a new pinned config invalidates the cache too.
+    files += [TRAIN_ROOT / 'config' / name
+              for name in training_cfg().packaging.snapshot_pinned_configs]
     files.sort()
     tracked = []
     for path in files:
@@ -123,11 +125,11 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     vectors = np.asarray(vectors, dtype=np.float32)
     progress(f'encoding complete shape={vectors.shape}; writing cache')
     from core.identity_policy import POLICY_PATH
-    from core.common import TRAIN_ROOT
+    from core.common import F
     metadata = {'checkpoint_sha256': fingerprint,
                 'embedding_dtype': 'float32',
                 'identity_policy_sha256': file_hash(POLICY_PATH),
-                'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
+                'identity_dimensions_sha256': file_hash(F['identity_dimensions']),
                 'composition': model_input_composition().model_dump(mode='json'),
                 'catalog_sha256': source_hash,
                 'composition_implementation_sha256': implementation,

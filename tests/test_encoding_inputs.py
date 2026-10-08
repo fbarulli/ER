@@ -146,13 +146,17 @@ def test_prepared_token_contract_rejects_lost_or_misattributed_rows(corruption):
 
 def test_embedding_fingerprint_tracks_pipeline_parser_changes(tmp_path, monkeypatch):
     from core import common
+    from core.common import training_cfg
     from graph_tracks.text_cache import composition_fingerprint
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     for directory in ('src/core', 'src/graph_tracks', 'config'):
         (tmp_path / directory).mkdir(parents=True)
-    for path in ('src/core/model_input.py', 'src/graph_tracks/text_cache.py', 'src/pipeline.py',
-                 'config/paths.yaml', 'config/training.yaml', 'config/identity_dimensions.yaml',
-                 'config/identity_reviews.json', 'config/vocabulary.json'):
+    # The pinned config set is the packaging SSOT, not a literal: the fixture
+    # creates exactly the files the fingerprint reads.
+    pinned = [f'config/{name}'
+              for name in training_cfg().packaging.snapshot_pinned_configs]
+    for path in ('src/core/model_input.py', 'src/graph_tracks/text_cache.py',
+                 'src/pipeline.py', *pinned):
         (tmp_path / path).write_text('initial')
     before = composition_fingerprint()
     (tmp_path / 'src/pipeline.py').write_text('changed extraction behavior')

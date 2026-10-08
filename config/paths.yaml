@@ -101,6 +101,10 @@ files:
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
   gate_results: "training_data:gate_results.csv"             # SHARED frozen input
+  # Config files code reads by path: bound here so no module spells
+  # config/<name> itself. ``identity_dimensions`` feeds the dimension policy
+  # and the embedding/input identity hashes; declared once, read via F[name].
+  identity_dimensions: "repo:config/identity_dimensions.yaml"
   # Frozen calibration pairs are an input to both training and inference,
   # so ship them with the rest of the versioned runtime data.
   labeled_pairs: "data:labeled_pairs.csv"

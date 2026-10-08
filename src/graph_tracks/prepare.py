@@ -252,7 +252,7 @@ class PreparedManifest:
 @timed
 def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_tensors: bool = True) -> Path:
     from graph_tracks.train import load_pairs, write_json
-    from core.common import TRAIN_ROOT
+    from core.common import F, TRAIN_ROOT
     from core.identity_policy import POLICY_PATH, reviewed_row_mask
     layout = _setup_layout()
     # ONE consolidated-trace writer for the stage; committed once at the end (and
@@ -307,7 +307,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_
         manifest = PreparedManifest(
             catalog=catalog, metric_splits=splits, metric_pairs=pairs,
             policy_path=POLICY_PATH,
-            identity_dimensions=TRAIN_ROOT / 'config' / 'identity_dimensions.yaml',
+            identity_dimensions=F['identity_dimensions'],
             listing_path=listing_path,
         )
         manifest.write(binding)

@@ -31,7 +31,7 @@ def load_inputs(cfg, *, verify_inputs=None):
     if verify_inputs is None:
         from model_tracks.data_gate import _owner_trusted
         verify_inputs = not _owner_trusted('graph inputs')
-    from core.common import TRAIN_ROOT
+    from core.common import F, TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
     layout = _setup_layout()
     resolve = lambda raw: (TRAIN_ROOT / raw).resolve()
@@ -44,7 +44,7 @@ def load_inputs(cfg, *, verify_inputs=None):
         for key, path in [('listings_sha256', resolve(cfg.listings)),
                           ('pairs_sha256', resolve(cfg.pairs)),
                           ('identity_policy_sha256', POLICY_PATH),
-                          ('identity_dimensions_sha256', TRAIN_ROOT / 'config/identity_dimensions.yaml')]:
+                          ('identity_dimensions_sha256', F['identity_dimensions'])]:
             if manifest is not None and manifest.get(key) != file_hash(path):
                 raise ValueError(f'prepared input mismatch: {key}')
         from graph_tracks.data import NUMERIC, RELATIONS
