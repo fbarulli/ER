@@ -166,9 +166,7 @@ if file_hash(archive_path) != {file_hash(archive)!r}:
     raise ValueError("prepared all-track Git input mismatch")
 # The immutable package can predate its transport publication commit. Fetch
 # only that revision: a depth-one branch checkout need not contain its parent.
-subprocess.run(["git","fetch","--depth=1","--filter=blob:none","--no-tags",
-                {backend.GIT_REMOTE_NAME!r},{metadata['revision']!r}],cwd=root,check=True)
-subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
+
 from core.portable_archive import verified_archive, verify_archive, install_data_members
 with verified_archive(archive_path,"model_tracks_package.json") as (archive, _):
     for member in archive.infolist():
