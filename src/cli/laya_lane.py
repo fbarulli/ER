@@ -24,6 +24,9 @@ Contract + evidence: tests/test_laya_lane.py (offline, no network).
 from __future__ import annotations
 
 import argparse
+import ast
+import csv
+import hashlib
 import json
 import os
 import re
@@ -31,10 +34,14 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from collections import Counter
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+_PARIS = ZoneInfo("Europe/Paris")  # build once, not per log line
 
 from core.bundle import Bundle, BundleRole
 from core.common import TRAIN_ROOT, training_cfg
@@ -424,16 +431,15 @@ def corpus_skip_census(report: dict) -> dict[str, int]:
     return {str(reason): int(count) for reason, count in skipped.items()}
 
 
-def abstention_thresholds(mapping: dict | None) -> dict[str, float]:
-    """Validate a fitted ``abstention_thresholds`` map.
-
-    Keyed by ``temp_bucket`` plus the runtime ``default`` sentinel, so a scalar
-    ``min_confidence`` cannot represent it.
-    """
+@lru_cache(maxsize=1)
+def _threshold_adapter():
     from pydantic import TypeAdapter
 
-    return dict(TypeAdapter(dict[MinConfidenceKey, Share]).validate_python(
-        mapping or {}))
+    return TypeAdapter(dict[MinConfidenceKey, Share])
+
+
+def abstention_thresholds(mapping: dict | None) -> dict[str, float]:
+    return dict(_threshold_adapter().validate_python(mapping or {}))
 
 
 # The two shapes the finetune note uses to name the train/eval overlap:
@@ -844,7 +850,7 @@ def _stamp() -> str:
     phrasing in the relaunch brief predates that convention.
     """
     return (f"[laya-lane "
-            f"{datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+            f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}]")
 
 
 def _log_lane(line: str) -> None:
@@ -857,7 +863,7 @@ def _log_lane(line: str) -> None:
     never allowed to mask the operation's own outcome.
     """
     global _LANE_LOG_STARTED
-    stamp = f"{datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}"
+    stamp = f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}"
     print(f"[laya-lane {stamp}] {line}", flush=True)
     try:
         log_dir = lane_logs_dir()
@@ -943,6 +949,57 @@ def _metric_expectation(path: Path, columns: list[str]) -> dict[str, Any]:
     }
 
 
+def _census_csv(path: Path, wanted_columns: tuple[str, ...],
+                label_column: str = "true_label") -> dict[str, Any]:
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"decision input not found: {path}")
+    digest = hashlib.sha256()
+    labels: Counter = Counter()
+    with path.open("rb") as handle:
+        def lines():
+            for raw in handle:
+                digest.update(raw)
+                yield raw.decode("utf-8")
+
+        reader = csv.reader(lines())
+        header = next(reader, None)
+        if header is None:
+            raise ValueError(f"decision input has no header row: {path}")
+        missing = [column for column in wanted_columns if column not in header]
+        if missing:
+            raise ValueError(
+                f"decision input {path.name} is missing columns {missing} "
+                f"(header: {header})")
+        label_at = header.index(label_column) if label_column in header else None
+        rows = 0
+        for record in reader:
+            rows += 1
+            if label_at is not None and record:
+                labels[record[label_at] if label_at < len(record) else ""] += 1
+    if rows == 0:
+        raise ValueError(f"decision input has no data rows: {path}")
+    expectation: dict[str, Any] = {}
+    if label_at is not None:
+        unknown = sorted(set(labels) - {"0", "1"})
+        if unknown:
+            raise ValueError(
+                f"decision input {path.name} carries true_label values "
+                f"outside {{0, 1}}: {unknown}")
+        expectation = {
+            "expected_rows": sum(labels.values()),
+            "expected_label_distribution": {
+                label: labels[label] for label in sorted(labels)},
+            "metric_expectation": {
+                "accuracy_gold": "label",
+                "f1_gold": "identity_claim-vs-true_label",
+            },
+        }
+    return {"rows": rows, "columns": list(header),
+            "sha256": digest.hexdigest(), "bytes": path.stat().st_size,
+            "expectation": expectation}
+
+
 def stage_decision_input(kind: str, *, decision_kind: str,
                          override: Path | None = None) -> dict[str, Any]:
     """Stage ONE decision CSV under results/laya_lane/<kind>/<decision>/.
@@ -960,7 +1017,7 @@ def stage_decision_input(kind: str, *, decision_kind: str,
     source = Path(override) if override else F[decision_binding(decision_kind)]
     stage = staging_dir() / kind / decision_kind
     stage.mkdir(parents=True, exist_ok=True)
-    census = _measure_csv(source, entry["wanted_columns"])
+    census = _census_csv(source, entry["wanted_columns"])
     destination = stage / source.name
     shutil.copy2(source, destination)
     receipt = {
@@ -970,7 +1027,7 @@ def stage_decision_input(kind: str, *, decision_kind: str,
         "rows": census["rows"], "columns": census["columns"],
         "sha256": census["sha256"], "bytes": census["bytes"],
         "description": entry["description"],
-        **_metric_expectation(source, census["columns"]),
+        **census["expectation"],
     }
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     _log_lane(f"staged decision input [{kind}/{decision_kind}] "
@@ -1105,49 +1162,42 @@ laya_runtime_preflight()
 
 
 # ── kernel / notebook payload composition ──────────────────────────────────
-def _kernel_script_gate(script: str) -> None:
-    """Staging-time AST gate (kaggle_lane._kernel_script_gate mirror):
-    never stage an unparseable payload or one that references an undeclared
-    UPPER_CASE template constant (the v4 NameError error class)."""
-    import ast
+@lru_cache(maxsize=8)
+def _parse(script: str) -> ast.Module:
+    return ast.parse(script)
 
-    parsed = ast.parse(script)
-    defined = {node.id for stmt in ast.walk(parsed)
-               if isinstance(stmt, ast.Assign)
-               for node in stmt.targets if isinstance(node, ast.Name)}
-    undeclared = {expr.id for expr in ast.walk(parsed)
-                  if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load)
-                  and expr.id.isupper() and expr.id not in defined}
+
+def _kernel_script_gate(script: str) -> None:
+    defined: set[str] = set()
+    loaded: set[str] = set()
+    for node in ast.walk(_parse(script)):
+        if isinstance(node, ast.Assign):
+            defined.update(t.id for t in node.targets
+                           if isinstance(t, ast.Name))
+        elif (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+              and node.id.isupper()):
+            loaded.add(node.id)
+    undeclared = loaded - defined
     if undeclared:
         raise ValueError(f"staged kernel uses undeclared constants: "
                          f"{sorted(undeclared)}; regenerate the template")
 
 
 def _module_scope_gate(script: str) -> None:
-    """Post-substitution module-scope AST scan (regression pin for the
-    BUG-1 NameError class: a template substitution emitting an undefined
-    TOP-LEVEL load — e.g. `_runtime_root = Path(root)` — can never stage
-    again). Every name Loaded at module scope (compound statements
-    recurse; function/class bodies are their own scopes and skipped) must
-    be a builtin, an import binding, a def/class name, or a bound target.
-    Raise loud (never a silent payload) BEFORE the atomic writes.
-    """
-    import ast
     import builtins
 
-    compile(script, "<laya-payload>", "exec")
-    tree = ast.parse(script)
+    tree = _parse(script)  # shared with _kernel_script_gate (cache hit)
+    compile(tree, "<laya-payload>", "exec")
     bound = set(dir(builtins))
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
                              ast.ClassDef)):
             bound.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                if isinstance(node, ast.Import):
-                    bound.add(alias.asname or alias.name.split(".")[0])
-                elif alias.name != "*":
-                    bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            bound.update(a.asname or a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            bound.update(a.asname or a.name for a in node.names
+                         if a.name != "*")
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             bound.add(node.id)
     loaded = {node.id
@@ -1240,7 +1290,7 @@ def log(line):
 def pip_upgrade_laya():
     """laya installs over pip; torch must already be 2.14 cu13x."""
     command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
-               LAYA_PACKAGE]
+               "--disable-pip-version-check", LAYA_PACKAGE]
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, check=True)
 
@@ -1299,8 +1349,7 @@ def main():
     WORKING.mkdir(parents=True, exist_ok=True)
     out = WORKING / (DECISION_KIND + ".decisions.jsonl")
     with out.open("w", encoding="utf-8") as handle:
-        for item in results:
-            handle.write(json.dumps(item) + "\\n")
+        handle.write("".join(json.dumps(item) + "\\n" for item in results))
     log("wrote " + str(out) + " (" + str(len(results)) + " decisions)")
     receipt = {
         "gpu_kind": DECISION_KIND,
@@ -1317,7 +1366,8 @@ def main():
     }
     (WORKING / "laya_decision.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_decision.tar.gz", "w:gz") as tar:
+    with tarfile.open(WORKING / "laya_decision.tar.gz", "w:gz",
+                      compresslevel=1) as tar:
         for item in sorted(WORKING.iterdir()):
             if item.name != "laya_decision.tar.gz":
                 tar.add(item, arcname=item.name)
@@ -1376,7 +1426,8 @@ def resolve_input(name):
 
 def main():
     subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                    "--no-input", LAYA_PACKAGE], check=True)
+                    "--no-input", "--disable-pip-version-check",
+                    LAYA_PACKAGE], check=True)
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
     questions_path = resolve_input(QUESTION_SCHEMA_FILE)
     questions = json.loads(questions_path.read_text())["questions"]
@@ -1513,9 +1564,12 @@ def apply_device_patch():
 #   (3) encode_item is memoized per (item id, option order) so steady-state
 #       epochs skip re-tokenizing (train.py:665). draw_option_order is still
 #       called in the same per-step order, so the RNG stream is identical.
-# The recipe flags, grad-accum window, clipping, scheduler and seed paths are
-# byte-for-byte the stock loop. Opt out (patch AND sampler) with
-# ER_LAYA_PERF_PATCH=0. Injected at the `@PERF_PATCH@` marker.
+# The SINGLE-PROCESS path is byte-for-byte the stock loop (ITEM order included);
+# when WORLD_SIZE>1 the same loop additionally DDP-wraps the model and shards
+# the items via `build_distributed_sampler` (see the DDP helpers below). The
+# recipe flags, grad-accum window, clipping, scheduler and seed paths are
+# unchanged. Opt out (patch AND sampler) with ER_LAYA_PERF_PATCH=0; force the
+# single-process fallback with ER_LAYA_DDP=0. Injected at `@PERF_PATCH@`.
 FINETUNE_PERF_PATCH_SOURCE = '''\
 PERF_PATCH_ENV = "ER_LAYA_PERF_PATCH"
 
@@ -1524,6 +1578,130 @@ def perf_patch_enabled():
     # one env flag disables BOTH the movement patch and the GPU sampler.
     return os.environ.get(PERF_PATCH_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
+
+
+# Distributed-data-parallel wiring (2xT4). `finetune` is a black box that
+# calls train_model once per rank, so the wrap + the per-rank shard live IN
+# the patched loop (DDP averages the gradients for us). One env flag forces
+# the single-process fallback: ER_LAYA_DDP=0.
+DDP_ENV = "ER_LAYA_DDP"
+
+
+def ddp_enabled():
+    return os.environ.get(DDP_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def dist_env():
+    # LOCAL_RANK drives the per-rank CUDA device; RANK the global rank; the
+    # spawn/torchrun launcher sets both (world_size <= 1 => single process).
+    world_size = int(os.environ.get("WORLD_SIZE") or "1")
+    rank = int(os.environ.get("RANK") or os.environ.get("LOCAL_RANK") or "0")
+    local_rank = int(os.environ.get("LOCAL_RANK") or "0")
+    return local_rank, rank, world_size
+
+
+def is_distributed():
+    return ddp_enabled() and dist_env()[2] > 1
+
+
+def is_rank0():
+    return dist_env()[1] == 0
+
+
+def build_distributed_sampler(items, seed):
+    # One disjoint shard per rank, reseeded every epoch via set_epoch(). The
+    # pad-to-even behaviour keeps every rank's step count equal (the DDP
+    # allreduce needs matching backward counts); a corpus whose item count
+    # divides world_size then covers every item exactly once per epoch.
+    import torch
+    local_rank, rank, world_size = dist_env()
+    return torch.utils.data.DistributedSampler(
+        items, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
+
+
+def init_distributed(backend=None):
+    # nccl on the T4 pair, gloo for the CPU test; idempotent per process.
+    if not is_distributed():
+        return False
+    import torch
+    import torch.distributed as dist
+    local_rank, rank, world_size = dist_env()
+    if backend is None:
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+    if backend == "nccl":
+        torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        # env:// rendezvous needs a master; torchrun sets these, plain
+        # torch.multiprocessing.spawn does not (single box => localhost).
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        torch.distributed.init_process_group(backend)
+    return True
+
+
+def barrier_if_distributed():
+    if not is_distributed():
+        return
+    import torch.distributed as dist
+    if dist.is_initialized():
+        dist.barrier()
+
+
+def destroy_if_distributed():
+    if not is_distributed():
+        return
+    import torch.distributed as dist
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def run_on_rank0(fn):
+    # rank 0 ONLY stages: the barrier first guarantees every rank finished
+    # training before the single writer touches /kaggle/working.
+    barrier_if_distributed()
+    if is_rank0():
+        return fn()
+    return None
+
+
+def resolve_nprocs():
+    # 2 ranks only when DDP AND the perf loop are on and 2+ cuda devices
+    # exist; an already-launched torchrun-style WORLD_SIZE is honoured as-is.
+    if not (ddp_enabled() and perf_patch_enabled()):
+        return 1
+    env_world = int(os.environ.get("WORLD_SIZE", "0") or "0")
+    if env_world > 1:
+        return env_world
+    try:
+        import torch
+    except Exception:
+        return 1
+    try:
+        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            return torch.cuda.device_count()
+    except Exception:
+        return 1
+    return 1
+
+
+def launch_finetune(worker):
+    # Already launched torchrun-style (WORLD_SIZE>1): this process IS a rank,
+    # run it directly. Otherwise spawn one process per visible device (nccl);
+    # the caller falls back to the in-process single-device session when this
+    # returns 1. spawn (not fork) because resolve_nprocs touched CUDA.
+    if is_distributed():
+        _, rank, world_size = dist_env()
+        worker(rank, world_size)
+        return world_size
+    nprocs = resolve_nprocs()
+    if nprocs > 1:
+        import torch.multiprocessing as mp
+        print("[perf-patch] distributed launch: %d ranks (nccl)" % nprocs,
+              flush=True)
+        mp.spawn(worker, args=(nprocs,), nprocs=nprocs, join=True,
+                 start_method="spawn")
+    return nprocs
 
 
 def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
@@ -1559,8 +1737,25 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             "params": [p for n, p in model.named_parameters()
                        if n.startswith("encoder.") and p.requires_grad],
             "lr": config.encoder_lr})
-    optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay)
-    steps_per_epoch = math.ceil(len(items) / config.micro_batch)
+    optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay,
+                                 fused=(device.type == "cuda"))
+    # DDP: wrap the model (grads averaged across ranks) and shard the items
+    # with a per-rank DistributedSampler. The shard length is equal on every
+    # rank (pad-to-even), so the grad-accum window and the optimizer steps
+    # stay in lockstep across the DDP allreduce.
+    ddp_sampler = None
+    if is_distributed():
+        local_rank, rank, world_size = dist_env()
+        ddp_sampler = build_distributed_sampler(items, config.seed)
+        if device.type == "cuda":
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, device_ids=[local_rank], output_device=local_rank)
+        else:
+            model = torch.nn.parallel.DistributedDataParallel(model)
+        print("[perf-patch] ddp: rank %d/%d, %d local items"
+              % (rank, world_size, len(ddp_sampler)), flush=True)
+    epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
+    steps_per_epoch = math.ceil(epoch_len / config.micro_batch)
     updates = max(1, math.ceil(steps_per_epoch / config.grad_accum)
                   * config.epochs)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -1575,8 +1770,14 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     cache = {}
     hits = lookups = 0
     for epoch in range(config.epochs):
-        epoch_items = list(items)
-        random.Random(config.seed + epoch).shuffle(epoch_items)
+        if ddp_sampler is not None:
+            # Per-epoch reseed: every rank shuffles identically then takes a
+            # disjoint stride slice, so no item is trained twice per epoch.
+            ddp_sampler.set_epoch(epoch)
+            epoch_items = [items[i] for i in ddp_sampler]
+        else:
+            epoch_items = list(items)
+            random.Random(config.seed + epoch).shuffle(epoch_items)
         sigma = laya_train.sigma_at(epoch, config.epochs, config.sigma_start,
                                     config.sigma_end)
         total, n_steps = None, 0
@@ -1640,6 +1841,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                                                n_steps), flush=True)
         mean = (float(total.item() / max(1, n_steps))
                 if total is not None else 0.0)
+        # DDP already averages the gradients; report the rank-averaged scalar
+        # too so every rank logs the same honest epoch loss.
+        if is_distributed():
+            import torch.distributed as dist
+            mean_tensor = torch.tensor(mean, device=device)
+            dist.all_reduce(mean_tensor, op=dist.ReduceOp.SUM)
+            mean = float(mean_tensor.item()) / dist_env()[2]
         history.append(mean)
         print("epoch %d/%d mean loss %.4f (encode memo hits %d/%d)"
               % (epoch + 1, config.epochs, mean, hits, lookups), flush=True)
@@ -1663,45 +1871,30 @@ def apply_perf_patch():
 
 
 def start_gpu_sampler():
-    # 1 Hz nvidia-smi sampler -> /kaggle/working/gpu_usage.log (rides the
-    # fetch-back tar). No-op when the flag is off, nvidia-smi is absent, or
-    # the box is CPU-only.
     if not perf_patch_enabled():
         return None
     if shutil.which("nvidia-smi") is None:
         log("gpu sampler: nvidia-smi absent; skipping")
         return None
     path = WORKING / "gpu_usage.log"
-    stop = threading.Event()
-    query = ["nvidia-smi",
-             "--query-gpu=utilization.gpu,memory.used,memory.total",
-             "--format=csv,noheader"]
-
-    def _loop():
-        while not stop.is_set():
-            try:
-                proc = subprocess.run(query, capture_output=True, text=True,
-                                      timeout=5)
-                if proc.returncode == 0 and proc.stdout.strip():
-                    line = proc.stdout.strip().splitlines()[0]
-                    with path.open("a", encoding="utf-8") as handle:
-                        handle.write(line + "\\n")
-            except (OSError, subprocess.SubprocessError):
-                pass
-            stop.wait(1.0)
-
-    thread = threading.Thread(target=_loop, name="gpu-sampler", daemon=True)
-    thread.start()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        ["nvidia-smi",
+         "--query-gpu=utilization.gpu,memory.used,memory.total",
+         "--format=csv,noheader", "-l", "1", "-f", str(path)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     log("gpu sampler: 1 Hz -> " + str(path))
-    return stop, thread
+    return proc
 
 
-def stop_gpu_sampler(handle):
-    if not handle:
+def stop_gpu_sampler(proc):
+    if not proc:
         return
-    stop, thread = handle
-    stop.set()
-    thread.join(timeout=5)
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def summarize_gpu_usage(path):
@@ -1737,17 +1930,21 @@ def summarize_gpu_usage(path):
 FINETUNE_KERNEL_SCRIPT = '''\
 """ER laya fine-tune on a Kaggle GPU session (cli.laya_lane).
 
-Single T4 per owner ruling (2xT4 -> 1xT4; never requests the double
-accelerator): pins one CUDA device, installs laya over pip (pinned
-`laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test +
-receipt, the er-laya-train dataset), extracts the attached base-model
+Distributed data-parallel over the 2xT4 pair: when two CUDA devices are
+visible `main()` spawns one process per device (nccl), wraps the model in
+`DistributedDataParallel` and shards the training items with a per-rank
+`DistributedSampler`; a single GPU / CPU falls back to the original
+one-process path unchanged (opt out with ER_LAYA_DDP=0). Installs laya over
+pip (pinned `laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test
++ receipt, the er-laya-train dataset), extracts the attached base-model
 archive (the er-laya-base dataset; the shipped convaiinnovations/laya
 checkpoint) to a local dir, builds the FULL `laya.train.TrainConfig` from
 the YAML-driven `FINETUNE_CONFIG` (every trainer knob is config SSOT), and
 calls `laya.train.finetune(...)` directly with the extracted DIRECTORY as
 the base -- so `resolve_checkpoint_dir` takes the isdir branch and NEVER
-calls the Hub. It writes the checkpoint + a receipt into /kaggle/working
-for hash-verified fetch-back.
+calls the Hub. Rank 0 alone scores the held-out split, writes the receipt
+and stages the checkpoint tar into /kaggle/working for hash-verified
+fetch-back.
 """
 from __future__ import annotations
 
@@ -1760,7 +1957,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1796,7 +1992,7 @@ def log(line):
 def pip_install_laya():
     """laya installs over pip, pinned; torch is already on the session."""
     command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
-               LAYA_PACKAGE]
+               "--disable-pip-version-check", LAYA_PACKAGE]
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, check=True)
 
@@ -1846,7 +2042,8 @@ def open_zstd(path):
     except ImportError:
         pass
     subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                    "--no-input", "zstandard"], check=True)
+                    "--no-input", "--disable-pip-version-check",
+                    "zstandard"], check=True)
     import zstandard
     return zstandard.ZstdDecompressor().stream_reader(open(path, "rb"))
 
@@ -1904,7 +2101,11 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
 
 
 def sha256_of(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def evaluate_held_out(test_path, checkpoint, device):
@@ -1948,9 +2149,29 @@ def evaluate_held_out(test_path, checkpoint, device):
     }
 
 
-def main():
-    pip_install_laya()
-    device = pick_device()
+def session_env():
+    # Self-report the container session identity so the host-side log follower
+    # can persist logs/kaggle/<kernel>.session_id for the verified in-place
+    # stop. Kaggle sets NO KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID in the
+    # container; the only per-run id is the numeric suffix of
+    # KAGGLE_CONTAINER_NAME ("kaggle_<token>-<session_id>-webtier"), which the
+    # SDK cancel_kernel_session accepts.
+    _container = os.environ.get("KAGGLE_CONTAINER_NAME", "")
+    _parts = _container.rsplit("-", 2)
+    _session_id = (_parts[1] if len(_parts) == 3 and _parts[1].isdigit()
+                   else "")
+    print("[kaggle-session] session_id=" + _session_id
+          + " container=" + _container, flush=True)
+    return {"KAGGLE_CONTAINER_NAME": _container, "session_id": _session_id}
+
+
+def _finetune_session(distributed, session):
+    if distributed:
+        local_rank, rank, world_size = dist_env()
+        device = "cuda"
+        log("rank %d/%d on cuda:%d (DDP)" % (rank, world_size, local_rank))
+    else:
+        device = pick_device()
     train = resolve_input(TRAIN_JSONL)
     dev = resolve_input(DEV_JSONL)
     test = resolve_input(TEST_JSONL)
@@ -1961,60 +2182,98 @@ def main():
     base_model = extract_base_model(archive)
     log("base model: " + str(base_model))
     out_dir = WORKING / "checkpoint"
-    gpu_handle = start_gpu_sampler()
+    if distributed and not is_rank0():
+        # Non-rank-0 ranks must NEVER write the canonical checkpoint: suppress
+        # laya's per-epoch + final save_checkpoint and send any incidental
+        # byte to a private scratch dir (never /kaggle/working/checkpoint).
+        from laya import train as laya_train
+        laya_train.save_checkpoint = lambda *args, **kwargs: None
+        out_dir = WORKING / ("checkpoint.rank" + str(dist_env()[1]))
+    gpu_handle = start_gpu_sampler() if is_rank0() else None
     try:
         summary = run_laya_finetune(train, dev, base_model, out_dir, device)
     finally:
         stop_gpu_sampler(gpu_handle)
-    receipt = {
-        "gpu_kind": "finetune",
-        "gpu": "T4 (single)",
-        "run_tag": RUN_TAG,
-        "laya_package": LAYA_PACKAGE,
-        "base_model": str(base_model),
-        "base_model_archive": str(archive),
-        "device": device,
-        "perf_patch_enabled": perf_patch_enabled(),
-        "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
-        "recipe": FINETUNE_CONFIG,
-        "output_dir": str(out_dir),
-        "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
-                          DEV_JSONL: sha256_of(dev),
-                          TEST_JSONL: sha256_of(test)},
-    }
-    if isinstance(summary, dict):
-        for key in ("train_items", "calibration_items", "eval_items",
-                    "temperature", "epoch_loss"):
-            if key in summary:
-                receipt[key] = summary[key]
-    report = out_dir / "train_report.json"
-    if report.is_file():
-        receipt["train_report"] = json.loads(report.read_text())
-    # DEFAULT-ON held-out validation (owner order): every fine-tune also
-    # scores the just-trained checkpoint on the held-out `test` split, so the
-    # receipt always carries the honest generalization number. Opt out with
-    # ER_LAYA_HELD_OUT=0; a failure never discards the trained checkpoint.
-    if os.environ.get("ER_LAYA_HELD_OUT", "1").strip().lower() not in (
-            "0", "false", "off", "no"):
-        try:
-            held_out = evaluate_held_out(test, out_dir, device)
-            (out_dir / "held_out_report.json").write_text(
-                json.dumps(held_out, indent=2) + "\\n", encoding="utf-8")
-            receipt["held_out"] = held_out
-            log("held-out " + held_out["eval_source"] + " items="
-                + str(held_out["items"]) + " accuracy="
-                + str(held_out["metrics"].get("accuracy")))
-        except Exception as error:  # keep the checkpoint; surface the failure
-            receipt["held_out_error"] = (
-                type(error).__name__ + ": " + str(error)[:400])
-            log("held-out evaluation FAILED: " + receipt["held_out_error"])
-    (WORKING / "laya_finetune.receipt.json").write_text(
-        json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz") as tar:
-        for item in sorted(WORKING.iterdir()):
-            if item.name != "laya_finetune.tar.gz":
-                tar.add(item, arcname=item.name)
-    log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+
+    def rank0_work():
+        receipt = {
+            "gpu_kind": "finetune",
+            "gpu": "T4 (single)",
+            "session_env": session,
+            "run_tag": RUN_TAG,
+            "laya_package": LAYA_PACKAGE,
+            "base_model": str(base_model),
+            "base_model_archive": str(archive),
+            "device": device,
+            "perf_patch_enabled": perf_patch_enabled(),
+            "ddp": distributed,
+            "world_size": dist_env()[2],
+            "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
+            "recipe": FINETUNE_CONFIG,
+            "output_dir": str(WORKING / "checkpoint"),
+            "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
+                              DEV_JSONL: sha256_of(dev),
+                              TEST_JSONL: sha256_of(test)},
+        }
+        if isinstance(summary, dict):
+            for key in ("train_items", "calibration_items", "eval_items",
+                        "temperature", "epoch_loss"):
+                if key in summary:
+                    receipt[key] = summary[key]
+        report = WORKING / "checkpoint" / "train_report.json"
+        if report.is_file():
+            receipt["train_report"] = json.loads(report.read_text())
+        # DEFAULT-ON held-out validation (owner order): every fine-tune also
+        # scores the just-trained checkpoint on the held-out `test` split, so
+        # the receipt always carries the honest generalization number. Opt out
+        # with ER_LAYA_HELD_OUT=0; a failure never discards the checkpoint.
+        if os.environ.get("ER_LAYA_HELD_OUT", "1").strip().lower() not in (
+                "0", "false", "off", "no"):
+            try:
+                held_out = evaluate_held_out(test, WORKING / "checkpoint",
+                                             device)
+                (WORKING / "checkpoint" / "held_out_report.json").write_text(
+                    json.dumps(held_out, indent=2) + "\\n", encoding="utf-8")
+                receipt["held_out"] = held_out
+                log("held-out " + held_out["eval_source"] + " items="
+                    + str(held_out["items"]) + " accuracy="
+                    + str(held_out["metrics"].get("accuracy")))
+            except Exception as error:  # keep the checkpoint; surface failure
+                receipt["held_out_error"] = (
+                    type(error).__name__ + ": " + str(error)[:400])
+                log("held-out evaluation FAILED: " + receipt["held_out_error"])
+        (WORKING / "laya_finetune.receipt.json").write_text(
+            json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+        with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
+                          compresslevel=1) as tar:
+            for item in sorted(WORKING.iterdir()):
+                if item.name not in ("laya_finetune.tar.gz", "base_model"):
+                    tar.add(item, arcname=item.name)
+        log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+
+    # Barrier + rank-0-only gate: only rank 0 evaluates the held-out split,
+    # writes the receipt and tars /kaggle/working; every rank then tears the
+    # process group down.
+    run_on_rank0(rank0_work)
+
+
+def finetune_worker(rank, world_size):
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    init_distributed()
+    try:
+        _finetune_session(distributed=True, session=session_env())
+    finally:
+        destroy_if_distributed()
+
+
+def main():
+    session = session_env()
+    pip_install_laya()
+    if launch_finetune(finetune_worker) > 1:
+        return
+    _finetune_session(distributed=False, session=session)
 
 
 if __name__ == "__main__":
@@ -2074,7 +2333,7 @@ def log(line):
 def pip_install_laya():
     """laya installs over pip, pinned; torch is already on the session."""
     command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
-               LAYA_PACKAGE]
+               "--disable-pip-version-check", LAYA_PACKAGE]
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, check=True)
 
@@ -2122,7 +2381,11 @@ def resolve_checkpoint():
 
 
 def sha256_of(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def fit_eval_calibration(laya_train, records):
@@ -2246,7 +2509,8 @@ def main():
     }
     (WORKING / "laya_finetune-eval.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_finetune_eval.tar.gz", "w:gz") as tar:
+    with tarfile.open(WORKING / "laya_finetune_eval.tar.gz", "w:gz",
+                      compresslevel=1) as tar:
         for item in sorted(WORKING.iterdir()):
             if item.name != "laya_finetune_eval.tar.gz":
                 tar.add(item, arcname=item.name)
@@ -3037,6 +3301,41 @@ def kernel_slug(decision_kind: str) -> str:
     return slug
 
 
+def container_session_id(container: str) -> int | None:
+    """The kernel session id inside ``KAGGLE_CONTAINER_NAME``.
+
+    Kaggle sets NO ``KAGGLE_KERNEL_RUN_ID``/``KAGGLE_SESSION_ID`` in the
+    container; the only per-run id is the numeric suffix of
+    ``kaggle_<token>-<session_id>-webtier``, which the SDK
+    ``cancel_kernel_session`` accepts (verified live). Returns ``None`` for an
+    absent/malformed name.
+    """
+    parts = str(container or "").rsplit("-", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+def recorded_session_id(slug: str) -> int | None:
+    """The launch-recorded session id for a pushed kernel (``None`` if none).
+
+    The stream follower persists the kernel's self-reported id at
+    ``logs/kaggle/<kernel>.session_id``; this is the first-class reader the
+    verified in-place stop (and ``--session-id``) shares.
+    """
+    from cli import kaggle_lane as lane
+
+    kernel = slug.rpartition("/")[2]
+    if not kernel:
+        raise ValueError(f"slug must be owner/slug, got {slug!r}")
+    path = (lane.lane_logs_dir()
+            / lane._spec().files.session_id_file.format(kernel=kernel))
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def stop_kaggle_kernel(slug: str, *, execute: bool,
                        wait: bool = True) -> dict[str, Any]:
     """First-class teardown of a pushed laya kernel's running session.
@@ -3159,36 +3458,45 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
                            f"under {stage} (slug {slug})")
     receipt_name = f"laya_{decision_kind}.receipt.json"
     reports: dict[str, Any] = {}
-    with tarfile.open(archives[0], "r:*") as tar:
-        members = tar.getnames()
-        if receipt_name not in members:
-            raise RuntimeError(
-                f"fetched archive {archives[0].name} carries no "
-                f"{receipt_name}; the kernel receipt contract failed")
-        payload = json.loads(tar.extractfile(receipt_name)
-                             .read().decode())
-        # Extract the JSON payloads the kernel wrote (eval_report.json and
-        # siblings) into the fetch dir so the report path is reproducible
-        # offline: the returned plan carries them keyed by member name. The
-        # per-row decision kernel writes ``<kind>.decisions.jsonl``, which is
-        # NOT a JSON member: it is read here because the record grain has no
-        # other production source.
-        decision_rows: list[dict] = []
-        for member in members:
-            name = Path(member).name
-            if name == receipt_name:
+    # ONE streaming pass: `r|*` never seeks, so the receipt, every JSON report
+    # member and the per-row `<kind>.decisions.jsonl` member are consumed in a
+    # single forward walk. The JSON payloads the kernel wrote (eval_report.json
+    # and siblings) land in the fetch dir so the report path is reproducible
+    # offline: the returned plan carries them keyed by member name. The per-row
+    # decision kernel writes ``<kind>.decisions.jsonl``, which is NOT a JSON
+    # member: it is read here because the record grain has no other production
+    # source. Bodies are buffered so a missing receipt still fails loud BEFORE
+    # any report lands (the pre-streaming order).
+    members: list[str] = []
+    decision_rows: list[dict] = []
+    payload: Any = None
+    pending: list[tuple[str, bytes]] = []
+    with tarfile.open(archives[0], "r|*") as tar:
+        for member in tar:
+            members.append(member.name)
+            if member.name == receipt_name:
+                payload = json.loads(tar.extractfile(member).read().decode())
                 continue
+            if not member.isfile():
+                continue
+            name = Path(member.name).name
             if name.endswith(".json"):
                 body = tar.extractfile(member).read()
-                (stage / name).write_bytes(body)
+                pending.append((name, body))
                 try:
                     reports[name] = json.loads(body.decode())
                 except (ValueError, UnicodeDecodeError):
                     continue
             elif name == f"{decision_kind}{_DECISION_ROWS_SUFFIX}":
                 body = tar.extractfile(member).read()
-                (stage / name).write_bytes(body)
+                pending.append((name, body))
                 decision_rows = read_decision_rows(body)
+    if payload is None:
+        raise RuntimeError(
+            f"fetched archive {archives[0].name} carries no "
+            f"{receipt_name}; the kernel receipt contract failed")
+    for name, body in pending:
+        (stage / name).write_bytes(body)
     plan.update({"archive": str(archives[0]), "members": members,
                  "receipt": payload, "reports": reports})
     if decision_rows:
@@ -3417,6 +3725,9 @@ def main() -> None:
                         help="tear down the running session for --decision's "
                              "kernel (kaggle only); the launch-recorded "
                              "session id feeds the SDK cancel")
+    parser.add_argument("--session-id", action="store_true",
+                        help="print the launch-recorded kernel session id for "
+                             "--decision's kernel (or --slug); no network")
     parser.add_argument("--local-eval", action="store_true",
                         help="run the CPU held-out eval of a fetched "
                              "fine-tuned checkpoint instead of staging")
@@ -3455,6 +3766,15 @@ def main() -> None:
         plan = collect_kaggle_result(args.decision, args.slug,
                                      execute=args.execute)
         print(json.dumps(plan, indent=2), flush=True)
+        return
+
+    if args.session_id:
+        # First-class reader of the launch-recorded session id (the verified
+        # in-place stop's target); offline, no network.
+        slug = args.slug or kernel_slug(args.decision)
+        print(json.dumps({"kernel": slug,
+                          "session_id": recorded_session_id(slug)},
+                         indent=2), flush=True)
         return
 
     if args.stop:

@@ -1703,3 +1703,35 @@ def test_chain_with_embed_refuses_an_unconfigured_objective(tmp_path, monkeypatc
     with pytest.raises(RuntimeError, match="embed objective"):
         kaggle_lane.run_chain(cohort="10k", with_embed=True, execute=False)
 
+
+
+def test_stream_kernel_logs_persists_reported_session_id(tmp_path, monkeypatch):
+    """A kernel self-reports KAGGLE_KERNEL_RUN_ID on stdout; the follower must
+    persist it as <kernel>.session_id so the verified in-place stop can target
+    the exact session (the log-stream URL carries no id)."""
+    import types
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    frames = [
+        'data: {"stream_name":"stdout","time":1,"data":"[kaggle-session] '
+        'session_id=123456789 container=kaggle_x-123456789-webtier\\n"}',
+    ]
+
+    class Stream:
+        def iter_lines(self):
+            for frame in frames:
+                yield frame
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    session_file = (tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id")
+    assert session_file.read_text().strip() == "123456789"
+

@@ -13,6 +13,17 @@ from typing import Any, Sequence
 from cli.log_capture import progress_frames_to_lines
 
 
+#: A kernel self-reports its session id on stdout (the numeric suffix of
+#: KAGGLE_CONTAINER_NAME, which cancel_kernel_session accepts); the log-stream
+#: URL carries no id, so this line is the only source the follower can persist
+#: for the verified in-place stop.
+_SESSION_MARKER_RE = re.compile(r"\[kaggle-session\][^\n]*?session_id=(\d+)")
+
+
+def _reported_session_id(text: str) -> int | None:
+    match = _SESSION_MARKER_RE.search(text or "")
+    return int(match.group(1)) if match else None
+
 
 class KaggleMonitor:
     """Detached supervision, live progress, and terminal harvesting."""
@@ -342,9 +353,18 @@ class KaggleMonitor:
                         except (json.JSONDecodeError, ValueError):
                             payload = None
                         if isinstance(payload, dict):
-                            append_progress(str(payload.get("data", "")), line)
-                            for chunk in (str(payload.get("data", "")).splitlines()
-                                          or [""]):
+                            data_text = str(payload.get("data", ""))
+                            reported = _reported_session_id(data_text)
+                            if reported is not None and session_id is None:
+                                session_id = reported
+                                plan["session_id"] = reported
+                                lane.atomic_write_text(
+                                    lane.lane_logs_dir()
+                                    / lane._spec().files.session_id_file.format(
+                                        kernel=kernel),
+                                    str(reported) + "\n")
+                            append_progress(data_text, line)
+                            for chunk in (data_text.splitlines() or [""]):
                                 print(f"[stream {kernel}] {chunk}", flush=True)
                         else:
                             append_progress(None, line)
