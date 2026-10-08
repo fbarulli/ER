@@ -50,6 +50,33 @@ REQUIRED_KEYS = (
     "confidence_intervals",
 )
 
+#: The two per-lane traceability tables, present on every manifest.
+TRACEABILITY_KEYS = ("slices", "attributes")
+
+
+def _default_traceability(track: str, slices: list, attributes: list) -> dict:
+    """Name the provenance of each traceability table, or why it is empty.
+
+    ``slices`` is the generalization-slice table and ``attributes`` the
+    attribute-separation table. A trained lane without a live population still
+    writes its attribute rows next to the report as
+    ``<track>__attribute_separation_summary.csv``; the cascade is a combinator
+    over trained artifacts and has neither population, so it records an
+    explicit not-applicable instead of an indistinguishable empty list.
+    """
+    slice_note = ("computed from the scored dev/test pair population" if slices
+                  else f"{track} scored no generalization-slice population")
+    if attributes:
+        attribute_note = ("computed from the scored pair population and the "
+                          "attribute registry")
+    elif track == "cascade":
+        attribute_note = ("not applicable: the cascade carries no listing-attribute "
+                          "scoring population")
+    else:
+        attribute_note = (f"not embedded here; written to "
+                          f"{track}__attribute_separation_summary.csv")
+    return {"slices": slice_note, "attributes": attribute_note}
+
 
 class TrackReportManifest(BaseModel):
     """Schema for every lane's report, including fixed holdout guarantees."""
@@ -101,6 +128,9 @@ def build(
     summary: list | None = None,
     retrieval: list | None = None,
     slices: list | None = None,
+    attributes: list | None = None,
+    roles: dict | None = None,
+    traceability: dict | None = None,
     report_test: bool | None = None,
     extra: dict | None = None,
 ) -> dict:
@@ -113,6 +143,12 @@ def build(
     than negative.  ``identity_conflict_policy_applied`` and
     ``trained_endpoints_scored`` stay explicit ``False`` so a reader can tell
     the difference between "not applied" and "unknown".
+
+    The two traceability keys ``slices`` and ``attributes`` are emitted on
+    every manifest, with ``traceability`` naming where each table came from or
+    why it is empty. The cascade combinator has no listing catalog to slice or
+    attribute-score, so its tables are an explicit not-applicable rather than a
+    silent omission, and the key set never drifts between the three tracks.
     """
     manifest = {
         "schema": MANIFEST_SCHEMA,
@@ -146,8 +182,17 @@ def build(
         manifest["summary"] = summary
     if retrieval is not None:
         manifest["retrieval"] = retrieval
-    if slices is not None:
-        manifest["slices"] = slices
+    # Emitted unconditionally so the traceability shape is identical across the
+    # trained lanes and the cascade; an absent table is an empty list with a
+    # machine-readable reason, never a missing key.
+    manifest["slices"] = list(slices) if slices is not None else []
+    manifest["attributes"] = list(attributes) if attributes is not None else []
+    manifest["traceability"] = (
+        dict(traceability) if traceability is not None
+        else _default_traceability(track, manifest["slices"], manifest["attributes"])
+    )
+    if roles is not None:
+        manifest["roles"] = roles
     if extra:
         overlap = set(manifest).intersection(extra)
         if overlap:
@@ -159,6 +204,39 @@ def build(
     return TrackReportManifest.model_validate(manifest).model_dump(by_alias=True)
 
 
+def _fold_cascade_extras(path: Path, manifest: dict) -> dict:
+    """Attach the cascade report's traceability extras to its per-track manifest.
+
+    The cascade is a combinator: its ``report_cascade`` output carries the
+    ranker (candidate-recall) and decider (PR-AUC / precision@recall / ECE)
+    metrics plus the cascade's explicit traceability statement, but the suite
+    completion contract only names the shared manifest. The manifest writer is
+    the one place every lane's contract is assembled, so the cascade's roles,
+    ``slices``/``attributes`` tables and their ``traceability`` note are folded
+    in here rather than hand-rolled by a caller. A caller-supplied value wins;
+    this is a no-op for every other track.
+    """
+    if manifest.get("track") != "cascade":
+        return manifest
+    from graph_tracks.artifacts import name
+    report_path = path.parent / name("cascade", "cascade_report.json")
+    if not report_path.is_file():
+        return manifest
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return manifest
+    folded = dict(manifest)
+    if not folded.get("roles") and isinstance(payload.get("roles"), dict):
+        folded["roles"] = payload["roles"]
+    for key in TRACEABILITY_KEYS:
+        if not folded.get(key) and isinstance(payload.get(key), list):
+            folded[key] = payload[key]
+    if isinstance(payload.get("traceability"), dict):
+        folded["traceability"] = payload["traceability"]
+    return folded
+
+
 def write(path: Path, manifest: dict) -> Path:
     """Write a manifest, refusing to emit one with an incomplete contract."""
     missing = [key for key in REQUIRED_KEYS if key not in manifest]
@@ -166,6 +244,7 @@ def write(path: Path, manifest: dict) -> Path:
         raise ValueError(
             f"refusing to write {path.name}: manifest missing {missing}"
         )
+    manifest = _fold_cascade_extras(Path(path), manifest)
     validated = TrackReportManifest.model_validate(manifest)
     candidate = path.with_suffix(path.suffix + ".partial")
     candidate.write_text(validated.model_dump_json(indent=2, by_alias=True) + "\n")
@@ -173,4 +252,4 @@ def write(path: Path, manifest: dict) -> Path:
     return path
 
 
-__all__ = ["MANIFEST_SCHEMA", "REQUIRED_KEYS", "build", "write"]
+__all__ = ["MANIFEST_SCHEMA", "REQUIRED_KEYS", "TRACEABILITY_KEYS", "build", "write"]

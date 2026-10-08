@@ -16,7 +16,6 @@ Faces (CPU, synthetic/smoke inputs, bounded runtime):
   - graph_inputs   : scripts.smoke_graph_tracks.build_synthetic_inputs
                      (catalog -> prepared graph -> local MiniLM text cache)
   - graph_gnn_only : graph_tracks.train.train for track=gnn_only
-  - graph_hybrid   : graph_tracks.train.train for track=hybrid
   - text           : the smallest runnable CPU text lane
                      (training.train_prepared._main on data/prepared/smoke_200)
   - io             : core.portable_archive.write_archive over a tiny tree
@@ -186,7 +185,7 @@ def run_graph_inputs() -> dict:
 def run_graph_track(track: str, inputs: dict) -> Path:
     from graph_tracks.train import train
     from scripts.smoke_graph_tracks import build_track_config
-    config = build_track_config(inputs['root'], inputs['prepared'], inputs['cache'], track,
+    config = build_track_config(inputs['root'], inputs['prepared'], track,
                                 epochs=1, hidden_dim=8, output_dim=8,
                                 postprocess=False, include_inputs=False)
     with _LOG.section(f'profile.graph_{track}'):
@@ -271,8 +270,7 @@ def main() -> None:
     if inputs is None:
         _LOG.error('graph inputs unavailable; skipping graph tracks')
     else:
-        for track in ('gnn_only', 'hybrid'):
-            attempt(f'graph_{track}', run_graph_track, track, inputs)
+        attempt('graph_gnn_only', run_graph_track, 'gnn_only', inputs)
     attempt('text', run_text)
     attempt('io', run_io)
 

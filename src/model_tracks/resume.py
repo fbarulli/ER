@@ -271,42 +271,12 @@ def validate_suite(output: Path, identity: dict[str, Any]) -> None:
 def selected_checkpoint_dirs(root: Path) -> frozenset[str]:
     """Posix dirs (relative to ``root``) of the checkpoints a track consumes.
 
-    Text records the trainer-selected best in every ``trainer_state.json``
-    (ranked exactly like :func:`training.validation_inference.resolve_best_checkpoint`);
-    each graph track records its selected checkpoint in ``*__best_checkpoint.json``.
-    Non-selected epoch checkpoints are resume-only.
+    Thin compatibility surface over :meth:`core.bundle.Bundle.selected_checkpoint_dirs`
+    (the selection contract now lives with the bundle role it enforces). Kept as
+    a module attribute so call sites and tests can still monkeypatch it.
     """
-    root = Path(root)
-    selected: set[str] = set()
-    best = None
-    for state_path in sorted(root.rglob(f'checkpoint-*/trainer_state.json')):
-        try:
-            state = json.loads(state_path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            continue
-        recorded = state.get('best_model_checkpoint')
-        if not recorded:
-            continue
-        directory = state_path.parent.parent / Path(str(recorded)).name
-        if not directory.is_dir():
-            continue
-        rank = (float(state.get('best_metric', float('-inf'))),
-                int(state.get('global_step', 0)))
-        if best is None or rank > best[0]:
-            best = (rank, directory)
-    if best is not None:
-        selected.add(best[1].relative_to(root).as_posix())
-    for marker in sorted(root.rglob('*__best_checkpoint.json')):
-        try:
-            recorded = Path(str(json.loads(marker.read_text(encoding='utf-8')).get('path', '')))
-        except (OSError, ValueError):
-            continue
-        if not recorded.name:
-            continue
-        for found in root.rglob(f'{recorded.parent.name}/{recorded.name}'):
-            selected.add(found.parent.relative_to(root).as_posix())
-            break
-    return frozenset(selected)
+    from core.bundle import Bundle, BundleRole
+    return Bundle.from_directory(root, BundleRole.result).selected_checkpoint_dirs()
 
 
 def artifact_files(output: Path) -> list[Path]:

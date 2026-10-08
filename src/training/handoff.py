@@ -159,7 +159,7 @@ def _check_worker_settings(setup_dir, layout, suite, meter: _LoadMeter) -> dict:
     from model_tracks.worker import graph_worker_settings
     from tqdm import tqdm
     summary: dict[str, Any] = {}
-    for track in tqdm(('gnn_only', 'hybrid'), total=2, desc='worker_settings',
+    for track in tqdm(('gnn_only', 'cascade'), total=2, desc='worker_settings',
                       unit='track', leave=False, disable=False,
                       dynamic_ncols=True):
         track_config = Path(setup_dir) / layout.track_config(track)
@@ -362,7 +362,7 @@ def verify_training_loads(*, root, suite, suite_config_path, checkpoint,
         checks['training_tokens'] = token_checks
     return HandoffReport(
         status='pass',
-        gpu_embeddings='GPU pending: frozen baseline forward before hybrid training',
+        gpu_embeddings='GPU pending: frozen baseline forward before graph training',
         checks=checks, inputs=meter.entries, loss_batch_correctness=attestation,
         final_inventory=final_inventory, bundle_header=header.model_dump(mode='json'),
         suite_package=suite_package,

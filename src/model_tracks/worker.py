@@ -149,7 +149,9 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
 
     The cascade is a combinator, but every completed track ships one calibrated
     report manifest (the suite completion/verification contract). Its
-    checkpoint identity is the trained gnn_only scorer it consumes.
+    checkpoint identity is the trained gnn_only scorer it consumes, and its two
+    role metrics are passed explicitly from the cascade report that
+    ``graph_tracks.report.report_cascade`` just wrote.
     """
     from graph_tracks.artifacts import name
     from graph_tracks.data import file_hash
@@ -159,12 +161,16 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
     pairs = Path(lane.pairs)
     if not pairs.is_absolute():
         pairs = (TRAIN_ROOT / pairs).resolve()
+    roles = None
+    report_path = output / name('cascade', 'cascade_report.json')
+    if report_path.is_file():
+        roles = json.loads(report_path.read_text(encoding='utf-8')).get('roles')
     manifest = build_manifest(
         track='cascade', checkpoint=str(artifacts['gnn_checkpoint']),
         checkpoint_sha256=file_hash(artifacts['gnn_checkpoint']),
         listings_sha256=file_hash(listings), pairs_sha256=file_hash(pairs),
         threshold=0.5, threshold_source='dev_youden', test_reported=bool(lane.report_test),
-        model_selection='dev_pr_auc', retrieval_ks=list(lane.retrieval_ks))
+        model_selection='dev_pr_auc', retrieval_ks=list(lane.retrieval_ks), roles=roles)
     write_manifest(output / name('cascade', 'report_manifest.json'), manifest)
 
 
@@ -295,7 +301,6 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 settings.update(cfg.graph_execution_overrides())
                 _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
                     output/(track+'__inference'),GraphConfig.model_validate(settings),
-                    text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None,
                     return_encoder=True)
             events.emit('inference_export','completed',device=cfg.device)
             if cfg.post_training_ablation:

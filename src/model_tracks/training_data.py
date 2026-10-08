@@ -230,7 +230,7 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
 
 class TrackTrainingBinding(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
-    track: Literal['text', 'gnn_only', 'hybrid']
+    track: Literal['text', 'gnn_only']
     shared_data_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     example_ids: list[int]
     endpoint_indices: list[int]

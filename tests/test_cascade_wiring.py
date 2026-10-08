@@ -97,6 +97,82 @@ def test_cascade_artifacts_require_text_ann_and_gnn_scorer(tmp_path):
     assert 'text_cache' not in artifacts
 
 
+def test_run_sequences_cascade_after_the_parallel_trained_lanes(tmp_path, monkeypatch):
+    """run._run puts only the trained lanes behind the barrier; cascade after.
+
+    The supervisor must hand exactly ``TRAINING_TRACKS`` to ``run_parallel``
+    (the MPS barrier) and launch ``POSTPROCESS_TRACKS`` only once that call has
+    returned. The cascade is a trained-artifact combinator, so it must never
+    appear in the barrier commands.
+    """
+    from types import SimpleNamespace as NS
+    import yaml
+    from model_tracks import run as suite_run
+
+    config = tmp_path / 'suite.yaml'
+    config.write_text(yaml.safe_dump({
+        'setup_dir': 'setup', 'text_bundle': 'bundle.pkl.gz', 'device': 'cpu',
+        'publish_git': False, 'publish_dvc': False, 'profiling': False}))
+    output = tmp_path / 'run'
+    output.mkdir()
+
+    order, parallel, postprocess = [], {}, []
+    monkeypatch.delenv('ER_GPU_TRAINING_ONLY', raising=False)
+    monkeypatch.setattr(suite_run, 'preflight', lambda *a, **k: {})
+    monkeypatch.setattr('model_tracks.data_gate.validate',
+                        lambda *a, **k: NS(tracks={}, attestation='attestation'))
+    monkeypatch.setattr('model_tracks.resume.suite_identity',
+                        lambda *a, **k: {'implementation': {}})
+    monkeypatch.setattr('model_tracks.resume.completed_track', lambda *a, **k: True)
+    monkeypatch.setattr('model_tracks.resume.selected_checkpoint_dirs',
+                        lambda *a, **k: frozenset())
+
+    def fake_parallel(commands, root, env, *, resume=False, **kwargs):
+        order.append(('parallel', tuple(commands)))
+        parallel.update(commands)
+        return {'mode': 'parallel', 'workers': []}
+
+    def fake_postprocess(config_, output_, run_tag, track, env, **kwargs):
+        order.append(('postprocess', track))
+        postprocess.append(track)
+        return track
+
+    monkeypatch.setattr(suite_run, 'run_parallel', fake_parallel)
+    monkeypatch.setattr(suite_run, '_run_postprocess_track', fake_postprocess)
+
+    events = NS(attempt='attempt', emits=[], emit=lambda *a, **k: events.emits.append((a, k)))
+    suite_run._run(config, output, 'run-tag', events=events)
+
+    assert set(parallel) == set(resume.TRAINING_TRACKS) == {'text', 'gnn_only'}
+    assert 'cascade' not in parallel
+    assert postprocess == list(resume.POSTPROCESS_TRACKS) == ['cascade']
+    # The barrier releases before the combinator starts; nothing else is ordered.
+    assert order == [('parallel', ('text', 'gnn_only')), ('postprocess', 'cascade')]
+
+
+def test_cascade_worker_trains_nothing_and_skips_the_barrier(tmp_path, monkeypatch):
+    """The cascade worker branch composes only: no barrier wait, no trainer."""
+    from types import SimpleNamespace as NS
+
+    results = tmp_path / 'suite' / 'cascade'
+    results.mkdir(parents=True)
+    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR', str(results))
+    monkeypatch.setattr(worker, 'load_config', lambda _: NS(setup_dir='.'))
+    seen = {}
+    monkeypatch.setattr(worker, '_run_cascade',
+                        lambda cfg, setup, output, events: seen.setdefault('output', output))
+    monkeypatch.setattr(worker, 'wait_for_start',
+                        lambda *a, **k: pytest.fail('cascade must not wait on the start barrier'))
+    monkeypatch.setattr(worker.subprocess, 'run',
+                        lambda *a, **k: pytest.fail('cascade must not launch a training subprocess'))
+
+    events = NS(emits=[], emit=lambda *a, **k: events.emits.append((a, k)))
+    worker._run(tmp_path / 'suite.yaml', 'cascade', 'run', resume=False, events=events)
+
+    assert seen['output'] == results
+    assert 'training' not in [phase for phase, _ in events.emits]
+
+
 def test_cascade_worker_reports_both_roles_without_fusion(tmp_path, monkeypatch):
     results = tmp_path / 'suite'
     output = results / 'cascade'

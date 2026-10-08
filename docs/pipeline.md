@@ -134,7 +134,7 @@ from its own selected checkpoint.
 
 | Setting | Value | Note |
 |---|---|---|
-| `schedule` / `max_parallel` | parallel / 3 | one runtime, MPS |
+| `schedule` / `max_parallel` | parallel / 2 | two trained lanes behind one MPS barrier; the cascade is post-hoc, so older `3` manifests stay valid |
 | `gpu_optimizer_backend` | `cuda_fused` | |
 | `gpu_graph_aggregation_backend` | `cuda_segment` | |
 | `memory_reservations_gb` | `{}` | **empty — overlap not enforced** |

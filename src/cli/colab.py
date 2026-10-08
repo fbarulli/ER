@@ -2103,7 +2103,7 @@ def _suite_device_flip(suite_config: Path, suite) -> Path:
     flip_path.parent.mkdir(parents=True, exist_ok=True)
     setup_dir = (TRAIN_ROOT / suite.setup_dir).resolve()
     layout = training_cfg().preparation.graph_setup
-    for name in (layout.track_config('gnn_only'), layout.track_config('hybrid'), layout.text_config):
+    for name in (layout.track_config('gnn_only'), layout.track_config('cascade'), layout.text_config):
         companion, target = setup_dir / name, flip_path.parent / name
         if companion.is_file():
             shutil.copy2(companion, target)

@@ -132,56 +132,6 @@
       ],
       "shared_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
       "track": "gnn_only"
-    },
-    "hybrid": {
-      "endpoint_indices": [
-        0,
-        55,
-        76,
-        90,
-        105,
-        112,
-        122,
-        127,
-        128,
-        160,
-        182,
-        375,
-        633,
-        651,
-        857,
-        865,
-        980,
-        1133,
-        1195,
-        1203,
-        2695,
-        3683,
-        7168,
-        13294,
-        13295,
-        13296,
-        13297,
-        13298,
-        13313
-      ],
-      "example_ids": [
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        12
-      ],
-      "shared_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
-      "track": "hybrid"
     }
   },
   "train_pair_order_sha256": "ab42d7ac5f337cd00f5aef59108b8768d6dd5f934e55ee18d0e9e94b4f0ef4ac",
@@ -190,7 +140,7 @@
     "added_listing": 0,
     "augmentation": 6,
     "canonical": 4,
-    "superseded_clean_train_pairs": 266,
+    "superseded_clean_train_pairs": 14,
     "unmeasured_report_fields": 0
   }
 }

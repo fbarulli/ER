@@ -15,7 +15,13 @@ Added 2026-10-08. Anchors are approximate.
 ## Track training (cascade era)
 - [~] track-training agent running — `model_tracks/parallel.py` still needs the real fix (currently `run.py` runs cascade sequentially as a workaround); reconcile `resume/worker/package/preflight/data_gate/smoke_inputs` on `text/gnn_only/cascade`.
 - [ ] `tests/test_tracks_direct_download.py` x4 — fix the `model_tracks/colab.py` `verify_archive_digest` call site (unstubbed core call).
-- [ ] `local_complete` has no cascade branch; `post_training_ablation` + `archive_verification` with cascade (+`post_training_ablation=True`) unproven.
+- [ ] `local_complete` has no cascade branch; `post_training_ablation` + `archive_verification` with cascade (+`post_training_ablation=True`) unproven. (TB agent in flight.)
+- [ ] **Regenerate the stale prepared fixtures for cascade:** `data/prepared/{smoke_200,smoke_500}` and `data/track_setup` still carry `hybrid.yaml` and no `cascade.yaml`, and `shared_training_projection.json` still binds `hybrid` — blocks any local CPU smoke. Re-run prep (or migrate the yaml fixtures) so `text/gnn_only/cascade` fixtures exist.
+- [ ] Verified for tracks in `c9b96e8`: `TRAINING_TRACKS`/`POSTPROCESS_TRACKS`, `parallel.py` barrier uses `TRAINING_TRACKS`, run.py trains text+gnn_only + cascade post-hoc, `ABLATION_TRACKS=('text','gnn_only')`; 166 focused tests pass. No real CPU/GPU end-to-end run yet.
+- [x] Regenerate stale fixtures: `data/prepared/smoke_200` (cascade.yaml, no hybrid; projection binds gnn_only; suite preflight OK) + `data/track_setup` regenerated. `smoke_500` left stale (legacy, broken /tmp paths, not in matrix).
+- [ ] **`src/training/run_plan.py:154`** — `bound_files` compares bare keys (`labeled_pairs`) but bundles carry `*_csv`; materialization is dead code and `prepare_smoke` dies (`payload canonical has no canonical metadata`). Fix: `frozen_inputs[key] in bundle`.
+- [ ] **`src/model_tracks/smoke_inputs.py:175`** — `Path(settings[key]).relative_to(setup)` assumes absolute paths; committed fixtures are repo-relative → raises. Resolve against `TRAIN_ROOT` first.
+- [ ] `data/prepared/smoke_500` — stale legacy artifact (nonexistent /tmp paths, no cascade template); regenerate or delete.
 
 ## Lanes
 - [ ] Colab + Kaggle transports load/save `Bundle`; wire a Kaggle **finalize** step.

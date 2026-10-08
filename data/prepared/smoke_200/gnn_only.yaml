@@ -14,6 +14,8 @@ pairs: data/prepared/smoke_200/prepared/pairs.csv
 output_dir: results/graph_tracks
 text_cache: null
 text_checkpoint_sha256: null
+text_index: null
+gnn_checkpoint: null
 input_manifest: data/prepared/smoke_200/prepared/input_manifest.json
 allow_unmanifested_inputs: false
 wandb:

@@ -129,7 +129,7 @@ def open_archive(path, *, settings=None):
         try:
             with zstd.open(path, 'rb') as compressed:
                 shutil.copyfileobj(compressed, spool, length=settings.copy_buffer_bytes)
-        except zstd.ZstdError as error:
+        except (zstd.ZstdError, EOFError) as error:
             raise ValueError(f'invalid Zstandard archive: {path}') from error
         spool.seek(0)
         with tarfile.open(fileobj=spool, mode='r:') as archive:

@@ -6,7 +6,6 @@ import json
 
 import yaml
 import pytest
-import numpy as np
 
 
 def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
@@ -132,32 +131,8 @@ def test_suite_rejects_changed_labels_with_unchanged_catalog(tmp_path, monkeypat
         checks.preflight(tmp_path / 'suite.yaml')
 
 
-@pytest.mark.parametrize('changed_composition', [False, True])
-def test_manifested_hybrid_requires_active_text_composition(tmp_path, monkeypatch, changed_composition):
-    import core.common
-    import core.model_input
-    from graph_tracks import preflight as checks
-
-    manifest = {key: 'same-hash' for key in ('listings_sha256', 'pairs_sha256',
-                'identity_policy_sha256', 'identity_dimensions_sha256', 'catalog_sha256')}
-    (tmp_path / 'manifest.json').write_text(json.dumps(manifest))
-    composition = core.model_input.model_input_composition().model_dump(mode='json')
-    metadata = {key: manifest[key] for key in ('catalog_sha256', 'identity_policy_sha256',
-                                              'identity_dimensions_sha256')}
-    import training.prepare_embeddings
-    monkeypatch.setattr(training.prepare_embeddings, 'validate_prepared_provenance', lambda *_: None)
-    metadata.update(checkpoint_sha256='checkpoint',
-                    composition={'outdated': True} if changed_composition else composition)
-    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
-    monkeypatch.setattr(checks, 'file_hash', lambda _: 'same-hash')
-    monkeypatch.setattr(checks, 'load_records', lambda _: [{'sku_id': 'a'}])
-    monkeypatch.setattr(checks, 'load_pairs', lambda *_: {})
-    monkeypatch.setattr(checks, 'load_text_cache', lambda *_: (np.zeros((1, 2)), metadata))
-    cfg = SimpleNamespace(device='cpu',input_manifest='manifest.json', allow_unmanifested_inputs=False,
-                          listings='listings.csv', pairs='pairs.csv', text_cache='cache.npz',
-                          text_checkpoint_sha256='checkpoint')
-    if changed_composition:
-        with pytest.raises(ValueError, match='text cache composition differs from active model input'):
-            checks.load_inputs(cfg)
-    else:
-        assert checks.load_inputs(cfg)[4] == metadata
+# Retired: the manifested text-cache composition gate exercised the fused
+# hybrid text_cache path. No live track declares text_cache any more -- the
+# cascade forbids it at config load (covered by
+# test_cascade_wiring.py::test_cascade_lane_config_forbids_the_fused_text_cache),
+# and gnn_only forbids it too -- so the case was deleted rather than ported.

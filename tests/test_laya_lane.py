@@ -934,7 +934,7 @@ def _corpus_sources_fixture(tmp_path):
         "4000000005,4000000001,c1,c2,hard_no,"
         "Critical attribute mismatch: flavor,0.85\n"
         "9999999999,4000000001,c1,c2,hard_no,Package material mismatch,0.70\n"
-        "4000000002,4000000003,c1,c2,fallback,unresolved,0.50\n"
+        "4000000001,4000000004,c1,c2,fallback,unresolved,0.50\n"
         "4000000002,4000000003,c1,c2,proceed,ok,0.99\n",
         encoding="utf-8")
     return catalog, pairs, gate
@@ -1004,10 +1004,14 @@ def test_corpus_build_emits_laya_jsonl_counts_and_receipt(tmp_path):
             path.read_bytes()).hexdigest()
         for line in lines:
             record = json.loads(line)
-            assert set(record) == {"state", "questions", "expected"}
+            assert set(record) == {"state", "questions", "expected",
+                                   "difficulty_slice", "gate_reason",
+                                   "attribute"}
             assert isinstance(record["state"], str) and record["state"]
             assert record["questions"] == questions
-            # only noul golds; attribute_alignment is deliberately unlabelled
+            # only golds the fixture schema declares; attribute_alignment is
+            # deliberately unlabelled (the membership gate skips undeclared
+            # questions, and the fixture declares no new pair questions)
             assert set(record["expected"]) <= {"package_state",
                                                "identity_claim"}
             for qid, label in record["expected"].items():

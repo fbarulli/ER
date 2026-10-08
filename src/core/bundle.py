@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import json
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.archive_reader import open_archive
-from core.portable_archive import is_result_archive_member, verify_archive_digest
+from core.portable_archive import verify_archive_digest
 
 
 def _bundle_spec():
@@ -80,14 +80,14 @@ class Bundle(BaseModel):
         """
         role = BundleRole(role)
         path = Path(path)
-        name = manifest_name or manifest_name(role)
+        name = manifest_name or globals()["manifest_name"](role)
         manifest, observed = verify_archive_digest(path, name)
         if expected_digest is not None and observed != expected_digest:
             raise ValueError(
                 f"bundle failed the boundary integrity check: {path}\n"
                 f"  observed sha256={observed}\n  expected sha256={expected_digest}")
         spec = _bundle_spec()
-        if role is not BundleRole.recovery and spec.run_tag_key not in manifest:
+        if role is BundleRole.result and spec.run_tag_key not in manifest:
             raise ValueError(f"bundle manifest {name} carries no {spec.run_tag_key}: {path}")
         return cls(role=role, path=path, manifest_name=name,
                    manifest=manifest, digest=observed)
@@ -163,8 +163,10 @@ class Bundle(BaseModel):
         Text records the trainer-selected best in ``trainer_state.json`` (ranked by
         metric then step, mirroring resolve_best_checkpoint); a graph track records
         it in its ``best_checkpoint`` marker. Result bundles carry only this one;
-        recovery bundles carry all epoch checkpoints.
+        recovery bundles carry all epoch checkpoints. Inputs carry no weights.
         """
+        if self.role is BundleRole.inputs:
+            return None
         spec = _bundle_spec()
         root = self._root()
         track_root = self._track_root(root, track)
@@ -198,12 +200,150 @@ class Bundle(BaseModel):
         return None
 
     def checkpoints(self, track: str) -> list[Path]:
-        """Every materialized checkpoint dir for ``track`` (recovery role)."""
+        """Every materialized checkpoint dir for ``track`` (recovery role).
+
+        Role enforcement: inputs bundles carry no weights, so this is always
+        empty there; recovery carries every epoch; result carries the single
+        selected directory the seal kept.
+        """
+        if self.role is BundleRole.inputs:
+            return []
         spec = _bundle_spec()
         checkpoint_dir = self._track_root(self._root(), track) / spec.checkpoint_dir
         if not checkpoint_dir.is_dir():
             return []
         return sorted(p for p in checkpoint_dir.rglob("checkpoint-*") if p.is_dir())
+
+    def selected_checkpoint_dirs(self) -> frozenset[str]:
+        """Posix dirs (relative to this bundle's root) of selected checkpoints.
+
+        The result-member contract: text records the trainer-selected best in
+        every ``trainer_state.json`` (ranked metric then step, exactly like
+        :func:`training.validation_inference.resolve_best_checkpoint`); each
+        graph track records its selected checkpoint in ``*__best_checkpoint.json``.
+        Every other ``checkpoint-N`` tree is resume-only.
+        """
+        if self.role is BundleRole.inputs:
+            return frozenset()
+        spec = _bundle_spec()
+        root = self._root()
+        selected: set[str] = set()
+        best: tuple[tuple[float, int], Path] | None = None
+        for state_path in sorted(root.rglob("checkpoint-*/" + spec.trainer_state_file)):
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            recorded = state.get(spec.trainer_best_key)
+            if not recorded:
+                continue
+            directory = state_path.parent.parent / Path(str(recorded)).name
+            if not directory.is_dir():
+                continue
+            rank = (float(state.get(spec.trainer_metric_key, float("-inf"))),
+                    int(state.get(spec.trainer_step_key, 0)))
+            if best is None or rank > best[0]:
+                best = (rank, directory)
+        if best is not None:
+            selected.add(best[1].relative_to(root).as_posix())
+        for marker in sorted(root.rglob(spec.best_checkpoint_glob)):
+            try:
+                recorded = Path(str(json.loads(marker.read_text(encoding="utf-8"))
+                                    .get(spec.best_checkpoint_path_key, "")))
+            except (OSError, ValueError):
+                continue
+            if not recorded.name:
+                continue
+            for found in root.rglob(f"{recorded.parent.name}/{recorded.name}"):
+                selected.add(found.parent.relative_to(root).as_posix())
+                break
+        return frozenset(selected)
+
+    @staticmethod
+    def is_result_member(relative: str, *,
+                         selected_checkpoints: frozenset[str] = frozenset()) -> bool:
+        """Whether a root-relative path belongs in a RESULT bundle.
+
+        The single member predicate: checkpoint trees ship only when the
+        checkpoint is selected, resume-only state and profiling/caches are
+        dropped, and the archive walk and the per-track inventory can never
+        disagree. Names come from :class:`BundleSpec`.
+        """
+        spec = _bundle_spec()
+        parts = Path(relative).parts
+        if not parts or any(part in spec.result_excluded_dirs for part in parts):
+            return False
+        if parts[-1] in spec.resume_only_filenames:
+            return False
+        if parts[-1] in {".env", "config.local"}:
+            return False
+        if any(part.endswith(".publication") or part.endswith("__payload")
+               for part in parts):
+            return False
+        if "_artifact_publications" in parts and not relative.endswith(".json"):
+            return False
+        if ".dvc" in parts and "cache" in parts:
+            return False
+        if spec.checkpoint_dir in parts:
+            if not selected_checkpoints:
+                return False
+            member = PurePosixPath(relative)
+            return any(member == PurePosixPath(selected)
+                       or PurePosixPath(selected) in member.parents
+                       for selected in selected_checkpoints)
+        return True
+
+    def collect_result_members(self, *,
+                               selected_checkpoints: frozenset[str] | None = None
+                               ) -> dict[str, Path]:
+        """The member set this bundle would seal as a RESULT (selected-only).
+
+        Role enforcement: only a ``result`` bundle has a result-member set; the
+        selection is resolved from this bundle's own tree, so no stage re-parses
+        the archive and no caller re-derives the predicate.
+        """
+        if self.role is not BundleRole.result:
+            raise ValueError(
+                f"collect_result_members requires the result role, got {self.role.value}")
+        root = self._root()
+        if selected_checkpoints is None:
+            selected_checkpoints = self.selected_checkpoint_dirs()
+        return {p.relative_to(root).as_posix(): p for p in root.rglob("*")
+                if p.is_file() and not p.is_symlink()
+                and self.is_result_member(p.relative_to(root).as_posix(),
+                                          selected_checkpoints=selected_checkpoints)}
+
+    def seal_result(self, output: Path | str, *,
+                    metadata: dict[str, Any] | None = None) -> "Bundle":
+        """Write this bundle's result-only members as one sealed RESULT archive.
+
+        No local hashing is done here: :func:`core.portable_archive.write_archive`
+        hashes each source exactly once while writing and verifies the written
+        bytes, and the returned handle is trusted (the writer's verification is
+        the one boundary check for this crossing).
+        """
+        if self.role is not BundleRole.result:
+            raise ValueError(f"seal_result requires the result role, got {self.role.value}")
+        from core.portable_archive import write_archive
+        spec = _bundle_spec()
+        output = Path(output)
+        files = self.collect_result_members()
+        if not files:
+            raise ValueError("refusing to seal an empty result bundle")
+        payload = {spec.run_tag_key: self.run_tag(), **(metadata or {})}
+        write_archive(output, files, manifest_name=spec.manifest_result, metadata=payload)
+        return self.model_copy(update={
+            "path": output, "manifest_name": spec.manifest_result,
+            "manifest": payload, "digest": None})
+
+    @classmethod
+    def trusted(cls, path: Path | str, role: BundleRole | str, manifest: dict[str, Any], *,
+                manifest_name: str | None = None) -> "Bundle":
+        """Wrap a boundary that was just verified by its writer (no re-check)."""
+        role = BundleRole(role)
+        return cls(role=role, path=Path(path),
+                   manifest_name=manifest_name or globals()["manifest_name"](role),
+                   manifest=manifest, digest=None)
 
     @staticmethod
     def _track_root(root: Path, track: str) -> Path:
@@ -254,6 +394,12 @@ class BundlePipeline(BaseModel):
     sparse_paths: tuple[str, ...] = ()
     #: Where the sealed bundle is written/found.
     output: Path | None = None
+    #: The three-track suite config the pipeline prepares from (config SSOT).
+    config: Path | None = None
+    #: Optional explicit preparation run directory (defaults beside the output).
+    run_dir: Path | None = None
+    #: The verified prepared-inputs archive a finalize job consumes.
+    inputs: Path | None = None
 
     def prepare_inputs(self) -> "Bundle":
         """Generation: prepare the inputs bundle (CPU)."""
@@ -266,10 +412,22 @@ class BundlePipeline(BaseModel):
         return finalize(self, result)
 
 
-def collect_result_members(root: Path, *, selected_checkpoints: frozenset[str] = frozenset()
+def collect_result_members(root: Path, *, selected_checkpoints: frozenset[str] | None = None
                            ) -> dict[str, Path]:
-    """The member set a RESULT bundle may carry (selected-only, no profiling)."""
-    return {p.relative_to(root).as_posix(): p for p in root.rglob("*")
-            if p.is_file() and not p.is_symlink()
-            and is_result_archive_member(p.relative_to(root).as_posix(),
-                                         selected_checkpoints=selected_checkpoints)}
+    """The member set a RESULT bundle may carry (selected-only, no profiling).
+
+    Thin compatibility surface over :meth:`Bundle.collect_result_members` for
+    callers (``model_tracks.run`` / ``local_complete``) that hold an unpacked
+    tree rather than a verified handle.
+    """
+    tree = Bundle.from_directory(root, BundleRole.result)
+    return tree.collect_result_members(selected_checkpoints=selected_checkpoints)
+
+
+def selected_checkpoint_dirs(root: Path) -> frozenset[str]:
+    """Posix dirs of the selected checkpoints under an unpacked output tree.
+
+    Thin compatibility surface over :meth:`Bundle.selected_checkpoint_dirs`;
+    :mod:`model_tracks.run` and :mod:`model_tracks.resume` import this name.
+    """
+    return Bundle.from_directory(root, BundleRole.result).selected_checkpoint_dirs()

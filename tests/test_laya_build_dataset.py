@@ -234,12 +234,20 @@ def test_every_emitted_case_parses_with_valid_labels(tmp_path):
         assert len(lines) == receipt["split_sizes"][key]
         for line in lines:
             record = json.loads(line)
-            assert set(record) == {"state", "questions", "expected"}
+            assert set(record) == {"state", "questions", "expected",
+                                   "difficulty_slice", "gate_reason",
+                                   "attribute"}
             assert isinstance(record["state"], str) and record["state"]
             assert record["questions"] == questions
+            assert record["difficulty_slice"] in (
+                "all_same", "one_diff", "multi_diff", "insufficient",
+                "single_state", "pairwise")
             for qid, label in record["expected"].items():
-                assert record["questions"][qid]["type"] == "noul"
-                assert label in ("true", "false")
+                qtype = record["questions"][qid]["type"]
+                if qtype == "noul":
+                    assert label in ("true", "false")
+                else:
+                    assert label in record["questions"][qid]["criteria"]
             seen += 1
     assert seen == sum(receipt["split_sizes"].values())
 

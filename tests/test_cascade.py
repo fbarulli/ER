@@ -130,6 +130,33 @@ def test_decider_role_metrics_hand_checked():
     assert decider_report([1, 1], [0.9, 0.8])['pr_auc'] is None
 
 
+def test_cascade_report_emits_explicit_not_applicable_traceability(tmp_path):
+    """The cascade reports no slice/attribute table, but says so explicitly.
+
+    ``report_cascade`` composes trained artifacts and never sees a listing
+    catalog, so it cannot fill the per-slice or per-attribute tables the
+    trained lanes emit. The manifest contract still requires the keys, so the
+    cascade ships empty lists plus a documented reason and keeps the shape
+    identical across text/gnn_only/cascade.
+    """
+    from graph_tracks.report import report_cascade
+    from model_tracks.cascade import Decisions, Ranked
+
+    ranked = Ranked(query_ids=('a',),
+                    candidate_ids=np.array([['b', 'c']], dtype=object),
+                    similarities=np.array([[1.0, 0.9]], dtype=np.float32))
+    decisions = Decisions(query_ids=('a',),
+                          candidate_ids=np.array([['b', 'c']], dtype=object),
+                          scores=np.array([[0.9, 0.1]], dtype=np.float32),
+                          order=np.array([[0, 1]], dtype=np.int64),
+                          similarities=None)
+    report = report_cascade(ranked, [{'b'}], decisions, tmp_path, ks=(1, 2))
+    assert report['slices'] == []
+    assert report['attributes'] == []
+    assert report['traceability']['slices'].startswith('not applicable')
+    assert report['traceability']['attributes'].startswith('not applicable')
+
+
 def test_retrieved_relevance_flattens_the_decider_view(tmp_path):
     index, query = synthetic_index(tmp_path)
     result = cascade(query, index, CosineFakeScorer(), 2)

@@ -15,7 +15,12 @@ class SuiteConfig(BaseModel):
     input_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
     result_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
     schedule: Literal['parallel'] = 'parallel'
-    max_parallel: Literal[3] = 3
+    # Only the trained lanes (text, gnn_only) sit behind the MPS barrier; the
+    # cascade is a post-hoc combinator over their artifacts and must not be
+    # counted as a parallel worker. The default is the trained-lane count.
+    # ``3`` stays accepted so older suite manifests that predate the cascade
+    # replacing the third trained lane keep validating unchanged.
+    max_parallel: Literal[2, 3] = 2
     gpu_parallel_backend: Literal['mps'] = 'mps'
     # Missing fields in old suite manifests preserve their original execution.
     gpu_optimizer_backend: OptimizerBackend = 'auto'

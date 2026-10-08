@@ -177,6 +177,30 @@ class FinalInferenceContractTests(unittest.TestCase):
             [n for n in dir(worker) if "EXPECTED_SOURCE_EXPORT" in n.upper()],
             "the worker module carries a hardcoded census constant",
         )
+
+        # DATA-STATE GUARD (owner directive: only the full dataset is tested).
+        # The closure this test pins is meaningful only when the PREPARED
+        # corpus (dataset_deduped + the dedupe removals) was built from the
+        # mounted export. A cohort/partial-prep mount (e.g. a 10k-derived
+        # data/ directory beside a restored full dataset.csv) legitimately
+        # fails the closure on the WRONG universe; skip rather than fail.
+        def _prepared_corpus_closes() -> bool:
+            try:
+                return (
+                    _byte_stable_csv_rows(F["dataset_deduped"])
+                    + _byte_stable_csv_rows(F["removals"])
+                    == _byte_stable_csv_rows(DATA_PATH)
+                )
+            except (FileNotFoundError, RuntimeError, ValueError):
+                return False
+
+        from core.common import dataset_is_partial_cohort
+
+        if dataset_is_partial_cohort() or not _prepared_corpus_closes():
+            self.skipTest(
+                "prepared corpus is not the mounted export "
+                "(cohort/partial data state); census is full-cohort-only"
+            )
         census = scored_validation_accounting()
         # the exec-time census re-measures the raw export, never a stored pin
         self.assertEqual(

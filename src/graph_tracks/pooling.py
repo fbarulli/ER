@@ -12,6 +12,26 @@ import torch
 from graph_tracks.data import GraphBatch
 
 
+def _segment_degrees(target: torch.Tensor, count: int,
+                     dtype: torch.dtype) -> torch.Tensor:
+    """Raw per-row degrees for a fixed topology, scattered at most once.
+
+    The degree ``index_add_`` is cached on the immutable index tensor and keyed
+    by its version/count/dtype, so a fixed topology pays for the degree scatter
+    only once. Callers apply ``clamp_min(1).unsqueeze(1)`` themselves, which
+    keeps the exact denominator identity semantics of :func:`topology`.
+    Invalidated automatically when the index is mutated in place.
+    """
+    cached = getattr(target, '_er_segment_degrees', None)
+    version = None if torch.is_inference(target) else target._version
+    if cached is not None and cached[0] == version and cached[1] == count and cached[2] == dtype:
+        return cached[3]
+    sizes = torch.zeros(count, dtype=dtype, device=target.device)
+    sizes.index_add_(0, target, torch.ones(len(target), dtype=dtype, device=target.device))
+    target._er_segment_degrees = (version, count, dtype, sizes)
+    return sizes
+
+
 def topology(batch: GraphBatch, relation: str, *, attribute: bool = False,
              count: int | None = None, dtype: torch.dtype = torch.float32):
     listing, value = batch.edges[relation]
@@ -43,8 +63,7 @@ def topology(batch: GraphBatch, relation: str, *, attribute: bool = False,
             source, target = listing[valid], value[valid]
         else:
             source, target = value, listing
-        sizes = torch.zeros(count, dtype=dtype, device=listing.device)
-        sizes.index_add_(0, target, torch.ones(len(target), dtype=dtype, device=listing.device))
+        sizes = _segment_degrees(target, count, dtype)
         cached = (signature, source, target, sizes.clamp_min(1).unsqueeze(1), listing, value)
         target._er_segment_topology = SegmentTopology.prepare(target, count)
         cache[key] = cached
@@ -55,6 +74,28 @@ def pool(values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor):
     total = values.new_zeros((len(sizes), values.shape[-1]))
     total.index_add_(0, target, values)
     return total / sizes
+
+
+def fused_pool(values: torch.Tensor, target: torch.Tensor, count: int,
+               *, dtype: torch.dtype | None = None):
+    """Mean pooling that fuses the value and degree scattering passes.
+
+    The value sum is the only ``index_add_`` executed per call; the clamped
+    denominators come from :func:`_segment_degrees`, which scatters ``count``
+    degrees once per fixed ``(target, count, dtype)`` topology and reuses them
+    afterwards. Semantics -- including the ``clamp_min(1)`` empty-segment rule
+    -- are bit-identical to ``pool(values, target, topology(...)[2])`` and the
+    result stays differentiable with respect to ``values``.
+    """
+    if values.ndim != 2 or target.ndim != 1 or values.shape[0] != target.shape[0]:
+        raise ValueError('fused pool values must match the edge population')
+    if values.device != target.device:
+        raise ValueError('fused pool values and topology must share a device')
+    dtype = values.dtype if dtype is None else dtype
+    sizes = _segment_degrees(target, count, dtype)
+    total = values.new_zeros((count, values.shape[-1]))
+    total.index_add_(0, target, values)
+    return total / sizes.clamp_min(1).unsqueeze(1)
 
 
 @dataclass(frozen=True)

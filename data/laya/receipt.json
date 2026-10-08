@@ -14,8 +14,11 @@
     "listing_pairs_negative": 12,
     "gate_hard_no_available": 6947,
     "gate_hard_no_sampled": 552,
+    "gate_proceed_available": 22,
+    "gate_proceed_in_corpus": 22,
     "gate_fallback_quarantined": 1132,
     "gate_hard_no_cap": 1000,
+    "better_match_cases": 3,
     "identity_positive_total": 564,
     "identity_negative_total": 564,
     "dropped_missing": {
@@ -29,6 +32,8 @@
     "aug_pairs": 7901,
     "aug_pairs_positive": 3,
     "aug_pairs_negative": 7898,
+    "aug_pairs_counterfactual": 7875,
+    "labeled_pairs_added": 26,
     "identity_positive_total_with_growth": 567,
     "identity_negative_total_with_growth": 8462
   },
@@ -46,6 +51,7 @@
     "aug_pair_cases": 7901,
     "aug_pair_positive": 3,
     "aug_pair_negative": 7898,
+    "aug_pair_counterfactual": 7875,
     "aug_skipped_duplicate": 5690,
     "aug_skipped_unrepresentable": 4435,
     "labeled_pairs_rows": 41,
@@ -61,23 +67,131 @@
     "Pack blocker: pack size, package type, or volume mismatch": 350,
     "Package material mismatch": 42
   },
+  "gate_reason_families": {
+    "compatible": 22,
+    "contradictory_evidence": 463,
+    "critical_attribute": 2011,
+    "declared_identity_incomplete": 255,
+    "low_pack_confidence": 98,
+    "low_volume_confidence": 107,
+    "missing_flavor_evidence": 209,
+    "pack_blocker": 4410,
+    "package_material": 526
+  },
+  "question_label_census": {
+    "better_match": {
+      "candidate_1": 2,
+      "candidate_2": 1
+    },
+    "counterfactual": {
+      "false": 1176,
+      "true": 7875
+    },
+    "evidence_sufficient": {
+      "false": 16,
+      "true": 14289
+    },
+    "field_same:carbonation": {
+      "different": 587,
+      "same": 7270,
+      "unknown": 1194
+    },
+    "field_same:flavor": {
+      "different": 2977,
+      "same": 4793,
+      "unknown": 1281
+    },
+    "field_same:pack": {
+      "unknown": 9051
+    },
+    "field_same:package_type": {
+      "different": 1277,
+      "same": 6165,
+      "unknown": 1609
+    },
+    "field_same:sweetener": {
+      "different": 2240,
+      "same": 4350,
+      "unknown": 2461
+    },
+    "field_same:volume": {
+      "different": 1848,
+      "same": 6725,
+      "unknown": 478
+    },
+    "gate_reason": {
+      "compatible": 22,
+      "critical_attribute": 160,
+      "pack_blocker": 350,
+      "package_material": 42
+    },
+    "gate_verdict": {
+      "hard_no": 552,
+      "proceed": 22
+    },
+    "identity_claim": {
+      "false": 8462,
+      "true": 567
+    },
+    "pack_format_equivalent": {
+      "false": 2886,
+      "true": 6165
+    },
+    "pack_volume_equal": {
+      "false": 2397,
+      "true": 6654
+    },
+    "package_state": {
+      "false": 626,
+      "true": 4628
+    },
+    "same_brand_only": {
+      "false": 567,
+      "true": 587
+    }
+  },
+  "difficulty_slice_census": {
+    "all_same": 532,
+    "insufficient": 1,
+    "multi_diff": 298,
+    "one_diff": 8220,
+    "pairwise": 3,
+    "single_state": 5254
+  },
+  "attribute_census": {
+    "carbonation": 507,
+    "flavor": 2903,
+    "none": 15,
+    "package_type": 1609,
+    "sweetener": 2284,
+    "volume": 6990
+  },
+  "tag_gate_reason_census": {
+    "compatible": 22,
+    "critical_attribute": 160,
+    "none": 13734,
+    "pack_blocker": 350,
+    "package_material": 42
+  },
   "split_ratios": {
     "train": 0.5277777777777778,
     "dev": 0.24305555555555555,
     "test": 0.22916666666666666
   },
   "split_sizes": {
-    "train": 7538,
-    "dev": 3471,
-    "test": 3274
+    "train": 7551,
+    "dev": 3477,
+    "test": 3280
   },
   "split_counts": {
     "train": {
       "listing_positive": 295,
       "listing_negative": 9,
       "gate_negative": 291,
+      "gate_proceed": 12,
       "aug_pair_positive": 1,
       "aug_pair_negative": 4169,
+      "better_match": 1,
       "state": 2140,
       "mask_state": 633
     },
@@ -85,8 +199,10 @@
       "listing_positive": 139,
       "listing_negative": 1,
       "gate_negative": 134,
+      "gate_proceed": 5,
       "aug_pair_positive": 0,
       "aug_pair_negative": 1920,
+      "better_match": 1,
       "state": 985,
       "mask_state": 292
     },
@@ -94,18 +210,20 @@
       "listing_positive": 130,
       "listing_negative": 2,
       "gate_negative": 127,
+      "gate_proceed": 5,
       "aug_pair_positive": 2,
       "aug_pair_negative": 1809,
+      "better_match": 1,
       "state": 929,
       "mask_state": 275
     }
   },
-  "question_schema_sha256": "83ca616abccc2f031420181a364def2ad7599e1e10807f418cb0d854189d4514",
+  "question_schema_sha256": "549c782a32265cc363f06fdb1ee89d15402d42c994860df2ee47d1595cab064b",
   "sha256": {
-    "train.jsonl": "bb62a9734e766d11b584e99f9deaa8813b951cfb23bd9da3df5f9b01775ab463",
-    "dev.jsonl": "a1f8ffed47c1232d5e98722991b56f2929a87ad5b71cf8ef4c5ed83125338a1f",
-    "test.jsonl": "5bd73212c845a774ad5090208f6d2c8b9d1f80f2e31f34fc7ed257f8c8e6dece",
+    "train.jsonl": "ec29ea9d8268acbf35bf80b5933098bb175b7b893e139c5cc8fa06a522a15ce4",
+    "dev.jsonl": "ecde03ed2012c4e8371ccdd7588ce55de2d26f48a51b94304efbbf3b664c1177",
+    "test.jsonl": "12a38db4885dc0662f0696600675676be748eedda8565fd0148db54e8997d02e",
     "unknown_pairs.csv": "ff1e77d84c8679a7b15c357f73cff2177ec696624b39b48c4a82e6db4ebdf300"
   },
-  "corpus_sha256": "c1b5e29126fba6390ccaf58166dc18d9656f4ded68ab189089e65abb473ed7f7"
+  "corpus_sha256": "288b0de8665ed955250aeaf1ac3d0c51282d979b55102a1e55a06d3cc921a60d"
 }

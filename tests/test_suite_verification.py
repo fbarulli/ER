@@ -50,7 +50,10 @@ def _build_sealed(tmp_path, ablation=False, name=RUN):
         inline[f'{track}/track_complete.json'] = json.dumps(
             {'track': track, 'status': 'ok', 'postprocess_complete': True})
         listed = [rel, 'track_complete.json']
-        if ablation:
+        if ablation and track in ('text', 'gnn_only'):
+            # The cascade trains nothing and ships no ablation templates, so a
+            # completed suite with post_training_ablation=True legitimately has
+            # no cascade ablation report.
             inline[f'{track}/ablation/report.json'] = json.dumps(_ablation(track))
             listed.append('ablation/report.json')
         inventory = {'track': track,
@@ -105,6 +108,84 @@ def test_missing_archive_is_unreadable(tmp_path):
     result = archive_verification.verification_result(tmp_path / 'absent.zip')
     assert result['status'] == 'unreadable'
     assert 'absent.zip' in result['error']
+
+
+def test_verified_archive_with_ablation_skips_cascade(tmp_path):
+    """A completed suite with ablation enabled needs no cascade ablation.
+
+    Only the trained lanes export ablation templates; the cascade is a
+    combinator with no checkpoint to ablate, so verification must accept its
+    absence while still requiring the trained lanes' saved ablations.
+    """
+    archive = _build_sealed(tmp_path, ablation=True)
+    result = archive_verification.verification_result(archive)
+    assert result['status'] == 'verified'
+    assert 'ablation' in result['tracks']['text']
+    assert 'ablation' in result['tracks']['gnn_only']
+    assert 'ablation' not in result['tracks']['cascade']
+
+
+def test_cascade_manifest_folds_both_report_roles(tmp_path):
+    """The cascade's per-track manifest carries report_cascade's two role metrics.
+
+    ``report_cascade`` writes ``cascade__cascade_report.json`` with ranker and
+    decider sections; the suite manifest must expose them too, so a cascade
+    archive has the same traceability shape as the trained lanes.
+    """
+    import numpy as np
+    from graph_tracks import report as graph_report
+    from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
+    from model_tracks.cascade import Decisions, Ranked
+
+    ranked = Ranked(query_ids=('a',),
+                    candidate_ids=np.array([['b', 'c']], dtype=object),
+                    similarities=np.array([[1.0, 0.9]], dtype=np.float32))
+    decisions = Decisions(query_ids=('a',),
+                          candidate_ids=np.array([['b', 'c']], dtype=object),
+                          scores=np.array([[0.9, 0.1]], dtype=np.float32),
+                          order=np.array([[0, 1]], dtype=np.int64),
+                          similarities=None)
+    report_cascade = graph_report.report_cascade(
+        ranked, [{'b'}], decisions, tmp_path, ks=(1, 2))
+    assert set(report_cascade['roles']) == {'ranker', 'decider'}
+    # The cascade carries the same traceability keys as the trained lanes; it
+    # has no population to slice, so they are empty with an explicit reason.
+    assert report_cascade['slices'] == [] and report_cascade['attributes'] == []
+    assert report_cascade['traceability']['slices'].startswith('not applicable')
+    assert report_cascade['traceability']['attributes'].startswith('not applicable')
+
+    manifest = build_manifest(
+        track='cascade', checkpoint='gnn.json', checkpoint_sha256='0' * 64,
+        listings_sha256='1' * 64, pairs_sha256='2' * 64, threshold=0.5,
+        threshold_source='dev_youden', test_reported=False,
+        model_selection='dev_pr_auc', retrieval_ks=[1, 2])
+    written = write_manifest(tmp_path / 'cascade__report_manifest.json', manifest)
+    folded = json.loads(written.read_text())
+    assert folded['roles'] == report_cascade['roles']
+    assert folded['slices'] == report_cascade['slices']
+    assert folded['attributes'] == report_cascade['attributes']
+    assert folded['traceability'] == report_cascade['traceability']
+
+
+def test_traceability_keys_are_identical_across_tracks(tmp_path):
+    """text, gnn_only and cascade all expose slices/attributes + a reason.
+
+    The cascade computes no table, but a missing key would let a reader
+    confuse "the cascade did not measure slices" with "slices vanished".
+    """
+    from graph_tracks.report_manifest import TRACEABILITY_KEYS
+
+    manifests = {track: _report(track) for track in ('text', 'gnn_only', 'cascade')}
+    for track, manifest in manifests.items():
+        for key in TRACEABILITY_KEYS:
+            assert key in manifest, f'{track} manifest is missing {key}'
+        assert set(manifest['traceability']) == set(TRACEABILITY_KEYS)
+    # A trained lane's attribute table lives next to the report; the cascade
+    # records an explicit not-applicable rather than pointing at a file it
+    # never writes.
+    assert 'attribute_separation_summary' in manifests['gnn_only']['traceability']['attributes']
+    assert manifests['cascade']['traceability']['attributes'].startswith('not applicable')
+    assert manifests['cascade']['slices'] == []
 
 
 def test_verification_sidecar_roundtrip(tmp_path):

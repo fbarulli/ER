@@ -17,6 +17,112 @@
     "package_state": {
       "type": "noul",
       "instructions": "Does the state carry explicit package-quantity evidence (a pack count or a unit volume)?"
+    },
+    "field_same:volume": {
+      "type": "choice",
+      "instructions": "Do the two listings' measured volume values agree? Judge only the v1=/v2= volume evidence in the state.",
+      "criteria": {
+        "same": "volume is measured on both sides and the values are identical",
+        "different": "volume is measured on both sides and the values disagree",
+        "unknown": "at least one side leaves volume unmeasured"
+      }
+    },
+    "field_same:pack": {
+      "type": "choice",
+      "instructions": "Do the two listings' measured pack-count values agree? Judge only the v1=/v2= pack evidence in the state.",
+      "criteria": {
+        "same": "pack is measured on both sides and the values are identical",
+        "different": "pack is measured on both sides and the values disagree",
+        "unknown": "at least one side leaves pack unmeasured"
+      }
+    },
+    "field_same:package_type": {
+      "type": "choice",
+      "instructions": "Do the two listings' measured package types agree? Judge only the v1=/v2= package_type evidence in the state.",
+      "criteria": {
+        "same": "package type is measured on both sides and the values are identical",
+        "different": "package type is measured on both sides and the values disagree",
+        "unknown": "at least one side leaves package type unmeasured"
+      }
+    },
+    "field_same:sweetener": {
+      "type": "choice",
+      "instructions": "Do the two listings' measured sweetener values agree? Judge only the v1=/v2= sweetener evidence in the state.",
+      "criteria": {
+        "same": "sweetener is measured on both sides and the values are identical",
+        "different": "sweetener is measured on both sides and the values disagree",
+        "unknown": "at least one side leaves sweetener unmeasured"
+      }
+    },
+    "field_same:flavor": {
+      "type": "choice",
+      "instructions": "Do the two listings' measured flavours agree? Judge only the v1=/v2= flavor evidence in the state.",
+      "criteria": {
+        "same": "flavour is measured on both sides and the values are identical",
+        "different": "flavour is measured on both sides and the values disagree",
+        "unknown": "at least one side leaves flavour unmeasured"
+      }
+    },
+    "field_same:carbonation": {
+      "type": "choice",
+      "instructions": "Do the two listings' measured carbonation values agree? Judge only the v1=/v2= carbonation evidence in the state.",
+      "criteria": {
+        "same": "carbonation is measured on both sides and the values are identical",
+        "different": "carbonation is measured on both sides and the values disagree",
+        "unknown": "at least one side leaves carbonation unmeasured"
+      }
+    },
+    "pack_volume_equal": {
+      "type": "noul",
+      "instructions": "Do the two listings carry the same package quantity (the same measured unit volume and the same measured pack count)?"
+    },
+    "pack_format_equivalent": {
+      "type": "noul",
+      "instructions": "Do the two listings carry the same package format (the same measured pack type / container form)?"
+    },
+    "gate_verdict": {
+      "type": "choice",
+      "instructions": "What verdict did the identity gate reach on this pair? Judge only the state; answer with the gate decision.",
+      "criteria": {
+        "proceed": "the gate let the pair through (compatible critical attributes)",
+        "hard_no": "the gate blocked the pair (a decisive identity conflict)",
+        "fallback": "the gate could not decide and fell back to adjudication"
+      }
+    },
+    "gate_reason": {
+      "type": "choice",
+      "instructions": "Which gate-reason family did this pair belong to? Judge only the state; answer with one family.",
+      "criteria": {
+        "pack_blocker": "a pack size, package type or volume mismatch blocked the pair",
+        "critical_attribute": "a critical attribute (flavour, sweetener, pulp, ...) mismatched",
+        "package_material": "the package material mismatched",
+        "contradictory_evidence": "the source attribute evidence was contradictory",
+        "declared_identity_incomplete": "the declared product identity differed or was incomplete",
+        "missing_flavor_evidence": "flavour evidence was missing while supporting attributes differed",
+        "low_volume_confidence": "raw volume evidence was too weak to trust",
+        "low_pack_confidence": "raw pack evidence was too weak to trust",
+        "compatible": "the known critical attributes were compatible"
+      }
+    },
+    "counterfactual": {
+      "type": "noul",
+      "instructions": "Is this pair a minted counterfactual twin (one attribute deliberately flipped from its source), rather than an observed pair?"
+    },
+    "same_brand_only": {
+      "type": "noul",
+      "instructions": "Do the two listings share a brand but describe different grocery items (same brand only, not the same product)?"
+    },
+    "evidence_sufficient": {
+      "type": "noul",
+      "instructions": "Does the state carry enough measured identity evidence to decide? For a pair, both sides must carry at least one measured slice field."
+    },
+    "better_match": {
+      "type": "choice",
+      "instructions": "The state carries one anchor listing and two candidate matches. Which candidate is the better match to the anchor (same physical product)?",
+      "criteria": {
+        "candidate_1": "the first candidate is the better match to the anchor",
+        "candidate_2": "the second candidate is the better match to the anchor"
+      }
     }
   }
 }

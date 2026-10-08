@@ -19,6 +19,21 @@ from core.ranking_metrics import ranking_at_k
 from graph_tracks.artifacts import name
 from graph_tracks.data import file_hash, load_records, load_text_cache
 
+#: The cascade is a combinator: text retrieves, gnn_only decides, and neither
+#: role owns an encoded listing catalog. It therefore scores no
+#: generalization-slice or attribute-separation population of its own. These
+#: notes make that explicit so the cascade manifest carries the same
+#: ``slices``/``attributes`` keys as the trained lanes without pretending a
+#: population was measured.
+CASCADE_TRACEABILITY = {
+    'slices': ('not applicable: the cascade scores only retrieved candidate '
+               'pairs; it has no encoded listing catalog to classify into the '
+               'unseen / sparse-neighborhood / isolated / missing-field slices'),
+    'attributes': ('not applicable: the cascade composes the trained lanes and '
+                   'carries no listing-attribute table of its own; per-attribute '
+                   'separation is reported by the text and gnn_only lanes'),
+}
+
 
 def dev_threshold(labels, scores):
     if set(labels) != {0., 1.}:
@@ -144,6 +159,21 @@ def retrieval_report(records, vectors, pairs, output, track, cfg, *, perf=None):
     return summary
 
 
+def attribute_summary_rows(report_dir: Path, track: str) -> list:
+    """Read back the attribute-separation table the lane just wrote.
+
+    ``report_attributes.write_reports`` owns the CSV; the manifest only records
+    the same rows so the per-track contract carries the attribute traceability
+    table alongside the generalization slices. ``to_json``/``json.loads``
+    round-trips the frame so numpy scalars and NaN become JSON-native values in
+    one place (the manifest forbids inf/nan).
+    """
+    path = report_dir / name(track, 'attribute_separation_summary.csv')
+    if not path.is_file():
+        return []
+    return json.loads(pd.read_csv(path).to_json(orient='records'))
+
+
 def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cfg, *, text_cache=None, saved_inference=None):
     from graph_tracks.train import load_pairs
     records = load_records(listings)
@@ -259,8 +289,8 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         threshold=threshold, threshold_source='dev_youden',
         test_reported='test' in scores, model_selection='dev_pr_auc',
         retrieval_ks=cfg.retrieval_ks, summary=summary, retrieval=retrieval,
-        slices=slices, performance=performance,
-        confidence_intervals=intervals))
+        slices=slices, attributes=attribute_summary_rows(report_dir, track),
+        performance=performance, confidence_intervals=intervals))
     _plots(scored, report_dir, track, threshold)
     progress('plots_complete', plots=[str(path) for path in sorted(report_dir.glob('*.png'))])
     perf.write_payload(report_dir / name(track, 'performance.json'), performance)
@@ -308,6 +338,12 @@ def report_cascade(ranked, relevant, decisions, output, *, track='cascade',
     decider = decider_report(labels, scores, recall_targets=recall_targets, bins=bins)
     report = {'schema': 'er-cascade-report-v1', 'track': track,
               'roles': {'ranker': ranker, 'decider': decider},
+              # Same traceability keys as every trained-lane manifest; empty
+              # with a documented reason because the cascade has no listing
+              # catalog of its own to slice or attribute-score.
+              'slices': [],
+              'attributes': [],
+              'traceability': dict(CASCADE_TRACEABILITY),
               'retrieval_ks': [int(k) for k in ks],
               'decision_threshold': threshold,
               'composed_from': ['text ranker (ANN candidates)',
@@ -320,7 +356,14 @@ def report_cascade(ranked, relevant, decisions, output, *, track='cascade',
              '## Ranker (candidate recall)', '', '```json',
              json.dumps(ranker, indent=2, sort_keys=True), '```', '',
              '## Decider (retrieved candidate set)', '', '```json',
-             json.dumps(decider, indent=2, sort_keys=True), '```', '']
+             json.dumps(decider, indent=2, sort_keys=True), '```', '',
+             '## Traceability', '',
+             'The cascade emits no generalization-slice or attribute-separation '
+             'population of its own: it scores only the retrieved candidate pairs '
+             'and owns no encoded listing catalog.', '', '```json',
+             json.dumps({'slices': report['slices'], 'attributes': report['attributes'],
+                         'traceability': report['traceability']},
+                        indent=2, sort_keys=True), '```', '']
     (output / name(track, 'cascade_report.md')).write_text('\n'.join(lines) + '\n')
     return report
 

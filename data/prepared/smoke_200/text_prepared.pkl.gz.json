@@ -17,7 +17,7 @@
   "n_labeled_pairs_bytes": 23300,
   "n_canonical_records_bytes": 73192913,
   "n_gate_results_bytes": 29527906,
-  "sha256": "d9ab5d18e58dd97f51e84affa8f75395c86916feb46c88b45d8fcc4bd0acb4f5",
+  "sha256": "e825dfdd1931ab97f0e6df8863960cf30edce43b53ad606c6098c12b19bb01e4",
   "masking_config": {
     "enabled": true,
     "balanced_augmentation": {
@@ -33,6 +33,14 @@
         "masked_minted_negatives": 50,
         "masked_positives": 10,
         "vendor_variation_positives": 5
+      },
+      "cohort_counts": {
+        "10k": {
+          "minted_negatives": 12000,
+          "masked_minted_negatives": 6000,
+          "masked_positives": 1200,
+          "vendor_variation_positives": 287
+        }
       },
       "original_objective_share": 0.5,
       "min_attribute_pairs": 10,

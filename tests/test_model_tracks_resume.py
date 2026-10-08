@@ -40,20 +40,20 @@ def test_resume_rejects_changed_provenance_and_unverified_marker(tmp_path):
 
 
 def test_graph_resume_selects_latest_epoch_in_its_own_run(tmp_path):
-    for run, epoch in [('run-hybrid', 2), ('run-hybrid', 10), ('other-hybrid', 99)]:
-        folder = tmp_path / '_checkpoints/hybrid' / f'{run}_f0' / f'checkpoint-{epoch}'
+    for run, epoch in [('run-gnn_only', 2), ('run-gnn_only', 10), ('other-gnn_only', 99)]:
+        folder = tmp_path / '_checkpoints/gnn_only' / f'{run}_f0' / f'checkpoint-{epoch}'
         folder.mkdir(parents=True)
-        (folder / 'hybrid__graph_model.pt').write_bytes(b'checkpoint')
-    assert graph_checkpoint(tmp_path, 'hybrid', 'run-hybrid').parent.name == 'checkpoint-10'
-    assert graph_checkpoint(tmp_path, 'gnn_only', 'run-gnn_only') is None
+        (folder / 'gnn_only__graph_model.pt').write_bytes(b'checkpoint')
+    assert graph_checkpoint(tmp_path, 'gnn_only', 'run-gnn_only').parent.name == 'checkpoint-10'
+    assert graph_checkpoint(tmp_path, 'cascade', 'run-cascade') is None
 
 
 def test_graph_resume_finds_trainer_nested_worker_output(tmp_path):
-    root = tmp_path / 'hybrid__run-hybrid/_checkpoints/hybrid/run-hybrid_f0/checkpoint-3'
+    root = tmp_path / 'gnn_only__run-gnn_only/_checkpoints/gnn_only/run-gnn_only_f0/checkpoint-3'
     root.mkdir(parents=True)
-    checkpoint = root / 'hybrid__graph_model.pt'
+    checkpoint = root / 'gnn_only__graph_model.pt'
     checkpoint.write_bytes(b'checkpoint')
-    assert graph_checkpoint(tmp_path, 'hybrid', 'run-hybrid') == checkpoint
+    assert graph_checkpoint(tmp_path, 'gnn_only', 'run-gnn_only') == checkpoint
 
 
 def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, monkeypatch):

@@ -3069,6 +3069,22 @@ class BundleSpec(BaseModel):
     ablation_request_file: str = Field(min_length=1)
     ablation_skip_phases: tuple[str, ...] = Field(min_length=1)
     ablation_skip_status: str = Field(min_length=1)
+    # result-archive member contract (selected-only ship set; role enforcement).
+    # Bundle owns the predicate; these names are never re-spelled by a surface.
+    result_excluded_dirs: tuple[str, ...] = Field(default_factory=lambda: (
+        ".dvc", ".dvc-cache", ".dvc-site-cache", ".git", ".resume",
+        "_checkpoint_upload_staging", "wandb", "mlruns", "mps_pipe", "mps_log",
+        # Profiling is resume/diagnostic state, never a suite deliverable.
+        "profiles", "resource_profile",
+    ))
+    # Checkpoint members that exist only to resume training. A result bundle
+    # carries the selected checkpoint's weights; a recovery bundle keeps these.
+    resume_only_filenames: tuple[str, ...] = Field(default_factory=lambda: (
+        "optimizer.pt", "scheduler.pt", "rng_state.pth", "training_args.bin",
+        "scaler.pt",
+    ))
+    # The default three-track suite config a BundlePipeline prepares from.
+    suite_config: str = "config/model_tracks.yaml"
 
 
 class PreparationSpec(BaseModel):

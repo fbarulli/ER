@@ -118,7 +118,7 @@ def compile_model(module, *, name: str, mode: str = 'reduce-overhead',
 
 
 # ---------------------------------------------------------------------------
-# Triton segment-add (UNVALIDATED ON HARDWARE -- see note below)
+# Triton grouped segment-add (UNVALIDATED ON GPU HARDWARE -- see note below)
 # ---------------------------------------------------------------------------
 try:  # pragma: no cover - import probe, environment dependent
     import triton
@@ -138,38 +138,56 @@ def triton_available() -> bool:
 if _TRITON_AVAILABLE:
 
     @triton.jit
-    def _segment_add_kernel(values_ptr, index_ptr, out_ptr, n_edges, n_features,
-                            BLOCK_E: tl.constexpr, BLOCK_F: tl.constexpr):
-        """out[index[e]] += values[e] for one (edge-block, feature-block) tile.
+    def _segment_add_kernel(values_ptr, offsets_ptr, out_ptr, n_features,
+                            BLOCK_F: tl.constexpr):
+        """out[s] = sum(values[offsets[s]:offsets[s + 1]]) for one segment tile.
 
-        NOTE: this kernel is written but has NOT been validated on real GPU
-        hardware (no GPU on this host). It is only ever launched when
-        ``accel.segment_reduce`` is on AND CUDA AND Triton are all available,
-        and any launch failure silently falls back to the torch path.
+        Grouped/segmented reduction: the caller sorts edges by target and
+        passes the ``(count + 1,)`` segment offsets, so every program owns one
+        complete output row and reads its edges contiguously. No ``atomic_add``
+        is issued, which removes the contention the previous scatter kernel hit
+        whenever many edges share a target.
+
+        NOTE: written but NOT validated on real GPU hardware (no GPU on this
+        host). It is only launched when ``accel.segment_reduce`` is on AND CUDA
+        AND Triton are all available, and any launch failure silently falls back
+        to the torch path. The arithmetic (float32 accumulator, cast back to the
+        caller dtype) is identical to :func:`_torch_segment_sum`.
         """
-        pid_e = tl.program_id(0)
-        pid_f = tl.program_id(1)
-        offs_e = pid_e * BLOCK_E + tl.arange(0, BLOCK_E)
-        offs_f = pid_f * BLOCK_F + tl.arange(0, BLOCK_F)
-        edge_mask = offs_e < n_edges
-        index = tl.load(index_ptr + offs_e, mask=edge_mask, other=0).to(tl.int64)
-        values = tl.load(values_ptr + offs_e[:, None] * n_features + offs_f[None, :],
-                         mask=edge_mask[:, None], other=0.0)
-        tl.atomic_add(out_ptr + index[:, None] * n_features + offs_f[None, :],
-                      values, mask=edge_mask[:, None])
+        segment = tl.program_id(0)
+        feature_block = tl.program_id(1)
+        offs_f = feature_block * BLOCK_F + tl.arange(0, BLOCK_F)
+        f_mask = offs_f < n_features
+        start = tl.load(offsets_ptr + segment)
+        end = tl.load(offsets_ptr + segment + 1)
+        accumulator = tl.zeros((BLOCK_F,), dtype=tl.float32)
+        for edge in range(start, end):
+            row = tl.load(values_ptr + edge * n_features + offs_f,
+                          mask=f_mask, other=0.0)
+            accumulator += row
+        tl.store(out_ptr + segment * n_features + offs_f, accumulator, mask=f_mask)
 
 
 def _triton_segment_sum(values: torch.Tensor, index: torch.Tensor, count: int) -> torch.Tensor:
-    """Segment sum through the Triton atomic-add kernel (float32 accumulator)."""
+    """Grouped segment sum through the Triton kernel (float32 accumulator).
+
+    Edges are stably sorted by target once; the kernel then reduces each
+    contiguous group without atomics. ``values`` is only cast when it is not
+    already float32, and ``index`` is never copied.
+    """
     edges, features = values.shape
     out = torch.zeros((count, features), dtype=torch.float32, device=values.device)
-    block_e = 128
+    if count == 0 or edges == 0:
+        return out.to(values.dtype)
+    order = torch.argsort(index, stable=True)
+    grouped = values[order]
+    if grouped.dtype != torch.float32:
+        grouped = grouped.float()
+    lengths = torch.bincount(index, minlength=count)
+    offsets = torch.cat([lengths.new_zeros(1), lengths.cumsum(0)])
     block_f = min(64, triton.next_power_of_2(max(features, 1)))
-    grid = (triton.cdiv(edges, block_e), triton.cdiv(features, block_f))
-    _segment_add_kernel[grid](
-        values.contiguous().float(), index.to(torch.int32).contiguous(), out,
-        edges, features, BLOCK_E=block_e, BLOCK_F=block_f,
-    )
+    grid = (count, triton.cdiv(features, block_f))
+    _segment_add_kernel[grid](grouped, offsets, out, features, BLOCK_F=block_f)
     return out.to(values.dtype)
 
 
@@ -240,7 +258,11 @@ def segment_reduce_fast(values: torch.Tensor, index: torch.Tensor, sizes: torch.
 
     if reduce == 'sum':
         return total
-    denominator = sizes.to(dtype=values.dtype).reshape(count, 1)
+    # Divide by the denominators exactly as supplied; only cast when the dtype
+    # actually differs so the common float32 case copies nothing.
+    denominator = sizes.reshape(count, 1)
+    if denominator.dtype != total.dtype:
+        denominator = denominator.to(total.dtype)
     return total / denominator
 
 

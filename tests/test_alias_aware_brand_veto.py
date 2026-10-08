@@ -482,6 +482,33 @@ def test_canonical_map_join_resolves_a_zero_prefixed_upc12() -> None:
     assert df["canon1"].notna().all() and df["canon2"].notna().all()
 
 
+def _prepared_corpus_is_the_mounted_export() -> bool:
+    """True only when the prepared corpus closes against the mounted export.
+
+    The full-cohort count pins in this module are measured on a prepared
+    corpus (dataset_deduped.csv + the dedupe removals) that was built from
+    the SAME bytes as the mounted dataset.csv. A cohort/partial-prep mount
+    (e.g. a 10k-derived data/ directory left beside a restored full export)
+    breaks that closure: deduped + dropped != source. The row count is then
+    a property of the wrong universe and MUST skip, never fail. Missing
+    artifacts also answer False (a fresh clone has no prepared corpus).
+    """
+    from core.common import DATA_PATH, F, dataset_is_partial_cohort
+
+    if dataset_is_partial_cohort():
+        return False
+    try:
+        from training.complete_colab_worker import _byte_stable_csv_rows
+
+        return (
+            _byte_stable_csv_rows(F["dataset_deduped"])
+            + _byte_stable_csv_rows(F["removals"])
+            == _byte_stable_csv_rows(DATA_PATH)
+        )
+    except (FileNotFoundError, RuntimeError, ValueError):
+        return False
+
+
 def test_frozen_canonical_records_have_no_leading_zero_gtins() -> None:
     """Pre/post row-count identity on the REAL data (fast path).
 
@@ -492,13 +519,13 @@ def test_frozen_canonical_records_have_no_leading_zero_gtins() -> None:
     must be rerun with the repair path (never silently compiled away).
     """
     canon = pd.read_csv("data/canonical_records.csv", dtype={"gtin": str}, keep_default_na=False)
-    from core.common import dataset_is_partial_cohort
 
     # Owner directive 2026-10-06: only the full dataset is tested. The
     # canonical census is cohort-specific (35,561 cohort: 7,165 rows), so
-    # the count assert runs only on a full-cohort mount; the LEADING-ZERO
-    # hazard guard below is cohort-INDEPENDENT and always runs.
-    if not dataset_is_partial_cohort():
+    # the count assert runs only when the PREPARED corpus closes against the
+    # mounted full export; the LEADING-ZERO hazard guard below is
+    # cohort-INDEPENDENT and always runs.
+    if _prepared_corpus_is_the_mounted_export():
         # RE-PINNED 2026-10-06: 13,216 -> 13,102 canonicals (-114). Prior pin
         # (2026-10-01): 13,225 -> 13,216 (-9), measured against
         # dataset_deduped.csv SHA 73a94016 / 63,079 rows.

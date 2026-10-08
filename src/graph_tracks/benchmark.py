@@ -6,6 +6,7 @@ The model is discarded; no checkpoints or evaluation decisions are produced.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import time
@@ -13,6 +14,7 @@ import time
 import torch
 from torch.nn import functional as F
 
+from core.fast_kernels import autocast_context, compile_model
 from core.perf_switches import perf_enabled
 from graph_tracks.config import load_config
 from graph_tracks.data import fit_vocabulary, load_records, load_text_cache, tensorize
@@ -64,17 +66,25 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
     train_pairs = torch.tensor(pairs[0], device='cuda')
     labels = torch.tensor(pairs[1], device='cuda')
     context, encode, score = model.context, model.encode, scorer.forward
+    # BF16 autocast and torch.compile both go through the opt-in accelerator
+    # primitives so the benchmark measures the same gated kernels the trainer
+    # uses (accel.autocast / accel.compile); with the switches off they are
+    # no-ops and the benchmark measures the eager fp32 path.
+    amp = autocast_context('cuda') if bf16 else nullcontext()
     if compile_model:
         # Prime detached static topology eagerly; compilation then reads the
         # immutable metadata without dynamic boolean edge compaction.
-        with torch.no_grad(), torch.autocast(
-                'cuda', dtype=torch.bfloat16, enabled=bf16):
+        with torch.no_grad(), amp:
             model.encode(batch, model.context(support, support_text), text)
-        context, encode, score = [torch.compile(f, backend='inductor') for f in (context, encode, score)]
+        context, encode, score = [
+            compile_model(function, name=name, mode='default')
+            for name, function in (('gnn.context', context), ('gnn.encode', encode),
+                                   ('gnn.score', score))
+        ]
 
     def step():
         optimizer.zero_grad(set_to_none=True)
-        with torch.autocast('cuda', dtype=torch.bfloat16, enabled=bf16):
+        with amp:
             states = context(support, support_text)
             vectors = encode(batch, states, text)
             logits = score(vectors, train_pairs, text)

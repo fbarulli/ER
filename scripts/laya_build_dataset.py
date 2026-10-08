@@ -160,6 +160,149 @@ def _pack_type_only(attribute: str) -> bool:
             and bool(_field(attribute, "pack type")))
 
 
+# ── per-field / per-attribute pair labels (reuse the composed sides) ────────
+# Every pair label below is read off ONE of two things the builder already
+# has: the six-field side literals `compose_side` emits (the reused metrics
+# composer, never re-implemented) or the standardized attribute string. No
+# label is invented, and a question the caller's schema does not declare is
+# simply not emitted (the membership gate in `_pair_expected`).
+PAIR_FIELDS = _PAIRS_BUILDER.SLICE_FIELDS
+FIELD_SAME_QIDS = tuple(f"field_same:{field}" for field in PAIR_FIELDS)
+
+# The nine bounded gate-reason families (data/gate_results.csv carries a
+# free-form `gate_reason`; the family is its text before the first ':'
+# -- read off the source, never a new taxonomy). An unrecognized reason
+# falls back to `unclassified` and is counted, never silently dropped.
+GATE_REASON_FAMILIES: dict[str, str] = {
+    "Pack blocker": "pack_blocker",
+    "Critical attribute mismatch": "critical_attribute",
+    "Package material mismatch": "package_material",
+    "Contradictory source attribute evidence": "contradictory_evidence",
+    "Declared product identity differs or is incomplete":
+        "declared_identity_incomplete",
+    "Missing flavor evidence with differing supporting attributes":
+        "missing_flavor_evidence",
+    "Low raw volume confidence": "low_volume_confidence",
+    "Low raw pack confidence": "low_pack_confidence",
+    "Known critical attributes compatible": "compatible",
+}
+GATE_VERDICTS = ("proceed", "hard_no", "fallback")
+DIFFICULTY_SLICES = ("all_same", "one_diff", "multi_diff", "insufficient",
+                     "single_state")
+
+
+def _field_same_label(side_one: dict[str, str], side_two: dict[str, str],
+                      field: str) -> str:
+    """same / different / unknown for one slice field, from the side literals.
+
+    Both sides measured and equal -> same; both measured and unequal ->
+    different; either side unmeasured ('') -> unknown (never guessed).
+    """
+    one, two = side_one.get(field, ""), side_two.get(field, "")
+    if one and two:
+        return "same" if one == two else "different"
+    return "unknown"
+
+
+def _has_evidence(side: dict[str, str]) -> bool:
+    """Any of the six identity slice fields measured on one side."""
+    return any(side.get(field) for field in PAIR_FIELDS)
+
+
+def _package_signature(attribute: str) -> tuple:
+    """(volume, pack-count, multipack) evidence read off the attribute.
+
+    Reuses the same keys the `package_state` rule reads (Volume plus the
+    PACK_COUNT_KEYS / MULTIPACK_RE vocabulary); an unmeasured field is
+    simply absent, never zero.
+    """
+    parts: list[tuple[str, str]] = []
+    for part in str(attribute).split(";"):
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        key, value = key.strip().lower(), value.strip()
+        if key == "volume" and NUMERIC_VALUE_RE.match(value):
+            parts.append(("volume", value))
+        elif key in PACK_COUNT_KEYS and NUMERIC_VALUE_RE.match(value):
+            parts.append(("pack", value))
+    match = MULTIPACK_RE.search(str(attribute))
+    if match:
+        parts.append(("multipack", match.group(0).lower().replace(" ", "")))
+    return tuple(sorted(parts))
+
+
+def pack_volume_equal(attr_one: str, attr_two: str) -> str:
+    """true iff both sides carry package-quantity evidence and it agrees."""
+    signature_one = _package_signature(attr_one)
+    signature_two = _package_signature(attr_two)
+    return "true" if (signature_one and signature_two
+                      and signature_one == signature_two) else "false"
+
+
+def pack_format_equivalent(attr_one: str, attr_two: str) -> str:
+    """true iff both sides measure a Pack Type and the forms agree."""
+    one = (_field(attr_one, "pack type") or "").strip().lower()
+    two = (_field(attr_two, "pack type") or "").strip().lower()
+    return "true" if (one and two and one == two) else "false"
+
+
+def evidence_sufficient(side_one: dict[str, str],
+                        side_two: dict[str, str]) -> str:
+    """true iff both sides carry at least one measured slice field."""
+    return "true" if (_has_evidence(side_one) and _has_evidence(side_two)) \
+        else "false"
+
+
+def same_brand_only(brand_one: str | None, brand_two: str | None,
+                    identity_label: str | None) -> str | None:
+    """true iff the brands agree and the pair is NOT the same item.
+
+    `None` (omit the label) when either brand is unknown: the state does not
+    carry brand evidence, so the label is only emitted where the catalog
+    source supplies both brands AND the GTIN truth supplies the identity
+    label.
+    """
+    if not brand_one or not brand_two or identity_label is None:
+        return None
+    same = brand_one.strip().lower() == brand_two.strip().lower()
+    return "true" if (same and identity_label == "false") else "false"
+
+
+def _difficulty_slice(side_one: dict[str, str],
+                      side_two: dict[str, str]) -> str:
+    """A pair's difficulty from the same field-level agreement the questions
+    use: how many measured fields disagree (never invented from a model)."""
+    if not (_has_evidence(side_one) and _has_evidence(side_two)):
+        return "insufficient"
+    differing = sum(1 for field in PAIR_FIELDS
+                    if _field_same_label(side_one, side_two, field) == "different")
+    if differing == 0:
+        return "all_same"
+    if differing == 1:
+        return "one_diff"
+    return "multi_diff"
+
+
+def _primary_attribute(side_one: dict[str, str],
+                       side_two: dict[str, str]) -> str:
+    """The row's attribute tag: the first differing measured field, else the
+    first measured field in the frozen slice order, else 'none'."""
+    for field in PAIR_FIELDS:
+        if _field_same_label(side_one, side_two, field) == "different":
+            return field
+    for field in PAIR_FIELDS:
+        if side_one.get(field) or side_two.get(field):
+            return field
+    return "none"
+
+
+def gate_reason_family(reason: str) -> str:
+    """Free-form gate_reason -> its bounded family (text before ':')."""
+    prefix = str(reason).split(":", 1)[0].strip()
+    return GATE_REASON_FAMILIES.get(prefix, "unclassified")
+
+
 def _allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
     """Largest-remainder allocation of `total` at `ratios` (sums to total)."""
     raw = {key: total * ratios[key] for key in ratios}
@@ -213,8 +356,135 @@ def _stratified_sample(rows: list[dict], target: int, reason_of,
     return sampled
 
 
-def _record(state: str, questions: dict, expected: dict) -> dict:
-    return {"state": state, "questions": questions, "expected": expected}
+def _record(state: str, questions: dict, expected: dict, *,
+            difficulty_slice: str, gate_reason: str = "",
+            attribute: str = "none") -> dict:
+    """One corpus case: the laya contract keys PLUS the traceability tags.
+
+    `difficulty_slice`/`gate_reason`/`attribute` ride at the top level: the
+    laya trainer (`items_from_rows`) reads only `state`/`questions`/`gold`/
+    `expected`, so the extra keys never affect training, and the eval report
+    reads them back to slice accuracy/ECE without re-deriving membership.
+    """
+    return {"state": state, "questions": questions, "expected": expected,
+            "difficulty_slice": difficulty_slice,
+            "gate_reason": gate_reason, "attribute": attribute}
+
+
+def _pair_expected(questions: dict, side_one: dict[str, str],
+                   side_two: dict[str, str], *, attr_one: str | None = None,
+                   attr_two: str | None = None,
+                   identity: str | None = None,
+                   brand_one: str | None = None,
+                   brand_two: str | None = None,
+                   counterfactual: str | None = None,
+                   gate_verdict: str | None = None,
+                   gate_reason: str | None = None) -> dict:
+    """Every pair label this row's sources support, gated by the schema.
+
+    A label is emitted only when the caller's `questions` dict declares the
+    qid (the hermetic fixtures with a 3-question schema stay byte-identical)
+    AND the source supplies the truth. All field labels come off the SAME
+    composed sides the state was rendered from.
+    """
+    expected: dict[str, str] = {}
+
+    def put(qid: str, label: str | None) -> None:
+        if label is not None and qid in questions:
+            expected[qid] = label
+
+    put("identity_claim", identity)
+    put("counterfactual", counterfactual)
+    for field in PAIR_FIELDS:
+        put(f"field_same:{field}",
+            _field_same_label(side_one, side_two, field))
+    if attr_one is not None and attr_two is not None:
+        put("pack_volume_equal", pack_volume_equal(attr_one, attr_two))
+        put("pack_format_equivalent",
+            pack_format_equivalent(attr_one, attr_two))
+    put("evidence_sufficient", evidence_sufficient(side_one, side_two))
+    put("same_brand_only", same_brand_only(brand_one, brand_two, identity))
+    put("gate_verdict", gate_verdict)
+    put("gate_reason", gate_reason)
+    return expected
+
+
+def _pair_meta(side_one: dict[str, str], side_two: dict[str, str], *,
+               gate_reason: str = "") -> dict:
+    return {"difficulty_slice": _difficulty_slice(side_one, side_two),
+            "gate_reason": gate_reason,
+            "attribute": _primary_attribute(side_one, side_two)}
+
+
+def _single_meta(attribute: str) -> dict:
+    """A single-state row's tags: no pair slice, the first measured field."""
+    side = compose_side(attribute)
+    for field in PAIR_FIELDS:
+        if side.get(field):
+            return {"difficulty_slice": "single_state", "gate_reason": "",
+                    "attribute": field}
+    return {"difficulty_slice": "single_state", "gate_reason": "",
+            "attribute": "none"}
+
+
+def _render_triple_side(side: dict[str, str]) -> str:
+    """One listing's six-field literals for the better_match state."""
+    return "[" + ", ".join(
+        f"{field}:{side.get(field) or '-'}" for field in PAIR_FIELDS) + "]"
+
+
+def better_match_records(pairs: list[dict], by_sku: dict[str, dict],
+                         questions: dict) -> list[dict]:
+    """Pairwise `better_match` (choice(2)) cases from the GTIN truth.
+
+    For every confirmed-different listing pair (A, B) that also has a
+    confirmed-same partner C for A, the state carries the anchor A and two
+    candidates (B, C); the answer is the candidate whose GTIN equals A's.
+    The two candidates are placed deterministically by GTIN (the smaller
+    GTIN is `candidate_1`) so position is not a free signal. Emitted only
+    when the schema declares `better_match`.
+    """
+    if "better_match" not in questions:
+        return []
+    same_by_sku: dict[str, dict[str, dict]] = {}
+    for pair in pairs:
+        if int(pair["label"]) != 1:
+            continue
+        for anchor, partner in ((pair["sku_id1"], pair["sku_id2"]),
+                                (pair["sku_id2"], pair["sku_id1"])):
+            same_by_sku.setdefault(anchor, {})[partner] = pair
+    records: list[dict] = []
+    seen: set[str] = set()
+    for pair in pairs:
+        if int(pair["label"]) != 0:
+            continue
+        anchor = pair["sku_id1"]
+        different = pair["sku_id2"]
+        for same in sorted(same_by_sku.get(anchor, {})):
+            if same == different:
+                continue
+            gtin_different = by_sku[different]["gtin"]
+            gtin_same = by_sku[same]["gtin"]
+            # deterministic candidate order by GTIN; the GTIN truth decides
+            first_is_same = gtin_same <= gtin_different
+            cand_one = same if first_is_same else different
+            cand_two = different if first_is_same else same
+            side_anchor = compose_side(by_sku[anchor]["attribute"])
+            side_one = compose_side(by_sku[cand_one]["attribute"])
+            side_two = compose_side(by_sku[cand_two]["attribute"])
+            state = (f"anchor: {_render_triple_side(side_anchor)}; "
+                     f"candidate_1: {_render_triple_side(side_one)}; "
+                     f"candidate_2: {_render_triple_side(side_two)}")
+            if state in seen:
+                continue
+            seen.add(state)
+            records.append(_record(
+                state, questions,
+                {"better_match": "candidate_1" if first_is_same
+                 else "candidate_2"},
+                difficulty_slice="pairwise",
+                attribute=_primary_attribute(side_one, side_two)))
+    return records
 
 
 def _dump_line(record: dict) -> str:
@@ -285,11 +555,6 @@ def _side_from_payload(text: str) -> dict[str, str]:
     return compose_side(_attr_from_payload(text))
 
 
-def _has_evidence(side: dict[str, str]) -> bool:
-    """Any of the six identity slice fields measured on one side."""
-    return any(side.get(field) for field in _PAIRS_BUILDER.SLICE_FIELDS)
-
-
 def _ingest_masking_and_augmentation(
     *, bundle_path, labeled_pairs_path, by_gtin, existing_pair_states,
     questions,
@@ -315,6 +580,7 @@ def _ingest_masking_and_augmentation(
         "aug_pair_cases": 0,
         "aug_pair_positive": 0,
         "aug_pair_negative": 0,
+        "aug_pair_counterfactual": 0,
         "aug_skipped_duplicate": 0,
         "aug_skipped_unrepresentable": 0,
         "labeled_pairs_rows": 0,
@@ -349,14 +615,22 @@ def _ingest_masking_and_augmentation(
                 anchor = int(audit["anchor_payload_idx"])
                 attribute = str(frame.iloc[anchor]["attribute"])
                 label = "true" if package_state(attribute) else "false"
+                expected = {"package_state": label}
+                if "evidence_sufficient" in questions:
+                    side = compose_side(attribute)
+                    expected["evidence_sufficient"] = (
+                        "true" if _has_evidence(side) else "false")
                 mask_records.append(
-                    _record(state, questions, {"package_state": label}))
+                    _record(state, questions, expected,
+                            **_single_meta(attribute)))
                 mask_seen.add(state)
                 census[f"mask_package_state_{label}"] += 1
                 continue
             # a side-by-side augmentation PAIR (counterfactual/twin/minted)
             census["aug_pair_audits"] += 1
             label = "true" if population == "swap_counterpart" else "false"
+            is_counterfactual = "true" if target_mode == "counterfactual" \
+                else "false"
             copy_text = (audit.get("masked_text")
                          or payload[int(audit["copy_payload_idx"])])
             pair_text = payload[int(audit["pair_payload_idx"])]
@@ -370,10 +644,23 @@ def _ingest_masking_and_augmentation(
             if state in aug_seen:
                 census["aug_skipped_duplicate"] += 1
                 continue
+            expected = _pair_expected(
+                questions, side_one, side_two,
+                attr_one=_attr_from_payload(copy_text),
+                attr_two=_attr_from_payload(pair_text),
+                identity=label, counterfactual=is_counterfactual)
+            if label == "true" and "identity_claim" not in expected:
+                # the fixture schema labelled no identity_claim: keep the
+                # historical positive/negative census meaningful anyway.
+                pass
             aug_records.append(
-                _record(state, questions, {"identity_claim": label}))
+                _record(state, questions, expected,
+                        **_pair_meta(side_one, side_two)))
             aug_seen.add(state)
             census[f"aug_pair_{'positive' if label == 'true' else 'negative'}"] += 1
+            if is_counterfactual == "true":
+                census["aug_pair_counterfactual"] = (
+                    census.get("aug_pair_counterfactual", 0) + 1)
 
     if labeled_pairs_path is not None and Path(labeled_pairs_path).is_file():
         header, rows = _read_csv(labeled_pairs_path)
@@ -387,13 +674,21 @@ def _ingest_masking_and_augmentation(
                 census["labeled_pairs_missing_gtin"] += 1
                 continue
             label = "true" if int(row["true_label"]) == 1 else "false"
-            state = compose_state(compose_side(one["attribute"]),
-                                  compose_side(two["attribute"]))
+            side_one = compose_side(one["attribute"])
+            side_two = compose_side(two["attribute"])
+            state = compose_state(side_one, side_two)
             if state in aug_seen:
                 census["labeled_pairs_skipped_duplicate"] += 1
                 continue
+            expected = _pair_expected(
+                questions, side_one, side_two,
+                attr_one=one["attribute"], attr_two=two["attribute"],
+                identity=label,
+                brand_one=one.get("brand"), brand_two=two.get("brand"),
+                counterfactual="false")
             aug_records.append(
-                _record(state, questions, {"identity_claim": label}))
+                _record(state, questions, expected,
+                        **_pair_meta(side_one, side_two)))
             aug_seen.add(state)
             census["labeled_pairs_added"] += 1
             census[f"aug_pair_{'positive' if label == 'true' else 'negative'}"] += 1
@@ -451,28 +746,38 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         attribute = row["attribute"]
         labeled = package_state(attribute)
         state_pkg[str(labeled).lower()] += 1
-        state_records.append(_record(
-            attribute, questions, {"package_state": "true" if labeled
-                                   else "false"}))
+        expected = {"package_state": "true" if labeled else "false"}
+        if "evidence_sufficient" in questions:
+            expected["evidence_sufficient"] = (
+                "true" if _has_evidence(compose_side(attribute)) else "false")
+        state_records.append(_record(attribute, questions, expected,
+                                     **_single_meta(attribute)))
     state_splits = _assign_splits(state_records, ratios, seed)
 
     # ── PAIR cases: the ground-truth listing pairs ──────────────────────
     pair_by_split: dict[str, list[dict]] = {key: [] for key in SPLIT_ORDER}
     identity_labels = Counter()
     for pair in pairs:
-        one = by_sku[pair["sku_id1"]]["attribute"]
-        two = by_sku[pair["sku_id2"]]["attribute"]
+        row_one = by_sku[pair["sku_id1"]]
+        row_two = by_sku[pair["sku_id2"]]
+        one, two = row_one["attribute"], row_two["attribute"]
+        side_one, side_two = compose_side(one), compose_side(two)
         label = "true" if int(pair["label"]) == 1 else "false"
         identity_labels[label] += 1
+        expected = _pair_expected(
+            questions, side_one, side_two, attr_one=one, attr_two=two,
+            identity=label, brand_one=row_one.get("brand"),
+            brand_two=row_two.get("brand"), counterfactual="false")
         pair_by_split[pair["split"]].append(_record(
-            compose_state(compose_side(one), compose_side(two)),
-            questions, {"identity_claim": label}))
+            compose_state(side_one, side_two), questions, expected,
+            difficulty_slice=_difficulty_slice(side_one, side_two),
+            attribute=_primary_attribute(side_one, side_two)))
     positives = identity_labels["true"]
     listing_negatives = identity_labels["false"]
 
-    # ── GATE cases: hard_no negatives + fallback quarantine ─────────────
+    # ── GATE cases: hard_no negatives + proceed + fallback quarantine ───
     gate_header, gate = _read_csv(gate_path)
-    hard_no, fallback = [], []
+    hard_no, proceed, fallback = [], [], []
     dropped_missing = Counter()
     for row in gate:
         both = ((row["gtin1"] or "").strip() in by_gtin
@@ -482,6 +787,9 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         if row["gate_decision"] == "hard_no":
             if both:
                 hard_no.append(row)
+        elif row["gate_decision"] == "proceed":
+            if both:
+                proceed.append(row)
         elif row["gate_decision"] == "fallback":
             fallback.append(row)
 
@@ -491,17 +799,58 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         hard_no, hard_no_target, lambda row: row["gate_reason"], seed)
     gate_reason_sample = Counter(row["gate_reason"] for row in sampled)
     gate_splits = _assign_splits(sampled, ratios, seed)
+    # Every joinable `proceed` gate row rides the corpus for its gate verdict
+    # / reason labels (identity_claim stays unlabelled: the gate verdict is
+    # not a GTIN truth). Deterministic row order preserved, then split.
+    proceed_splits = _assign_splits(list(proceed), ratios, seed)
+    gate_reason_families = Counter(
+        gate_reason_family(row["gate_reason"]) for row in gate)
 
-    def _gate_state(row: dict) -> str:
+    def _gate_sides(row: dict) -> tuple[dict, dict]:
         one = by_gtin[(row["gtin1"] or "").strip()]["attribute"]
         two = by_gtin[(row["gtin2"] or "").strip()]["attribute"]
-        return compose_state(compose_side(one), compose_side(two))
+        return compose_side(one), compose_side(two)
+
+    def _gate_state(row: dict) -> str:
+        side_one, side_two = _gate_sides(row)
+        return compose_state(side_one, side_two)
 
     gate_records_by_split: dict[str, list[dict]] = {key: [] for key in SPLIT_ORDER}
     for key in SPLIT_ORDER:
         for row in gate_splits[key]:
+            side_one, side_two = _gate_sides(row)
+            family = gate_reason_family(row["gate_reason"])
+            expected = _pair_expected(
+                questions, side_one, side_two, identity="false",
+                gate_verdict="hard_no", gate_reason=family,
+                attr_one=by_gtin[(row["gtin1"] or "").strip()]["attribute"],
+                attr_two=by_gtin[(row["gtin2"] or "").strip()]["attribute"],
+                brand_one=by_gtin[(row["gtin1"] or "").strip()].get("brand"),
+                brand_two=by_gtin[(row["gtin2"] or "").strip()].get("brand"),
+                counterfactual="false")
             gate_records_by_split[key].append(_record(
-                _gate_state(row), questions, {"identity_claim": "false"}))
+                compose_state(side_one, side_two), questions, expected,
+                difficulty_slice=_difficulty_slice(side_one, side_two),
+                gate_reason=family,
+                attribute=_primary_attribute(side_one, side_two)))
+
+    proceed_records_by_split: dict[str, list[dict]] = {
+        key: [] for key in SPLIT_ORDER}
+    for key in SPLIT_ORDER:
+        for row in proceed_splits[key]:
+            side_one, side_two = _gate_sides(row)
+            family = gate_reason_family(row["gate_reason"])
+            expected = _pair_expected(
+                questions, side_one, side_two,
+                gate_verdict="proceed", gate_reason=family,
+                attr_one=by_gtin[(row["gtin1"] or "").strip()]["attribute"],
+                attr_two=by_gtin[(row["gtin2"] or "").strip()]["attribute"],
+                counterfactual="false")
+            proceed_records_by_split[key].append(_record(
+                compose_state(side_one, side_two), questions, expected,
+                difficulty_slice=_difficulty_slice(side_one, side_two),
+                gate_reason=family,
+                attribute=_primary_attribute(side_one, side_two)))
 
     # ── MASKING + AUGMENTATION: fold the pipeline's minted data in ──────
     # The bundles/labeled pairs are opt-in (None in the hermetic builder
@@ -519,8 +868,12 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
     mask_splits = _assign_splits(mask_records, ratios, seed)
     aug_splits = _assign_splits(aug_records, ratios, seed)
 
-    # ── emit the splits (deterministic order: pairs, gate, aug, state,
-    #    mask) ────────────────────────────────────────────────────────────
+    # ── BETTER_MATCH cases: pairwise choice(2) from the GTIN truth ──────
+    better_records = better_match_records(pairs, by_sku, questions)
+    better_splits = _assign_splits(better_records, ratios, seed)
+
+    # ── emit the splits (deterministic order: pairs, gate, proceed, aug,
+    #    better_match, state, mask) ───────────────────────────────────────
     output_dir.mkdir(parents=True, exist_ok=True)
     split_sizes: dict[str, int] = {}
     split_counts: dict[str, dict] = {}
@@ -528,7 +881,8 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
     for key in SPLIT_ORDER:
         path = output_dir / f"{key}.jsonl"
         lines = (pair_by_split[key] + gate_records_by_split[key]
-                 + aug_splits[key] + state_splits[key] + mask_splits[key])
+                 + proceed_records_by_split[key] + aug_splits[key]
+                 + better_splits[key] + state_splits[key] + mask_splits[key])
         with path.open("w", encoding="utf-8") as handle:
             for record in lines:
                 handle.write(_dump_line(record) + "\n")
@@ -537,17 +891,19 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         split_counts[key] = {
             "listing_positive": sum(
                 1 for r in pair_by_split[key]
-                if r["expected"]["identity_claim"] == "true"),
+                if r["expected"].get("identity_claim") == "true"),
             "listing_negative": sum(
                 1 for r in pair_by_split[key]
-                if r["expected"]["identity_claim"] == "false"),
+                if r["expected"].get("identity_claim") == "false"),
             "gate_negative": len(gate_records_by_split[key]),
+            "gate_proceed": len(proceed_records_by_split[key]),
             "aug_pair_positive": sum(
                 1 for r in aug_splits[key]
-                if r["expected"]["identity_claim"] == "true"),
+                if r["expected"].get("identity_claim") == "true"),
             "aug_pair_negative": sum(
                 1 for r in aug_splits[key]
-                if r["expected"]["identity_claim"] == "false"),
+                if r["expected"].get("identity_claim") == "false"),
+            "better_match": len(better_splits[key]),
             "state": len(state_splits[key]),
             "mask_state": len(mask_splits[key]),
         }
@@ -570,6 +926,26 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
                 _gate_state(row) if (in_one and in_two) else "")
             writer.writerow(out)
 
+    # ── traceability census: per-question label + per-tag populations ────
+    all_records = [
+        record
+        for key in SPLIT_ORDER
+        for record in (pair_by_split[key] + gate_records_by_split[key]
+                       + proceed_records_by_split[key] + aug_splits[key]
+                       + better_splits[key] + state_splits[key]
+                       + mask_splits[key])
+    ]
+    question_label_census: dict[str, Counter] = defaultdict(Counter)
+    difficulty_slice_census: Counter = Counter()
+    gate_reason_census: Counter = Counter()
+    attribute_census: Counter = Counter()
+    for record in all_records:
+        for qid, label in record["expected"].items():
+            question_label_census[qid][label] += 1
+        difficulty_slice_census[record["difficulty_slice"]] += 1
+        gate_reason_census[record["gate_reason"] or "none"] += 1
+        attribute_census[record["attribute"]] += 1
+
     # ── receipt ─────────────────────────────────────────────────────────
     receipt = {
         "seed": seed,
@@ -585,8 +961,13 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
             "listing_pairs_negative": listing_negatives,
             "gate_hard_no_available": len(hard_no),
             "gate_hard_no_sampled": len(sampled),
+            "gate_proceed_available": len(proceed),
+            "gate_proceed_in_corpus": sum(
+                len(proceed_records_by_split[key]) for key in SPLIT_ORDER),
             "gate_fallback_quarantined": len(fallback),
             "gate_hard_no_cap": hard_no_cap,
+            "better_match_cases": sum(
+                len(better_splits[key]) for key in SPLIT_ORDER),
             "identity_positive_total": positives,
             "identity_negative_total": listing_negatives + len(sampled),
             "dropped_missing": {
@@ -601,6 +982,9 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
             "aug_pairs": growth_census["aug_pair_cases"],
             "aug_pairs_positive": growth_census["aug_pair_positive"],
             "aug_pairs_negative": growth_census["aug_pair_negative"],
+            "aug_pairs_counterfactual":
+                growth_census.get("aug_pair_counterfactual", 0),
+            "labeled_pairs_added": growth_census["labeled_pairs_added"],
             # corpus-wide identity prior AFTER folding the augmentation in:
             # the counterfactual/twin negatives are hard and numerous, so the
             # operator can see the balance (and tune the source) at a glance.
@@ -612,6 +996,17 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         },
         "growth": growth_census,
         "gate_reason_sample": dict(sorted(gate_reason_sample.items())),
+        "gate_reason_families": dict(sorted(gate_reason_families.items())),
+        # traceability: every emitted question's label distribution, plus the
+        # per-row tag populations the eval report slices on. Deterministic
+        # (counters over the frozen SPLIT_ORDER), so a rerun reproduces it.
+        "question_label_census": {
+            qid: dict(sorted(labels.items()))
+            for qid, labels in sorted(question_label_census.items())
+        },
+        "difficulty_slice_census": dict(sorted(difficulty_slice_census.items())),
+        "attribute_census": dict(sorted(attribute_census.items())),
+        "tag_gate_reason_census": dict(sorted(gate_reason_census.items())),
         "split_ratios": {key: ratios[key] for key in SPLIT_ORDER},
         "split_sizes": split_sizes,
         "split_counts": split_counts,
@@ -672,6 +1067,14 @@ def main() -> None:
           + json.dumps(receipt["split_sizes"]))
     print("[laya-build-dataset] split_counts="
           + json.dumps(receipt["split_counts"]))
+    print("[laya-build-dataset] question_label_census="
+          + json.dumps(receipt["question_label_census"]))
+    print("[laya-build-dataset] difficulty_slice_census="
+          + json.dumps(receipt["difficulty_slice_census"]))
+    print("[laya-build-dataset] attribute_census="
+          + json.dumps(receipt["attribute_census"]))
+    print("[laya-build-dataset] tag_gate_reason_census="
+          + json.dumps(receipt["tag_gate_reason_census"]))
     print("[laya-build-dataset] growth=" + json.dumps(receipt["growth"]))
     for name, digest in receipt["sha256"].items():
         print(f"[laya-build-dataset] sha256 {name} {digest}")

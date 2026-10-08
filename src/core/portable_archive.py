@@ -8,7 +8,7 @@ import uuid
 import time
 import io
 import tarfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import zipfile
 from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -85,59 +85,18 @@ class RuntimeSnapshot(BaseModel):
         return {relative: cached_file_digest(path) for relative, path in self.files.items()}
 
 
-RESULT_ARCHIVE_EXCLUDED_DIRS = frozenset({
-    '.dvc', '.dvc-cache', '.dvc-site-cache', '.git', '.resume',
-    '_checkpoint_upload_staging', 'wandb', 'mlruns', 'mps_pipe', 'mps_log',
-    # Profiling is resume/diagnostic state, never a suite deliverable
-    # (owner 2026-10-08: we don't need any profiling data anymore).
-    'profiles', 'resource_profile',
-})
-
-#: Checkpoint members that exist only to resume training. The result archive
-#: carries the selected checkpoint's weights; the recovery archive keeps these.
-#: ``trainer_state.json`` is deliberately absent: best-checkpoint resolution
-#: reads it on the downloaded result archive.
-RESUME_ONLY_FILENAMES = frozenset({
-    'optimizer.pt', 'scheduler.pt', 'rng_state.pth', 'training_args.bin',
-    'scaler.pt',
-})
-
-_CHECKPOINT_DIR = '_checkpoints'
-
-
 def is_result_archive_member(relative: str,
                              selected_checkpoints: frozenset[str] = frozenset()) -> bool:
     """Whether a checkpoint-relative path belongs in the RESULT archive.
 
-    One predicate shared by the archive walk (:mod:`model_tracks.run`) and the
-    per-track inventory (:func:`model_tracks.resume.artifact_files`) so a member
-    dropped from the archive is dropped from ``track_inventory.json`` too and
-    ``validate_archived_track`` can never disagree with the manifest.
-
-    ``selected_checkpoints`` holds the posix dirs (relative to the same root the
-    predicate is called with) of the checkpoints reports/publication consume.
-    Every other ``checkpoint-N`` tree is resume-only and ships only in recovery.
+    Thin compatibility re-export over :meth:`core.bundle.Bundle.is_result_member`
+    (the predicate now lives with the bundle role it enforces). Imported by
+    :mod:`model_tracks.resume`, :mod:`model_tracks.run` and
+    :mod:`model_tracks.local_complete`; the lazily imported delegation avoids
+    the ``core.bundle`` <-> ``core.portable_archive`` import cycle.
     """
-    parts = Path(relative).parts
-    if not parts or any(part in RESULT_ARCHIVE_EXCLUDED_DIRS for part in parts):
-        return False
-    if parts[-1] in RESUME_ONLY_FILENAMES:
-        return False
-    if parts[-1] in {'.env', 'config.local'}:
-        return False
-    if any(part.endswith('.publication') or part.endswith('__payload') for part in parts):
-        return False
-    if '_artifact_publications' in parts and not relative.endswith('.json'):
-        return False
-    if '.dvc' in parts and 'cache' in parts:
-        return False
-    if _CHECKPOINT_DIR in parts:
-        if not selected_checkpoints:
-            return False
-        member = PurePosixPath(relative)
-        return any(member == PurePosixPath(selected) or PurePosixPath(selected) in member.parents
-                   for selected in selected_checkpoints)
-    return True
+    from core.bundle import Bundle
+    return Bundle.is_result_member(relative, selected_checkpoints=selected_checkpoints)
 
 
 # Recompressing these containers wastes CPU and rarely saves meaningful space.
@@ -409,7 +368,7 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
                 # Consume the frame trailer as well; truncated zstd streams must fail.
                 while compressed.read(archive_settings().copy_buffer_bytes):
                     pass
-    except zstd.ZstdError as error:
+    except (zstd.ZstdError, EOFError) as error:
         raise ValueError(f'invalid Zstandard archive: {path}') from error
     if metadata is None:
         raise ValueError('archive manifest missing')

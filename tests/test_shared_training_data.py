@@ -24,7 +24,7 @@ def test_projection_retains_canonical_copy_and_repeated_positive_relationship():
     rows = data.pair_rows()
     assert len(rows) == 4
     assert [(row['payload_index2'], row['label']) for row in rows] == [(2, 1), (3, 0), (2, 1), (3, 0)]
-    binding = TrackTrainingBinding(track='hybrid', shared_data_sha256=data.fingerprint,
+    binding = TrackTrainingBinding(track='gnn_only', shared_data_sha256=data.fingerprint,
                                   example_ids=[0, 1], endpoint_indices=[0, 2, 3])
     binding.validate_data(data)
     assert retrieval_indices([{'sku_id': value} for value in

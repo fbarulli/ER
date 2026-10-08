@@ -1,4 +1,5 @@
-# One Colab runtime, one control channel, all three prepared tracks.
+# One Colab runtime, one control channel: two trained lanes behind the MPS
+# barrier, then the cascade combinator over their saved artifacts.
 setup_dir: data/track_setup
 text_bundle: data/track_setup/text_prepared.pkl.gz
 text_model: minilm_l6
@@ -7,7 +8,9 @@ device: cuda
 input_archive_format: tar.zst
 result_archive_format: tar.zst
 schedule: parallel
-max_parallel: 3
+# Trained lanes only: text + gnn_only. The cascade runs after the barrier.
+# ``3`` remains valid for older suite manifests (see SuiteConfig.max_parallel).
+max_parallel: 2
 gpu_parallel_backend: mps
 # GPU execution overrides are frozen into each packaged graph configuration.
 gpu_optimizer_backend: cuda_fused

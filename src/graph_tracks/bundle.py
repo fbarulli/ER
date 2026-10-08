@@ -13,9 +13,9 @@ import argparse
 import json
 from pathlib import Path
 
+from core.bundle import Bundle, BundleRole
 from core.run_log import RunLogger
 from graph_tracks.artifacts import name
-from graph_tracks.data import file_hash
 
 _LOG = RunLogger(__name__)
 
@@ -76,10 +76,12 @@ def bundle(source: Path, output: Path, *, include_dvc_cache=False):
                 'run_tag': run['run_tag'],
                 'dvc_cache_included': include_dvc_cache,
                 'wandb_logs_included': False}
+    manifest = name(track, 'bundle_manifest.json')
     from core.portable_archive import write_archive
-    return write_archive(output, files,
-                         manifest_name=name(track, 'bundle_manifest.json'),
-                         metadata=metadata)
+    write_archive(output, files, manifest_name=manifest, metadata=metadata)
+    # Sealing is not done until the result Bundle verifies at the boundary;
+    # consumers load this handle and never re-hash the members.
+    return Bundle.load(output, BundleRole.result, manifest_name=manifest).path
 
 
 def main():

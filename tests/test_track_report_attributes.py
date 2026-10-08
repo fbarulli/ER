@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from core.sku_identity import ProductIdentity
+from graph_tracks.report import attribute_summary_rows
 from graph_tracks.report_attributes import identity_attributes, load_inputs, write_inputs, write_reports
 from training.attribute_separation import ATTRIBUTE_SOURCES
 
@@ -25,6 +26,11 @@ def test_every_track_uses_existing_attribute_registry_and_support_rules(tmp_path
         assert pulp.n_positive == 1 and pulp.n_negative == 1
         assert not pulp.reportable and not pulp.flagged_weak
         assert summary.set_index('attribute').loc['flavor', 'n_unobservable'] == 2
+        # The lane manifest carries the same table, JSON-native, so the
+        # per-attribute traceability is not left only in a side CSV.
+        rows = attribute_summary_rows(output, track)
+        assert len(rows) == len(summary)
+        assert {row['attribute'] for row in rows} == set(ATTRIBUTE_SOURCES)
 
 
 def test_report_population_mismatch_is_rejected(tmp_path):

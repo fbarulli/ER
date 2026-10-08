@@ -26,7 +26,7 @@
     }
   },
   "pair_protocol": "shared frozen training objective; clean listing-only dev/test evaluation",
-  "parent_setup_sha256": "3e42c269a7815e4fbe3f14ef30598e94c97e092aedce875161e774597d69c587",
+  "parent_setup_sha256": "f879491702488bbcd0e15bcac5e00d5cf59ee3ef2ad9a57a92a601fe7db9b07d",
   "schema": "er-track-setup-v1",
   "seed": 42,
   "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",

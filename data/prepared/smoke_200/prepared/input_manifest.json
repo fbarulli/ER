@@ -41,6 +41,6 @@
   "report_attributes_sha256": "ef4a93884bb80fd9e6852950cfb7152c718c4547d5295792a69820e55ee0a989",
   "schema": "er-graph-inputs-v1",
   "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
-  "shared_training_projection_sha256": "3d173dd5df9e50aae9204c41a994bbed531e4deb6975c5fc03f3a4b276d402c4",
+  "shared_training_projection_sha256": "dbf91b587d584846046473c56ee7161650ad24c28007d79eec11e8ee371db366",
   "splits_sha256": "3b87920f64af1fb38db05e9949181a39402c09b43130944b970100044789b7bf"
 }

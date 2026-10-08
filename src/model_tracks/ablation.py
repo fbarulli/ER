@@ -289,11 +289,15 @@ def _compose(row, composer):
 @timed
 def _prepared_sources(track, listings, text_checkpoint, catalog, pairs, checkpoint, config):
     cfg = settings(config)
-    if track not in {'text', 'gnn_only', 'hybrid'}:
+    if track not in {'text', 'gnn_only'}:
         raise ValueError('unknown track')
-    if (track != 'text') != bool(listings) or (track == 'hybrid') != bool(text_checkpoint):
-        raise ValueError('graph tracks require listings; only hybrid requires text_checkpoint')
-    inputs = [catalog, pairs, checkpoint] + ([listings] if listings else []) + ([text_checkpoint] if text_checkpoint else [])
+    if (track != 'text') != bool(listings):
+        raise ValueError('graph tracks require listings; the text track must not pass any')
+    if text_checkpoint:
+        # Kept as an accepted keyword so the frozen staged-ablation caller does
+        # not change shape, but the fused hybrid checkpoint is retired.
+        raise ValueError('text_checkpoint belonged to the retired hybrid track')
+    inputs = [catalog, pairs, checkpoint] + ([listings] if listings else [])
     config = config or TRAIN_ROOT/'config/attribute_ablation.yaml'
     inputs += [config, TRAIN_ROOT/'src/core/encoding_inputs.py',TRAIN_ROOT/'src/model_tracks/ablation_inputs.py',
                TRAIN_ROOT/'src/graph_tracks/infer.py',TRAIN_ROOT/'src/graph_tracks/pooling.py',
@@ -909,8 +913,8 @@ def _cli_parser():
     prep = sub.add_parser('prepare')
     for key in ('catalog','pairs','checkpoint'):
         prep.add_argument('--'+key,type=Path,required=True)
-    prep.add_argument('--track', choices=('text','gnn_only','hybrid'),default='text')
-    for key in ('listings','text-checkpoint','config'):
+    prep.add_argument('--track', choices=('text','gnn_only'),default='text')
+    for key in ('listings','config'):
         prep.add_argument('--'+key,type=Path)
     worker = sub.add_parser('encode')
     worker.add_argument('--request',type=Path,required=True)

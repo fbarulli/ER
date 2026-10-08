@@ -1,4 +1,4 @@
-"""Actual local MiniLM -> prepared graph -> both workers -> W&B offline + DVC smoke.
+"""Actual local MiniLM -> prepared graph -> graph worker -> W&B offline + DVC smoke.
 
 Uses synthetic listings, so results prove lifecycle wiring, not model quality.
 No shared dataset, model checkpoint, Git state or online account is modified.
@@ -19,9 +19,9 @@ def build_synthetic_inputs(root: Path, *, text_checkpoint: Path) -> dict:
     """Write the synthetic catalog/splits/pairs and build prepared text + cache.
 
     The layout mirrors the production suite naming (``eligible_catalog.csv``,
-    ``prepared/``, ``setup_manifest.json``) so the hybrid text cache is built
-    through ``training.prepare_embeddings.prepare`` and carries the provenance
-    the graph preflight validates. Returns the created paths.
+    ``prepared/``, ``setup_manifest.json``) so the prepared text inputs are
+    built through ``training.prepare_embeddings.prepare`` and carry the
+    provenance the graph preflight validates. Returns the created paths.
 
     ``root`` is created if missing; callers that need exclusivity create it
     first (``main`` does, preserving its original ``exist_ok=False``).
@@ -54,7 +54,7 @@ def build_synthetic_inputs(root: Path, *, text_checkpoint: Path) -> dict:
             'prepared': prepared, 'cache': cache}
 
 
-def build_track_config(root: Path, prepared: Path, cache: Path | None, track: str, *,
+def build_track_config(root: Path, prepared: Path, track: str, *,
                        epochs: int = 2, hidden_dim: int = 8, output_dim: int = 8,
                        dvc: dict | None = None, postprocess: bool = True,
                        include_inputs: bool = True, retrieval_ks: tuple = (1, 2),
@@ -69,14 +69,12 @@ def build_track_config(root: Path, prepared: Path, cache: Path | None, track: st
            'dvc': dvc or {'enabled': False, 'remote': None, 'push': False},
            'retrieval_ks': list(retrieval_ks), 'device': 'cpu',
            'postprocess': postprocess, 'include_inputs': include_inputs}
-    if track == 'hybrid':
-        cfg['text_cache'] = str(cache)
     config = root / f'{track}__smoke.yaml'
     config.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return config
 
 
-def train_tracks(root: Path, *, text_checkpoint: Path, tracks=('gnn_only', 'hybrid'),
+def train_tracks(root: Path, *, text_checkpoint: Path, tracks=('gnn_only',),
                  epochs: int = 2, dvc: dict | None = None, postprocess: bool = True,
                  include_inputs: bool = True, retrieval_ks: tuple = (1, 2),
                  run_tag: str = 'smoke') -> tuple[dict, dict]:
@@ -85,7 +83,7 @@ def train_tracks(root: Path, *, text_checkpoint: Path, tracks=('gnn_only', 'hybr
     inputs = build_synthetic_inputs(root, text_checkpoint=text_checkpoint)
     checkpoints = {}
     for track in tracks:
-        config = build_track_config(inputs['root'], inputs['prepared'], inputs['cache'], track,
+        config = build_track_config(inputs['root'], inputs['prepared'], track,
                                     epochs=epochs, dvc=dvc, postprocess=postprocess,
                                     include_inputs=include_inputs, retrieval_ks=retrieval_ks)
         checkpoints[track] = train(config, run_tag=run_tag)

@@ -41,25 +41,28 @@ def _patch_namespace():
 
 
 def _render_finetune_script() -> str:
-    recipe = laya_lane.FINETUNE_RECIPE
+    """Render the finetune kernel the way stage_finetune_kernel does.
+
+    The trainer surface is config-driven: the FULL ``laya.train.TrainConfig``
+    kwargs come from ``finetune_config()`` and are baked as one repr literal
+    (``FINETUNE_CONFIG``); the device AND perf monkeypatches ride their own
+    ``@DEVICE_PATCH@`` / ``@PERF_PATCH@`` markers.
+    """
     values = {
         "LAYA_PACKAGE": laya_lane.FINETUNE_LAYA_PACKAGE,
-        "BASE_MODEL": "convaiinnovations/laya",
+        "BASE_MODEL_ARCHIVE": "convaiinnovations-laya.tar.zst",
+        "BASE_MODEL_DIR": "convaiinnovations-laya",
         "RUN_TAG": "gpu_test",
         "TRAIN_JSONL": "train.jsonl",
         "DEV_JSONL": "dev.jsonl",
         "TEST_JSONL": "test.jsonl",
-        "EPOCHS": str(recipe["epochs"]),
-        "MICRO_BATCH": str(recipe["micro_batch"]),
-        "GRAD_ACCUM": str(recipe["grad_accum"]),
-        "ENCODER_LR": repr(recipe["encoder_lr"]),
-        "HEAD_LR": repr(recipe["head_lr"]),
-        "LOSS": recipe["loss"],
-        "SEED": str(recipe["seed"]),
+        "FINETUNE_CONFIG": repr(laya_lane.finetune_config()),
+        "FINETUNE_DEVICE": "auto",
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
+        "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
     }
     preflight = laya_lane._template(laya_lane.FINETUNE_RUNTIME_PREFLIGHT, values)
     return laya_lane._template(
@@ -132,16 +135,26 @@ def test_apply_device_patch_wraps_both_forward_entrypoints(monkeypatch):
 
 
 def test_finetune_payload_embeds_patch_and_passes_gates():
-    """The staged finetune payload carries the patch, routes the real CLI
-    through it in-process, and still clears both staging-time AST gates."""
+    """The staged finetune payload carries both monkeypatches, routes the real
+    trainer in-process, and still clears both staging-time AST gates."""
     script = _render_finetune_script()
     laya_lane._kernel_script_gate(script)
     laya_lane._module_scope_gate(script)
+    # device patch: both forward entrypoints are wrapped by name
     assert "def force_model_to_device" in script
     assert "def apply_device_patch" in script
-    assert "def run_laya_train" in script
     assert "apply_device_patch()" in script
-    assert "train_cli.main(arguments)" in script
+    # perf patch: movement/redundancy wrapper + its opt-out env flag
+    assert "def apply_perf_patch" in script
+    assert "apply_perf_patch()" in script
+    assert 'PERF_PATCH_ENV = "ER_LAYA_PERF_PATCH"' in script
+    # both template markers were substituted
     assert "@DEVICE_PATCH@" not in script
-    # flags/recipe unchanged
-    assert "--device" in script and "str(SEED)" in script
+    assert "@PERF_PATCH@" not in script
+    # config-driven kernel: the FULL TrainConfig is baked and constructed
+    # in-process (the laya-train CLI subprocess is gone)
+    assert "def run_laya_finetune" in script
+    assert "TrainConfig(**FINETUNE_CONFIG" in script
+    assert "laya_train.finetune(" in script
+    assert "train_cli" not in script
+    assert 'FINETUNE_DEVICE = "auto"' in script

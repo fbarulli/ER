@@ -23,6 +23,13 @@ _LOG = RunLogger(__name__)
 # re-introspecting the model on every preprocess call.
 _CACHE_BOUND_CONTRACT = perf_enabled("text.bound_task_contract")
 
+# Reuse the padded native batch for a repeated *ordered* fixed-text batch. The
+# frozen batch sampler replays the exact same epochs, so steady-state epochs
+# skip re-padding (and any re-tokenization). The key is the ordered text tuple,
+# so option-order shuffles produce distinct entries; batches containing any
+# dynamic (generated) text are never cached and keep their quota bookkeeping.
+_CACHE_PREPROCESSED = perf_enabled("text.cache_preprocessed_batches")
+
 TEXT_COLUMNS = {"sentence1", "sentence2", "anchor", "positive", "negative"}
 COLLATOR_TEXT_COLUMNS = set(TEXT_COLUMNS) | {"label", "dataset_name"}
 
@@ -172,6 +179,7 @@ class PreparedTokenLookup:
         self._bound_task_contract = self.task_contract
         self.original = model.preprocess
         self.generated = Counter()
+        self._preprocessed_cache: dict[tuple, dict] = {}
         self.model.preprocess = self.preprocess
 
     def _require_policy(self, model, table) -> None:
@@ -270,7 +278,20 @@ class PreparedTokenLookup:
         self._require_task_safe(args, task)
         prompt = prompt or ""
         variant = self._variant_for(prompt)
+        if not inputs:
+            return self.original(inputs, prompt=prompt, **kwargs)
         dynamic_positions = [index for index, text in enumerate(inputs) if text not in self.indices]
+        if _CACHE_PREPROCESSED and not dynamic_positions:
+            key = (prompt, tuple(inputs))
+            cached = self._preprocessed_cache.get(key)
+            if cached is not None:
+                return cached
+            rows = [variant["rows"][self.indices[text]] for text in inputs]
+            result = self._padded_rows(
+                rows, self._require_same_feature_keys(rows), variant["constants"]
+            )
+            self._preprocessed_cache[key] = result
+            return result
         requested = Counter(inputs[index] for index in dynamic_positions)
         self._require_registered_dynamic(requested)
         dynamic_rows: dict[int, dict] = {}

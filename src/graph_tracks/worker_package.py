@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
+from core.bundle import Bundle, BundleRole
 from core.portable_archive import write_archive
 
 import yaml
@@ -13,8 +15,23 @@ from graph_tracks.data import file_hash
 from graph_tracks.preflight import preflight
 
 
-def package(config: Path, output: Path, *, device: str = 'cuda') -> Path:
-    from core.common import TRAIN_ROOT
+def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
+    """The Bundle-facing inventory (config ``files_key``).
+
+    ``Bundle.load`` verifies against ``training_cfg().bundle.files_key``. The
+    portable package keeps its historical ``files_sha256`` key (written by
+    ``write_archive``) for existing consumers, so the manifest carries both.
+    """
+    from core.portable_archive import cached_file_digest
+    inventory = {target: cached_file_digest(source) for target, source in files.items()}
+    inventory.update({target: hashlib.sha256(value.encode()).hexdigest()
+                      for target, value in inline.items()})
+    return inventory
+
+
+def package(config: Path, output: Path, *, device: str = 'cuda',
+            run_tag: str | None = None) -> Path:
+    from core.common import TRAIN_ROOT, training_cfg
     from graph_tracks.config import load_config
     cfg = load_config(config)
     checks = preflight(config, check_device=False)
@@ -56,7 +73,11 @@ def package(config: Path, output: Path, *, device: str = 'cuda') -> Path:
     config_target = (base / 'worker.yaml').as_posix()
     manifest = {'schema': 'er-graph-worker-package-v1', 'base_git_revision': revision,
                 'track': cfg.track, 'local_preflight': checks,
-                'target_device': device, 'target_runtime_verified': False}
+                'target_device': device, 'target_runtime_verified': False,
+                # The package is run-agnostic; its identity is the pinned
+                # revision until a worker supplies the real run tag. Bundle's
+                # inputs role requires a run_tag key, so bind it to the revision.
+                'run_tag': run_tag or revision}
     readme = (
         f'Check out ER revision {revision}, then extract this ZIP into that checkout.\n'
         'The ZIP includes the shared runtime source/config overlay, hashed in package_manifest.json.\n'
@@ -69,10 +90,13 @@ def package(config: Path, output: Path, *, device: str = 'cuda') -> Path:
         f'PYTHONPATH=src python -m graph_tracks.train --config {base}/worker.yaml --run-tag YOUR_RUN_TAG\n'
         'Collect the complete result ZIP before VM teardown using graph_tracks.bundle.\n'
         'This package does not provision a VM or start training. No credentials are included.\n')
-    return write_archive(output, files,
-        manifest_name=(base / 'package_manifest.json').as_posix(),
-        metadata=manifest, inventory_key='files_sha256',
-        inline={config_target: configuration, (base / 'README.txt').as_posix(): readme})
+    inline = {config_target: configuration, (base / 'README.txt').as_posix(): readme}
+    bundle_spec = training_cfg().bundle
+    manifest[bundle_spec.files_key] = _bundle_inventory(files, inline)
+    manifest_name = (base / 'package_manifest.json').as_posix()
+    write_archive(output, files, manifest_name=manifest_name,
+                  metadata=manifest, inventory_key='files_sha256', inline=inline)
+    return Bundle.load(output, BundleRole.inputs, manifest_name=manifest_name).path
 
 
 
