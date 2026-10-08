@@ -4889,14 +4889,23 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
-    result = subprocess.run(
-        [sys.executable, "-m", "kaggle", "kernels", "output", slug,
-         "-p", str(stage)], cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True)
-    if result.returncode != 0:
+    # The fail-loud, 429-aware boundary: an rc=0 CLI call that wrote zero files
+    # (the upstream `kernels output` silent-empty success, and/or a stop-stub
+    # version with no artifacts) must NEVER be reported as a successful fetch.
+    from cli.kaggle_download import DownloadError, KernelOutputFetcher
+
+    try:
+        download = KernelOutputFetcher(cwd=TRAIN_ROOT).fetch(
+            slug, stage, require_globs=("*.tar.gz", "*.zip"))
+    except DownloadError as error:
         raise RuntimeError(
-            f"kaggle kernels output failed (rc={result.returncode}) for "
-            f"{slug}: {result.stdout.strip()[-4000:]}")
+            f"kaggle kernels output for {slug} failed: {error}\n"
+            f"{error.traceback_text}") from error
+    plan["download"] = {
+        "files": [str(path) for path in download.files],
+        "attempts": download.attempts,
+        "resumed": download.resumed,
+    }
     archives = sorted(stage.glob("*.tar.gz")) or sorted(stage.glob("*.zip"))
     if not archives:
         raise RuntimeError(f"kaggle kernels output staged no archive "

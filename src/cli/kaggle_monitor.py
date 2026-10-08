@@ -601,13 +601,26 @@ class KaggleMonitor:
                 break
             time.sleep(resolved_poll)
         log_dir.mkdir(parents=True, exist_ok=True)
-        fetch = [executable, "kernels", "output", slug, "-p", str(log_dir / slug.replace("/", "__"))]
+        # Fail LOUD: `kaggle kernels output` exits 0 with zero files, so rc
+        # alone is not success. The fetcher verifies files landed (and paces
+        # 429s) before this method reports `log_fetched`.
+        from cli.kaggle_download import DownloadError, KernelOutputFetcher
+
         try:
-            _, _ = lane._run_kaggle(fetch)
-            plan["log_fetched"] = True
-        except RuntimeError as error:
+            download = KernelOutputFetcher(
+                argv_prefix=(executable,), cwd=lane.TRAIN_ROOT).fetch(
+                slug, log_dir / slug.replace("/", "__"), require_globs=())
+        except DownloadError as error:
             plan["log_fetched"] = False
-            plan["log_error"] = str(error)[-lane._spec().limits.error_tail_chars:]
+            plan["log_error"] = f"{error}\n{error.traceback_text}"
+            plan["history"] = history
+            raise DownloadError(
+                f"kernel output for {slug} was empty or failed: {error}",
+                traceback_text=error.traceback_text,
+                stdout=error.stdout) from error
+        plan["log_fetched"] = True
+        plan["files"] = [str(path) for path in download.files]
+        plan["download_attempts"] = download.attempts
         plan["history"] = history
         return plan
 

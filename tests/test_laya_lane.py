@@ -1310,3 +1310,32 @@ def test_base_model_archive_seals_as_an_inputs_bundle(tmp_path, monkeypatch):
     assert "convaiinnovations-laya/weights.bin" in handle.members()
     # the kaggle dataset shape lands beside the archive
     assert (tmp_path / "stage" / "dataset-metadata.json").is_file()
+
+
+def test_fetch_path_fails_loud_on_a_silent_empty_kernel_output(
+        tmp_path, monkeypatch):
+    """JOB 1 regression: an rc=0, zero-file `kernels output` must RAISE.
+
+    The upstream CLI returns exit 0 even when it downloads nothing; the fetch
+    path must never report that as success. `--fetch` now routes through the
+    fail-loud, 429-aware `KernelOutputFetcher`.
+    """
+    from cli import kaggle_download
+
+    _spec(tmp_path, monkeypatch)
+
+    class _EmptyFetcher:
+        def __init__(self, **kwargs):
+            pass
+
+        def fetch(self, slug, dest, **kwargs):
+            raise kaggle_download.EmptyDownloadError(
+                f"kaggle download for {slug!r} exited 0 but wrote no files",
+                traceback_text="kaggle_download.py frame")
+
+    monkeypatch.setattr(kaggle_download, "KernelOutputFetcher", _EmptyFetcher)
+    with pytest.raises(RuntimeError, match="wrote no files"):
+        laya_lane.collect_kaggle_result("attribute", "owner/slug", execute=True)
+    # the stage was created fresh and left empty — never a silent success
+    stage = laya_lane.staging_dir() / "fetch" / "attribute"
+    assert stage.is_dir() and not any(stage.iterdir())
