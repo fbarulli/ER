@@ -1747,11 +1747,17 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     if is_distributed():
         local_rank, rank, world_size = dist_env()
         ddp_sampler = build_distributed_sampler(items, config.seed)
+        # find_unused_parameters=True: laya's model has parameters that do not
+        # contribute to every loss (frozen encoder / unused head paths), so the
+        # default reduction bucket never completes and DDP raises "Expected to
+        # have finished reduction in the prior iteration".
         if device.type == "cuda":
             model = torch.nn.parallel.DistributedDataParallel(
-                model, device_ids=[local_rank], output_device=local_rank)
+                model, device_ids=[local_rank], output_device=local_rank,
+                find_unused_parameters=True)
         else:
-            model = torch.nn.parallel.DistributedDataParallel(model)
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, find_unused_parameters=True)
         print("[perf-patch] ddp: rank %d/%d, %d local items"
               % (rank, world_size, len(ddp_sampler)), flush=True)
     epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
@@ -2097,6 +2103,12 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
                                     eval_data=str(dev_path))
     config.validate()
     log("TrainConfig: " + json.dumps(FINETUNE_CONFIG, sort_keys=True))
+    # laya evaluates the dev split before training and prints nothing while it
+    # does (27k items here -> several minutes of silence). Say so, so the quiet
+    # stretch is not mistaken for a hang.
+    log("starting laya.train.finetune: the pre-train dev evaluation runs "
+        "silently until the first 'epoch 1/8 step' line (minutes on the full "
+        "corpus)")
     return laya_train.finetune(
         data=str(train_path), model_dir=str(base_model),
         output_dir=str(out_dir), config=config, device=device)
@@ -3404,11 +3416,17 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
         result = subprocess.run(argv, cwd=TRAIN_ROOT, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True)
         completed["result"] = result
-        if result.returncode != 0:
-            tail = (result.stdout or "").strip()[-4000:] or \
-                "(kaggle produced no output)"
+        # `kaggle kernels push` returns rc=0 even on a soft error — e.g. the
+        # GPU-session quota message "Kernel push error: Maximum batch GPU
+        # session count of 2 reached" — so the exit code alone is NOT
+        # fail-loud. Require the CLI's success line and reject any error text.
+        output = result.stdout or ""
+        lowered = output.lower()
+        if (result.returncode != 0 or "error" in lowered
+                or "successfully pushed" not in lowered):
+            tail = output.strip()[-4000:] or "(kaggle produced no output)"
             raise RuntimeError(
-                f"kaggle command failed (rc={result.returncode}): "
+                f"kaggle kernels push failed (rc={result.returncode}): "
                 f"{' '.join(argv)}\n--- kaggle output ---\n{tail}")
 
     # ONE home for the clear/push/capture launch-aid sequence (shared with

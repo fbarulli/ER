@@ -331,3 +331,15 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
     assert "destroy_if_distributed()" in script
     # the single-process branch is preserved byte-for-byte
     assert "random.Random(config.seed + epoch).shuffle(epoch_items)" in script
+
+
+def test_ddp_find_unused_parameters_is_pinned():
+    """The 2xT4 run crashed with 'Expected to have finished reduction in the
+    prior iteration' — laya's model leaves parameters unused under DDP, so the
+    wrapper MUST pass find_unused_parameters=True. Pin it so it cannot regress."""
+    from cli import laya_lane as L
+
+    src = L.FINETUNE_PERF_PATCH_SOURCE
+    assert "DistributedDataParallel" in src
+    assert src.count("find_unused_parameters=True") >= 2, (
+        "both the CUDA and CPU DDP wrappers must set find_unused_parameters=True")

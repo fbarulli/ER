@@ -142,7 +142,9 @@ def test_laya_push_routes_through_the_shared_launch_aid(tmp_path, monkeypatch):
 
     def fake_run(argv, **kwargs):
         seen["argv"] = argv
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        # The push contract is fail-loud: a zero exit code alone is not enough,
+        # the CLI's success line must be present (no "error" text).
+        return subprocess.CompletedProcess(argv, 0, stdout="Kernel successfully pushed", stderr="")
 
     monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
     calls: list = []

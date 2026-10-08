@@ -271,35 +271,38 @@ class KaggleMonitor:
         destination.parent.mkdir(parents=True, exist_ok=True)
         plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
         session_id: int | None = None
-        # Raw stream characters already persisted (the decoded ``data`` payload
-        # text, NOT the transformed lines) and how many the current reconnected
-        # attempt must still drop. A dropped SSE connection re-attaches at the
-        # session's FIRST line and replays a byte-exact prefix, so the follower
-        # skips exactly that many raw characters. Counting transformed lines
-        # (3c6d048) drifted as soon as ``progress_frames_to_lines``
-        # re-partitioned ``\r`` frames across different chunk boundaries: it
-        # duplicated the prefix and then swallowed the live tail — the tqdm
-        # regression this fixes.
-        written_raw_chars = 0
-        replay_remaining = 0
+        # One follower per kernel: two writers race the transcript, each with
+        # its own replay state. Refuse to start if the recorded pid is alive; a
+        # stale pid left by a dead follower is overwritten.
+        lock_path = lane.lane_logs_dir() / f"{kernel}.follower.pid"
+        try:
+            holder = int(lock_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            holder = None
+        if holder is not None:
+            try:
+                os.kill(holder, 0)
+            except ProcessLookupError:
+                holder = None  # the previous follower is gone
+            except PermissionError:
+                pass  # alive (owned by another uid on this box)
+            if holder is not None:
+                raise RuntimeError(
+                    f"a stream follower for {slug} is already running "
+                    f"(pid {holder}); refusing a second writer on the transcript")
+        lane.atomic_write_text(lock_path, str(os.getpid()) + "\n")
+        # On a dropped connection the midtier replays the WHOLE session from
+        # line 0. We do NOT try to dedup that replay: byte/line/time counters all
+        # drift because the replay is not a prefix of what we wrote, and the
+        # drift swallows the live tail (the log freezes, then dumps late).
+        # Instead the transcript is truncated and rewritten from the replay on
+        # every reconnect, so it always mirrors the full current session.
 
         def emit(text: str) -> None:
             if not text.endswith("\n"):
                 text += "\n"
             log_handle.write(text)
             log_handle.flush()
-
-        def route_stream(data: str) -> None:
-            """Persist one decoded ``data`` payload, dropping the replay prefix."""
-            nonlocal written_raw_chars, replay_remaining
-            if replay_remaining:
-                if replay_remaining >= len(data):
-                    replay_remaining -= len(data)
-                    return
-                data = data[replay_remaining:]
-                replay_remaining = 0
-            written_raw_chars += len(data)
-            emit(progress_frames_to_lines(data))
 
         def append_progress(payload_text: str | None, raw: str) -> None:
             """Append one captured chunk as grep-able, post-processed lines.
@@ -311,8 +314,13 @@ class KaggleMonitor:
             if payload_text is None:
                 emit(raw)
                 return
-            route_stream(payload_text or "")
+            emit(progress_frames_to_lines(payload_text or ""))
         with destination.open("a", encoding="utf-8") as log_handle:
+            # This follower owns only the section after the run's status lines
+            # (the pusher's _log_lane writes those first). On a reconnect the
+            # whole replay is rewritten into that section.
+            log_handle.seek(0, os.SEEK_END)
+            section_start = log_handle.tell()
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
             while True:
@@ -373,26 +381,25 @@ class KaggleMonitor:
                     # current burst, never whole-run history.
                     attempts = 0
                     break
-                except (ProtocolError, requests.exceptions.RequestException) as error:
-                    # The midtier SSE proxy drops live connections mid-run; a
-                    # replayed stream re-attaches at the session's FIRST line.
-                    # replay_remaining carries the raw prefix already persisted,
-                    # so the next attempt appends only the characters it has
-                    # not seen (no line-count drift, no swallowed tail).
+                except Exception as error:  # noqa: BLE001
+                    # A detached follower must outlive EVERY transport hiccup:
+                    # the midtier drops live connections repeatedly, and a
+                    # reconnect cap (stream_retries) is exactly what froze the
+                    # transcript mid-run — lane.log stopped and the logs only
+                    # appeared when the session ended. Keep reconnecting until
+                    # the SESSION ends (a clean END_OF_LOG, handled above).
                     attempts += 1
-                    if attempts > lane._spec().limits.stream_retries:
-                        # Server-side drops exhaust the cap; visibility only —
-                        # never kill the watcher's status-poll contract on it.
-                        lane._log_lane(
-                            f"[stream {kernel}] follower exhausted after "
-                            f"{attempts} reconnects; status-poll only for the rest of the session")
-                        break
                     lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
                               f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
-                    # The next attempt replays from line 0: drop exactly the raw
-                    # characters already persisted (see route_stream).
-                    replay_remaining = written_raw_chars
-                    time.sleep(lane._spec().limits.retry_seconds * attempts)
+                    # The next attempt replays from line 0: drop this follower's
+                    # section (not the run's status lines) and rewrite it from
+                    # the replay (no dedup, no drift).
+                    log_handle.flush()
+                    log_handle.seek(section_start)
+                    log_handle.truncate()
+                    log_handle.seek(0, os.SEEK_END)
+                    time.sleep(min(lane._spec().limits.retry_seconds * attempts,
+                                   60.0))
         plan["session_id"] = session_id
         return plan
 

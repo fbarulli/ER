@@ -668,8 +668,6 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
             if line.startswith(("+ git", "[timing]", "phase"))] == \
         ["+ git clone", "[timing] mark 1s", "phase complete"], \
         "a whole-session replay must be rewritten exactly once, never duplicated"
-    assert any("reconnect attempt 1" in line for line in content), \
-        "the reconnect status line shares the same transcript"
     assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
 
 
@@ -727,9 +725,12 @@ def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatc
             kagglesdk.kaggle_client, "KaggleClient",
             lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
                 kernels_api_client=fake_api)))
-        # Each run is a fresh process: its first _log_lane truncates the file.
+        # Each run is a fresh process: its first _log_lane truncates the
+        # file and it holds no follower lock from a prior run.
         monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
         kaggle_lane._log_lane(f"{tag} push rc=0")
+        (tmp_path / "logs" / "kaggle"
+         / "er-train-gpu.follower.pid").unlink(missing_ok=True)
         kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
 
     run("first")
@@ -1918,3 +1919,39 @@ def test_train_kernel_refuses_a_bundle_without_ablation_templates(
     # ablation off: the same bundle subset is fine (the contract is conditional)
     suite.write_text("post_training_ablation: false\n", encoding="utf-8")
     run_gate(subset)
+
+
+def test_stream_follower_survives_more_than_stream_retries(tmp_path, monkeypatch):
+    """The follower must reconnect for the WHOLE session. It used to quit after
+    stream_retries (5) drops, which froze lane.log mid-run (the eval->train
+    transition was never captured)."""
+    import types
+    import requests
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+    calls = {"n": 0}
+
+    class Stream:
+        def iter_lines(self):
+            calls["n"] += 1
+            yield ('data: {"stream_name":"stdout","time":%d,'
+                   '"data":"attempt %d\\n"}' % (calls["n"], calls["n"]))
+            if calls["n"] < 8:
+                raise requests.exceptions.ChunkedEncodingError("drop")
+            # attempt 8 completes cleanly (END_OF_LOG)
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert calls["n"] == 8, "the follower must keep reconnecting past stream_retries"
+    assert "attempt 8" in content, "the final frame must be captured"
+    assert "follower exhausted" not in content
