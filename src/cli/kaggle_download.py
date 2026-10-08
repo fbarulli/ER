@@ -14,8 +14,10 @@ Two single-responsibility classes fix that at the transport boundary:
   retries, post-download verification and a fail-LOUD contract: an rc=0 with
   no files raises :class:`EmptyDownloadError`, never a silent empty success.
 * :class:`DatasetDownloader` — ``kaggle datasets download`` with the same
-  pacing, plus unzip and sha256 verification (used for the immutable dataset
-  transport that outlives stop-stub kernel versions).
+  pacing, plus unzip and sha256 verification. This is the ONE dataset-archive
+  transport: :meth:`cli.kaggle_datasets.KaggleDatasets.download_dataset`
+  delegates here (receipt identity included) instead of re-spelling its own
+  ``kaggle datasets download`` call, so there is no second downloader.
 
 Every failure carries the FULL CLI output and the FULL Python traceback
 (``DownloadError.traceback_text``); nothing is truncated to a one-liner.
@@ -50,6 +52,7 @@ class DownloadResult:
     command: tuple[str, ...]
     stdout: str = ""
     resumed: bool = False
+    archive: Path | None = None
 
     @property
     def empty(self) -> bool:
@@ -127,8 +130,8 @@ class _RetryingDownloader:
             raise EmptyDownloadError(
                 f"kaggle download for {slug!r} exited 0 but wrote no files "
                 f"under {dest} (the CLI's silent-empty success); nothing was "
-                "fetched — the kernel output may be a stop-stub version or not "
-                "yet finalized",
+                "fetched — the remote may be a stop-stub version or not yet "
+                "finalized",
                 stdout="", traceback_text=_stack())
         if require_globs and not any(
                 _matches_any(path, require_globs) for path in files):
@@ -152,8 +155,7 @@ class _RetryingDownloader:
         for attempt in range(1, self._max_attempts + 1):
             try:
                 result = self._run_once(command)
-            except BaseException as error:  # transport blew up (runner raised)
-                last_error = error
+            except Exception as error:  # transport blew up (runner raised)
                 if attempt < self._max_attempts:
                     self._pace(attempt, error)
                     continue
@@ -229,21 +231,29 @@ class DatasetDownloader(_RetryingDownloader):
             slug=slug, dest=Path(dest),
             tail=("datasets", "download", slug, "-p", str(dest)),
             require_globs=require_globs)
-        if unzip:
-            self._unzip(result.dest)
-            result = DownloadResult(
-                slug=result.slug, dest=result.dest,
-                files=self._files_under(result.dest), attempts=result.attempts,
-                command=result.command, stdout=result.stdout,
-                resumed=result.resumed)
+        # Verify the transport identity BEFORE unpacking: the receipt's sha256
+        # is the archive contract, so a drifted archive never has its (possibly
+        # zip-slip/archive-bomb) bytes extracted, and the archive stays
+        # unambiguous among the members an earlier unpack may have left behind.
+        archive = self._archive(result.files) if (sha256 is not None or unzip) else None
         if sha256 is not None:
-            archive = self._archive(result.files)
             observed = self._sha256(archive)
             if observed != sha256:
                 raise DownloadError(
                     f"dataset {slug!r} sha256 mismatch for {archive}: expected "
                     f"{sha256} observed {observed}",
                     traceback_text=_stack())
+        result = DownloadResult(
+            slug=result.slug, dest=result.dest, files=result.files,
+            attempts=result.attempts, command=result.command,
+            stdout=result.stdout, resumed=result.resumed, archive=archive)
+        if unzip:
+            self._unzip(archive)
+            result = DownloadResult(
+                slug=result.slug, dest=result.dest,
+                files=self._files_under(result.dest), attempts=result.attempts,
+                command=result.command, stdout=result.stdout,
+                resumed=result.resumed, archive=archive)
         return result
 
     @staticmethod
@@ -257,7 +267,11 @@ class DatasetDownloader(_RetryingDownloader):
                 f"dataset download landed no archive among "
                 f"{[p.name for p in files]}",
                 traceback_text=_stack())
-        return sorted(archives)[0]
+        # Kaggle dataset downloads are zips; prefer one deterministically, and
+        # among equals take the most recently landed so a resumed stage dir's
+        # older archive is never the one verified (the fetch-back contract).
+        return max(archives, key=lambda path: (
+            path.suffix == ".zip", path.stat().st_mtime, str(path)))
 
     @staticmethod
     def _sha256(path: Path) -> str:
@@ -268,7 +282,6 @@ class DatasetDownloader(_RetryingDownloader):
         return digest.hexdigest()
 
     @staticmethod
-    def _unzip(dest: Path) -> None:
-        for archive in sorted(dest.glob("*.zip")):
-            with zipfile.ZipFile(archive) as bundle:
-                bundle.extractall(dest)
+    def _unzip(archive: Path) -> None:
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(archive.parent)

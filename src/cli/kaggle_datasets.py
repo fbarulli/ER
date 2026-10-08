@@ -121,11 +121,16 @@ class KaggleDatasets:
     def download_dataset(package: lane.KagglePackage, *, execute: bool) -> dict[str, Any]:
         """Fetch the published dataset back and verify it against the receipt.
 
-        The receipt written by `package_export` is the transport-identity
-        contract: a fetch-back whose sha256 differs from the packaged archive
-        raises RuntimeError instead of silently accepting drift.
+        Delegates the transport to :class:`cli.kaggle_download.DatasetDownloader`
+        (the ONE 429-aware, fail-loud dataset downloader), so this surface does
+        not re-spell a second ``kaggle datasets download`` call and inherits
+        the backoff/Retry-After pacing and the empty-download fail-loud. The
+        receipt written by `package_export` is the transport-identity contract:
+        a fetch-back whose sha256 differs from the packaged archive raises
+        instead of silently accepting drift.
         """
         from cli import kaggle_lane as lane
+        from cli.kaggle_download import DatasetDownloader
 
         spec = lane._spec()
         receipt_path = (lane.staging_dir() / lane.cohort_label(Path(package.export_path))
@@ -150,21 +155,12 @@ class KaggleDatasets:
             )
         executable = lane._require_kaggle_executable(spec.kaggle_executable)
         stage = lane.staging_dir() / lane.cohort_label(Path(package.export_path))
-        command = [executable, "datasets", "download", slug, "--path", str(stage)]
-        _, _ = lane._run_kaggle(command)
-        fetched_candidates = sorted(
-            stage.glob("*.zip"), key=lambda path: path.stat().st_mtime, reverse=True
-        )
-        if not fetched_candidates:
-            raise RuntimeError(f"kaggle download produced no archive under {stage}")
-        fetched = fetched_candidates[0]
-        observed = lane.sha256_file(fetched)
-        if observed != receipt["archive_sha256"]:
-            raise RuntimeError(
-                "fetched dataset archive sha256 mismatch: "
-                f"expected {receipt['archive_sha256']} observed {observed}"
-            )
-        plan["fetched_archive"] = str(fetched)
+        download = DatasetDownloader(
+            argv_prefix=(executable,), cwd=lane.TRAIN_ROOT).download(
+            slug, stage, require_globs=("*.zip",),
+            sha256=receipt["archive_sha256"])
+        plan["fetched_archive"] = str(download.archive)
+        plan["download_attempts"] = download.attempts
         plan["verified"] = True
         return plan
 
