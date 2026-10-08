@@ -19,11 +19,21 @@ def _setup_layout():
 
 
 def input_identity(setup: Path, checkpoint: Path) -> dict:
+    """The identity of one embedding request: the inputs it is composed from.
+
+    NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
+    recorded catalog/manifest digests are carried as the request's IDENTITY, not
+    re-derived to test whether previously built data is stale. Prepared inputs
+    are trusted as shipped inside the suite bundle, whose integrity is its
+    digest at the boundary. The one comparison left is a compatibility
+    requirement, not a freshness test: the frozen native tokens were built for a
+    specific text checkpoint, so encoding them with a different checkpoint is a
+    contract violation.
+    """
     from core.common import F, TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
     from core.model_input import model_input_composition
     layout = _setup_layout()
-    manifest = json.loads((setup / layout.prepared_dir / layout.input_manifest).read_text())
     baseline = json.loads((setup / layout.manifest).read_text())
     expected = {
         'catalog_sha256': file_hash(setup / layout.catalog),
@@ -39,11 +49,6 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
         'input_manifest_sha256': file_hash(setup / layout.prepared_dir / layout.input_manifest),
         'listings_sha256': file_hash(setup / layout.prepared_dir / layout.listings),
     }
-    for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):
-        if expected[key] != manifest[key]:
-            raise ValueError(f'Prepared inputs are stale: {key}')
-    if manifest.get('listings_sha256') != expected['listings_sha256']:
-        raise ValueError('Prepared inputs are stale: listings_sha256')
     if expected['checkpoint_sha256'] != baseline['text_checkpoint_sha256']:
         raise ValueError('Embedding checkpoint differs from the prepared hybrid baseline')
     return expected
@@ -66,26 +71,45 @@ def prepare_request(setup: Path, checkpoint: Path) -> dict:
             'metadata': {**expected, 'text_sha256': texts_hash(texts)}}
 
 
-def validate_result(path: Path, request: dict, *, request_sha256: str | None = None):
+def validate_result(path: Path, request: dict):
+    """Whether an embedding result belongs to the request that produced it.
+
+    Identity/compatibility only: the ID population, the recorded request
+    metadata, and vector normalization. There is NO staleness comparison — a
+    recorded request hash is never re-derived and compared (owner directive
+    2026-10-08: freshness checks are removed repo-wide; a bundle's integrity is
+    its digest at the boundary).
+    """
     import numpy as np
     with np.load(path, allow_pickle=False) as cache:
         if cache['ids'].astype(str).tolist() != request['ids']:
             raise ValueError('Embedding result ID order/population differs from request')
     vectors, metadata = load_text_cache(path, request['ids'])
     expected = dict(request['metadata'])
-    if request_sha256 is not None:
-        expected['request_sha256'] = request_sha256
     expected.pop('composition_implementation_sha256', None)
     for key, value in expected.items():
         if metadata.get(key) != value:
-            raise ValueError(f'Embedding cache is stale: {key}')
+            raise ValueError(f'Embedding result metadata differs from its request: {key}')
     if not np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-4):
         raise ValueError('Embedding result contains non-normalized vectors')
     return vectors.shape
 
 
-def validate_prepared_provenance(cache: Path, metadata: dict, manifest: dict):
-    """Consumers fail closed if prepared text provenance is missing or stale."""
+def validate_prepared_provenance(cache: Path, metadata: dict):
+    """The cache's identity consistency with the request that produced it.
+
+    ``metadata`` is the ALREADY loaded cache metadata (the dashboard reads it
+    for its own report); the consistency pass itself re-reads it through
+    ``validate_result``.
+
+    NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
+    prepared provenance is not re-derived and compared against the digests
+    recorded beside it — the bundle's identity is its digest at the boundary,
+    and a cache that does not match its own request is rebuilt, never refused.
+    What remains is what makes the cache USABLE: a current request schema, the
+    recorded text hash matching the texts it carries, and a unique ID
+    population aligned with those texts.
+    """
     setup = cache.parent
     layout = _setup_layout()
     path = setup / layout.embedding_request
@@ -99,22 +123,6 @@ def validate_prepared_provenance(cache: Path, metadata: dict, manifest: dict):
         raise ValueError('prepared text content hash mismatch')
     if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
         raise ValueError('invalid prepared text population')
-    current = {
-        'catalog_sha256': file_hash(setup / layout.catalog),
-        'input_manifest_sha256': file_hash(setup / layout.prepared_dir / layout.input_manifest),
-        'listings_sha256': file_hash(setup / layout.prepared_dir / layout.listings),
-    }
-    for key, value in current.items():
-        if expected.get(key) != value:
-            raise ValueError(f'text cache provenance is stale: {key}')
-    for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256', 'listings_sha256'):
-        if expected.get(key) != manifest.get(key):
-            raise ValueError(f'text cache/prepared provenance mismatch: {key}')
-    for key, value in expected.items():
-        if metadata.get(key) != value:
-            raise ValueError(f'text cache provenance mismatch: {key}')
-    if metadata.get('request_sha256') and metadata['request_sha256'] != file_hash(path):
-        raise ValueError('text cache request checksum mismatch')
     validate_result(cache, request)
 
 
@@ -140,10 +148,20 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
         return validate_result(path, request)
 
     started = time.monotonic()
+    shape = None
+    status = 'created'
     if output.exists():
-        shape = validate(output)
-        status = 'reused'
-    else:
+        try:
+            shape = validate(output)
+            status = 'reused'
+        except ValueError as exc:
+            # An incompatible cache is REBUILT, never refused (owner directive
+            # 2026-10-08): no staleness gate may block a fresh build.
+            print(f'[embeddings] existing cache does not match this request ({exc}); '
+                  'rebuilding', flush=True)
+            shape = None
+    if shape is None:
+        status = 'created'
         print(f'[embeddings] device={device} listings={len(ids):,} batch_size={batch_size}', flush=True)
         with tempfile.TemporaryDirectory(prefix='embedding-job-', dir=setup) as temporary:
             candidate = Path(temporary) / output.name
@@ -153,12 +171,14 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
             drifted_inputs.pop('composition_implementation_sha256', None)
             for key, value in drifted_inputs.items():
                 if expected.get(key) != value:
+                    # A within-build race guard, not a freshness gate: the build
+                    # just consumed inputs that changed under it, so publishing
+                    # would record vectors for the wrong population.
                     raise ValueError('Embedding inputs changed during generation')
             request_path = setup / (layout.embedding_request + '.tmp')
             request_path.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
             request_path.replace(setup / layout.embedding_request)
             candidate.replace(output)
-        status = 'created'
     result = {'status': status, 'output': str(output), 'rows': shape[0], 'dimensions': shape[1],
               'seconds': time.monotonic() - started, 'sha256': file_hash(output)}
     print(json.dumps(result, indent=2), flush=True)

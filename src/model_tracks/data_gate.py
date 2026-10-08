@@ -40,19 +40,11 @@ _LOG = RunLogger(__name__)
 
 #: Set by the supervisor for its children; holds the gate attestation.
 ATTESTATION_ENV = 'ER_DATA_GATE'
-#: Records that the suite gate ran against the declared GPU-pending baseline cache.
-GPU_PENDING_ENV = 'ER_DATA_GATE_GPU_PENDING'
 #: Ignores attestation trust entirely; every check stays live.
 FORCE_ENV = 'ER_DATA_GATE_ENFORCE'
 #: Suite configuration the attestation was computed over. Workers receive it so
 #: a spawned trainer can recompute the same digest without extra arguments.
 CONFIG_ENV = 'ER_DATA_GATE_CONFIG'
-
-#: Digest recorded for a text cache the supervisor's baseline export still has
-#: to produce. It is a declared state, not a missing input: `preflight` has
-#: already verified the embedding request that will produce it, and the gate
-#: digests that request's bytes below.
-GPU_PENDING = 'declared GPU-pending; bound to the baseline embedding request'
 
 
 class SplitPairCounts(BaseModel):
@@ -134,7 +126,7 @@ def _suite_digest(config: Path) -> str:
 
 
 @timed
-def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str, str]:
+def input_digests(config: Path) -> dict[str, str]:
     """Digest every prepared input the gate verifies, keyed by owner.
 
     Binding the attestation to these bytes is what lets a worker skip the
@@ -142,7 +134,6 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
     enforcement active.
     """
     from core.common import TRAIN_ROOT, F
-    from core.portable_archive import cached_file_digest
     from graph_tracks.config import load_config as load_graph_config
     cfg = load_config(config)
     layout = _setup_layout()
@@ -183,24 +174,21 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
                 continue
             path = (TRAIN_ROOT / raw).resolve()
             owner = f'{track}.{key}'
-            if path.is_file():
-                digests[owner] = cached_file_digest(path)
-            elif key == 'text_cache' and allow_gpu_pending:
-                digests[owner] = GPU_PENDING
-            else:
-                raise FileNotFoundError(
-                    f'data gate input missing: {owner} -> {_repo_relative(path)}')
+            # A declared input is REQUIRED: there is no "pending" state that
+            # tolerates a not-yet-produced cache (owner directive 2026-10-08 —
+            # the only tolerated absence was a freshness allowance, and it is
+            # gone; the producer runs before the gate).
+            digests[owner] = _required(path, owner)
     return digests
 
 
 @timed
-def attestation(config: Path, *, allow_gpu_pending: bool = False) -> str:
+def attestation(config: Path) -> str:
     """The digest a worker must match to treat the gate as proof."""
     config = _resolve(config)
     digest = hashlib.sha256()
     digest.update(_suite_digest(config).encode())
-    for owner, value in sorted(input_digests(config,
-                                             allow_gpu_pending=allow_gpu_pending).items()):
+    for owner, value in sorted(input_digests(config).items()):
         digest.update(b'\0')
         digest.update(owner.encode())
         digest.update(b'\0')
@@ -208,23 +196,13 @@ def attestation(config: Path, *, allow_gpu_pending: bool = False) -> str:
     return digest.hexdigest()
 
 
-#: Per-process memo of `enforced` verdicts, keyed by (resolved config, pending).
+#: Per-process memo of `enforced` verdicts, keyed by resolved config.
 #: A worker asks the same question several times (gate, preflight, trainer);
 #: replaying `attestation` for each is redundant re-hashing of the same bytes.
 _enforced: dict | None = None
 
 
-def _gpu_pending() -> bool:
-    """Whether the suite declared GPU-only caches as legitimately not built yet.
-
-    The supervisor exports ER_DATA_GATE_GPU_PENDING=1 for every worker, so the
-    environment is the one channel that reaches all three tracks.  The explicit
-    keyword stays available for the supervisor's own call.
-    """
-    return os.environ.get(GPU_PENDING_ENV) == '1'
-
-
-def enforced(config: Path, *, allow_gpu_pending: bool = False) -> bool:
+def enforced(config: Path) -> bool:
     """Whether this process must run the data tests itself.
 
     False only inside a suite whose supervisor already ran the gate over exactly
@@ -236,23 +214,22 @@ def enforced(config: Path, *, allow_gpu_pending: bool = False) -> bool:
     if not expected:
         return True
     resolved = _resolve(config)
-    pending = allow_gpu_pending or _gpu_pending()
     if perf_enabled('data_gate.enforced_memo'):
         global _enforced
         if _enforced is None:
             _enforced = {}
-        key = (str(resolved), pending)
+        key = str(resolved)
         verdict = _enforced.get(key)
         if verdict is None:
-            verdict = expected != attestation(resolved, allow_gpu_pending=pending)
+            verdict = expected != attestation(resolved)
             _enforced[key] = verdict
         return verdict
-    return expected != attestation(resolved, allow_gpu_pending=pending)
+    return expected != attestation(resolved)
 
 
-def trusted(config: Path, owner: str, *, allow_gpu_pending: bool = False) -> bool:
+def trusted(config: Path, owner: str) -> bool:
     """Record that the gate already proved these inputs, and say so once."""
-    if enforced(config, allow_gpu_pending=allow_gpu_pending):
+    if enforced(config):
         return False
     _LOG.info(f'[data-gate] {owner}: verified before training by the suite gate; '
               'configuration and input bytes unchanged')
@@ -260,9 +237,7 @@ def trusted(config: Path, owner: str, *, allow_gpu_pending: bool = False) -> boo
 
 
 @timed
-def validate(config: Path, *, suite_inputs: dict | None = None,
-             allow_gpu_pending: bool = False,
-             native_token_model: Path | None = None) -> DataGateResult:
+def validate(config: Path, *, suite_inputs: dict | None = None) -> DataGateResult:
     """Run every data test the three tracks depend on. Raises on any failure.
 
     Returns the suite preflight summary plus each track's input census obtained
@@ -281,8 +256,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
     cfg = load_suite_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     if suite_inputs is None:
-        suite_inputs = preflight(config, allow_gpu_pending=allow_gpu_pending,
-                                 native_token_model=native_token_model)
+        suite_inputs = preflight(config)
     tracks: dict[str, TrackInputCensus] = {}
     # Validate each graph track's inputs under its executed configuration, not
     # the prepared one: the worker overrides device, epochs, postprocessing and
@@ -309,8 +283,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
         listings=tracks['gnn_only'].listings, pairs=tracks['gnn_only'].pairs,
         text_dimension=None, device=cascade_settings.device)
     return DataGateResult(suite=suite_inputs, tracks=tracks,
-                          attestation=attestation(config,
-                                                  allow_gpu_pending=allow_gpu_pending))
+                          attestation=attestation(config))
 
 
 def census_tracks(result: DataGateResult) -> dict[str, dict]:
@@ -326,15 +299,13 @@ def census_tracks(result: DataGateResult) -> dict[str, dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
-    parser.add_argument('--allow-gpu-pending', action='store_true',
-                        help='accept the declared pending baseline embedding cache')
     parser.add_argument('--attestation-only', action='store_true',
                         help='print this configuration/input digest and exit')
     args = parser.parse_args()
     if args.attestation_only:
         print(attestation(args.config))
         return
-    result = validate(args.config, allow_gpu_pending=args.allow_gpu_pending)
+    result = validate(args.config)
     print(result.model_dump_json(indent=2))
     print(f'[data-gate] passed; attestation={result.attestation}', flush=True)
 

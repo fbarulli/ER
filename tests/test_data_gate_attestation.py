@@ -9,8 +9,8 @@ These tests pin the boundaries that make that safe:
 
 * no attestation, or one that does not match, means every check stays live;
 * ER_DATA_GATE_ENFORCE=1 ignores trust completely;
-* the exported GPU-pending marker is what lets a legitimately unbuilt GPU-only
-  text cache digest consistently between supervisor and workers;
+* there is no pending/not-yet-produced input state at all (owner directive
+  2026-10-08): a declared input that is absent fails the gate loudly;
 * without the suite configuration a worker cannot recompute the digest at all,
   so it must verify rather than trust.
 """
@@ -39,7 +39,6 @@ class TrustContract(unittest.TestCase):
         self._env.start()
         for key in (
             data_gate.ATTESTATION_ENV,
-            data_gate.GPU_PENDING_ENV,
             data_gate.FORCE_ENV,
             data_gate.CONFIG_ENV,
         ):
@@ -80,24 +79,21 @@ class TrustContract(unittest.TestCase):
         with mock.patch.object(data_gate, "attestation", return_value=DIGEST_A):
             self.assertFalse(data_gate.trusted(CONFIG, "text bundle"))
 
-    def test_gpu_pending_env_reaches_the_digest(self) -> None:
-        os.environ[data_gate.ATTESTATION_ENV] = DIGEST_A
-        # The supervisor exported the pending marker for a text cache that its own
-        # baseline export has not written yet. The worker must be allowed to
-        # compute the same digest, or an honest worker would distrust the gate.
-        with mock.patch.object(
-            data_gate, "attestation", return_value=DIGEST_A
-        ) as attestation:
-            data_gate.enforced(CONFIG)
-        self.assertFalse(attestation.call_args.kwargs["allow_gpu_pending"])
+    def test_no_pending_input_state_exists(self) -> None:
+        """A declared input is required: the pending tolerance is gone.
 
-        with mock.patch.object(
-            data_gate, "attestation", return_value=DIGEST_A
-        ) as attestation:
-            os.environ[data_gate.GPU_PENDING_ENV] = "1"
-            data_gate._enforced = None
-            data_gate.enforced(CONFIG)
-        self.assertTrue(attestation.call_args.kwargs["allow_gpu_pending"])
+        Owner directive 2026-10-08 removed every "not-yet-fresh" allowance, so
+        the gate has no GPU-pending marker/env and no keyword that substitutes a
+        sentinel digest for an absent text cache.
+        """
+        self.assertFalse(hasattr(data_gate, "GPU_PENDING"))
+        self.assertFalse(hasattr(data_gate, "GPU_PENDING_ENV"))
+        self.assertFalse(hasattr(data_gate, "_gpu_pending"))
+        import inspect
+
+        for function in (data_gate.input_digests, data_gate.attestation,
+                         data_gate.enforced, data_gate.trusted, data_gate.validate):
+            self.assertNotIn("allow_gpu_pending", inspect.signature(function).parameters)
 
     def test_config_absent_cannot_trust(self) -> None:
         # A worker that cannot recompute the digest has no proof at all.

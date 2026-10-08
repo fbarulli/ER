@@ -72,7 +72,6 @@ def forward(output,setup,*,device,return_model=False):
     from training.validation_inference import resolve_best_checkpoint
     layout = _setup_layout()
     request_path = setup/layout.text_export_request
-    request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())
     tokens = setup/'prepared_text.npz'
     if file_hash(tokens) != request['tokens_sha256']:
@@ -84,9 +83,9 @@ def forward(output,setup,*,device,return_model=False):
     contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
         request_path=request_path, tokens_path=tokens, plan=request['plan'],
         row_count=len(request['ids']), tokens_sha256=request['tokens_sha256'])
-    vectors, model, checkpoint_sha256, request_sha256 = contract.forward()
+    vectors, model, checkpoint_sha256, _request_sha256 = contract.forward()
     metadata = {key:request[key] for key in ('catalog_sha256','listings_sha256','pairs_sha256','text_sha256','composition','composition_implementation_sha256','export_implementation_sha256','token_implementation_sha256')}
-    metadata.update(checkpoint_sha256=checkpoint_sha256,request_sha256=request_sha256,
+    metadata.update(checkpoint_sha256=checkpoint_sha256,
         tokenization=request['plan']['tokenization'],export_location=contract.export_location,
         truncated_inputs=0,embedding_dtype=contract.embedding_dtype,
         performance=model._er_forward_performance)
@@ -97,12 +96,19 @@ def forward(output,setup,*,device,return_model=False):
 
 
 def validate(path,checkpoint,setup):
+    """Identity/compatibility of one saved GPU text export.
+
+    NO FRESHNESS COMPARISON (owner directive 2026-10-08, repo-wide): the export
+    request is NOT re-hashed and compared against the value recorded in the
+    export metadata. The checkpoint, catalog, listings, and pairs identities are
+    checked so the vectors provably belong to this suite's prepared inputs; the
+    bundle's integrity is its digest at the boundary.
+    """
     layout = _setup_layout()
     ids = [r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)]
     vectors,metadata = load_text_cache(path,ids)
     for key,expected in [('checkpoint_sha256',checkpoint_hash(checkpoint)),('catalog_sha256',file_hash(setup/layout.catalog)),
-            ('listings_sha256',file_hash(setup/layout.prepared_dir/layout.listings)),('pairs_sha256',file_hash(setup/layout.prepared_dir/'pairs.csv')),
-            ('request_sha256',file_hash(setup/layout.text_export_request))]:
+            ('listings_sha256',file_hash(setup/layout.prepared_dir/layout.listings)),('pairs_sha256',file_hash(setup/layout.prepared_dir/'pairs.csv'))]:
         if metadata.get(key) != expected:
             raise ValueError('saved GPU text export mismatch: '+key)
     if metadata.get('export_location') not in {'Colab GPU', 'Colab CPU'} or metadata.get('truncated_inputs') != 0 or not np.allclose(np.linalg.norm(vectors,axis=1),1,atol=PreparedEmbeddingForward.normalization_atol):

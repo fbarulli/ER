@@ -72,21 +72,26 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
     ``recovery`` is the ALREADY loaded recovery manifest (a caller that opens
     the same archive for its own provenance check passes it down) so a resume
     run verifies the recovery archive exactly once.
+
+    Every archive name and the transport directory come from the ONE data
+    bundle declaration (``ColabSpec.data_bundle``), the same declaration both
+    Colab lanes read.
     """
-    from core.common import TRAIN_ROOT
+    from core.common import TRAIN_ROOT, training_cfg
+    bundle = training_cfg().colab.data_bundle
     metadata = verify(archive)
-    files = {'inputs.tar.zst':archive}
+    files = {bundle.transport_member: archive}
     if resume_archive is not None:
         recovery = (recovery if recovery is not None
                     else Bundle.load(resume_archive, BundleRole.recovery).manifest)
         _validate_recovery(recovery, run_tag, metadata)
-        files['recovery.tar.zst'] = resume_archive
+        files[bundle.recovery_member] = resume_archive
     inventory = {name:{'sha256':file_hash(path),'size':path.stat().st_size}
                  for name,path in files.items()}
     identity = hashlib.sha256(json.dumps(inventory,sort_keys=True).encode()).hexdigest()
-    folder = TRAIN_ROOT/'results/model_tracks/inputs'
+    folder = TRAIN_ROOT/bundle.git_transport_dir
     folder.mkdir(parents=True,exist_ok=True)
-    transport = folder/f'{identity}.tar.zst'
+    transport = folder/bundle.git_transport_name(identity)
     if not transport.exists():
         partial = transport.with_suffix('.partial')
         with tar_archive(partial, 'x') as package:
@@ -150,7 +155,8 @@ print(json.dumps({{name: hashlib.sha256((root/name).read_bytes()).hexdigest()
 def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Path | None = None,
         git_inputs: Path | None = None):
     from cli import colab as backend
-    from core.common import RESULTS, TRAIN_ROOT
+    from core.common import RESULTS, TRAIN_ROOT, training_cfg
+    bundle = training_cfg().colab.data_bundle
     inputs_bundle = Bundle.load(archive, BundleRole.inputs)
     with inputs_bundle.reader() as source:
         metadata = inputs_bundle.manifest
@@ -165,13 +171,13 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     import re
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
-    recovery_local = RESULTS / 'model_tracks' / f'{run_tag}.recovery.tar.zst'
+    recovery_local = RESULTS / 'model_tracks' / bundle.recovery_archive_name(run_tag)
     if resume_archive is not None and not resume:
         raise ValueError('recovery archive requires resume')
     if resume and resume_archive is None and recovery_local.exists():
         resume_archive = recovery_local
-    remote_recovery = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__recovery.tar.zst'
-    remote_zip = f"{backend.REMOTE_ROOT}/prepared_training/{run_tag}__all_tracks.{settings['input_archive_format']}"
+    remote_recovery = f'{backend.REMOTE_ROOT}/{bundle.remote_dir}/{bundle.remote_recovery_name(run_tag)}'
+    remote_zip = f"{backend.REMOTE_ROOT}/{bundle.remote_dir}/{bundle.remote_archive_name(run_tag, settings['input_archive_format'])}"
     # Opened ONCE here (the boundary that owns the recovery role) and handed to
     # the transport builder, so a resume run never verifies the archive twice.
     recovery = (Bundle.load(resume_archive, BundleRole.recovery).manifest
@@ -194,10 +200,10 @@ if file_hash(transport) != {file_hash(git_inputs)!r}:
     raise ValueError("cloned Git input transport mismatch")
 archive_path.parent.mkdir(parents=True,exist_ok=True)
 with tar_archive(transport) as package:
-    expected_members={{'inputs.tar.zst'}} | ({{'recovery.tar.zst'}} if {resume_archive is not None!r} else set())
+    expected_members={{{bundle.transport_member!r}}} | ({{{bundle.recovery_member!r}}} if {resume_archive is not None!r} else set())
     if set(package.getnames()) != expected_members:
         raise ValueError("cloned Git input inventory mismatch")
-    for member_name,destination in [('inputs.tar.zst',archive_path),('recovery.tar.zst',pathlib.Path({remote_recovery!r}))]:
+    for member_name,destination in [({bundle.transport_member!r},archive_path),({bundle.recovery_member!r},pathlib.Path({remote_recovery!r}))]:
         if member_name not in expected_members:
             continue
         member=package.getmember(member_name)
@@ -252,7 +258,7 @@ else:
         # The backend tears down the VM after this returns: collect stopped
         # workers' checkpoints and completed reports first when still reachable.
         try:
-            recovery_remote = remote_output + '.recovery.tar.zst'
+            recovery_remote = f'{backend.REMOTE_ROOT}/results/model_tracks/{bundle.recovery_archive_name(run_tag)}'
             recovery_script = backend._BOOTSTRAP + f'''
 import json, os, pathlib, signal, time
 from model_tracks.package import recovery_package

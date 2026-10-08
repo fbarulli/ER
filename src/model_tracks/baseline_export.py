@@ -37,7 +37,7 @@ def prepare(setup,checkpoint,*,composer=None):
             handle.close()
             cache = setup / layout.shared_embeddings
             if cache.exists():
-                validate_result(cache, request, request_sha256=file_hash(candidate))
+                validate_result(cache, request)
             candidate.replace(path)
         finally:
             candidate.unlink(missing_ok=True)
@@ -45,6 +45,15 @@ def prepare(setup,checkpoint,*,composer=None):
 
 
 def validate_pending(setup,checkpoint,*,native_model=None):
+    """The pre-forward contract of a prepared but unencoded baseline.
+
+    NO FRESHNESS COMPARISON (owner directive 2026-10-08, repo-wide): the
+    request's recorded input digests are not re-derived and compared against
+    the current tree. What this checks is what the forward pass requires: a v2
+    request whose recorded text hash matches its own texts, aligned and unique
+    IDs covering the prepared listings, and a frozen native-token plan whose
+    tokenizer is the configured checkpoint's.
+    """
     from core.encoding_inputs import PreparedTokenInputs,tokenization_policy
     if native_model is None:
         from sentence_transformers import SentenceTransformer
@@ -53,12 +62,8 @@ def validate_pending(setup,checkpoint,*,native_model=None):
     path = setup/layout.embedding_request
     request = json.loads(path.read_text())
     expected = input_identity(setup,checkpoint)
-    expected.pop('composition_implementation_sha256',None)
     if request.get('schema') != 'er-embedding-request-v2' or request.get('metadata',{}).get('text_sha256') != texts_hash(request['texts']):
         raise ValueError('pending baseline request corrupt')
-    for key,value in expected.items():
-        if request['metadata'].get(key) != value:
-            raise ValueError('pending baseline source changed: '+key)
     if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
         raise ValueError('pending baseline ID/text alignment differs')
     if set(request['ids']) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)}:
@@ -73,14 +78,19 @@ def validate_pending(setup,checkpoint,*,native_model=None):
         prepared = PreparedTokenInputs(plan=plan, arrays=arrays, row_count=len(request['ids']))
         count = prepared.row_count
     return {'status':'prepared GPU pending','rows':count,'checkpoint_sha256':expected['checkpoint_sha256'],
-        'request_sha256':file_hash(path),'token_sha256':file_hash(tokens)}
+        'token_sha256':file_hash(tokens)}
 
 
 def forward(setup,checkpoint,*,device,return_model=False):
-    """GPU supervisor runs once before the trained workers start; no CPU composition."""
+    """GPU supervisor runs once before the trained workers start; no CPU composition.
+
+    NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
+    embedding request is never re-hashed to decide whether an existing export is
+    stale. An export whose recorded metadata does not match the request is
+    rebuilt below, and the request/result contract is checked on identity only.
+    """
     layout = _setup_layout()
     request_path = setup/layout.embedding_request
-    request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())
     output = setup/layout.shared_embeddings
     validate_embedding_device(device)
@@ -90,20 +100,20 @@ def forward(setup,checkpoint,*,device,return_model=False):
     model._er_checkpoint_sha256 = checkpoint_hash(checkpoint)
     validate_pending(setup,checkpoint,native_model=model)
     if output.exists():
-        validate_result(output,request,request_sha256=request_sha256)
+        validate_result(output,request)
         return (output,model) if return_model else output
     plan = request['prepared_text']
     contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
         request_path=request_path, tokens_path=setup/'prepared_text.npz', plan=plan,
         row_count=len(request['ids']), tokens_sha256=plan['sha256'])
-    vectors, model, _, request_sha256 = contract.forward(model=model)
+    vectors, model, _, _request_sha256 = contract.forward(model=model)
     current = input_identity(setup, checkpoint)
     current.pop('composition_implementation_sha256',None)
     for key, value in current.items():
         if request['metadata'].get(key) != value:
             raise ValueError('baseline source changed during encoding: ' + key)
-    metadata = {**request['metadata'],'request_sha256':request_sha256,
+    metadata = {**request['metadata'],
         'embedding_dtype':contract.embedding_dtype,'tokenization':plan['tokenization']}
     path = contract.write(output, request['ids'], vectors, metadata,
-        lambda candidate: validate_result(candidate,request,request_sha256=request_sha256))
+        lambda candidate: validate_result(candidate,request))
     return (path,model) if return_model else path

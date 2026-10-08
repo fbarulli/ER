@@ -299,7 +299,14 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
         assert saved.iloc[0]['test_eval'] == 'skipped_selection_mode'
 
 
-def test_suite_preflight_rejects_changed_source_catalog_before_launch(tmp_path, monkeypatch):
+def test_suite_preflight_has_no_source_catalog_freshness_gate(tmp_path, monkeypatch):
+    """ZERO freshness checks (owner directive 2026-10-08, repo-wide).
+
+    A catalog whose bytes no longer match the setup manifest's recorded
+    ``source_catalog_sha256`` is no longer a staleness verdict; the preflight
+    walks past the removed comparison and fails on the next structural step
+    instead (this fixture provides no prepared lane config).
+    """
     import core.common
     from model_tracks import preflight as checks
 
@@ -311,7 +318,7 @@ def test_suite_preflight_rejects_changed_source_catalog_before_launch(tmp_path, 
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', {'dataset_deduped': source})
     monkeypatch.setattr(checks, 'load_config', lambda _: SimpleNamespace(setup_dir='setup'))
-    with pytest.raises(ValueError, match='graph setup is stale: source catalog'):
+    with pytest.raises(FileNotFoundError, match='gnn_only.yaml'):
         checks.preflight(tmp_path / 'suite.yaml')
 
 

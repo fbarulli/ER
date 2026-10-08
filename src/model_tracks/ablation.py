@@ -626,7 +626,7 @@ def _persist_prepared(request, cfg, token_cache):
             in_count=text_slots, out_count=len(request['texts']),
             reason='every intervention text slot is interned down to its distinct native text; '
                    'the request freezes cohort, interventions and texts',
-            detail={'request_path': source_name(path), 'request_sha256': request_sha,
+            detail={'request_path': source_name(path),
                     'prepared_inputs_sha256': request['prepared_inputs']['sha256'],
                     'cohort_sha256': request.get('cohort_sha256'),
                     'variants': len(request['variants']),
@@ -870,10 +870,9 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
 def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
-    request_sha = file_hash(request_path)
     with output.open('xb') as handle:
         np.savez_compressed(handle, vectors=np.asarray(vectors,dtype=np.float32), scores=np.asarray(scores,dtype=np.float32),
-                            request_sha256=request_sha,embedding_dtype='float32',
+                            embedding_dtype='float32',
                             **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
     output_sha = file_hash(output)
     output.with_suffix('.sha256').write_text(output_sha)
@@ -883,7 +882,6 @@ def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_ve
         in_count=None, out_count=1,
         reason='one float32 vectors/scores export and its sha256 sidecar for the whole request',
         detail={'output': source_name(output), 'output_sha256': output_sha,
-                'request_sha256': request_sha,
                 'vectors_shape': list(np.asarray(vectors).shape),
                 'scores_shape': list(np.asarray(scores).shape),
                 'candidate_vectors': candidate_vectors is not None,
@@ -1046,8 +1044,9 @@ def validate_vectors(request_path, result):
     if 'prepared_inputs' in request:
         load_prepared(request_path,request).close()
     with np.load(result,allow_pickle=False) as data:
-        if str(data['request_sha256'].item()) != _raw_file_hash(request_path):
-            raise ValueError('ablation result belongs to another request')
+        # NO FRESHNESS COMPARISON (owner directive 2026-10-08, repo-wide): the
+        # result is not re-bound to the current request by a re-derived hash.
+        # Its identity is checked structurally below (shapes, dtypes, ids).
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None
     expected = (len(request['variants']),len(request['ids']))
@@ -1159,7 +1158,7 @@ def assert_ablation_rows(rows, threshold):
 
 def _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids):
     return {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
-        'request_path':source_name(request_path), 'request_sha256':file_hash(request_path),
+        'request_path':source_name(request_path),
         'result_path':source_name(result),'result_sha256':file_hash(result),
         'sources':request['sources'],'composition':request['composition'],
         'implementation_sha256':request['implementation_sha256'], 'embedding_dtype':'float32', 'threshold':threshold,

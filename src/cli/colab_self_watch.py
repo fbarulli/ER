@@ -61,9 +61,9 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     """
     # The watcher appends to the SAME per-run lane transcript (owner order:
     # one file).  It is a detached child, so it never truncates: the launcher
-    # opened lane.log fresh (start_live_log) and this child only appends.
-    from cli import log_capture
-    log_path = log_capture.lane_log("colab", hub().LANE_LOG_NAME)
+    # opened the declared transcript fresh (start_live_log) and this child only
+    # appends.
+    log_path = hub().lane_transcript_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # The runbook's "never python -m cli.colab for a launch" rule stands: this
     # child is a watcher, not a launch — it provisions nothing.
@@ -109,11 +109,12 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     if not state["delivered"]:
         captured: list[str] = []
         destination = _self_watch_root(run_id)
-        for name in (f"colab_system_{hub().SESSION}.log", f"training_{hub().SESSION}.log",
+        for name in (hub().LANE_LOG_NAME,
+                     f"colab_system_{hub().SESSION}.log", f"training_{hub().SESSION}.log",
                      "lane.log", "system.log", "training.log"):
             try:
                 from cli import log_capture
-                source = log_capture.lane_log("colab", name)
+                source = log_capture.lane_log_at(hub()._COLAB.log_dir, name)
                 if (source.is_file()
                         and source.stat().st_size <= _SELF_WATCH_TRANSCRIPT_MAX_BYTES):
                     destination.mkdir(parents=True, exist_ok=True)

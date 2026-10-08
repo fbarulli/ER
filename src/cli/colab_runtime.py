@@ -161,22 +161,20 @@ def ensure_session() -> None:
 # uncommitted entry surfaces as a FileNotFoundError on the VM, so
 # validate_runtime_checkout() fails loud locally, before any VM is allocated.
 #
-# ONE HOME (consolidated 2026-10-08): this block is the Colab checkout
-# contract -- the declared path lists, their emitted sparse patterns
-# (runtime_checkout_paths), their verifier (validate_runtime_checkout) and the
+# ONE HOME (consolidated 2026-10-08): the Colab checkout contract lives in
+# ``ColabSpec`` (config/training.yaml colab.checkout_paths) — the declared
+# list, its emitted sparse patterns (``ColabSpec.checkout_patterns``), and the
 # path-shape rule every consumer shares (is_checkout_relative_path, which the
-# lane's ColabLaneBase.checkout_relative_guard now delegates to). The DECLARED
-# values now come from the config SSOT (config/training.yaml
-# colab.checkout_paths), so the two lists below are derived, not spelled here.
-# The Colab list is deliberately NOT derivable from kaggle.checkout_paths (this
-# lane needs artifacts/wheels + artifacts/evidence and no
-# requirements/artifacts/models), which is why it has its own config key.
-_COLAB_CHECKOUT_PATHS = tuple(training_cfg().colab.checkout_paths)
+# lane's ColabLaneBase.checkout_relative_guard now delegates to). The two
+# module attributes below are the PROJECTION the offline checkout tests patch;
+# the spec remains the only declaration. The Colab list is deliberately NOT
+# derivable from kaggle.checkout_paths (this lane needs artifacts/wheels +
+# artifacts/evidence and no requirements/artifacts/models), which is why it has
+# its own config key.
+_COLAB = training_cfg().colab
 #: Directory entries carry a trailing slash; the rest are repo-root files.
-RUNTIME_DIRECTORY_PATHS = tuple(
-    name for name in _COLAB_CHECKOUT_PATHS if name.endswith('/'))
-RUNTIME_REQUIRED_ROOT_FILES = tuple(
-    name for name in _COLAB_CHECKOUT_PATHS if not name.endswith('/'))
+RUNTIME_DIRECTORY_PATHS = _COLAB.checkout_directory_paths()
+RUNTIME_REQUIRED_ROOT_FILES = _COLAB.checkout_root_files()
 # Characters that can never appear in a repository-relative checkout path: a
 # newline/CR breaks the emitted git pathspec, a backslash escapes it, and
 # ``*?[]{}`` turned a declared path into a pattern/expansion in the old
@@ -448,13 +446,22 @@ def _env_value(name: str) -> str | None:
     return None
 
 def _wandb_env_script() -> str:
-    """Inject only the API key into the remote process, never remote disk."""
-    key = hub()._env_value("WANDB_API_KEY")
+    """Inject only the API key into the remote process, never remote disk.
+
+    The variable name and the project/mode the lanes report to come from
+    ``ColabSpec.wandb`` (project/mode are projected from ``tracking.wandb``), so
+    no surface re-spells ``WANDB_API_KEY``.
+    """
+    spec = training_cfg().colab.wandb
+    key = hub()._env_value(spec.api_key_env)
     if not key:
-        print(hub()._stamp(), "[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
+        print(hub()._stamp(),
+              f"[wandb] {spec.api_key_env} absent from .env; run will remain local-only")
         return ""
-    print(hub()._stamp(), "[wandb] API key loaded from local .env and injected into VM process")
-    return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
+    print(hub()._stamp(),
+          f"[wandb] API key loaded from local .env and injected into VM process "
+          f"(project={spec.project} mode={spec.mode})")
+    return f"os.environ[{spec.api_key_env!r}] = {key!r}\n"
 
 def _optuna_env_script() -> str:
     """Inject the shared PostgreSQL control-plane URL into the VM only."""

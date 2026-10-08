@@ -112,8 +112,12 @@ def embedding_state(setup, listing_ids, model):
         return state, {}, None
     try:
         vectors, metadata = load_text_cache(cache, listing_ids)
-        manifest = json_file(setup / layout.prepared_dir / layout.input_manifest, {})
-        validate_prepared_provenance(cache, metadata, manifest)
+        # Identity only (owner directive 2026-10-08: no freshness checks
+        # anywhere): the cache must be consistent with its own request, and it
+        # is never refused because a recorded digest no longer matches a
+        # re-derived one. The input comparison below only LABELS the report as
+        # historical, it never blocks the run.
+        validate_prepared_provenance(cache, metadata)
         if json_file(setup / layout.embedding_request, {}).get('ids') != listing_ids:
             raise ValueError('Embedding input ID order/population differs from prepared listings')
         current = input_identity(setup, Path(resolve_model(model)))

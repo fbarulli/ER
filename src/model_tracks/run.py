@@ -160,12 +160,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             inputs = json.loads(
                 (TRAIN_ROOT / manifest_name(BundleRole.inputs)).read_text())['preflight']
         else:
-            # When this suite exports the baseline itself, the frozen embedding
-            # cache is a declared pending input at preflight time: it is produced
-            # by the export a few lines below.  Verifying it as missing-and-bound-to-a-checked
-            # embedding request is what lets preflight run before the export instead
-            # of demanding bytes that do not exist yet.
-            inputs = preflight(config, allow_gpu_pending=cfg.post_training_ablation)
+            inputs = preflight(config)
     # Reject an unusable parallel runtime before the baseline consumes GPU
     # time. MPS is a required capability for this suite, not a late fallback.
     if cfg.device == 'cuda':
@@ -208,8 +203,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     from model_tracks.data_gate import validate as validate_data
     events.emit('data_gate', 'starting')
     with _LOG.section('phase.data_gate'):
-        gate = validate_data(config, allow_gpu_pending=True,
-                             suite_inputs=None if gpu_only else inputs)
+        gate = validate_data(config, suite_inputs=None if gpu_only else inputs)
         events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
@@ -296,7 +290,6 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
            'EUROMONITOR_REMOTE_TRAINING':'1' if gpu_only else os.environ.get('EUROMONITOR_REMOTE_TRAINING', '0'),
            'ER_DATA_GATE': gate.attestation,
-           'ER_DATA_GATE_GPU_PENDING': '1',
            'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
     with _LOG.section('phase.worker_launch', workers=len(commands) + len(postprocess_tracks), device=cfg.device):

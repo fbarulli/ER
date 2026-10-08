@@ -174,7 +174,17 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     assert set(sealed['inline_configs']) <= set(metadata['files'])
 
 
-def test_suite_rejects_changed_labels_with_unchanged_catalog(tmp_path, monkeypatch):
+def test_suite_preflight_has_no_recorded_digest_freshness_gate(tmp_path, monkeypatch):
+    """ZERO freshness checks (owner directive 2026-10-08, repo-wide).
+
+    The suite preflight used to re-derive the source-catalog / labeled-pairs
+    digests and compare them against the setup manifest's recorded values,
+    raising 'graph setup is stale: ...'. That comparison is gone: the recorded
+    digests are identity metadata carried inside the bundle, and the prepared
+    suite is trusted as shipped. The mismatching fixture here therefore walks
+    straight past the digest comparison to the next structural step (loading the
+    prepared lane config, which this fixture does not provide).
+    """
     import core.common
     from model_tracks import preflight as checks
 
@@ -191,7 +201,7 @@ def test_suite_rejects_changed_labels_with_unchanged_catalog(tmp_path, monkeypat
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', {'dataset_deduped': source, 'labeled_pairs': labels})
     monkeypatch.setattr(checks, 'load_config', lambda _: SimpleNamespace(setup_dir='setup'))
-    with pytest.raises(ValueError, match='graph setup is stale: labeled pairs'):
+    with pytest.raises(FileNotFoundError, match='gnn_only.yaml'):
         checks.preflight(tmp_path / 'suite.yaml')
 
 

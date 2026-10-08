@@ -69,7 +69,6 @@ class SavedAblationReport(BaseModel):
     """Identity required before a previously computed report is published."""
     model_config = ConfigDict(extra='allow', allow_inf_nan=False)
     track: Track
-    request_sha256: Digest
     result_sha256: Digest
     threshold: float
     threshold_provenance: dict[str, Any]
@@ -141,7 +140,6 @@ def _published_identity(track, request, saved, binding, vectors):
     document = json.loads(request.read_text())
     calibration = SavedCalibration.model_validate_json(binding.read_text())
     if (validated.track != track or document['track'] != track
-            or validated.request_sha256 != file_hash(request)
             or validated.result_sha256 != file_hash(vectors)
             or saved.with_suffix('.sha256').read_text().strip() != file_hash(saved)
             or validated.threshold_provenance.get('sha256') != file_hash(binding)
@@ -322,7 +320,6 @@ def _trusted_saved_report(result, threshold, binding, previous, validated, docum
     request = previous.parent/bundle_spec().ablation_request_file
     trusted = (validated and previous.with_suffix('.sha256').is_file()
                and previous.with_suffix('.sha256').read_text().strip() == file_hash(previous)
-               and validated.get('request_sha256') == file_hash(request)
                and validated.get('result_sha256') == file_hash(result)
                and validated.get('threshold') == threshold
                and validated.get('threshold_provenance',{}).get('sha256') == file_hash(binding))

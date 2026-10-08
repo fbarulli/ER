@@ -437,9 +437,9 @@ def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
         _release_bundle(bundle_path)
     try:
         with trace_step('package.preflight'):
-            checks = preflight(config, allow_gpu_pending=True,
-                               native_token_model=native_model)
-            return native_model, checks
+            # The package preflight runs over shipped bytes; nothing here
+            # tolerates a not-yet-produced input (owner directive 2026-10-08).
+            return native_model, preflight(config)
     finally:
         del native_model
         _release_bundle(bundle_path)

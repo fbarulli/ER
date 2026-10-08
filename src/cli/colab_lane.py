@@ -53,7 +53,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from core.common import TRAIN_ROOT
+from core.common import TRAIN_ROOT, training_cfg
 from cli import log_capture
 from core.run_log import RunLogger
 from core.schemas import ColabBundlePlan
@@ -164,12 +164,14 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
     @timed
     def qualify_session_transcripts(self, file_map: dict, session: str) -> None:
         """Per-session root/training transcript paths for the 2-parallel cap."""
-        # One roof (owner order 2026-10-07): per-session transcripts live in
-        # the canonical logs root, colab lane subdir.
-        file_map["colab_live_log"] = log_capture.lane_log(
-            "colab", f"colab_system_{session}.log")
-        file_map["colab_training_log"] = log_capture.lane_log(
-            "colab", f"training_{session}.log")
+        # One roof (owner order 2026-10-07): per-session transcripts live under
+        # the DECLARED Colab log directory (ColabSpec.log_dir), so the roof is
+        # never re-spelled beside the lane's own declarations.
+        log_dir = training_cfg().colab.log_dir
+        file_map["colab_live_log"] = log_capture.lane_log_at(
+            log_dir, f"colab_system_{session}.log")
+        file_map["colab_training_log"] = log_capture.lane_log_at(
+            log_dir, f"training_{session}.log")
 
     @timed
     def run_cpu_prep(self, dataset_csv: Path | None = None) -> None:

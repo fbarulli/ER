@@ -90,8 +90,10 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     assert report['threshold'] == .5
     assert report['rows'][1]['decision_flip'] is False
     save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.75],[.25],[.75]],request_sha256='stale')
-    with pytest.raises(ValueError,match='another request'):
-        a.report(path,output,.5,threshold_source=str(frozen))
+    # ZERO freshness checks (owner directive 2026-10-08): a recorded request hash
+    # that no longer matches the request file is NOT compared, so the report is
+    # produced from the export's own structural identity instead of being refused.
+    assert a.report(path,output,.5,threshold_source=str(frozen)).is_file()
 
 
 def test_threshold_binds_to_attested_track_and_checkpoint(tmp_path,monkeypatch):

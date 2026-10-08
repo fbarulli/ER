@@ -168,7 +168,7 @@ masking_profiles:
 tracking:
   wandb:
     project: "e-r"
-    mode: "online"
+    mode: "offline"
 
 # ── Kaggle dataset/export transport lane ───────────────────────────────────
 # Parallel dataset/transport lane (branch kaggle-lane): packages/uploads
@@ -373,6 +373,66 @@ colab:
     - "colab_backend.py"
     - "model_tracks_package.json"
   session: "my-highram-session"
+  # Per-lane identity (owner directive 2026-10-08): the accelerator request
+  # selects exactly one of these two lanes, each owning its VM session and its
+  # transcript basename. cli.colab derives LANE_LOG_NAME through
+  # ColabSpec.transcript_name (an explicit EUROMONITOR_LANE_LOG still wins), and
+  # scripts/run_colab_smoke.sh asks the launcher for the lane's session, so
+  # neither the session pair nor the transcript pair is spelled anywhere else.
+  lanes:
+    cpu:
+      session: "smoke-cpu"
+      log_name: "lane_cpu.log"
+    gpu:
+      session: "smoke-gpu"
+      log_name: "lane_gpu.log"
+  # The ONE Colab transcript roof and its fallback names: the configured
+  # session above uses default_log_name, an isolated EUROMONITOR_COLAB_SESSION
+  # gets log_name_template rendered with its own name (concurrent lanes never
+  # truncate one shared file).
+  log_dir: "logs/colab"
+  default_log_name: "lane.log"
+  log_name_template: "lane_{session}.log"
+  # The advisory launcher lock that refuses a second launcher sharing one VM
+  # (cli.colab_launch): one template, rendered with the session name.
+  launcher_lock_template: "launcher-{session}.lock"
+  # W&B wiring the Colab lanes use. project/mode are PROJECTED from
+  # tracking.wandb at config load (TrainingConfig._colab_wandb_is_the_tracking_ssot),
+  # so the values below are placeholders the projection overwrites; the env
+  # names are the lane's own injection contract.
+  wandb:
+    project: "e-r"
+    mode: "offline"
+    api_key_env: "WANDB_API_KEY"
+    run_name_env: "WANDB_RUN_NAME"
+    dir_env: "WANDB_DIR"
+    dir_name: "wandb"
+  # The ONE data bundle feeding BOTH lanes (--gpu CPU and --gpu T4): the same
+  # prepared setup, the same suite config, and the same sealed inputs package
+  # and transport members. Declared once here so neither lane re-spells a path,
+  # an archive name, or a transport member.
+  # NO FRESHNESS CHECKS (owner directive 2026-10-08): freshness_checks can only
+  # be false; the lanes never re-derive a hash to test staleness. Integrity
+  # comes from the sealed Bundle verified exactly once at the boundary
+  # (core.bundle.Bundle.load / core.portable_archive.verify_archive_digest).
+  freshness_checks: false
+  data_bundle:
+    setup_dir: "data/prepared/smoke_200"
+    suite_config: "data/prepared/smoke_200/suite.yaml"
+    # Projected from kaggle.files.bundle_archive at load
+    # (TrainingConfig._colab_data_bundle_names_the_sealed_archive): one home for
+    # the sealed package's physical name; this value is a placeholder.
+    archive_name: "all_tracks_inputs.tar.zst"
+    transport_member: "inputs.tar.zst"
+    recovery_member: "recovery.tar.zst"
+    git_transport_dir: "results/model_tracks/inputs"
+    git_transport_template: "{identity}.tar.zst"
+    run_archive_name_template: "{run_tag}__inputs.{archive_format}"
+    recovery_archive_name_template: "{run_tag}.recovery.tar.zst"
+    # VM-side prepared-package names (the same bundle, installed by the lane).
+    remote_dir: "prepared_training"
+    remote_archive_template: "{run_tag}__all_tracks.{archive_format}"
+    remote_recovery_template: "{run_tag}__recovery.tar.zst"
   # Full all-track launches default to GPU; the smoke script requests CPU.
   # GPU provisioning still requires the launcher's --allow-gpu flag.
   gpu: "T4"

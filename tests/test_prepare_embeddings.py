@@ -116,7 +116,13 @@ def test_cuda_job_refuses_cpu_fallback(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('change', ['texts', 'manifest', 'listings'])
-def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
+def test_reuse_rebuilds_an_incompatible_cache(tmp_path, monkeypatch, change):
+    """An incompatible cache is REBUILT, never refused (owner directive 2026-10-08).
+
+    There is no staleness gate left: changed texts, a rewritten prepared
+    manifest, or a rewritten listings file make the existing export not match
+    this request, so it is rebuilt in place instead of failing the run.
+    """
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     if change == 'texts':
@@ -126,8 +132,7 @@ def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
         manifest.write_text(manifest.read_text() + '\n')
     else:
         (setup / 'prepared/listings.json').write_text('[]')
-    with pytest.raises(ValueError, match='stale'):
-        job.prepare(setup, checkpoint, device='cpu')
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
 
 
 def test_reuse_accepts_changed_composition_implementation(tmp_path, monkeypatch):
@@ -144,14 +149,13 @@ def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):
     job.prepare(setup, checkpoint, device='cpu')
     cache = setup / 'shared_minilm__embeddings.npz'
     _, metadata = job.load_text_cache(cache, ['a', 'b'])
-    manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
-    job.validate_prepared_provenance(cache, metadata, manifest)
+    job.validate_prepared_provenance(cache, metadata)
     request_path = setup / 'embedding_inputs.json'
     request = json.loads(request_path.read_text())
     request['texts'][0] = 'tampered text'
     request_path.write_text(json.dumps(request))
     with pytest.raises(ValueError, match='text content hash'):
-        job.validate_prepared_provenance(cache, metadata, manifest)
+        job.validate_prepared_provenance(cache, metadata)
 
 
 @pytest.mark.parametrize('ids,vectors', [(['b', 'a'], [[1, 0], [0, 1]]),
@@ -168,12 +172,23 @@ def test_invalid_gpu_result_cannot_be_accepted(tmp_path, monkeypatch, ids, vecto
         job.validate_result(candidate, request)
 
 
-def test_request_digest_binds_result_to_exact_upload(tmp_path, monkeypatch):
+def test_no_request_digest_freshness_gate(tmp_path, monkeypatch):
+    """ZERO freshness checks (owner directive 2026-10-08): the result contract
+    has no request-hash staleness parameter at all, and a recorded request hash
+    that disagrees with the request file is ignored rather than compared."""
+    import inspect
+
+    assert 'request_sha256' not in inspect.signature(job.validate_result).parameters
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     request = job.prepare_request(setup, checkpoint)
-    with pytest.raises(ValueError, match='request_sha256'):
-        job.validate_result(setup / 'shared_minilm__embeddings.npz', request, request_sha256='another-job')
+    cache = setup / 'shared_minilm__embeddings.npz'
+    with np.load(cache, allow_pickle=False) as data:
+        ids, vectors = data['ids'], data['embeddings']
+        metadata = json.loads(str(data['metadata']))
+    metadata['request_sha256'] = 'a-request-hash-from-another-run'
+    np.savez(cache, ids=ids, embeddings=vectors, metadata=json.dumps(metadata))
+    job.validate_result(cache, request)
 
 
 def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatch):
@@ -183,7 +198,7 @@ def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatc
         original(*args, **kwargs)
         (setup / 'eligible_catalog.csv').write_text('sku_id\nchanged\n')
     monkeypatch.setattr(job, 'create_cache', changing)
-    with pytest.raises(ValueError, match='stale'):
+    with pytest.raises(ValueError, match='changed during generation'):
         job.prepare(setup, checkpoint, device='cpu')
     assert not (setup / 'shared_minilm__embeddings.npz').exists()
 

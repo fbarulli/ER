@@ -86,7 +86,7 @@ import math
 import re
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import numpy as np
@@ -2603,6 +2603,176 @@ class CpuBundlePrepSpec(BaseModel):
     )
 
 
+class ColabLaneSpec(BaseModel):
+    """One Colab lane's identity: its session name and its transcript basename.
+
+    The Colab lanes are ``cpu`` (``--gpu CPU``) and ``gpu`` (``--gpu <accel>``).
+    Declaring the per-lane session and transcript HERE is what lets
+    ``cli.colab.LANE_LOG_NAME`` derive instead of re-spelling
+    ``lane_cpu.log``/``lane_gpu.log``, and lets ``scripts/run_colab_smoke.sh``
+    ask the launcher for the lane's session instead of hardcoding
+    ``smoke-cpu``/``smoke-gpu``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str = Field(min_length=1)
+    log_name: str = Field(min_length=1)
+
+    @field_validator("log_name")
+    @classmethod
+    def _log_name_is_a_basename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
+            raise ValueError("Colab lane transcript names must be non-empty basenames")
+        return value
+
+
+class ColabWandbSpec(BaseModel):
+    """The W&B wiring the Colab lanes use (project/mode + env injection).
+
+    ``project``/``mode`` are PROJECTIONS of ``tracking.wandb`` (the SSOT the
+    trainer itself reads), copied in by ``TrainingConfig`` so the Colab lane
+    never holds a second, drift-prone declaration. The env names are the
+    Colab lane's own: which variable carries the key, the run name, and the
+    run directory on the VM.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1)
+    mode: str = Field(min_length=1)
+    api_key_env: str = Field(min_length=1)
+    run_name_env: str = Field(min_length=1)
+    dir_env: str = Field(min_length=1)
+    #: VM-side run directory name (inside a worker's output dir).
+    dir_name: str = Field(min_length=1)
+
+
+class ColabDataBundleSpec(BaseModel):
+    """The ONE data bundle feeding BOTH Colab lanes (``--gpu CPU`` and ``--gpu T4``).
+
+    The two lanes differ only in the accelerator request (and the automatic
+    device flip it triggers); the data they train from is the same prepared
+    setup and the same sealed inputs package. Declaring it once here is what
+    stops a second, drift-prone spelling of the setup directory, the suite
+    config, or the transport member names from appearing in a lane.
+
+    ``transport_member``/``recovery_member`` are the members of the Git
+    transport archive ``model_tracks.colab`` publishes (``prepare_git_inputs``)
+    and the VM reads back; ``run_archive_name_template`` renders the published
+    ``results/model_tracks`` archive name; ``git_transport_template`` renders
+    the transport file inside ``git_transport_dir``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    setup_dir: str = Field(min_length=1)
+    suite_config: str = Field(min_length=1)
+    #: The kaggle-lane/install name of the same sealed package (unchanged
+    #: reader: cli.colab.prepared_package_candidates), declared here so the
+    #: bundle owns its archive name.
+    archive_name: str = Field(min_length=1)
+    transport_member: str = Field(min_length=1)
+    recovery_member: str = Field(min_length=1)
+    git_transport_dir: str = Field(min_length=1)
+    #: ``{identity}.tar.zst`` — the published immutable transport file.
+    git_transport_template: str = Field(min_length=1)
+    #: ``{run_tag}__inputs.{archive_format}`` — the run's inputs archive.
+    run_archive_name_template: str = Field(min_length=1)
+    #: ``{run_tag}.recovery.tar.zst`` — the run's resume-state archive (the
+    #: local/remote name of the transport's recovery member).
+    recovery_archive_name_template: str = Field(min_length=1)
+    # The remote root the prepared packages are installed under, plus the two
+    # names the VM derives from a run tag: the unpacked inputs archive and the
+    # recovery archive used by a resume.
+    remote_dir: str = Field(min_length=1)
+    remote_archive_template: str = Field(min_length=1)
+    remote_recovery_template: str = Field(min_length=1)
+
+    @field_validator("transport_member", "recovery_member", "archive_name")
+    @classmethod
+    def _member_is_a_basename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
+            raise ValueError("Colab data-bundle archive names must be non-empty basenames")
+        return value
+
+    @field_validator("git_transport_template")
+    @classmethod
+    def _transport_template_names_the_identity(cls, value: str) -> str:
+        if "{identity}" not in value:
+            raise ValueError(
+                "colab.data_bundle.git_transport_template must render {identity}")
+        return value
+
+    @field_validator("run_archive_name_template")
+    @classmethod
+    def _run_archive_template_names_the_run(cls, value: str) -> str:
+        for field in ("{run_tag}", "{archive_format}"):
+            if field not in value:
+                raise ValueError(
+                    f"colab.data_bundle.run_archive_name_template must render {field}")
+        return value
+
+    @field_validator("remote_archive_template")
+    @classmethod
+    def _remote_archive_template_names_the_run(cls, value: str) -> str:
+        for field in ("{run_tag}", "{archive_format}"):
+            if field not in value:
+                raise ValueError(
+                    f"colab.data_bundle.remote_archive_template must render {field}")
+        return value
+
+    @field_validator("recovery_archive_name_template")
+    @classmethod
+    def _recovery_archive_template_names_the_run(cls, value: str) -> str:
+        if "{run_tag}" not in value:
+            raise ValueError(
+                "colab.data_bundle.recovery_archive_name_template must render {run_tag}")
+        return value
+
+    @field_validator("remote_recovery_template")
+    @classmethod
+    def _remote_recovery_template_names_the_run(cls, value: str) -> str:
+        if "{run_tag}" not in value:
+            raise ValueError(
+                "colab.data_bundle.remote_recovery_template must render {run_tag}")
+        return value
+
+    @field_validator("setup_dir", "suite_config", "git_transport_dir")
+    @classmethod
+    def _repo_relative(cls, value: str) -> str:
+        candidate = Path(value)
+        if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
+            raise ValueError(f"colab.data_bundle paths must be repository-relative: {value!r}")
+        return value
+
+    def git_transport_name(self, identity: str) -> str:
+        """The transport file name for one immutable inputs identity."""
+        return self.git_transport_template.format(identity=identity)
+
+    def run_archive_name(self, run_tag: str, archive_format: str) -> str:
+        """The published inputs archive name for one run."""
+        return self.run_archive_name_template.format(
+            run_tag=run_tag, archive_format=archive_format)
+
+    def run_archive_glob(self) -> str:
+        """The glob finding every published inputs archive of this template."""
+        return self.run_archive_name_template.format(run_tag="*", archive_format="*")
+
+    def remote_archive_name(self, run_tag: str, archive_format: str) -> str:
+        """The VM-side prepared inputs archive name for one run."""
+        return self.remote_archive_template.format(
+            run_tag=run_tag, archive_format=archive_format)
+
+    def recovery_archive_name(self, run_tag: str) -> str:
+        """The run's resume-state archive name (local and remote)."""
+        return self.recovery_archive_name_template.format(run_tag=run_tag)
+
+    def remote_recovery_name(self, run_tag: str) -> str:
+        """The VM-side recovery archive name for one run."""
+        return self.remote_recovery_template.format(run_tag=run_tag)
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
@@ -2621,6 +2791,35 @@ class ColabSpec(BaseModel):
     checkout_paths: tuple[str, ...] = Field(min_length=1)
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
+    # Per-lane identity (owner directive 2026-10-08): the two Colab lanes an
+    # accelerator request selects (``cpu`` = ``--gpu CPU``, ``gpu`` = anything
+    # else) each own their session name and transcript basename. cli.colab
+    # derives LANE_LOG_NAME from ``transcript_name`` and the smoke script asks
+    # the launcher for the lane's session, so neither re-spells the pair.
+    lanes: dict[str, ColabLaneSpec] = Field(min_length=1)
+    # The ONE Colab transcript directory (repo-relative, under the canonical
+    # logs root) and the fallback names for the configured session and for any
+    # other (isolated) session.
+    log_dir: str = Field(min_length=1)
+    default_log_name: str = Field(min_length=1)
+    log_name_template: str = Field(min_length=1)
+    # ``launcher-{session}.lock``: the advisory lock file that refuses a second
+    # launcher sharing one VM (cli.colab_launch). Declared here so the lock
+    # name is not a second literal beside the session name it derives from.
+    launcher_lock_template: str = Field(min_length=1)
+    # The W&B settings the Colab lanes use (project/mode are projected from
+    # tracking.wandb by TrainingConfig; the env names are the lane's own).
+    wandb: ColabWandbSpec
+    # The ONE data bundle feeding BOTH lanes (``--gpu CPU`` and ``--gpu T4``).
+    data_bundle: ColabDataBundleSpec
+    # NO FRESHNESS CHECKS ON COLAB (owner directive 2026-10-08, item 3).
+    # The class states it: there is no staleness test anywhere on these lanes.
+    # Freshness/integrity comes from the data bundle — the sealed ``Bundle``
+    # whose role contract is verified exactly once at the boundary
+    # (``core.bundle.Bundle.load``) — so no downstream consumer may re-derive
+    # a file hash and compare it against a recorded one to decide staleness.
+    # ``Literal[False]`` makes forgetting this impossible to express.
+    freshness_checks: Literal[False] = False
     remote_data_prep: Literal[False] = False
     training_dataset_csv: str = Field(min_length=1)
     train_fraction: float = Field(gt=0.0, le=1.0)
@@ -2712,6 +2911,111 @@ class ColabSpec(BaseModel):
                 raise ValueError(
                     f"colab.checkout_paths must be repository-relative: {entry!r}")
         return value
+
+    @field_validator("lanes")
+    @classmethod
+    def _lanes_are_the_two_lanes(
+        cls, value: dict[str, ColabLaneSpec]
+    ) -> dict[str, ColabLaneSpec]:
+        """The only two Colab lanes are the accelerator request's two outcomes."""
+        if set(value) != {"cpu", "gpu"}:
+            raise ValueError(
+                "colab.lanes must declare exactly the cpu and gpu lanes, got "
+                f"{sorted(value)}")
+        sessions = [spec.session for spec in value.values()]
+        logs = [spec.log_name for spec in value.values()]
+        if len(set(sessions)) != len(sessions):
+            raise ValueError("colab.lanes sessions must be distinct")
+        if len(set(logs)) != len(logs):
+            raise ValueError("colab.lanes transcripts must be distinct")
+        return value
+
+    @field_validator("log_dir")
+    @classmethod
+    def _log_dir_is_under_the_log_root(cls, value: str) -> str:
+        candidate = Path(value)
+        if candidate.is_absolute() or ".." in candidate.parts or len(candidate.parts) < 2:
+            raise ValueError(
+                f"colab.log_dir must be a repository-relative directory under logs/: {value!r}")
+        return value
+
+    @field_validator("log_name_template")
+    @classmethod
+    def _log_template_names_the_session(cls, value: str) -> str:
+        if "{session}" not in value:
+            raise ValueError("colab.log_name_template must render {session}")
+        return value
+
+    @field_validator("launcher_lock_template")
+    @classmethod
+    def _lock_template_names_the_session(cls, value: str) -> str:
+        if "{session}" not in value:
+            raise ValueError("colab.launcher_lock_template must render {session}")
+        return value
+
+    @model_validator(mode="after")
+    def _data_bundle_suite_lives_in_the_setup_dir(self) -> "ColabSpec":
+        """The suite config BOTH lanes load must sit inside the declared setup dir."""
+        setup = PurePosixPath(self.data_bundle.setup_dir)
+        suite = PurePosixPath(self.data_bundle.suite_config)
+        if suite != setup and setup not in suite.parents:
+            raise ValueError(
+                "colab.data_bundle.suite_config must live inside "
+                f"data_bundle.setup_dir ({self.data_bundle.setup_dir!r}), got "
+                f"{self.data_bundle.suite_config!r}")
+        return self
+
+    # ── checkout accessors (the ONE sparse-checkout declaration) ───────────
+    def checkout_directory_paths(self) -> tuple[str, ...]:
+        """The declared directory entries (trailing slash), in declared order."""
+        return tuple(name for name in self.checkout_paths if name.endswith("/"))
+
+    def checkout_root_files(self) -> tuple[str, ...]:
+        """The declared repository-root file entries."""
+        return tuple(name for name in self.checkout_paths if not name.endswith("/"))
+
+    def checkout_patterns(self) -> tuple[str, ...]:
+        """The no-cone git sparse patterns the VM checks out."""
+        return tuple("/" + name for name in self.checkout_paths)
+
+    # ── lane identity accessors ────────────────────────────────────────────
+    def lane_for(self, gpu: str) -> ColabLaneSpec:
+        """The lane an accelerator request selects (only ``CPU`` is the CPU lane)."""
+        return self.lanes["cpu"] if str(gpu).upper() == "CPU" else self.lanes["gpu"]
+
+    def lane_by_session(self, session: str) -> ColabLaneSpec | None:
+        """The declared lane whose session is ``session``, if any."""
+        return next((spec for spec in self.lanes.values() if spec.session == session), None)
+
+    def transcript_name(self, session: str) -> str:
+        """The ONE transcript basename rule for a launcher session.
+
+        A declared lane session uses that lane's transcript; the configured
+        (default) session uses ``default_log_name``; any other isolated session
+        gets ``log_name_template`` rendered with its own name, so concurrent
+        lanes never truncate one shared file.
+        """
+        lane = self.lane_by_session(session)
+        if lane is not None:
+            return lane.log_name
+        if session == self.session:
+            return self.default_log_name
+        return self.log_name_template.format(session=session)
+
+    def launcher_lock_name(self, session: str) -> str:
+        """The advisory lock file name that guards one launcher session."""
+        return self.launcher_lock_template.format(session=session)
+
+    # ── the freshness ruling, readable by consumers ────────────────────────
+    def verifies_freshness(self) -> bool:
+        """Whether the Colab lanes may re-derive a hash to test staleness.
+
+        Always ``False``: the field is ``Literal[False]`` (see the class
+        definition), so no consumer can reintroduce a staleness comparison for
+        these lanes. Integrity comes from the sealed ``Bundle`` verified once
+        at the boundary.
+        """
+        return bool(self.freshness_checks)
 
 
 class DifferentiationAuditSpec(BaseModel):
@@ -3414,6 +3718,34 @@ class TrainingConfig(BaseModel):
         rendered LANE contract reads it and is outside this change.
         """
         self.kaggle.files.package_manifest = self.bundle.manifest_inputs
+        return self
+
+    @model_validator(mode="after")
+    def _colab_wandb_is_the_tracking_ssot(self) -> TrainingConfig:
+        """``colab.wandb.project``/``mode`` ARE ``tracking.wandb``'s values.
+
+        The Colab lane injects W&B settings into remote processes; the trainer
+        itself reads ``tracking.wandb``. Copying the values here (the same
+        projection pattern as ``hash_suffix`` above) keeps ONE declaration of
+        the project and the dashboard mode, so retuning the mirror cannot leave
+        the Colab lane reporting into a second, older project.
+        """
+        self.colab.wandb.project = self.tracking.wandb.project
+        self.colab.wandb.mode = self.tracking.wandb.mode
+        return self
+
+    @model_validator(mode="after")
+    def _colab_data_bundle_names_the_sealed_archive(self) -> TrainingConfig:
+        """``colab.data_bundle.archive_name`` IS ``kaggle.files.bundle_archive``.
+
+        Both lanes read the SAME sealed inputs package that
+        ``training.prepare_all`` writes and the Kaggle lane installs, so its
+        name has one home (the same projection pattern as ``hash_suffix``
+        above). The Colab data bundle still declares everything else about the
+        package (its setup dir, suite config, and transport members); only the
+        physical archive name is shared with the Kaggle lane's file contract.
+        """
+        self.colab.data_bundle.archive_name = self.kaggle.files.bundle_archive
         return self
 
 

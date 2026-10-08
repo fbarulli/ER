@@ -47,6 +47,7 @@ from functools import lru_cache, wraps
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -93,7 +94,7 @@ from cli.colab_lane import (
     DELIVERY_TRACKED_DIRS,
 )
 from cli.colab_lane_contracts import _stamp as _lane_stamp
-from cli.log_capture import lane_log, progress_frames_to_lines
+from cli.log_capture import lane_log_at, progress_frames_to_lines
 
 _LOG = RunLogger(__name__)
 
@@ -117,17 +118,30 @@ _SIMS_MODEL = str(_COLAB.sims_model)
 # Preparation / bundle archive names (config SSOT); the remote delivery and
 # prepared-package discovery spell no path/archive literal.
 _PREP_RUN_DIR_BASE = training_cfg().preparation.run_dir_base
-_BUNDLE_ARCHIVE = training_cfg().kaggle.files.bundle_archive
+# The sealed inputs package both Colab lanes read; ONE declaration of its
+# archive name, transport members, and transport directory (ColabSpec.data_bundle).
+_BUNDLE_ARCHIVE = _COLAB.data_bundle.archive_name
 REPOSITORY = _COLAB.repository
 BRANCH = _COLAB.branch
 GIT_REMOTE_NAME = _COLAB.git_remote_name
 # Keep the config session as the default, while allowing concurrent launches
 # to select an isolated named VM without editing the shared configuration.
 SESSION = os.environ.get("EUROMONITOR_COLAB_SESSION", _COLAB.session)
-# One transcript per session: the default session keeps the historical
-# logs/colab/lane.log; an isolated EUROMONITOR_COLAB_SESSION gets its own
-# lane_<session>.log so concurrent lanes never truncate each other.
-LANE_LOG_NAME = "lane.log" if SESSION == _COLAB.session else f"lane_{SESSION}.log"
+# One transcript per lane: an explicit EUROMONITOR_LANE_LOG wins; otherwise the
+# basename is the class rule (ColabSpec.transcript_name) — a declared lane
+# session gets that lane's transcript, the configured session keeps lane.log,
+# and any other isolated session gets lane_<session>.log, so concurrent lanes
+# never truncate one shared file.
+LANE_LOG_NAME = (os.environ.get("EUROMONITOR_LANE_LOG")
+                 or _COLAB.transcript_name(SESSION))
+# The W&B wiring the Colab lanes use (ColabSpec.wandb): project/mode are
+# projected from tracking.wandb, and these are the env names every generated
+# remote script injects. No lane re-spells "WANDB_DIR"/"WANDB_RUN_NAME".
+_WANDB = _COLAB.wandb
+_WANDB_API_KEY_ENV = _WANDB.api_key_env
+_WANDB_RUN_NAME_ENV = _WANDB.run_name_env
+_WANDB_DIR_ENV = _WANDB.dir_env
+_WANDB_DIR_NAME = _WANDB.dir_name
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
@@ -733,17 +747,17 @@ for number in range(1, {workers} + 1):
     )
     log_path, status_path = out / "training.log", out / "training.status"
     live_status_path = out / "live_status.json"
-    wandb_dir = out / "wandb"
+    wandb_dir = out / {_WANDB_DIR_NAME!r}
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
-           "WANDB_DIR": str(wandb_dir),
-           "WANDB_RUN_NAME": training_name,
+           {_WANDB_DIR_ENV!r}: str(wandb_dir),
+           {_WANDB_RUN_NAME_ENV!r}: training_name,
            "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
            "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1", **run_trace_env(lane=training_name)}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
-        "wandb_run_name": env["WANDB_RUN_NAME"],
+        "wandb_run_name": env[{_WANDB_RUN_NAME_ENV!r}],
     }}) + "\\n", encoding="utf-8")
     process_log = out / "processes.log"
     # Every worker launch owns a fresh diagnostics log.  Resume restores
@@ -905,21 +919,32 @@ from cli.colab_result_sync import (  # noqa: E402,F401
 from cli.colab_retention import (  # noqa: E402,F401
     publish_local_hpo_results,
 )
+def lane_transcript_path() -> Path:
+    """The ONE Colab lane transcript path (declared dir + derived basename).
+
+    ``ColabSpec.log_dir`` declares the transcript roof and
+    ``ColabSpec.transcript_name`` derives the basename from the session, so the
+    path is never assembled from a literal here.
+    """
+    return lane_log_at(_COLAB.log_dir, LANE_LOG_NAME)
+
+
 def start_live_log() -> None:
     """Start the ONE per-run Colab lane transcript, replacing the prior run's.
 
-    `logs/colab/lane.log` is opened exactly once per run and shared by the
-    system stdout/stderr tee, the trainer/worker writer, and setup timing.
-    The file is truncated once (write_text) and then held in append mode so a
-    detached self-watch child can append its own lines to the same transcript
-    without a second "w" open clobbering it.
+    The declared lane transcript (``ColabSpec.log_dir`` + the session-derived
+    basename, e.g. ``logs/colab/lane_cpu.log``) is opened exactly once per run
+    and shared by the system stdout/stderr tee, the trainer/worker writer, and
+    setup timing. The file is truncated once (write_text) and then held in
+    append mode so a detached self-watch child can append its own lines to the
+    same transcript without a second "w" open clobbering it.
     """
     global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
     global _original_stdout, _original_stderr
     global SETUP_TIMING_LOG_PATH, _setup_timing_active
     if _live_log is not None:
         _live_log.close()
-    lane_path = lane_log("colab", LANE_LOG_NAME)
+    lane_path = lane_transcript_path()
     LIVE_LOG_PATH = lane_path
     TRAINING_LOG_PATH = lane_path
     SETUP_TIMING_LOG_PATH = lane_path
@@ -1194,13 +1219,13 @@ print("[worker] resolving versioned checkout inputs", flush=True)
     destination = out / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
-wandb_dir = out / "wandb"
+wandb_dir = out / {_WANDB_DIR_NAME!r}
 wandb_dir.mkdir(parents=True, exist_ok=True)
 training_name = {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r}
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "EUROMONITOR_RESULTS_DIR": str(out),
-       "WANDB_DIR": str(wandb_dir),
-       "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
+       {_WANDB_DIR_ENV!r}: str(wandb_dir),
+       {_WANDB_RUN_NAME_ENV!r}: {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
        "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1", **run_trace_env(lane=training_name)}}
@@ -1389,7 +1414,7 @@ def worker_setup(model_key):
         shutil.copy2(source, target)
     return out, {{
         "EUROMONITOR_RESULTS_DIR": str(out),
-        "WANDB_RUN_NAME": f"{run_id}_hpo_{{model_key}}",
+        {_WANDB_RUN_NAME_ENV!r}: f"{run_id}_hpo_{{model_key}}",
         "EUROMONITOR_REMOTE_TRAINING": "1",
         "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
         "EUROMONITOR_HPO_RETENTION_MODE": "1",
@@ -1423,7 +1448,7 @@ def run_model(model_key):
     print(f"== FINAL {{model_key}}: selected dev config -> held-out test + rerank", flush=True)
     final_env = dict(env)
     if final_env:
-        final_env["WANDB_RUN_NAME"] = f"{run_id}_final_{{model_key}}"
+        final_env[{_WANDB_RUN_NAME_ENV!r}] = f"{run_id}_final_{{model_key}}"
     run_logged(final, f"final_{{model_key}}", final_env)
     return {{"model_key": model_key, "model": str(model), "best": params,
             "results_dir": str(out.relative_to(root / "results"))}}
@@ -1479,10 +1504,10 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
     Fresh-checkout flow: the VM reuses the checkout prepare_remote_layout
     refetches to the configured branch HEAD; the raw export is uploaded on
     top of it because dataset.csv IS git-tracked (commit 1084010 "track the
-    five CSVs a clone needs, ignore the rest") — the upload is a freshness
-    override that replaces the checkout's committed bytes with the export
-    passed via --dataset-csv (or repo-root dataset.csv by default), so an
-    uncommitted export still drives the whole run. prepare_all then runs
+    five CSVs a clone needs, ignore the rest") — the upload replaces the
+    checkout's committed bytes with the export passed via --dataset-csv (or
+    repo-root dataset.csv by default), so an uncommitted export still drives
+    the whole run. prepare_all then runs
     on the VM end to end and one delivery archive with the run dir +
     regenerated data artifacts comes back. CPU-only: no GPU allocation, no
     training.
@@ -1575,7 +1600,7 @@ def run_sims() -> None:
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, subprocess, sys
 os.environ["EUROMONITOR_RUN_ID"] = {run_id!r}
-os.environ["WANDB_RUN_NAME"] = {run_id!r}
+os.environ[{_WANDB_RUN_NAME_ENV!r}] = {run_id!r}
 rc = subprocess.run(
     [sys.executable, "-m", "training.zero_shot_sims", "--models", {_SIMS_MODEL!r}],
     cwd={REMOTE_ROOT!r},
@@ -1678,7 +1703,7 @@ def monitor_worker(label, out, proc, stop):
 def run_worker(number, label, command_args, profile, masking_applied):
     out = base / f"worker_{{number}}"
     out.mkdir()
-    (out / "wandb").mkdir()
+    (out / {_WANDB_DIR_NAME!r}).mkdir()
     for name in (F["canonical_records"], F["gate_results"]):
         source = root / "results" / name.name
         if not source.is_file():
@@ -1702,8 +1727,8 @@ def run_worker(number, label, command_args, profile, masking_applied):
         "PYTHONUNBUFFERED": "1",
         "PYTHONPATH": str(root / "src"),
         "EUROMONITOR_RESULTS_DIR": str(out),
-        "WANDB_DIR": str(out / "wandb"),
-        "WANDB_RUN_NAME": f"{{base.name}}-{{label}}",
+        {_WANDB_DIR_ENV!r}: str(out / {_WANDB_DIR_NAME!r}),
+        {_WANDB_RUN_NAME_ENV!r}: f"{{base.name}}-{{label}}",
         "EUROMONITOR_RUN_ID": f"{{base.name}}-{{label}}",
         "EUROMONITOR_MINING_PROFILE": profile,
         "EUROMONITOR_REMOTE_TRAINING": "1",
@@ -2181,7 +2206,7 @@ def prepared_package_candidates() -> list[tuple[Path, dict]]:
             add(run / 'before' / _BUNDLE_ARCHIVE, None)
     tracks_root = RESULTS / 'model_tracks'
     if tracks_root.is_dir():
-        for archive in sorted(tracks_root.glob('*__inputs.tar.zst')):
+        for archive in sorted(tracks_root.glob(_COLAB.data_bundle.run_archive_glob())):
             add(archive, None)
     return sorted(found, key=lambda item: item[0].stat().st_mtime, reverse=True)
 
@@ -2244,7 +2269,7 @@ def main() -> None:
                     help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument('--prepared-input-package', type=Path, default=None,
                     help='reuse a training.prepare_all all_tracks_inputs package '
-                         '(.tar.zst) after freshness validation; may be the archive, '
+                         '(.tar.zst) by verifying the archive digest only; may be the archive, '
                          'a bundle directory (resolved via bundle.receipt.json), or a '
                          'results/kaggle_lane/<cohort>/bundle dir')
     ap.add_argument('--dataset-csv', type=Path, default=None,
@@ -2357,7 +2382,23 @@ def main() -> None:
         "--self-watch-run", default=None,
         help="the run identity a detached self-watch watches (internal)",
     )
+    ap.add_argument(
+        "--print-lane-env", action="store_true",
+        help="print the selected lane's session/transcript env exports (from "
+             "ColabSpec.lanes) and exit; contacts nothing",
+    )
     args = ap.parse_args()
+    if args.print_lane_env:
+        # The shell entrypoint (scripts/run_colab_smoke.sh) asks the class for
+        # the lane's session, transcript, and the ONE data-bundle suite config
+        # both lanes train from, instead of hardcoding any of them; nothing is
+        # provisioned and no transcript is opened.
+        lane = _COLAB.lane_for(args.gpu)
+        print(f"export EUROMONITOR_COLAB_SESSION={shlex.quote(lane.session)}")
+        print(f"export EUROMONITOR_LANE_LOG={shlex.quote(lane.log_name)}")
+        print("export EUROMONITOR_LANE_SUITE_CONFIG="
+              + shlex.quote(_COLAB.data_bundle.suite_config))
+        return
     if args.what == "hpo" and args.hpo_persistence not in {"local", "none"}:
         raise ValueError("Colab HPO supports local/none persistence only")
     # The detached self-watch child enters here: before any gate could
@@ -2421,7 +2462,9 @@ def main() -> None:
             else:
                 raise ValueError('suite device and --gpu must agree')
         suite_run_tag = args.resume_run or _lane_run_stamp()
-        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.{suite.input_archive_format}'
+        suite_archive = (RESULTS/'model_tracks'
+                         / _COLAB.data_bundle.run_archive_name(
+                             suite_run_tag, suite.input_archive_format))
         if args.resume_run:
             if not suite_archive.is_file():
                 raise FileNotFoundError(f'resume requires the original prepared input package: {suite_archive}')

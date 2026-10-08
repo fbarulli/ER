@@ -379,8 +379,9 @@ def _restore_frozen_baseline(destination: Path, setup: Path) -> None:
     from training.prepare_embeddings import validate_result
     from graph_tracks.data import file_hash
     request = setup / _setup_layout().embedding_request
-    validate_result(baseline, json.loads(request.read_text()),
-                    request_sha256=file_hash(request))
+    # Identity only: the request hash is NOT re-derived and compared against the
+    # cache's record (owner directive 2026-10-08: no freshness checks anywhere).
+    validate_result(baseline, json.loads(request.read_text()))
     cache = setup / shared
     baseline_sha = file_hash(baseline)
     cache_sha = file_hash(cache) if cache.exists() else None

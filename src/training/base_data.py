@@ -6,10 +6,10 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
   isolated mutable views for augmentation consumers (deep-copied handoffs).
 - :class:`LaneDispatch` — lane mode vs gate mode builder selection
   (negative_supply 'lane' bypasses the shared-base cache).
-- :class:`SharedBasePayload` — the on-disk pickle contract: (path, mtime,
-  size)-keyed fingerprint verification, checksum guard, and atomic
-  partial->final publish under a file lock, so concurrent consumers reuse
-  one build and a changed input tree can never load a stale payload.
+- :class:`SharedBasePayload` — the on-disk pickle contract: fingerprint-keyed
+  cache reuse, checksum guard, and atomic partial->final publish under a file
+  lock, so concurrent consumers reuse one build and an incompatible cache is
+  rebuilt (never a freshness failure).
 - :func:`fingerprint` — the inputs fingerprint (frame hash + input files).
 - :func:`load_base_data` — the dispatch facade every consumer routes through.
 """
@@ -117,7 +117,9 @@ class SharedBasePayload:
             fcntl.flock(lock, fcntl.LOCK_EX)
             expected = fingerprint(df, payload_variant)
             if self._path.exists() or self._header.exists():
-                return self._reuse(expected)
+                reused = self._reuse(expected)
+                if reused is not None:
+                    return reused
             data = build_training_data(df, payload_variant=payload_variant)
             if fingerprint(df, payload_variant) != expected:
                 raise ValueError('Preparation inputs changed while building the shared base payload')
@@ -126,12 +128,26 @@ class SharedBasePayload:
             return data
 
     def _reuse(self, expected):
+        """The cached payload when it matches these inputs, else None (rebuild).
+
+        NO FRESHNESS FAILURE (owner directive 2026-10-08): a cache whose
+        fingerprint does not match the current inputs is not "stale" — it is
+        simply incompatible, and it is rebuilt below instead of refusing the
+        run. The remaining guard is the payload's own checksum, i.e. the file's
+        integrity.
+        """
         if not self._path.exists() or not self._header.exists():
-            raise ValueError('Incomplete shared base payload; use a fresh preparation run')
-        metadata = json.loads(self._header.read_text())
-        if metadata['fingerprint'] != expected:
-            raise ValueError('Stale shared base payload; inputs changed, use a fresh preparation run')
-        if metadata['sha256'] != sha256_file(self._path):
+            _LOG.info('[shared-base] incomplete cache; rebuilding')
+            return None
+        try:
+            metadata = json.loads(self._header.read_text())
+        except (OSError, ValueError):
+            _LOG.info('[shared-base] unreadable cache header; rebuilding')
+            return None
+        if metadata.get('fingerprint') != expected:
+            _LOG.info('[shared-base] cache fingerprint does not match these inputs; rebuilding')
+            return None
+        if metadata.get('sha256') != sha256_file(self._path):
             raise ValueError('Shared base payload checksum mismatch')
         _LOG.info(f'[shared-base] verified reuse -> {self._path}')
         with self._path.open('rb') as stream:
