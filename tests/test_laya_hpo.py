@@ -25,8 +25,8 @@ class FakeTrial:
         self.calls: list[tuple] = []
         self.attrs: dict = {}
 
-    def suggest_int(self, name, lo, hi):
-        self.calls.append(("int", name, lo, hi))
+    def suggest_int(self, name, lo, hi, log=False):
+        self.calls.append(("int", name, lo, hi, log))
         return lo
 
     def suggest_float(self, name, lo, hi, log=False):
@@ -76,17 +76,48 @@ class FakeChampionStore:
 def test_space_loads_declared_dials_and_metadata():
     space = laya_hpo.load_space()
     assert set(space["dials"]) == {
+        # core dials
         "early_stop_patience", "warmup_frac", "lr_scheduler", "encoder_lr",
         "head_lr", "weight_decay", "micro_batch", "grad_accum",
         "label_smoothing", "sigma_start", "sigma_end", "ema", "swa",
         "layer_decay",
+        # optional control dials (default-OFF)
+        "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
+        "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
+        "drop_path_schedule", "dynamic_padding", "pad_to_multiple",
+        "batch_size_ramp", "batch_ramp_start_frac", "batch_ramp_epochs",
+        "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
+        "contrastive_margin_end",
     }
+    assert len(space["dials"]) == 33
     assert space["model_key"] == "laya"
     assert space["objective"] == {
         "direction": "maximize", "primary": "dev_accuracy",
         "secondary": "dev_loss", "forbidden": "test",
     }
     assert space["n_trials"] > 0 and space["n_jobs"] >= 1
+
+
+def test_optional_control_dials_target_the_laya_control_block():
+    dials = laya_hpo.load_space()["dials"]
+    optional = [
+        "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
+        "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
+        "drop_path_schedule", "dynamic_padding", "pad_to_multiple",
+        "batch_size_ramp", "batch_ramp_start_frac", "batch_ramp_epochs",
+        "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
+        "contrastive_margin_end",
+    ]
+    from core.laya_config import FinetuneSpec
+    assert len(optional) == 19
+    for name in optional:
+        assert dials[name]["target"] == "control"
+        assert name in FinetuneSpec.model_fields  # SSOT field
+    assert dials["base_batch"]["type"] == "int" and dials["base_batch"]["log"]
+    assert dials["optim_state_dtype"]["choices"] == ["fp32", "bf16"]
+    assert dials["lr_scaling"]["choices"] == ["none", "linear", "sqrt"]
+    assert dials["loss_schedule"]["choices"] == [
+        "constant", "linear", "cosine", "laya"]
 
 
 def test_space_targets_route_to_the_right_channel():
@@ -123,6 +154,25 @@ def test_validate_space_rejects_bad_objective():
         laya_hpo.validate_space(space)
 
 
+def test_validate_space_rejects_a_bad_gate():
+    space = json.loads(json.dumps(laya_hpo.load_space()))
+    space["dials"]["r_drop_alpha"]["when"] = {"dial": "no_such_gate"}
+    with pytest.raises(ValueError, match="unknown dial"):
+        laya_hpo.validate_space(space)
+
+    space = json.loads(json.dumps(laya_hpo.load_space()))
+    space["dials"]["r_drop_alpha"]["when"] = {"dial": "encoder_lr",
+                                              "equals": True}
+    with pytest.raises(ValueError, match="categorical"):
+        laya_hpo.validate_space(space)
+
+    space = json.loads(json.dumps(laya_hpo.load_space()))
+    space["dials"]["r_drop_alpha"]["when"] = {"dial": "r_drop",
+                                              "equals": "maybe"}
+    with pytest.raises(ValueError, match="not a choice"):
+        laya_hpo.validate_space(space)
+
+
 def test_space_file_carries_no_secret():
     text = laya_hpo.space_path().read_text(encoding="utf-8").lower()
     assert "postgresql://" not in text
@@ -134,13 +184,71 @@ def test_sample_dials_dispatches_generically_by_type():
     space = laya_hpo.load_space()
     trial = FakeTrial()
     sampled = laya_hpo.sample_dials(trial, space)
-    assert set(sampled) == set(space["dials"])
+    # FakeTrial's categoricals are False for the gates, so gate dependents are
+    # skipped; every non-gated dial is sampled.
+    assert set(sampled).issubset(set(space["dials"]))
+    assert {"r_drop_alpha", "drop_path_rate", "batch_ramp_epochs",
+            "drop_path_schedule", "batch_ramp_start_frac"}.isdisjoint(sampled)
     by_name = {call[1]: call for call in trial.calls}
     assert by_name["early_stop_patience"][0] == "int"
     assert by_name["encoder_lr"][0] == "float" and by_name["encoder_lr"][4] is True
     assert by_name["weight_decay"][0] == "float" and by_name["weight_decay"][4] is False
     assert by_name["lr_scheduler"][0] == "categorical"
     assert by_name["micro_batch"][2] == (4, 8, 16)
+    assert by_name["base_batch"][0] == "int" and by_name["base_batch"][4] is True
+
+
+class _GateTrial:
+    """A trial whose gate categoricals return configured values."""
+
+    def __init__(self, gates):
+        self.gates = dict(gates)
+
+    def suggest_int(self, name, lo, hi, log=False):
+        return lo
+
+    def suggest_float(self, name, lo, hi, log=False):
+        return lo
+
+    def suggest_categorical(self, name, choices):
+        return self.gates.get(name, choices[0])
+
+
+def test_gated_optional_dials_are_skipped_when_the_gate_is_off():
+    space = laya_hpo.load_space()
+    trial = _GateTrial({"r_drop": False, "drop_path": False,
+                        "batch_size_ramp": False})
+    sampled = laya_hpo.sample_dials(trial, space)
+    assert sampled["r_drop"] is False and "r_drop_alpha" not in sampled
+    assert sampled["drop_path"] is False and "drop_path_rate" not in sampled
+    assert sampled["batch_size_ramp"] is False
+    assert "batch_ramp_epochs" not in sampled
+    # Non-gated optional dials are always sampled.
+    assert "no_decay_bias_norm" in sampled and "loss_schedule" in sampled
+
+
+def test_gated_optional_dials_are_sampled_when_the_gate_is_on():
+    space = laya_hpo.load_space()
+    trial = _GateTrial({"r_drop": True, "drop_path": True,
+                        "batch_size_ramp": True})
+    sampled = laya_hpo.sample_dials(trial, space)
+    assert {"r_drop_alpha", "drop_path_rate", "drop_path_schedule",
+            "batch_ramp_start_frac", "batch_ramp_epochs"}.issubset(sampled)
+
+
+def test_off_gate_preserves_the_base_control_default():
+    space = laya_hpo.load_space()
+    base_control = {name: "SSOT-DEFAULT" for name, spec in space["dials"].items()
+                    if spec["target"] == "control"}
+    trial = _GateTrial({"r_drop": False, "drop_path": False,
+                        "batch_size_ramp": False})
+    sampled = laya_hpo.sample_dials(trial, space)
+    _, control = laya_hpo.apply_dials({}, base_control, sampled, space)
+    # An off gate leaves its dependents at the SSOT default (default-OFF).
+    assert control["r_drop_alpha"] == "SSOT-DEFAULT"
+    assert control["batch_ramp_epochs"] == "SSOT-DEFAULT"
+    assert control["drop_path_rate"] == "SSOT-DEFAULT"
+    assert control["r_drop"] is False  # the gate itself is sampled
 
 
 def test_apply_dials_routes_by_target():

@@ -79,7 +79,7 @@ def test_trial_objective_calls_the_evaluator_with_sampled_dials():
     from training.laya_hpo_runtime import sample_dials
 
     class _FakeTrial:
-        def suggest_int(self, name, lo, hi):
+        def suggest_int(self, name, lo, hi, log=False):
             return lo
 
     captured = {}

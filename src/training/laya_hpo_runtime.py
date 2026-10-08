@@ -23,13 +23,28 @@ def sample_dials(trial, space):
     ``space['dials']`` insertion order defines the suggest-call order (which
     defines the TPE search layout), so a reordered spec is a new search surface
     — deliberately, and visibly.
+
+    A dial may declare a conditional gate ``when: {dial: <gate>, equals: <v>}``:
+    it is sampled ONLY when the already-sampled gate matches. An off gate skips
+    the dependent dials entirely, so they keep their SSOT default in the base
+    control block (default-OFF, reproducible) and no trials are spent on
+    flag-off combinations.
     """
     sampled = {}
     for name, spec in space.get("dials", {}).items():
+        gate = spec.get("when")
+        if gate is not None:
+            gate_name = gate["dial"]
+            if gate_name not in sampled:
+                # Gate must be declared (and sampled) before its dependents.
+                continue
+            if sampled[gate_name] != gate.get("equals", True):
+                continue
         kind = spec["type"]
         if kind == "int":
             sampled[name] = trial.suggest_int(
-                name, int(spec["lo"]), int(spec["hi"]))
+                name, int(spec["lo"]), int(spec["hi"]),
+                log=bool(spec.get("log", False)))
         elif kind == "float":
             sampled[name] = trial.suggest_float(
                 name, float(spec["lo"]), float(spec["hi"]),
@@ -46,13 +61,14 @@ def route_dials(base_config, base_control, dials, space):
     """Route sampled dials to the TrainConfig / training-control channels.
 
     The ``target`` declared per dial is the SSOT; this function knows nothing
-    about which knob belongs to which channel.
+    about which knob belongs to which channel. A dial without a ``target``
+    defaults to ``config``.
     """
     config = dict(base_config)
     control = dict(base_control)
     specs = space.get("dials", {})
     for name, value in dials.items():
-        target = specs[name]["target"]
+        target = specs[name].get("target", "config")
         if target == "config":
             config[name] = value
         elif target == "control":

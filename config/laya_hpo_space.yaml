@@ -19,7 +19,7 @@
 # PostgreSQL Optuna URL lives exclusively in the runtime secret store
 # (`OPTUNA_STORAGE_URL`) and is injected into the staged kernel, never here.
 
-space_version: 1
+space_version: 2
 
 # The shared-study identity (the model boundary; kept distinct from the
 # generation boundary, which is runtime environment).
@@ -190,4 +190,99 @@ dials:
     type: float
     target: control
     lo: 0.5
+    hi: 1.0
+  # ── optional control dials (all `target: control`; the SSOT FinetuneSpec
+  #    defaults are preserved when a gate is off, so the current recipe stays
+  #    reproducible). `when:` gates a dependent dial on an already-sampled
+  #    categorical gate so no trials are spent on flag-off combinations. ──────
+  no_decay_bias_norm:
+    type: categorical
+    target: control
+    choices: [false, true]
+  optim_state_dtype:
+    type: categorical
+    target: control
+    choices: [fp32, bf16]
+  lr_scaling:
+    type: categorical
+    target: control
+    choices: [none, linear, sqrt]
+  base_batch:
+    type: int
+    target: control
+    lo: 8
+    hi: 128
+    log: true
+  r_drop:                     # gate
+    type: categorical
+    target: control
+    choices: [false, true]
+  r_drop_alpha:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+    when: {dial: r_drop, equals: true}
+  drop_path:                  # gate
+    type: categorical
+    target: control
+    choices: [false, true]
+  drop_path_rate:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+    when: {dial: drop_path, equals: true}
+  drop_path_schedule:
+    type: categorical
+    target: control
+    choices: [linear, constant]
+    when: {dial: drop_path, equals: true}
+  dynamic_padding:
+    type: categorical
+    target: control
+    choices: [false, true]
+  pad_to_multiple:
+    type: categorical
+    target: control
+    choices: [8, 16, 32, 64]
+  batch_size_ramp:            # gate
+    type: categorical
+    target: control
+    choices: [false, true]
+  batch_ramp_start_frac:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+    when: {dial: batch_size_ramp, equals: true}
+  batch_ramp_epochs:
+    type: int
+    target: control
+    lo: 1
+    hi: 8
+    when: {dial: batch_size_ramp, equals: true}
+  loss_schedule:
+    type: categorical
+    target: control
+    choices: [constant, linear, cosine, laya]
+  w_sph_end:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+  w_rps_end:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 2.0
+  contrastive_margin:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+  contrastive_margin_end:
+    type: float
+    target: control
+    lo: 0.0
     hi: 1.0

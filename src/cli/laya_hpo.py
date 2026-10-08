@@ -155,6 +155,26 @@ def validate_space(space: dict[str, Any]) -> None:
             if not isinstance(choices, list) or not choices:
                 raise ValueError(
                     f"laya HPO dial {name!r} needs a non-empty choices list")
+        gate = spec.get("when")
+        if gate is not None:
+            if not isinstance(gate, dict) or "dial" not in gate:
+                raise ValueError(
+                    f"laya HPO dial {name!r} 'when' must declare a gate dial")
+            gate_name = gate["dial"]
+            if gate_name not in dials:
+                raise ValueError(
+                    f"laya HPO dial {name!r} gates on unknown dial "
+                    f"{gate_name!r}")
+            gate_spec = dials[gate_name]
+            if gate_spec.get("type") != "categorical":
+                raise ValueError(
+                    f"laya HPO dial {name!r} gate {gate_name!r} must be "
+                    "categorical")
+            if "equals" in gate and gate["equals"] not in gate_spec.get(
+                    "choices", []):
+                raise ValueError(
+                    f"laya HPO dial {name!r} gate value {gate['equals']!r} is "
+                    f"not a choice of {gate_name!r}")
     if int(space.get("n_trials", 0)) <= 0:
         raise ValueError("laya HPO space n_trials must be a positive integer")
     if int(space.get("n_jobs", 0)) <= 0:

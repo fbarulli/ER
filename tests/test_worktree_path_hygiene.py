@@ -42,13 +42,20 @@ def test_laya_hpo_modules_resolve_to_this_worktree():
         _assert_under_repo(module)
 
 
-def test_no_foreign_src_is_on_sys_path():
-    foreign = [
-        entry for entry in sys.path
-        if entry.endswith("/src")
-        and Path(entry).resolve() != WORKTREE_SRC
+def test_worktree_src_precedes_any_other_checkout_src():
+    """The worktree src must win the import race against the shared .pth.
+
+    Some tests legitimately add paths, so the invariant is ORDER, not absence:
+    no other checkout's ``src`` may sit ahead of this worktree's ``src``.
+    """
+    resolved = [Path(entry).resolve() for entry in sys.path if entry]
+    assert WORKTREE_SRC in resolved, "worktree src is not on sys.path"
+    worktree_index = resolved.index(WORKTREE_SRC)
+    ahead = [
+        str(path) for index, path in enumerate(resolved)
+        if index < worktree_index and path.name == "src" and path != WORKTREE_SRC
     ]
-    assert foreign == [], f"foreign src on sys.path: {foreign}"
+    assert ahead == [], f"a foreign src precedes the worktree src: {ahead}"
 
 
 if __name__ == "__main__":

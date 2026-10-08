@@ -40,9 +40,9 @@ def _pin_import_paths() -> None:
 
 def _assert_worktree_modules() -> None:
     expected = str(_SRC)
-    import cli  # noqa: F401  (imported for the path assertion below)
-    import core  # noqa: F401
-    import training  # noqa: F401
+    import cli
+    import core
+    import training
 
     wrong = {}
     for name, module in (("core", core), ("cli", cli), ("training", training)):
