@@ -30,6 +30,9 @@ Row = Mapping[str, object]
 
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_BOOTSTRAP = 2000
+# Deliberate per-experiment bootstrap seed (NOT core.common.SED): this module
+# is hermetic (no config import) and the CI draws are a reporting concern,
+# not the training determinism seed.
 DEFAULT_SEED = 1729
 DEFAULT_ALPHA = 0.05
 

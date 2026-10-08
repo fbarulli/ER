@@ -65,6 +65,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--canonicals", type=Path, default=RESULTS / F["canonical_records"])
     ap.add_argument("--out", type=Path, default=Path("data/validation/stratified_holdout.csv"))
+    # Deliberate per-experiment holdout-construction seed (NOT core.common.SED):
+    # it fixes the stratified validation CSV independent of the training seed.
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--support_threshold", type=int, default=5)
     ap.add_argument("--blind_spot_threshold", type=int, default=50)

@@ -213,6 +213,9 @@ class NegativeSupplySpec(SupplySpecBase):
 
     blocker: BlockerSpec = Field(default_factory=BlockerSpec)
     mint: MintSpec = Field(default_factory=MintSpec)
+    # Deliberate per-lane seed (NOT core.common.SED): it pins the mint's donor
+    # draw so a rerun reproduces pairs.csv byte for byte, independent of the
+    # training-lane determinism seed.
     seed: int = 1337
     # Shadow gate comparison columns are attached to every emitted row; they
     # are informational contrast (model-alone vs gate), never labels/features.
@@ -791,13 +794,24 @@ class FoldMap:
         }
 
 
-def gtin_group_split(frame: pd.DataFrame, *, k: int = 4, seed: int = 1337) -> pd.Series:
+def gtin_group_split(
+    frame: pd.DataFrame, *, k: int | None = None, seed: int = 1337
+) -> pd.Series:
     """Deterministic GTIN-grouped bucket index (0..k-1) per pair row.
 
     Entities are union components over the gtin namespace: pairs sharing an
     endpoint share a bucket. Minted synthetic rows carry -1 (never scored;
     evaluation is real-pairs-only by owner ruling).
+
+    ``k`` defaults to ``training_cfg().split.holdout_component_folds`` (the
+    SSOT quarter, a Literal[4]), not a literal. ``seed`` is a DELIBERATE
+    per-lane split seed (NOT ``core.common.SED``): the lane's fold buckets
+    stay independent of the training determinism seed.
     """
+    if k is None:
+        from core.common import training_cfg
+
+        k = int(training_cfg().split.holdout_component_folds)
     gtins = frame["anchor_gtin"].astype(str).str.strip()
     partners = frame["partner_gtin"].astype(str).str.strip()
     populations = frame["population"]

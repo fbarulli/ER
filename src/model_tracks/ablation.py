@@ -102,6 +102,9 @@ class Settings(BaseModel):
     sample_pairs: int = Field(default=100, ge=1)
     coverage: str = 'sampled'
     uniform_channels: bool = False
+    # Deliberate per-experiment sampling seed (NOT core.common.SED): pinned by
+    # config/attribute_ablation.yaml so the ablation cohort is reproducible
+    # independently of the training determinism seed.
     seed: int = 1729
     split: str = 'dev'
     batch_size: int = Field(default=256, ge=1)
