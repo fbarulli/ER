@@ -31,21 +31,30 @@ _DEFAULT_SECONDARY_OBJECTIVE = "epoch_time_s"
 
 # ── A) parallelism / resource caps ─────────────────────────────────────────
 class ResourceCaps:
-    """Per-worker CPU/CUDA fairness caps (no slot starves another)."""
+    """Per-worker CPU/CUDA fairness caps (no slot starves another).
+
+    ``threads_per_worker`` is the SSOT for thread/core matching: every worker
+    process pins the BLAS/OMP thread pools to it (default 1) so N worker
+    processes on an N-core box do not oversubscribe.
+    """
 
     def __init__(self, config):
         config = dict(config or {})
-        self.omp_threads = int(config.get("omp_threads", 4))
-        self.torch_threads = int(config.get("torch_threads", self.omp_threads))
+        self.threads_per_worker = int(config.get("threads_per_worker", 1))
+        self.omp_threads = int(config.get("omp_threads", self.threads_per_worker))
+        self.torch_threads = int(config.get("torch_threads",
+                                            self.threads_per_worker))
         self.dataloader_workers = int(config.get("dataloader_workers", 2))
         self.cuda_alloc_fraction = float(config.get("cuda_alloc_fraction", 0.0))
 
     def env(self):
         """The environment a worker process must inherit before torch import."""
+        threads = str(self.omp_threads)
         return {
-            "OMP_NUM_THREADS": str(self.omp_threads),
-            "MKL_NUM_THREADS": str(self.omp_threads),
-            "NUMEXPR_NUM_THREADS": str(self.omp_threads),
+            "OMP_NUM_THREADS": threads,
+            "MKL_NUM_THREADS": threads,
+            "OPENBLAS_NUM_THREADS": threads,
+            "NUMEXPR_NUM_THREADS": threads,
             "ER_LAYA_DATALOADER_WORKERS": str(self.dataloader_workers),
             "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128",
         }
@@ -66,11 +75,68 @@ class ResourceCaps:
 
     def as_dict(self):
         return {
+            "threads_per_worker": self.threads_per_worker,
             "omp_threads": self.omp_threads,
             "torch_threads": self.torch_threads,
             "dataloader_workers": self.dataloader_workers,
             "cuda_alloc_fraction": self.cuda_alloc_fraction,
         }
+
+
+class CoreAllocator:
+    """Match worker count to cores (documentation + planning, no oversubscribe).
+
+    Two regimes, per the Optuna guidance:
+      * many small trials: n_workers ~= cores, 1 thread each (default);
+      * few big trials:   1 worker, N threads.
+    """
+
+    def __init__(self, threads_per_worker=1):
+        self.threads_per_worker = max(1, int(threads_per_worker))
+
+    def regime(self, cores, big_trials=False):
+        cores = max(1, int(cores))
+        if big_trials:
+            return {"regime": "big_trials", "n_workers": 1,
+                    "threads_per_worker": cores}
+        return {"regime": "many_small_trials",
+                "n_workers": cores,
+                "threads_per_worker": self.threads_per_worker}
+
+    def as_dict(self):
+        return {"threads_per_worker": self.threads_per_worker}
+
+
+class SessionPolicy:
+    """Kaggle-session limits: processes-only, Postgres resume, wall timeout.
+
+    Optuna runs one trial per PROCESS (the slots pool); ``n_jobs`` is pinned to
+    1 so ``study.optimize`` never spawns its own threads. The study persists to
+    the shared Postgres RDB with ``load_if_exists=True`` so a new session
+    resumes; ``timeout_s`` stops cleanly before the Kaggle cutoff.
+    """
+
+    def __init__(self, config):
+        config = dict(config or {})
+        self.timeout_s = int(config.get("timeout_s", 0))
+        self.load_if_exists = bool(config.get("load_if_exists", True))
+        self.processes_only = bool(config.get("processes_only", True))
+        self.n_jobs_threads = 1  # never >1: trials run in their own processes
+
+    def study_kwargs(self):
+        return {"load_if_exists": self.load_if_exists}
+
+    def optimize_kwargs(self):
+        kwargs = {"n_jobs": self.n_jobs_threads, "catch": (Exception,)}
+        if self.timeout_s > 0:
+            kwargs["timeout"] = self.timeout_s
+        return kwargs
+
+    def as_dict(self):
+        return {"timeout_s": self.timeout_s,
+                "load_if_exists": self.load_if_exists,
+                "processes_only": self.processes_only,
+                "n_jobs_threads": self.n_jobs_threads}
 
 
 class MpsController:
@@ -312,13 +378,20 @@ class DdpTrialRunner:
 
 # ── B) sampler / pruner / fidelity / objective ─────────────────────────────
 class SamplerFactory:
-    """Build the Optuna sampler named by config (registry, no literals)."""
+    """Build the Optuna sampler named by config (registry, no literals).
+
+    TPE defaults to ``multivariate=True, constant_liar=True``: the multivariate
+    kernel models parameter interactions, and constant_liar makes concurrent
+    workers stop proposing points near one another's in-flight trials.
+    """
 
     KINDS = SAMPLER_KINDS
 
-    def __init__(self, kind, seed):
+    def __init__(self, kind, seed, *, multivariate=True, constant_liar=True):
         self.kind = str(kind)
         self.seed = int(seed)
+        self.multivariate = bool(multivariate)
+        self.constant_liar = bool(constant_liar)
         if self.kind not in self.KINDS:
             raise ValueError(
                 f"unknown sampler {self.kind!r}; expected {self.KINDS}")
@@ -326,7 +399,9 @@ class SamplerFactory:
     def create(self, optuna_module):
         samplers = optuna_module.samplers
         if self.kind == "tpe":
-            return samplers.TPESampler(seed=self.seed)
+            return samplers.TPESampler(
+                seed=self.seed, multivariate=self.multivariate,
+                constant_liar=self.constant_liar)
         if self.kind == "cmaes":
             return samplers.CmaEsSampler(seed=self.seed)
         if self.kind == "random":
@@ -338,7 +413,9 @@ class SamplerFactory:
         raise ValueError(f"unknown sampler {self.kind!r}")  # pragma: no cover
 
     def as_dict(self):
-        return {"kind": self.kind, "seed": self.seed}
+        return {"kind": self.kind, "seed": self.seed,
+                "multivariate": self.multivariate,
+                "constant_liar": self.constant_liar}
 
 
 class PrunerFactory:
@@ -521,12 +598,19 @@ class SharedDataCache:
 
 
 class WarmStartPolicy:
-    """Where a trial starts from: scratch, the shared base, or the champion."""
+    """Where a trial starts from: scratch, the shared base, or the champion.
 
-    def __init__(self, mode, *, base_model=None, champion_artifact=None):
+    Also carries the ``enqueue`` seed configs: known-good parameter sets the
+    kernel feeds to ``study.enqueue_trial`` so TPE starts from them rather than
+    from cold random points.
+    """
+
+    def __init__(self, mode, *, base_model=None, champion_artifact=None,
+                 enqueue=None):
         self.mode = str(mode)
         self.base_model = base_model
         self.champion_artifact = champion_artifact
+        self.enqueue = [dict(entry) for entry in (enqueue or [])]
         if self.mode not in WARM_START_MODES:
             raise ValueError(
                 f"unknown warm_start mode {self.mode!r}; "
@@ -542,9 +626,14 @@ class WarmStartPolicy:
             return self.champion_artifact or self.base_model
         raise ValueError(f"unknown warm_start mode {self.mode!r}")
 
+    def enqueued_trials(self):
+        """The known-good seed configs for ``study.enqueue_trial``."""
+        return [dict(entry) for entry in self.enqueue]
+
     def as_dict(self):
         return {"mode": self.mode, "base_model": self.base_model,
-                "champion_artifact": self.champion_artifact}
+                "champion_artifact": self.champion_artifact,
+                "enqueue": len(self.enqueue)}
 
 
 class TrialEnsembler:
@@ -608,11 +697,14 @@ def _mean_value(values):
 class OptionSet:
     """The assembled, config-selected option components."""
 
-    def __init__(self, *, scheduler, mps, resource_caps, sampler, pruner,
-                 fidelity, objective_mode, shared_data, warm_start, ensembler):
+    def __init__(self, *, scheduler, mps, resource_caps, core_allocator,
+                 session, sampler, pruner, fidelity, objective_mode,
+                 shared_data, warm_start, ensembler):
         self.scheduler = scheduler
         self.mps = mps
         self.resource_caps = resource_caps
+        self.core_allocator = core_allocator
+        self.session = session
         self.sampler = sampler
         self.pruner = pruner
         self.fidelity = fidelity
@@ -626,6 +718,8 @@ class OptionSet:
             "scheduler": self.scheduler.as_dict(),
             "mps": self.mps.as_dict(),
             "resource_caps": self.resource_caps.as_dict(),
+            "core_allocator": self.core_allocator.as_dict(),
+            "session": self.session.as_dict(),
             "sampler": self.sampler.as_dict(),
             "pruner": self.pruner.as_dict(),
             "fidelity": self.fidelity.as_dict(),
@@ -641,10 +735,15 @@ def build_option_set(space, *, root=None, base_model=None,
     """Assemble every option component from the ``options:`` config block."""
     options = dict((space or {}).get("options") or {})
     resources = ResourceCaps(options.get("resources"))
+    core_allocator = CoreAllocator(resources.threads_per_worker)
+    session = SessionPolicy(options.get("session"))
     mps = MpsController(options.get("mps", False))
     scheduler = TrialScheduler.create(options, resource_caps=resources, mps=mps)
-    sampler = SamplerFactory(options.get("sampler", {}).get("kind", "tpe"),
-                            (space or {}).get("seed", 0))
+    sampler_cfg = options.get("sampler") or {}
+    sampler = SamplerFactory(sampler_cfg.get("kind", "tpe"),
+                            (space or {}).get("seed", 0),
+                            multivariate=sampler_cfg.get("multivariate", True),
+                            constant_liar=sampler_cfg.get("constant_liar", True))
     pruner = PrunerFactory(options.get("pruner"))
     fidelity = FidelitySchedule(options.get("fidelity"),
                                 options.get("staged"))
@@ -653,14 +752,17 @@ def build_option_set(space, *, root=None, base_model=None,
         options.get("multi_objective_secondary", _DEFAULT_SECONDARY_OBJECTIVE))
     shared_data = SharedDataCache(options.get("shared_data"),
                                   root or (Path.cwd() / "hpo_shared_cache"))
+    warm_start_cfg = options.get("warm_start") or {}
     warm_start = WarmStartPolicy(
-        (options.get("warm_start") or {}).get("mode", "base"),
-        base_model=base_model, champion_artifact=champion_artifact)
+        warm_start_cfg.get("mode", "base"),
+        base_model=base_model, champion_artifact=champion_artifact,
+        enqueue=warm_start_cfg.get("enqueue"))
     ensembler = TrialEnsembler(
         (options.get("ensemble") or {}).get("enabled", False),
         top_k=(options.get("ensemble") or {}).get("top_k", 3),
         method=(options.get("ensemble") or {}).get("method", "weights"))
     return OptionSet(
-        scheduler=scheduler, mps=mps, resource_caps=resources, sampler=sampler,
+        scheduler=scheduler, mps=mps, resource_caps=resources,
+        core_allocator=core_allocator, session=session, sampler=sampler,
         pruner=pruner, fidelity=fidelity, objective_mode=objective_mode,
         shared_data=shared_data, warm_start=warm_start, ensembler=ensembler)

@@ -135,7 +135,8 @@ def test_sampler_factory_registry_covers_every_kind():
     _Recording.calls.clear()
     factory = opt.SamplerFactory("tpe", seed=7)
     assert isinstance(factory.create(_fake_optuna()), _Recording)
-    assert _Recording.calls[-1][1] == {"seed": 7}
+    assert _Recording.calls[-1][1] == {"seed": 7, "multivariate": True,
+                                       "constant_liar": True}
     for kind, cls in (("cmaes", "CmaEsSampler"), ("random", "RandomSampler"),
                       ("gp", "GPSampler"), ("qmc", "QMCSampler")):
         factory = opt.SamplerFactory(kind, seed=1)
@@ -239,9 +240,13 @@ def test_build_option_set_reads_the_config_block(tmp_path):
     assert isinstance(options, opt.OptionSet)
     assert options.scheduler.mode == "slots"
     assert options.sampler.kind == "tpe"
-    assert options.pruner.kind == "none"
+    assert options.sampler.multivariate is True
+    assert options.sampler.constant_liar is True
+    assert options.pruner.kind == "hyperband"  # recommended default
     assert options.objective_mode.multi is False
     assert options.warm_start.mode == "base"
+    assert options.session.processes_only is True
+    assert options.core_allocator.threads_per_worker == 1
     payload = options.as_dict()
     assert payload["scheduler"]["mode"] == "slots"
     json.dumps(payload)  # JSON-serializable
@@ -262,6 +267,64 @@ def test_validate_space_rejects_bad_option_values():
     space["options"]["parallelism"] = "bogus"
     with pytest.raises(ValueError, match="parallelism"):
         laya_hpo.validate_space(space)
+
+
+# ── Optuna best practices (threads/pruner/sampler/warm-start/session) ──────
+def test_threads_per_worker_defaults_every_blas_pool():
+    caps = opt.ResourceCaps({})  # threads_per_worker default 1
+    env = caps.env()
+    assert env["OMP_NUM_THREADS"] == "1"
+    assert env["MKL_NUM_THREADS"] == "1"
+    assert env["OPENBLAS_NUM_THREADS"] == "1"
+    assert env["NUMEXPR_NUM_THREADS"] == "1"
+    recorded = {}
+    caps.apply_torch(SimpleNamespace(
+        set_num_threads=lambda n: recorded.update(t=n),
+        cuda=SimpleNamespace(is_available=lambda: False)))
+    assert recorded == {"t": 1}
+
+
+def test_core_allocator_regimes_match_optuna_guidance():
+    allocator = opt.CoreAllocator(threads_per_worker=1)
+    many = allocator.regime(16)
+    assert many == {"regime": "many_small_trials", "n_workers": 16,
+                    "threads_per_worker": 1}
+    big = allocator.regime(16, big_trials=True)
+    assert big == {"regime": "big_trials", "n_workers": 1,
+                   "threads_per_worker": 16}
+
+
+def test_session_policy_processes_only_and_timeout():
+    policy = opt.SessionPolicy({})
+    assert policy.optimize_kwargs() == {"n_jobs": 1, "catch": (Exception,)}
+    assert policy.study_kwargs() == {"load_if_exists": True}
+    assert policy.processes_only is True
+    timed = opt.SessionPolicy({"timeout_s": 5400, "load_if_exists": True})
+    assert timed.optimize_kwargs()["timeout"] == 5400
+    assert timed.optimize_kwargs()["n_jobs"] == 1
+
+
+def test_sampler_tpe_passes_multivariate_and_constant_liar():
+    _Recording.calls.clear()
+    opt.SamplerFactory("tpe", seed=3, multivariate=True,
+                       constant_liar=True).create(_fake_optuna())
+    assert _Recording.calls[-1] == (
+        "TPESampler", {"seed": 3, "multivariate": True,
+                       "constant_liar": True})
+
+
+def test_warm_start_enqueued_trials_are_defensively_copied():
+    policy = opt.WarmStartPolicy(
+        "base", base_model="/b",
+        enqueue=[{"encoder_lr": 1.0e-5}, {"head_lr": 1.0e-4}])
+    seeds = policy.enqueued_trials()
+    assert seeds == [{"encoder_lr": 1.0e-5}, {"head_lr": 1.0e-4}]
+    seeds[0]["encoder_lr"] = 9.0
+    assert policy.enqueued_trials()[0]["encoder_lr"] == 1.0e-5
+
+
+def test_space_pruner_default_is_hyperband():
+    assert laya_hpo.load_space()["options"]["pruner"]["kind"] == "hyperband"
 
 
 if __name__ == "__main__":

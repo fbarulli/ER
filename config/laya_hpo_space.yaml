@@ -67,15 +67,18 @@ options:
     backend: nccl
     master_port: 29500
   resources:                  # per-worker CPU/CUDA fairness caps
-    omp_threads: 4
-    torch_threads: 4
+    threads_per_worker: 1     # thread/core matching (no oversubscription)
+    omp_threads: 1            # default = threads_per_worker
+    torch_threads: 1          # default = threads_per_worker
     dataloader_workers: 2
     cuda_alloc_fraction: 0.45 # per-process CUDA memory fraction in slots mode
   # B) search / scheduling
   sampler:
     kind: tpe                 # tpe | cmaes | random | gp | qmc
+    multivariate: true        # TPE joint kernel (parameter interactions)
+    constant_liar: true       # parallel workers do not chase in-flight points
   pruner:
-    kind: none                # none | median | successive_halving | hyperband
+    kind: hyperband           # hyperband (recommended) | successive_halving | median | none
     n_startup_trials: 5
     n_warmup_steps: 1
     min_resource: 1
@@ -98,10 +101,17 @@ options:
     dev_encoding_cache: true  # dev encodings cached for fast per-epoch eval
   warm_start:
     mode: base                # scratch | base | champion
+    enqueue: []               # known-good param dicts -> study.enqueue_trial
   ensemble:
     enabled: false            # average the top-k trials (data is fixed)
     top_k: 3
     method: weights           # weights | predictions
+  # D) Kaggle session limits
+  session:
+    timeout_s: 0              # 0 = no wall-clock timeout; else stop cleanly
+    load_if_exists: true      # resume the shared study across sessions
+    processes_only: true      # never study.optimize(n_jobs>1) threads
+
 
 # The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune
 # kernel so an HPO push never clobbers a training push.

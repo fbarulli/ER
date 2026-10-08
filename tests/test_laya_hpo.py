@@ -414,9 +414,10 @@ def test_stage_kernel_receipt_carries_the_option_set(monkeypatch, tmp_path):
     receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert receipt["options"]["scheduler"]["mode"] == "slots"
     assert receipt["options"]["sampler"]["kind"] == "tpe"
-    assert receipt["options"]["pruner"]["kind"] == "none"
+    assert receipt["options"]["pruner"]["kind"] == "hyperband"
     assert receipt["options"]["warm_start"]["mode"] == "base"
     assert receipt["options"]["shared_data"]["tokenized"] is True
+    assert receipt["options"]["session"]["processes_only"] is True
 
 
 # ── per-trial profiler coverage (stubbed torch, no GPU) ────────────────────

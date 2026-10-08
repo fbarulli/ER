@@ -770,10 +770,11 @@ def run_trial(trial, device, train_path, dev_path, base_model):
         device_type=("cuda" if str(device).startswith("cuda") else "cpu"),
         laya_train=laya_train, namespace=globals(),
         logger=log, wandb_log=wandb_log_profiler, rank0=rank0)
-    # Fidelity reporting drives the ASHA/Hyperband pruner from the per-epoch
-    # dev accuracy (only meaningful when a pruner is configured).
+    # Intermediate reporting for AGGRESSIVE pruning: every per-epoch dev
+    # evaluation is reported to Optuna (independent of the fidelity lever), so
+    # Hyperband/ASHA can prune early and pair with in-trial early stopping.
     reporter = None
-    if fidelity.enabled and options.pruner.kind != "none":
+    if options.pruner.kind != "none":
         reporter = FidelityReporter(trial, globals().get("optuna"), globals())
         reporter.install()
     started = time.time()
@@ -941,9 +942,15 @@ def run_worker(device):
         sampler=sampler,
         pruner=pruner,
         storage=storage,
-        load_if_exists=True,
+        **options.session.study_kwargs(),
         **study_kwargs)
     fail_stale_trials(study)
+    # Warm start: enqueue known-good seed configs so TPE starts from them.
+    for seed_config in options.warm_start.enqueued_trials():
+        try:
+            study.enqueue_trial(seed_config)
+        except Exception as error:
+            log("enqueue_trial skipped: " + str(error)[:160])
     lease_store = TrialLeaseStore(storage_config.url)
     champion_store = ChampionStore(storage_config.url)
 
@@ -972,11 +979,12 @@ def run_worker(device):
         divisor = max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
                              or N_JOBS))
     per_worker = max(0, math.ceil(remaining / divisor))
-    log("worker budget prior=%d remaining=%d per_worker=%d study=%s"
-        % (prior, remaining, per_worker, study_name))
+    log("worker budget prior=%d remaining=%d per_worker=%d study=%s timeout=%s"
+        % (prior, remaining, per_worker, study_name,
+           options.session.timeout_s or "none"))
     if per_worker:
-        study.optimize(objective, n_trials=per_worker, n_jobs=1,
-                       catch=(Exception,))
+        study.optimize(objective, n_trials=per_worker,
+                       **options.session.optimize_kwargs())
     wandb_finish()
 
 
@@ -1070,9 +1078,11 @@ def main():
     specs = options.scheduler.workers(gpu_count or 1)
     study_name = generation_study_name(generation_id=GENERATION_ID,
                                        model_key=MODEL_KEY)
-    log("session gpus=%d mode=%s workers=%d study=%s budget=%d options=%s"
-        % (gpu_count, options.scheduler.mode, len(specs), study_name,
-           int(N_TRIALS), json.dumps(options.as_dict(), sort_keys=True)))
+    log("session gpus=%d cores=%d mode=%s workers=%d study=%s budget=%d "
+        "threads_per_worker=%d timeout=%s"
+        % (gpu_count, os.cpu_count() or 1, options.scheduler.mode, len(specs),
+           study_name, int(N_TRIALS), options.resource_caps.threads_per_worker,
+           options.session.timeout_s or "none"))
     script = os.path.abspath(__file__)
     processes = []
     for spec in specs:
