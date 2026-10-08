@@ -1242,6 +1242,32 @@ def _git_revision() -> str:
     return result.stdout.strip()
 
 
+def _env_value(name: str) -> str | None:
+    """Read KEY=VALUE from .env (TRAIN_ROOT, then its parent), then the env.
+
+    The same lookup the Colab lane uses (cli.colab_runtime._env_value). The
+    secret is baked into the STAGED kernel only, never written to the repo.
+    """
+    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env"):
+        if not env_path.is_file():
+            continue
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == name:
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    return value
+    return os.environ.get(name) or None
+
+
+def _wandb_project() -> str:
+    """The wandb project (`tracking.wandb.project`; ER default `e-r`)."""
+    try:
+        return training_cfg().tracking.wandb.project
+    except Exception:
+        return "e-r"
+
+
 def decision_tag() -> str:
     """UTC-stamped run tag (the laya-lane stamp SURFACE stays UTC inside
     the payload because the remote session may not share this box's zone;
@@ -1865,6 +1891,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         history.append(mean)
         print("epoch %d/%d mean loss %.4f (encode memo hits %d/%d)"
               % (epoch + 1, config.epochs, mean, hits, lookups), flush=True)
+        wandb_log_epoch(epoch, mean)
         if on_epoch_end is not None:
             on_epoch_end(epoch, mean)
     model.eval()
@@ -1984,11 +2011,67 @@ BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
 FINETUNE_DEVICE = "@FINETUNE_DEVICE@"
 FINETUNE_CONFIG = @FINETUNE_CONFIG@
 HELD_OUT_BATCH = @HELD_OUT_BATCH@
+WANDB_API_KEY = "@WANDB_API_KEY@"
+WANDB_PROJECT = "@WANDB_PROJECT@"
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
 REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
+
+WANDB_RUN = None
+
+
+def wandb_init():
+    """Start the optional wandb mirror (project `tracking.wandb.project`).
+
+    The API key travels baked (read from .env at staging, never from the repo);
+    with no key the run stays local and artifacts are the record, exactly like
+    the ER tracking contract. Rank 0 only (the caller gates it)."""
+    global WANDB_RUN
+    if not WANDB_API_KEY:
+        print("[wandb] no WANDB_API_KEY; tracking disabled", flush=True)
+        return None
+    os.environ["WANDB_API_KEY"] = WANDB_API_KEY
+    try:
+        import wandb
+        WANDB_RUN = wandb.init(project=WANDB_PROJECT, name=RUN_TAG,
+                               config=FINETUNE_CONFIG)
+        print("[wandb] run " + str(getattr(WANDB_RUN, "id", ""))
+              + " -> " + WANDB_PROJECT, flush=True)
+    except Exception as error:  # tracking is best-effort, never fatal
+        print("[wandb] init skipped: " + type(error).__name__ + ": "
+              + str(error)[:200], flush=True)
+        WANDB_RUN = None
+    return WANDB_RUN
+
+
+def wandb_log_epoch(epoch, mean):
+    if WANDB_RUN is not None:
+        WANDB_RUN.log({"epoch": epoch + 1, "train/mean_loss": mean}, step=epoch)
+
+
+def wandb_log_metrics(report):
+    if WANDB_RUN is None or not isinstance(report, dict):
+        return
+    flat = {}
+    for phase in ("before", "after"):
+        block = report.get(phase) or {}
+        for key in ("accuracy", "loss", "ece", "brier", "brier_top1",
+                    "mean_confidence"):
+            if block.get(key) is not None:
+                flat[phase + "/" + key] = block[key]
+    if flat:
+        WANDB_RUN.log(flat)
+
+
+def wandb_finish():
+    if WANDB_RUN is not None:
+        try:
+            WANDB_RUN.finish()
+        except Exception:
+            pass
+
 
 @DEVICE_PATCH@
 
@@ -2209,6 +2292,8 @@ def _finetune_session(distributed, session):
         from laya import train as laya_train
         laya_train.save_checkpoint = lambda *args, **kwargs: None
         out_dir = WORKING / ("checkpoint.rank" + str(dist_env()[1]))
+    if is_rank0():
+        wandb_init()
     gpu_handle = start_gpu_sampler() if is_rank0() else None
     try:
         summary = run_laya_finetune(train, dev, base_model, out_dir, device)
@@ -2262,6 +2347,12 @@ def _finetune_session(distributed, session):
                 receipt["held_out_error"] = (
                     type(error).__name__ + ": " + str(error)[:400])
                 log("held-out evaluation FAILED: " + receipt["held_out_error"])
+        # Mirror the run to wandb (rank 0 only; no-op without WANDB_API_KEY).
+        if isinstance(receipt.get("train_report"), dict):
+            wandb_log_metrics(receipt["train_report"])
+        if isinstance(receipt.get("held_out"), dict):
+            wandb_log_metrics({"after": receipt["held_out"].get("metrics", {})})
+        wandb_finish()
         (WORKING / "laya_finetune.receipt.json").write_text(
             json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
         with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
@@ -3442,6 +3533,10 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "FINETUNE_CONFIG": repr(recipe),
         "FINETUNE_DEVICE": spec.finetune.device,
         "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
+        # wandb mirror: the key is read from .env at staging and baked in
+        # (never committed); empty key -> the kernel logs nothing.
+        "WANDB_API_KEY": _env_value("WANDB_API_KEY") or "",
+        "WANDB_PROJECT": _wandb_project(),
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
