@@ -2029,7 +2029,7 @@ class GateSpec(BaseModel):
 
     @model_validator(mode="after")
     def _pair_families_are_declared(self) -> "GateSpec":
-        declared = set(self.reasons.model_fields)
+        declared = set(type(self.reasons).model_fields)
         unknown = sorted(set(self.pair_families) - declared)
         if unknown:
             raise ValueError(
