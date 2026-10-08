@@ -280,14 +280,12 @@ class KaggleMonitor:
         # re-partitioned ``\r`` frames across different chunk boundaries: it
         # duplicated the prefix and then swallowed the live tail — the tqdm
         # regression this fixes.
-        # Reconnect dedup keys on the SSE frame's own ``time`` (monotonic
-        # per-session seconds), NOT on cumulative bytes. The midtier replay is
-        # not a byte-exact prefix — it re-chunks and may omit frames — so a raw
-        # byte counter drifts (or never catches up) and the follower then
-        # swallows the entire tail after a single drop: the log freezes and only
-        # appears much later. A frame whose time is <= the last written time is
-        # a replayed duplicate; a greater time is new.
-        last_time: float | None = None
+        # On a dropped connection the midtier replays the WHOLE session from
+        # line 0. We do NOT try to dedup that replay: byte/line/time counters all
+        # drift because the replay is not a prefix of what we wrote, and the
+        # drift swallows the live tail (the log freezes, then dumps late).
+        # Instead the transcript is truncated and rewritten from the replay on
+        # every reconnect, so it always mirrors the full current session.
 
         def emit(text: str) -> None:
             if not text.endswith("\n"):
@@ -306,7 +304,7 @@ class KaggleMonitor:
                 emit(raw)
                 return
             emit(progress_frames_to_lines(payload_text or ""))
-        with destination.open("a", encoding="utf-8") as log_handle:
+        with destination.open("w", encoding="utf-8") as log_handle:
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
             while True:
@@ -357,17 +355,6 @@ class KaggleMonitor:
                                     / lane._spec().files.session_id_file.format(
                                         kernel=kernel),
                                     str(reported) + "\n")
-                            frame_time = payload.get("time")
-                            if frame_time is not None:
-                                try:
-                                    frame_time = float(frame_time)
-                                except (TypeError, ValueError):
-                                    frame_time = None
-                            if (frame_time is not None and last_time is not None
-                                    and frame_time <= last_time):
-                                continue  # replayed duplicate after a reconnect
-                            if frame_time is not None:
-                                last_time = frame_time
                             append_progress(data_text, line)
                             for chunk in (data_text.splitlines() or [""]):
                                 print(f"[stream {kernel}] {chunk}", flush=True)
@@ -378,23 +365,23 @@ class KaggleMonitor:
                     # current burst, never whole-run history.
                     attempts = 0
                     break
-                except (ProtocolError, requests.exceptions.RequestException) as error:
-                    # The midtier SSE proxy drops live connections mid-run; the
-                    # replayed stream re-attaches at the session's FIRST line.
-                    # Dedup is by frame time (see last_time), so the next attempt
-                    # writes only frames newer than the last persisted — robust
-                    # to the replay's re-chunking.
+                except Exception as error:  # noqa: BLE001
+                    # A detached follower must outlive EVERY transport hiccup:
+                    # the midtier drops live connections repeatedly, and a
+                    # reconnect cap (stream_retries) is exactly what froze the
+                    # transcript mid-run — lane.log stopped and the logs only
+                    # appeared when the session ended. Keep reconnecting until
+                    # the SESSION ends (a clean END_OF_LOG, handled above).
                     attempts += 1
-                    if attempts > lane._spec().limits.stream_retries:
-                        # Server-side drops exhaust the cap; visibility only —
-                        # never kill the watcher's status-poll contract on it.
-                        lane._log_lane(
-                            f"[stream {kernel}] follower exhausted after "
-                            f"{attempts} reconnects; status-poll only for the rest of the session")
-                        break
                     lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
                               f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
-                    time.sleep(lane._spec().limits.retry_seconds * attempts)
+                    # The next attempt replays from line 0: drop this transcript
+                    # and rewrite it from the replay (no dedup, no drift).
+                    log_handle.flush()
+                    log_handle.seek(0)
+                    log_handle.truncate()
+                    time.sleep(min(lane._spec().limits.retry_seconds * attempts,
+                                   60.0))
         plan["session_id"] = session_id
         return plan
 

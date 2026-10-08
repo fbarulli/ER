@@ -667,8 +667,6 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
             if line.startswith(("+ git", "[timing]", "phase"))] == \
         ["+ git clone", "[timing] mark 1s", "phase complete"], \
         "a whole-session replay must be rewritten exactly once, never duplicated"
-    assert any("reconnect attempt 1" in line for line in content), \
-        "the reconnect status line shares the same transcript"
     assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
 
 
