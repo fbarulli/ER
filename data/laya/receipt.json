@@ -22,7 +22,36 @@
       "hard_no": 0,
       "fallback": 0,
       "total": 0
-    }
+    },
+    "mask_cases": 1200,
+    "mask_package_state_true": 1073,
+    "mask_package_state_false": 127,
+    "aug_pairs": 7901,
+    "aug_pairs_positive": 3,
+    "aug_pairs_negative": 7898,
+    "identity_positive_total_with_growth": 567,
+    "identity_negative_total_with_growth": 8462
+  },
+  "growth": {
+    "bundle": "/home/opc/ONE/ER/data/prepared/full/worker_1_baseline.pkl.gz",
+    "labeled_pairs": "/home/opc/ONE/ER/data/labeled_pairs.csv",
+    "bundle_mask_audit_total": 1200,
+    "bundle_hard_negative_audit_total": 18000,
+    "mask_positive_audits": 1200,
+    "mask_cases": 1200,
+    "mask_package_state_true": 1073,
+    "mask_package_state_false": 127,
+    "mask_skipped_duplicate": 0,
+    "aug_pair_audits": 18000,
+    "aug_pair_cases": 7901,
+    "aug_pair_positive": 3,
+    "aug_pair_negative": 7898,
+    "aug_skipped_duplicate": 5690,
+    "aug_skipped_unrepresentable": 4435,
+    "labeled_pairs_rows": 41,
+    "labeled_pairs_added": 26,
+    "labeled_pairs_missing_gtin": 0,
+    "labeled_pairs_skipped_duplicate": 15
   },
   "gate_reason_sample": {
     "Critical attribute mismatch: flavor": 138,
@@ -38,35 +67,45 @@
     "test": 0.22916666666666666
   },
   "split_sizes": {
-    "train": 2735,
-    "dev": 1259,
-    "test": 1188
+    "train": 7538,
+    "dev": 3471,
+    "test": 3274
   },
   "split_counts": {
     "train": {
       "listing_positive": 295,
       "listing_negative": 9,
       "gate_negative": 291,
-      "state": 2140
+      "aug_pair_positive": 1,
+      "aug_pair_negative": 4169,
+      "state": 2140,
+      "mask_state": 633
     },
     "dev": {
       "listing_positive": 139,
       "listing_negative": 1,
       "gate_negative": 134,
-      "state": 985
+      "aug_pair_positive": 0,
+      "aug_pair_negative": 1920,
+      "state": 985,
+      "mask_state": 292
     },
     "test": {
       "listing_positive": 130,
       "listing_negative": 2,
       "gate_negative": 127,
-      "state": 929
+      "aug_pair_positive": 2,
+      "aug_pair_negative": 1809,
+      "state": 929,
+      "mask_state": 275
     }
   },
   "question_schema_sha256": "83ca616abccc2f031420181a364def2ad7599e1e10807f418cb0d854189d4514",
   "sha256": {
-    "train.jsonl": "1702255c078fb4ebf7c456ef7a40b99d0d6939e57068dd1ac9cbb587c07fedd8",
-    "dev.jsonl": "01503ea15cab6f2697beae1549153e86625510c5094b80dea40989f13bc96d25",
-    "test.jsonl": "bbf2e0100d5834c553a494469fbb87d905565e262edbf9367d255f0fccf9022d",
+    "train.jsonl": "bb62a9734e766d11b584e99f9deaa8813b951cfb23bd9da3df5f9b01775ab463",
+    "dev.jsonl": "a1f8ffed47c1232d5e98722991b56f2929a87ad5b71cf8ef4c5ed83125338a1f",
+    "test.jsonl": "5bd73212c845a774ad5090208f6d2c8b9d1f80f2e31f34fc7ed257f8c8e6dece",
     "unknown_pairs.csv": "ff1e77d84c8679a7b15c357f73cff2177ec696624b39b48c4a82e6db4ebdf300"
-  }
+  },
+  "corpus_sha256": "c1b5e29126fba6390ccaf58166dc18d9656f4ded68ab189089e65abb473ed7f7"
 }

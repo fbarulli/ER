@@ -1,4 +1,9 @@
-"""One supervisor, three simultaneous model workers and a shared start barrier."""
+"""One supervisor, the trained model workers and a shared start barrier.
+
+The barrier is for the trained lanes only (``resume.TRAINING_TRACKS``). The
+cascade composes already-trained artifacts and runs sequentially after this
+phase, so it never reaches ``run_parallel``.
+"""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -11,6 +16,7 @@ import time
 import uuid
 
 from core.perf_switches import perf_enabled
+from model_tracks.resume import TRAINING_TRACKS
 
 
 @contextmanager
@@ -57,8 +63,8 @@ def wait_for_start(root: Path, track: str, timeout: float = 600):
 def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
                  *, timeout: float = 14400, barrier_timeout: float = 600,
                  resume: bool = False):
-    if not commands or set(commands) - {'text', 'gnn_only', 'hybrid'}:
-        raise ValueError('suite workers must be known unfinished tracks')
+    if not commands or set(commands) - set(TRAINING_TRACKS):
+        raise ValueError('suite workers must be known unfinished trained tracks')
     # Each attempt has a fresh barrier; a restored start file cannot release
     # a resumed worker before its companions have loaded.
     barrier = root / ('barrier' if not resume else f'barrier_resume_{time.time_ns()}')

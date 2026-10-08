@@ -2,6 +2,12 @@
 
 Run: python -m graph_tracks.train --config config/graph_tracks_gnn.yaml
 This worker is independent of the existing Colab launcher's dispatch.
+
+The fused text+graph hybrid encoder is retired: the ``cascade`` lane is the
+retrieve-then-rerank combinator (:mod:`model_tracks.cascade`), which composes an
+already-trained text ranker with an already-trained ``gnn_only`` pair scorer and
+is reported by :func:`graph_tracks.report.report_cascade`. This trainer only
+trains the single-cosine ``gnn_only`` scorer.
 """
 from __future__ import annotations
 
@@ -230,11 +236,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                                             for a, b in pairs['train'][0]], dtype=np.int64)
             dev_pair_indices = np.asarray([[dev_local[int(a)], dev_local[int(b)]]
                                           for a, b in pairs['dev'][0]], dtype=np.int64)
-        # Only support/dev text is needed on device during optimization.
+        # Only support/dev text is needed on device during optimization. The
+        # fused hybrid is retired, so a text-free (gnn_only) graph is trained.
         text_dim = 0 if vectors is None else vectors.shape[1]
         model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
                              text_dim, cfg.graph_enabled, cfg.aggregation_backend).to(cfg.device)
-        scorer = PairScorer(bool(text_dim)).to(cfg.device)
+        scorer = PairScorer().to(cfg.device)
         logger.info("[graph-scorer] initialization=%s", json.dumps(scorer.calibration_metrics()))
         from core.gpu_execution import GradientStatistics, OptimizerExecution
         from core.execution_policy import resolve_aggregation
@@ -272,8 +279,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "pairs_sha256": file_hash(resolve(cfg.pairs)),
                     "text_cache_sha256": file_hash(resolve(cfg.text_cache)) if cfg.text_cache else None,
                     "text_metadata": text_metadata, "graph_context": "training-listings-only",
-                    "augmentation": {"masking": False, "gendata": False,
-                                     "hybrid_text": "frozen baseline checkpoint" if cfg.track == 'hybrid' else None},
+                    "augmentation": {"masking": False, "gendata": False},
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
                     "optimizer_backend": optimizer_policy.resolved_backend(cfg.device),
                     "aggregation_backend": resolve_aggregation(cfg.aggregation_backend, cfg.device),
@@ -284,8 +290,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         if input_manifest and input_manifest.get('shared_training_data_sha256'):
             manifest['augmentation'] = {
                 'source': 'shared frozen training objective',
-                'shared_training_data_sha256': input_manifest['shared_training_data_sha256'],
-                'hybrid_text': 'frozen baseline checkpoint' if cfg.track == 'hybrid' else None}
+                'shared_training_data_sha256': input_manifest['shared_training_data_sha256']}
         best_metric, best_path, start_epoch = -1., None, 0
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
                     'resume' if resume else 'fresh', resume, cfg.epochs)
@@ -392,8 +397,6 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         support_text_cpu = None if vectors is None else torch.as_tensor(vectors[support_indices])
         support_text = None if support_text_cpu is None else support_text_cpu.to(cfg.device)
         dev_text = None if vectors is None else torch.as_tensor(vectors[dev_indices], device=cfg.device)
-        train_text_cosine = None if support_text is None else scorer.text_cosine(support_text, train_pairs)
-        dev_text_cosine = None if dev_text is None else scorer.text_cosine(dev_text, dev_pairs)
         if prepared_arrays is not None:
             prepared_arrays.close()
         logger.info("[graph-performance] encode_population train=%d dev=%d full=%d reason=independent_queries_against_training_only_context",
@@ -423,8 +426,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     initial = profiler.call('graph/train_initial', model.initial, support, support_text)
                     states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
                     embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
-                    scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs,
-                                           text_cosine=train_text_cosine)
+                    scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs)
                     classification = F.binary_cross_entropy_with_logits(scores.logits, train_labels)
                     cos = scores.cosine
                     metric = (train_labels * (1 - cos) + (1 - train_labels)
@@ -471,7 +473,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 scorer.eval()
                 with torch.no_grad(), profiler.section('graph/dev_evaluation'), _LOG.section("graph.dev_eval", epoch=epoch), amp_ctx():
                     embeddings = model.encode(dev_batch, model.context(support, support_text), dev_text)
-                    dev_scores = scorer.score(embeddings, dev_pairs, text_cosine=dev_text_cosine).logits.float().sigmoid().cpu().numpy()
+                    dev_scores = scorer.score(embeddings, dev_pairs).logits.float().sigmoid().cpu().numpy()
                 metrics = {"epoch": epoch, "train_loss": loss_value,
                            "train_classification_loss": classification_value,
                            "train_metric_loss": metric_value, **quality(pairs["dev"][1], dev_scores),

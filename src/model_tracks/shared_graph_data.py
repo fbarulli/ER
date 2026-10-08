@@ -25,7 +25,10 @@ from model_tracks.training_data import (
 # projection rebuild starts from. Named here so a rename cannot orphan an
 # existing backup and silently snapshot already-projected inputs.
 CLEAN_BACKUP_SUFFIX = '__clean_shared_inputs'
-TRACKS = ('gnn_only', 'hybrid')
+#: Tracks that consume the shared graph projection. Only the trained gnn_only
+#: lane does; the cascade declares no shared projection (it composes trained
+#: artifacts), and text has its own objective.
+TRACKS = ('gnn_only',)
 
 
 class SharedGraphProjection(BaseModel):
@@ -265,7 +268,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     bindings = {track: TrackTrainingBinding(track=track, shared_data_sha256=shared_hash,
                     example_ids=[row.example_id for row in shared.examples],
                     endpoint_indices=[row.payload_index for row in shared.endpoints])
-                for track in ('gnn_only', 'hybrid')}
+                for track in TRACKS}
     projection = SharedGraphProjection(shared_data_sha256=shared_hash,
         example_ids=[row.example_id for row in shared.examples],
         endpoint_indices=[row.payload_index for row in shared.endpoints], node_map=node_map,
@@ -332,7 +335,7 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
     if (projection.shared_data_sha256 != shared_hash
             or projection.example_ids != [row.example_id for row in shared.examples]
             or projection.endpoint_indices != [row.payload_index for row in shared.endpoints]
-            or set(projection.track_bindings) != {'gnn_only', 'hybrid'}
+            or set(projection.track_bindings) != set(TRACKS)
             or set(projection.node_map) != {str(row.payload_index) for row in shared.endpoints}
             or len(set(projection.node_map.values())) != len(projection.node_map)):
         raise ValueError('shared graph endpoint projection mismatch')

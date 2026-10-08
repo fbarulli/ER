@@ -15,7 +15,7 @@ def test_every_track_uses_existing_attribute_registry_and_support_rules(tmp_path
     write_inputs(tmp_path, rows)
     records = [{'sku_id': str(i)} for i in range(3)]
     pairs = {'dev': (np.array([[0, 1], [0, 2]]), np.array([1., 0.]))}
-    for track in ('text', 'gnn_only', 'hybrid'):
+    for track in ('text', 'gnn_only', 'cascade'):
         output = tmp_path / track
         output.mkdir()
         write_reports(tmp_path / 'listings.json', records, pairs, ['dev'], output, track)

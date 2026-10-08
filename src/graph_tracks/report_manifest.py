@@ -55,7 +55,7 @@ class TrackReportManifest(BaseModel):
     """Schema for every lane's report, including fixed holdout guarantees."""
     model_config = ConfigDict(extra='allow', allow_inf_nan=False)
     schema_id: Literal['er-track-report-manifest-v1'] = Field(alias='schema')
-    track: Literal['text', 'gnn_only', 'hybrid']
+    track: Literal['text', 'gnn_only', 'cascade']
     checkpoint: str | None
     checkpoint_sha256: str = Field(min_length=1)
     listings_sha256: str = Field(min_length=1)

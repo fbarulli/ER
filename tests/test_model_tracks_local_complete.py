@@ -29,12 +29,13 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
            'publish_git': False, 'publish_dvc': False, 'result_archive_format': archive_format,
            'post_training_ablation': post_training_ablation}
     inline = {'data/model_tracks/suite.yaml': yaml.safe_dump(cfg)}
-    for track in ('gnn_only', 'hybrid'):
+    for track in ('gnn_only', 'cascade'):
         settings = {'track': track, 'listings': 'data/model_tracks/shared/prepared/listings.json',
                     'pairs': 'data/model_tracks/shared/prepared/pairs.csv',
                     'output_dir': 'results/graph_tracks'}
-        if track == 'hybrid':
-            settings['text_cache'] = 'data/model_tracks/shared/shared_minilm__embeddings.npz'
+        if track == 'cascade':
+            settings['text_index'] = 'results/graph_tracks/text__index'
+            settings['gnn_checkpoint'] = 'results/graph_tracks/gnn_only__best_checkpoint.json'
         inline[f'data/model_tracks/shared/{track}.yaml'] = yaml.safe_dump(settings)
     inputs = {'text': {'bundle_sha256': 'bundle'}}
     input_zip = write_archive(tmp_path / 'input.zip', {}, inline=inline,
@@ -43,7 +44,7 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
     root.mkdir()
     (root / 'suite_manifest.json').write_text(json.dumps({'run_tag': 'run', 'inputs': inputs, 'config': cfg,
         'resume_identity': {'implementation': {}}}))
-    for track in ('text', 'gnn_only', 'hybrid'):
+    for track in ('text', 'gnn_only', 'cascade'):
         output = root / track
         output.mkdir()
         checkpoint = output / 'checkpoint-1'
@@ -77,11 +78,11 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
 def test_downloaded_checkpoints_complete_locally_without_retraining(tmp_path, monkeypatch):
     training_zip, input_zip, calls, _ = suite(tmp_path, monkeypatch)
     final = complete(training_zip, input_zip, 'run')
-    assert calls == ['text', 'gnn_only', 'hybrid']
+    assert calls == ['text', 'gnn_only', 'cascade']
     metadata = verify_archive(final, 'suite_bundle_manifest.json')
     assert metadata['postprocess_location'] == 'local CPU'
     assert all(json.loads((tmp_path / 'run' / track / 'track_complete.json').read_text())['postprocess_complete']
-               for track in ('text', 'gnn_only', 'hybrid'))
+               for track in ('text', 'gnn_only', 'cascade'))
     assert complete(training_zip, input_zip, 'run') == final
     assert len(calls) == 3
 
@@ -97,7 +98,7 @@ def test_local_report_failure_is_retryable_without_retraining(tmp_path, monkeypa
     assert not (tmp_path / 'run.zip').exists()
     monkeypatch.setattr(report, 'complete', graph)
     complete(training_zip, input_zip, 'run')
-    assert calls == ['text', 'gnn_only', 'hybrid']
+    assert calls == ['text', 'gnn_only', 'cascade']
 
 
 def test_interrupted_text_report_preserves_future_artifacts(tmp_path, monkeypatch):
@@ -131,7 +132,7 @@ def test_completion_runs_configured_post_training_ablation(tmp_path,monkeypatch)
     calls = []
     def complete_saved(destination, settings, *, publisher=None):
         calls.append(('complete', settings))
-        for track in ('text', 'gnn_only', 'hybrid'):
+        for track in ('text', 'gnn_only', 'cascade'):
             folder = destination / track / 'ablation'; folder.mkdir(parents=True)
             (folder / 'report.json').write_text(json.dumps({
                 'track': track, 'request_sha256': '0' * 64, 'result_sha256': '0' * 64,
@@ -162,7 +163,7 @@ def test_completed_archive_restores_inputs_and_reports_before_publish(tmp_path,m
         return archive
     monkeypatch.setattr(local_complete,'_publish',publish)
     assert complete(training_zip,input_zip,'run') == final
-    assert calls == ['text','gnn_only','hybrid']
+    assert calls == ['text','gnn_only','cascade']
 
 
 def test_zstandard_checkpoints_complete_locally_and_remain_retryable(tmp_path, monkeypatch):
@@ -170,6 +171,6 @@ def test_zstandard_checkpoints_complete_locally_and_remain_retryable(tmp_path, m
     final = complete(training, inputs, 'run')
     assert final.name == 'run.tar.zst'
     assert verify_archive(final, 'suite_bundle_manifest.json')['postprocess_location'] == 'local CPU'
-    assert calls == ['text', 'gnn_only', 'hybrid']
+    assert calls == ['text', 'gnn_only', 'cascade']
     assert complete(training, inputs, 'run') == final
     assert len(calls) == 3

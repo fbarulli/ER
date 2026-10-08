@@ -15,11 +15,14 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
 
     setup = tmp_path / 'prepared'
     setup.mkdir()
-    for track in ('gnn_only', 'hybrid'):
-        (setup / f'{track}.yaml').write_text(yaml.safe_dump({
-            'track': track, 'listings': 'prepared/listings.csv',
-            'pairs': 'prepared/pairs.csv', 'output_dir': 'results/graph_tracks',
-            **({'text_cache': 'prepared/shared_minilm__embeddings.npz'} if track == 'hybrid' else {})}))
+    (setup / 'gnn_only.yaml').write_text(yaml.safe_dump({
+        'track': 'gnn_only', 'listings': 'prepared/listings.csv',
+        'pairs': 'prepared/pairs.csv', 'output_dir': 'results/graph_tracks'}))
+    (setup / 'cascade.yaml').write_text(yaml.safe_dump({
+        'track': 'cascade', 'listings': 'prepared/listings.csv',
+        'pairs': 'prepared/pairs.csv', 'output_dir': 'results/graph_tracks',
+        'text_index': 'results/graph_tracks/text__index',
+        'gnn_checkpoint': 'results/graph_tracks/gnn_only__best_checkpoint.json'}))
     (setup / 'pairs.csv').write_text('sku_id1,sku_id2,label,split\n')
     (setup / 'text.yaml').write_text(yaml.safe_dump({'track': 'text', 'output_dir': 'results/model_tracks'}))
     (setup / 'listings.csv').write_text('sku_id\na\n')
@@ -101,7 +104,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
         text = yaml.safe_load(archive.read('data/model_tracks/shared/text.yaml'))
         assert text['report_test'] is False
         assert text['retrieval_ks'] == list(core.common.ann_retrieval_ks())
-        for track in ('gnn_only', 'hybrid'):
+        for track in ('gnn_only', 'cascade'):
             config = yaml.safe_load(archive.read(f'data/model_tracks/shared/{track}.yaml'))
             assert config['device'] == 'cpu'
             assert config['report_test'] is False

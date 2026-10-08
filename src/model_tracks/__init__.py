@@ -1,1 +1,1 @@
-"""One-run orchestration for text, GNN-only and frozen-text hybrid tracks."""
+"""One-run orchestration for the text, GNN-only and cascade tracks."""

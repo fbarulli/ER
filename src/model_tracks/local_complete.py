@@ -4,7 +4,7 @@ from pathlib import Path
 from model_tracks.package import package_member
 from core.archive_reader import open_archive, archive_sidecar
 
-from core.portable_archive import verify_archive, write_archive, RESULT_ARCHIVE_EXCLUDED_DIRS
+from core.portable_archive import verify_archive, write_archive, is_result_archive_member
 from core.run_log import RunLogger
 from graph_tracks.data import file_hash
 from model_tracks.config import SuiteConfig
@@ -209,9 +209,13 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                 record_completion(destination / track, track)
     suite['postprocess_location'] = 'local CPU'
     (destination / 'suite_manifest.json').write_text(json.dumps(suite, indent=2))
+    from model_tracks.resume import selected_checkpoint_dirs
+    selected = selected_checkpoint_dirs(destination)
     files = {p.relative_to(destination).as_posix(): p for p in destination.rglob('*')
              if p.is_file() and not p.is_symlink()
-             and not ({'local_inputs'} | RESULT_ARCHIVE_EXCLUDED_DIRS).intersection(p.relative_to(destination).parts)}
+             and 'local_inputs' not in p.relative_to(destination).parts
+             and is_result_archive_member(p.relative_to(destination).as_posix(),
+                                          selected_checkpoints=selected)}
     write_archive(final, files, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': run_tag, **identity, 'postprocess_location': 'local CPU'})
     from model_tracks.resume import validate_completed_suite_archive

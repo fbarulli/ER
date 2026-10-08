@@ -8,7 +8,7 @@ import uuid
 import time
 import io
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import zipfile
 from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -88,7 +88,56 @@ class RuntimeSnapshot(BaseModel):
 RESULT_ARCHIVE_EXCLUDED_DIRS = frozenset({
     '.dvc', '.dvc-cache', '.dvc-site-cache', '.git', '.resume',
     '_checkpoint_upload_staging', 'wandb', 'mlruns', 'mps_pipe', 'mps_log',
+    # Profiling is resume/diagnostic state, never a suite deliverable
+    # (owner 2026-10-08: we don't need any profiling data anymore).
+    'profiles', 'resource_profile',
 })
+
+#: Checkpoint members that exist only to resume training. The result archive
+#: carries the selected checkpoint's weights; the recovery archive keeps these.
+#: ``trainer_state.json`` is deliberately absent: best-checkpoint resolution
+#: reads it on the downloaded result archive.
+RESUME_ONLY_FILENAMES = frozenset({
+    'optimizer.pt', 'scheduler.pt', 'rng_state.pth', 'training_args.bin',
+    'scaler.pt',
+})
+
+_CHECKPOINT_DIR = '_checkpoints'
+
+
+def is_result_archive_member(relative: str,
+                             selected_checkpoints: frozenset[str] = frozenset()) -> bool:
+    """Whether a checkpoint-relative path belongs in the RESULT archive.
+
+    One predicate shared by the archive walk (:mod:`model_tracks.run`) and the
+    per-track inventory (:func:`model_tracks.resume.artifact_files`) so a member
+    dropped from the archive is dropped from ``track_inventory.json`` too and
+    ``validate_archived_track`` can never disagree with the manifest.
+
+    ``selected_checkpoints`` holds the posix dirs (relative to the same root the
+    predicate is called with) of the checkpoints reports/publication consume.
+    Every other ``checkpoint-N`` tree is resume-only and ships only in recovery.
+    """
+    parts = Path(relative).parts
+    if not parts or any(part in RESULT_ARCHIVE_EXCLUDED_DIRS for part in parts):
+        return False
+    if parts[-1] in RESUME_ONLY_FILENAMES:
+        return False
+    if parts[-1] in {'.env', 'config.local'}:
+        return False
+    if any(part.endswith('.publication') or part.endswith('__payload') for part in parts):
+        return False
+    if '_artifact_publications' in parts and not relative.endswith('.json'):
+        return False
+    if '.dvc' in parts and 'cache' in parts:
+        return False
+    if _CHECKPOINT_DIR in parts:
+        if not selected_checkpoints:
+            return False
+        member = PurePosixPath(relative)
+        return any(member == PurePosixPath(selected) or PurePosixPath(selected) in member.parents
+                   for selected in selected_checkpoints)
+    return True
 
 
 # Recompressing these containers wastes CPU and rarely saves meaningful space.
@@ -320,33 +369,56 @@ def verified_archive(path: Path, manifest_name: str, *, inventory_key: str = 'fi
         yield archive, verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
 
 
-def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files') -> dict[str, Any]:
+def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files',
+                   digest=None) -> dict[str, Any]:
+    """Verify an archive's manifest and member digests.
+
+    When ``digest`` (a ``hashlib``-style object) is given it is updated with the
+    archive's whole-file bytes. For a Zstandard tar the hash is folded into the
+    same pass that verifies members, so callers that need both (the VM->local
+    handoff) read the multi-GB archive exactly once.
+    """
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            return verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+            metadata = verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+        if digest is not None:
+            with Path(path).open('rb') as handle:
+                while chunk := handle.read(archive_settings().copy_buffer_bytes):
+                    digest.update(chunk)
+        return metadata
     # Verification is sequential: do not inflate a multi-GB tar to a temporary
     # disk file just to read it once. Hash members directly from the zstd stream.
     actual, seen, metadata = {}, set(), None
     zstd = zstd_module()
     try:
-        with zstd.open(path, 'rb') as compressed:
-            with tarfile.open(fileobj=compressed, mode='r|',
-                              bufsize=archive_settings().copy_buffer_bytes) as archive:
-                for member in tracked(archive, desc='archive.verify_stream'):
-                    _check_member(member.name, regular=member.isfile())
-                    if member.name in seen:
-                        raise ValueError('duplicate archive members')
-                    seen.add(member.name)
-                    with archive.extractfile(member) as handle:
-                        if member.name == manifest_name:
-                            metadata = json.load(handle)
-                        else:
-                            actual[member.name] = hashlib.file_digest(handle, 'sha256').hexdigest()
-            # Consume the frame trailer as well; truncated zstd streams must fail.
-            while compressed.read(archive_settings().copy_buffer_bytes):
-                pass
+        with Path(path).open('rb') as raw:
+            source = _HashingReader(raw, digest) if digest is not None else raw
+            with zstd.open(source, 'rb') as compressed:
+                with tarfile.open(fileobj=compressed, mode='r|',
+                                  bufsize=archive_settings().copy_buffer_bytes) as archive:
+                    for member in tracked(archive, desc='archive.verify_stream'):
+                        _check_member(member.name, regular=member.isfile())
+                        if member.name in seen:
+                            raise ValueError('duplicate archive members')
+                        seen.add(member.name)
+                        with archive.extractfile(member) as handle:
+                            if member.name == manifest_name:
+                                metadata = json.load(handle)
+                            else:
+                                actual[member.name] = hashlib.file_digest(handle, 'sha256').hexdigest()
+                # Consume the frame trailer as well; truncated zstd streams must fail.
+                while compressed.read(archive_settings().copy_buffer_bytes):
+                    pass
     except zstd.ZstdError as error:
         raise ValueError(f'invalid Zstandard archive: {path}') from error
     if metadata is None:
         raise ValueError('archive manifest missing')
     return _check_inventory(metadata, actual, manifest_name, inventory_key)
+
+
+def verify_archive_digest(path: Path, manifest_name: str, *,
+                          inventory_key: str = 'files') -> tuple[dict[str, Any], str]:
+    """Verify an archive and return its whole-file SHA256 from one streaming pass."""
+    digest = hashlib.sha256()
+    metadata = verify_archive(path, manifest_name, inventory_key=inventory_key, digest=digest)
+    return metadata, digest.hexdigest()

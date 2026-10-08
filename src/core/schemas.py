@@ -3032,6 +3032,45 @@ class PackagingSpec(BaseModel):
     snapshot_pinned_configs: tuple[str, ...] = Field(default_factory=tuple)
 
 
+class BundleSpec(BaseModel):
+    """The bundle contract: names that must never be re-hardcoded per surface.
+
+    One sealed ``Bundle`` travels generation -> training -> post-training across
+    Colab and Kaggle; every name-like value it relies on (role manifests, the
+    checkpoint layout, track markers, event streams, the ablation template
+    directory, and the completion/status keys) is declared here so no lane,
+    suite module or handoff re-spells a literal.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    # role -> manifest member name (one manifest per role)
+    manifest_inputs: str = Field(min_length=1)
+    manifest_recovery: str = Field(min_length=1)
+    manifest_result: str = Field(min_length=1)
+    # manifest keys
+    run_tag_key: str = Field(min_length=1)
+    files_key: str = Field(min_length=1)
+    complete_status: str = Field(min_length=1)
+    # checkpoint layout + selection
+    checkpoint_dir: str = Field(min_length=1)
+    trainer_state_file: str = Field(min_length=1)
+    trainer_best_key: str = Field(min_length=1)
+    trainer_metric_key: str = Field(min_length=1)
+    trainer_step_key: str = Field(min_length=1)
+    best_checkpoint_glob: str = Field(min_length=1)
+    best_checkpoint_path_key: str = Field(min_length=1)
+    # per-track markers + event streams
+    inventory_file: str = Field(min_length=1)
+    complete_file: str = Field(min_length=1)
+    worker_events_file: str = Field(min_length=1)
+    suite_events_file: str = Field(min_length=1)
+    # ablation (bundle-prepared samples; GPU inference owns the forward pass)
+    ablation_templates_dir: str = Field(min_length=1)
+    ablation_request_file: str = Field(min_length=1)
+    ablation_skip_phases: tuple[str, ...] = Field(min_length=1)
+    ablation_skip_status: str = Field(min_length=1)
+
+
 class PreparationSpec(BaseModel):
     """training.preparation — the owned preparation run contract.
 
@@ -3138,6 +3177,9 @@ class TrainingConfig(BaseModel):
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
     archives: ArchiveSpec
     packaging: PackagingSpec
+    # One sealed Bundle contract (roles/manifests/checkpoints/markers/ablation);
+    # additive default factory so existing YAML without the block still validates.
+    bundle: BundleSpec = Field(default_factory=BundleSpec)
     # TIER 1(e) bundle-drift switch (see config/training.yaml), retired
     # owner order 2026-10-07: the key stays a declared policy record, but
     # training.prepared_bundle never compares recorded masking/easy config,

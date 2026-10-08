@@ -63,11 +63,13 @@ def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, m
     setup.mkdir()
     (setup / 'eligible_catalog.csv').write_text('frozen')
     import yaml
-    for track in ('gnn_only', 'hybrid'):
-        (setup / (track + '.yaml')).write_text(yaml.safe_dump({
-            'track': track, 'listings': 'data/listings.json', 'pairs': 'data/pairs.csv',
-            'output_dir': 'results/graph_tracks',
-            **({'text_cache': 'data/text.npz'} if track == 'hybrid' else {})}))
+    for track in ('gnn_only', 'cascade'):
+        lane = {'track': track, 'listings': 'data/listings.json', 'pairs': 'data/pairs.csv',
+                'output_dir': 'results/graph_tracks'}
+        if track == 'cascade':
+            lane['text_index'] = 'results/graph_tracks/text__index'
+            lane['gnn_checkpoint'] = 'results/graph_tracks/gnn_only__best_checkpoint.json'
+        (setup / (track + '.yaml')).write_text(yaml.safe_dump(lane))
     (setup / 'text.yaml').write_text(yaml.safe_dump({'track': 'text', 'output_dir': 'results/model_tracks'}))
 
     (tmp_path / 'config').mkdir()
@@ -123,7 +125,7 @@ print('resumed text')
 
 def test_suite_archive_reuse_requires_current_worker_generation(tmp_path):
     from core.portable_archive import write_archive
-    from model_tracks.resume import TRACKS, verify_suite_archive
+    from model_tracks.resume import TRACKS, expected_postprocess, verify_suite_archive
     output = tmp_path / 'run'
     output.mkdir()
     identity = {'run_tag': 'run', 'inputs': {'sha': 'original'}}
@@ -132,16 +134,18 @@ def test_suite_archive_reuse_requires_current_worker_generation(tmp_path):
         folder = output / track
         folder.mkdir()
         (folder / 'checkpoint.bin').write_bytes(b'original')
-        record_completion(folder, track, postprocess_complete=False)
+        record_completion(folder, track,
+                          postprocess_complete=expected_postprocess(track, gpu_only=True))
     archive = tmp_path / 'run.zip'
     write_archive(archive, {path.relative_to(output).as_posix(): path
                            for path in output.rglob('*') if path.is_file()},
                   manifest_name='suite_bundle_manifest.json', metadata={'run_tag': 'run'})
-    verify_suite_archive(archive, output, 'run', identity, postprocess_complete=False)
+    verify_suite_archive(archive, output, 'run', identity, gpu_only=True)
     (output / 'text/checkpoint.bin').write_bytes(b'retrained')
-    record_completion(output / 'text', 'text', postprocess_complete=False)
+    record_completion(output / 'text', 'text',
+                      postprocess_complete=expected_postprocess('text', gpu_only=True))
     with pytest.raises(ValueError, match='stale worker artifacts'):
-        verify_suite_archive(archive, output, 'run', identity, postprocess_complete=False)
+        verify_suite_archive(archive, output, 'run', identity, gpu_only=True)
 
 
 def test_archive_is_not_published_when_source_changes_during_write(tmp_path, monkeypatch):

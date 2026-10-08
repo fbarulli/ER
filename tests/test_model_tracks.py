@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from model_tracks.parallel import run_parallel
+from model_tracks.resume import TRAINING_TRACKS
 
 
 def test_all_workers_overlap_and_outputs_are_isolated(tmp_path):
@@ -19,11 +20,11 @@ start=time.time()
 time.sleep(.4)
 (root/'result.json').write_text(json.dumps({'track':track,'start':start,'end':time.time(),'wandb':os.environ['WANDB_DIR']}))
 '''
-    commands={track:[sys.executable,'-c',code] for track in ('text','gnn_only','hybrid')}
+    commands={track:[sys.executable,'-c',code] for track in TRAINING_TRACKS}
     result=run_parallel(commands,tmp_path,{**os.environ,'PYTHONPATH':str(Path(__file__).resolve().parents[1]/'src')},barrier_timeout=10)
     rows=[json.loads((tmp_path/track/'result.json').read_text()) for track in commands]
     assert max(row['start'] for row in rows)<min(row['end'] for row in rows)
-    assert len({row['wandb'] for row in rows})==3
+    assert len({row['wandb'] for row in rows})==len(TRAINING_TRACKS)
     assert result['mode']=='parallel'
 
 
@@ -35,7 +36,7 @@ wait_for_start(pathlib.Path(os.environ['ER_TRACK_BARRIER']),track,timeout=10)
 if track=='gnn_only': raise SystemExit(3)
 time.sleep(30)
 '''
-    commands={track:[sys.executable,'-c',code] for track in ('text','gnn_only','hybrid')}
+    commands={track:[sys.executable,'-c',code] for track in TRAINING_TRACKS}
     with pytest.raises(RuntimeError,match='workers failed'):
         run_parallel(commands,tmp_path,{**os.environ,'PYTHONPATH':str(Path(__file__).resolve().parents[1]/'src')},barrier_timeout=10)
 

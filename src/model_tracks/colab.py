@@ -3,10 +3,23 @@ import json
 from pathlib import Path
 import hashlib
 
-from core.portable_archive import verify_archive, verified_archive
-from core.archive_reader import open_archive, archive_sidecar, tar_archive
+from core.portable_archive import verify_archive, verify_archive_digest, verified_archive
+from core.archive_reader import open_archive, tar_archive
 from graph_tracks.data import file_hash
 from model_tracks.package import verify, package_member
+
+RESULT_MANIFEST = 'suite_bundle_manifest.json'
+
+
+def verify_result_archive(path: Path) -> tuple[dict, str]:
+    """Verify a downloaded result archive once and return (manifest, sha256).
+
+    This is the single boundary the result download trusts: the whole-file
+    digest is folded into the same streaming pass that checks the manifest and
+    every member, so the result archive is read exactly once. Tests stub this
+    named seam rather than the underlying core call.
+    """
+    return verify_archive_digest(path, RESULT_MANIFEST)
 
 
 def _publish_git_inputs(paths, message: str) -> None:
@@ -79,8 +92,9 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
 def _collect_failure_logs(backend, remote_output: str, run_tag: str):
     """Collect diagnostics even when preflight never produced a suite manifest."""
     from core.common import RESULTS
+    from model_tracks.resume import TRACKS
     names = ['suite_events.jsonl']
-    for track in ('text', 'gnn_only', 'hybrid'):
+    for track in TRACKS:
         names.extend([f'{track}__worker.log', f'{track}/worker_events.jsonl'])
     script = f'''import hashlib, json, pathlib
 root=pathlib.Path({remote_output!r})
@@ -223,7 +237,7 @@ for proc in pathlib.Path('/proc').iterdir():
         environment=proc.joinpath('environ').read_bytes().split(b'\\0')
         supervisor=b'model_tracks.run' in args and {remote_output.encode()!r} in args
         worker=any(b'EUROMONITOR_RESULTS_DIR='+{remote_output.encode()!r}+b'/'+track in environment
-                   for track in (b'text',b'gnn_only',b'hybrid'))
+                   for track in (b'text',b'gnn_only',b'cascade'))
         if supervisor or worker:
             owned.append(int(proc.name))
             if worker and os.getpgid(int(proc.name)) == int(proc.name):
@@ -273,34 +287,27 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
     expected = backend._read_remote_text(remote_output+'.sha256').strip()
     local = RESULTS/'model_tracks'/f'{run_tag}.training{result_suffix}'
     local.parent.mkdir(parents=True,exist_ok=True)
-    if not local.exists() or file_hash(local) != expected:
+    # One download + one streaming verify (owner #5): verify_archive_digest folds
+    # the whole-file SHA256 into the manifest/member verification pass, so the
+    # ~1 GB result archive is read exactly once. A matching local archive skips
+    # the download entirely; a corrupt partial is retained for diagnosis.
+    manifest = None
+    observed = None
+    if local.exists():
+        try:
+            manifest, observed = verify_result_archive(local)
+        except ValueError:
+            manifest, observed = None, None
+    if observed != expected:
         partial = local.with_name(local.name + '.partial')
         backend._download_one_remote_file(remote_output+result_suffix, partial)
-        if file_hash(partial) != expected:
+        manifest, observed = verify_result_archive(partial)
+        if observed != expected:
             raise ValueError('all-track result download mismatch; partial retained for diagnosis')
-        verify_archive(partial, 'suite_bundle_manifest.json')
         partial.replace(local)
+    if manifest.get('run_tag') != run_tag:
+        raise ValueError('all-track result archive run mismatch')
     print(f'[tracks] Direct result archive download verified: {local}', flush=True)
-    # Final collection events occur after the result archive snapshot.
-    # Retain this separate log with its own remotely computed digest.
-    events_remote = remote_output + '.events.jsonl'
-    events_local = archive_sidecar(local, '.events.jsonl')
-    try:
-        events_digest = backend.run_colab_exec_capture(backend.SESSION,
-            f'import hashlib, pathlib\np=pathlib.Path({events_remote!r})\n'
-            'print(hashlib.sha256(p.read_bytes()).hexdigest())\n', timeout=120).strip()
-        partial_events = events_local.with_suffix('.jsonl.partial')
-        backend._download_one_remote_file(events_remote, partial_events)
-        if file_hash(partial_events) != events_digest:
-            raise ValueError('suite final event log download mismatch')
-        for line in partial_events.read_text().splitlines():
-            event = json.loads(line)
-            if event.get('run_tag') != run_tag or event.get('track') != 'suite':
-                raise ValueError('suite final event log identity mismatch')
-        partial_events.replace(events_local)
-        print(f'Suite final event log verified: {events_local}', flush=True)
-    except Exception as error:
-        print(f'Suite final event log unavailable: {error}; archived worker logs remain available', flush=True)
     # Release GPU quota before local inference, indexing, reporting or publishing.
     # stop() is deliberately non-raising for launcher finally blocks. Require
     # a verified release here so reporting cannot overlap an idle GPU session.
@@ -316,12 +323,12 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             f"CPU postprocessing refused. Result handoff retained beside {local}. "
             f"Release the session with colab stop -s {backend.SESSION} before completing locally."
         )
-    if file_hash(local) != expected:
-        raise ValueError('all-track result collection mismatch')
-    manifest = verify_archive(local, 'suite_bundle_manifest.json')
-    from model_tracks.resume import TRACKS, validate_archived_track
+    from model_tracks.resume import TRACKS, expected_postprocess, validate_archived_track
     with open_archive(local) as result:
         for track in TRACKS:
-            validate_archived_track(result, manifest, track, postprocess_complete=False)
+            # The remote stage always trains GPU-only: trained lanes defer their
+            # CPU reports, the cascade already finished its composed report.
+            validate_archived_track(result, manifest, track,
+                                    postprocess_complete=expected_postprocess(track, gpu_only=True))
     from model_tracks.snapshot_completion import complete
     return complete(local, archive, run_tag, publish=False)

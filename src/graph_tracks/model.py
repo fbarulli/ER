@@ -66,7 +66,7 @@ class AttributeGNN(nn.Module):
 
     def initial(self, batch: GraphBatch, text: torch.Tensor | None = None) -> torch.Tensor:
         if bool(self.text_dim) != (text is not None):
-            raise ValueError("text input is required only for the hybrid model")
+            raise ValueError("text input is required only for a text-aware encoder")
         features = [batch.numeric]
         for relation in RELATIONS:
             value, listing, sizes = topology(batch, relation, dtype=self.tokens[relation].weight.dtype)
@@ -121,14 +121,22 @@ class AttributeGNN(nn.Module):
 
 
 class PairScorer(nn.Module):
-    """Trainable cosine calibration; new training keeps similarity monotonic.
+    """Cosine calibration for the ``gnn_only`` pair decider.
 
-    State-dict keys remain unchanged so historical checkpoints retain their
-    original scores when loaded for inference.
+    A single monotonic graph-cosine coefficient and a bias. The fixed
+    graph/text cosine fusion was retired with the hybrid encoder: the
+    "hybrid" combination is now the retrieve-then-rerank cascade
+    (:mod:`model_tracks.cascade`), which composes the trained text ranker with
+    this trained scorer and fuses nothing. ``forward(embeddings, pairs, text)``
+    keeps the ``text`` argument only so callers (the cascade decider) can pass
+    ``None`` uniformly; it is never used to build a fused feature.
     """
-    def __init__(self, hybrid: bool):
+    def __init__(self, hybrid: bool = False):
         super().__init__()
-        self.head = nn.Linear(2 if hybrid else 1, 1)
+        if hybrid:
+            raise ValueError('the fused-hybrid pair scorer is retired; '
+                             'the cascade consumes the single-cosine scorer')
+        self.head = nn.Linear(1, 1)
         nn.init.constant_(self.head.weight, 1.0 / self.head.in_features)
         nn.init.zeros_(self.head.bias)
 
@@ -139,33 +147,19 @@ class PairScorer(nn.Module):
 
     def calibration_metrics(self) -> dict:
         weights = self.head.weight.detach().flatten().cpu().tolist()
-        return {"policy": "nonnegative_similarity_weights_v1",
+        return {"policy": "gnn_single_cosine_v1",
                 "graph_cosine_weight": weights[0],
-                "text_cosine_weight": weights[1] if len(weights) > 1 else None,
                 "bias": self.head.bias.detach().cpu().item()}
 
     def forward(self, embeddings: torch.Tensor, pairs: torch.Tensor,
                 text: torch.Tensor | None = None) -> torch.Tensor:
-        return self.score(embeddings, pairs, text).logits
-
-    @staticmethod
-    def text_cosine(text: torch.Tensor, pairs: torch.Tensor) -> torch.Tensor:
-        text = F.normalize(text, dim=-1)
-        left, right = pairs.unbind(1)
-        return (text[left] * text[right]).sum(-1)
+        return self.score(embeddings, pairs).logits
 
     def score(self, embeddings: torch.Tensor, pairs: torch.Tensor,
-              text: torch.Tensor | None = None, *, text_cosine: torch.Tensor | None = None) -> PairScores:
+              text: torch.Tensor | None = None) -> PairScores:
         left, right = pairs.unbind(1)
         cosine = (embeddings[left] * embeddings[right]).sum(-1)
-        features = [cosine]
-        if text_cosine is None and text is not None:
-            text_cosine = self.text_cosine(text, pairs)
-        if text_cosine is not None:
-            if text_cosine.shape != cosine.shape or text_cosine.device != cosine.device:
-                raise ValueError('prepared text pair cosine differs from graph pairs')
-            features.append(text_cosine)
-        return PairScores(self.head(torch.stack(features, dim=1)).squeeze(1), cosine)
+        return PairScores(self.head(cosine.unsqueeze(1)).squeeze(1), cosine)
 
 
 @dataclass(frozen=True)

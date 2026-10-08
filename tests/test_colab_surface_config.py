@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_all_lane_defaults_follow_retuned_ann_ssot(monkeypatch):
     monkeypatch.setattr(common, 'ann_retrieval_ks', lambda: (1, 3, 17))
-    for filename in ('graph_tracks_gnn.yaml', 'graph_tracks_hybrid.yaml'):
+    for filename in ('graph_tracks_gnn.yaml', 'graph_tracks_cascade.yaml'):
         cfg = GraphConfig.model_validate(yaml.safe_load((ROOT/'config'/filename).read_text()))
         assert cfg.retrieval_ks == [1, 3, 17]
     assert load_text_config(ROOT/'config/text_track.yaml').retrieval_ks == [1, 3, 17]

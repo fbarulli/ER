@@ -16,6 +16,10 @@ from model_tracks.ablation import report, checkpoint_identity, source_name, writ
 
 _LOG = RunLogger(__name__)
 
+#: Tracks that produce a post-training ablation export. The trained lanes do;
+#: the cascade trains nothing and ships no ablation, so it is excluded.
+ABLATION_TRACKS = ('text', 'gnn_only')
+
 
 class AblationThresholdIdentity(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
@@ -49,7 +53,7 @@ def publish_saved(destination: Path, suite: SuiteConfig, *, archive: Path) -> No
     with _LOG.section('ablation.publish.verify'):
         archived, publisher = _sealed_archive(archive, suite)
     with _LOG.section('ablation.publish.tracks'):
-        for track in _LOG.progress(('text', 'gnn_only', 'hybrid'), desc='publish_saved', unit='track'):
+        for track in _LOG.progress(ABLATION_TRACKS, desc='publish_saved', unit='track'):
             _publish_track(destination, track, archived, publisher)
 
 
@@ -188,7 +192,7 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
     from graph_tracks.data import file_hash
     outputs = {}
     _LOG.info(f'[ablation] complete_saved destination={destination}')
-    for track in _LOG.progress(('text','gnn_only','hybrid'), desc='complete_saved', unit='track'):
+    for track in _LOG.progress(ABLATION_TRACKS, desc='complete_saved', unit='track'):
         _LOG.info(f'[ablation] complete track={track}')
         with _LOG.section('ablation.complete.calibration'):
             request, result, source, calibration = _calibration_source(destination, track)
@@ -280,6 +284,6 @@ def git_publisher(suite: SuiteConfig):
 def run(archive, run_tag, suite, *, launcher=None):
     archive_metadata = verify_archive(archive,'suite_bundle_manifest.json')
     destination = archive.parent/run_tag
-    if any((destination/track/'ablation/request.json').exists() for track in ('text','gnn_only','hybrid')):
+    if any((destination/track/'ablation/request.json').exists() for track in ABLATION_TRACKS):
         return complete_saved(destination,suite,publisher=git_publisher(suite))
     raise ValueError('suite lacks staged GPU ablation exports; rebuild prepared inputs before training')

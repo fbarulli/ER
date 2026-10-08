@@ -149,6 +149,27 @@ class KaggleKernels:
         return receipt
 
     @staticmethod
+    def _push_and_record_session(stage_dir: Path, slug: str) -> None:
+        """Push a staged kernel and record its session id for in-place cancel.
+
+        Every live push gets its own session id written to
+        ``logs/kaggle/<kernel>.session_id`` so ``stop`` can use the SDK's
+        in-place ``cancel_kernel_session`` instead of a version-replace stub.
+        The stale id is cleared first (a push invalidates any prior session),
+        and capture is best-effort — the autowatch stream follower is the
+        backup writer and must never gate the launch.
+        """
+        from cli import kaggle_lane as lane
+
+        executable = lane._require_kaggle_executable(lane._spec().kaggle_executable)
+        lane.clear_kernel_session_id(slug)
+        lane._run_kaggle([executable, "kernels", "push", "-p", str(stage_dir)])
+        try:
+            lane.capture_kernel_session_id(slug)
+        except Exception as error:  # noqa: BLE001 - best-effort launch aid
+            lane._log_lane(f"[{slug}] session-id capture skipped: {error}")
+
+    @staticmethod
     def push_bundle_kernel(stage_dir: Path) -> dict[str, Any]:
         """Push the staged CPU kernel via the configured kaggle executable.
 
@@ -166,9 +187,7 @@ class KaggleKernels:
                 "(owner/slug) before pushing")
         from core.runtime_inputs import staged_kernel_preflight
         staged_kernel_preflight(Path(stage_dir))
-        executable = lane._require_kaggle_executable(spec.kaggle_executable)
-        command = [executable, "kernels", "push", "-p", str(stage_dir)]
-        _, _ = lane._run_kaggle(command)
+        KaggleKernels._push_and_record_session(Path(stage_dir), slug)
         plan = {"mode": "executed", "kernel": slug, "pushed": True,
                 "staged": str(stage_dir)}
         plan.update(lane._spawn_autowatch("cpu"))
@@ -300,14 +319,12 @@ class KaggleKernels:
         spec = lane._spec()
         from core.runtime_inputs import staged_kernel_preflight
         staged_kernel_preflight(Path(stage_dir))
-        executable = lane._require_kaggle_executable(spec.kaggle_executable)
         metadata = json.loads((Path(stage_dir) / lane._spec().files.kernel_metadata).read_text())
         kind = next((kind for kind, code_file in spec.files.code_files.items()
                      if code_file == metadata["code_file"]), None)
         if kind is None:
             raise RuntimeError("pushed kernel has no configured watcher kind")
-        command = [executable, "kernels", "push", "-p", str(stage_dir)]
-        _, _ = lane._run_kaggle(command)
+        KaggleKernels._push_and_record_session(Path(stage_dir), metadata["id"])
         configured_slug = {"bundle": spec.cpu_kernel_slug,
                            "train": spec.gpu_kernel_slug,
                            "embed": spec.embedding_kernel_slug}[kind]
@@ -344,21 +361,22 @@ class KaggleKernels:
 
     @staticmethod
     def stop_kernel(slug: str | None = None, *, which: str = "cpu",
-                    execute: bool) -> dict[str, Any]:
+                    execute: bool, wait: bool = True) -> dict[str, Any]:
         """Stop a kernel's running session with a verified verdict.
 
-        "Replacement is the kill" is not a verified kill: the plan must report
-        stopped / still_running and success is only ever a terminal status.
-        Preferred mechanism: the stream follower records the session's
-        kernel_session_id (files.session_id_file under logs/kaggle/); the SDK
-        cancels that exact session (cancel_kernel_session). Without a recorded
-        id — or when the SDK cancel raises — the fallback is the version
-        replace: push a trivial stub that prints and exits, and the platform
-        tears down the current session to run version N+1. Both paths are
-        verified by bounded status polls (limits.stop_verify_polls x
-        logs_poll_seconds); no terminal status inside the window degrades the
-        verdict to still_running and the stop fails loud. Dry-run by default;
-        --execute performs the cancel/replace.
+        Preferred mechanism: the recorded session id (written on every push and
+        by the stream follower) feeds the SDK's in-place
+        ``cancel_kernel_session`` — no new run. Without a recorded id — or when
+        the SDK cancel raises — the fallback is the version replace: push a
+        trivial stub that prints and exits, and the platform tears down the
+        current session to run version N+1. Both paths are verified by bounded
+        status polls (limits.stop_verify_polls x logs_poll_seconds); no terminal
+        status inside the window degrades the verdict to still_running and the
+        stop fails loud. Dry-run by default; ``--execute`` performs the
+        cancel/replace. With ``wait=False`` the cancel/replace is issued and the
+        plan is returned immediately (verdict ``requested``) — the caller's
+        detached watcher owns the terminal confirmation, so the CLI never blocks
+        silently for minutes.
         """
         from cli import kaggle_lane as lane
 
@@ -424,12 +442,23 @@ class KaggleKernels:
             command = [executable, "kernels", "push", "-p", str(stage)]
             lane._run_kaggle(command)
             plan["cancel_method"] = "version_replace"
+        if not wait:
+            # Fire-and-forget: the cancel/replace is issued; a detached watcher
+            # (or the operator) confirms terminal. Never block silently.
+            plan["verdict"] = "requested"
+            plan["stopped"] = None
+            return plan
         # Verified stop: bounded status polls; only a terminal state is a stop.
         verdict = "still_running"
         deadline = (time.monotonic()
                     + max(spec.limits.stop_verify_polls, 1) * spec.logs_poll_seconds)
+        last_state = None
         while time.monotonic() < deadline:
             state = lane.kernel_status(resolved)["status"]
+            if state != last_state:
+                print(f"[stop] {resolved} state={state} (method="
+                      f"{plan['cancel_method']})", flush=True)
+                last_state = state
             if state in ("complete", "error"):
                 verdict = "stopped"
                 plan["terminal_state"] = state

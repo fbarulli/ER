@@ -42,8 +42,11 @@ def _source_layout_key() -> str:
 
 PACKAGE_MANIFEST = 'model_tracks_package.json'
 RECOVERY_MANIFEST = 'suite_recovery_manifest.json'
-GRAPH_TRACKS = ('gnn_only', 'hybrid')
-TRACK_CONFIGS = frozenset({'gnn_only.yaml', 'hybrid.yaml', 'text.yaml'})
+GRAPH_TRACKS = ('gnn_only',)
+#: Lane configs inlined into the package: the trained graph lane plus the
+#: cascade combinator (which consumes those trained artifacts).
+PACKAGED_LANES = (GRAPH_TRACKS + ('cascade',))
+TRACK_CONFIGS = frozenset({'gnn_only.yaml', 'cascade.yaml', 'text.yaml'})
 INPUT_KEYS = ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results')
 RECOVERY_EXCLUDED = frozenset({'wandb', 'mlruns', 'mps_pipe', 'mps_log', '.git', '.dvc'})
 
@@ -312,7 +315,7 @@ def _portable_config_models(cfg, setup: Path) -> dict[str, dict]:
         package_member('suite_package_config'): suite,
         str(_target() / 'text.yaml'): text,
         **{str(_target() / f'{track}.yaml'): _portable_graph_config(cfg, setup, track)
-           for track in GRAPH_TRACKS},
+           for track in PACKAGED_LANES},
     }
 
 

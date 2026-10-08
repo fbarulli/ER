@@ -19,7 +19,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         raise ValueError('smoke parent suite differs from requested prepared setup')
     from graph_tracks.config import load_config as load_graph_config, load_text_config
     graph_settings = {track: load_graph_config(setup/f'{track}.yaml', expected_track=track).model_dump()
-                      for track in ('gnn_only', 'hybrid')}
+                      for track in ('gnn_only', 'cascade')}
     text_settings = load_text_config(setup/'text.yaml').model_dump()
     from core.common import SEED, training_cfg
     from graph_tracks.data import file_hash
@@ -168,9 +168,9 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     from model_tracks.baseline_export import prepare as prepare_baseline
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
     prepare_baseline(output, checkpoint)
-    for track in ('gnn_only','hybrid'):
+    for track in ('gnn_only','cascade'):
         settings = graph_settings[track]
-        for key in ('listings','pairs','input_manifest','text_cache'):
+        for key in ('listings','pairs','input_manifest','text_cache','text_index','gnn_checkpoint'):
             if settings.get(key):
                 settings[key]=str(output/Path(settings[key]).relative_to(setup))
         settings.update(device='cpu',epochs=1,report_test=False)

@@ -35,6 +35,164 @@ def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = Fals
     return GraphConfig.model_validate(settings).model_dump()
 
 
+def _cascade_lane(setup: Path):
+    """The validated cascade lane config (never a trained graph lane)."""
+    from graph_tracks.config import load_config as load_graph_config
+    return load_graph_config(setup / 'cascade.yaml', expected_track='cascade')
+
+
+def _cascade_artifacts(results: Path, lane) -> dict:
+    """Locate and validate the trained text-ANN + gnn-scorer inputs.
+
+    The cascade is a combinator that trains nothing. Its declared inputs are
+    the text ranker's ANN/embedding export and the gnn_only decider's scorer
+    checkpoint/embedding export. A missing artifact fails here, before any
+    ranking work, and the retired fused text cache is never consulted.
+    """
+    from graph_tracks.artifacts import name
+    text_root = results / 'text'
+    gnn_root = results / 'gnn_only'
+    text_index = Path(lane.text_index) if lane.text_index else text_root / name('text', 'index')
+    text_vectors = text_root / name('text', 'vectors.npz')
+    gnn_vectors = gnn_root / name('gnn_only', 'vectors.npz')
+    gnn_checkpoint = Path(lane.gnn_checkpoint) if lane.gnn_checkpoint else None
+    if gnn_checkpoint is None or not gnn_checkpoint.is_file():
+        marker = gnn_root / name('gnn_only', 'best_checkpoint.json')
+        if marker.is_file():
+            gnn_checkpoint = Path(json.loads(marker.read_text())['path'])
+    if not text_index.is_dir():
+        raise FileNotFoundError(f'cascade text ranker index missing: {text_index}')
+    if not text_vectors.is_file():
+        raise FileNotFoundError(f'cascade text ranker vectors missing: {text_vectors}')
+    if not gnn_vectors.is_file():
+        raise FileNotFoundError(f'cascade gnn scorer vectors missing: {gnn_vectors}')
+    if gnn_checkpoint is None or not Path(gnn_checkpoint).is_file():
+        raise FileNotFoundError('cascade gnn scorer checkpoint missing')
+    return {'text_index': text_index, 'text_vectors': text_vectors,
+            'gnn_vectors': gnn_vectors, 'gnn_checkpoint': Path(gnn_checkpoint)}
+
+
+def _load_catalog_vectors(path: Path):
+    import numpy as np
+    with np.load(path, allow_pickle=False) as cache:
+        return [str(value) for value in cache['ids'].tolist()], cache['embeddings']
+
+
+def _cascade_roles(records, pairs, artifacts) -> tuple:
+    """Retrieve with the text ranker, then rerank with the gnn_only scorer.
+
+    The two trained artifacts are consumed exactly as trained: text vectors
+    feed the ANN candidate generation, and the gnn_only scorer (rebuilt from
+    its checkpoint) makes the decision over the retrieved catalog geometry.
+    No fused embedding or two-input score is ever computed.
+    """
+    import numpy as np
+    import torch
+    from graph_tracks.model import PairScorer
+    from model_tracks.cascade import CascadeIndex, Decisions, Query, Ranked, cascade
+    text_ids, text_vectors = _load_catalog_vectors(artifacts['text_vectors'])
+    gnn_ids, gnn_vectors = _load_catalog_vectors(artifacts['gnn_vectors'])
+    if text_ids != gnn_ids:
+        raise ValueError('cascade text and gnn catalog IDs differ')
+    ids = tuple(gnn_ids)
+    directory = Path(artifacts['text_index']).parent / 'cascade_ann'
+    index = CascadeIndex.from_arrays(
+        text_vectors, torch.as_tensor(gnn_vectors), ids, directory=directory,
+        checkpoint=Path(artifacts['gnn_checkpoint']), model_name='text', build_index=True)
+    payload = torch.load(artifacts['gnn_checkpoint'], map_location='cpu', weights_only=False)
+    scorer = PairScorer()
+    scorer.load_state_dict(payload['scorer'])
+    scorer.eval()
+    lookup = {identifier: i for i, identifier in enumerate(ids)}
+    relevant = {}
+    for split in ('dev', 'test'):
+        indices, labels = pairs.get(split, (np.empty((0, 2), dtype=int), np.empty(0)))
+        for (left, right), label in zip(indices, labels):
+            if int(label) != 1:
+                continue
+            relevant.setdefault(records[int(left)]['sku_id'], set()).add(records[int(right)]['sku_id'])
+            relevant.setdefault(records[int(right)]['sku_id'], set()).add(records[int(left)]['sku_id'])
+    k = max(1, len(ids) - 1)
+    rows_ranked, rows_decided, query_ids = [], [], []
+    for sku_id, truth in relevant.items():
+        if sku_id not in lookup:
+            continue
+        row = lookup[sku_id]
+        query = Query(ids=(sku_id,), text=np.asarray([text_vectors[row]], dtype=np.float32),
+                      graph=torch.as_tensor(gnn_vectors[row:row + 1]))
+        decisions = cascade(query, index, scorer, k)
+        query_ids.append(sku_id)
+        rows_ranked.append(decisions.candidate_ids[0])
+        rows_decided.append(decisions)
+    if not rows_ranked:
+        raise ValueError('cascade found no retrieval queries with known positives')
+    ranked = Ranked(query_ids=tuple(query_ids),
+                    candidate_ids=np.asarray(rows_ranked, dtype=object),
+                    similarities=np.full((len(rows_ranked), k), np.nan, dtype=np.float32))
+    decisions = Decisions(
+        query_ids=tuple(query_ids),
+        candidate_ids=np.asarray([row.candidate_ids[0] for row in rows_decided], dtype=object),
+        scores=np.asarray([row.scores[0] for row in rows_decided], dtype=np.float32),
+        order=np.asarray([row.order[0] for row in rows_decided], dtype=np.int64),
+        similarities=None)
+    return ranked, [relevant[q] for q in query_ids], decisions
+
+
+def load_records_from_setup(setup: Path, lane):
+    from core.common import TRAIN_ROOT
+    from graph_tracks.data import load_records
+    return load_records((TRAIN_ROOT / lane.listings).resolve())
+
+
+def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
+    """Write the shared per-track report manifest for the cascade lane.
+
+    The cascade is a combinator, but every completed track ships one calibrated
+    report manifest (the suite completion/verification contract). Its
+    checkpoint identity is the trained gnn_only scorer it consumes.
+    """
+    from graph_tracks.artifacts import name
+    from graph_tracks.data import file_hash
+    from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
+    from core.common import TRAIN_ROOT
+    listings = (TRAIN_ROOT / lane.listings).resolve()
+    pairs = Path(lane.pairs)
+    if not pairs.is_absolute():
+        pairs = (TRAIN_ROOT / pairs).resolve()
+    manifest = build_manifest(
+        track='cascade', checkpoint=str(artifacts['gnn_checkpoint']),
+        checkpoint_sha256=file_hash(artifacts['gnn_checkpoint']),
+        listings_sha256=file_hash(listings), pairs_sha256=file_hash(pairs),
+        threshold=0.5, threshold_source='dev_youden', test_reported=bool(lane.report_test),
+        model_selection='dev_pr_auc', retrieval_ks=list(lane.retrieval_ks))
+    write_manifest(output / name('cascade', 'report_manifest.json'), manifest)
+
+
+def _run_cascade(cfg, setup: Path, output: Path, events):
+    """The cascade lane: validate inputs, compose roles, report both roles."""
+    from graph_tracks.report import report_cascade
+    from model_tracks.resume import record_completion
+    lane = _cascade_lane(setup)
+    events.emit('input_validation', 'configured', device=lane.device,
+                worker_config=str(setup / 'cascade.yaml'), trains_nothing=True)
+    artifacts = _cascade_artifacts(output.parent, lane)
+    events.emit('input_validation', 'completed', text_index=str(artifacts['text_index']),
+                gnn_checkpoint=str(artifacts['gnn_checkpoint']))
+    from graph_tracks.train import load_pairs
+    records = load_records_from_setup(setup, lane)
+    pairs = load_pairs(Path(lane.pairs), records)
+    events.emit('cascade', 'started')
+    ranked, relevant, decisions = _cascade_roles(records, pairs, artifacts)
+    report_cascade(ranked, relevant, decisions, output, track='cascade',
+                   ks=tuple(sorted(set(lane.retrieval_ks) | {1})))
+    _record_cascade_report_manifest(output, lane, artifacts)
+    events.emit('cascade', 'completed', queries=len(relevant))
+    with _LOG.section('phase.completion', track='cascade'):
+        record_completion(output, 'cascade', postprocess_complete=True)
+        events.emit('completion', 'verified', inventory='track_inventory.json',
+                    marker='track_complete.json')
+
+
 def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
     from model_tracks.telemetry import WorkerEvents
     output = Path(os.environ['EUROMONITOR_RESULTS_DIR'])
@@ -56,6 +214,13 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     output = Path(os.environ['EUROMONITOR_RESULTS_DIR'])
     output.mkdir(parents=True, exist_ok=True)
+    if track == 'cascade':
+        # The cascade is a combinator: it trains nothing and simply consumes
+        # the already-trained text ranker and gnn_only scorer. It runs after
+        # both prerequisite tracks complete, so it has no start barrier.
+        with _LOG.section('phase.cascade', track=track):
+            _run_cascade(cfg, setup, output, events)
+        return
     if track == 'text':
         from training.prepared_bundle import PreparedBundleManifest
         bundle_path = (TRAIN_ROOT / cfg.text_bundle).resolve()
@@ -183,7 +348,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
-    parser.add_argument('--track', choices=['text', 'gnn_only', 'hybrid'], required=True)
+    parser.add_argument('--track', choices=['text', 'gnn_only', 'cascade'], required=True)
     parser.add_argument('--run-tag', required=True)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()

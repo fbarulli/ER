@@ -1,4 +1,4 @@
-"""Single Colab supervisor for all three model tracks; workers own outputs."""
+"""Single Colab supervisor for the trained lanes plus the cascade; workers own outputs."""
 from __future__ import annotations
 import argparse
 import json
@@ -59,6 +59,30 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             shutil.copyfile(events.path, output.with_suffix('.events.jsonl'))
 
 
+def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
+                           env: dict, *, resume: bool, events) -> str:
+    """Run one post-training combinator lane after the parallel barrier.
+
+    The lane trains nothing and consumes the trained lanes' artifacts, so it is
+    spawned as a normal worker process with the suite environment plus its own
+    results directory once ``run_parallel`` has returned.
+    """
+    import subprocess
+    from core.common import TRAIN_ROOT
+    track_env = {**env, 'EUROMONITOR_RESULTS_DIR': str((output / track).resolve()),
+                 'ER_TRACK_BARRIER': str((output / 'barrier').resolve())}
+    command = [sys.executable, '-m', 'model_tracks.worker', '--config',
+               str(config.resolve()), '--track', track, '--run-tag', f'{run_tag}-{track}']
+    if resume:
+        command.append('--resume')
+    events.emit('worker_spawn', 'started', worker_track=track,
+                log=str(output / f'{track}__worker.log'))
+    with (output / f'{track}__worker.log').open('a') as log:
+        subprocess.run(command, cwd=TRAIN_ROOT, env=track_env,
+                       stdout=log, stderr=subprocess.STDOUT, check=True)
+    return track
+
+
 def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, events=None) -> Path:
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
@@ -78,9 +102,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             from core.common import TRAIN_ROOT
             inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
         else:
-            # When this suite exports the baseline itself, the hybrid text cache is a
-            # declared pending input at preflight time: it is produced by the export
-            # a few lines below.  Verifying it as missing-and-bound-to-a-checked
+            # When this suite exports the baseline itself, the frozen embedding
+            # cache is a declared pending input at preflight time: it is produced
+            # by the export a few lines below.  Verifying it as missing-and-bound-to-a-checked
             # embedding request is what lets preflight run before the export instead
             # of demanding bytes that do not exist yet.
             inputs = preflight(config, allow_gpu_pending=cfg.post_training_ablation)
@@ -121,7 +145,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # Every data test runs here: once, on the machine that will train, after the
     # baseline export (the last producer of a gate input) and before the
     # barrier that releases any worker. One attestation then covers the exact
-    # bytes all three concurrent tracks consume, so the training path spends its
+    # bytes the trained lanes consume, so the training path spends its
     # time training instead of re-arguing shared immutable inputs.
     from model_tracks.data_gate import validate as validate_data
     events.emit('data_gate', 'starting')
@@ -131,7 +155,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
-    from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
+    from model_tracks.resume import (TRACKS, TRAINING_TRACKS, POSTPROCESS_TRACKS,
+                                     expected_postprocess, suite_identity, validate_suite, completed_track)
     identity = suite_identity(cfg, inputs, run_tag)
     if resume:
         validate_suite(output, identity)
@@ -139,7 +164,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     from core.common import TRAIN_ROOT
     from graph_tracks.data import file_hash
     import torch
-    hardware = {'device': cfg.device, 'parallel_workers': 3}
+    hardware = {'device': cfg.device, 'parallel_workers': len(TRAINING_TRACKS)}
     if cfg.device == 'cuda':
         if not torch.cuda.is_available():
             raise RuntimeError('CUDA required for all-track GPU run')
@@ -158,18 +183,23 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                                  if gpu_only else 'train, checkpoint, postprocess, report own track'),
         'supervisor_responsibility':'barrier, MPS, child lifetime, collection',
         'shared_inputs':'read-only; text bundle CSVs materialized in text worker output',
-        'hybrid_text_checkpoint':'frozen prepared baseline; no dependency on concurrent text worker'
+        'cascade_mode':'text ranker retrieves, gnn_only scorer decides; no fused embedding'
         })
         atomic_write_text(output / 'suite_manifest.json',
                           manifest.model_dump_json(indent=2, by_alias=True) + '\n')
-    skipped = [track for track in TRACKS if resume and completed_track(output / track, track,
-                                                                   postprocess_complete=not gpu_only)]
+    skipped = [track for track in TRACKS if resume and completed_track(
+        output / track, track, postprocess_complete=expected_postprocess(track, gpu_only=gpu_only))]
     for track in skipped:
         events.emit('worker_selection', 'skipped', worker_track=track,
                     reason='completed artifacts verified against SHA256 inventory')
+    # The trained lanes (text, gnn_only) run in parallel behind the start
+    # barrier. The cascade trains nothing and consumes both trained artifacts,
+    # so it runs sequentially after the parallel phase completes. Both groups
+    # come from the suite's declared track taxonomy, not a hardcoded tuple.
+    parallel_tracks = [track for track in TRAINING_TRACKS if track not in skipped]
     commands = {track: [sys.executable, '-m', 'model_tracks.worker', '--config', str(config.resolve()),
                         '--track', track, '--run-tag', f'{run_tag}-{track}'] + (['--resume'] if resume else [])
-                for track in TRACKS if track not in skipped}
+                for track in parallel_tracks}
     env = {**os.environ, 'PYTHONPATH':str(TRAIN_ROOT/'src'),
            'ER_SUITE_ATTEMPT': events.attempt,
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
@@ -179,20 +209,26 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_DATA_GATE_GPU_PENDING': '1',
            'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
-    with _LOG.section('phase.worker_launch', workers=len(commands), device=cfg.device):
+    postprocess_tracks = [track for track in POSTPROCESS_TRACKS if track not in skipped]
+    with _LOG.section('phase.worker_launch', workers=len(commands) + len(postprocess_tracks), device=cfg.device):
         if not commands:
             result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}
         elif cfg.device == 'cuda':
-            share = max(1, 100 // len(commands)) if commands else None
+            share = max(1, 100 // len(commands))
             with mps_environment(output, thread_percentage=share) as mps_env:
                 result = run_parallel(commands, output, {**env, **mps_env, 'PYTHONPATH':str(TRAIN_ROOT/'src')}, resume=resume)
         else:
             result = run_parallel(commands, output, env, resume=resume)
+        for track in postprocess_tracks:
+            result.setdefault('workers', []).append(
+                _run_postprocess_track(config, output, run_tag, track, env,
+                                       resume=resume, events=events))
     result['skipped_verified_tracks'] = skipped
     # Validate the current artifact generation, not just completion markers.
     with _LOG.section('phase.completion', tracks=len(TRACKS)):
         for track in TRACKS:
-            if not completed_track(output / track, track, postprocess_complete=not gpu_only):
+            if not completed_track(output / track, track,
+                                   postprocess_complete=expected_postprocess(track, gpu_only=gpu_only)):
                 raise ValueError(f'incomplete track: {track}')
     if cfg.post_training_ablation and not gpu_only:
         from model_tracks.baseline_ablation import complete as complete_baseline
@@ -211,7 +247,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if not resume:
             raise FileExistsError(archive_path)
         from model_tracks.resume import verify_suite_archive
-        verify_suite_archive(archive_path, output, run_tag, identity, postprocess_complete=not gpu_only)
+        verify_suite_archive(archive_path, output, run_tag, identity, gpu_only=gpu_only)
         archive_sha = file_hash(archive_path)
         archive_sidecar(archive_path, '.sha256').write_text(archive_sha + '\n')
         events.emit('collection', 'verified', archive=str(archive_path), sha256=archive_sha,
@@ -225,7 +261,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             else:
                 events.emit('publication', 'skipped', reason='publication disabled in suite config')
         return archive_path
-    from core.portable_archive import RESULT_ARCHIVE_EXCLUDED_DIRS
+    from core.portable_archive import is_result_archive_member, write_archive
+    from model_tracks.resume import selected_checkpoint_dirs
     # The timing surfaces default into output/logs (bffadd3) and are appended
     # to by this very collection step, so the archive would hash bytes that
     # change mid-write ("archive integrity mismatch: logs/timings.log").
@@ -235,15 +272,17 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if _bound and Path(_bound).resolve().is_relative_to(output.resolve()):
             os.environ[_variable] = str(
                 Path(tempfile.gettempdir()) / f'er_frozen_{Path(_bound).name}')
+    publication = cfg.dvc_enabled and not gpu_only
+    # The publication decision is sealed into the archived event log: it is the
+    # last handoff event knowable before the archive exists (owner #5). The
+    # post-seal `collection complete` sha is carried by the .sha256 sidecar.
+    if not publication:
+        events.emit('publication', 'skipped', reason='publication disabled in suite config')
+    selected = selected_checkpoint_dirs(output)
     files = {p.relative_to(output).as_posix(): p for p in output.rglob('*')
-             if p.is_file() and not p.is_symlink() and not any(part in
-                 RESULT_ARCHIVE_EXCLUDED_DIRS for part in p.relative_to(output).parts)
-             and not ('_artifact_publications' in p.relative_to(output).parts and p.suffix != '.json')
-             and not any(part.endswith('.publication') for part in p.relative_to(output).parts)
-             and p.name not in {'.env','config.local'}
-             and not any(part.endswith('__payload') for part in p.relative_to(output).parts)
-             and not ('.dvc' in p.relative_to(output).parts and 'cache' in p.relative_to(output).parts)}
-    from core.portable_archive import write_archive
+             if p.is_file() and not p.is_symlink()
+             and is_result_archive_member(p.relative_to(output).as_posix(),
+                                          selected_checkpoints=selected)}
     with _LOG.section('phase.archive_write', files=len(files), format=cfg.result_archive_format):
         write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag}, profile=cfg.profiling)
         archive_sha = file_hash(archive_path)
@@ -251,13 +290,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         events.emit('collection', 'complete', archive=str(archive_path), sha256=archive_sha,
                     bytes=archive_path.stat().st_size)
     with _LOG.section('phase.publication', reused=False):
-        if cfg.dvc_enabled and not gpu_only:
+        if publication:
             from model_tracks.local_complete import _publish
             events.emit('publication', 'starting', archive=str(archive_path))
             _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
             events.emit('publication', 'complete')
-        else:
-            events.emit('publication', 'skipped', reason='publication disabled in suite config')
     return archive_path
 
 

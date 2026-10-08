@@ -1,4 +1,9 @@
-"""Regression checks for the inverted similarity heads found in the pair audit."""
+"""Regression checks for the single-cosine gnn_only pair scorer.
+
+The fused graph/text hybrid head is retired; these checks pin the surviving
+monotonic single-cosine head and that the fused two-input head can no longer be
+built at all.
+"""
 import json
 
 import pytest
@@ -7,29 +12,19 @@ import torch
 from graph_tracks.model import PairScorer
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-@pytest.mark.parametrize('seed', [7, 42, 1337])
-def test_higher_similarity_increases_new_match_score(hybrid, seed):
-    torch.manual_seed(seed)
-    scorer = PairScorer(hybrid)
+def test_higher_similarity_increases_new_match_score():
+    torch.manual_seed(1337)
+    scorer = PairScorer()
     vectors = torch.tensor([[1., 0.], [0.6, 0.8], [1., 0.]])
     pairs = torch.tensor([[0, 1], [0, 2]])
-    logits = scorer.score(vectors, pairs,
-                          text_cosine=torch.tensor([.7, .7]) if hybrid else None).logits
+    logits = scorer.score(vectors, pairs).logits
     assert logits[1] > logits[0]
-    if hybrid:
-        logits = scorer.score(vectors, pairs,
-                              text_cosine=torch.tensor([.7, 1.])).logits
-        same_graph = scorer.score(vectors, pairs,
-                                  text_cosine=torch.tensor([.7, .7])).logits
-        assert logits[1] > same_graph[1]
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_optimizer_projection_prevents_similarity_inversion(hybrid):
-    scorer = PairScorer(hybrid)
+def test_optimizer_projection_prevents_similarity_inversion():
+    scorer = PairScorer()
     optimizer = torch.optim.SGD(scorer.parameters(), lr=10.)
-    # An adverse update would invert every similarity coefficient.
+    # An adverse update would invert the similarity coefficient.
     scorer.head.weight.sum().backward()
     optimizer.step()
     assert (scorer.head.weight < 0).all()
@@ -43,23 +38,24 @@ def test_optimizer_projection_prevents_similarity_inversion(hybrid):
     assert (scorer.head.weight > 0).all()
 
 
-def test_historical_signed_checkpoint_scores_are_preserved():
-    scorer = PairScorer(True)
-    scorer.load_state_dict({'head.weight': torch.tensor([[.546, -.163]]),
-                            'head.bias': torch.tensor([.231])})
-    vectors = torch.tensor([[1., 0.], [1., 0.]])
-    pairs = torch.tensor([[0, 1]])
-    result = scorer.score(vectors, pairs, text_cosine=torch.tensor([.99])).logits
-    torch.testing.assert_close(result, torch.tensor([.546 - .163 * .99 + .231]))
-    assert scorer.head.weight[0, 1] < 0
+def test_fused_hybrid_head_is_retired():
+    with pytest.raises(ValueError, match='fused-hybrid pair scorer is retired'):
+        PairScorer(True)
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_training_checkpoints_and_epoch_metrics_keep_monotonic_head(tmp_path, monkeypatch, hybrid):
+def test_calibration_metrics_report_only_the_graph_cosine():
+    scorer = PairScorer()
+    metrics = scorer.calibration_metrics()
+    assert metrics['policy'] == 'gnn_single_cosine_v1'
+    assert 'graph_cosine_weight' in metrics
+    assert 'text_cosine_weight' not in metrics
+
+
+def test_training_checkpoints_and_epoch_metrics_keep_monotonic_head(tmp_path, monkeypatch):
     from test_graph_tracks import inputs, disable_tracking
     from graph_tracks.train import train
     disable_tracking(monkeypatch)
-    _, _, _, config = inputs(tmp_path, hybrid)
+    _, _, _, config = inputs(tmp_path)
     # Force an inverted update at each epoch to check training integration,
     # rather than relying on this small fixture to naturally invert a head.
     original_step = torch.optim.AdamW.step
@@ -69,7 +65,7 @@ def test_training_checkpoints_and_epoch_metrics_keep_monotonic_head(tmp_path, mo
         with torch.no_grad():
             for group in optimizer.param_groups:
                 for parameter in group['params']:
-                    if parameter.shape == (1, 2 if hybrid else 1):
+                    if parameter.shape == (1, 1):
                         parameter.fill_(-1.)
         return result
 
@@ -83,4 +79,4 @@ def test_training_checkpoints_and_epoch_metrics_keep_monotonic_head(tmp_path, mo
     for epoch in metrics:
         head = epoch['scorer_calibration']
         assert head['graph_cosine_weight'] >= 0
-        assert head['text_cosine_weight'] is None or head['text_cosine_weight'] >= 0
+        assert 'text_cosine_weight' not in head

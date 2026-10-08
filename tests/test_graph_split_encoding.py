@@ -8,8 +8,7 @@ from graph_tracks.model import AttributeGNN, PairScorer
 from test_graph_tracks import population
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_split_only_encoding_preserves_scores_losses_and_gradients(hybrid):
+def test_split_only_encoding_preserves_scores_losses_and_gradients(hybrid=False):
     records = population()
     vocabulary = fit_vocabulary(records)
     support_ids = [i for i, row in enumerate(records) if row['split'] == 'train']

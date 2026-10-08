@@ -1,0 +1,29 @@
+# Cascade lane: retrieve-then-rerank over the trained text ranker and the
+# trained gnn_only scorer. It trains NO parameters and fuses NO embedding; it
+# consumes the trained text ANN (rank/index) plus the trained gnn_only scorer
+# checkpoint and reports both roles via graph_tracks.report.report_cascade.
+track: cascade
+listings: data/graph_tracks/listings.json
+pairs: data/graph_tracks/pairs.csv
+# Real cascade inputs (resolved by the worker after the trained tracks finish):
+# the text ANN used as the recall-oriented ranker and the gnn_only pair scorer
+# checkpoint used as the precision-oriented decider.
+text_index: results/graph_tracks/text__index
+gnn_checkpoint: results/graph_tracks/gnn_only__best_checkpoint.json
+output_dir: results/graph_tracks
+input_manifest: data/graph_tracks/input_manifest.json
+# Candidate budget for the ranker before the decider reranks.
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
+# The cascade inherits the shared graph execution policy; nothing is trained.
+device: cpu
+report_test: true
+postprocess: true
+wandb:
+  project: e-r
+  mode: offline
+dvc:
+  enabled: false
+  remote: null
+  push: false

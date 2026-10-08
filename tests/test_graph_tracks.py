@@ -97,8 +97,7 @@ def test_cache_alignment_and_zero_guard(tmp_path):
         load_text_cache(path, ['a'])
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid):
+def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid=False):
     disable_tracking(monkeypatch)
     listings, pairs, cache, config = inputs(tmp_path, hybrid)
     checkpoint = train(config, run_tag='smoke')
@@ -168,8 +167,7 @@ def test_prepared_export_shared_identity(tmp_path):
         load_records(listings)
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_complete_offline_wandb_dvc_lifecycle(tmp_path, monkeypatch, hybrid):
+def test_complete_offline_wandb_dvc_lifecycle(tmp_path, monkeypatch, hybrid=False):
     """Exercise real W&B SDK and DVC add/push/clean-pull without external services."""
     disable_tracking(monkeypatch)
     monkeypatch.setenv('WANDB_MODE', 'offline')
@@ -224,9 +222,9 @@ def test_track_checkpoint_name_and_integrity(tmp_path, monkeypatch):
     cfg.update(epochs=1, postprocess=False)
     config.write_text(yaml.safe_dump(cfg))
     checkpoint = train(config, run_tag='integrity')
-    wrong = checkpoint.with_name(name('hybrid', 'graph_model.pt'))
+    wrong = checkpoint.with_name(name('cascade', 'graph_model.pt'))
     shutil.copy2(checkpoint, wrong)
-    with pytest.raises(ValueError, match='completion marker'):
+    with pytest.raises(ValueError, match='checkpoint filename'):
         GraphEncoder(wrong)
     with checkpoint.open('ab') as handle:
         handle.write(b'tampered')
@@ -342,8 +340,7 @@ def test_prepare_rejects_scoped_hold_without_blocking_gtin_peers(tmp_path):
         prepare(catalog, splits, pairs, tmp_path / 'blocked')
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch, hybrid):
+def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch, hybrid=False):
     import importlib
     worker = importlib.import_module('graph_tracks.train')
     disable_tracking(monkeypatch)

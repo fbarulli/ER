@@ -12,7 +12,7 @@ class GraphExportManifest(BaseModel):
     """Saved catalog forward provenance shared by exporter and CPU reporter."""
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     schema_id: Literal['er-graph-export-v1'] = Field(alias='schema')
-    track: Literal['gnn_only', 'hybrid']
+    track: Literal['gnn_only']
     checkpoint_sha256: Digest
     listings_sha256: Digest
     vectors_sha256: Digest
@@ -35,8 +35,10 @@ class GraphForwardManifest(GraphExportManifest):
     forward_only: Literal[True]
 
 
-TRACKS = {'gnn_only', 'hybrid'}
-_NAME_TRACKS = TRACKS | {'text'}
+TRACKS = {'gnn_only'}
+#: ``cascade`` is a nameable lane (it writes ``cascade__cascade_report.json``)
+#: but never trains or exports a graph model, so it is not a checkpoint track.
+_NAME_TRACKS = TRACKS | {'text', 'cascade'}
 
 
 def _validate_name_track(track: str) -> None:

@@ -65,15 +65,15 @@ def _build_sealed(tmp_path, ablation=False, name=RUN):
 
 
 def test_verified_archive_reports_sha_and_tracks(tmp_path):
-    archive = _build_sealed(tmp_path, ablation=True)
+    archive = _build_sealed(tmp_path, ablation=False)
     result = archive_verification.verification_result(archive)
     assert result['status'] == 'verified'
     assert result['run_tag'] == RUN
     assert result['zip_sha256']['match'] is True
     assert result['tracks']['text']['threshold'] == 0.5
     assert result['tracks']['text']['test_reported'] is False
-    assert result['tracks']['hybrid']['ablation']['threshold_binding']['checkpoint_sha256'] == '0' * 64
-    assert 'ablation' not in result['tracks']['text'] or result['tracks']['text']['ablation']
+    assert result['tracks']['cascade']['threshold'] == 0.5
+    assert result['tracks']['cascade']['test_reported'] is False
 
 
 def test_settings_pin_rejects_a_different_suite(tmp_path):

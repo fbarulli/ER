@@ -496,10 +496,10 @@ colab:
     # 12 GB VRAM, inference only. Finetuning uses 64 on a 14.6-GB T4 because
     # backward passes and Adam moments dominate memory; forward-only under
     # no_grad keeps the working set alone, so the same class of card carries a
-    # batch an order of magnitude larger. 512 is the chosen operating point and
+    # batch an order of magnitude larger. 600 is the chosen operating point and
     # max_batch_size is the enforced ceiling: a typo fails at config load, and
     # the worker re-checks it against the device before encoding.
-    batch_size: 512
+    batch_size: 600
     max_batch_size: 1024
     min_vram_gb: 10.0
     error_threshold: 0.787
@@ -1009,8 +1009,8 @@ training:
   # Conservative shared batch sizes for the 14.6-GB T4 across all three
   # swept backbones (MiniLM, multilingual L12, and DeBERTa-v3-base).
   batch_size_cuda: 64         # finetune batch when on GPU
-  batch_size_embed: 64        # encode batch (zero-shot, plots, eval encoders)
-  batch_size_eval: 64         # post-train eval encodes
+  batch_size_embed: 600       # encode batch (zero-shot, plots, eval encoders)
+  batch_size_eval: 600        # post-train eval encodes
   max_seq_length: 512         # full supported encoder window; overflow is rejected, never truncated
   eval_steps_per_epoch: 4     # early-stop eval cadence
   dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
@@ -1445,3 +1445,27 @@ packaging:
     - vocabulary.json
     - text_track.yaml
     - attribute_ablation.yaml
+bundle:
+  # One sealed Bundle travels generation -> training -> post-training (Colab and
+  # Kaggle); every name lives here so no surface re-hardcodes a literal.
+  manifest_inputs: "model_tracks_package.json"
+  manifest_recovery: "suite_recovery_manifest.json"
+  manifest_result: "suite_bundle_manifest.json"
+  run_tag_key: "run_tag"
+  files_key: "files"
+  complete_status: "ok"
+  checkpoint_dir: "_checkpoints"
+  trainer_state_file: "trainer_state.json"
+  trainer_best_key: "best_model_checkpoint"
+  trainer_metric_key: "best_metric"
+  trainer_step_key: "global_step"
+  best_checkpoint_glob: "*__best_checkpoint.json"
+  best_checkpoint_path_key: "path"
+  inventory_file: "track_inventory.json"
+  complete_file: "track_complete.json"
+  worker_events_file: "worker_events.jsonl"
+  suite_events_file: "suite_events.jsonl"
+  ablation_templates_dir: "ablation_templates"
+  ablation_request_file: "request.json"
+  ablation_skip_phases: ["ablation", "attribute_ablation_export"]
+  ablation_skip_status: "skipped"

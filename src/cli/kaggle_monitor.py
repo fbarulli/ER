@@ -364,6 +364,102 @@ class KaggleMonitor:
         return plan
 
     @staticmethod
+    def clear_kernel_session_id(slug: str) -> None:
+        """Drop a stale recorded session id before a fresh push of ``slug``.
+
+        The id file is process-local state under ``logs/kaggle``; leaving a
+        previous run's id in place would let ``stop`` cancel a session that is
+        already gone (or, worse, a different run's session).
+        """
+        from cli import kaggle_lane as lane
+
+        _, _, kernel = slug.rpartition("/")
+        if not kernel:
+            return
+        path = lane.lane_logs_dir() / lane._spec().files.session_id_file.format(kernel=kernel)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def capture_kernel_session_id(slug: str, *, attempts: int = 3,
+                                  retry_seconds: float = 3.0,
+                                  timeout_seconds: float = 15.0) -> dict[str, Any]:
+        """Record a running kernel's session id so ``stop`` can cancel it in place.
+
+        Connects the midtier log-stream proxy, reads the ``kernel_session_id``
+        embedded in the stream URL — the same id the verified ``stop`` feeds to
+        the SDK's in-place ``cancel_kernel_session`` — writes
+        ``logs/kaggle/<kernel>.session_id`` atomically, and closes WITHOUT
+        following the stream. Retries because the proxy only serves a URL once
+        the session is up. Best-effort: on failure it returns ``session_id:
+        None`` and the autowatch stream follower still captures the id during
+        the run. The SDK call has no client timeout, so each attempt runs in a
+        daemon thread bounded by ``timeout_seconds``: a hung connect can never
+        stall the synchronous launch path that awaits this capture.
+        """
+        from cli import kaggle_lane as lane
+
+        import threading
+        owner, slash, kernel = slug.rpartition("/")
+        if not slash or not owner or not kernel:
+            raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
+        session_file = (lane.lane_logs_dir()
+                        / lane._spec().files.session_id_file.format(kernel=kernel))
+        plan: dict[str, Any] = {"kernel": slug, "session_id": None}
+
+        def probe(outcome: dict[str, Any]) -> None:
+            """One bounded attempt: read the URL, always close the response."""
+            try:
+                from kagglesdk.kaggle_client import KaggleClient
+                from kagglesdk.kaggle_env import KaggleEnv
+                from kagglesdk.kernels.types.kernels_api_service import (
+                    ApiGetKernelSessionLogsStreamRequest)
+                request = ApiGetKernelSessionLogsStreamRequest()
+                request.user_name = owner
+                request.kernel_slug = kernel
+                response = (KaggleClient(env=KaggleEnv.PROD).kernels
+                            .kernels_api_client.get_kernel_session_logs_stream(request))
+                try:
+                    outcome["url"] = str(getattr(response, "url", "") or "")
+                finally:
+                    close = getattr(response, "close", None)
+                    if callable(close):
+                        close()
+            except Exception as error:  # proxy not up yet / transport hiccup
+                outcome["error"] = f"{type(error).__name__}: {str(error)[:160]}"
+
+        total = max(1, attempts)
+        for attempt in range(total):
+            outcome: dict[str, Any] = {}
+            worker = threading.Thread(target=probe, args=(outcome,), daemon=True,
+                                      name=f"capture-{kernel}")
+            worker.start()
+            worker.join(timeout=timeout_seconds)
+            if worker.is_alive():
+                plan["session_id"] = None
+                plan["error"] = (f"TimeoutError: no stream URL within "
+                                 f"{timeout_seconds:g}s")
+            elif "error" in outcome:
+                plan["session_id"] = None
+                plan["error"] = outcome["error"]
+            else:
+                match = re.search(r'(\d{3,})(?:\?.*)?$', outcome.get("url", ""))
+                if match:
+                    session_id = int(match.group(1))
+                    session_file.parent.mkdir(parents=True, exist_ok=True)
+                    lane.atomic_write_text(session_file, str(session_id) + "\n")
+                    plan["session_id"] = session_id
+                    plan["session_id_file"] = str(session_file)
+                    plan.pop("error", None)
+                    return plan
+                plan["session_id"] = None
+            if attempt + 1 < total:
+                time.sleep(retry_seconds)
+        return plan
+
+    @staticmethod
     def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
                     execute: bool) -> dict[str, Any]:
         """Poll kernel status; on terminal states pull output logs locally.

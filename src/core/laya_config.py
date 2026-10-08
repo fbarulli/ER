@@ -13,6 +13,64 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class FinetuneSpec(BaseModel):
+    """laya.finetune — the fine-tune recipe SSOT (additive).
+
+    Every `laya.train.TrainConfig` field the finetune kernel drives is named
+    here, so the whole trainer surface is YAML-driven. The defaults reproduce
+    the landed research recipe (epochs 8, micro_batch 8, grad_accum 8,
+    encoder_lr 2.5e-5, head_lr 1e-4, loss "soft-ce", seed 1729) and the
+    upstream `TrainConfig` defaults for every other knob, so a
+    config/training.yaml without this block stages byte-identically.
+
+    `eval_data` is not a knob: the kernel sets it to the attached dev split.
+    `device` is the runtime resolver input (`"auto"` -> cuda when the pinned
+    single T4 is present).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # optimization
+    epochs: int = Field(default=8, ge=1, le=128)
+    micro_batch: int = Field(default=8, ge=1, le=1024)
+    grad_accum: int = Field(default=8, ge=1, le=1024)
+    encoder_lr: float = Field(default=2.5e-5, gt=0.0)
+    head_lr: float = Field(default=1e-4, gt=0.0)
+    min_lr: float = Field(default=1e-6, ge=0.0)
+    weight_decay: float = Field(default=0.01, ge=0.0)
+    grad_clip: float = Field(default=1.0, gt=0.0)
+    # loss
+    loss: Literal["soft-ce", "rlcd"] = "soft-ce"
+    label_smoothing: float = Field(default=0.0, ge=0.0, lt=1.0)
+    rl_samples: int = Field(default=4, ge=1, le=1024)
+    sigma_start: float = Field(default=0.4, ge=0.0)
+    sigma_end: float = Field(default=0.1, ge=0.0)
+    w_sph: float = Field(default=0.75, ge=0.0)
+    w_rps: float = Field(default=1.0, ge=0.0)
+    # layout / data
+    shuffle_options: list[str] = Field(default_factory=list)
+    option_layout: Literal["sequential", "parallel"] | None = None
+    max_len: int | None = Field(default=None, ge=1)
+    head_max_len: int | None = Field(default=None, ge=1)
+    text_column: str = "text"
+    label_column: str = "label"
+    question_id: str = "label"
+    instructions: str | None = None
+    freeze_encoder: bool = False
+    # calibration / abstention
+    calib_max: int = Field(default=400, ge=0)
+    calib_frac: float = Field(default=0.1, ge=0.0, lt=1.0)
+    calib_seed: int = 20260922
+    target_error: float = Field(default=0.10, ge=0.0, le=1.0)
+    min_abstain_n: int = Field(default=10, ge=1)
+    # runtime
+    seed: int = 1729
+    amp: bool | None = None
+    gradient_checkpointing: bool | None = None
+    log_every: int = Field(default=100, ge=0)
+    device: str = "auto"
+
+
 class LayaSpec(BaseModel):
     """training.laya — the laya decision lane's SSOT (additive).
 
@@ -42,8 +100,21 @@ class LayaSpec(BaseModel):
                                  "laya-cli-eval": "final_validation"},
     )
     # laya checkpoint hub source (convaiinnovations/laya on the Hugging
-    # Face hub; the kernel loads it explicitly).
+    # Face hub). Kept for the decision kinds that still load a checkpoint
+    # by id; the FINE-TUNE path no longer uses it (see base_model_* below).
     checkpoint_hub: str = "convaiinnovations/laya"
+    # The fine-tune BASE checkpoint travels as its OWN kaggle dataset: the
+    # 647 MB local snake_local tree ships as a `.tar.zst` (plain git caps
+    # at 100 MB), the transport the project already uses for large
+    # payloads. The finetune kernel attaches this dataset, extracts the
+    # archive under /kaggle/input to a local dir, and passes the extracted
+    # DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local dir
+    # carrying rl_agent_config.json and never calls the Hub.
+    base_model_dataset: str | None = "fbarulli/er-laya-base"
+    base_model_archive: str = "convaiinnovations-laya.tar.zst"
+    # The single top-level member of base_model_archive (extraction yields
+    # a dir of this name); used as a deterministic hint before the rglob.
+    base_model_dir: str = "convaiinnovations-laya"
     # Staging root (TRAIN_ROOT-relative). Receipts land under
     # results/laya_lane/<kind>/<op>/...
     staging_dir: str = "results/laya_lane"
@@ -60,6 +131,28 @@ class LayaSpec(BaseModel):
     # payloads so a dataset version never drops the decision inputs.
     finetune_dataset_slug: str | None = "fbarulli/er-laya-train"
     finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
+    # ── fine-tune EVAL-only path (held-out score, no retrain) ─────────────
+    # A dedicated eval-only kernel scores a fine-tuned checkpoint on the
+    # corpus held-out split: it attaches the SAME corpus dataset
+    # (finetune_dataset_slug) + the fine-tuned checkpoint dataset
+    # (finetune_ckpt_dataset), loads the checkpoint, and runs
+    # `laya.train.calibration_records` + `evaluate_records`. No training,
+    # no Hub fetch. The checkpoint dataset is optional when the operator
+    # bakes an explicit local/attached path instead.
+    finetune_eval_kernel_slug: str | None = "fbarulli/er-laya-finetune-eval"
+    finetune_ckpt_dataset: str | None = "fbarulli/er-laya-finetune-ckpt"
+    # Deterministic member-dir hint inside the attached checkpoint dataset
+    # (mirrors base_model_dir); the kernel rglobs `rl_agent_config.json` as
+    # a fallback when the hint misses.
+    finetune_ckpt_dir: str = "checkpoint"
+    # The corpus split the eval-only kernel scores. Held out by construction:
+    # the fine-tune trains on train and evaluates/calibrates on dev.
+    finetune_eval_split: Literal["train", "dev", "test"] = "test"
+    finetune_eval_batch_size: int = Field(default=16, ge=1, le=256)
+    # The FULL `laya.train.TrainConfig` recipe the finetune kernel builds
+    # (additive; defaults reproduce the landed recipe exactly). YAML-driven
+    # so every trainer knob is SSOT config, never a code literal.
+    finetune: FinetuneSpec = Field(default_factory=FinetuneSpec)
     run_tag_prefix: str = "laya_"
     # SINGLE T4 per owner ruling; the meta never requests 2xT4.
     gpu: Literal["T4"] = "T4"

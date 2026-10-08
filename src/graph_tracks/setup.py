@@ -238,7 +238,7 @@ def _load_setup_templates(train_root: Path) -> dict:
     config_dir = Path(TRAIN_ROOT) / str(_config_layout())
     templates = {track: load_graph_config(config_dir / f'graph_tracks_{template}.yaml',
                                           expected_track=track).model_dump()
-                 for track, template in [('gnn_only', 'gnn'), ('hybrid', 'hybrid')]}
+                 for track, template in [('gnn_only', 'gnn'), ('cascade', 'cascade')]}
     templates['text'] = load_text_config(config_dir / 'text_track.yaml').model_dump()
     return templates
 
@@ -285,15 +285,19 @@ def _write_track_configs(output: Path, templates: dict, listings: Path,
                          baseline_hash: str) -> None:
     """Render each graph track's runnable config against this setup tree."""
     from graph_tracks.config import GraphConfig
-    for track in ('gnn_only', 'hybrid'):
+    for track in ('gnn_only', 'cascade'):
         cfg = templates[track].copy()
         cfg.update(listings=str(listings),
                    pairs=str(listings.parent / 'pairs.csv'),
                    input_manifest=str(listings.parent / 'input_manifest.json'),
                    report_test=False)
-        if track == 'hybrid':
-            cfg['text_cache'] = str(output / 'shared_minilm__embeddings.npz')
-            cfg['text_checkpoint_sha256'] = baseline_hash
+        if track == 'cascade':
+            # The cascade consumes the trained text ANN and the trained
+            # gnn_only scorer; the paths are resolved by the worker once those
+            # artifacts exist. No text_cache fusion is ever declared.
+            cfg.pop('text_cache', None)
+            cfg['text_index'] = str(output / 'text_index')
+            cfg['gnn_checkpoint'] = str(output / 'gnn_checkpoint.json')
         cfg = GraphConfig.model_validate(cfg).model_dump()
         (output / f'{track}.yaml').write_text(yaml.safe_dump(cfg, sort_keys=False))
 

@@ -78,7 +78,7 @@ class ProfilerMetadata(BaseModel):
 class PerformanceSummary(BaseModel):
     model_config = ConfigDict(extra='allow', allow_inf_nan=False)
     schema_id: Literal['er-track-performance-v1'] = Field(alias='schema')
-    track: Literal['text', 'gnn_only', 'hybrid']
+    track: Literal['text', 'gnn_only', 'cascade']
     enabled: bool
     sections: dict[str, SectionTiming]
     missing_required_sections: list[str]

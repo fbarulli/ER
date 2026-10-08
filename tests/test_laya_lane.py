@@ -232,7 +232,7 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     # publish pin constants + the checkout preflight block (kaggle-lane
     # sibling shape; the push gate reads these constants)
     assert 'REPOSITORY = "https://github.com/fbarulli/ER.git"' in script
-    assert 'BRANCH = "kaggle-lane"' in script
+    assert 'BRANCH = "main"' in script
     assert f'REVISION = "{REVISION_PIN}"' in script
     # THE ATTACHED-INPUTS preflight (BUG 1 fix): root is /kaggle/input
     # (never `_runtime_root = Path(root)` — no clone root is defined),
@@ -257,7 +257,7 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     # publish-tip expectation
     assert receipt["published_pin"] == {
         "repository": "https://github.com/fbarulli/ER.git",
-        "branch": "kaggle-lane",
+        "branch": "main",
         "revision": REVISION_PIN,
     }
 
@@ -285,7 +285,7 @@ def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     assert "_runtime_files = (" in eval_script
     assert eval_receipt["published_pin"] == {
         "repository": "https://github.com/fbarulli/ER.git",
-        "branch": "kaggle-lane",
+        "branch": "main",
         "revision": REVISION_PIN,
     }
     # the eval harness is unlatched by config default; the receipt records
@@ -313,7 +313,7 @@ def test_stage_decision_kernel_refuses_stale_published_tip(
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch, origin_tip="fed321cba9" + "0" * 35)
-    with pytest.raises(RuntimeError, match="origin/kaggle-lane tip"):
+    with pytest.raises(RuntimeError, match="origin/main tip"):
         laya_lane.stage_decision_kernel(decision_kind="attribute")
     stage = tmp_path / "results/laya_lane/kaggle/attribute"
     assert not (stage / "kernel-metadata.json").exists()
@@ -550,7 +550,8 @@ def test_decision_kind_registry_contract():
     from cli.laya_lane import DECISION_BINDINGS
 
     assert set(DECISION_BINDINGS) == {"attribute", "identity",
-                                      "laya-cli-eval"}
+                                      "laya-cli-eval", "finetune",
+                                      "finetune-eval"}
     # every binding carries the class contract: header columns + state
     for entry in DECISION_BINDINGS.values():
         assert entry["wanted_columns"]

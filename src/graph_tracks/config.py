@@ -76,12 +76,19 @@ class DvcSpec(BaseModel):
 
 class GraphConfig(RetrievalConfig):
     model_config = ConfigDict(extra="forbid", validate_default=True)
-    track: Literal["gnn_only", "hybrid"]
+    track: Literal["gnn_only", "cascade"]
     listings: str
     pairs: str
     output_dir: str
+    #: Fused text embedding cache. Only the retired hybrid used this; no track
+    #: declares it any more, so it is rejected everywhere it is still passed.
     text_cache: str | None = None
     text_checkpoint_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+    #: Cascade-only: the trained text ANN (ranker) and the trained gnn_only
+    #: scorer checkpoint (decider). The cascade fuses nothing; it consumes both
+    #: artifacts exactly as trained.
+    text_index: str | None = None
+    gnn_checkpoint: str | None = None
     input_manifest: str | None = None
     allow_unmanifested_inputs: bool = False
     wandb: WandbSpec = Field(default_factory=WandbSpec)
@@ -111,10 +118,24 @@ class GraphConfig(RetrievalConfig):
 
     @model_validator(mode="after")
     def check_track(self):
-        if (self.track == "hybrid") != bool(self.text_cache):
-            raise ValueError("hybrid requires text_cache; gnn_only forbids it")
-        if self.track == 'gnn_only' and self.text_checkpoint_sha256:
-            raise ValueError('gnn_only forbids a text checkpoint reference')
+        if self.track == "cascade":
+            # The cascade is a combinator: it consumes the trained text ANN and
+            # the trained gnn_only scorer. It never fuses an embedding, so the
+            # fused text cache/checkpoint are forbidden, and it must declare the
+            # real inputs it reads: the text index and the gnn scorer checkpoint.
+            if self.text_cache:
+                raise ValueError('cascade forbids the fused text_cache; it consumes the trained text index and gnn scorer')
+            if self.text_checkpoint_sha256:
+                raise ValueError('cascade forbids a fused text checkpoint reference')
+            if not (self.text_index and self.gnn_checkpoint):
+                raise ValueError('cascade requires the trained text_index and gnn_checkpoint inputs')
+        else:
+            if self.text_cache:
+                raise ValueError('gnn_only forbids text_cache')
+            if self.text_index or self.gnn_checkpoint:
+                raise ValueError('gnn_only forbids cascade artifact references')
+            if self.text_checkpoint_sha256:
+                raise ValueError('gnn_only forbids a text checkpoint reference')
         if not all((self.listings, self.pairs, self.output_dir)):
             raise ValueError("input and output paths must not be empty")
         return self

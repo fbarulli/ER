@@ -90,7 +90,7 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
             checkpoint, _ = resolve_best_checkpoint(restored/'text')
             ignored = {'optimizer.pt','scheduler.pt','rng_state.pth','trainer_state.json','training_args.bin','scaler.pt'}
             shutil.copytree(checkpoint,staged/'text',ignore=lambda _, names: [n for n in names if n in ignored])
-            for track in ('gnn_only','hybrid'):
+            for track in ('gnn_only',):
                 selected = list((restored/track).rglob(name(track,'best_checkpoint.json')))
                 if len(selected)!=1:
                     raise ValueError(f'ambiguous selected checkpoint: {track}')
@@ -116,8 +116,8 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
                     raise ValueError(f'model file exceeds GitHub regular-file limit: {path.name}')
             (staged/'models_manifest.json').write_text(json.dumps({
                 'run_tag':run_tag,'source_archive_sha256':file_hash(archive),'files':inventory,
-                'tracks':['text','gnn_only','hybrid'],'graph_models_inference_only':True,
-                'hybrid_text_reference':'artifacts/models/all-MiniLM-L6-v2; checkpoint hash in graph manifest'
+                'tracks':['text','gnn_only'],'graph_models_inference_only':True,
+                'cascade_composed_from':['text ranker (ANN candidates)','gnn_only pair scorer (decisions)']
             },indent=2)+'\n')
             staged.rename(destination)
     if push:

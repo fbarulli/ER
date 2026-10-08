@@ -32,6 +32,10 @@ class KaggleCLI:
         parser.add_argument("--execute", action="store_true",
                             help="actually invoke the kaggle CLI (requires "
                                  "credentials + configured kaggle.slug)")
+        parser.add_argument("--no-wait", action="store_true",
+                            help="stop: issue the cancel/replace and return "
+                                 "immediately (verdict 'requested'); never block "
+                                 "in the bounded verify poll")
         parser.add_argument("--kernel", choices=["cpu", "gpu", "embed"], default="cpu",
                             help="which configured kernel slug kernel-status "
                                  "resolves (default: cpu)")
@@ -166,7 +170,8 @@ class KaggleCLI:
                 else spec.gpu_kernel_slug if args.kernel == "gpu"
                 else spec.cpu_kernel_slug)
             print(json.dumps(lane.stop_kernel(slug=resolved, which=args.kernel,
-                                         execute=args.execute), indent=2), flush=True)
+                                         execute=args.execute,
+                                         wait=not args.no_wait), indent=2), flush=True)
             return
         spec = lane._spec()
         if args.what == "submission":

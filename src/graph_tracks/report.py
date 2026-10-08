@@ -288,6 +288,43 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
             'performance': performance, 'confidence_intervals': intervals}
 
 
+def report_cascade(ranked, relevant, decisions, output, *, track='cascade',
+                   ks=(), recall_targets=(0.95,), bins=10, threshold=None):
+    """Cascade report: ranker recall AND decider precision/calibration.
+
+    Consumes the two role outputs of :func:`model_tracks.cascade.cascade` at a
+    fixed candidate budget and evaluates each role on its own terms -- the
+    ranker by candidate recall, the decider on the RETRIEVED candidate set by
+    PR-AUC, precision at the requested recalls and ECE. It is a combinator
+    report: no fused embedding or fused score is computed here.
+    """
+    from model_tracks.cascade import decider_report, ranker_report, retrieved_relevance
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    if not ks:
+        ks = tuple(range(1, ranked.candidate_ids.shape[1] + 1))
+    ranker = ranker_report(list(ranked.candidate_ids), relevant, ks)
+    labels, scores = retrieved_relevance(decisions, relevant)
+    decider = decider_report(labels, scores, recall_targets=recall_targets, bins=bins)
+    report = {'schema': 'er-cascade-report-v1', 'track': track,
+              'roles': {'ranker': ranker, 'decider': decider},
+              'retrieval_ks': [int(k) for k in ks],
+              'decision_threshold': threshold,
+              'composed_from': ['text ranker (ANN candidates)',
+                                'gnn_only pair scorer (decisions)']}
+    (output / name(track, 'cascade_report.json')).write_text(
+        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n')
+    lines = [f'# {track} cascade report', '',
+             'The cascade is a combinator: the text ranker retrieves, the '
+             'gnn_only pair scorer decides, and both roles are reported separately.', '',
+             '## Ranker (candidate recall)', '', '```json',
+             json.dumps(ranker, indent=2, sort_keys=True), '```', '',
+             '## Decider (retrieved candidate set)', '', '```json',
+             json.dumps(decider, indent=2, sort_keys=True), '```', '']
+    (output / name(track, 'cascade_report.md')).write_text('\n'.join(lines) + '\n')
+    return report
+
+
 def _plots(scored, output, track, threshold):
     import matplotlib
     matplotlib.use('Agg')

@@ -119,18 +119,8 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
     if prepared_plan is not None and prepared_plan.get('checkpoint_sha256', file_hash(checkpoint)) != file_hash(checkpoint):
         raise ValueError('prepared query checkpoint mismatch')
     text, metadata = None, None
-    hybrid = encoder.manifest['track'] == 'hybrid'
-    if hybrid != bool(text_cache):
-        raise ValueError('hybrid requires text cache; gnn_only forbids it')
     if text_cache:
-        text, metadata = load_text_cache(text_cache, ids)
-        keys = ('checkpoint_sha256', 'composition', 'identity_policy_sha256', 'identity_dimensions_sha256')
-        for key in keys:
-            if metadata.get(key) != encoder.manifest['text_metadata'].get(key):
-                raise ValueError(f'inference text cache mismatch: {key}')
-        if not encoder.manifest['config']['allow_unmanifested_inputs']:
-            if any(not metadata.get(key) for key in keys):
-                raise ValueError('inference text cache lacks complete composition provenance')
+        raise ValueError('graph export forbids a fused text cache; the hybrid fusion is retired')
     from core.performance import PerformanceRecorder
     perf = PerformanceRecorder(encoder.manifest['track'])
     if prepared_plan is not None:

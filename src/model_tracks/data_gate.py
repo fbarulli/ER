@@ -40,7 +40,7 @@ _LOG = RunLogger(__name__)
 
 #: Set by the supervisor for its children; holds the gate attestation.
 ATTESTATION_ENV = 'ER_DATA_GATE'
-#: Records that the suite gate ran against the declared GPU-pending hybrid cache.
+#: Records that the suite gate ran against the declared GPU-pending baseline cache.
 GPU_PENDING_ENV = 'ER_DATA_GATE_GPU_PENDING'
 #: Ignores attestation trust entirely; every check stays live.
 FORCE_ENV = 'ER_DATA_GATE_ENFORCE'
@@ -153,14 +153,14 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
                         ('text_export_request', setup / 'text_export_request.json'),
                         ('eligible_catalog', setup / 'eligible_catalog.csv'),
                         ('listing_splits', setup / 'listing_splits.csv'),
-                        # The baseline export consumes these to produce the
-                        # hybrid text cache, so they are always gate inputs.
+                        # baseline export consumes these to produce the
+                        # frozen embedding cache, so they are always gate inputs.
                         ('embedding_inputs', setup / 'embedding_inputs.json'),
                         ('prepared_text', setup / 'prepared_text.npz')):
         digests[owner] = _required(path, owner)
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
         digests[key] = _required(Path(F[key]).resolve(), key)
-    for track in ('gnn_only', 'hybrid'):
+    for track in ('gnn_only', 'cascade'):
         track_config = setup / f'{track}.yaml'
         digests[f'{track}_config'] = _required(track_config, f'{track} config')
         settings = load_graph_config(track_config, expected_track=track)
@@ -280,7 +280,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
     # the GPU execution backends, and CUDA additionally requires prepared
     # tensors. Building that configuration through the worker's own helper is
     # what keeps this gate from passing on inputs the trainer would reject.
-    for track in ('gnn_only', 'hybrid'):
+    for track in ('gnn_only',):
         settings = GraphConfig.model_validate(
             graph_worker_settings(setup, cfg, track, gpu_only=True))
         _, records, pairs, vectors, _ = load_inputs(settings, verify_inputs=True)
@@ -291,6 +291,14 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
                    for split, (_, labels) in pairs.items()},
             text_dimension=None if vectors is None else int(vectors.shape[1]),
             device=settings.device)
+    # The cascade is a combinator over the same frozen graph population and the
+    # trained text ANN. It trains nothing, so it declares no shared projection;
+    # its trained artifacts are validated by the worker after training.
+    cascade_settings = GraphConfig.model_validate(
+        graph_worker_settings(setup, cfg, 'cascade', gpu_only=True))
+    tracks['cascade'] = TrackInputCensus(
+        listings=tracks['gnn_only'].listings, pairs=tracks['gnn_only'].pairs,
+        text_dimension=None, device=cascade_settings.device)
     return DataGateResult(suite=suite_inputs, tracks=tracks,
                           attestation=attestation(config,
                                                   allow_gpu_pending=allow_gpu_pending))
@@ -310,7 +318,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--allow-gpu-pending', action='store_true',
-                        help='accept the declared pending hybrid embedding cache')
+                        help='accept the declared pending baseline embedding cache')
     parser.add_argument('--attestation-only', action='store_true',
                         help='print this configuration/input digest and exit')
     args = parser.parse_args()

@@ -5,15 +5,22 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 from core.archive_reader import open_archive
-from core.portable_archive import Digest, RuntimeSnapshot, cached_file_digest
+from core.portable_archive import (
+    Digest, RuntimeSnapshot, cached_file_digest, is_result_archive_member,
+)
 from core.step_trace import timed
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from model_tracks.config import SuiteConfig
 
-TRACKS = ('text', 'gnn_only', 'hybrid')
+TRACKS = ('text', 'gnn_only', 'cascade')
+#: Tracks that train behind the shared start barrier. The cascade trains
+#: nothing: it composes the trained text ranker and gnn_only scorer after them.
+TRAINING_TRACKS = ('text', 'gnn_only')
+#: Tracks that run after training by composing trained artifacts (no barrier).
+POSTPROCESS_TRACKS = ('cascade',)
 
 
-Track = Literal['text', 'gnn_only', 'hybrid']
+Track = Literal['text', 'gnn_only', 'cascade']
 
 
 class TrackCompletion(BaseModel):
@@ -55,21 +62,33 @@ def _training_identity(identity: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _events_skip_ablation(text: str) -> bool:
-    """True when an event stream records a deliberate ablation-export skip."""
+    """True when an event stream records a deliberate ablation-export skip.
+
+    The GPU worker emits the skip as ``attribute_ablation_export``/``skipped``
+    (bundle shipped no ablation templates); older/suite streams may use
+    ``ablation``. Both count.
+    """
     for line in text.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if event.get('phase') == 'ablation' and event.get('status') == 'skipped':
+        if (event.get('phase') in ('ablation', 'attribute_ablation_export')
+                and event.get('status') == 'skipped'):
             return True
     return False
 
 
 def recorded_ablation_skip(output: Path) -> bool:
-    """True when a suite's event log records that GPU ablation export was skipped."""
-    events = output / 'suite_events.jsonl'
-    return events.is_file() and _events_skip_ablation(events.read_text())
+    """True when a suite's event logs record that GPU ablation export was skipped.
+
+    The skip lives in the per-track ``worker_events.jsonl`` (the suite event
+    stream carries no ablation phase), so scan those as well as the suite log.
+    """
+    candidates = [output / 'suite_events.jsonl']
+    candidates += sorted(output.glob('*/worker_events.jsonl'))
+    return any(events.is_file() and _events_skip_ablation(events.read_text())
+               for events in candidates)
 
 
 def runtime_source_inventory(files: dict[str, Digest], *,
@@ -94,12 +113,19 @@ def runtime_source_inventory(files: dict[str, Digest], *,
 
 def validate_training_binding(document: dict[str, Any], inputs: dict[str, Any],
                               settings: SuiteConfig, run_tag: str) -> TrainingInputBinding:
+    """Check a downloaded result against the input package it was trained from.
+
+    The input DATA identity is enforced: run tag, suite settings, and the
+    package preflight block (``inputs``). The recorded runtime implementation is
+    deliberately NOT compared against the input package's source inventory: the
+    revision pin is removed by owner policy, so the trained checkout can be newer
+    than the package that supplied the inputs. The binding still records the
+    implementation actually used (``resume_identity.implementation``), which is
+    what the result archive carries.
+    """
     binding = TrainingInputBinding.model_validate(document)
-    source_inventory = runtime_source_inventory(
-        inputs['files'], ablation_config=settings.ablation_config)
     if (binding.run_tag != run_tag or binding.settings != settings
-            or binding.inputs != inputs['preflight']
-            or binding.resume_identity.implementation != source_inventory):
+            or binding.inputs != inputs['preflight']):
         raise ValueError('Training suite differs from verified input/config/runtime snapshot')
     return binding
 
@@ -149,7 +175,7 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
             report = TrackReportManifest.model_validate_json(bundle.read(track + '/' + reports[0]))
             if report.track != track or report.test_reported and not binding.settings.report_test:
                 raise ValueError('completed archive report configuration differs: ' + track)
-            if binding.settings.post_training_ablation and not ablation_skipped:
+            if binding.settings.post_training_ablation and not ablation_skipped and track != 'cascade':
                 from model_tracks.post_training_ablation import SavedAblationReport
                 path = 'ablation/report.json'
                 if path not in inventory.files:
@@ -163,7 +189,7 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
 
 
 def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: dict[str, Any],
-                         *, postprocess_complete: bool) -> dict[str, Any]:
+                         *, gpu_only: bool = False) -> dict[str, Any]:
     """Reuse only an archive containing the verified current worker generation."""
     from core.portable_archive import verify_archive
     import zipfile
@@ -175,11 +201,12 @@ def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: di
         if _training_identity(archived_suite.get('resume_identity')) != _training_identity(identity):
             raise ValueError('existing archive has different suite provenance')
         for track in TRACKS:
-            if not completed_track(output / track, track, postprocess_complete=postprocess_complete):
+            complete = expected_postprocess(track, gpu_only=gpu_only)
+            if not completed_track(output / track, track, postprocess_complete=complete):
                 raise ValueError(f'incomplete track: {track}')
             inventory = TrackInventory.model_validate_json((output / track / 'track_inventory.json').read_text())
             archived_inventory = validate_archived_track(
-                bundle, manifest, track, postprocess_complete=postprocess_complete)
+                bundle, manifest, track, postprocess_complete=complete)
             if archived_inventory != inventory:
                 raise ValueError(f'existing archive contains stale worker artifacts: {track}')
     return manifest
@@ -216,11 +243,12 @@ def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> di
                               or 'prepared' in path.relative_to(setup).parts and path.suffix in {'.csv', '.json'})}
     from graph_tracks.config import load_config as load_graph_config, load_text_config
     lanes = {}
-    for track in ('gnn_only', 'hybrid', 'text'):
+    for track in ('gnn_only', 'cascade', 'text'):
         path = setup / (track + '.yaml')
         lane = (load_text_config(path) if track == 'text' else load_graph_config(path, expected_track=track)).model_dump()
         # Input hashes bind content; locations differ in the portable archive.
-        for key in ('listings', 'pairs', 'input_manifest', 'text_cache', 'output_dir'):
+        for key in ('listings', 'pairs', 'input_manifest', 'text_cache',
+                    'text_index', 'gnn_checkpoint', 'output_dir'):
             lane.pop(key, None)
         lanes[track] = lane
     identity['lanes'] = lanes
@@ -240,12 +268,56 @@ def validate_suite(output: Path, identity: dict[str, Any]) -> None:
         raise ValueError('resume provenance mismatch: run, configuration or frozen inputs changed')
 
 
+def selected_checkpoint_dirs(root: Path) -> frozenset[str]:
+    """Posix dirs (relative to ``root``) of the checkpoints a track consumes.
+
+    Text records the trainer-selected best in every ``trainer_state.json``
+    (ranked exactly like :func:`training.validation_inference.resolve_best_checkpoint`);
+    each graph track records its selected checkpoint in ``*__best_checkpoint.json``.
+    Non-selected epoch checkpoints are resume-only.
+    """
+    root = Path(root)
+    selected: set[str] = set()
+    best = None
+    for state_path in sorted(root.rglob(f'checkpoint-*/trainer_state.json')):
+        try:
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        recorded = state.get('best_model_checkpoint')
+        if not recorded:
+            continue
+        directory = state_path.parent.parent / Path(str(recorded)).name
+        if not directory.is_dir():
+            continue
+        rank = (float(state.get('best_metric', float('-inf'))),
+                int(state.get('global_step', 0)))
+        if best is None or rank > best[0]:
+            best = (rank, directory)
+    if best is not None:
+        selected.add(best[1].relative_to(root).as_posix())
+    for marker in sorted(root.rglob('*__best_checkpoint.json')):
+        try:
+            recorded = Path(str(json.loads(marker.read_text(encoding='utf-8')).get('path', '')))
+        except (OSError, ValueError):
+            continue
+        if not recorded.name:
+            continue
+        for found in root.rglob(f'{recorded.parent.name}/{recorded.name}'):
+            selected.add(found.parent.relative_to(root).as_posix())
+            break
+    return frozenset(selected)
+
+
 def artifact_files(output: Path) -> list[Path]:
-    excluded = {'wandb', 'mlruns', 'profiles', '_artifact_publications', '.dvc', '.git'}
+    """Result-archive artifacts: the shared member predicate plus marker/log skips."""
+    selected = selected_checkpoint_dirs(output)
+    markers = {'track_complete.json', 'track_inventory.json', 'worker.yaml', 'worker_events.jsonl'}
     return [path for path in output.rglob('*') if path.is_file() and not path.is_symlink()
-            and not excluded.intersection(path.relative_to(output).parts)
-            and path.name not in {'track_complete.json', 'track_inventory.json', 'worker.yaml', 'worker_events.jsonl'}
-            and not path.name.endswith('.log')]
+            and is_result_archive_member(path.relative_to(output).as_posix(),
+                                         selected_checkpoints=selected)
+            and path.name not in markers and not path.name.endswith('.log')]
+
 
 
 @timed
@@ -281,6 +353,18 @@ def completed_track(output: Path, track: Track, *, postprocess_complete: bool = 
         if not path.is_file() or digest(path) != expected:
             raise ValueError(f'completed artifact changed: {track}/{relative}')
     return True
+
+
+def expected_postprocess(track: Track, *, gpu_only: bool) -> bool:
+    """The completion flag a worker records for ``track``.
+
+    Under ``gpu_only`` the trained lanes defer their CPU reports to local
+    completion, so their markers land ``postprocess_complete=False``. The
+    cascade is a pure postprocess combinator with no checkpoint to transport:
+    its worker always finishes the report it composes from the trained
+    artifacts, so its marker is complete regardless of ``gpu_only``.
+    """
+    return True if track in POSTPROCESS_TRACKS else not gpu_only
 
 
 def graph_checkpoint(output: Path, track: Track, run_tag: str) -> Path | None:

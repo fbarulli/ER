@@ -4,7 +4,7 @@ coverage: all  # Exhaustive clean, minted supply and frozen objective pairs; no 
 uniform_channels: true  # Same text/graph/both interventions; unsupported channels are no-ops.
 seed: 1729
 split: dev
-batch_size: 64
+batch_size: 600
 accelerator: T4
 attributes: []  # Empty selects the shared attribute registry.
 output_dir: results/attribute_ablation

@@ -9,16 +9,15 @@ from test_graph_tracks import inputs, disable_tracking, population
 from graph_tracks.artifacts import name
 
 
-@pytest.mark.parametrize('hybrid', [False, True])
-def test_graph_training_reports_decisions_phases_and_test_skip(tmp_path, monkeypatch, hybrid):
+def test_graph_training_reports_decisions_phases_and_test_skip(tmp_path, monkeypatch):
     from graph_tracks.train import train
     disable_tracking(monkeypatch)
-    _, _, _, config = inputs(tmp_path, hybrid)
+    _, _, _, config = inputs(tmp_path)
     settings = yaml.safe_load(config.read_text())
     settings.update(epochs=1, report_test=False)
     config.write_text(yaml.safe_dump(settings))
     checkpoint = train(config, run_tag='visible')
-    track = 'hybrid' if hybrid else 'gnn_only'
+    track = 'gnn_only'
     log = (tmp_path / 'run' / name(track, 'visible') / name(track, 'training.log')).read_text()
     for evidence in ('input_validation complete', 'features complete', 'epoch=1/1',
                      'classification_loss=', 'dev_pr_auc=', 'reason=strictly higher dev_pr_auc',

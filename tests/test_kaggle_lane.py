@@ -1083,3 +1083,177 @@ def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkey
     assert plan["terminal_state"] == "complete"
     assert any("kernels" in parts and "push" in parts for parts in pushes), \
         "the stub replace must still be pushed"
+
+
+# ── session-id capture: launch path records the id, stop consumes it ────────
+
+def _fake_stream_client(monkeypatch, url: str, closed: list[str]):
+    """A fake KaggleClient whose log-stream probe returns ``url`` and closes."""
+    import types
+    import kagglesdk.kaggle_client
+
+    class FakeApi:
+        def get_kernel_session_logs_stream(self, request):
+            return types.SimpleNamespace(url=url, close=lambda: closed.append(url))
+
+    client = types.SimpleNamespace(kernels=types.SimpleNamespace(
+        kernels_api_client=FakeApi()))
+    monkeypatch.setattr(kagglesdk.kaggle_client, "KaggleClient", lambda env: client)
+
+
+def test_clear_kernel_session_id_removes_existing_and_is_noop(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    session_file = tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("111222\n")
+    kaggle_lane.clear_kernel_session_id("owner/er-bundle-cpu")
+    assert not session_file.exists(), "a fresh push drops the previous run's id"
+    # absent id file -> no-op, never raises (a push path clears unconditionally)
+    kaggle_lane.clear_kernel_session_id("owner/er-bundle-cpu")
+    assert not session_file.exists()
+
+
+def test_capture_kernel_session_id_writes_id_from_stream_url(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    closed: list[str] = []
+    url = "https://www.kaggle.com/api/i/kernels/987654321?x=1"
+    _fake_stream_client(monkeypatch, url, closed)
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+    plan = kaggle_lane.capture_kernel_session_id("owner/er-bundle-cpu", attempts=1)
+    assert plan["session_id"] == 987654321
+    session_file = tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id"
+    assert session_file.read_text() == "987654321\n"
+    assert plan["session_id_file"] == str(session_file)
+    assert closed == [url], "capture must close the response without following it"
+
+
+def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    closed: list[str] = []
+    _fake_stream_client(
+        monkeypatch,
+        "https://www.kaggle.com/api/i/kernels.GetKernelSessionLogsStream", closed)
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+    plan = kaggle_lane.capture_kernel_session_id("owner/er-bundle-cpu", attempts=2)
+    assert plan["session_id"] is None
+    assert not (tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id").exists(), \
+        "no id in the URL -> no file, no fabricated session"
+    assert len(closed) == 2, "each bounded attempt still closes its response"
+
+
+def test_push_and_record_session_clears_before_push_and_captures_after(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    stage = tmp_path / "kaggle_stage" / "bundle_kernel"
+    stage.mkdir(parents=True)
+    events: list[tuple[str, object]] = []
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "clear_kernel_session_id",
+                        lambda slug: events.append(("clear", slug)))
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle",
+                        lambda command: events.append(("push", list(command))) or (0, ""))
+    monkeypatch.setattr(kaggle_lane, "capture_kernel_session_id",
+                        lambda slug: events.append(("capture", slug)))
+    kaggle_lane.KaggleKernels._push_and_record_session(stage, "owner/er-bundle-cpu")
+    assert [kind for kind, _ in events] == ["clear", "push", "capture"]
+    assert events[0] == ("clear", "owner/er-bundle-cpu")
+    assert events[2] == ("capture", "owner/er-bundle-cpu")
+
+
+def test_push_kernel_records_session_around_push(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    stage = tmp_path / "kaggle_stage" / "bundle_kernel"
+    stage.mkdir(parents=True)
+    (stage / "kernel-metadata.json").write_text(json.dumps(
+        {"id": "owner/er-bundle-cpu", "code_file": "bundle_cpu.py"}))
+    (stage / "bundle_cpu.py").write_text("# stub\n")
+    import importlib
+    monkeypatch.setattr(importlib.import_module("core.runtime_inputs"),
+                        "staged_kernel_preflight", lambda stage_dir: None)
+    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch", lambda *a, **kw: {})
+    events: list[tuple[str, object]] = []
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "clear_kernel_session_id",
+                        lambda slug: events.append(("clear", slug)))
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle",
+                        lambda command: events.append(("push", list(command))) or (0, ""))
+    monkeypatch.setattr(kaggle_lane, "capture_kernel_session_id",
+                        lambda slug: events.append(("capture", slug)))
+    plan = kaggle_lane.push_kernel(stage)
+    assert plan["pushed"] is True
+    assert [kind for kind, _ in events] == ["clear", "push", "capture"]
+
+
+def test_push_and_record_session_capture_failure_does_not_abort_push(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    stage = tmp_path / "kaggle_stage" / "bundle_kernel"
+    stage.mkdir(parents=True)
+    logged: list[str] = []
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "clear_kernel_session_id", lambda slug: None)
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle", lambda command: (0, ""))
+    monkeypatch.setattr(kaggle_lane, "capture_kernel_session_id",
+                        lambda slug: (_ for _ in ()).throw(RuntimeError("proxy down")))
+    monkeypatch.setattr(kaggle_lane, "_log_lane", lambda line: logged.append(line))
+    kaggle_lane.KaggleKernels._push_and_record_session(stage, "owner/er-bundle-cpu")
+    assert any("session-id capture skipped" in line for line in logged), \
+        "a best-effort capture failure is logged, never raised onto the push"
+
+
+def test_stop_kernel_no_wait_with_session_id_requests_sdk_cancel(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    session_file = tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("424242\n")
+    cancels: list[int] = []
+    _fake_sdk_cancel(monkeypatch, cancels)
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: pytest.fail("wait=False must not poll status"))
+    plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu",
+                                   execute=True, wait=False)
+    assert plan["verdict"] == "requested"
+    assert plan["stopped"] is None
+    assert plan["cancel_method"] == "sdk_cancel_kernel_session"
+    assert cancels == [424242], "the recorded id must still drive the cancel"
+
+
+def test_stop_kernel_no_wait_without_session_id_pushes_stub_and_requests(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    pushes: list[list[str]] = []
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle",
+                        lambda command: pushes.append(list(command)) or (0, ""))
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: pytest.fail("wait=False must not poll status"))
+    plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu",
+                                   execute=True, wait=False)
+    assert plan["verdict"] == "requested"
+    assert plan["stopped"] is None
+    assert plan["cancel_method"] == "version_replace"
+    assert any("kernels" in parts and "push" in parts for parts in pushes), \
+        "no id -> the stub replace is still issued"
+    # the stop stub push is not a real launch: it must never capture an id
+    assert not (tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id").exists()
+
+
+def test_stop_kernel_wait_true_version_replace_fails_loud(tmp_path, monkeypatch):
+    import types
+    import cli.kaggle_kernels
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle", lambda command: (0, ""))
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "running", "raw": "RUNNING"})
+    ticks = iter([0.0, 10.0, 10_000.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(cli.kaggle_kernels, "time", types.SimpleNamespace(
+        monotonic=lambda: next(ticks),
+        sleep=lambda seconds: sleeps.append(seconds)))
+    with pytest.raises(RuntimeError, match="stop did not reach a terminal state"):
+        kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
+    assert sleeps == [15.0], "verify polls run logs_poll_seconds apart"

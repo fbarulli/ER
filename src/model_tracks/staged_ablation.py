@@ -105,7 +105,7 @@ def _track_request(setup,checkpoint,track,*,cohort,frozen_config,baseline,compos
         path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
             cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
             listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
-            text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
+            text_checkpoint=None,config=frozen_config,
             composer=composer,token_cache=token_cache)
         request = json.loads(path.read_text())
     return path,request
@@ -174,7 +174,7 @@ def _drop_staging(setup):
     # Generated content-addressed staging directories are temporary; retain one
     # fixed template per track and avoid shipping duplicate tensors.
     staging = [path for path in (setup/'ablation_templates').iterdir()
-               if path.is_dir() and path.name not in {'text','gnn_only','hybrid'}]
+               if path.is_dir() and path.name not in {'text','gnn_only'}]
     for path in _LOG.progress(staging,desc='ablation_staging_cleanup',unit='dir'):
         shutil.rmtree(path)
 
@@ -190,7 +190,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     timing.mark('load_support_and_vocabulary')
     with _LOG.section('ablation_suite.track_templates'):
         common_cohort = None
-        tracks = ('text','gnn_only','hybrid')
+        tracks = ('text','gnn_only')
         graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
         for track in _LOG.progress(tracks,desc='ablation_templates',unit='track',total=len(tracks)):
             _LOG.info('ablation template building track=' + track)
@@ -266,8 +266,7 @@ def _bound_folder(output,template,request):
 def _saved_text_default(request,*,output,setup,track,saved_text):
     """Default to the suite's saved vectors for the full local retrieval catalog."""
     if saved_text is None and request['settings']['retrieval_catalog'] == 'full' and request['settings'].get('coverage') != 'all':
-        saved_text = (output/'text__vectors.npz' if track == 'text' else
-                      setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
+        saved_text = (output/'text__vectors.npz' if track == 'text' else None)
     return saved_text
 
 

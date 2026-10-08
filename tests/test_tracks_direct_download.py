@@ -45,6 +45,11 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     # detach-checkout the package's exact source revision before restoring
     # its frozen files, so the stub must carry it alongside run_tag.
     monkeypatch.setattr(colab, 'verify_archive', lambda *a: dict(run_tag='run', revision='revision'))
+    # The result download trusts one named single-pass verify seam. Stub it so
+    # a tiny fixture archive is never parsed as a real tar.zst; the returned
+    # whole-file digest still drives the corruption check.
+    monkeypatch.setattr(colab, 'verify_result_archive',
+                        lambda path: (dict(run_tag='run', files={}), file_hash(path)))
     monkeypatch.setattr(backend, 'GPU', 'CPU')
     monkeypatch.setattr(backend, '_env_value', lambda _: None)
     monkeypatch.setattr(backend, '_wandb_env_script', lambda: '')

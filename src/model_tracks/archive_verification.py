@@ -25,8 +25,10 @@ from pathlib import Path
 from core.archive_reader import archive_sidecar, open_archive
 from graph_tracks.data import file_hash
 from model_tracks.config import SuiteConfig
-from model_tracks.post_training_ablation import SavedAblationReport
-from model_tracks.resume import TRACKS, TrainingInputBinding, validate_completed_suite_archive
+from model_tracks.post_training_ablation import ABLATION_TRACKS, SavedAblationReport
+from model_tracks.resume import (
+    TRACKS, TrainingInputBinding, _events_skip_ablation, validate_completed_suite_archive,
+)
 
 VERIFICATION_SCHEMA = 'er-suite-verification-v1'
 
@@ -82,6 +84,13 @@ def verification_result(archive: Path, run_tag: str | None = None,
         with open_archive(archive) as bundle:
             binding = TrainingInputBinding.model_validate_json(bundle.read('suite_manifest.json'))
             ablation_enabled = binding.settings.post_training_ablation
+            # A GPU suite that shipped no ablation templates records a deliberate
+            # skip; the cascade never ships an ablation at all.
+            ablation_skipped = any(
+                _events_skip_ablation(bundle.read(name).decode(errors='replace'))
+                for name in bundle.namelist()
+                if name.endswith(('suite_events.jsonl', 'worker_events.jsonl')))
+            ablation_required = ablation_enabled and not ablation_skipped
             for track in TRACKS:
                 suffix = report_member(track)
                 reports = [relative for relative in bundle.namelist()
@@ -98,7 +107,7 @@ def verification_result(archive: Path, run_tag: str | None = None,
                     'checkpoint_sha256': report['checkpoint_sha256'],
                     'test_reported': report['test_reported'],
                 }
-                if ablation_enabled:
+                if ablation_required and track in ABLATION_TRACKS:
                     saved = SavedAblationReport.model_validate_json(
                         bundle.read(f'{track}/ablation/report.json'))
                     entry['ablation'] = {

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,8 @@ from core.manifest import atomic_write_json, sha256_file
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
-GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune")
+GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune",
+             "finetune-eval")
 LANE_LOG_NAME = "lane.log"
 # One fresh lane.log per run: first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
@@ -70,19 +72,56 @@ FINETUNE_CODE_FILE = "laya_finetune.py"
 FINETUNE_CORPUS_DIR = "data/laya"
 FINETUNE_CORPUS_FILES = ("train.jsonl", "dev.jsonl", "test.jsonl")
 FINETUNE_CORPUS_RECEIPT = "receipt.json"
+
+# ── fine-tune EVAL-only kind (held-out score, no retrain) ──────────────────
+# A dedicated `--decision finetune-eval` kernel loads a fine-tuned checkpoint
+# and scores the corpus HELD-OUT split (default test.jsonl) with
+# `laya.train.load_checkpoint` -> `calibration_records` -> `evaluate_records`.
+# It attaches the SAME corpus dataset (er-laya-train) + the fine-tuned
+# checkpoint dataset, installs laya, and writes eval_report.json + a receipt
+# into /kaggle/working for fetch-back. NO training, NO Hub.
+FINETUNE_EVAL_DECISION = "finetune-eval"
+FINETUNE_EVAL_CODE_FILE = "laya_finetune_eval.py"
+FINETUNE_EVAL_REPORT_FILE = "eval_report.json"
+FINETUNE_EVAL_RECEIPT_FILE = "laya_finetune-eval.receipt.json"
+# The corpus split name is a config literal; map it to the JSONL file the
+# corpus dataset carries. Never duplicated: the tuple above is the SSOT.
+FINETUNE_EVAL_SPLIT_FILES = {
+    "train": FINETUNE_CORPUS_FILES[0],
+    "dev": FINETUNE_CORPUS_FILES[1],
+    "test": FINETUNE_CORPUS_FILES[2],
+}
 # `pip install laya`; pin laya>=0.3.29 (the version the flags were verified
 # against: /tmp/opc/laya_pkg329/bin/laya-train --help).
 FINETUNE_LAYA_PACKAGE = "laya>=0.3.29"
-# The completed-research recipe (single T4), baked verbatim into the script.
-FINETUNE_RECIPE: dict[str, Any] = {
-    "epochs": 8,
-    "micro_batch": 8,
-    "grad_accum": 8,
-    "encoder_lr": 2.5e-5,
-    "head_lr": 1e-4,
-    "loss": "soft-ce",
-    "seed": 1729,
-}
+# The FULL `laya.train.TrainConfig` field surface the finetune kernel
+# builds from `laya.finetune` (SSOT): every trainer knob is YAML-driven,
+# never a code literal. `eval_data` is supplied by the kernel (the attached
+# dev split); `device` is a runtime resolver input, not a TrainConfig field.
+FINETUNE_CONFIG_FIELDS = (
+    "epochs", "micro_batch", "grad_accum", "encoder_lr", "head_lr",
+    "min_lr", "weight_decay", "grad_clip",
+    "loss", "label_smoothing", "rl_samples", "sigma_start", "sigma_end",
+    "w_sph", "w_rps",
+    "shuffle_options", "option_layout", "max_len", "head_max_len",
+    "text_column", "label_column", "question_id", "instructions",
+    "freeze_encoder",
+    "calib_max", "calib_frac", "calib_seed", "target_error", "min_abstain_n",
+    "seed", "amp", "gradient_checkpointing", "log_every",
+)
+
+
+def finetune_config(spec: Any | None = None) -> dict[str, Any]:
+    """The full `laya.train.TrainConfig` kwargs from `laya.finetune` (SSOT).
+
+    `shuffle_options` is normalised to a tuple (the TrainConfig annotation)
+    while staying JSON/repr-bakeable. Never a second recipe registry: the
+    field list above names exactly the `FinetuneSpec` surface.
+    """
+    ft = (spec or _spec()).finetune
+    config = {name: getattr(ft, name) for name in FINETUNE_CONFIG_FIELDS}
+    config["shuffle_options"] = tuple(config["shuffle_options"])
+    return config
 
 PUBLISHED_RUNTIME_FILES = (
     'artifacts/evidence/attribute_universe_census.json', 'artifacts/evidence/semantics/family_registry.json', 'artifacts/evidence/semantics/tau_sweep.json', 'artifacts/evidence/semantics/value_universe.json',
@@ -221,6 +260,18 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
         "description": ("fine-tune the convaiinnovations/laya checkpoint on "
                         "the verified-label JSONL corpus (state + identity "
                         "cases) via the real laya-train CLI on a single T4"),
+    },
+    "finetune-eval": {
+        # Not a per-row decision CSV either: the eval-only kernel scores an
+        # attached fine-tuned checkpoint against the corpus split, so the
+        # corpus row keys are the contract (mirrors the finetune entry).
+        "wanted_columns": ("state", "questions", "expected"),
+        "state_column": "state",
+        "description": ("HELD-OUT eval-only score of an attached fine-tuned "
+                        "laya checkpoint on the corpus test split: loads the "
+                        "checkpoint, runs calibration_records + "
+                        "evaluate_records, writes eval_report.json. No "
+                        "training, no Hub fetch."),
     },
 }
 
@@ -492,6 +543,36 @@ laya_runtime_preflight()
 '''
 
 
+# The eval-only kernel attaches the SAME corpus dataset and verifies the ONE
+# held-out split it scores (rglob finds the JSONL under /kaggle/input/<slug>/).
+# The CHECKPOINT is a separate attached dataset, resolved in-kernel by the
+# `rl_agent_config.json` rglob (never vendored here): the push gate's
+# `_runtime_files` inventory can only verify files that live in the staged
+# dataset_payload, so the checkpoint inventory stays out of it and fails loud
+# in `resolve_checkpoint()` instead.
+FINETUNE_EVAL_RUNTIME_PREFLIGHT = '''\
+_runtime_files = ("@EVAL_JSONL@",)
+INPUT_ROOT = Path("/kaggle/input")
+
+
+def laya_runtime_preflight():
+    """Verify the ATTACHED corpus split (the corpus dataset mounts under
+    /kaggle/input/<slug>/ and rglob searches recursively by name); fail
+    loud before pip touches anything."""
+    missing = [name for name in _runtime_files
+               if not any(INPUT_ROOT.rglob(name))]
+    if missing:
+        raise FileNotFoundError(
+            "Runtime preflight missing attached inputs: "
+            + ", ".join(missing))
+    print("[runtime-preflight] verified %d required files"
+          % len(_runtime_files), flush=True)
+
+
+laya_runtime_preflight()
+'''
+
+
 # ── kernel / notebook payload composition ──────────────────────────────────
 def _kernel_script_gate(script: str) -> None:
     """Staging-time AST gate (kaggle_lane._kernel_script_gate mirror):
@@ -634,8 +715,8 @@ def pick_device():
     import torch
     if not torch.cuda.is_available():
         raise SystemExit("cuda unavailable: the session is not a T4")
-    name = torch.cuda.get_device_name(0)
-    log("device pinned: " + name + " (single GPU, never a second one)")
+    log("device pinned: " + torch.cuda.get_device_name(0)
+        + " (single GPU, never a second one)")
     return "cuda"
 
 
@@ -836,22 +917,531 @@ if __name__ == "__main__":
 '''
 
 
+# Runtime device patch for the finetune kernel (laya<=0.4.0). `finetune()`
+# evaluates the base checkpoint via `calibration_records()` BEFORE
+# `train_model()` calls `model.to(device)`, so `load_checkpoint()`'s CPU
+# model meets cuda `input_ids` and `index_select` raises "index is on
+# cuda:0, different from other tensors on cpu" on the T4. Injected into the
+# kernel below at the `@DEVICE_PATCH@` marker; it leaves the recipe, flags
+# and the single-T4 rule untouched.
+FINETUNE_DEVICE_PATCH_SOURCE = '''\
+def force_model_to_device(model, device):
+    # Move every module, and every registered buffer (non-persistent ones
+    # included), onto `device` before any forward pass.
+    import torch
+    device = torch.device(device)
+    for module in model.modules():
+        for name, buffer in list(module._buffers.items()):
+            if buffer is not None:
+                module._buffers[name] = buffer.to(device)
+        module.to(device)
+    return model.to(device)
+
+
+def apply_device_patch():
+    # Wrap the two forward entrypoints so the model is on the training
+    # device before any forward pass. `calibration_records` is the crash:
+    # it runs the base checkpoint on device inputs while the model is
+    # still CPU. `train_model` is wrapped for the same invariant.
+    from laya import train as laya_train
+
+    original_calibration_records = laya_train.calibration_records
+
+    def calibration_records(model, tok, items, device, *args, **kwargs):
+        force_model_to_device(model, device)
+        return original_calibration_records(
+            model, tok, items, device, *args, **kwargs)
+
+    laya_train.calibration_records = calibration_records
+
+    original_train_model = laya_train.train_model
+
+    def train_model(model, tok, items, config, device, *args, **kwargs):
+        force_model_to_device(model, device)
+        return original_train_model(
+            model, tok, items, config, device, *args, **kwargs)
+
+    laya_train.train_model = train_model
+'''
+
+
+# Movement/redundancy PERF_PATCH for the finetune kernel (laya>=0.3.29).
+# Replaces laya.train.train_model with a faithful copy carrying exactly three
+# recipe-neutral changes:
+#   (1) the running loss is accumulated as a 0-dim CUDA tensor and synced with
+#       ONE .item() per epoch (the stock loop synced twice per micro-step,
+#       train.py:696 and :698);
+#   (2) the batch tensors the loop consumes are moved to the device ONCE (the
+#       stock loop re-moved marker_mask and qtype after _forward had already
+#       moved them, train.py:608 vs :671);
+#   (3) encode_item is memoized per (item id, option order) so steady-state
+#       epochs skip re-tokenizing (train.py:665). draw_option_order is still
+#       called in the same per-step order, so the RNG stream is identical.
+# The recipe flags, grad-accum window, clipping, scheduler and seed paths are
+# byte-for-byte the stock loop. Opt out (patch AND sampler) with
+# ER_LAYA_PERF_PATCH=0. Injected at the `@PERF_PATCH@` marker.
+FINETUNE_PERF_PATCH_SOURCE = '''\
+PERF_PATCH_ENV = "ER_LAYA_PERF_PATCH"
+
+
+def perf_patch_enabled():
+    # one env flag disables BOTH the movement patch and the GPU sampler.
+    return os.environ.get(PERF_PATCH_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
+                      on_epoch_end=None, parallel=False):
+    # Faithful copy of laya.train.train_model (0.3.29) with the three
+    # recipe-neutral changes described in the source header.
+    import torch
+    from laya import train as laya_train
+
+    config.validate()
+    if not items:
+        raise ValueError("no training items")
+    amp = (device.type == "cuda") if config.amp is None else bool(config.amp)
+    checkpointing = (amp if config.gradient_checkpointing is None
+                     else bool(config.gradient_checkpointing))
+    if config.freeze_encoder:
+        for p in model.encoder.parameters():
+            p.requires_grad_(False)
+    elif checkpointing and hasattr(model.encoder,
+                                   "gradient_checkpointing_enable"):
+        model.encoder.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.head_checkpointing = checkpointing
+    model.to(device).train()
+    if config.freeze_encoder:
+        model.encoder.eval()
+
+    groups = [{"params": [p for n, p in model.named_parameters()
+                          if not n.startswith("encoder.") and p.requires_grad],
+               "lr": config.head_lr}]
+    if not config.freeze_encoder:
+        groups.insert(0, {
+            "params": [p for n, p in model.named_parameters()
+                       if n.startswith("encoder.") and p.requires_grad],
+            "lr": config.encoder_lr})
+    optimizer = torch.optim.AdamW(groups, weight_decay=config.weight_decay)
+    steps_per_epoch = math.ceil(len(items) / config.micro_batch)
+    updates = max(1, math.ceil(steps_per_epoch / config.grad_accum)
+                  * config.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=updates, eta_min=config.min_lr)
+    scaler = (torch.amp.GradScaler("cuda")
+              if amp and device.type == "cuda" else None)
+
+    torch.manual_seed(config.seed)
+    order_rng = random.Random(config.seed)
+    params = [p for g in groups for p in g["params"]]
+    history = []
+    cache = {}
+    hits = lookups = 0
+    for epoch in range(config.epochs):
+        epoch_items = list(items)
+        random.Random(config.seed + epoch).shuffle(epoch_items)
+        sigma = laya_train.sigma_at(epoch, config.epochs, config.sigma_start,
+                                    config.sigma_end)
+        total, n_steps = None, 0
+        optimizer.zero_grad(set_to_none=True)
+        for start in range(0, len(epoch_items), config.micro_batch):
+            chunk = []
+            for it in epoch_items[start:start + config.micro_batch]:
+                order = laya_train.draw_option_order(
+                    it, order_rng, config.shuffle_options)
+                key = (id(it), tuple(order) if order is not None else None,
+                       max_len, head_max_len, parallel)
+                encoded = cache.get(key)
+                if encoded is None:
+                    encoded = laya_train.encode_item(
+                        tok, it, max_len, head_max_len, order, parallel)
+                    cache[key] = encoded
+                else:
+                    hits += 1
+                lookups += 1
+                chunk.append(encoded)
+            batch = laya_train.collate_items([chunk], tok.pad_token_id)
+            # (2) one device move for what the loop consumes; _forward's own
+            # .to(device) on the same device is then a no-op.
+            mask = batch["marker_mask"].to(device)
+            target = batch["target"].to(device)
+            qtype = batch["qtype"].to(device)
+            logits = laya_train._forward(model, batch, device, amp,
+                                         config.freeze_encoder)
+            if config.loss == "rlcd":
+                loss = laya_train.rlcd_loss(logits, target, mask, qtype, sigma,
+                                            config.rl_samples, config.w_sph,
+                                            config.w_rps)
+            else:
+                loss = laya_train.soft_ce_loss(logits, target, mask)
+            window_start = (n_steps // config.grad_accum) * config.grad_accum
+            window_size = min(config.grad_accum,
+                              steps_per_epoch - window_start)
+            scaled = loss / window_size
+            if scaler is not None:
+                scaler.scale(scaled).backward()
+            else:
+                scaled.backward()
+            n_steps += 1
+            if (n_steps % config.grad_accum == 0
+                    or start + config.micro_batch >= len(epoch_items)):
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
+                if scaler is not None:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+            # (1) stay on-GPU: accumulate the loss, sync once per epoch.
+            detached = loss.detach()
+            total = detached if total is None else total + detached
+            if config.log_every and n_steps % config.log_every == 0:
+                print("epoch %d/%d step %d" % (epoch + 1, config.epochs,
+                                               n_steps), flush=True)
+        mean = (float(total.item() / max(1, n_steps))
+                if total is not None else 0.0)
+        history.append(mean)
+        print("epoch %d/%d mean loss %.4f (encode memo hits %d/%d)"
+              % (epoch + 1, config.epochs, mean, hits, lookups), flush=True)
+        if on_epoch_end is not None:
+            on_epoch_end(epoch, mean)
+    model.eval()
+    return history
+
+
+def apply_perf_patch():
+    # Apply BEFORE the device patch so the device wrapper closes over (and
+    # preserves) this loop; opt out with ER_LAYA_PERF_PATCH=0.
+    if not perf_patch_enabled():
+        print("[perf-patch] disabled via " + PERF_PATCH_ENV, flush=True)
+        return False
+    from laya import train as laya_train
+    laya_train.train_model = _perf_train_model
+    print("[perf-patch] laya.train.train_model patched: on-GPU loss (1 sync/"
+          "epoch), single device move, encode memoization", flush=True)
+    return True
+
+
+def start_gpu_sampler():
+    # 1 Hz nvidia-smi sampler -> /kaggle/working/gpu_usage.log (rides the
+    # fetch-back tar). No-op when the flag is off, nvidia-smi is absent, or
+    # the box is CPU-only.
+    if not perf_patch_enabled():
+        return None
+    if shutil.which("nvidia-smi") is None:
+        log("gpu sampler: nvidia-smi absent; skipping")
+        return None
+    path = WORKING / "gpu_usage.log"
+    stop = threading.Event()
+    query = ["nvidia-smi",
+             "--query-gpu=utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader"]
+
+    def _loop():
+        while not stop.is_set():
+            try:
+                proc = subprocess.run(query, capture_output=True, text=True,
+                                      timeout=5)
+                if proc.returncode == 0 and proc.stdout.strip():
+                    line = proc.stdout.strip().splitlines()[0]
+                    with path.open("a", encoding="utf-8") as handle:
+                        handle.write(line + "\\n")
+            except (OSError, subprocess.SubprocessError):
+                pass
+            stop.wait(1.0)
+
+    thread = threading.Thread(target=_loop, name="gpu-sampler", daemon=True)
+    thread.start()
+    log("gpu sampler: 1 Hz -> " + str(path))
+    return stop, thread
+
+
+def stop_gpu_sampler(handle):
+    if not handle:
+        return
+    stop, thread = handle
+    stop.set()
+    thread.join(timeout=5)
+
+
+def summarize_gpu_usage(path):
+    if not path.is_file():
+        return None
+    utils, mems, total_mb = [], [], None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            util = float(parts[0].rstrip("%").strip())
+            used = float(parts[1].split()[0])
+            total = float(parts[2].split()[0])
+        except (ValueError, IndexError):
+            continue
+        utils.append(util)
+        mems.append(used)
+        total_mb = total
+    if not utils:
+        return None
+    return {
+        "samples": len(utils),
+        "util_min_pct": min(utils),
+        "util_max_pct": max(utils),
+        "util_mean_pct": sum(utils) / len(utils),
+        "mem_used_peak_mb": max(mems),
+        "mem_total_mb": total_mb,
+    }
+'''
+
+
 FINETUNE_KERNEL_SCRIPT = '''\
 """ER laya fine-tune on a Kaggle GPU session (cli.laya_lane).
 
 Single T4 per owner ruling (2xT4 -> 1xT4; never requests the double
 accelerator): pins one CUDA device, installs laya over pip (pinned
 `laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test +
-receipt, the staged data/laya payload dataset), runs the REAL
-`laya-train` CLI, and writes the checkpoint + a receipt into
-/kaggle/working for hash-verified fetch-back.
+receipt, the er-laya-train dataset), extracts the attached base-model
+archive (the er-laya-base dataset; the shipped convaiinnovations/laya
+checkpoint) to a local dir, builds the FULL `laya.train.TrainConfig` from
+the YAML-driven `FINETUNE_CONFIG` (every trainer knob is config SSOT), and
+calls `laya.train.finetune(...)` directly with the extracted DIRECTORY as
+the base -- so `resolve_checkpoint_dir` takes the isdir branch and NEVER
+calls the Hub. It writes the checkpoint + a receipt into /kaggle/working
+for hash-verified fetch-back.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import random
+import shutil
+import subprocess
+import sys
+import tarfile
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+LAYA_PACKAGE = "@LAYA_PACKAGE@"
+RUN_TAG = "@RUN_TAG@"
+TRAIN_JSONL = "@TRAIN_JSONL@"
+DEV_JSONL = "@DEV_JSONL@"
+TEST_JSONL = "@TEST_JSONL@"
+BASE_MODEL_ARCHIVE = "@BASE_MODEL_ARCHIVE@"
+BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
+FINETUNE_DEVICE = "@FINETUNE_DEVICE@"
+FINETUNE_CONFIG = @FINETUNE_CONFIG@
+
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+@RUNTIME_PREFLIGHT@
+
+@DEVICE_PATCH@
+
+@PERF_PATCH@
+
+WORKING = Path("/kaggle/working")
+INPUTS = Path("/kaggle/input")
+
+
+def log(line):
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print("[laya-lane " + stamp + "] " + line, flush=True)
+
+
+def pip_install_laya():
+    """laya installs over pip, pinned; torch is already on the session."""
+    command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
+               LAYA_PACKAGE]
+    print("+ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def pick_device():
+    """SINGLE T4 ruling: pin the FIRST cuda device only (never 2xT4).
+
+    `auto`/`cuda` require a live cuda session and resolve to device 0; an
+    explicit other device (e.g. `cpu`) is passed through while cuda stays
+    pinned to device 0, so a second accelerator is never visible."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    if FINETUNE_DEVICE not in ("auto", "cuda"):
+        log("device configured: " + FINETUNE_DEVICE
+            + " (cuda pinned to device 0)")
+        return FINETUNE_DEVICE
+    import torch
+    if not torch.cuda.is_available():
+        raise SystemExit("cuda unavailable: the session is not a T4")
+    log("device pinned: " + torch.cuda.get_device_name(0)
+        + " (single GPU, never a second one)")
+    return "cuda"
+
+
+def resolve_input(name):
+    for candidate in sorted(INPUTS.rglob(name)):
+        return candidate
+    raise FileNotFoundError(
+        "attached inputs carried no " + name + " (expected the staged "
+        "laya finetune dataset)")
+
+
+def open_zstd(path):
+    """Open a `.tar.zst` stream with whichever zstd binding the session has.
+
+    The base checkpoint ships as a zstd tar (the project transport); never
+    falls back to the network for the checkpoint itself. Python 3.14 exposes
+    `compression.zstd`; the Kaggle 3.13 image needs `zstandard` (installed
+    on demand only when neither binding is importable)."""
+    try:
+        from compression import zstd
+        return zstd.open(path, "rb")
+    except ImportError:
+        pass
+    try:
+        import zstandard
+        return zstandard.ZstdDecompressor().stream_reader(open(path, "rb"))
+    except ImportError:
+        pass
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                    "--no-input", "zstandard"], check=True)
+    import zstandard
+    return zstandard.ZstdDecompressor().stream_reader(open(path, "rb"))
+
+
+def extract_base_model(archive):
+    """Extract the attached base-model tar.zst and return the directory that
+    carries rl_agent_config.json.
+
+    `--base` then points at a LOCAL dir, so laya's resolve_checkpoint_dir
+    takes the isdir branch and NEVER calls snapshot_download (the HF
+    dependency is gone from this path)."""
+    destination = WORKING / "base_model"
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    stream = open_zstd(str(archive))
+    try:
+        with tarfile.open(fileobj=stream, mode="r|") as tar:
+            try:
+                tar.extractall(destination, filter="data")
+            except TypeError:
+                tar.extractall(destination)
+    finally:
+        stream.close()
+    candidate = destination / BASE_MODEL_DIR
+    if (candidate / "rl_agent_config.json").is_file():
+        return candidate
+    for found in sorted(destination.rglob("rl_agent_config.json")):
+        return found.parent
+    raise FileNotFoundError(
+        "base-model archive carried no rl_agent_config.json")
+
+
+def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
+    """Apply the PERF patch then the device patch, build the FULL
+    `TrainConfig` from FINETUNE_CONFIG, and call `laya.train.finetune`
+    directly.
+
+    The `laya-train` CLI only exposes a subset of the trainer surface, so
+    the non-CLI knobs are set by constructing the config here and calling
+    `finetune` in-process (the monkeypatches reach the same
+    `train_model`/`calibration_records` entrypoints finetune calls). PERF
+    first so the device wrapper closes over the patched train_model (see
+    FINETUNE_PERF_PATCH_SOURCE)."""
+    apply_perf_patch()
+    apply_device_patch()
+    from laya import train as laya_train
+    config = laya_train.TrainConfig(**FINETUNE_CONFIG,
+                                    eval_data=str(dev_path))
+    config.validate()
+    log("TrainConfig: " + json.dumps(FINETUNE_CONFIG, sort_keys=True))
+    return laya_train.finetune(
+        data=str(train_path), model_dir=str(base_model),
+        output_dir=str(out_dir), config=config, device=device)
+
+
+def sha256_of(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main():
+    pip_install_laya()
+    device = pick_device()
+    train = resolve_input(TRAIN_JSONL)
+    dev = resolve_input(DEV_JSONL)
+    test = resolve_input(TEST_JSONL)
+    log("corpus: " + train.name + " + " + dev.name + " (+ " + test.name + ")")
+    WORKING.mkdir(parents=True, exist_ok=True)
+    archive = resolve_input(BASE_MODEL_ARCHIVE)
+    log("base-model archive: " + str(archive))
+    base_model = extract_base_model(archive)
+    log("base model: " + str(base_model))
+    out_dir = WORKING / "checkpoint"
+    gpu_handle = start_gpu_sampler()
+    try:
+        summary = run_laya_finetune(train, dev, base_model, out_dir, device)
+    finally:
+        stop_gpu_sampler(gpu_handle)
+    receipt = {
+        "gpu_kind": "finetune",
+        "gpu": "T4 (single)",
+        "run_tag": RUN_TAG,
+        "laya_package": LAYA_PACKAGE,
+        "base_model": str(base_model),
+        "base_model_archive": str(archive),
+        "device": device,
+        "perf_patch_enabled": perf_patch_enabled(),
+        "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
+        "recipe": FINETUNE_CONFIG,
+        "output_dir": str(out_dir),
+        "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
+                          DEV_JSONL: sha256_of(dev),
+                          TEST_JSONL: sha256_of(test)},
+    }
+    if isinstance(summary, dict):
+        for key in ("train_items", "calibration_items", "eval_items",
+                    "temperature", "epoch_loss"):
+            if key in summary:
+                receipt[key] = summary[key]
+    report = out_dir / "train_report.json"
+    if report.is_file():
+        receipt["train_report"] = json.loads(report.read_text())
+    (WORKING / "laya_finetune.receipt.json").write_text(
+        json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz") as tar:
+        for item in sorted(WORKING.iterdir()):
+            if item.name != "laya_finetune.tar.gz":
+                tar.add(item, arcname=item.name)
+    log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+FINETUNE_EVAL_KERNEL_SCRIPT = '''\
+"""ER laya fine-tune EVAL-ONLY on a Kaggle GPU session (cli.laya_lane).
+
+Single T4 per owner ruling: pins one CUDA device, installs laya over pip
+(pinned), reads the attached corpus HELD-OUT split + the attached fine-tuned
+checkpoint dataset, loads the checkpoint (`laya.train.load_checkpoint`), runs
+`calibration_records` + `evaluate_records` on the held-out split, and writes
+eval_report.json (before vs after temperature calibration;
+eval_mode=held_out, is_held_out=true) + a receipt into /kaggle/working for
+hash-verified fetch-back. NO training, NO Hub.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -859,18 +1449,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
-BASE_MODEL = "@BASE_MODEL@"
 RUN_TAG = "@RUN_TAG@"
-TRAIN_JSONL = "@TRAIN_JSONL@"
-DEV_JSONL = "@DEV_JSONL@"
-TEST_JSONL = "@TEST_JSONL@"
-EPOCHS = @EPOCHS@
-MICRO_BATCH = @MICRO_BATCH@
-GRAD_ACCUM = @GRAD_ACCUM@
-ENCODER_LR = @ENCODER_LR@
-HEAD_LR = @HEAD_LR@
-LOSS = "@LOSS@"
-SEED = @SEED@
+EVAL_JSONL = "@EVAL_JSONL@"
+EVAL_SPLIT = "@EVAL_SPLIT@"
+CKPT_DIR_HINT = "@CKPT_DIR@"
+CHECKPOINT_PATH = "@CHECKPOINT_PATH@"
+BATCH_SIZE = @BATCH_SIZE@
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
@@ -910,15 +1494,30 @@ def resolve_input(name):
         return candidate
     raise FileNotFoundError(
         "attached inputs carried no " + name + " (expected the staged "
-        "laya finetune dataset)")
+        "laya eval corpus dataset)")
 
 
-def laya_train_argv(arguments):
-    """The real `laya-train` console script; module fallback if PATH is bare."""
-    executable = shutil.which("laya-train")
-    if executable:
-        return [executable, *arguments]
-    return [sys.executable, "-m", "laya.train_cli", *arguments]
+def resolve_checkpoint():
+    """The fine-tuned checkpoint dir: an explicit CHECKPOINT_PATH when baked,
+    else the CKPT_DIR_HINT match, else the rl_agent_config.json rglob under
+    /kaggle/input. Never a Hub fetch."""
+    if CHECKPOINT_PATH:
+        candidate = Path(CHECKPOINT_PATH)
+        if candidate.is_dir() and (candidate / "rl_agent_config.json").is_file():
+            return candidate
+        raise FileNotFoundError(
+            "CHECKPOINT_PATH carries no rl_agent_config.json: "
+            + CHECKPOINT_PATH)
+    if CKPT_DIR_HINT:
+        for found in sorted(INPUTS.rglob(CKPT_DIR_HINT)):
+            if (found.is_dir()
+                    and (found / "rl_agent_config.json").is_file()):
+                return found
+    for found in sorted(INPUTS.rglob("rl_agent_config.json")):
+        return found.parent
+    raise FileNotFoundError(
+        "attached inputs carried no fine-tuned checkpoint "
+        "(rl_agent_config.json); attach the checkpoint dataset")
 
 
 def sha256_of(path):
@@ -928,47 +1527,86 @@ def sha256_of(path):
 def main():
     pip_install_laya()
     device = pick_device()
-    train = resolve_input(TRAIN_JSONL)
-    dev = resolve_input(DEV_JSONL)
-    test = resolve_input(TEST_JSONL)
-    log("corpus: " + train.name + " + " + dev.name + " (+ " + test.name + ")")
+    import torch
+    from laya import train as laya_train
+    eval_path = resolve_input(EVAL_JSONL)
+    checkpoint = resolve_checkpoint()
+    log("checkpoint: " + str(checkpoint))
+    log("held-out split: " + str(eval_path) + " (" + EVAL_SPLIT + ")")
+    model, tok, cfg = laya_train.load_checkpoint(str(checkpoint))
+    model = model.to(torch.device(device)).eval()
+    max_len = int(cfg.get("max_len", 512))
+    head_max_len = int(cfg.get("head_max_len", 192))
+    parallel = laya_train.uses_parallel_layout(cfg)
+    rows = laya_train.read_jsonl(str(eval_path))
+    items, skipped = laya_train.items_from_rows(
+        tok, rows, max_len, head_max_len, label_smoothing=0.0)
+    if not items:
+        raise SystemExit(
+            "eval split " + eval_path.name + " produced no usable items "
+            "(skipped: " + repr(skipped) + ")")
+    log("held-out rows " + str(len(rows)) + " -> items " + str(len(items)))
+    records = laya_train.calibration_records(
+        model, tok, items, device, max_len, head_max_len,
+        batch_size=BATCH_SIZE, parallel=parallel)
+    before = laya_train.evaluate_records(records)
+    fitted = laya_train.fit_temperature_map(records)
+    after = laya_train.evaluate_records(
+        records, fitted.get("temperature"),
+        fitted.get("temperature_by_options"))
+    comparison = {
+        "delta_accuracy": round(
+            after["accuracy"] - before["accuracy"], 4),
+        "delta_ece": (round(after["ece"] - before["ece"], 4)
+                      if after["ece"] is not None
+                      and before["ece"] is not None else None),
+        "delta_brier": (round(after["brier"] - before["brier"], 4)
+                        if after["brier"] is not None
+                        and before["brier"] is not None else None),
+        "delta_mean_confidence": round(
+            after["mean_confidence"] - before["mean_confidence"], 4),
+    }
+    report = {
+        "eval_mode": "held_out",
+        "is_held_out": True,
+        "eval_source": eval_path.name,
+        "eval_split": EVAL_SPLIT,
+        "rows": len(rows),
+        "items": len(items),
+        "skipped": skipped,
+        "checkpoint": str(checkpoint),
+        "run_tag": RUN_TAG,
+        "before": before,
+        "after": after,
+        "comparison": comparison,
+        "temperature": fitted.get("temperature"),
+        "temperature_by_options": fitted.get("temperature_by_options"),
+    }
     WORKING.mkdir(parents=True, exist_ok=True)
-    out_dir = WORKING / "checkpoint"
-    command = laya_train_argv([
-        "--data", str(train), "--eval", str(dev), "--base", BASE_MODEL,
-        "--out", str(out_dir), "--loss", LOSS, "--epochs", str(EPOCHS),
-        "--micro-batch", str(MICRO_BATCH), "--grad-accum", str(GRAD_ACCUM),
-        "--encoder-lr", str(ENCODER_LR), "--head-lr", str(HEAD_LR),
-        "--device", device, "--seed", str(SEED)])
-    print("+ " + " ".join(command), flush=True)
-    subprocess.run(command, check=True)
+    report_path = WORKING / "eval_report.json"
+    report_path.write_text(json.dumps(report, indent=2) + "\\n",
+                           encoding="utf-8")
+    log("wrote " + str(report_path) + " (accuracy before/after "
+        + str(before["accuracy"]) + "/" + str(after["accuracy"]) + ")")
     receipt = {
-        "gpu_kind": "finetune",
+        "gpu_kind": "finetune-eval",
         "gpu": "T4 (single)",
         "run_tag": RUN_TAG,
         "laya_package": LAYA_PACKAGE,
-        "base_model": BASE_MODEL,
-        "command": command,
-        "recipe": {
-            "epochs": EPOCHS, "micro_batch": MICRO_BATCH,
-            "grad_accum": GRAD_ACCUM, "encoder_lr": ENCODER_LR,
-            "head_lr": HEAD_LR, "loss": LOSS, "seed": SEED,
-        },
-        "output_dir": str(out_dir),
-        "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
-                          DEV_JSONL: sha256_of(dev),
-                          TEST_JSONL: sha256_of(test)},
+        "eval_split": EVAL_SPLIT,
+        "eval_mode": "held_out",
+        "is_held_out": True,
+        "eval_jsonl_sha256": sha256_of(eval_path),
+        "checkpoint": str(checkpoint),
+        "report_sha256": sha256_of(report_path),
     }
-    report = out_dir / "train_report.json"
-    if report.is_file():
-        receipt["train_report"] = json.loads(report.read_text())
-    (WORKING / "laya_finetune.receipt.json").write_text(
+    (WORKING / "laya_finetune-eval.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz") as tar:
+    with tarfile.open(WORKING / "laya_finetune_eval.tar.gz", "w:gz") as tar:
         for item in sorted(WORKING.iterdir()):
-            if item.name != "laya_finetune.tar.gz":
+            if item.name != "laya_finetune_eval.tar.gz":
                 tar.add(item, arcname=item.name)
-    log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+    log("staged eval_report.json + receipt in /kaggle/working")
 
 
 if __name__ == "__main__":
@@ -1011,6 +1649,57 @@ def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
     return receipt
 
 
+def package_base_model(*, source_dir: Path, dataset_slug: str,
+                       archive_name: str, member_name: str,
+                       output_dir: Path | None = None) -> dict[str, Any]:
+    """Package the local base checkpoint tree as a `.tar.zst` dataset payload.
+
+    The fine-tune base checkpoint is 647 MB (plain git caps at 100 MB), so
+    it ships the way the project ships large payloads: a zstd tar attached
+    as a kaggle dataset. Streams `source_dir`'s whole tree under ONE
+    top-level member named `member_name`, so extraction yields a dir
+    carrying `rl_agent_config.json` (exactly what laya's
+    resolve_checkpoint_dir needs to take the local-dir branch). Uses the
+    project's zstd tar writer (core.archive_reader.tar_archive) and lands
+    the kaggle `dataset-metadata.json` beside the archive. Results live
+    under results/laya_lane/base_model (never committed).
+    """
+    from core.archive_reader import tar_archive
+
+    source_dir = Path(source_dir)
+    if not (source_dir / "rl_agent_config.json").is_file():
+        raise FileNotFoundError(
+            f"base-model source {source_dir} carries no rl_agent_config.json")
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.base_model_dataset is unset; name the base-model "
+            "dataset (owner/slug) before packaging")
+    stage = Path(output_dir) if output_dir else staging_dir() / "base_model"
+    stage.mkdir(parents=True, exist_ok=True)
+    archive_path = stage / archive_name
+    if archive_path.exists():
+        archive_path.unlink()
+    with tar_archive(archive_path, "w") as archive:
+        archive.add(str(source_dir), arcname=member_name, recursive=True)
+    metadata = {"title": "er laya base", "id": dataset_slug,
+                "licenses": [{"name": "other"}]}
+    atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+    receipt = {
+        "dataset": dataset_slug,
+        "payload": str(stage),
+        "archive": archive_name,
+        "member": member_name,
+        "source": str(source_dir),
+        "bytes": archive_path.stat().st_size,
+        "sha256": sha256_file(archive_path),
+        "metadata": metadata,
+    }
+    atomic_write_json(receipt, stage / "base_model.receipt.json")
+    _log_lane(f"packaged base model {dataset_slug} member={member_name} "
+              f"archive={archive_name} bytes={receipt['bytes']} -> {stage}")
+    return receipt
+
+
 def publish_laya_dataset(decision_kind: str, *, run_tag: str,
                          execute: bool) -> dict[str, Any]:
     """`--execute`-gated create-or-version of the laya inputs dataset.
@@ -1039,14 +1728,15 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
         raise RuntimeError(
             "--activate gate: no staged dataset payload at "
             f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
-    slug = (_spec().finetune_dataset_slug
-            if decision_kind == FINETUNE_DECISION else _spec().dataset_slug)
+    corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION)
+    slug = (_spec().finetune_dataset_slug if corpus_kind
+            else _spec().dataset_slug)
     plan["slug"] = slug
     if not slug:
         raise RuntimeError(
             "config laya.finetune_dataset_slug is unset; name the corpus "
             "dataset (owner/slug) before an executed attach"
-            if decision_kind == FINETUNE_DECISION else
+            if corpus_kind else
             "config laya.dataset_slug is unset; name the input dataset "
             "(owner/slug) before an executed attach")
     from cli import kaggle_lane as lane
@@ -1087,7 +1777,9 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
 
 def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
                           run_tag: str | None = None,
-                          input_override: Path | None = None) -> dict[str, Any]:
+                          input_override: Path | None = None,
+                          checkpoint_path: Path | None = None
+                          ) -> dict[str, Any]:
     """Stage the kaggle decision kernel payload (dry-safe).
 
     Writes under results/laya_lane/kaggle/<decision_kind>/:
@@ -1107,6 +1799,12 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         # per-row decision CSV: it has its own staging surface, reached
         # through the same `--decision` dispatch.
         return stage_finetune_kernel(revision=revision, run_tag=run_tag)
+    if decision_kind == FINETUNE_EVAL_DECISION:
+        # The eval-only kind is corpus- + checkpoint-driven: it has its
+        # own staging surface, reached through the same `--decision`
+        # dispatch. No training, no Hub.
+        return stage_finetune_eval_kernel(revision=revision, run_tag=run_tag,
+                                          checkpoint_path=checkpoint_path)
     if spec.laya_decision_epochs <= 0:
         raise RuntimeError(
             "config laya.laya_decision_epochs <= 0: the decision lane is "
@@ -1235,20 +1933,24 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
 
 
 def stage_finetune_dataset_payload(*, dataset_slug: str,
-                                   corpus_dir: Path) -> dict[str, Any]:
+                                   corpus_dir: Path,
+                                   kind: str = FINETUNE_DECISION
+                                   ) -> dict[str, Any]:
     """Stage the fine-tune CORPUS as a kaggle dataset payload (dry-safe).
 
-    Builds results/laya_lane/kaggle/finetune/dataset_payload/: the kaggle
+    Builds results/laya_lane/kaggle/<kind>/dataset_payload/: the kaggle
     `dataset-metadata.json` + the three split JSONL + the builder receipt.
     Distinct from the decision datasets (spec.dataset_slug) so a corpus
-    version never drops the decision inputs (and vice versa).
+    version never drops the decision inputs (and vice versa). `kind` names
+    the staging surface (`finetune` or the eval-only `finetune-eval`), so
+    each kernel's push gate finds its own `dataset_payload` beside it.
     """
     if not dataset_slug:
         raise RuntimeError(
             "config laya.finetune_dataset_slug is unset; name the corpus "
             "dataset (owner/slug) before staging")
     corpus_dir = Path(corpus_dir)
-    stage = staging_dir() / "kaggle" / FINETUNE_DECISION / DATASET_PAYLOAD_DIR
+    stage = staging_dir() / "kaggle" / kind / DATASET_PAYLOAD_DIR
     stage.mkdir(parents=True, exist_ok=True)
     metadata = {"title": "er laya train", "id": dataset_slug,
                 "licenses": [{"name": "other"}]}
@@ -1300,6 +2002,12 @@ def stage_finetune_kernel(*, revision: str | None = None,
         raise RuntimeError(
             "config laya.finetune_dataset_slug is unset; the corpus travels "
             "as that dataset (owner/slug) — name it before staging")
+    base_dataset = spec.base_model_dataset
+    if not base_dataset:
+        raise RuntimeError(
+            "config laya.base_model_dataset is unset; the base checkpoint "
+            "travels as that dataset (owner/slug) — the finetune kernel "
+            "must extract a LOCAL dir, never fetch from the Hub")
     # The published-tip invariant ('origin/<branch> == HEAD') resolves
     # BEFORE any payload write, exactly like stage_decision_kernel.
     repository = training_cfg().kaggle.repository
@@ -1324,32 +2032,33 @@ def stage_finetune_kernel(*, revision: str | None = None,
         # single T4: the payload never requests the double accelerator;
         # the script itself pins CUDA_VISIBLE_DEVICES=0.
         "enable_internet": True,
-        # THE CORPUS TRAVELS AS THE DATASET: kernels push does NOT ship the
-        # co-located JSONL files, so resolve_input would FileNotFoundError
-        # once boot passes — attach the finetune dataset slug.
-        "dataset_sources": [dataset_slug],
+        # THE CORPUS + THE BASE CHECKPOINT TRAVEL AS DATASETS: kernels push
+        # does NOT ship the co-located JSONL files, and the 647 MB base
+        # checkpoint cannot ride git — attach the corpus slug AND the
+        # base-model archive dataset (er-laya-base).
+        "dataset_sources": [dataset_slug, base_dataset],
         "kernel_sources": [],
         "competition_sources": [],
         "is_private": True,
     }
-    recipe = FINETUNE_RECIPE
+    recipe = finetune_config(spec)
     values = {
         "LAYA_PACKAGE": FINETUNE_LAYA_PACKAGE,
-        "BASE_MODEL": spec.checkpoint_hub,
+        "BASE_MODEL_ARCHIVE": spec.base_model_archive,
+        "BASE_MODEL_DIR": spec.base_model_dir,
         "RUN_TAG": tag,
         "TRAIN_JSONL": FINETUNE_CORPUS_FILES[0],
         "DEV_JSONL": FINETUNE_CORPUS_FILES[1],
         "TEST_JSONL": FINETUNE_CORPUS_FILES[2],
-        "EPOCHS": str(recipe["epochs"]),
-        "MICRO_BATCH": str(recipe["micro_batch"]),
-        "GRAD_ACCUM": str(recipe["grad_accum"]),
-        "ENCODER_LR": repr(recipe["encoder_lr"]),
-        "HEAD_LR": repr(recipe["head_lr"]),
-        "LOSS": recipe["loss"],
-        "SEED": str(recipe["seed"]),
+        # The FULL TrainConfig surface rides one repr-baked Python literal:
+        # the kernel constructs `TrainConfig(**FINETUNE_CONFIG)` directly.
+        "FINETUNE_CONFIG": repr(recipe),
+        "FINETUNE_DEVICE": spec.finetune.device,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
+        "DEVICE_PATCH": FINETUNE_DEVICE_PATCH_SOURCE,
+        "PERF_PATCH": FINETUNE_PERF_PATCH_SOURCE,
     }
     # two-pass substitution (a nested value's @tokens@ are never re-scanned
     # once it is inserted): the preflight bakes its own literal tuple FIRST,
@@ -1373,8 +2082,13 @@ def stage_finetune_kernel(*, revision: str | None = None,
                     "payload": dataset_receipt["payload"],
                     "files": dataset_receipt["files"]},
         "laya_package": FINETUNE_LAYA_PACKAGE,
-        "base_model": spec.checkpoint_hub,
+        # The base checkpoint is the attached er-laya-base dataset archive,
+        # extracted in-kernel; the Hub id is NOT passed as --base anymore.
+        "base_model": {"dataset": base_dataset,
+                       "archive": spec.base_model_archive,
+                       "dir": spec.base_model_dir},
         "recipe": recipe,
+        "device": spec.finetune.device,
         "corpus_dir": str(TRAIN_ROOT / FINETUNE_CORPUS_DIR),
         "published_pin": {"repository": repository, "branch": branch,
                           "revision": revision},
@@ -1383,6 +2097,137 @@ def stage_finetune_kernel(*, revision: str | None = None,
     atomic_write_json(receipt, stage / f"{FINETUNE_DECISION}.receipt.json")
     _log_lane(f"staged kaggle finetune kernel ({spec.gpu}) run_tag={tag} "
               f"-> {stage}")
+    return receipt
+
+
+def stage_finetune_eval_kernel(*, revision: str | None = None,
+                               run_tag: str | None = None,
+                               checkpoint_path: Path | None = None
+                               ) -> dict[str, Any]:
+    """Stage the kaggle fine-tune EVAL-ONLY kernel payload (dry-safe).
+
+    Writes under results/laya_lane/kaggle/finetune-eval/:
+      kernel-metadata.json + laya_finetune_eval.py +
+      finetune-eval.receipt.json (+ the SAME staged corpus dataset payload
+      as the finetune kind).
+    Fail-loud preconditions (no silent skip):
+      * spec.laya_decision_epochs > 0 (0 = disabled, nothing may stage);
+      * spec.finetune_eval_kernel_slug + spec.finetune_dataset_slug set;
+      * a checkpoint source: spec.finetune_ckpt_dataset OR checkpoint_path;
+      * spec.finetune_eval_split names a corpus split.
+
+    The kernel loads the attached checkpoint and scores the attached split:
+    no training, no Hub. The checkpoint dataset is attached as a second
+    `dataset_sources` entry; an explicit `checkpoint_path` is baked as
+    CHECKPOINT_PATH and takes precedence in-kernel.
+    """
+    spec = _spec()
+    if spec.laya_decision_epochs <= 0:
+        raise RuntimeError(
+            "config laya.laya_decision_epochs <= 0: the laya lane is "
+            "disabled (no payload may stage a GPU session)")
+    slug = spec.finetune_eval_kernel_slug
+    if not slug:
+        raise RuntimeError(
+            "config laya.finetune_eval_kernel_slug is unset; name the target "
+            "eval kernel (owner/slug) before staging")
+    dataset_slug = spec.finetune_dataset_slug
+    if not dataset_slug:
+        raise RuntimeError(
+            "config laya.finetune_dataset_slug is unset; the corpus travels "
+            "as that dataset (owner/slug) — name it before staging")
+    ckpt_dataset = spec.finetune_ckpt_dataset
+    if not ckpt_dataset and not checkpoint_path:
+        raise RuntimeError(
+            "config laya.finetune_ckpt_dataset is unset and no checkpoint "
+            "path was given; the eval-only kernel needs a fine-tuned "
+            "checkpoint dataset (owner/slug) or an explicit path")
+    split = spec.finetune_eval_split
+    if split not in FINETUNE_EVAL_SPLIT_FILES:
+        raise ValueError(
+            f"config laya.finetune_eval_split {split!r} is not one of "
+            f"{sorted(FINETUNE_EVAL_SPLIT_FILES)}")
+    # The published-tip invariant resolves BEFORE any payload write.
+    repository = training_cfg().kaggle.repository
+    branch = training_cfg().kaggle.branch
+    revision = revision or _git_revision()
+    from core import runtime_inputs
+    tip = runtime_inputs.require_published_tip_match(
+        revision, repository, branch)
+    dataset_receipt = stage_finetune_dataset_payload(
+        dataset_slug=dataset_slug,
+        corpus_dir=TRAIN_ROOT / FINETUNE_CORPUS_DIR,
+        kind=FINETUNE_EVAL_DECISION)
+    stage = staging_dir() / "kaggle" / FINETUNE_EVAL_DECISION
+    stage.mkdir(parents=True, exist_ok=True)
+    tag = run_tag or spec.run_tag_prefix + decision_tag()
+    dataset_sources = [dataset_slug]
+    if ckpt_dataset and not checkpoint_path:
+        dataset_sources.append(ckpt_dataset)
+    metadata: dict[str, Any] = {
+        "id": slug,
+        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
+        "code_file": FINETUNE_EVAL_CODE_FILE,
+        "language": "python",
+        "kernel_type": "script",
+        "enable_gpu": True,
+        # single T4: the payload never requests the double accelerator.
+        "enable_internet": True,
+        # THE HELD-OUT SPLIT + THE CHECKPOINT TRAVEL AS DATASETS: the corpus
+        # dataset carries the JSONL split, the checkpoint dataset carries
+        # the fine-tuned checkpoint dir (rl_agent_config.json).
+        "dataset_sources": dataset_sources,
+        "kernel_sources": [],
+        "competition_sources": [],
+        "is_private": True,
+    }
+    eval_jsonl = FINETUNE_EVAL_SPLIT_FILES[split]
+    values = {
+        "LAYA_PACKAGE": FINETUNE_LAYA_PACKAGE,
+        "RUN_TAG": tag,
+        "EVAL_JSONL": eval_jsonl,
+        "EVAL_SPLIT": split,
+        "CKPT_DIR": spec.finetune_ckpt_dir,
+        "CHECKPOINT_PATH": str(checkpoint_path) if checkpoint_path else "",
+        "BATCH_SIZE": str(spec.finetune_eval_batch_size),
+        "REPOSITORY": repository,
+        "BRANCH": branch,
+        "REVISION": revision,
+    }
+    # two-pass substitution (the preflight bakes its own literal tuple
+    # first; the push gate literal-evals `_runtime_files`).
+    preflight = _template(FINETUNE_EVAL_RUNTIME_PREFLIGHT, values)
+    script = _template(FINETUNE_EVAL_KERNEL_SCRIPT,
+                       {**values, "RUNTIME_PREFLIGHT": preflight})
+    _kernel_script_gate(script)
+    _module_scope_gate(script)
+    atomic_write_json(metadata, stage / "kernel-metadata.json")
+    (stage / FINETUNE_EVAL_CODE_FILE).write_text(script, encoding="utf-8")
+    receipt = {
+        "kernel": slug,
+        "kind": FINETUNE_EVAL_DECISION,
+        "gpu": "T4 (single)",
+        "run_tag": tag,
+        "staged": str(stage),
+        "code_file": FINETUNE_EVAL_CODE_FILE,
+        "dataset": {"slug": dataset_slug,
+                    "payload": dataset_receipt["payload"],
+                    "files": dataset_receipt["files"]},
+        "checkpoint_dataset": ckpt_dataset,
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
+        "checkpoint_dir_hint": spec.finetune_ckpt_dir,
+        "eval_split": split,
+        "eval_jsonl": eval_jsonl,
+        "laya_package": FINETUNE_LAYA_PACKAGE,
+        "published_pin": {"repository": repository, "branch": branch,
+                          "revision": revision},
+        "published_tip": tip,
+    }
+    atomic_write_json(receipt,
+                      stage / f"{FINETUNE_EVAL_DECISION}.receipt.json")
+    _log_lane(f"staged kaggle finetune-eval kernel ({spec.gpu}) "
+              f"split={split} ckpt={ckpt_dataset or checkpoint_path} "
+              f"run_tag={tag} -> {stage}")
     return receipt
 
 
@@ -1551,6 +2396,7 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
         raise RuntimeError(f"kaggle kernels output staged no archive "
                            f"under {stage} (slug {slug})")
     receipt_name = f"laya_{decision_kind}.receipt.json"
+    reports: dict[str, Any] = {}
     with tarfile.open(archives[0], "r:*") as tar:
         members = tar.getnames()
         if receipt_name not in members:
@@ -1559,11 +2405,125 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
                 f"{receipt_name}; the kernel receipt contract failed")
         payload = json.loads(tar.extractfile(receipt_name)
                              .read().decode())
+        # Extract the JSON payloads the kernel wrote (eval_report.json and
+        # siblings) into the fetch dir so the report path is reproducible
+        # offline: the returned plan carries them keyed by member name.
+        for member in members:
+            name = Path(member).name
+            if not name.endswith(".json") or name == receipt_name:
+                continue
+            body = tar.extractfile(member).read()
+            (stage / name).write_bytes(body)
+            try:
+                reports[name] = json.loads(body.decode())
+            except (ValueError, UnicodeDecodeError):
+                continue
     plan.update({"archive": str(archives[0]), "members": members,
-                 "receipt": payload})
+                 "receipt": payload, "reports": reports})
     _log_lane(f"fetched kernel output for {slug}: "
-              f"archive={archives[0].name} members={len(members)}")
+              f"archive={archives[0].name} members={len(members)} "
+              f"reports={sorted(reports)}")
     return plan
+
+
+def local_eval_checkpoint(checkpoint_dir: Path, *,
+                          eval_data: Path | None = None,
+                          out_dir: Path | None = None,
+                          split: str | None = None,
+                          batch_size: int | None = None,
+                          limit: int | None = None) -> dict[str, Any]:
+    """Local (CPU) held-out eval of a fetched fine-tuned checkpoint.
+
+    The offline twin of the `finetune-eval` kernel: loads the checkpoint with
+    `laya.train.load_checkpoint` on CPU and runs `calibration_records` +
+    `evaluate_records` on the corpus split (default `data/laya/test.jsonl`),
+    writing the same `eval_report.json` (+ receipt) under `out_dir` (default
+    results/laya_lane/local_eval). Requires `laya` + torch installed locally;
+    fails loud before any work when they are missing. Never touches the
+    network and never trains.
+    """
+    spec = _spec()
+    split = split or spec.finetune_eval_split
+    if split not in FINETUNE_EVAL_SPLIT_FILES:
+        raise ValueError(
+            f"eval split {split!r} is not one of "
+            f"{sorted(FINETUNE_EVAL_SPLIT_FILES)}")
+    checkpoint_dir = Path(checkpoint_dir)
+    if not (checkpoint_dir / "rl_agent_config.json").is_file():
+        raise FileNotFoundError(
+            f"checkpoint {checkpoint_dir} carries no rl_agent_config.json")
+    if eval_data is None:
+        eval_data = (TRAIN_ROOT / FINETUNE_CORPUS_DIR
+                     / FINETUNE_EVAL_SPLIT_FILES[split])
+    eval_data = Path(eval_data)
+    if not eval_data.is_file():
+        raise FileNotFoundError(f"eval data not found: {eval_data}")
+    if out_dir is None:
+        out_dir = staging_dir() / "local_eval"
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    batch_size = batch_size or spec.finetune_eval_batch_size
+    try:
+        import torch
+        from laya import train as laya_train
+    except ImportError as error:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "local eval needs the laya package + torch installed on this "
+            f"box (pip install {spec.laya_package}): {error}") from error
+    device = torch.device("cpu")
+    model, tok, cfg = laya_train.load_checkpoint(str(checkpoint_dir))
+    model = model.to(device).eval()
+    max_len = int(cfg.get("max_len", 512))
+    head_max_len = int(cfg.get("head_max_len", 192))
+    parallel = laya_train.uses_parallel_layout(cfg)
+    rows = laya_train.read_jsonl(str(eval_data))
+    if limit:
+        rows = rows[:limit]
+    items, skipped = laya_train.items_from_rows(
+        tok, rows, max_len, head_max_len, label_smoothing=0.0)
+    if not items:
+        raise RuntimeError(
+            f"eval data {eval_data} produced no usable items "
+            f"(skipped: {skipped!r})")
+    records = laya_train.calibration_records(
+        model, tok, items, device, max_len, head_max_len,
+        batch_size=batch_size, parallel=parallel)
+    before = laya_train.evaluate_records(records)
+    fitted = laya_train.fit_temperature_map(records)
+    after = laya_train.evaluate_records(
+        records, fitted.get("temperature"),
+        fitted.get("temperature_by_options"))
+    report = {
+        "eval_mode": "held_out",
+        "is_held_out": True,
+        "device": "cpu",
+        "eval_source": eval_data.name,
+        "eval_split": split,
+        "rows": len(rows),
+        "items": len(items),
+        "skipped": skipped,
+        "checkpoint": str(checkpoint_dir),
+        "before": before,
+        "after": after,
+        "temperature": fitted.get("temperature"),
+        "temperature_by_options": fitted.get("temperature_by_options"),
+    }
+    atomic_write_json(report, out_dir / FINETUNE_EVAL_REPORT_FILE)
+    receipt = {
+        "gpu_kind": FINETUNE_EVAL_DECISION,
+        "device": "cpu",
+        "eval_split": split,
+        "eval_mode": "held_out",
+        "is_held_out": True,
+        "eval_data": str(eval_data),
+        "eval_data_sha256": sha256_file(eval_data),
+        "checkpoint": str(checkpoint_dir),
+        "report": str(out_dir / FINETUNE_EVAL_REPORT_FILE),
+    }
+    atomic_write_json(receipt, out_dir / FINETUNE_EVAL_RECEIPT_FILE)
+    _log_lane(f"local cpu eval [{split}] items={len(items)} "
+              f"accuracy={after['accuracy']} -> {out_dir}")
+    return report
 
 
 class LayaLane:
@@ -1583,11 +2543,13 @@ class LayaLane:
         self._spec = _spec()
 
     def stage(self, decision_kind: str, *,
-              input_override: Path | None = None) -> dict[str, Any]:
+              input_override: Path | None = None,
+              checkpoint_path: Path | None = None) -> dict[str, Any]:
         """Stage the payload (offline, dry-safe)."""
         if self.kind == "kaggle":
-            return stage_decision_kernel(decision_kind=decision_kind,
-                                         input_override=input_override)
+            return stage_decision_kernel(
+                decision_kind=decision_kind, input_override=input_override,
+                checkpoint_path=checkpoint_path)
         return stage_colab_notebook(decision_kind=decision_kind)
 
     def push(self, stage_dir: Path, *, execute: bool = False,
@@ -1609,6 +2571,32 @@ class LayaLane:
 
 
 # ── main ───────────────────────────────────────────────────────────────────
+def _spawn_stream_follower(slug: str) -> None:
+    """Follow a pushed kernel's live session log into the laya lane transcript.
+
+    The laya lane otherwise has no visibility into the remote session (it never
+    opens a stream), so the training tqdm never reaches ``logs/laya/lane.log``.
+    This spawns the kaggle lane's SSE follower against the pushed slug so the
+    live output lands there. Detached (setsid) so a wrapper/shell death cannot
+    orphan or kill the follower.
+    """
+    from core.common import TRAIN_ROOT
+
+    log = TRAIN_ROOT / "logs/laya/lane.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    code = (
+        "from pathlib import Path\n"
+        "from cli.kaggle_lane import stream_kernel_logs\n"
+        f"stream_kernel_logs({slug!r}, log_path=Path({str(log)!r}))\n"
+    )
+    with log.open("ab") as handle:
+        subprocess.Popen(
+            [sys.executable, "-c", code], cwd=TRAIN_ROOT,
+            stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            env={**os.environ, "PYTHONPATH": str(TRAIN_ROOT / "src")},
+            start_new_session=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kind", choices=KINDS, default="kaggle")
@@ -1622,9 +2610,56 @@ def main() -> None:
                         help="alternate decision source CSV on this box "
                              "(forwarded as the staging override; "
                              "kaggle staging path)")
+    parser.add_argument("--fetch", action="store_true",
+                        help="fetch a pushed kernel's output (kaggle "
+                             "kernels output) instead of staging; combine "
+                             "with --decision + --slug and --execute")
+    parser.add_argument("--slug", default=None,
+                        help="the pushed kernel slug (owner/slug) for "
+                             "--fetch")
+    parser.add_argument("--local-eval", action="store_true",
+                        help="run the CPU held-out eval of a fetched "
+                             "fine-tuned checkpoint instead of staging")
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="the fine-tuned checkpoint dir for "
+                             "--local-eval (must carry rl_agent_config.json)")
+    parser.add_argument("--eval-data", type=Path, default=None,
+                        help="the eval JSONL for --local-eval (default: the "
+                             "config split under data/laya)")
+    parser.add_argument("--eval-out", type=Path, default=None,
+                        help="output dir for --local-eval "
+                             "(default: results/laya_lane/local_eval)")
+    parser.add_argument("--eval-split", choices=tuple(FINETUNE_EVAL_SPLIT_FILES),
+                        default=None,
+                        help="the corpus split for --local-eval "
+                             "(default: config laya.finetune_eval_split)")
+    parser.add_argument("--eval-limit", type=int, default=None,
+                        help="cap the number of eval rows for --local-eval")
     args = parser.parse_args()
+
+    if args.local_eval:
+        # Local CPU eval path: no staging, no network, no kernel.
+        if args.checkpoint is None:
+            parser.error("--local-eval requires --checkpoint PATH")
+        report = local_eval_checkpoint(
+            args.checkpoint, eval_data=args.eval_data, out_dir=args.eval_out,
+            split=args.eval_split, limit=args.eval_limit)
+        print(json.dumps(report, indent=2), flush=True)
+        return
+
+    if args.fetch:
+        # Fetch path: kaggle kernels output for a pushed kernel; the eval
+        # report JSONs land under results/laya_lane/fetch/<decision>/.
+        if not args.slug:
+            parser.error("--fetch requires --slug owner/slug")
+        plan = collect_kaggle_result(args.decision, args.slug,
+                                     execute=args.execute)
+        print(json.dumps(plan, indent=2), flush=True)
+        return
+
     lane = LayaLane(args.kind)
-    receipt = lane.stage(args.decision, input_override=args.decision_input)
+    receipt = lane.stage(args.decision, input_override=args.decision_input,
+                         checkpoint_path=args.checkpoint)
     print(_stamp(), f"[laya-lane] staged {args.kind}/{args.decision} payload: "
           f"{json.dumps(receipt, indent=2)}", flush=True)
     if args.execute and args.kind == "kaggle":
@@ -1638,6 +2673,10 @@ def main() -> None:
         print(json.dumps(dataset_plan, indent=2), flush=True)
         push_plan = lane.push(stage_dir, execute=True)
         print(json.dumps(push_plan, indent=2), flush=True)
+        # Follow the pushed kernel's live session log into logs/laya/lane.log
+        # (the lane otherwise has no remote visibility and never shows a tqdm).
+        _spawn_stream_follower(
+            json.loads((stage_dir / "kernel-metadata.json").read_text())["id"])
     elif args.execute:
         _log_lane("colab payloads are a delivery contract only; nothing "
                   "to --execute")

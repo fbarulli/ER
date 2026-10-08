@@ -69,7 +69,7 @@ def validate_pending(setup,checkpoint,*,native_model=None):
 
 
 def forward(setup,checkpoint,*,device,return_model=False):
-    """GPU supervisor runs once before hybrid workers train; no CPU composition."""
+    """GPU supervisor runs once before the trained workers start; no CPU composition."""
     request_path = setup/'embedding_inputs.json'
     request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())

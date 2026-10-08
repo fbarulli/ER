@@ -60,13 +60,14 @@ def stage_smoke_parent(setup: Path, monkeypatch):
     from model_tracks.config import SuiteConfig
     import model_tracks.text_export
     import model_tracks.baseline_export
-    for track in ('gnn_only', 'hybrid'):
+    for track in ('gnn_only', 'cascade'):
         lane = dict(track=track, listings=str(setup/'prepared/listings.json'),
                     pairs=str(setup/'prepared/pairs.csv'),
                     input_manifest=str(setup/'prepared/input_manifest.json'),
                     output_dir=str(setup/'runs'), device='cpu')
-        if track == 'hybrid':
-            lane['text_cache'] = str(setup/'shared_minilm__embeddings.npz')
+        if track == 'cascade':
+            lane['text_index'] = str(setup/'text__index')
+            lane['gnn_checkpoint'] = str(setup/'gnn_only__best_checkpoint.json')
         (setup/f'{track}.yaml').write_text(yaml.safe_dump(lane))
     (setup/'text.yaml').write_text(yaml.safe_dump(dict(track='text', output_dir=str(setup/'runs'))))
     suite = SuiteConfig(setup_dir=str(setup), text_bundle=str(setup/'text_prepared.pkl.gz'),
@@ -183,7 +184,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
         return
     prepare_smoke(setup_arg, output_arg, sample=2, suite_config=parent_config)
     import yaml
-    for track in ('gnn_only', 'hybrid'):
+    for track in ('gnn_only', 'cascade'):
         settings = yaml.safe_load((output / f'{track}.yaml').read_text())
         assert settings['listings'] == str(output / 'prepared/listings.json')
     assert preparations == ['text', 'baseline']
