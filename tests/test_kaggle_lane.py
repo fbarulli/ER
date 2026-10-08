@@ -241,6 +241,45 @@ def test_download_rejects_drifted_fetchback(tmp_path, monkeypatch):
         kaggle_lane.download_dataset(package, execute=True)
 
 
+def test_download_dataset_delegates_to_the_shared_fetch_transport(
+        tmp_path, monkeypatch):
+    """No second downloader: the fetch-back reuses the 429-aware transport.
+
+    `KaggleDatasets.download_dataset` must route its ``kaggle datasets
+    download`` through `cli.kaggle_download.DatasetDownloader` (the ONE
+    fail-loud transport, shared with the kernel-output fetcher) instead of
+    re-spelling its own subprocess call.
+    """
+    from cli import kaggle_download
+
+    _spec(tmp_path, monkeypatch, slug="owner/slug")
+    export = tmp_path / "dataset.csv"
+    _write_export(export)
+    package = kaggle_lane.package_export(export)
+    receipt = json.loads(
+        (tmp_path / "kaggle_stage" / "full" / "full.receipt.json").read_text())
+    calls: dict = {}
+
+    class _SpyDownloader:
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+
+        def download(self, slug, dest, **kwargs):
+            calls.update(slug=slug, dest=Path(dest), kwargs=kwargs)
+            return kaggle_download.DownloadResult(
+                slug=slug, dest=Path(dest), files=(), attempts=2,
+                command=("kaggle",), archive=Path(dest) / "slug.zip")
+
+    monkeypatch.setattr(kaggle_download, "DatasetDownloader", _SpyDownloader)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = kaggle_lane.download_dataset(package, execute=True)
+    assert calls["slug"] == "owner/slug"
+    assert calls["kwargs"]["sha256"] == receipt["archive_sha256"]
+    assert calls["kwargs"]["require_globs"] == ("*.zip",)
+    assert calls["init"]["cwd"] == kaggle_lane.TRAIN_ROOT
+    assert plan["download_attempts"] == 2 and plan["verified"] is True
+
+
 def test_submission_packaging_matches_external_contract(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     predictions = tmp_path / "predictions.csv"
