@@ -247,9 +247,13 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     text_settings.update(report_test=False)
     write_text_config(output, text_settings)
     cfg = parent.model_dump()
+    # A smoke is a lifecycle check, not a performance experiment: the suite
+    # config keeps resource profiling off (matching the committed S fixture),
+    # while post-training ablation stays inherited from the parent so the local
+    # finalize still fires from the downloaded result archive.
     cfg.update(setup_dir=_portable_path(output, train_root=train_root),
                text_bundle=_portable_path(output/'text_prepared.pkl.gz', train_root=train_root),
                epochs=1,device='cpu',report_test=False,publish_git=False,
-               publish_dvc=False,profiling=True)
+               publish_dvc=False,profiling=False)
     (output/'suite.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False))
     return output/'suite.yaml'

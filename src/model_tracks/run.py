@@ -353,7 +353,25 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from model_tracks.baseline_ablation import complete as complete_baseline
         from model_tracks.post_training_ablation import complete_saved
         from model_tracks.resume import record_completion
-        complete_baseline(output / 'baseline', setup, config=TRAIN_ROOT / cfg.ablation_config)
+        # The frozen baseline report is optional: GPU sessions run no ablation
+        # staging/forward (owner order 2026-10-07), so an archive produced there
+        # ships no 'baseline/ablation' request. The local finalize
+        # (bundle_steps.finalize) already skips it with a named reason; the
+        # suite does the same instead of failing after every track has
+        # completed and reported. The saved per-track ablation below is the part
+        # that must always complete.
+        baseline_request = output / 'baseline' / 'ablation' / spec.ablation_request_file
+        if baseline_request.is_file():
+            complete_baseline(output / 'baseline', setup, config=TRAIN_ROOT / cfg.ablation_config)
+        else:
+            trace().add(
+                'run', 'baseline_ablation',
+                reason='post-training ablation is enabled but the suite shipped no baseline '
+                       'ablation; the frozen baseline report is skipped rather than refit',
+                detail={'baseline': str(output / 'baseline'),
+                        'request': str(baseline_request), 'present': False},
+                source=str(output / 'baseline'),
+            )
         complete_saved(output, cfg)
         for track in TRACKS:
             record_completion(output / track, track)

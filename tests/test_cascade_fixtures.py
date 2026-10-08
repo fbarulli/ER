@@ -49,8 +49,12 @@ def test_cascade_and_companion_configs_load(name):
         pytest.skip(f"{name} not present in this checkout")
     cascade = load_graph_config(setup / "cascade.yaml", expected_track="cascade")
     # The cascade composes the trained text ranker + trained gnn_only scorer
-    # and fuses no embedding, so it must not declare a text cache.
-    assert cascade.text_index and cascade.gnn_checkpoint
+    # and fuses no embedding, so it must not declare a text cache. Its two
+    # trained inputs are declared together (an explicit sibling results root) or
+    # both left null; the null form makes the worker resolve the SAME-RUN
+    # artifacts its prerequisite tracks wrote, which is what the committed smoke
+    # fixtures need (their results root exists only at run time).
+    assert bool(cascade.text_index) == bool(cascade.gnn_checkpoint)
     assert cascade.text_cache is None
     gnn = load_graph_config(setup / "gnn_only.yaml", expected_track="gnn_only")
     assert gnn.track == "gnn_only"
@@ -87,6 +91,24 @@ def test_committed_lane_configs_are_portable_and_resolve(monkeypatch):
         assert not Path(suite.setup_dir).is_absolute()
         assert not Path(suite.text_bundle).is_absolute()
         assert (checkout / suite.text_bundle).is_file()
+
+
+def test_smoke_200_cascade_consumes_same_run_artifacts():
+    """The S fixture leaves the cascade inputs null, like ``gnn_only.yaml``.
+
+    Pinning them into the prepared setup (``data/prepared/smoke_200/text_index``)
+    made the cascade worker raise FileNotFoundError: that path is an artifact of
+    a run, not of the setup tree, and a smoke's results root exists only at run
+    time. Both fixtures therefore stay null and the worker resolves the run's
+    own ``text`` / ``gnn_only`` outputs behind the barrier.
+    """
+    setup = _setup("data/prepared/smoke_200")
+    if not (setup / "cascade.yaml").is_file():
+        pytest.skip("smoke_200 not present in this checkout")
+    cascade = load_graph_config(setup / "cascade.yaml", expected_track="cascade")
+    assert cascade.text_index is None and cascade.gnn_checkpoint is None
+    gnn = load_graph_config(setup / "gnn_only.yaml", expected_track="gnn_only")
+    assert gnn.text_index is None and gnn.gnn_checkpoint is None
 
 
 def test_smoke_200_suite_binds_cpu_and_cascade_configs():

@@ -14,8 +14,13 @@ pairs: data/prepared/smoke_200/prepared/pairs.csv
 output_dir: results/graph_tracks
 text_cache: null
 text_checkpoint_sha256: null
-text_index: data/prepared/smoke_200/text_index
-gnn_checkpoint: data/prepared/smoke_200/gnn_checkpoint.json
+# A smoke's results root exists only at run time, so the cascade consumes the
+# SAME-RUN artifacts its prerequisite tracks (text, gnn_only) write behind the
+# barrier: both inputs stay null and the worker resolves them under the run
+# (worker._cascade_artifacts), exactly like gnn_only.yaml's null inputs. Pinning
+# them into the setup tree made the cascade raise FileNotFoundError here.
+text_index: null
+gnn_checkpoint: null
 input_manifest: data/prepared/smoke_200/prepared/input_manifest.json
 allow_unmanifested_inputs: false
 wandb:

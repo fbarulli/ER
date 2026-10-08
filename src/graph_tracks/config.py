@@ -131,14 +131,16 @@ class GraphConfig(RetrievalConfig):
         if self.track == "cascade":
             # The cascade is a combinator: it consumes the trained text ANN and
             # the trained gnn_only scorer. It never fuses an embedding, so the
-            # fused text cache/checkpoint are forbidden, and it must declare the
-            # real inputs it reads: the text index and the gnn scorer checkpoint.
+            # fused text cache/checkpoint are forbidden. The two trained inputs
+            # are OPTIONAL declarations: when either stays null the worker
+            # resolves the SAME-RUN artifact its prerequisite track wrote behind
+            # the barrier (``worker._cascade_artifacts``), which is what a suite
+            # whose results root exists only at run time needs -- the committed
+            # smoke fixture leaves both null, exactly like gnn_only.yaml.
             if self.text_cache:
                 raise ValueError('cascade forbids the fused text_cache; it consumes the trained text index and gnn scorer')
             if self.text_checkpoint_sha256:
                 raise ValueError('cascade forbids a fused text checkpoint reference')
-            if not (self.text_index and self.gnn_checkpoint):
-                raise ValueError('cascade requires the trained text_index and gnn_checkpoint inputs')
         else:
             if self.text_cache:
                 raise ValueError('gnn_only forbids text_cache')
