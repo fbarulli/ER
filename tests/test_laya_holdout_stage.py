@@ -101,6 +101,19 @@ def test_stage_holdout_eval_kernel_renders_and_writes_receipt(
     laya_lane._kernel_script_gate(script)
     laya_lane._module_scope_gate(script)
     assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
+    # The push gate's attached-inputs inventory is the holdout JSONL ONLY: the
+    # questions are embedded per row, so a separate schema file is never
+    # attached (the decision kernel's inventory would fail the staged payload).
+    inventory = {}
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and \
+                        target.id == "_runtime_files":
+                    inventory["_runtime_files"] = ast.literal_eval(node.value)
+    assert inventory["_runtime_files"] == (laya_lane.HOLDOUT_JSONL,)
+    payload = stage / laya_lane.DATASET_PAYLOAD_DIR
+    assert (payload / laya_lane.HOLDOUT_JSONL).is_file()
     # the checkpoint dataset rides alongside the holdout dataset
     metadata = json.loads((stage / "kernel-metadata.json").read_text())
     assert spec.holdout_dataset_slug in metadata["dataset_sources"]
