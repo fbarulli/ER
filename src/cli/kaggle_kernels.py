@@ -162,7 +162,12 @@ class KaggleKernels:
         every script and itself embeds remote.input_dir — it is configured
         data, not a reader.
         """
+        from cli import kaggle_lane as lane
+
         import ast
+        # Config-owned remote input mount (KaggleRemoteSpec.input_dir); the
+        # gate checks THIS value, never a re-spelled "/kaggle/input" literal.
+        input_dir = lane._spec().remote.input_dir
         reads_input_mount = False
         for expr in ast.walk(ast.parse(script)):
             if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load) \
@@ -170,7 +175,7 @@ class KaggleKernels:
                 reads_input_mount = True
                 break
             if (isinstance(expr, ast.Constant) and isinstance(expr.value, str)
-                    and "/kaggle/input" in expr.value
+                    and input_dir in expr.value
                     and not expr.value.lstrip().startswith("{")):
                 reads_input_mount = True
                 break

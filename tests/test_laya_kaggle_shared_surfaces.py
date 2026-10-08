@@ -1,15 +1,27 @@
 """The laya lane's kaggle-facing stages, consolidated onto the kaggle owners.
 
-The laya lane used to re-implement five functions the kaggle lane already owns.
-Where behavior is identical the laya lane now calls the owner; where the lane
-deliberately differs (it attaches DATASETS instead of cloning the repo, and it
-addresses the CLI as ``python -m kaggle``), the SHARED part is pinned byte-for-
-byte here.
+The laya lane used to re-implement the kaggle lane's kernel metadata and argv
+shapes. Where behavior is identical it now calls the owner:
+
+* ``KaggleKernels.kernel_metadata`` — the four laya stage metadata documents
+  (decision, holdout-eval, finetune, finetune-eval) are built by the owner;
+* ``KaggleKernels.kernels_push_argv`` / ``kernels_output_argv`` — the push and
+  output argv (addressed as ``python -m kaggle``);
+* ``KaggleDatasets.dataset_publish_commands`` — the create/version argv;
+* ``KernelTemplates.substitute`` — the ``@TOKEN@`` loop the scripts render with;
+* ``KaggleKernels.push_with_session_capture`` — the clear/push/capture launch aid.
+
+The lane deliberately diverges in exactly three places, and each is pinned here
+(never silently unified): the dataset attach passes ``-r zip`` (its own
+``dir_mode_args``), the CLI is addressed as ``[sys.executable, "-m", "kaggle"]``,
+and the fetched result's integrity contract is the in-archive receipt (a plain
+tar.gz, not a Bundle role) in ``collect_kaggle_result``.
 
 The emitted bytes this file protects:
 
 * the ``kernels push`` / ``kernels output`` argv tokens,
-* the ``kernel-metadata.json`` document,
+* the ``kernel-metadata.json`` document (and that the laya stage emits it
+  through the owner, not a re-spelled copy),
 * the ``datasets create`` / ``datasets version`` argv,
 * the ``@TOKEN@`` substitution loop the staged kernel scripts are rendered with.
 """
@@ -219,6 +231,69 @@ def test_kernel_metadata_reproduces_the_legacy_document_bytes():
     cpu = KaggleKernels.kernel_metadata("owner/an-er-kernel", "er_stop.py",
                                         enable_gpu=False)
     assert json.dumps(cpu, indent=2) == json.dumps(legacy_cpu, indent=2)
+
+
+def test_laya_stage_emits_the_owners_metadata_document(tmp_path, monkeypatch):
+    """The four laya stage metadata dicts are gone: staging a decision kernel
+    must build ``kernel-metadata.json`` through ``KaggleKernels.kernel_metadata``
+    (the owner), never a re-spelled 11-key copy. A recorder wraps the owner and
+    the written document must equal the owner's output for the same inputs."""
+    from pathlib import Path
+
+    from core.schemas import LayaSpec
+
+    monkeypatch.setattr(laya_lane, "_spec", lambda: LayaSpec(
+        export_dataset_slug="owner/er-laya-decision",
+        dataset_slug="owner/er-laya-payload"))
+    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    from core.common import training_cfg as _tcfg
+
+    base = _tcfg()
+    forced = base.model_copy(update={
+        "kaggle": base.kaggle.model_copy(update={"branch": "main"})})
+    monkeypatch.setattr(laya_lane, "training_cfg", lambda: forced)
+
+    schema = tmp_path / "config/laya.question.json"
+    schema.parent.mkdir(parents=True, exist_ok=True)
+    schema.write_text(json.dumps({"questions": {
+        "attribute_alignment": {"type": "choice", "instructions": "verdict?",
+                                "criteria": {"aligned": None}}}}))
+    import core.common as core_common
+
+    dataset = tmp_path / "dataset.csv"
+    dataset.write_text("sku_id,sku_name_eng,attribute\n"
+                       "SKU0,Name 0 500 ml,Volume: 500; Brand: A\n")
+    monkeypatch.setitem(core_common.F, "dataset", dataset)
+    monkeypatch.setitem(core_common.F, "final_validation", dataset)
+
+    monkeypatch.setattr(laya_lane, "_git_revision", lambda: "0" * 40)
+    import subprocess as sp
+
+    def fake_run(args, **kwargs):
+        if "rev-parse" in args:
+            return sp.CompletedProcess(args, 0, stdout="0" * 40, stderr="")
+        return sp.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+
+    calls: list = []
+    real = KaggleKernels.kernel_metadata
+
+    def recorder(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(KaggleKernels, "kernel_metadata", staticmethod(recorder))
+
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = Path(receipt["staged"])
+    written = json.loads((stage / "kernel-metadata.json").read_text())
+    assert calls, "staging must build the metadata through the owner"
+    args, kwargs = calls[0]
+    assert written == real(*args, **kwargs)
+    assert list(written) == list(real(*args, **kwargs))
+    assert kwargs["dataset_sources"] == ["owner/er-laya-payload"]
+    assert written["code_file"] == "laya_decision.py"
 
 
 def test_push_with_session_capture_clears_then_captures(monkeypatch):

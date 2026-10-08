@@ -2803,24 +2803,16 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
     template = (DECISION_KERNEL_SCRIPT if decision_kind != "laya-cli-eval"
                 else EVAL_KERNEL_SCRIPT)
     tag = run_tag or spec.run_tag_prefix + decision_tag()
-    metadata: dict[str, Any] = {
-        "id": slug,
-        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-        "code_file": code_file,
-        "language": "python",
-        "kernel_type": "script",
-        "enable_gpu": True,
-        # single T4: the payload never requests the double accelerator;
-        # the script itself pins CUDA_VISIBLE_DEVICES=0.
-        "enable_internet": True,
-        # THE INPUTS TRAVEL AS THE DATASET: kernels push does NOT ship
-        # the co-located csv/schema files, so resolve_input would
-        # FileNotFoundError once boot passes — attach the dataset slug.
-        "dataset_sources": [dataset_slug],
-        "kernel_sources": [],
-        "competition_sources": [],
-        "is_private": True,
-    }
+    from cli.kaggle_kernels import KaggleKernels
+
+    # single T4: the payload never requests the double accelerator; the
+    # script itself pins CUDA_VISIBLE_DEVICES=0. THE INPUTS TRAVEL AS THE
+    # DATASET: kernels push does NOT ship the co-located csv/schema files, so
+    # resolve_input would FileNotFoundError once boot passes — attach the
+    # dataset slug. The 11-key document shape is the kaggle lane's ONE home
+    # (KaggleKernels.kernel_metadata); never re-spelled in this lane.
+    metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
+        slug, code_file, enable_gpu=True, dataset_sources=[dataset_slug])
     entry = DECISION_BINDINGS[decision_kind]
     staged_csv = input_receipt["staged"]
     values = {
@@ -3311,19 +3303,11 @@ def stage_holdout_eval_kernel(*, revision: str | None = None,
     dataset_sources = [dataset_slug]
     if ckpt_dataset:
         dataset_sources.append(ckpt_dataset)
-    metadata: dict[str, Any] = {
-        "id": slug,
-        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-        "code_file": HOLDOUT_EVAL_CODE_FILE,
-        "language": "python",
-        "kernel_type": "script",
-        "enable_gpu": True,
-        "enable_internet": True,
-        "dataset_sources": dataset_sources,
-        "kernel_sources": [],
-        "competition_sources": [],
-        "is_private": True,
-    }
+    from cli.kaggle_kernels import KaggleKernels
+
+    metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
+        slug, HOLDOUT_EVAL_CODE_FILE, enable_gpu=True,
+        dataset_sources=dataset_sources)
     values = {
         "LAYA_PACKAGE": spec.finetune_package,
         "RUN_TAG": tag,
@@ -3416,25 +3400,17 @@ def stage_finetune_kernel(*, revision: str | None = None,
     stage = staging_dir() / "kaggle" / FINETUNE_DECISION
     stage.mkdir(parents=True, exist_ok=True)
     tag = run_tag or spec.run_tag_prefix + decision_tag()
-    metadata: dict[str, Any] = {
-        "id": slug,
-        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-        "code_file": FINETUNE_CODE_FILE,
-        "language": "python",
-        "kernel_type": "script",
-        "enable_gpu": True,
-        # single T4: the payload never requests the double accelerator;
-        # the script itself pins CUDA_VISIBLE_DEVICES=0.
-        "enable_internet": True,
-        # THE CORPUS + THE BASE CHECKPOINT TRAVEL AS DATASETS: kernels push
-        # does NOT ship the co-located JSONL files, and the 647 MB base
-        # checkpoint cannot ride git — attach the corpus slug AND the
-        # base-model archive dataset (er-laya-base).
-        "dataset_sources": [dataset_slug, base_dataset],
-        "kernel_sources": [],
-        "competition_sources": [],
-        "is_private": True,
-    }
+    from cli.kaggle_kernels import KaggleKernels
+
+    # single T4: the payload never requests the double accelerator; the
+    # script itself pins CUDA_VISIBLE_DEVICES=0. THE CORPUS + THE BASE
+    # CHECKPOINT TRAVEL AS DATASETS: kernels push does NOT ship the
+    # co-located JSONL files, and the 647 MB base checkpoint cannot ride git
+    # — attach the corpus slug AND the base-model archive dataset
+    # (er-laya-base). The document shape is KaggleKernels.kernel_metadata.
+    metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
+        slug, FINETUNE_CODE_FILE, enable_gpu=True,
+        dataset_sources=[dataset_slug, base_dataset])
     recipe = finetune_config(spec)
     values = {
         "LAYA_PACKAGE": spec.finetune_package,
@@ -3562,23 +3538,16 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
     dataset_sources = [dataset_slug]
     if ckpt_dataset and not checkpoint_path:
         dataset_sources.append(ckpt_dataset)
-    metadata: dict[str, Any] = {
-        "id": slug,
-        "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-        "code_file": FINETUNE_EVAL_CODE_FILE,
-        "language": "python",
-        "kernel_type": "script",
-        "enable_gpu": True,
-        # single T4: the payload never requests the double accelerator.
-        "enable_internet": True,
-        # THE HELD-OUT SPLIT + THE CHECKPOINT TRAVEL AS DATASETS: the corpus
-        # dataset carries the JSONL split, the checkpoint dataset carries
-        # the fine-tuned checkpoint dir (rl_agent_config.json).
-        "dataset_sources": dataset_sources,
-        "kernel_sources": [],
-        "competition_sources": [],
-        "is_private": True,
-    }
+    from cli.kaggle_kernels import KaggleKernels
+
+    # single T4: the payload never requests the double accelerator. THE
+    # HELD-OUT SPLIT + THE CHECKPOINT TRAVEL AS DATASETS: the corpus dataset
+    # carries the JSONL split, the checkpoint dataset carries the fine-tuned
+    # checkpoint dir (rl_agent_config.json). The document shape is
+    # KaggleKernels.kernel_metadata.
+    metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
+        slug, FINETUNE_EVAL_CODE_FILE, enable_gpu=True,
+        dataset_sources=dataset_sources)
     eval_jsonl = FINETUNE_EVAL_SPLIT_FILES[split]
     calibration = eval_calibration_config(spec)
     values = {
