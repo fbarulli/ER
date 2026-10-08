@@ -13,6 +13,7 @@ import unicodedata
 import argparse
 from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -67,6 +68,21 @@ PACKAGE_MATERIAL_RE = re.compile(
 ATTRIBUTE_ITEM_RE = re.compile(r"\s*([^:;]+):\s*([^;]+)")
 TOKEN_RE = re.compile(r"[A-Za-zÀ-ÿ0-9]+")
 SPACE_RE = re.compile(r"\s+")
+# Hoisted module-level dispatch: these ran per row through re's pattern cache.
+NUMBER_RE = re.compile(NUMBER)
+UNIT_KEY_RE = re.compile(r"[.\s]")
+NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
+LEADING_BY_RE = re.compile(r"^\s*by\s+", re.IGNORECASE)
+
+
+@lru_cache(maxsize=4096)
+def _escaped_brand_pattern(brand_text: str) -> re.Pattern:
+    """`re.escape(brand_text)` compiled once per distinct brand.
+
+    This ran `re.escape` (build a translation table, 33 str.translate calls per
+    escape) plus a pattern-cache lookup on every row it could not short-circuit.
+    """
+    return re.compile(re.escape(brand_text), re.IGNORECASE)
 
 def _volume_factors() -> dict[str, float]:
     """unit spelling (stripped per _unit_key) -> ml per unit, from config.
@@ -134,7 +150,7 @@ class Candidate:
 
 
 def _unit_key(unit: str) -> str:
-    return re.sub(r"[.\s]", "", unit.lower())
+    return UNIT_KEY_RE.sub("", unit.lower())
 
 
 VOLUME_TO_ML = _volume_factors()
@@ -235,17 +251,22 @@ def parse_attribute_details(attribute: Any) -> dict[str, Any]:
     }
     volume_values = extract_title_attributes(items.get("volume", ""))["volume_ml"]
     if not volume_values and items.get("volume"):
-        numeric = re.search(NUMBER, items["volume"])
+        numeric = NUMBER_RE.search(items["volume"])
         if numeric:
             volume_values = [_number(numeric.group())]
+    # "pack type" was scanned by PACKAGE_TYPE_RE twice (once for the canonical
+    # set, once for the package-detail list); findall is pure, so scan it once
+    # and reuse the list. The per-key walk order is unchanged.
+    pack_type_matches = PACKAGE_TYPE_RE.findall(items.get("pack type", ""))
     attribute_package_types = sorted({
-        _canonical_package_type(item)
-        for item in PACKAGE_TYPE_RE.findall(items.get("pack type", ""))
+        _canonical_package_type(item) for item in pack_type_matches
     })
     package_values = []
     for key in ("pack type", "pack material type", "sustainable packaging"):
         value = items.get(key, "")
-        package_values.extend(_canonical_package_type(item) for item in PACKAGE_TYPE_RE.findall(value))
+        type_matches = (pack_type_matches if key == "pack type"
+                        else PACKAGE_TYPE_RE.findall(value))
+        package_values.extend(_canonical_package_type(item) for item in type_matches)
         package_values.extend(item.lower() for item in PACKAGE_MATERIAL_RE.findall(value))
     return {
         "attribute_volume_ml": volume_values,
@@ -258,17 +279,17 @@ def parse_attribute_details(attribute: Any) -> dict[str, Any]:
 def _normalize_for_match(value: str) -> str:
     value = unicodedata.normalize("NFKD", value)
     value = "".join(char for char in value if not unicodedata.combining(char))
-    return re.sub(r"[^a-z0-9]", "", value.lower())
+    return NON_ALNUM_RE.sub("", value.lower())
 
 
 def find_brand_span(text: str, brand: Any) -> Candidate | None:
     """Find a whole-token catalog brand span without matching inside BOLT24."""
     if pd.isna(brand):
         return None
-    brand_text = re.sub(r"^\s*by\s+", "", str(brand), flags=re.IGNORECASE).strip()
+    brand_text = LEADING_BY_RE.sub("", str(brand)).strip()
     if not brand_text:
         return None
-    direct = re.search(re.escape(brand_text), text, flags=re.IGNORECASE)
+    direct = _escaped_brand_pattern(brand_text).search(text)
     if direct and (direct.start() == 0 or not text[direct.start() - 1].isalnum()) and (
         direct.end() == len(text) or not text[direct.end()].isalnum()
     ):
