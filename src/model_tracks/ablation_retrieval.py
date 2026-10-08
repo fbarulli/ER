@@ -44,6 +44,12 @@ class RetrievalComparison:
         self.endpoints = [lookup[key] for key in request['ids']]
         query_lookup = {key:n for n,key in enumerate(request['ids'])}
         self.pairs = [(query_lookup[p['sku_id1']],query_lookup[p['sku_id2']]) for p in request['pairs']]
+        targets = {}
+        for n,(a,b) in enumerate(self.pairs):
+            for side,source,target in ((0,a,b),(1,b,a)):
+                targets.setdefault(source, []).append((n, side, self.endpoints[target]))
+        self.targets = [(source, tuple(requested)) for source, requested in targets.items()]
+        self.rank_cache = {}
         self.tmp = tempfile.TemporaryDirectory(dir=request_path.parent)
         from model_tracks.ablation import resolve
         marker = resolve(request['checkpoint']) if request.get('checkpoint') else request_path
@@ -54,25 +60,31 @@ class RetrievalComparison:
     def ranks(self, queries):
         # Only compare queries against candidates; never construct catalog².
         pair_ranks = [[None, None] for _ in self.pairs]
-        targets = {}
-        for n,(a,b) in enumerate(self.pairs):
-            for side,source,target in ((0,a,b),(1,b,a)):
-                targets.setdefault(source, []).append((n, side, target))
         endpoints = self.endpoints
         catalog = self.vectors
-        for source, requested in targets.items():
-            # Exact per-source scores: see the class docstring for why the
-            # faster block product cannot be used behind a rank.
-            scores = catalog @ queries[source]
-            scores[endpoints[source]] = -np.inf
-            for n, side, target in requested:
-                target_index = endpoints[target]
-                value = scores[target_index]
-                # Ties are won by the lower catalog index: slicing to the
-                # target is that same contest with one temporary instead of two
-                # (count((scores == value) & (candidate_order < target_index))).
-                pair_ranks[n][side] = int(1+np.count_nonzero(scores > value)+np.count_nonzero(
-                    scores[:target_index] == value))
+        cache = self.rank_cache
+        for source, requested in self.targets:
+            # Rank of a query row depends only on the row bytes; unchanged rows
+            # recur across ablation variants, so memoize the per-target ranks.
+            key = (source, queries[source].tobytes())
+            cached = cache.get(key)
+            if cached is None:
+                # Exact per-source scores: see the class docstring for why the
+                # faster block product cannot be used behind a rank.
+                scores = catalog @ queries[source]
+                scores[endpoints[source]] = -np.inf
+                cached = []
+                for n, side, target_index in requested:
+                    value = scores[target_index]
+                    # Ties are won by the lower catalog index: slicing to the
+                    # target is that same contest with one temporary instead of
+                    # two (count((scores == value) & (candidate_order < idx))).
+                    rank = 1+np.count_nonzero(scores > value)+np.count_nonzero(
+                        scores[:target_index] == value)
+                    cached.append((n, side, int(rank)))
+                cache[key] = cached
+            for n, side, rank in cached:
+                pair_ranks[n][side] = rank
         return pair_ranks
 
     def ann_hits(self, queries):
