@@ -2,9 +2,13 @@
 
 The profiler is DEFAULT-ON per owner but auto-disables without CUDA (CPU
 profiling is near-useless and slows training); under DDP it profiles rank 0
-only. The bounded schedule records only a slice of an epoch, writes a chrome
-trace per profiled epoch under `<output_dir>/<profile_dir>/epoch_<n>.json`,
-and prints/logs a top-ops table. Every profiler path is fail-soft.
+only. The bounded schedule records a slice of an epoch, writes a chrome trace
+per profiled epoch under `<output_dir>/<profile_dir>/epoch_<n>.json`, and feeds
+a top-ops table to an optional sink. Every profiler path is fail-soft.
+
+The session logic is the `ProfilerSession` class in `core.laya_controls`; these
+tests exercise its public methods with a fake torch module (no GPU, no real
+profiler).
 """
 from __future__ import annotations
 
@@ -15,24 +19,61 @@ import re
 import types
 from pathlib import Path
 
-import torch
+import pytest
 
-from core import laya_config
+from core import laya_controls
+from core.laya_config import FinetuneSpec
 from cli import laya_lane
-
-
-def _perf_namespace():
-    namespace = {"os": os, "math": math, "random": random}
-    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
-    return namespace
 
 
 def _device(kind):
     return types.SimpleNamespace(type=kind)
 
 
+class _Event:
+    key = "aten::matmul"
+    self_cuda_time_total = 2500.0
+    self_cpu_time_total = 100.0
+    count = 7
+
+
+class _FakeProfiler:
+    """Minimal torch.profiler stand-in that fires on_trace_ready on step()."""
+
+    def __init__(self, **kwargs):
+        self._on_trace_ready = kwargs["on_trace_ready"]
+
+    def export_chrome_trace(self, path):
+        Path(path).write_text("{}", encoding="utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def step(self):
+        self._on_trace_ready(self)
+
+    def key_averages(self):
+        return [_Event()]
+
+
+class _FakeActivity:
+    CPU = "cpu"
+    CUDA = "cuda"
+
+
+def _fake_torch(profile_cls=_FakeProfiler):
+    profiler = types.SimpleNamespace(
+        ProfilerActivity=_FakeActivity,
+        schedule=lambda **kwargs: kwargs,
+        profile=profile_cls)
+    return types.SimpleNamespace(profiler=profiler)
+
+
 def test_profile_default_on_and_schedule_knobs():
-    ft = laya_config.FinetuneSpec()
+    ft = FinetuneSpec()
     assert ft.profile is True
     assert ft.profile_dir == "profiler"
     assert ft.profile_schedule == {"wait": 1, "warmup": 1, "active": 1,
@@ -43,64 +84,82 @@ def test_profile_default_on_and_schedule_knobs():
 
 
 def test_profile_schedule_rejects_unknown_keys_and_bad_dir():
-    from pydantic import ValidationError
-
-    with __import__("pytest").raises(ValidationError):
-        laya_config.FinetuneSpec(profile_schedule={"wait": 1, "nope": 2})
-    with __import__("pytest").raises(ValidationError):
-        laya_config.FinetuneSpec(profile_dir="../escape")
+    with pytest.raises(Exception):
+        FinetuneSpec(profile_schedule={"wait": 1, "nope": 2})
+    with pytest.raises(Exception):
+        FinetuneSpec(profile_dir="../escape")
 
 
-def test_profile_enabled_gates_cuda_and_rank(monkeypatch):
-    namespace = _perf_namespace()
-    enabled = namespace["_profile_enabled"]
-    # off when the knob is off
-    assert enabled({"profile": False}, _device("cuda")) is False
-    # off on CPU (near-useless + slows training)
-    assert enabled({"profile": True}, _device("cpu")) is False
-    # on for cuda rank 0
-    monkeypatch.delenv("RANK", raising=False)
-    monkeypatch.delenv("WORLD_SIZE", raising=False)
-    assert enabled({"profile": True}, _device("cuda")) is True
-    # off for a non-zero DDP rank
-    monkeypatch.setenv("RANK", "1")
-    monkeypatch.setenv("LOCAL_RANK", "1")
-    monkeypatch.setenv("WORLD_SIZE", "2")
-    assert enabled({"profile": True}, _device("cuda")) is False
+def test_profiler_session_enabled_only_for_cuda_rank0(monkeypatch):
+    control = {"profile": True}
+    assert laya_controls.ProfilerSession.enabled_for(
+        control, _device("cpu"), True) is False
+    assert laya_controls.ProfilerSession.enabled_for(
+        {"profile": False}, _device("cuda"), True) is False
+    assert laya_controls.ProfilerSession.enabled_for(
+        control, _device("cuda"), False) is False
+    assert laya_controls.ProfilerSession.enabled_for(
+        control, _device("cuda"), True) is True
 
 
-def test_profile_trace_and_top_ops_are_fail_soft(tmp_path):
-    namespace = _perf_namespace()
-    namespace["WANDB_RUN"] = None
-    namespace["FINETUNE_OUTPUT_DIR"] = str(tmp_path)
+def test_profiler_session_for_training_resolves_trace_dir(tmp_path):
+    session = laya_controls.ProfilerSession.for_training(
+        _fake_torch(), laya_lane.finetune_control(), _device("cuda"), True,
+        str(tmp_path))
+    assert session.enabled is True
+    assert session._trace_dir == os.path.join(str(tmp_path), "profiler")
+    # CPU auto-disables and never resolves a trace dir
+    disabled = laya_controls.ProfilerSession.for_training(
+        _fake_torch(), laya_lane.finetune_control(), _device("cpu"), True,
+        str(tmp_path))
+    assert disabled.enabled is False
 
-    class _Event:
-        key = "aten::matmul"
-        self_cuda_time_total = 2500.0
-        self_cpu_time_total = 100.0
-        count = 7
 
-    class _Profiler:
-        def export_chrome_trace(self, path):
-            Path(path).write_text("{}", encoding="utf-8")
+def test_profiler_session_writes_trace_and_feeds_sink(tmp_path):
+    captured = []
+    torch_module = _fake_torch()
+    session = laya_controls.ProfilerSession.for_training(
+        torch_module, laya_lane.finetune_control(), _device("cuda"), True,
+        str(tmp_path), on_metrics=lambda rows, epoch, path:
+        captured.append((rows, epoch, path)))
+    assert session.start() is True
+    session.epoch = 3
+    session.step()
+    session.close()
+    trace = tmp_path / "profiler" / "epoch_3.json"
+    assert trace.is_file()
+    assert captured and captured[0][1] == 3
+    rows = captured[0][0]
+    assert rows[0][0] == "aten::matmul" and rows[0][1] == 2.5
+    # disabled session is a no-op
+    off = laya_controls.ProfilerSession.for_training(
+        torch_module, laya_lane.finetune_control(), _device("cpu"), True,
+        str(tmp_path))
+    assert off.start() is False
+    off.step()
+    off.close()
 
-        def key_averages(self):
-            return [_Event()]
 
-    namespace["_profile_top_ops"](
-        torch, _Profiler(), {"epoch": 3}, {"profile_dir": "profiler"})
-    assert (tmp_path / "profiler" / "epoch_3.json").is_file()
-
-    class _Broken:
+def test_profiler_session_is_fail_soft(tmp_path):
+    class _Broken(_FakeProfiler):
         def export_chrome_trace(self, path):
             raise RuntimeError("boom")
 
-        def key_averages(self):
-            raise RuntimeError("boom")
+    session = laya_controls.ProfilerSession.for_training(
+        _fake_torch(_Broken), laya_lane.finetune_control(), _device("cuda"),
+        True, str(tmp_path))
+    assert session.start() is True
+    session.step()   # trace handler error must not raise
+    session.close()
 
-    # a profiler error must never raise out of the handler
-    namespace["_profile_top_ops"](
-        torch, _Broken(), {"epoch": 4}, {"profile_dir": "profiler"})
+    class _NoEnter(_FakeProfiler):
+        def __enter__(self):
+            raise RuntimeError("no profiler")
+
+    failing = laya_controls.ProfilerSession.for_training(
+        _fake_torch(_NoEnter), laya_lane.finetune_control(), _device("cuda"),
+        True, str(tmp_path))
+    assert failing.start() is False
 
 
 def test_rendered_kernel_annotates_phases_and_schedules_profiler():
@@ -136,10 +195,11 @@ def test_rendered_kernel_annotates_phases_and_schedules_profiler():
                   "backward", "optimizer_step", "dev_eval",
                   "checkpoint_save", "calibration"):
         assert 'record_function("%s")' % phase in script, phase
+    assert "class ProfilerSession" in script
     assert "torch.profiler.profile(" in script
     assert "torch.profiler.schedule(" in script
     assert "profile_memory=True" in script
     assert "with_stack=False" in script
     assert "record_shapes=False" in script
-    assert 'export_chrome_trace' in script
+    assert "export_chrome_trace" in script
     assert "key_averages()" in script

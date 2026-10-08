@@ -89,6 +89,8 @@ class FinetuneSpec(BaseModel):
     warmup_frac: float = Field(default=0.0, ge=0.0, le=1.0)
     warmup_steps: int = Field(default=0, ge=0)
     plateau_patience: int = Field(default=2, ge=0, le=64)
+    plateau_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
+    onecycle_pct_start: float = Field(default=0.3, gt=0.0, lt=1.0)
     # Confidence cut used only to derive the dev abstain_rate/coverage wandb
     # metrics (laya's evaluate_records emits neither).
     abstain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
