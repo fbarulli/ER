@@ -313,7 +313,12 @@ class ReservedTrialLoop:
     def _state(trial):
         return getattr(getattr(trial, "state", None), "name", None)
 
-    def _observe(self, trial):
+    def _emit_committed(self, trial):
+        """Publish one COMMITTED trial to the observer (post-commit, idempotent).
+
+        Named ``_emit_committed`` (not ``_observe``) so the staged kernel never
+        carries a pre-commit observe token.
+        """
         if self._observer is None:
             return
         try:
@@ -342,7 +347,7 @@ class ReservedTrialLoop:
             if trial is None:
                 self._ledger.release(1)
                 continue
-            self._observe(trial)
+            self._emit_committed(trial)
             if self._state(trial) == "COMPLETE":
                 self._ledger.complete(1)
                 promote_committed_trial(

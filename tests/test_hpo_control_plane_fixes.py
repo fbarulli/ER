@@ -415,7 +415,10 @@ def test_ensure_tables_is_idempotent_ddl(monkeypatch):
 # ── structural: the staged kernel wires the fixes ──────────────────────────
 def _worker_region():
     template = laya_hpo._HPO_KERNEL_TEMPLATE
-    return template.split("def run_worker", 1)[1].split("def sha256_of", 1)[0]
+    # The worker path is the WorkerSession class plus its run_worker facade
+    # (obs's single-purpose-class refactor moved the body out of run_worker).
+    return template.split("class WorkerSession", 1)[1].split(
+        "def sha256_of", 1)[0]
 
 
 def test_run_worker_uses_shared_ledger_and_loop():

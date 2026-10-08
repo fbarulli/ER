@@ -460,14 +460,103 @@ class HpoStagePlan:
             setattr(self, name, kwargs.get(name))
 
 
+class HpoReceipt:
+    """Build the staged receipt for one resolved plan.
+
+    Each method answers one question; ``kaggle``/``colab`` add only their lane
+    envelope to the shared ``common`` body.
+    """
+
+    def __init__(self, plan: HpoStagePlan, *, space_config=None):
+        self.plan = plan
+        self.space_config = space_config
+
+    def budget(self) -> dict[str, Any]:
+        # The GPU-capped worker plan, not the raw pool ceiling: ``n_jobs`` is
+        # the in-session GPU worker count, so the scheduler caps the plan
+        # exactly as it will at runtime.
+        gpu_count = max(1, int(self.plan.budget_jobs))
+        workers = self.plan.options.scheduler.workers(gpu_count)
+        return {"n_trials": self.plan.budget_trials,
+                "n_jobs": self.plan.budget_jobs,
+                "seed": int(self.plan.space["seed"]),
+                "max_workers": len(workers)}
+
+    def _offline(self) -> bool:
+        return bool(self.plan.options.session.offline)
+
+    def observability(self) -> dict[str, Any]:
+        return hpo_observability.TrialObserver(
+            hpo_observability.OBSERVABILITY_DIR,
+            offline=self._offline()).as_dict()
+
+    def storage(self) -> dict[str, Any]:
+        return {"required_env": OPTUNA_URL_ENV,
+                "injected_into_kernel": True,
+                "offline": self._offline(),
+                "url_persisted_to_manifest": False}
+
+    def _space(self) -> dict[str, Any]:
+        space = self.plan.space
+        return {"path": str(space_path(self.space_config)),
+                "version": space["space_version"],
+                "digest": space_digest(space),
+                "dials": sorted(space["dials"])}
+
+    def common(self) -> dict[str, Any]:
+        plan = self.plan
+        return {
+            "lane": plan.lane,
+            "kind": HPO_DECISION,
+            "run_tag": plan.tag,
+            "staged": str(plan.stage_dir),
+            "code_file": HPO_CODE_FILE,
+            "study": {"generation_id": plan.generation, "model_key": plan.key,
+                      "study_name": plan.study_name},
+            "space": self._space(),
+            "budget": self.budget(),
+            "objective": plan.space["objective"],
+            "profiler": plan.space.get("profiler"),
+            "options": plan.options.as_dict(),
+            "registry": hpo_registry.default_registry().describe(),
+            "observability": self.observability(),
+            "optuna_storage": self.storage(),
+            "published_pin": {"repository": plan.repository,
+                              "branch": plan.branch, "revision": plan.revision},
+            "published_tip": plan.tip,
+        }
+
+    def kaggle(self) -> dict[str, Any]:
+        receipt = self.common()
+        plan = self.plan
+        receipt["kernel"] = plan.kernel
+        receipt["gpu"] = ("T4 (2x when the session exposes it; one worker per "
+                          "device)")
+        receipt["dataset"] = {"slug": plan.dataset_slug,
+                              "payload": plan.dataset_receipt["payload"],
+                              "files": plan.dataset_receipt["files"]}
+        receipt["base_model"] = {"dataset": plan.base_dataset,
+                                 "archive": plan.spec.base_model_archive,
+                                 "dir": plan.spec.base_model_dir}
+        receipt["laya_package"] = plan.spec.finetune_package
+        return receipt
+
+    def colab(self) -> dict[str, Any]:
+        receipt = self.common()
+        receipt["colab_entry"] = COLAB_ENTRY_FILE
+        receipt["working"] = self.plan.working
+        receipt["input_root"] = self.plan.input_root
+        return receipt
+
+
 class LayaHpoStager:
     """Resolve and stage the laya HPO payload for ONE lane (SRP).
 
     Kaggle and Colab differ ONLY in the delivery envelope (kernel metadata vs
     the Colab entry driver) and in how the Optuna URL line is injected; the
     space/identity/dataset resolution, the published-tip pin, the staged script
-    and the receipt are a single shared path. This replaces the two parallel
-    staging functions that previously duplicated that path.
+    and the receipt are a single shared path. Each private ``_resolve_*``
+    helper answers exactly one question; ``plan`` only wires them together.
     """
 
     def __init__(self, lane: str, *, revision: str | None = None,
@@ -490,7 +579,7 @@ class LayaHpoStager:
         self.working = working
         self.input_root = input_root
 
-    # ── resolution (shared by both lanes) ──────────────────────────────────
+    # ── resolution (each helper answers one question) ──────────────────────
     def _dataset_slugs(self, spec) -> tuple[str, str]:
         dataset_slug = spec.finetune_dataset_slug
         if not dataset_slug:
@@ -504,26 +593,32 @@ class LayaHpoStager:
                 "travels as that dataset (owner/slug) — name it before staging")
         return dataset_slug, base_dataset
 
-    def _optuna_env_script(self) -> str | None:
-        """The lane's URL line: Colab reuses colab_runtime; Kaggle bakes the URL."""
-        if self.lane == "colab":
-            return _colab_optuna_env_line()
-        return None
+    def _options(self, space):
+        """Build the option set from the search-space config block."""
+        return laya_hpo_options.build_option_set(space)
 
-    def plan(self) -> HpoStagePlan:
-        spec = training_cfg().laya
-        space = load_space(self.space_config)
-        url = require_optuna_url()
-        generation, key, study_name = study_identity(
-            space=space, generation_id=self.generation_id)
-        dataset_slug, base_dataset = self._dataset_slugs(spec)
-        kernel = None
-        if self.lane == "kaggle":
-            kernel = self.kernel_slug or space.get("kernel_slug")
-            if not kernel:
-                raise RuntimeError(
-                    "laya-hpo kernel slug is unset; set kernel_slug in "
-                    f"{space_path(self.space_config)} (owner/slug) before staging")
+    def _url(self, offline: bool) -> str:
+        """The shared PostgreSQL URL, or ``""`` for an offline study."""
+        return "" if offline else require_optuna_url()
+
+    def _kernel(self, space) -> str | None:
+        """The Kaggle kernel slug (override wins over the space SSOT)."""
+        if self.lane != "kaggle":
+            return None
+        kernel = self.kernel_slug or space.get("kernel_slug")
+        if not kernel:
+            raise RuntimeError(
+                "laya-hpo kernel slug is unset; set kernel_slug in "
+                f"{space_path(self.space_config)} (owner/slug) before staging")
+        return kernel
+
+    def _dataset_receipt(self, spec, dataset_slug) -> dict[str, Any]:
+        return laya_lane.stage_finetune_dataset_payload(
+            dataset_slug=dataset_slug,
+            corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
+
+    def _git_pin(self) -> tuple[str, str, str, Any]:
+        """``(repository, branch, revision, published_tip)``."""
         repository = training_cfg().kaggle.repository
         branch = _current_git_branch()
         revision = self.revision or laya_lane._git_revision()
@@ -531,23 +626,57 @@ class LayaHpoStager:
 
         tip = runtime_inputs.require_published_tip_match(
             revision, repository, branch)
-        dataset_receipt = laya_lane.stage_finetune_dataset_payload(
-            dataset_slug=dataset_slug,
-            corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
+        return repository, branch, revision, tip
+
+    def _stage_dir(self) -> Path:
         stage_dir = laya_lane.staging_dir() / self.lane / HPO_DECISION
         stage_dir.mkdir(parents=True, exist_ok=True)
-        tag = self.run_tag or (
+        return stage_dir
+
+    def _run_tag(self, spec) -> str:
+        return self.run_tag or (
             spec.run_tag_prefix + "hpo_" + laya_lane.decision_tag())
-        budget_trials = int(self.n_trials if self.n_trials is not None
-                            else space["n_trials"])
-        budget_jobs = int(self.n_jobs if self.n_jobs is not None
-                          else space["n_jobs"])
-        options = laya_hpo_options.build_option_set(space)
+
+    def _budget(self, space) -> tuple[int, int]:
+        trials = int(self.n_trials if self.n_trials is not None
+                     else space["n_trials"])
+        jobs = int(self.n_jobs if self.n_jobs is not None else space["n_jobs"])
+        return trials, jobs
+
+    def _optuna_env_script(self, offline: bool) -> str | None:
+        """The lane's URL line, or ``""`` when the study runs offline.
+
+        Colab reuses ``colab_runtime`` to resolve/validate the URL; Kaggle lets
+        the shared composer bake ``require_optuna_url``'s value. An offline
+        study needs no URL at all: the token is replaced with the empty string
+        so the staged kernel never carries a secret it will not use.
+        """
+        if offline:
+            return ""
+        if self.lane == "colab":
+            return _colab_optuna_env_line()
+        return None
+
+    def plan(self) -> HpoStagePlan:
+        spec = training_cfg().laya
+        space = load_space(self.space_config)
+        options = self._options(space)
+        offline = bool(options.session.offline)
+        url = self._url(offline)
+        generation, key, study_name = study_identity(
+            space=space, generation_id=self.generation_id)
+        dataset_slug, base_dataset = self._dataset_slugs(spec)
+        dataset_receipt = self._dataset_receipt(spec, dataset_slug)
+        kernel = self._kernel(space)
+        repository, branch, revision, tip = self._git_pin()
+        stage_dir = self._stage_dir()
+        tag = self._run_tag(spec)
+        budget_trials, budget_jobs = self._budget(space)
         script = _compose_hpo_script(
             spec=spec, space=space, generation=generation, key=key, tag=tag,
             budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
             repository=repository, branch=branch, revision=revision,
-            optuna_env_script=self._optuna_env_script())
+            optuna_env_script=self._optuna_env_script(offline))
         return HpoStagePlan(
             lane=self.lane, spec=spec, space=space, options=options, url=url,
             generation=generation, key=key, study_name=study_name,
@@ -557,41 +686,11 @@ class LayaHpoStager:
             budget_trials=budget_trials, budget_jobs=budget_jobs, script=script,
             working=self.working, input_root=self.input_root)
 
-    # ── receipt (one shape; each lane adds only its envelope keys) ─────────
-    def _budget(self, plan: HpoStagePlan) -> dict[str, Any]:
-        pool = getattr(plan.options.scheduler, "pool", None)
-        return {"n_trials": plan.budget_trials, "n_jobs": plan.budget_jobs,
-                "seed": int(plan.space["seed"]),
-                "max_workers": int(getattr(pool, "max_concurrent_trials", 1))}
-
-    def _receipt_common(self, plan: HpoStagePlan) -> dict[str, Any]:
-        space = plan.space
-        return {
-            "lane": plan.lane,
-            "kind": HPO_DECISION,
-            "run_tag": plan.tag,
-            "staged": str(plan.stage_dir),
-            "code_file": HPO_CODE_FILE,
-            "study": {"generation_id": plan.generation, "model_key": plan.key,
-                      "study_name": plan.study_name},
-            "space": {"path": str(space_path(self.space_config)),
-                      "version": space["space_version"],
-                      "digest": space_digest(space),
-                      "dials": sorted(space["dials"])},
-            "budget": self._budget(plan),
-            "objective": space["objective"],
-            "profiler": space.get("profiler"),
-            "options": plan.options.as_dict(),
-            "registry": hpo_registry.default_registry().describe(),
-            "observability": hpo_observability.TrialObserver(
-                hpo_observability.OBSERVABILITY_DIR).as_dict(),
-            "optuna_storage": {"required_env": OPTUNA_URL_ENV,
-                               "injected_into_kernel": True,
-                               "url_persisted_to_manifest": False},
-            "published_pin": {"repository": plan.repository,
-                              "branch": plan.branch, "revision": plan.revision},
-            "published_tip": plan.tip,
-        }
+    def _receipt(self, plan: HpoStagePlan) -> dict[str, Any]:
+        """The lane envelope's receipt (one shape, one builder)."""
+        builder = HpoReceipt(plan, space_config=self.space_config)
+        return (builder.kaggle() if self.lane == "kaggle"
+                else builder.colab())
 
     # ── delivery envelopes (the only lane-specific surface) ────────────────
     def _kernel_metadata(self, plan: HpoStagePlan) -> dict[str, Any]:
@@ -614,35 +713,25 @@ class LayaHpoStager:
         atomic_write_json(self._kernel_metadata(plan),
                           plan.stage_dir / "kernel-metadata.json")
         (plan.stage_dir / HPO_CODE_FILE).write_text(plan.script, encoding="utf-8")
-        receipt = self._receipt_common(plan)
-        receipt["kernel"] = plan.kernel
-        receipt["gpu"] = ("T4 (2x when the session exposes it; one worker per "
-                          "device)")
-        receipt["dataset"] = {"slug": plan.dataset_slug,
-                              "payload": plan.dataset_receipt["payload"],
-                              "files": plan.dataset_receipt["files"]}
-        receipt["base_model"] = {"dataset": plan.base_dataset,
-                                 "archive": plan.spec.base_model_archive,
-                                 "dir": plan.spec.base_model_dir}
-        receipt["laya_package"] = plan.spec.finetune_package
-        return receipt
+        return self._receipt(plan)
 
     def _stage_colab(self, plan: HpoStagePlan) -> dict[str, Any]:
         (plan.stage_dir / HPO_CODE_FILE).write_text(plan.script, encoding="utf-8")
         (plan.stage_dir / COLAB_ENTRY_FILE).write_text(
             _compose_colab_entry(HPO_CODE_FILE, plan.working, plan.input_root),
             encoding="utf-8")
-        receipt = self._receipt_common(plan)
-        receipt["colab_entry"] = COLAB_ENTRY_FILE
-        receipt["working"] = plan.working
-        receipt["input_root"] = plan.input_root
-        return receipt
+        return self._receipt(plan)
 
     def stage(self) -> dict[str, Any]:
         """Resolve, compose, write the payload + receipt (no push, no run)."""
         plan = self.plan()
         receipt = (self._stage_kaggle(plan) if self.lane == "kaggle"
                    else self._stage_colab(plan))
+        # Thread the STAGED kernel slug into the shared dispatch hook so a
+        # later `kernel_slug("laya-hpo")` / stop addresses the very kernel this
+        # receipt staged (an override wins over the space SSOT).
+        if plan.lane == "kaggle" and plan.kernel:
+            register_dispatch(plan.kernel)
         # The one hard guarantee: the URL is not in the stored receipt.
         assert_secret_absent(receipt, plan.url)
         atomic_write_json(receipt, plan.stage_dir / HPO_RECEIPT_FILE)
@@ -902,7 +991,9 @@ def pip_install_laya():
 def ensure_optuna_url():
     url = os.environ.get(OPTUNA_URL_ENV, "").strip()
     if not url:
-        raise SystemExit(
+        # RuntimeError (not SystemExit) so the caller can catch it and fall
+        # back to the single-process SQLite study instead of hard-failing.
+        raise RuntimeError(
             "[laya-hpo] " + OPTUNA_URL_ENV + " is missing; the shared "
             "PostgreSQL Optuna study cannot be reached. Re-stage with the "
             "secret set.")
@@ -913,6 +1004,92 @@ def ensure_optuna_url():
         url = "postgresql+psycopg://" + url[len("postgresql://"):]
         os.environ[OPTUNA_URL_ENV] = url
     return url
+
+
+def offline_marker_path():
+    """The sentinel a fallback worker writes so the session end knows to read
+    the SQLite study and write the offline ledger."""
+    return WORKING / OBSERVABILITY_DIR / "offline.marker"
+
+
+def mark_offline(reason):
+    try:
+        path = offline_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(reason), encoding="utf-8")
+    except Exception:  # noqa: BLE001,S110 - the marker is best-effort
+        pass
+
+
+def offline_active(options):
+    """Configured-offline OR a runtime RDB-outage fallback fired this session."""
+    try:
+        if bool(options.session.offline):
+            return True
+    except Exception:  # noqa: BLE001,S110
+        pass
+    return offline_marker_path().is_file()
+
+
+class StorageResolver:
+    """Open the session's Optuna study on the right storage backend.
+
+    One job: prefer the shared Postgres RDB, fall back to the single-process
+    SQLite study (writing the offline marker) when it is missing/unreachable.
+    ``offline``/``config`` expose the outcome to the caller.
+    """
+
+    def __init__(self, optuna, options, study_name, *, offline=None):
+        self.optuna = optuna
+        self.options = options
+        self.study_name = study_name
+        self.offline = (bool(options.session.offline) if offline is None
+                        else bool(offline))
+        self.config = None
+
+    def sqlite(self):
+        WORKING.mkdir(parents=True, exist_ok=True)
+        return self.optuna.storages.RDBStorage(
+            "sqlite:///" + str(WORKING / "hpo_offline.db"))
+
+    def _create(self, storage, sampler, pruner, study_kwargs):
+        return self.optuna.create_study(
+            study_name=self.study_name, sampler=sampler, pruner=pruner,
+            storage=storage, **self.options.session.study_kwargs(),
+            **study_kwargs)
+
+    def open(self, sampler, pruner, study_kwargs):
+        """Create or resume the study, degrading to SQLite on an RDB outage."""
+        if self.offline:
+            return self._create(self.sqlite(), sampler, pruner, study_kwargs)
+        try:
+            ensure_optuna_url()
+            self.config = storage_from_environment()
+            return self._create(create_storage(self.config), sampler, pruner,
+                                study_kwargs)
+        except Exception as error:
+            log("shared Postgres unavailable (%s); falling back to the offline "
+                "SQLite study + hpo_trials ledger" % str(error)[:160])
+            self.offline = True
+            self.config = None
+            mark_offline(str(error)[:200])
+            return self._create(self.sqlite(), sampler, pruner, study_kwargs)
+
+    def load(self):
+        """Load an existing study (session end), degrading on an RDB outage."""
+        if self.offline:
+            return self.optuna.load_study(study_name=self.study_name,
+                                          storage=self.sqlite())
+        try:
+            storage = create_storage(storage_from_environment())
+        except Exception as error:
+            log("shared Postgres unavailable at session end (%s); reading "
+                "the offline SQLite study" % str(error)[:160])
+            self.offline = True
+            storage = self.sqlite()
+        return self.optuna.load_study(study_name=self.study_name,
+                                      storage=storage)
+
 
 
 def resolve_input(name):
@@ -1217,17 +1394,36 @@ def enqueue_warm_start(study, seeds):
     return enqueued
 
 
+def _sync_observations(study):
+    """Observe every COMMITTED trial once (idempotent); return the counts.
+
+    Called after ``study.optimize`` so a trial is never observed before Optuna
+    has committed its terminal state, and a resumed session/parallel worker
+    cannot re-emit history.
+    """
+    observer = globals().get("OBSERVER")
+    if observer is None:
+        return {"written": 0, "skipped": 0}
+    try:
+        result = observer.sync(study.trials)
+        observer.flush()
+        log("observer %s" % json.dumps(result))
+        return result
+    except Exception as error:
+        log("observer skipped: " + str(error)[:160])
+        return {"written": 0, "skipped": 0}
+
+
 def make_objective(device, train_path, dev_path, base_model, lease_store,
                    champion_store):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     def objective(trial):
-        value = objective_value(
+        return objective_value(
             trial,
             lambda trial: run_trial(
                 trial, device, train_path, dev_path, base_model),
             lease_store, champion_store, GENERATION_ID, MODEL_KEY,
             objective_mode=options.objective_mode)
-        return value
     return objective
 
 
@@ -1358,12 +1554,24 @@ def run_ddp_trial(trial_number):
         path.write_text(json.dumps(data) + "\\n", encoding="utf-8")
 
 
-def run_worker(device):
-    ensure_optuna_url()
-    if MODEL_KEY != "laya":
+class WorkerSession:
+    """One remote worker process: open the study, run its trial budget, observe.
+
+    Each private method does one job; ``run`` only wires them together.
+    """
+
+    def __init__(self, device):
+        self.device = device
+        self.optuna = None
+        self.options = None
+        self.resolver = None
+        self.observer = None
+
+    def _assert_laya(self):
+        if MODEL_KEY == "laya":
+            return
         # The registry carries a real search space + objective for every model
         # key, but THIS lane's remote worker executes only the laya objective.
-        # Fail loud rather than silently score the wrong model.
         registry = default_registry()
         descriptor = registry.objective(MODEL_KEY)
         raise SystemExit(
@@ -1371,112 +1579,161 @@ def run_worker(device):
             "this lane executes only the 'laya' objective; run that model's own "
             "HPO worker for remote execution" % (
                 MODEL_KEY, descriptor.metric, descriptor.runner))
-    if os.environ.get("ER_LAYA_HPO_SKIP_INSTALL") != "1":
-        pip_install_runtime()
-        pip_install_laya()
-    import optuna
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    globals()["optuna"] = optuna
-    import torch
-    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
-    globals()["OPTION_SET"] = options
-    options.resource_caps.apply_torch(torch)
-    offline = bool(options.session.offline)
-    observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
-    globals()["OBSERVER"] = observer
 
-    if offline:
-        # Offline fallback: a single-process local SQLite study + the offline
-        # ledger. No shared control plane, so no leases/champions.
-        WORKING.mkdir(parents=True, exist_ok=True)
-        storage_config = None
-        storage = optuna.storages.RDBStorage(
-            "sqlite:///" + str(WORKING / "hpo_offline.db"))
-    else:
-        storage_config = storage_from_environment()
-        storage = create_storage(storage_config)
-    study_name = generation_study_name(generation_id=GENERATION_ID,
-                                       model_key=MODEL_KEY)
-    sampler = options.sampler.create(optuna)
-    pruner = options.pruner.create(optuna)
-    directions = options.objective_mode.directions()
-    study_kwargs = ({"directions": directions} if isinstance(directions, list)
-                    else {"direction": directions})
-    study = optuna.create_study(
-        study_name=study_name,
-        sampler=sampler,
-        pruner=pruner,
-        storage=storage,
-        **options.session.study_kwargs(),
-        **study_kwargs)
-    # Warm start: enqueue known-good seed configs so TPE starts from them.
-    # Deduped against EXISTING waiting trials so concurrent workers and resumed
-    # sessions do not pile up identical enqueued trials.
-    enqueue_warm_start(study, options.warm_start.enqueued_trials())
-    lease_store = None if offline else TrialLeaseStore(
-        storage_config.url, ttl_seconds=storage_config.lease_ttl_seconds)
-    champion_store = None if offline else ChampionStore(storage_config.url)
-    if not offline and options.warm_start.mode == "champion":
-        # Read the shared champion registry (the read side that used to be
-        # missing) and warm start from it when its checkpoint is present on
-        # this machine; otherwise fall back to the base model, loudly.
+    def _install(self):
+        if os.environ.get("ER_LAYA_HPO_SKIP_INSTALL") != "1":
+            pip_install_runtime()
+            pip_install_laya()
+
+    def _load_libs(self):
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        globals()["optuna"] = optuna
+        import torch
+        options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+        globals()["OPTION_SET"] = options
+        options.resource_caps.apply_torch(torch)
+        self.optuna = optuna
+        self.options = options
+
+    def _study_kwargs(self):
+        directions = self.options.objective_mode.directions()
+        return ({"directions": directions} if isinstance(directions, list)
+                else {"direction": directions})
+
+    def _observer(self, offline):
+        observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
+        globals()["OBSERVER"] = observer
+        self.observer = observer
+        return observer
+
+    def _open_study(self):
+        options = self.options
+        self.resolver = StorageResolver(
+            self.optuna, options,
+            generation_study_name(generation_id=GENERATION_ID,
+                                  model_key=MODEL_KEY))
+        study = self.resolver.open(
+            options.sampler.create(self.optuna),
+            options.pruner.create(self.optuna), self._study_kwargs())
+        self._observer(self.resolver.offline)
+        # Stale-trial reaping happens ONCE in the session controller (a worker
+        # must never race a sibling's freshly-started trial).
+        return study
+
+    def _warm_start(self, study):
+        # Deduped against EXISTING waiting trials: concurrent workers and
+        # resumed sessions must not pile up identical enqueued trials.
+        enqueue_warm_start(study, self.options.warm_start.enqueued_trials())
+
+    def _stores(self):
+        if self.resolver.offline:
+            return None, None
+        config = self.resolver.config
+        return (TrialLeaseStore(config.url,
+                                ttl_seconds=config.lease_ttl_seconds),
+                ChampionStore(config.url))
+
+    def _warm_start_champion(self, champion_store):
+        """Seed from the shared champion registry when configured (F3).
+
+        Reads the champion only AFTER the shared stores are open; a missing
+        champion falls back to the base model, loudly.
+        """
+        if self.resolver.offline or self.options.warm_start.mode != "champion":
+            return
         champion_artifact = resolve_champion_artifact(
             champion_store, generation_id=GENERATION_ID, model_key=MODEL_KEY,
-            mode=options.warm_start.mode)
+            mode=self.options.warm_start.mode)
         if champion_artifact is None:
             log("warm_start=champion: no champion yet; falling back to the "
                 "base model")
         else:
             log("warm_start=champion: seeding from " + champion_artifact)
-        options = build_option_set(HPO_SPACE,
-                                   champion_artifact=champion_artifact)
-        globals()["OPTION_SET"] = options
+        self.options = build_option_set(
+            HPO_SPACE, champion_artifact=champion_artifact)
+        globals()["OPTION_SET"] = self.options
 
-    train_path = resolve_input(TRAIN_JSONL)
-    dev_path = resolve_input(DEV_JSONL)
-    base_model = extract_base_model(resolve_input(BASE_MODEL_ARCHIVE))
-    log("worker device=%s train=%s dev=%s base=%s"
-        % (device, train_path.name, dev_path.name, base_model.name))
+    def _inputs(self):
+        train_path = resolve_input(TRAIN_JSONL)
+        dev_path = resolve_input(DEV_JSONL)
+        base_model = extract_base_model(resolve_input(BASE_MODEL_ARCHIVE))
+        log("worker device=%s train=%s dev=%s base=%s"
+            % (self.device, train_path.name, dev_path.name, base_model.name))
+        return train_path, dev_path, base_model
 
-    try:
-        wandb_init()
-    except Exception as error:
-        log("wandb init failed: " + str(error)[:200])
+    def _objective(self, lease_store, champion_store, train_path, dev_path,
+                   base_model):
+        if os.environ.get("ER_LAYA_HPO_DDP") == "1":
+            return make_ddp_objective(self.options, lease_store, champion_store)
+        return make_objective(self.device, train_path, dev_path, base_model,
+                              lease_store, champion_store)
 
-    if os.environ.get("ER_LAYA_HPO_DDP") == "1":
-        objective = make_ddp_objective(options, lease_store, champion_store)
-    else:
-        objective = make_objective(device, train_path, dev_path, base_model,
-                                   lease_store, champion_store)
-    optimize_kwargs = options.session.optimize_kwargs()
-    if offline:
-        # Offline fallback: one SQLite study, no shared coordination, so the
-        # local remaining-budget split still applies.
+    def _per_worker(self, study):
         prior = finished_trial_count(study, ("COMPLETE", "PRUNED", "FAIL"))
         remaining = max(0, int(N_TRIALS) - prior)
-        divisor = (1 if os.environ.get("ER_LAYA_HPO_DDP") == "1"
-                   else max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
-                                   or N_JOBS)))
+        # DDP serialises trials (torchrun fans each one out); slots parallelise.
+        if os.environ.get("ER_LAYA_HPO_DDP") == "1":
+            divisor = 1
+        else:
+            divisor = max(1, int(os.environ.get("ER_LAYA_HPO_WORKER_COUNT")
+                                 or N_JOBS))
         per_worker = per_worker_budget(remaining, divisor)
-        log("offline worker budget prior=%d remaining=%d per_worker=%d study=%s"
-            % (prior, remaining, per_worker, study_name))
+        log("worker budget prior=%d remaining=%d per_worker=%d study=%s timeout=%s"
+            % (prior, remaining, per_worker, self.resolver.study_name,
+               self.options.session.timeout_s or "none"))
+        return per_worker
+
+    def _optimize_offline(self, study, objective):
+        """One SQLite study, no shared coordination: the local split applies."""
+        per_worker = self._per_worker(study)
         if per_worker:
-            study.optimize(objective, n_trials=per_worker, **optimize_kwargs)
-    else:
-        # Shared, atomic reservation: reserve ONE trial at a time so the TOTAL
-        # COMPLETE count across every worker/session cannot exceed N_TRIALS,
-        # and a FAIL/PRUNED trial releases its slot instead of starving the run.
-        ledger = WorkLedger(storage_config.url, generation_id=GENERATION_ID,
-                            model_key=MODEL_KEY, budget=int(N_TRIALS))
+            study.optimize(objective, n_trials=per_worker,
+                           **self.options.session.optimize_kwargs())
+
+    def _optimize_shared(self, study, objective, champion_store):
+        """Reserve one shared trial at a time; FAIL/PRUNED releases its slot."""
+        ledger = WorkLedger(self.resolver.config.url,
+                            generation_id=GENERATION_ID, model_key=MODEL_KEY,
+                            budget=int(N_TRIALS))
         log("worker shared budget=%d remaining=%d study=%s timeout=%s"
-            % (int(N_TRIALS), ledger.snapshot().remaining(), study_name,
-               options.session.timeout_s or "none"))
+            % (int(N_TRIALS), ledger.snapshot().remaining(),
+               self.resolver.study_name, self.options.session.timeout_s or "none"))
         ReservedTrialLoop(
-            study, objective, ledger, optimize_kwargs=optimize_kwargs,
-            observer=observer, champion_store=champion_store,
+            study, objective, ledger,
+            optimize_kwargs=self.options.session.optimize_kwargs(),
+            observer=self.observer, champion_store=champion_store,
             generation_id=GENERATION_ID, model_key=MODEL_KEY,
-            timeout_s=options.session.timeout_s, log=log).run()
-    wandb_finish()
+            timeout_s=self.options.session.timeout_s, log=log).run()
+
+    def run(self):
+        self._assert_laya()
+        self._install()
+        self._load_libs()
+        study = self._open_study()
+        self._warm_start(study)
+        lease_store, champion_store = self._stores()
+        self._warm_start_champion(champion_store)
+        train_path, dev_path, base_model = self._inputs()
+        try:
+            wandb_init()
+        except Exception as error:
+            log("wandb init failed: " + str(error)[:200])
+        objective = self._objective(lease_store, champion_store, train_path,
+                                    dev_path, base_model)
+        if self.resolver.offline:
+            self._optimize_offline(study, objective)
+        else:
+            self._optimize_shared(study, objective, champion_store)
+        # Observe the committed study ONCE (idempotent across workers/sessions)
+        # and flush every worker's mirror so an exiting worker never loses it.
+        _sync_observations(study)
+        wandb_finish()
+
+
+def run_worker(device):
+    """Entry point for one worker subprocess (thin facade over WorkerSession)."""
+    WorkerSession(device).run()
 
 
 def sha256_of(path):
@@ -1487,184 +1744,267 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
-def write_session_receipt():
-    import optuna
-    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
-    offline = bool(options.session.offline)
-    study_name = generation_study_name(generation_id=GENERATION_ID,
-                                       model_key=MODEL_KEY)
-    if offline:
-        storage = optuna.storages.RDBStorage(
-            "sqlite:///" + str(WORKING / "hpo_offline.db"))
-    else:
-        storage = create_storage(storage_from_environment())
-    study = optuna.load_study(study_name=study_name, storage=storage)
-    complete = [trial for trial in study.trials
-                if trial.state == optuna.trial.TrialState.COMPLETE
-                and trial_primary_value(trial) is not None]
-    best = (max(complete, key=trial_primary_value) if complete else None)
+class SessionReceiptWriter:
+    """Build and persist the session receipt from the authoritative study.
 
+    One job per method: load the study, project the trial rows, pick the best,
+    compute the ensemble, and assemble/write the receipt.
+    """
+
+    def __init__(self, optuna, options, *, offline):
+        self.optuna = optuna
+        self.options = options
+        self.offline = bool(offline)
+        self.resolver = StorageResolver(
+            optuna, options,
+            generation_study_name(generation_id=GENERATION_ID,
+                                  model_key=MODEL_KEY),
+            offline=offline)
+        self.observer = TrialObserver(WORKING / OBSERVABILITY_DIR,
+                                      offline=self.offline)
+
+    @staticmethod
     def _receipt_value(trial):
+        """The scalar for single-objective, the full vector for multi-objective."""
         full = trial_full_value(trial)
         if not full:
             return None
         return full[0] if len(full) == 1 else full
 
-    trials = [{
-        "number": int(trial.number),
-        "state": trial.state.name,
-        "value": _receipt_value(trial),
-        "values": trial_full_value(trial),
-        "params": trial.params,
-        "dev_accuracy": trial.user_attrs.get("dev_accuracy"),
-        "dev_loss": trial.user_attrs.get("dev_loss"),
-    } for trial in study.trials]
-    # Control-plane observability, emitted EXACTLY ONCE per trial, after commit:
-    # online the worker ``ReservedTrialLoop`` already emitted the CDC event when
-    # the trial committed, so here we only rebuild the authoritative mirror;
-    # offline there is no worker loop, so rebuild everything from the study.
-    observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
-    for trial in study.trials:
-        if offline:
-            observer.observe(trial)
-        else:
-            observer.mirror.record(trial)
-    observer.flush()
-    receipt = {
-        "kernel": "laya-hpo",
-        "run_tag": RUN_TAG,
-        "study": study_name,
-        "generation_id": GENERATION_ID,
-        "model_key": MODEL_KEY,
-        "space_version": HPO_SPACE.get("space_version"),
-        "budget": {"n_trials": int(N_TRIALS), "n_jobs": int(N_JOBS),
-                   "seed": int(SEED)},
-        "objective": HPO_SPACE.get("objective"),
-        "trials": trials,
-        "best": None if best is None else {
-            "number": int(best.number),
-            "value": _receipt_value(best),
-            "values": trial_full_value(best),
-            "params": best.params,
-            "dev_loss": best.user_attrs.get("dev_loss"),
-            "checkpoint": best.user_attrs.get("checkpoint"),
-        },
-        "corpus_sha256": {
-            TRAIN_JSONL: sha256_of(resolve_input(TRAIN_JSONL)),
-            DEV_JSONL: sha256_of(resolve_input(DEV_JSONL)),
-        },
-        "published_pin": {"repository": REPOSITORY, "branch": BRANCH,
-                          "revision": REVISION},
-    }
+    def _trial_rows(self, study):
+        return [{
+            "number": int(trial.number),
+            "state": trial.state.name,
+            "value": self._receipt_value(trial),
+            "values": trial_full_value(trial),
+            "params": trial.params,
+            "dev_accuracy": trial.user_attrs.get("dev_accuracy"),
+            "dev_loss": trial.user_attrs.get("dev_loss"),
+        } for trial in study.trials]
+
+    def _best(self, study):
+        directions = self.options.objective_mode.directions()
+        complete = [trial for trial in study.trials
+                    if trial.state == self.optuna.trial.TrialState.COMPLETE
+                    and trial_primary_value(trial) is not None]
+        return ObjectiveRanker(directions).best(
+            complete, value_of=trial_primary_value)
+
+    def _best_dict(self, best):
+        if best is None:
+            return None
+        return {"number": int(best.number), "value": self._receipt_value(best),
+                "values": trial_full_value(best),
+                "params": best.params,
+                "dev_loss": best.user_attrs.get("dev_loss"),
+                "checkpoint": best.user_attrs.get("checkpoint")}
+
+    def _corpus(self):
+        return {TRAIN_JSONL: sha256_of(resolve_input(TRAIN_JSONL)),
+                DEV_JSONL: sha256_of(resolve_input(DEV_JSONL))}
+
+    def _ensemble(self, trials):
+        options = self.options
+        selected = options.ensembler.select(
+            [SimpleNamespace(
+                number=t["number"],
+                value=(t["value"][0] if isinstance(t["value"], (list, tuple))
+                       else t["value"]))
+             for t in trials])
+        return {"enabled": options.ensembler.enabled,
+                "method": options.ensembler.method,
+                "top_k": options.ensembler.top_k,
+                "selected": [int(t.number) for t in selected]}
+
+    def build(self, study):
+        trials = self._trial_rows(study)
+        best = self._best(study)
+        # CDC events + mirror + offline ledger, synced ONCE (idempotent).
+        self.observer.sync(study.trials)
+        self.observer.flush()
+        receipt = {
+            "kernel": "laya-hpo",
+            "run_tag": RUN_TAG,
+            "study": self.resolver.study_name,
+            "generation_id": GENERATION_ID,
+            "model_key": MODEL_KEY,
+            "space_version": HPO_SPACE.get("space_version"),
+            "budget": {"n_trials": int(N_TRIALS), "n_jobs": int(N_JOBS),
+                       "seed": int(SEED)},
+            "objective": HPO_SPACE.get("objective"),
+            "trials": trials,
+            "best": self._best_dict(best),
+            "corpus_sha256": self._corpus(),
+            "published_pin": {"repository": REPOSITORY, "branch": BRANCH,
+                              "revision": REVISION},
+        }
+        receipt["options"] = self.options.as_dict()
+        receipt["ensemble"] = self._ensemble(trials)
+        receipt["observability"] = self.observer.as_dict()
+        receipt["registry"] = default_registry().describe()
+        return receipt, best
+
+    def write(self, receipt, best):
+        WORKING.mkdir(parents=True, exist_ok=True)
+        path = WORKING / "laya-hpo.receipt.json"
+        path.write_text(json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+        log("wrote " + str(path) + " best="
+            + (str(best.value) if best is not None else "none"))
+        return receipt
+
+    def run(self):
+        study = self.resolver.load()
+        receipt, best = self.build(study)
+        return self.write(receipt, best)
+
+
+def write_session_receipt():
+    """Facade: build + write the session receipt (one SessionReceiptWriter)."""
+    import optuna
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
-    receipt["options"] = options.as_dict()
-    # Ensemble: the top-k trials are directly comparable (fixed data).
-    ensemble_trials = options.ensembler.select(
-        [SimpleNamespace(
-            number=t["number"],
-            value=(t["value"][0] if isinstance(t["value"], (list, tuple))
-                   else t["value"]))
-         for t in trials])
-    receipt["ensemble"] = {
-        "enabled": options.ensembler.enabled,
-        "method": options.ensembler.method,
-        "top_k": options.ensembler.top_k,
-        "selected": [int(t.number) for t in ensemble_trials],
-    }
-    receipt["observability"] = observer.as_dict()
-    receipt["registry"] = default_registry().describe()
-    WORKING.mkdir(parents=True, exist_ok=True)
-    path = WORKING / "laya-hpo.receipt.json"
-    path.write_text(json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
-    log("wrote " + str(path) + " best="
-        + (str(best.value) if best is not None else "none"))
-    return receipt
+    offline = offline_active(options)
+    return SessionReceiptWriter(optuna, options, offline=offline).run()
+
+
+class SessionArchive:
+    """Archive the session's decision trail (tar + snapshot)."""
+
+    def __init__(self, options):
+        self.options = options
+
+    def _champion(self, receipt):
+        return (receipt.get("best") or {}).get("checkpoint") or ""
+
+    def write_tar(self, receipt):
+        """Stage ONLY the champion checkpoint; the receipt is the trail."""
+        WORKING.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(WORKING / "laya_hpo.tar.gz", "w:gz",
+                          compresslevel=1) as tar:
+            tar.add(WORKING / "laya-hpo.receipt.json",
+                    arcname="laya-hpo.receipt.json")
+            champion = self._champion(receipt)
+            if champion and Path(champion).is_dir():
+                tar.add(champion, arcname="champion")
+                log("staged champion checkpoint " + champion)
+        log("staged laya_hpo.tar.gz + receipt in /kaggle/working")
+
+    def _warn_dropped(self, receipt):
+        dropped = (receipt.get("observability") or {}).get("events_dropped")
+        if dropped:
+            log("WARNING observability dropped %s event(s); the snapshot omits "
+                "them" % dropped)
+
+    def write_snapshot(self):
+        """Build the durable decision-trail snapshot."""
+        try:
+            session_offline = offline_active(self.options)
+            include = [p for p in (
+                WORKING / "laya-hpo.receipt.json",
+                WORKING / OBSERVABILITY_DIR / "trial_events.jsonl",
+                WORKING / OBSERVABILITY_DIR / "study_mirror.jsonl",
+                WORKING / OBSERVABILITY_DIR / "hpo_trials.jsonl",
+            ) if p.exists()]
+            builder = SnapshotBuilder(generation=WORKING,
+                                      sequence=int(time.time()))
+            snapshot = builder.build(
+                include,
+                (WORKING / "hpo_offline.db") if session_offline else None)
+            log("hpo snapshot -> " + str(snapshot))
+        except Exception as error:
+            log("hpo snapshot skipped: " + str(error)[:200])
+
+    def run(self, receipt):
+        self.write_tar(receipt)
+        self._warn_dropped(receipt)
+        self.write_snapshot()
+
+
+class SessionOrchestrator:
+    """One Kaggle session: prepare, launch one worker per GPU, archive."""
+
+    def __init__(self):
+        self.options = None
+
+    def _prepare(self):
+        pip_install_runtime()
+        pip_install_laya()
+        import torch
+        options = build_option_set(HPO_SPACE)
+        globals()["OPTION_SET"] = options
+        options.resource_caps.apply_torch(torch)
+        if not bool(options.session.offline):
+            ensure_optuna_url()
+        self.options = options
+        return torch
+
+    def _specs(self, torch):
+        gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        specs = self.options.scheduler.workers(gpu_count or 1)
+        if self.options.session.offline and len(specs) > 1:
+            # Offline uses ONE SQLite file; concurrent writers would lock. Keep
+            # the documented single-process semantics regardless of the slots plan.
+            log("offline mode: collapsing %d workers to 1" % len(specs))
+            specs = specs[:1]
+        log("session gpus=%d cores=%d mode=%s workers=%d study=%s budget=%d "
+            "threads_per_worker=%d timeout=%s"
+            % (gpu_count, os.cpu_count() or 1, self.options.scheduler.mode,
+               len(specs),
+               generation_study_name(generation_id=GENERATION_ID,
+                                     model_key=MODEL_KEY),
+               int(N_TRIALS),
+               self.options.resource_caps.threads_per_worker,
+               self.options.session.timeout_s or "none"))
+        return specs
+
+    def _launch(self, specs):
+        script = os.path.abspath(__file__)
+        processes = []
+        for spec in specs:
+            env = os.environ.copy()
+            env.update(spec.env)
+            env["ER_LAYA_HPO_SKIP_INSTALL"] = "1"
+            env["ER_LAYA_HPO_WORKER_COUNT"] = str(len(specs))
+            if self.options.scheduler.mode == "slots":
+                # Pin the slot to ONE physical GPU (its own worker process).
+                env["CUDA_VISIBLE_DEVICES"] = str(spec.device_index)
+                env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:0"
+            else:
+                # DDP-per-trial: one controller fans each trial over torchrun.
+                env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:0"
+                env["ER_LAYA_HPO_DDP"] = "1"
+            processes.append(subprocess.Popen([sys.executable, script], env=env))
+        return [process.wait() for process in processes]
+
+    def _reap_stale(self):
+        """Reap stale RUNNING trials ONCE, before ANY worker starts (F7).
+
+        A storage error is loud (never silently skipped): a worker must never
+        race a sibling's freshly-started trial.
+        """
+        storage = create_storage(storage_from_environment())
+        study_name = generation_study_name(generation_id=GENERATION_ID,
+                                           model_key=MODEL_KEY)
+        reaped = reap_stale_trials_for_study(study_name, storage)
+        log("stale-trial reap: " + ("reaped" if reaped else "no study yet"))
+
+    def run(self):
+        torch = self._prepare()
+        if not self.options.session.offline:
+            self._reap_stale()
+        if self.options.scheduler.mode == "slots":
+            self.options.mps.start()
+        codes = self._launch(self._specs(torch))
+        if self.options.scheduler.mode == "slots":
+            self.options.mps.stop()
+        log("workers exited: " + str(codes))
+        receipt = write_session_receipt()
+        SessionArchive(self.options).run(receipt)
+        if any(code != 0 for code in codes):
+            raise SystemExit("laya HPO worker failure: exit codes " + str(codes))
 
 
 def main():
-    pip_install_runtime()
-    pip_install_laya()
-    import torch
-    options = build_option_set(HPO_SPACE)
-    globals()["OPTION_SET"] = options
-    options.resource_caps.apply_torch(torch)
-    offline = bool(options.session.offline)
-    if not offline:
-        ensure_optuna_url()
-    gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    if options.scheduler.mode == "slots":
-        options.mps.start()
-    specs = options.scheduler.workers(gpu_count or 1)
-    if offline and len(specs) > 1:
-        # Offline uses ONE SQLite file; concurrent writers would lock. Keep the
-        # documented single-process semantics regardless of the slots plan.
-        log("offline mode: collapsing %d workers to 1" % len(specs))
-        specs = specs[:1]
-    study_name = generation_study_name(generation_id=GENERATION_ID,
-                                       model_key=MODEL_KEY)
-    if not offline:
-        # Reap stale RUNNING trials ONCE, before ANY worker starts, so a worker
-        # cannot race a sibling's freshly-started trial.  A storage error is
-        # loud (never silently skipped).
-        storage = create_storage(storage_from_environment())
-        reaped = reap_stale_trials_for_study(study_name, storage)
-        log("stale-trial reap: " + ("reaped" if reaped else "no study yet"))
-    log("session gpus=%d cores=%d mode=%s workers=%d study=%s budget=%d "
-        "threads_per_worker=%d timeout=%s"
-        % (gpu_count, os.cpu_count() or 1, options.scheduler.mode, len(specs),
-           study_name, int(N_TRIALS), options.resource_caps.threads_per_worker,
-           options.session.timeout_s or "none"))
-    script = os.path.abspath(__file__)
-    processes = []
-    for spec in specs:
-        env = os.environ.copy()
-        env.update(spec.env)
-        env["ER_LAYA_HPO_SKIP_INSTALL"] = "1"
-        env["ER_LAYA_HPO_WORKER_COUNT"] = str(len(specs))
-        if options.scheduler.mode == "slots":
-            # Pin the slot to ONE physical GPU (its own worker process).
-            env["CUDA_VISIBLE_DEVICES"] = str(spec.device_index)
-            env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:0"
-        else:
-            # DDP-per-trial: one controller process; each OBJECTIVE fans the
-            # trial out over torchrun and only rank 0 returns the metric.
-            env["ER_LAYA_HPO_WORKER_DEVICE"] = "cuda:0"
-            env["ER_LAYA_HPO_DDP"] = "1"
-        processes.append(subprocess.Popen([sys.executable, script], env=env))
-    codes = [process.wait() for process in processes]
-    if options.scheduler.mode == "slots":
-        options.mps.stop()
-    log("workers exited: " + str(codes))
-    receipt = write_session_receipt()
-    # Stage ONLY the champion checkpoint (the per-trial checkpoints would make
-    # the archive enormous); the receipt is the decision trail.
-    WORKING.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(WORKING / "laya_hpo.tar.gz", "w:gz",
-                      compresslevel=1) as tar:
-        tar.add(WORKING / "laya-hpo.receipt.json",
-                arcname="laya-hpo.receipt.json")
-        champion = ((receipt.get("best") or {}).get("checkpoint") or "")
-        if champion and Path(champion).is_dir():
-            tar.add(champion, arcname="champion")
-            log("staged champion checkpoint " + champion)
-    log("staged laya_hpo.tar.gz + receipt in /kaggle/working")
-    # Durable, self-validating snapshot of the session's decision trail.
-    try:
-        include = [p for p in (
-            WORKING / "laya-hpo.receipt.json",
-            WORKING / OBSERVABILITY_DIR / "trial_events.jsonl",
-            WORKING / OBSERVABILITY_DIR / "study_mirror.jsonl",
-            WORKING / OBSERVABILITY_DIR / "hpo_trials.jsonl",
-        ) if p.exists()]
-        snapshot = build_snapshot(
-            generation=WORKING, sequence=int(time.time()),
-            optuna_db=(WORKING / "hpo_offline.db" if offline else None),
-            include=include)
-        log("hpo snapshot -> " + str(snapshot))
-    except Exception as error:
-        log("hpo snapshot skipped: " + str(error)[:200])
-    if any(code != 0 for code in codes):
-        raise SystemExit("laya HPO worker failure: exit codes " + str(codes))
+    SessionOrchestrator().run()
 
 
 if __name__ == "__main__":
@@ -1727,16 +2067,30 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def register_dispatch() -> str | None:
-    """Register the HPO kind with the laya lane's `kernel_slug` dispatch.
+class KernelSlugRegistry:
+    """The HPO kind's kernel-slug dispatch.
 
-    The HPO slug lives in the HPO space SSOT, not LayaSpec, so we push it into
-    `laya_lane.EXTERNAL_KIND_SLUGS` instead of duplicating it.
+    The HPO slug lives in the HPO space SSOT, not ``LayaSpec``, so it is pushed
+    into ``laya_lane.EXTERNAL_KIND_SLUGS``. One job: map the ``laya-hpo`` kind
+    to the slug actually staged (an explicit override wins over the SSOT).
     """
-    slug = load_space().get("kernel_slug")
-    if slug:
-        laya_lane.EXTERNAL_KIND_SLUGS[HPO_DECISION] = slug
-    return slug
+
+    def __init__(self, kind: str = HPO_DECISION):
+        self.kind = kind
+
+    def register(self, slug: str | None = None) -> str | None:
+        effective = slug or load_space().get("kernel_slug")
+        if effective:
+            laya_lane.EXTERNAL_KIND_SLUGS[self.kind] = effective
+        return effective
+
+    def resolve(self) -> str:
+        return laya_lane.kernel_slug(self.kind)
+
+
+def register_dispatch(slug: str | None = None) -> str | None:
+    """Register the HPO kind with the laya lane's `kernel_slug` dispatch."""
+    return KernelSlugRegistry().register(slug)
 
 
 def kernel_slug(decision_kind: str = HPO_DECISION) -> str:
@@ -1763,6 +2117,10 @@ __all__ = [
     "LANES",
     "OPTUNA_URL_ENV",
     "STAGE_DISPATCH",
+    "HpoReceipt",
+    "HpoStagePlan",
+    "KernelSlugRegistry",
+    "LayaHpoStager",
     "apply_dials",
     "assert_secret_absent",
     "finished_trial_count",
