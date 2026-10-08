@@ -8,7 +8,7 @@ those CPU-side inputs.
 One responsibility per unit:
 
   PreparedBundleManifest         the frozen identity/shape contract
-  hashing primitive              _digest (bar-tracked)
+  size primitive                _size_of (bar-tracked)
   drift policy                   prepared_bundle_drift_strict + BundleDriftPolicy
   holdout reconstruction         FrozenHoldoutPolicy (prepared_holdout seam)
   lineage attestation            LineageAuditor (write + load share it)
@@ -23,7 +23,7 @@ One responsibility per unit:
 from __future__ import annotations
 
 import gzip
-import hashlib
+from core.portable_archive import ByteCount
 import os
 import pickle
 from pathlib import Path
@@ -39,7 +39,7 @@ from training.prepare_all_trace import timed, trace_step
 
 _LOG = RunLogger(__name__)
 
-_HASH_CHUNK_BYTES = 1024 * 1024
+_SIZE_CHUNK_BYTES = 1024 * 1024
 
 REQUIRED_BUNDLE_FIELDS = frozenset({
     "df", "payload", "structured_features", "row_bc", "country", "pos",
@@ -73,7 +73,7 @@ class PreparedBundleManifest(BaseModel):
     n_labeled_pairs_bytes: int = Field(ge=1)
     n_canonical_records_bytes: int = Field(ge=1)
     n_gate_results_bytes: int = Field(ge=1)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0)
     # Diet/augmentation provenance: the resolved masking profile and the
     # easy-negative quota the bundle was built under. config/ can drift
     # after a build (ratio_to_hard moves the diet verdict without touching
@@ -94,17 +94,17 @@ class PreparedBundleManifest(BaseModel):
 
 
 @timed
-def _digest(path: Path) -> str:
-    """Hash one file with a byte-accurate progress bar (no manual bhist here)."""
-    digest = hashlib.sha256()
+def _size_of(path: Path) -> str:
+    """Count one file's bytes with a byte-accurate progress bar (no manual bhist here)."""
+    size = ByteCount()
     source = Path(path)
     with source.open("rb") as handle, \
-            _LOG.bar(total=source.stat().st_size, desc='bundle_sha256',
+            _LOG.bar(total=source.stat().st_size, desc='bundle_size',
                      unit='B') as bar:
-        for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
-            digest.update(chunk)
+        for chunk in iter(lambda: handle.read(_SIZE_CHUNK_BYTES), b""):
+            size.update(chunk)
             bar.update(len(chunk))
-    return digest.hexdigest()
+    return size.total
 
 
 @timed
@@ -583,7 +583,7 @@ class BundleWriter:
     @staticmethod
     @timed
     def build_manifest(path: Path, payload_data: dict[str, Any], **headers) -> PreparedBundleManifest:
-        """Assemble + persist the manifest sidecar (hash included, not computed here)."""
+        """Assemble + persist the manifest sidecar (size included, not computed here)."""
         manifest = PreparedBundleManifest(**headers)
         path.with_suffix(path.suffix + ".json").write_text(
             manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
@@ -695,11 +695,11 @@ def write_prepared_bundle(
         n_labeled_pairs_bytes=len(labeled_pairs_csv),
         n_canonical_records_bytes=len(canonical_records_csv),
         n_gate_results_bytes=len(gate_results_csv),
-        sha256=_digest(path),
+        size=_size_of(path),
     )
-    timing.mark('hash_and_write_manifest')
+    timing.mark('size_and_write_manifest')
     PreparationStore.register_built(path, manifest, payload_data)
-    _LOG.info(f'[bundle] wrote {path} sha256={manifest.sha256}')
+    _LOG.info(f'[bundle] wrote {path} size={manifest.size}')
     return manifest
 
 
@@ -732,12 +732,12 @@ class BundleReader:
     @staticmethod
     @timed
     def verify_bytes(path: Path, manifest: PreparedBundleManifest) -> None:
-        """The whole-file digest must match the manifest's recorded hash."""
-        actual_digest = _digest(path)
-        if actual_digest != manifest.sha256:
+        """The whole-file byte size must match the manifest's recorded size."""
+        actual_size = _size_of(path)
+        if actual_size != manifest.size:
             raise ValueError(
-                f"prepared bundle SHA-256 mismatch: {path} "
-                f"{actual_digest} != {manifest.sha256}"
+                f"prepared bundle size mismatch: {path} "
+                f"{actual_size} != {manifest.size}"
             )
 
     @staticmethod
@@ -823,9 +823,9 @@ def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBun
 
     `verify_inputs` defaults to the suite data gate's decision.  The bundle is
     always decompressed and unpickled -- training consumes it -- but when the
-    supervisor already attested these exact bytes the whole-file SHA-256 and the
-    manifest/provenance comparisons are skipped, since a changed bundle changes
-    its digest and leaves enforcement active.  Pass True to force them.
+    supervisor already attested these exact bytes the whole-file size check and
+    the manifest/provenance comparisons are skipped, since a changed bundle
+    changes its size and leaves enforcement active.  Pass True to force them.
     """
     cached = PreparationStore.cached(path)
     if cached is not None:
@@ -842,6 +842,6 @@ def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBun
     BundleReader.validate_manifest_counts(path, manifest, data)
     BundleReader.validate_identity_fields(path, manifest, data)
     PreparationStore.cache(path, manifest, data)
-    _LOG.info(f'[bundle] loaded {path} sha256={manifest.sha256}')
+    _LOG.info(f'[bundle] loaded {path} size={manifest.size}')
     # BundleDriftPolicy checks retired (owner order 2026-10-07: no drift enforcement in the lane; prepared_bundle_drift_strict is config-inert).
     return manifest, data

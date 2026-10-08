@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
-from core.portable_archive import Digest, verify_archive
+from core.portable_archive import int, verify_archive
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.common import TRAIN_ROOT
@@ -23,14 +23,14 @@ _LOG = RunLogger(__name__)
 class AblationThresholdIdentity(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     track: Literal['text', 'gnn_only', 'hybrid']
-    checkpoint_sha256: Digest
+    checkpoint_size: int
     verified: Literal[True]
 
 
 class SavedCalibration(BaseModel):
     model_config = ConfigDict(extra='allow', frozen=True, allow_inf_nan=False)
     track: Literal['text', 'gnn_only', 'hybrid']
-    checkpoint_sha256: Digest
+    checkpoint_size: int
     threshold: float
 
 
@@ -38,8 +38,8 @@ class SavedAblationReport(BaseModel):
     """Identity required before a previously computed report is published."""
     model_config = ConfigDict(extra='allow', allow_inf_nan=False)
     track: Literal['text', 'gnn_only', 'hybrid']
-    request_sha256: Digest
-    result_sha256: Digest
+    request_size: int
+    result_size: int
     threshold: float
     threshold_provenance: dict[str, Any]
     threshold_binding: AblationThresholdIdentity
@@ -146,7 +146,7 @@ def _calibration_source(destination, track):
 @timed
 def _wrote_binding(request, track, calibration, source):
     """Seal the selected checkpoint identity and frozen threshold into binding."""
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from model_tracks.ablation import request_context
     
     binding = request.parent / 'baseline_threshold.json'
@@ -156,18 +156,18 @@ def _wrote_binding(request, track, calibration, source):
     with request_context(request):
         checkpoint = resolve(document['checkpoint'])
         selected_identity = checkpoint_identity(checkpoint)
-        calibrated_identity = calibration.checkpoint_sha256
+        calibrated_identity = calibration.checkpoint_size
         
         if calibrated_identity != selected_identity:
             raise ValueError('baseline calibration differs from selected ablation checkpoint: ' + track)
             
         write(binding, {
             'track': track,
-            'checkpoint_sha256': selected_identity,
+            'checkpoint_size': selected_identity,
             'threshold': threshold,
             'calibration': {'threshold': threshold},
             'source_calibration': source_name(source),
-            'source_calibration_sha256': file_hash(source),
+            'source_calibration_size': file_size(source),
             'threshold_source': 'saved dev calibration; no refit'
         })
     _LOG.info(f'[ablation] threshold binding track={track} threshold={threshold}')
@@ -245,8 +245,8 @@ def _saved_track_report(request, result, threshold, binding, document, suite):
         
     _sealed_track_report(request, validated, resolve(suite.ablation_config))
     
-    from graph_tracks.data import file_hash
-    previous.with_suffix('.sha256').write_text(file_hash(previous) + '\n')
+    from graph_tracks.data import file_size
+    previous.with_suffix('.size').write_text(file_size(previous) + '\n')
     return validated
 
 

@@ -46,7 +46,7 @@ import pandas as pd
 from core.run_log import RunLogger
 from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
 from training.prepare_all_trace import timed
-from graph_tracks.data import RELATIONS, NUMERIC, file_hash, load_records
+from graph_tracks.data import RELATIONS, NUMERIC, file_size, load_records
 
 _LOG = RunLogger(__name__)
 
@@ -188,7 +188,7 @@ class PairSourceBinding:
             return None
         lineage = json.loads(self._source.read_text())
         if (lineage.get('schema') != self.SCHEMA
-                or lineage.get('listing_pairs_sha256') != file_hash(self._pairs)):
+                or lineage.get('listing_pairs_size') != file_size(self._pairs)):
             raise ValueError('pair lineage does not bind the prepared pair source')
         return lineage
 
@@ -214,7 +214,7 @@ class PairSourceBinding:
 
 
 class PreparedManifest:
-    """The er-graph-inputs-v1 manifest over the prepared package's hashes."""
+    """The er-graph-inputs-v1 manifest over the prepared package's sizes."""
 
     def __init__(self, *, catalog: Path, metric_splits: Path, metric_pairs: Path,
                  policy_path: Path, identity_dimensions: Path, listing_path: Path):
@@ -229,19 +229,19 @@ class PreparedManifest:
         from graph_tracks.data import RELATIONS, NUMERIC
         layout = _setup_layout()
         write_json(self._listing_path.parent / layout.input_manifest, {
-            'schema': 'er-graph-inputs-v1', 'catalog_sha256': file_hash(self._catalog),
-            'identity_policy_sha256': file_hash(self._policy_path),
-            'identity_dimensions_sha256': file_hash(self._identity_dimensions),
-            'splits_sha256': file_hash(self._metric_splits),
-            'pairs_sha256': file_hash(self._metric_pairs),
-            'pair_lineage_sha256': file_hash(
+            'schema': 'er-graph-inputs-v1', 'catalog_size': file_size(self._catalog),
+            'identity_policy_size': file_size(self._policy_path),
+            'identity_dimensions_size': file_size(self._identity_dimensions),
+            'splits_size': file_size(self._metric_splits),
+            'pairs_size': file_size(self._metric_pairs),
+            'pair_lineage_size': file_size(
                 self._listing_path.parent / _setup_layout().pair_lineage
             ) if (self._listing_path.parent / _setup_layout().pair_lineage).is_file() else None,
             'pair_trace': binding.trace(),
             'augmentation': 'not_applicable: fixed graph pairs; no masking/gendata pipeline',
-            'listings_sha256': file_hash(self._listing_path),
+            'listings_size': file_size(self._listing_path),
             'identity_extractor': 'core.sku_identity.row_identity',
-            'report_attributes_sha256': file_hash(
+            'report_attributes_size': file_size(
                 self._listing_path.parent / FILENAME),
             'relations': list(RELATIONS), 'numeric': list(NUMERIC),
             'feature_scope': 'derived from core.sku_identity.graph_schema; every extractor descriptor is a model input',
@@ -316,7 +316,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_
             "published",
             in_count=int(len(records)),
             out_count=int(len(records)),
-            reason="the er-graph-inputs-v1 manifest is written over the package's hashes",
+            reason="the er-graph-inputs-v1 manifest is written over the package's sizes",
             detail={
                 "path": str(listing_path.parent / layout.input_manifest),
                 "listings": str(listing_path),

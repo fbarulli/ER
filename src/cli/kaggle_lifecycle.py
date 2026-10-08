@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 
 class KernelLifecycle:
@@ -51,9 +51,9 @@ class KernelLifecycle:
                     archive.write(path, arcname=name)
         failure_manifest = {
             "status": "error", "archive": failure_archive.name,
-            "archive_sha256": sha256_file(failure_archive),
+            "archive_size": file_size(failure_archive),
             "files": {name: {"bytes": path.stat().st_size,
-                             "sha256": sha256_file(path)}
+                             "size": file_size(path)}
                       for name, path in failure_files.items()},
         }
         (WORKING / LANE["files"]["failure_manifest"]).write_text(
@@ -82,11 +82,11 @@ class KernelLifecycle:
         if name not in {files.failure_archive, files.failure_zip}:
             raise RuntimeError("invalid failure archive name")
         archive = manifests[0].parent / name
-        observed = sha256_file(archive)
-        if observed != manifest.get("archive_sha256"):
-            raise RuntimeError("failure archive sha256 mismatch")
+        observed = file_size(archive)
+        if observed != manifest.get("archive_size"):
+            raise RuntimeError("failure archive size mismatch")
         return {"failed": True, "verified": True,
-                "fetched_archive": str(archive), "archive_sha256": observed}
+                "fetched_archive": str(archive), "archive_size": observed}
 
     @staticmethod
     def harvest_and_stop(*, kind: str, slug: str, which: str,

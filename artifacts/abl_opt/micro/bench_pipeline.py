@@ -11,7 +11,7 @@ Usage: python artifacts/abl_opt/micro/bench_pipeline.py [--rows 2000] [--reps 3]
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import sys
@@ -41,8 +41,8 @@ def load_texts(rows: int) -> list[tuple[str, str, str, str, str]]:
              row.image_url, row.attribute) for row in frame.itertuples(index=False)]
 
 
-def run_scan(texts) -> tuple[str, int]:
-    digest = hashlib.sha256()
+def run_scan(texts) -> tuple[int, int]:
+    digest = ByteCount()
     calls = 0
     for title, description, url, image, attribute in texts:
         for text in (title, description, url, image):
@@ -52,16 +52,16 @@ def run_scan(texts) -> tuple[str, int]:
             calls += 3
         digest.update(json.dumps(parse_attribute_volume_pack(attribute)).encode())
         calls += 1
-    return digest.hexdigest(), calls
+    return digest.total, calls
 
 
-def run_extract_all(texts) -> tuple[str, int]:
+def run_extract_all(texts) -> tuple[int, int]:
     """The per-row entry point (covers _fuse_and_bound and the whole card)."""
-    digest = hashlib.sha256()
+    digest = ByteCount()
     for title, description, url, image, attribute in texts:
         digest.update(json.dumps(extract_all(title, attribute, description, url, image),
                                  sort_keys=True, default=str).encode())
-    return digest.hexdigest(), len(texts)
+    return digest.total, len(texts)
 
 
 def bulk_pattern_ab(reps: int = 5) -> dict:

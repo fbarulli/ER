@@ -8,7 +8,7 @@ lines, tracking counters, scan counts) say what the decision rules read.
 
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from types import SimpleNamespace
 
@@ -22,15 +22,15 @@ from training.attestation import (
 from training.prepared_bundle import _timed_lineage_validations
 
 
-def _attestation(run_dir: str, provenance_digest: str | None):
+def _attestation(run_dir: str, provenance_size: int | None):
     return TrainingAttestation(
         attestation_schema="er-training-attestation-v1",
         status="pass",
         run_dir=run_dir,
         finished_at="finished",
         bundle_path="bundle.pkl.gz",
-        bundle_sha256="0" * 64,
-        provenance_digest=provenance_digest,
+        bundle_size=1234,
+        provenance_size=provenance_size,
         plan_identity={"loss": "mnrl"},
         checks={},
         attested_at="now",
@@ -43,22 +43,22 @@ def _manifest(run_dir, provenance: dict) -> None:
     )
 
 
-def _provenance_digest(provenance: dict) -> str:
+def _provenance_size(provenance: dict) -> int:
     canonical = json.dumps(provenance, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return ByteCount(canonical.encode()).total
 
 
 def test_d1_attestation_records_verified_provenance(tmp_path, capsys):
     provenance = {"src/a.py": "a" * 64}
     _manifest(tmp_path, provenance)
-    attestation = _attestation(str(tmp_path), _provenance_digest(provenance))
+    attestation = _attestation(str(tmp_path), _provenance_size(provenance))
     status = record_provenance_verification(attestation)
     assert attestation.provenance_verified == "verified"
     assert '[timing] training.attestation provenance_verified=verified' in capsys.readouterr().out
 
 
 def test_d1_attestation_records_missing_manifest_without_raising(tmp_path, capsys):
-    attestation = _attestation(str(tmp_path), "b" * 64)
+    attestation = _attestation(str(tmp_path), 4321)
     status = record_provenance_verification(attestation)
     assert status == "missing_manifest"
     assert attestation.provenance_verified == "missing_manifest"
@@ -66,7 +66,10 @@ def test_d1_attestation_records_missing_manifest_without_raising(tmp_path, capsy
 
 def test_d1_attestation_records_mismatch_and_unreadable_without_raising(tmp_path):
     _manifest(tmp_path, {"src/a.py": "a" * 64})
-    est = _provenance_digest({"src/a.py": "c" * 64})
+    # The recorded value is the canonical block's BYTE LENGTH (structural
+    # identity, owner directive 2026-10-08), so a difference must change the
+    # length: a same-length edit is the accepted blind spot of that vocabulary.
+    est = _provenance_size({"src/a.py": "c" * 64, "src/extra.py": "d" * 64})
     attestation = _attestation(str(tmp_path), est)
     record_provenance_verification(attestation)
     changed = _attestation(str(tmp_path), est)
@@ -216,7 +219,7 @@ def test_d6_unattested_path_carries_data_digest_mark():
     import training.train_prepared as tp
 
     main_src = inspect.getsource(tp._main)
-    assert "data_digest_revalidation" in main_src
+    assert "data_size_revalidation" in main_src
     assert "validate_run_plan" in main_src
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 
@@ -45,7 +45,7 @@ class DifficultyReport(BaseModel):
     model_config = ConfigDict(extra='forbid')
     schema_version: int = 1
     bundle: str
-    bundle_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    bundle_size: int = Field(ge=0)
     definition: DifficultySpec
     difficulty_kind: str = 'structural proxy; no model scores or errors used'
     attributes: list[str]
@@ -65,12 +65,12 @@ class DifficultyReport(BaseModel):
         return self
 
 
-def digest(path):
-    h = hashlib.sha256()
+def file_size(path) -> int:
+    h = ByteCount()
     with path.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             h.update(chunk)
-    return h.hexdigest()
+    return h.total
 
 
 def main():
@@ -80,7 +80,7 @@ def main():
     parser.add_argument('--definition', type=Path, help='optional DifficultySpec JSON')
     args = parser.parse_args()
     spec = DifficultySpec.model_validate_json(args.definition.read_text()) if args.definition else DifficultySpec()
-    before = digest(args.bundle)
+    before = file_size(args.bundle)
     _, bundle = load_prepared_bundle(args.bundle)
     endpoints = [DifficultyEndpoint.from_text(text) for text in bundle['payload']]
     copies = {}
@@ -155,7 +155,7 @@ def main():
             attributes={field: {state: attr_counts[name][field][state]
                 for state in ('both_observed', 'one_observed', 'neither_observed', 'conflict')}
                 for field in _FIELD_PREFIXES})
-    report = DifficultyReport(bundle=str(args.bundle), bundle_sha256=before, definition=spec,
+    report = DifficultyReport(bundle=str(args.bundle), bundle_size=before, definition=spec,
         attributes=list(_FIELD_PREFIXES), catalog_rows=len(bundle['df']),
         catalog_attribute_rows={f: sum(bool(e.attributes[f]) for e in endpoints[:len(bundle['df'])])
                                 for f in _FIELD_PREFIXES}, populations=populations,
@@ -165,7 +165,7 @@ def main():
                'Positive conflicts flag review; difficulty never changes labels.',
                'Whole-catalog singleton rows have attribute coverage but no pair difficulty.',
                'Structural thresholds are provisional; model error measurement remains separate.'])
-    if digest(args.bundle) != before:
+    if file_size(args.bundle) != before:
         raise ValueError('bundle changed during difficulty measurement')
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / 'report.json').write_text(report.model_dump_json(indent=2) + '\n')

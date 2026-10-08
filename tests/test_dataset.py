@@ -1,10 +1,11 @@
-"""The project Dataset owns the data surface: members, read spec, identity, transport.
+"""The project Dataset owns the data surface: members, sets/splits, read spec,
+identity, transport.
 
 Every baked-in behavior of ``core.dataset.Dataset`` is pinned here by ONE test:
 member resolution equals the current SSOT accessors, the declared read spec
-drives ``load``, ``identity`` is a content digest (stable, portable, content-
-following, absence-tolerant), ``as_bundle`` hands off to ``Bundle.load``, and
-the class carries no validity gate.
+drives ``load``, the declared SETS report their SPLITS (a set with none says
+so), the flex ``validation_size`` and the bin list are declared, ``as_bundle``
+hands off to ``Bundle.load``, and the class carries no validity gate.
 """
 import inspect
 from pathlib import Path
@@ -17,6 +18,7 @@ from core.dataset import (
     SOURCE,
     Dataset,
     DatasetMemberSpec,
+    DatasetSetSpec,
     DatasetSpec,
     dataset,
     dataset_spec,
@@ -28,13 +30,29 @@ def _injected(store: Dataset, **members: Path) -> Dataset:
     return store.model_copy(update={"members": {**store.members, **members}})
 
 
+def _expected(binding: DatasetMemberSpec) -> Path:
+    """The path the tree's own accessor returns for one declared binding."""
+    return common.F[binding.key] if binding.via == "files" else common.artifact(binding.key)
+
+
+def _bare_spec(**overrides) -> DatasetSpec:
+    """A minimal declared dataset; ``overrides`` steer one field for the case under test."""
+    fields: dict[str, object] = {
+        "name": "unit",
+        "source": DatasetMemberSpec(via="files", key="dataset"),
+        "members": {"dataset_deduped": DatasetMemberSpec(via="files", key="dataset_deduped")},
+    }
+    fields.update(overrides)
+    return DatasetSpec(**fields)
+
+
 # ── resolution: equals the current accessors ────────────────────────────────
 
 def test_members_resolve_through_the_same_ssot_accessors():
     """``member(name)`` IS the ``files``/``layouts`` accessor, not a copy of it."""
     store, spec = dataset(), dataset_spec()
     for name, binding in spec.members.items():
-        assert store.member(name) == common.F[binding.key]
+        assert store.member(name) == _expected(binding)
     for name, binding in spec.layout.items():
         assert store.member(name) == common.artifact(binding.key)
     assert store.member(SOURCE) == common.F[spec.source.key]
@@ -139,7 +157,7 @@ def test_identity_is_stable_portable_and_follows_content(tmp_path):
 
 
 def test_identity_records_an_absent_member_without_raising(tmp_path):
-    """A missing member is content (absence), not a validity verdict."""
+    """A missing member is census (absence), not a validity verdict."""
     store = Dataset(
         name="unit",
         read=common.data_cfg().dataset_csv_read,
@@ -147,8 +165,10 @@ def test_identity_records_an_absent_member_without_raising(tmp_path):
         members={"dataset_deduped": tmp_path / "also-missing.csv"},
         layout={},
     )
-    assert len(store.identity()) == 64
-    # and presence changes the digest, so absence is distinguishable from bytes.
+    census = store.identity()
+    assert census["dataset"] == "unit"
+    assert census["members"] == {"source": None, "dataset_deduped": None}
+    # and presence changes the census, so absence is distinguishable from bytes.
     (tmp_path / "never-written.csv").write_bytes(b"x")
     assert store.identity() != _store_at(tmp_path, b"x").identity()
 
@@ -176,16 +196,16 @@ def test_as_bundle_hands_off_to_the_verified_bundle_boundary(monkeypatch, tmp_pa
 
     recorded = {}
 
-    def fake_load(path, role, *, expected_digest=None, manifest_name=None):
+    def fake_load(path, role, *, manifest_name=None):
         recorded.update(path=Path(path), role=role,
-                        expected_digest=expected_digest, manifest_name=manifest_name)
+                        manifest_name=manifest_name)
         return "trusted-handle"
 
     monkeypatch.setattr(bundle.Bundle, "load", staticmethod(fake_load))
     archive = tmp_path / "inputs.tar.zst"
-    assert dataset().as_bundle(archive, "result", expected_digest="a" * 64) == "trusted-handle"
+    assert dataset().as_bundle(archive, "result") == "trusted-handle"
     assert recorded == {"path": archive, "role": "result",
-                        "expected_digest": "a" * 64, "manifest_name": None}
+                        "manifest_name": None}
 
 
 # ── declaration validation ──────────────────────────────────────────────────
@@ -231,8 +251,9 @@ def test_the_declaration_covers_the_dataset_surface():
     """The dataset's member set is exactly the declared line items + trees."""
     spec = dataset_spec()
     assert set(spec.members) == {
-        "dataset_deduped", "sku_to_rep", "canonical_records", "gate_results",
-        "labeled_pairs", "final_validation", "number_tokens_reference",
+        "dataset_3k", "dataset_deduped", "sku_to_rep", "canonical_records",
+        "gate_results", "labeled_pairs", "final_validation",
+        "number_tokens_reference",
     }
     assert set(spec.layout) == {"prepared", "track_setup"}
     assert spec.source == DatasetMemberSpec(via="files", key="dataset")
@@ -272,3 +293,75 @@ def test_the_dataset_read_equals_the_direct_read_the_consumer_replaced(tmp_path)
     direct = pd.read_csv(path, dtype=str, keep_default_na=False)  # the replaced read
     pd.testing.assert_frame_equal(
         store.load("dataset_deduped", dtype=str, keep_default_na=False), direct)
+
+
+# ── sets and splits: the class owns them ────────────────────────────────────
+
+def test_every_declared_set_resolves_through_the_same_ssot_accessor():
+    store, spec = dataset(), dataset_spec()
+    assert set(store.sets()) == set(spec.sets)
+    for name, entry in spec.sets.items():
+        assert store.set_path(name) == _expected(entry.binding)
+
+
+def test_a_set_reports_its_declared_splits_through_the_same_accessor():
+    store, spec = dataset(), dataset_spec()
+    for name, entry in spec.sets.items():
+        resolved = store.splits(name)
+        assert resolved.set == name
+        assert set(resolved.members) == set(entry.splits)
+        for split, binding in entry.splits.items():
+            assert resolved.members[split] == _expected(binding)
+
+
+def test_a_set_with_no_splits_says_so():
+    splits = dataset().splits("smoke")
+    assert splits.members == {}
+    assert splits.declares_no_splits
+
+
+def test_the_official_split_shape_is_declared():
+    store = dataset()
+    assert set(store.splits("laya").members) == {"train", "dev", "validation"}
+    assert set(store.splits("full").members) == {"full", "validation"}
+    assert store.splits("smoke").declares_no_splits
+
+
+def test_an_undeclared_set_names_the_declared_ones():
+    with pytest.raises(KeyError, match="unknown dataset set"):
+        dataset().set_path("nope")
+    with pytest.raises(KeyError, match="unknown dataset set"):
+        dataset().splits("nope")
+
+
+def test_the_3k_set_resolves_through_the_declared_binding():
+    assert dataset().member("dataset_3k") == common.artifact("dataset_3k")
+
+
+def test_the_validation_size_is_flex_and_never_a_fixed_literal():
+    store, spec = dataset(), dataset_spec()
+    assert store.validation_size == spec.validation_size
+    size = store.validation_size
+    assert (isinstance(size, float) and 0.0 < size < 1.0) or (
+        isinstance(size, int) and size >= 1)
+    assert _bare_spec(validation_size=500).validation_size == 500  # absolute row count
+    assert _bare_spec(validation_size=0.25).validation_size == 0.25  # fraction of population
+    for bad in (0, 0.0, 1.0, 1.5):
+        with pytest.raises(ValueError, match="validation_size"):
+            _bare_spec(validation_size=bad)
+
+
+def test_the_bin_list_is_declared_names_only():
+    assert dataset().binned_sets == (
+        "dataset_50pct.csv",
+        "dataset_10k.csv",
+        "data/prepared/smoke_500",
+        "data/prepared/*__clean_shared_inputs",
+        "data/track_setup__clean_shared_inputs",
+    )
+
+
+def test_a_set_may_not_shadow_a_source_member_or_tree_name():
+    with pytest.raises(ValueError, match="shadow"):
+        _bare_spec(sets={"dataset_deduped": DatasetSetSpec(
+            binding=DatasetMemberSpec(via="files", key="dataset"))})

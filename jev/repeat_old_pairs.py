@@ -1,5 +1,5 @@
 """Stage exactly 50 previously judged pairs for a reproducible repeat check."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import random
 from collections import Counter
@@ -10,8 +10,8 @@ from core.project_root import find_project_root
 ROOT = find_project_root(Path(__file__))
 DIRECTORY = ROOT / 'jev'
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def file_size(path) -> int:
+    return ByteCount(path.read_bytes()).total
 
 def stage():
     output = DIRECTORY / 'sample_doubled_9.json'
@@ -35,9 +35,9 @@ def stage():
         rows = sorted((r for r in previous if cell(r) == name), key=lambda r:(r['gtin1'], r['gtin2']))
         for row in rng.sample(rows, count):
             sample = {key: value for key, value in row.items() if key not in {
-                'noul', 'status', 'adapter', 'model', 'completed_utc', 'request_sha256', 'raw_response'}}
+                'noul', 'status', 'adapter', 'model', 'completed_utc', 'request_size', 'raw_response'}}
             sample.update(audit_cohort='repeat_old_pairs', stratum=name,
-                          prior_jev_score=row['noul'], prior_request_sha256=row['request_sha256'], prior_round=8)
+                          prior_jev_score=row['noul'], prior_request_size=row['request_size'], prior_round=8)
             selected.append(sample)
             for field in ('gtin1', 'gtin2'):
                 gtin = row[field]
@@ -52,14 +52,14 @@ def stage():
     state_path = DIRECTORY / 'input_states_9.json'
     state_path.write_text(json.dumps(states, ensure_ascii=False, indent=2)+'\n')
     summary = {'strategy':'stratified repeat of prior round-8 pairs', 'calls':50, 'unique_pairs':50,
-               'allocations':allocations, 'seed':950, 'sample_sha256':digest(output),
-               'input_states_sha256':digest(state_path),
+               'allocations':allocations, 'seed':950, 'sample_size':file_size(output),
+               'input_states_size':file_size(state_path),
                'interpretation':'Diagnostic repeat, not a population accuracy estimate. Same model inputs and order as the prior call; gates are evaluated offline separately.'}
     (DIRECTORY / 'sample_9_summary.json').write_text(json.dumps(summary,indent=2)+'\n')
     ledger_path = DIRECTORY / 'sample_ledger.json'
     ledger = json.loads(ledger_path.read_text())
     ledger.append({'round':9,'status':'staged_not_tested','sample':'jev/sample_doubled_9.json',
-                   'sample_sha256':digest(output),'checkpoint':'jev/audit_results_9.jsonl',
+                   'sample_size':file_size(output),'checkpoint':'jev/audit_results_9.jsonl',
                    'calls_staged':50,'calls_completed':0,'unique_pairs':50,'purpose':'user-requested repeat of old pairs',
                    'pairs':[list(sorted((r['gtin1'],r['gtin2']))) for r in selected]})
     ledger_path.write_text(json.dumps(ledger,indent=2)+'\n')

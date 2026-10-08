@@ -563,22 +563,22 @@ def test_ann_fingerprint_inputs_include_the_composition() -> None:
     }
 
     # Same config twice -> same fingerprint; a different composition -> different one.
-    import hashlib
+    from core.portable_archive import ByteCount
     import json
 
-    def digest(payload: dict) -> str:
-        return hashlib.sha256(
+    def size_of(payload: dict) -> int:
+        return ByteCount(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        ).total
 
-    assert digest(inputs) == digest(preprocessing_fingerprint_inputs({"enabled": True}))
+    assert size_of(inputs) == size_of(preprocessing_fingerprint_inputs({"enabled": True}))
     other = dict(
         inputs,
         model_input=TrainingSpec.ModelInputComposition.from_spec(
             TrainingSpec.ModelInputSpec(profile="legacy", include_evidence=True)
         ).model_dump(),
     )
-    assert digest(other) != digest(inputs)
+    assert size_of(other) != size_of(inputs)
 
 
 def test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary() -> None:
@@ -591,11 +591,11 @@ def test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary() -> None:
     ANN index built before the edit would be silently reused.
     """
     from core.common import VOCABULARY_CONFIG_PATH
-    from core.manifest import sha256_file
+    from core.manifest import file_size
     from training.rand_matching import preprocessing_fingerprint_inputs
 
     inputs = preprocessing_fingerprint_inputs({"enabled": True})
-    assert inputs["vocabulary"] == sha256_file(VOCABULARY_CONFIG_PATH)
+    assert inputs["vocabulary"] == file_size(VOCABULARY_CONFIG_PATH)
     assert len(inputs["vocabulary"]) == 64
 
     # The vocabulary really is an input to the composed text: a stopword that
@@ -632,14 +632,14 @@ def test_ann_fingerprint_inputs_cover_the_composition_code() -> None:
 
     import pipeline
     import core.model_input as model_input_module
-    from core.manifest import sha256_file
+    from core.manifest import file_size
     from training.rand_matching import preprocessing_fingerprint_inputs
 
     inputs = preprocessing_fingerprint_inputs({"enabled": True})
     code = inputs["composition_code"]
     assert set(code) == {"core.model_input", "pipeline"}
-    assert code["pipeline"] == sha256_file(pipeline.__file__)
-    assert code["core.model_input"] == sha256_file(model_input_module.__file__)
+    assert code["pipeline"] == file_size(pipeline.__file__)
+    assert code["core.model_input"] == file_size(model_input_module.__file__)
     assert len(code["pipeline"]) == 64
     # Stable across calls: the same tree must not churn the index.
     assert preprocessing_fingerprint_inputs({"enabled": True})["composition_code"] == code
@@ -649,7 +649,7 @@ def test_ann_fingerprint_inputs_cover_the_composition_code() -> None:
         copy = Path(tmp) / "pipeline_copy.py"
         shutil.copy2(pipeline.__file__, copy)
         copy.write_text(copy.read_text(encoding="utf-8") + "\n# simulated edit\n", encoding="utf-8")
-        assert sha256_file(copy) != sha256_file(pipeline.__file__)
+        assert file_size(copy) != file_size(pipeline.__file__)
 
     # ...and the symbol really does drive the text the index was built from.
     # strip_schema_words reads _MODEL_STOP, so patching it is exactly what a
@@ -767,7 +767,7 @@ def test_a_reduction_flag_changes_the_composition_fingerprint() -> None:
     a flag flip would change the encoder text while the ANN reuse fingerprint
     stayed identical — a stale index served as valid.
     """
-    import hashlib
+    from core.portable_archive import ByteCount
     import json
 
     import training.rand_matching as rm
@@ -784,21 +784,21 @@ def test_a_reduction_flag_changes_the_composition_fingerprint() -> None:
 
         # ...and the ANN REUSE fingerprint moves with it, so a persisted index
         # cannot outlive the composition that built it.
-        def ann_digest(composition) -> str:
+        def ann_size(composition) -> int:
             original = rm.model_input_composition
             rm.model_input_composition = lambda: composition
             try:
-                return hashlib.sha256(
+                return ByteCount(
                     json.dumps(
                         rm.preprocessing_fingerprint_inputs({"enabled": True}),
                         sort_keys=True,
                         separators=(",", ":"),
                     ).encode()
-                ).hexdigest()
+                ).total
             finally:
                 rm.model_input_composition = original
 
-        assert ann_digest(other) != ann_digest(base), flag
+        assert ann_size(other) != ann_size(base), flag
 
 
 def test_a_reduction_flag_is_refused_under_legacy() -> None:

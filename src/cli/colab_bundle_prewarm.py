@@ -1,11 +1,14 @@
-"""Local prepared-bundle cache + prewarm (split phase of cli.colab).
+"""Local prepared-bundle build + prewarm (split phase of cli.colab).
 
 The GPU train lane's pure-local CPU half: resolve one masking profile per
-worker, content-address a bundle request, serve a byte-identical cache hit,
-build + diet-gate + validate the bundles, upload them, and run the whole build
-concurrently with the VM dependency install.  Split from cli/colab.py (the
-kaggle_lane.py owner-module pattern) exactly like colab_runtime /
-colab_result_sync / colab_launch.
+worker, build + diet-gate + validate the bundles, upload them, and run the
+whole build concurrently with the VM dependency install.  Split from
+cli/colab.py (the kaggle_lane.py owner-module pattern) exactly like
+colab_runtime / colab_result_sync / colab_launch.
+
+There is exactly ONE prepared bundle for the full training set (owner
+directive 2026-10-08): any input change rebuilds the whole bundle, so no build
+is reused across runs and no cross-run cache exists.
 
 Collaborators still owned by cli.colab (config constants, ``RESULTS``/``F``,
 the input resolver, the legacy validation gates, transport) are re-read through
@@ -17,18 +20,14 @@ stale second copy.  The in-flight prewarm slot stays on the hub
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
-import shutil
 import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.common import TRAIN_ROOT, resolve_model, training_cfg
-from core.manifest import sha256_file
+from core.common import TRAIN_ROOT, training_cfg
 from cli.colab_hub import hub, timed_colab
 
 
@@ -177,72 +176,6 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     return request
 
 
-_BUNDLE_CACHE_DIRNAME = "_cache"
-# Every file whose content can change what a prepared bundle contains.  A miss
-# on any of them must invalidate the cache: a stale bundle would train on data
-# the operator did not ask for, which is the silent-staleness defect class this
-# repository treats as a bug rather than an inconvenience.
-_BUNDLE_SOURCE_DIRS = ("src",)
-_BUNDLE_SOURCE_FILES = ("scripts/diet_manifest.py",)
-
-
-def _tree_digest() -> str:
-    """Digest every config file and bundle-producing source file."""
-    digest = hashlib.sha256()
-    paths = sorted(
-        [path for name in _BUNDLE_SOURCE_DIRS for path in (TRAIN_ROOT / name).rglob("*.py")]
-        + [TRAIN_ROOT / name for name in _BUNDLE_SOURCE_FILES]
-        + sorted((TRAIN_ROOT / "config").glob("*"))
-    )
-    for path in paths:
-        if not path.is_file():
-            continue
-        digest.update(path.relative_to(TRAIN_ROOT).as_posix().encode("utf-8"))
-        digest.update(sha256_file(path).encode("ascii"))
-    return digest.hexdigest()
-
-
-def _bundle_model_digest(model_key: str) -> str:
-    from graph_tracks.text_cache import checkpoint_hash
-    return checkpoint_hash(Path(resolve_model(model_key)))
-
-
-def _bundle_cache_dir(
-    *,
-    profiles: list[str],
-    model_key: str,
-    sample: int | None,
-    payload: str,
-    training_dataset: Path,
-) -> Path | None:
-    """Content address for one bundle request, or None when caching is off."""
-    surface = hub()
-    if not surface._CACHE_PREPARED_BUNDLES:
-        return None
-    request = json.dumps(
-        {
-            "profiles": list(profiles),
-            "model": model_key,
-            "model_checkpoint_sha256": surface._bundle_model_digest(model_key),
-            "sample": sample,
-            "payload": payload,
-            "collapsed_guardrail": surface._COLLAPSE_GUARDRAIL_PROFILE,
-            "dataset_sha256": sha256_file(training_dataset),
-            # These inputs are read by preparation and frozen into the bundle.
-            # Dataset/source identity alone cannot detect label or canonical
-            # edits made since the previous build.
-            "frozen_inputs_sha256": {
-                name: sha256_file(Path(surface.F[name]))
-                for name in ("labeled_pairs", "canonical_records", "gate_results", "number_reference")
-            },
-            "sources_sha256": surface._tree_digest(),
-        },
-        sort_keys=True,
-    )
-    key = hashlib.sha256(request.encode("utf-8")).hexdigest()[:32]
-    return surface.RESULTS / "prepared_training" / _BUNDLE_CACHE_DIRNAME / key
-
-
 def _run_diet_gate(bundle: Path) -> int:
     """The bundle diet gate (scripts/diet_manifest.py), exit 0 pass / 2 fail."""
     if str(TRAIN_ROOT) not in sys.path:
@@ -256,56 +189,6 @@ def _bundle_manifest(bundle: Path):
     from training.prepared_bundle import load_prepared_bundle
 
     return load_prepared_bundle(bundle)[0]
-
-
-def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | None:
-    """The cached bundles for this request, when every worker's pair is intact.
-
-    `load_prepared_bundle` is the validation: it re-checks the manifest against
-    the current encoder-text contract and refuses a mismatch, so a cached
-    bundle cannot outlive the model-input spec even if the digest missed it.
-    """
-    surface = hub()
-    expected = [
-        cache_dir / f"worker_{number}_{profile}.pkl.gz"
-        for number, profile in enumerate(profiles, start=1)
-    ]
-    for bundle in expected:
-        if not bundle.is_file() or not bundle.with_suffix(bundle.suffix + ".json").is_file():
-            return None
-        try:
-            surface._bundle_manifest(bundle)
-        except Exception as exc:
-            print(
-                surface._stamp(),
-                f"[local-prepare] cached bundle {bundle} is not reusable "
-                f"({exc!r}); rebuilding",
-                flush=True,
-            )
-            return None
-        if surface._run_diet_gate(bundle) != 0:
-            print(
-                surface._stamp(),
-                f"[local-prepare] cached bundle {bundle} fails the diet "
-                "gate; rebuilding",
-                flush=True,
-            )
-            return None
-    return expected
-
-
-def _populate_bundle_cache(cache_dir: Path, bundles: list[Path]) -> None:
-    """Publish freshly built bundles under their content address."""
-    surface = hub()
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        for bundle in bundles:
-            for source in (bundle, bundle.with_suffix(bundle.suffix + ".json")):
-                shutil.copy2(source, cache_dir / source.name)
-    except OSError as exc:
-        print(surface._stamp(), f"[local-prepare] could not populate {cache_dir} ({exc!r})", flush=True)
-        return
-    print(surface._stamp(), f"[local-prepare] cached {len(bundles)} bundle(s) at {cache_dir}", flush=True)
 
 
 def _build_local_training_bundles(
@@ -322,12 +205,10 @@ def _build_local_training_bundles(
     it is what the prewarm thread itself runs, so looking the prewarm up here
     would make that thread join itself.
 
-    The build is deterministic in its inputs and expensive (531 s measured on
-    this host once the payload stage is cold), and every launch rebuilt it from
-    scratch.  A content-keyed cache under `results/prepared_training/_cache`
-    now serves a bundle whose inputs — dataset bytes, every bundle-producing
-    source file, every config file, and the requested model/profile/payload —
-    are byte-identical to one already built.
+    Every build lands under its own timestamped ``results/prepared_training/<run>``
+    directory.  There is exactly ONE prepared bundle for the full training set,
+    so an input change rebuilds the whole bundle and no build is ever reused
+    across runs (owner directive 2026-10-08; cross-run caching is forbidden).
     """
     surface = hub()
     if sample is not None:
@@ -339,25 +220,6 @@ def _build_local_training_bundles(
     training_dataset = surface._validation_input_path(
         dataset_csv or surface._COLAB.training_dataset_csv
     )
-    cache_dir = surface._bundle_cache_dir(
-        profiles=profiles, model_key=model_key, sample=sample, payload=payload,
-        training_dataset=training_dataset,
-    )
-    cached = surface._cached_bundles(cache_dir, profiles=profiles) if cache_dir else None
-    if cached is not None:
-        for number, bundle in enumerate(cached, start=1):
-            manifest = surface._bundle_manifest(bundle)
-            print(
-                surface._stamp(),
-                f"[local-prepare] cache hit worker={number} "
-                f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
-                f"pos={manifest.n_pos:,} neg={manifest.n_neg:,} "
-                f"sha256={manifest.sha256} bundle={bundle}",
-                flush=True,
-            )
-        surface._legacy_validation_sources()
-        surface._validate_legacy_bundle_partitions(cached)
-        return cached
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     root = surface.RESULTS / "prepared_training" / stamp
     root.mkdir(parents=True, exist_ok=False)
@@ -399,9 +261,7 @@ def _build_local_training_bundles(
             flush=True,
         )
         subprocess.run(command, cwd=TRAIN_ROOT, env=env, check=True)
-        from training.prepared_bundle import load_prepared_bundle
-
-        manifest, _ = load_prepared_bundle(bundle)
+        manifest = surface._bundle_manifest(bundle)
         if surface._run_diet_gate(bundle) != 0:
             raise SystemExit(
                 f"[local-prepare] bundle {bundle} FAILED the diet gate; the "
@@ -413,12 +273,10 @@ def _build_local_training_bundles(
             f"[local-prepare] validated worker={number} "
             f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
             f"pos={manifest.n_pos:,} neg={manifest.n_neg:,} "
-            f"sha256={manifest.sha256}",
+            f"size={manifest.size}",
             flush=True,
         )
         bundles.append(bundle)
-    if cache_dir is not None:
-        surface._populate_bundle_cache(cache_dir, bundles)
     surface._legacy_validation_sources()
     surface._validate_legacy_bundle_partitions(bundles)
     return bundles

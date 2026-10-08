@@ -375,7 +375,7 @@ class SliceFieldGrid:
         canon = pd.read_csv(
             F["canonical_records"], dtype=str, keep_default_na=False, low_memory=False
         )
-        # Same read contract as the pipeline lanes: migrate a stale artifact
+        # Same read contract as the pipeline lanes: migrate an outdated artifact
         # and validate before slicing — the freeze step's column access makes
         # the old "first column might be the key" fallback unreachable.
         canon = upgrade_canonical_records_frame(canon)

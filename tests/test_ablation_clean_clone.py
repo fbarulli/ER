@@ -4,7 +4,7 @@ Verifies that ablation reports, prepared inputs, and threshold bindings can be
 restored and validated from a fresh clone of the saved artifacts, even when
 TRAIN_ROOT differs from the original workspace.
 """
-import hashlib
+from core.portable_archive import ByteCount
 import importlib
 import json
 import sys
@@ -14,8 +14,8 @@ import numpy as np
 import pytest
 
 
-def _sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def _size(path):
+    return ByteCount(Path(path).read_bytes()).total
 
 
 def _composition_fingerprint():
@@ -52,14 +52,14 @@ def _make_portable_request(tmp_path, monkeypatch):
     config = setup_dir / 'config.yaml'
     config.write_text('sample_pairs: 10\n')
 
-    from graph_tracks.text_cache import checkpoint_hash
+    from graph_tracks.text_cache import checkpoint_size
     source_files = [catalog, pairs, checkpoint, config]
     sources = {}
     for f in source_files:
         if f.is_dir():
-            sources['@setup/' + f.name] = checkpoint_hash(f)
+            sources['@setup/' + f.name] = checkpoint_size(f)
         else:
-            sources['@setup/' + f.name] = _sha256(f)
+            sources['@setup/' + f.name] = _size(f)
 
     request = {
         'schema': 'er-attribute-ablation-v2',
@@ -75,7 +75,7 @@ def _make_portable_request(tmp_path, monkeypatch):
         'portable_setup': 'local_inputs',
         'sources': sources,
         'composition': _composition_fingerprint(),
-        'implementation_sha256': _sha256(Path(__file__).parents[1] / 'src/model_tracks/ablation.py'),
+        'implementation_size': _size(Path(__file__).parents[1] / 'src/model_tracks/ablation.py'),
         'checkpoint': '@setup/checkpoint',
         'text_checkpoint': None,
         'text_checkpoint': None,
@@ -121,48 +121,48 @@ def _make_vectors(setup_dir):
 
 def _make_threshold_source(setup_dir):
     """Create a baseline threshold source file."""
-    from graph_tracks.text_cache import checkpoint_hash
-    checkpoint_hash_value = checkpoint_hash(setup_dir / 'checkpoint')
+    from graph_tracks.text_cache import checkpoint_size
+    checkpoint_size_value = checkpoint_size(setup_dir / 'checkpoint')
     threshold_file = setup_dir / 'baseline_threshold.json'
     _write_json(threshold_file, {
         'track': 'text',
         'checkpoint': 'checkpoint',
         'threshold': 0.5,
-        'checkpoint_sha256': checkpoint_hash_value,
+        'checkpoint_size': checkpoint_size_value,
     })
     return threshold_file
 
 
 def _make_report(tmp_path, request_path, result_path, threshold_source, request, result):
     """Create a minimal ablation report."""
-    from graph_tracks.text_cache import checkpoint_hash
+    from graph_tracks.text_cache import checkpoint_size
     setup_dir = request_path.parent.parent.parent / 'local_inputs' / 'local_inputs'
-    actual_checkpoint_hash = checkpoint_hash(setup_dir / 'checkpoint')
+    actual_checkpoint_size = checkpoint_size(setup_dir / 'checkpoint')
     report = {
         'schema': 'er-attribute-ablation-report-v1',
         'track': 'text',
         'checkpoint_role': 'selected',
         'request_path': str(request_path),
-        'request_sha256': _sha256(request_path),
+        'request_size': _size(request_path),
         'result_path': str(result_path),
-        'result_sha256': _sha256(result_path),
+        'result_size': _size(result_path),
         'sources': request['sources'],
         'composition': request['composition'],
-        'implementation_sha256': request['implementation_sha256'],
+        'implementation_size': request['implementation_size'],
         'embedding_dtype': 'float32',
         'threshold': 0.5,
         'threshold_source': str(threshold_source),
         'threshold_provenance': {
             'path': str(threshold_source),
-            'sha256': _sha256(threshold_source),
+            'size': _size(threshold_source),
             'selection': 'saved dev calibration; no refit',
             'track': 'text',
             'checkpoint': 'checkpoint',
-            'checkpoint_sha256': actual_checkpoint_hash,
+            'checkpoint_size': actual_checkpoint_size,
         },
         'threshold_binding': {
             'track': 'text',
-            'checkpoint_sha256': actual_checkpoint_hash,
+            'checkpoint_size': actual_checkpoint_size,
             'verified': True,
         },
         'split': 'dev',
@@ -197,7 +197,7 @@ def portable_ablation(tmp_path, monkeypatch):
 
     prepared_data = np.load(prepared)
     request['prepared_inputs'] = {
-        'sha256': _sha256(prepared),
+        'size': _size(prepared),
         'shape': list(prepared_data['tokens'].shape),
     }
 
@@ -341,8 +341,9 @@ def test_clean_clone_with_different_train_root(portable_ablation, monkeypatch):
     assert result['status'] == 'verified frozen-checkpoint intervention'
 
 
-def test_stale_source_hash_fails_closed(portable_ablation, monkeypatch):
-    """Verify that a modified source file fails validation."""
+def test_a_changed_source_is_not_withheld(portable_ablation, monkeypatch):
+    """A modified source file is not a freshness verdict (owner directive
+    2026-10-08): the request still validates. A MISSING source is still refused."""
     from model_tracks import ablation as a
 
     request_path = portable_ablation['request_path']
@@ -352,12 +353,15 @@ def test_stale_source_hash_fails_closed(portable_ablation, monkeypatch):
     catalog.write_text('sku_id,gtin,sku_name_eng\na,1,Alpha MODIFIED\nb,2,Beta\n')
 
     with a.request_context(request_path):
-        with pytest.raises(ValueError, match='ablation source changed'):
-            a.validate_sources(request)
+        a.validate_sources(request)
+
+    catalog.unlink()
+    with a.request_context(request_path), pytest.raises(ValueError, match='ablation source missing'):
+        a.validate_sources(request)
 
 
-def test_stale_request_hash_fails_closed(portable_ablation, monkeypatch):
-    """Verify that a modified request file fails validation."""
+def test_a_modified_request_is_still_published(portable_ablation, monkeypatch):
+    """The report's recorded request digest is never re-derived and compared."""
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'dashboard'))
     module = importlib.import_module('decision_reports')
 
@@ -369,11 +373,12 @@ def test_stale_request_hash_fails_closed(portable_ablation, monkeypatch):
     report_path = portable_ablation['report_path']
     result = module._controlled_report(report_path)
 
-    assert result['status'].startswith('invalid or stale')
+    assert result['status'] == 'verified frozen-checkpoint intervention'
+    assert result['rows']
 
 
-def test_stale_result_hash_fails_closed(portable_ablation, monkeypatch):
-    """Verify that a modified result file fails validation."""
+def test_a_modified_result_is_still_published(portable_ablation, monkeypatch):
+    """The report's recorded result digest is never re-derived and compared."""
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'dashboard'))
     module = importlib.import_module('decision_reports')
 
@@ -386,7 +391,8 @@ def test_stale_result_hash_fails_closed(portable_ablation, monkeypatch):
     report_path = portable_ablation['report_path']
     result = module._controlled_report(report_path)
 
-    assert result['status'].startswith('invalid or stale')
+    assert result['status'] == 'verified frozen-checkpoint intervention'
+    assert result['rows']
 
 
 def test_threshold_binding_mismatch_fails_closed(portable_ablation, monkeypatch):
@@ -396,12 +402,12 @@ def test_threshold_binding_mismatch_fails_closed(portable_ablation, monkeypatch)
 
     report_path = portable_ablation['report_path']
     report = json.loads(report_path.read_text())
-    report['threshold_binding']['checkpoint_sha256'] = 'wrong_hash'
+    report['threshold_binding']['checkpoint_size'] = 'wrong_hash'
     _write_json(report_path, report)
 
     result = module._controlled_report(report_path)
 
-    assert result['status'].startswith('invalid or stale')
+    assert result['status'].startswith('invalid controlled ablation')
 
 
 def test_report_without_portable_setup_fails_in_clean_clone(portable_ablation, monkeypatch):

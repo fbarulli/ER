@@ -305,62 +305,6 @@ def data_cfg() -> DataConfig:
     return _DATA_CFG
 
 
-def _byte_identical_to_staged(staged_name: str) -> bool:
-    """True when the mounted export is byte-identical to a staged cohort CSV.
-
-    Cheap: size compare first, sha256 only on a size match. A tree without
-    the staged file (e.g. a fresh clone) or the export is never a match.
-    """
-    if not DATA_PATH.is_file():
-        return False
-    from core.manifest import sha256_file
-
-    staged = DATA_PATH.with_name(staged_name)
-    return bool(
-        staged.is_file()
-        and staged.stat().st_size == DATA_PATH.stat().st_size
-        and sha256_file(DATA_PATH) == sha256_file(staged)
-    )
-
-
-def dataset_is_partial_cohort() -> bool:
-    """True when the mounted raw export is the 50%-cohort accommodation.
-
-    Owner directive 2026-10-06: live-data oracles are validated on the FULL
-    dataset only ("only the full dataset should be tested"). dataset_50pct.csv
-    is the partial cohort's staged export; when dataset.csv is byte-identical
-    to it, cohort-specific live-data expectations (measured on a different
-    universe) SKIP instead of failing. Derived from the ONE cohort detector
-    (mounted_cohort) so the two answers can never diverge.
-    """
-    return mounted_cohort() == "50pct"
-
-
-_COHORT_EXPORTS: tuple[tuple[str, str], ...] = (
-    ("dataset_50pct.csv", "50pct"),
-    ("dataset_10k.csv", "10k"),
-)
-
-
-def mounted_cohort() -> str:
-    """Cohort tag of the mounted raw export ('50pct', '10k', or 'full').
-
-    The balanced-augmentation vendor quota is cohort-scoped
-    (training.yaml masking.balanced_augmentation.cohort_counts): a
-    dataset.csv that is a byte-identical copy of a staged cohort export must
-    train under that cohort's counts even when no lane set ER_COHORT_TAG,
-    else the exact-equality coverage validator refuses a thin cross-vendor
-    pool (10k cohort: 287 mined < the full-dataset quota 300). One identity
-    here keeps every lane (local prep, colab bundle, kaggle) and the
-    training child run on the same tag. Cheap: size compare first, sha only
-    on a size match;     without a staged cohort file the export is full.
-    """
-    for filename, tag in _COHORT_EXPORTS:
-        if _byte_identical_to_staged(filename):
-            return tag
-    return "full"
-
-
 def category_macros() -> dict[str, str]:
     """SSOT accessor for the category -> macro bucket taxonomy
     (config/paths.yaml category_macros:).
@@ -1321,7 +1265,7 @@ def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
     `load_dataset`, never a hardcoded path. Columns are canonicalized
     project-wide via COLUMN_MAPPING (config/paths.yaml). Optional ``columns``
     uses canonical names and projects at CSV parsing time; the complete source
-    row-count and hash checks still run. Pandas missing-value semantics remain
+    row-count and size checks still run. Pandas missing-value semantics remain
     the same as the full loader.
     """
     # Imported HERE, not as a module global: COLUMN_MAPPING is reachable as

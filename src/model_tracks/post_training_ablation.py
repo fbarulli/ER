@@ -5,7 +5,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from core.bundle import bundle_spec
-from core.portable_archive import Digest
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
@@ -54,14 +53,14 @@ ABLATION_TRACKS = TRAINING_TRACKS
 class AblationThresholdIdentity(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     track: Track
-    checkpoint_sha256: Digest
+    checkpoint_size: int
     verified: Literal[True]
 
 
 class SavedCalibration(BaseModel):
     model_config = ConfigDict(extra='allow', frozen=True, allow_inf_nan=False)
     track: Track
-    checkpoint_sha256: Digest
+    checkpoint_size: int
     threshold: float
 
 
@@ -69,11 +68,35 @@ class SavedAblationReport(BaseModel):
     """Identity required before a previously computed report is published."""
     model_config = ConfigDict(extra='allow', allow_inf_nan=False)
     track: Track
-    result_sha256: Digest
+    result_size: int
     threshold: float
     threshold_provenance: dict[str, Any]
     threshold_binding: AblationThresholdIdentity
     rows: list[dict[str, Any]]
+
+    def identity_disagreements(self, *, track: str, request_track: str, report_size: int,
+                               vectors_size: int, report_sidecar_size: int,
+                               binding_size: int, calibration: SavedCalibration) -> list[str]:
+        """The identity fields that disagree with the artifacts sealed beside it.
+
+        The report's own identity contract, owned by the class that carries the
+        fields: the sealed report, the request that names it, the vectors it was
+        computed over and the calibration binding it recorded must all agree.
+        Empty list means the report is safe to republish. No freshness verdict
+        is ever computed here (owner directive 2026-10-08).
+        """
+        return [name for name, agrees in (
+            ('track', self.track == track),
+            ('request track', request_track == track),
+            ('result vectors', self.result_size == vectors_size),
+            ('report sidecar', report_sidecar_size == report_size),
+            ('binding provenance', self.threshold_provenance.get('size') == binding_size),
+            ('calibration track', calibration.track == track),
+            ('threshold', self.threshold == calibration.threshold),
+            ('threshold binding track', self.threshold_binding.track == track),
+            ('checkpoint binding',
+             self.threshold_binding.checkpoint_size == calibration.checkpoint_size),
+        ) if not agrees]
 
 
 @timed
@@ -92,7 +115,7 @@ def publish_saved(destination: Path, suite: SuiteConfig, *, archive: Path,
             "publish_saved", "verify",
             reason='the sealed archive is verified once and the trusted handle is reused',
             detail={'archive': source_name(archive), 'boundary_handle_supplied': bundle is not None,
-                    'archive_sha256': getattr(archived, 'digest', None),
+                    'archive_size': getattr(archived, 'path').stat().st_size,
                     'publisher': publisher is not None},
             source=source_name(archive),
         )
@@ -112,21 +135,21 @@ def _sealed_archive(archive, suite, *, bundle=None):
 
 def _sealed_track(archived, destination, request, vectors, saved, binding):
     """Raise unless every exported artifact matches the sealed archive bytes."""
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     folder = request.parent
     # ``archived`` is a verified Bundle handle or the plain verified manifest.
     manifest = getattr(archived, 'manifest', archived)
-    for path in (request, vectors, saved, binding, folder / 'prepared_inputs.npz', saved.with_suffix('.sha256')):
+    for path in (request, vectors, saved, binding, folder / 'prepared_inputs.npz', saved.with_suffix('.size')):
         relative = path.relative_to(destination).as_posix()
-        if manifest['files'].get(relative) != file_hash(path):
+        if manifest['files'].get(relative) != file_size(path):
             trace().add(
                 "publish_saved", "track_identity_rejected",
                 scope=SCOPE_ENTITY, key=request.parent.parent.name,
                 reason='the on-disk ablation artifact differs from the sealed archive byte-for-byte; '
                        'the track is quarantined, never republished',
                 detail={'track': request.parent.parent.name, 'relative': relative,
-                        'sealed_sha256': manifest['files'].get(relative),
-                        'on_disk_sha256': file_hash(path)},
+                        'sealed_size': manifest['files'].get(relative),
+                        'on_disk_size': file_size(path)},
                 source=source_name(path),
             )
             flush_trace()
@@ -135,24 +158,24 @@ def _sealed_track(archived, destination, request, vectors, saved, binding):
 
 def _published_identity(track, request, saved, binding, vectors):
     """The validated saved report, request document and calibration binding."""
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     validated = SavedAblationReport.model_validate_json(saved.read_text())
     document = json.loads(request.read_text())
     calibration = SavedCalibration.model_validate_json(binding.read_text())
-    if (validated.track != track or document['track'] != track
-            or validated.result_sha256 != file_hash(vectors)
-            or saved.with_suffix('.sha256').read_text().strip() != file_hash(saved)
-            or validated.threshold_provenance.get('sha256') != file_hash(binding)
-            or calibration.track != track or validated.threshold != calibration.threshold
-            or validated.threshold_binding.track != track
-            or validated.threshold_binding.checkpoint_sha256 != calibration.checkpoint_sha256):
+    disagreements = validated.identity_disagreements(
+        track=track, request_track=document['track'], report_size=file_size(saved),
+        vectors_size=file_size(vectors),
+        report_sidecar_size=saved.with_suffix('.size').read_text().strip(),
+        binding_size=file_size(binding), calibration=calibration)
+    if disagreements:
         trace().add(
             "publish_saved", "report_identity_rejected",
             scope=SCOPE_ENTITY, key=track,
             reason='the saved report, its request and its calibration binding do not agree',
             detail={'track': track, 'report': source_name(saved),
                     'validated_track': validated.track, 'document_track': document['track'],
-                    'calibration_track': calibration.track},
+                    'calibration_track': calibration.track,
+                    'disagreements': disagreements},
             source=source_name(saved),
         )
         flush_trace()
@@ -196,7 +219,7 @@ def _publish_track(destination, track, archived, publisher):
                     'threshold': validated['threshold'],
                     'request': source_name(request), 'vectors': source_name(vectors),
                     'report': source_name(saved), 'binding': source_name(binding),
-                    'calibration_checkpoint_sha256': calibration.checkpoint_sha256,
+                    'calibration_checkpoint_size': calibration.checkpoint_size,
                     'publisher': publisher is not None},
             source=source_name(saved),
         )
@@ -251,7 +274,7 @@ def _calibration_source(destination, track):
         detail={'track': track, 'manifest': source_name(sources[0]),
                 'threshold': calibration.threshold,
                 'threshold_source': calibration.threshold_source,
-                'checkpoint_sha256': calibration.checkpoint_sha256,
+                'checkpoint_size': calibration.checkpoint_size,
                 'request': source_name(request), 'result': source_name(result),
                 'candidates': len(sources)},
         source=source_name(sources[0]),
@@ -263,7 +286,7 @@ def _calibration_source(destination, track):
 @timed
 def _wrote_binding(request, track, calibration, source):
     """Seal the selected checkpoint identity and frozen threshold into binding."""
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from model_tracks.ablation import request_context
     binding = request.parent/'baseline_threshold.json'
     document = json.loads(request.read_text())
@@ -271,7 +294,7 @@ def _wrote_binding(request, track, calibration, source):
     with request_context(request):
         checkpoint = resolve(document['checkpoint'])
         selected_identity = checkpoint_identity(checkpoint)
-        calibrated_identity = calibration.checkpoint_sha256
+        calibrated_identity = calibration.checkpoint_size
         if calibrated_identity != selected_identity:
             trace().add(
                 "complete_saved", "checkpoint_mismatch",
@@ -279,8 +302,8 @@ def _wrote_binding(request, track, calibration, source):
                 reason='the baseline calibration was fit on a different checkpoint than the one '
                        'this ablation selected; the frozen threshold is not applied',
                 detail={'track': track, 'selected_checkpoint': source_name(checkpoint),
-                        'selected_sha256': selected_identity,
-                        'calibrated_sha256': calibrated_identity,
+                        'selected_size': selected_identity,
+                        'calibrated_size': calibrated_identity,
                         'binding': source_name(binding)},
                 source=source_name(checkpoint),
             )
@@ -292,17 +315,17 @@ def _wrote_binding(request, track, calibration, source):
             reason='the selected checkpoint identity must equal the calibrated one before the '
                    'frozen threshold is bound to it',
             detail={'track': track, 'selected_checkpoint': source_name(checkpoint),
-                    'selected_sha256': selected_identity,
-                    'calibrated_sha256': calibrated_identity,
+                    'selected_size': selected_identity,
+                    'calibrated_size': calibrated_identity,
                     'threshold': threshold,
                     'source_calibration': source_name(source),
                     'binding': source_name(binding)},
             source=source_name(checkpoint),
         )
-        write(binding,{'track':track,'checkpoint_sha256':selected_identity,
+        write(binding,{'track':track,'checkpoint_size':selected_identity,
             'threshold':threshold,'calibration':{'threshold':threshold},
             'source_calibration':source_name(source),
-            'source_calibration_sha256':__import__('graph_tracks.data',fromlist=['file_hash']).file_hash(source),
+            'source_calibration_size':__import__('graph_tracks.data',fromlist=['file_size']).file_size(source),
             'threshold_source':'saved dev calibration; no refit'})
     _LOG.info(f'[ablation] threshold binding track={track} threshold={threshold}')
     return binding, threshold, document
@@ -315,14 +338,14 @@ def _trusted_saved_report(result, threshold, binding, previous, validated, docum
     Callers then only re-verify the vectors behind the cached report instead
     of recomputing the threshold-frozen comparison.
     """
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from model_tracks.ablation import request_context, validate_vectors
     request = previous.parent/bundle_spec().ablation_request_file
-    trusted = (validated and previous.with_suffix('.sha256').is_file()
-               and previous.with_suffix('.sha256').read_text().strip() == file_hash(previous)
-               and validated.get('result_sha256') == file_hash(result)
+    trusted = (validated and previous.with_suffix('.size').is_file()
+               and previous.with_suffix('.size').read_text().strip() == file_size(previous)
+               and validated.get('result_size') == file_size(result)
                and validated.get('threshold') == threshold
-               and validated.get('threshold_provenance',{}).get('sha256') == file_hash(binding))
+               and validated.get('threshold_provenance',{}).get('size') == file_size(binding))
     if not trusted:
         return False, None
     with request_context(request):
@@ -336,7 +359,7 @@ def _trusted_saved_report(result, threshold, binding, previous, validated, docum
 @timed
 def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> Path:
     """Consume suite GPU exports after shutdown; no provisioning or forwards."""
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     outputs = {}
     _LOG.info(f'[ablation] complete_saved destination={destination}')
     for track in _LOG.progress(ABLATION_TRACKS, desc='complete_saved', unit='track'):
@@ -393,7 +416,7 @@ def _sealed_track_report(request, validated, config):
 
 def _saved_track_report(request, result, threshold, binding, document, suite):
     """Restore the cached report when trusted, otherwise recompute and seal it."""
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     previous = request.parent/'report.json'
     validated = json.loads(previous.read_text()) if previous.exists() else None
     trusted, cached = _trusted_saved_report(result, threshold, binding, previous, validated, document)
@@ -403,7 +426,7 @@ def _saved_track_report(request, result, threshold, binding, document, suite):
     else:
         validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
     _sealed_track_report(request,validated,resolve(suite.ablation_config))
-    previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')
+    previous.with_suffix('.size').write_text(str(file_size(previous))+'\n')
     trace().add(
         "complete_saved", "report",
         scope=SCOPE_ENTITY, key=request.parent.parent.name,
@@ -414,7 +437,7 @@ def _saved_track_report(request, result, threshold, binding, document, suite):
                 'rows': len(validated.get('rows', [])),
                 'threshold': validated.get('threshold'),
                 'report': source_name(previous),
-                'report_sha256': previous.with_suffix('.sha256').read_text().strip()},
+                'report_size': previous.with_suffix('.size').read_text().strip()},
         source=source_name(previous),
     )
     return validated

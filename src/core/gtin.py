@@ -1,8 +1,8 @@
 """src/core/gtin.py — GTIN/UPC structural validation (moved from src/core/cache.py).
 
-Pure, import-light (pandas only — no torch, no dataset hashing): every
+Pure, import-light (pandas only — no torch, no full-dataset read): every
 label-forming surface imports from here, never from core.cache, so adding
-validation to a script never drags the 53MB dataset sha256.
+validation to a script never drags the 53MB raw export in.
 
 Why this module exists (owner ruling, this session): 1,747 of 14,997
 distinct gtins (3,715 rows) FAIL the GS1 check digit — retailer-export

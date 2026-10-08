@@ -88,7 +88,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
                       for track in ('gnn_only', 'cascade')}
     text_settings = load_text_config(setup/layout.text_config).model_dump()
     from core.common import SEED, training_cfg
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from graph_tracks.prepare import prepare
     from graph_tracks.train import write_json
     from training.folds import normalize_gtin
@@ -227,11 +227,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         holdout_populations={s:sorted(values) for s,values in zip(('train','dev','test'),populations)})
     manifest=dict(parent_manifest)
     manifest.update(smoke=True,source_listing_count=sample,
-                    parent_setup_sha256=file_hash(setup/layout.manifest),
+                    parent_setup_size=file_size(setup/layout.manifest),
                     text_checkpoint=_portable_path(checkpoint, train_root=train_root))
     write_json(output/layout.manifest,manifest)
-    from graph_tracks.text_cache import checkpoint_hash
-    if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
+    from graph_tracks.text_cache import checkpoint_size
+    if checkpoint_size(checkpoint) != manifest['text_checkpoint_size']:
         raise ValueError('smoke baseline differs from the parent checkpoint')
     # Bind the CPU cache to the same prepared-token request used by the suite.
     from core.common import runtime

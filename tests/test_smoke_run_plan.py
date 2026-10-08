@@ -9,12 +9,12 @@ from training.sampler import FrozenBatchSampler
 @pytest.fixture
 def saved_plan(monkeypatch):
     identity = dict(loss='mnrl', train_frac=1., sample=True, seed=1729,
-                    data_sha256='same-data')
+                    data_size='same-data')
     monkeypatch.setattr(run_plan, 'plan_identity', lambda *args, **kwargs: dict(identity, **{
         key: kwargs[key] for key in ('loss', 'train_frac', 'sample', 'seed')}))
     # A frozen plan built before the whole-config hash was retired still
-    # carries a legacy `config_sha256`; the run-plan path must ignore it.
-    return dict(version=1, identity=dict(identity, config_sha256='old-config'),
+    # carries a legacy `config_size`; the run-plan path must ignore it.
+    return dict(version=1, identity=dict(identity, config_size='old-config'),
                 inputs=dict(skipped=[], folds=[{}]))
 
 
@@ -43,11 +43,11 @@ def _valid_collapse_config():
 
 
 def test_plan_identity_drops_whole_config_hash(monkeypatch):
-    monkeypatch.setattr(run_plan, 'data_digest', lambda bundle: 'same-data')
+    monkeypatch.setattr(run_plan, 'data_size', lambda bundle: 4242)
     identity = run_plan.plan_identity({}, loss='mnrl', train_frac=1., sample=False)
-    assert 'config_sha256' not in identity
+    assert 'config_size' not in identity
     assert identity == {'loss': 'mnrl', 'train_frac': 1.0, 'sample': False,
-                        'seed': run_plan.SEED, 'data_sha256': 'same-data'}
+                        'seed': run_plan.SEED, 'data_size': 4242}
 
 
 def test_frozen_inputs_materialize_from_the_bundle_members(tmp_path, monkeypatch):
@@ -105,12 +105,12 @@ def test_full_training_accepts_unrelated_config_drift(saved_plan):
 
 def test_full_training_still_rejects_data_drift(saved_plan):
     saved_plan['identity']['sample'] = False
-    saved_plan['identity']['data_sha256'] = 'other-data'
+    saved_plan['identity']['data_size'] = 'other-data'
     with pytest.raises(ValueError, match='row plan differs'):
         validate(saved_plan, sample=False)
 
 
-@pytest.mark.parametrize('field,value', [('data_sha256', 'other-data'),
+@pytest.mark.parametrize('field,value', [('data_size', 'other-data'),
                                        ('loss', 'contrastive'), ('seed', 42),
                                        ('train_frac', .5), ('sample', False)])
 def test_smoke_rejects_incompatible_plan(saved_plan, field, value):
@@ -136,7 +136,7 @@ def test_collapse_regulation_gate_is_pure_and_cheap(monkeypatch):
     def _boom(*args, **kwargs):
         raise AssertionError(
             'the collapse gate must not derive data or reload the config')
-    monkeypatch.setattr(run_plan, 'data_digest', _boom)
+    monkeypatch.setattr(run_plan, 'data_size', _boom)
     monkeypatch.setattr(run_plan, 'load_config', _boom)
     config = _valid_collapse_config()
     assert run_plan.validate_collapse_regulation(config) is config

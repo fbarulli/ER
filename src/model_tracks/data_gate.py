@@ -12,9 +12,9 @@ invariants are not data enforcement and stay where they are — gradient flow,
 optimizer progress, per-fold presentation coverage, resumable checkpoint state
 and checkpoint selection can only be observed while training runs.
 
-An attestation is a digest over the suite configuration and every input byte
+An attestation is a size total over the suite configuration and every input
 this gate verified. A worker recomputes it and, on a match, treats the gate as
-proof for its own bytes. A standalone worker launch, a different configuration,
+proof for its own inputs. A standalone worker launch, a different configuration,
 or a single changed byte all leave enforcement active.
 
 Every path and knob comes from the validated configuration models. Nothing
@@ -24,10 +24,11 @@ absent fails loudly.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
+import traceback
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,7 +44,7 @@ ATTESTATION_ENV = 'ER_DATA_GATE'
 #: Ignores attestation trust entirely; every check stays live.
 FORCE_ENV = 'ER_DATA_GATE_ENFORCE'
 #: Suite configuration the attestation was computed over. Workers receive it so
-#: a spawned trainer can recompute the same digest without extra arguments.
+#: a spawned trainer can recompute the same total without extra arguments.
 CONFIG_ENV = 'ER_DATA_GATE_CONFIG'
 
 
@@ -69,7 +70,7 @@ class DataGateResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
     suite: dict
     tracks: dict[str, TrackInputCensus]
-    attestation: str = Field(min_length=64, max_length=64)
+    attestation: int = Field(ge=0)
 
 
 def _resolve(config: Path) -> Path:
@@ -106,31 +107,31 @@ def _repo_relative(path: Path) -> str:
     return path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
 
 
-def _required(path: Path, owner: str) -> str:
-    """Digest a declared input; its absence is a failure, never a skip."""
-    from core.portable_archive import cached_file_digest
+def _required(path: Path, owner: str) -> int:
+    """Account for a declared input; its absence is a failure, never a skip."""
+    from core.portable_archive import file_size
     if not path.is_file():
         raise FileNotFoundError(f'data gate input missing: {owner} -> {_repo_relative(path)}')
-    return cached_file_digest(path)
+    return file_size(path)
 
 
-def _suite_digest(config: Path) -> str:
-    """Digest the suite configuration that decides how inputs are trained."""
+def _suite_size(config: Path) -> int:
+    """Account for the suite configuration that decides how inputs are trained."""
     cfg = load_config(config)
-    digest = hashlib.sha256()
-    digest.update(json.dumps(cfg.model_dump(mode='json'), sort_keys=True,
-                             separators=(',', ':')).encode())
-    digest.update(b'\0')
-    digest.update(str(config).encode())
-    return digest.hexdigest()
+    count = ByteCount()
+    count.update(json.dumps(cfg.model_dump(mode='json'), sort_keys=True,
+                            separators=(',', ':')).encode())
+    count.update(b'\0')
+    count.update(str(config).encode())
+    return count.total
 
 
 @timed
-def input_digests(config: Path) -> dict[str, str]:
-    """Digest every prepared input the gate verifies, keyed by owner.
+def input_sizes(config: Path) -> dict[str, int]:
+    """Account for every prepared input the gate verifies, keyed by owner.
 
-    Binding the attestation to these bytes is what lets a worker skip the
-    repeated re-verification: a changed input changes its digest and leaves
+    Binding the attestation to these sizes is what lets a worker skip the
+    repeated re-verification: a changed input changes its size and leaves
     enforcement active.
     """
     from core.common import TRAIN_ROOT, F
@@ -139,7 +140,7 @@ def input_digests(config: Path) -> dict[str, str]:
     layout = _setup_layout()
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     bundle = (TRAIN_ROOT / cfg.text_bundle).resolve()
-    digests: dict[str, str] = {}
+    sizes: dict[str, int] = {}
     # Inputs the suite gate reads directly. All are mandatory for this suite.
     # Every setup-tree name is the declared layout (training.preparation.
     # graph_setup), never re-spelled here.
@@ -157,12 +158,12 @@ def input_digests(config: Path) -> dict[str, str]:
                         # frozen embedding cache, so they are always gate inputs.
                         ('embedding_inputs', setup / layout.embedding_request),
                         ('prepared_text', setup / 'prepared_text.npz')):
-        digests[owner] = _required(path, owner)
+        sizes[owner] = _required(path, owner)
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
-        digests[key] = _required(Path(F[key]).resolve(), key)
+        sizes[key] = _required(Path(F[key]).resolve(), key)
     for track in ('gnn_only', 'cascade'):
         track_config = setup / layout.track_config(track)
-        digests[f'{track}_config'] = _required(track_config, f'{track} config')
+        sizes[f'{track}_config'] = _required(track_config, f'{track} config')
         settings = load_graph_config(track_config, expected_track=track)
         # These four are the graph model's own declared inputs; the schema says
         # which are optional for this track, so the configuration decides.
@@ -178,35 +179,51 @@ def input_digests(config: Path) -> dict[str, str]:
             # tolerates a not-yet-produced cache (owner directive 2026-10-08 —
             # the only tolerated absence was a freshness allowance, and it is
             # gone; the producer runs before the gate).
-            digests[owner] = _required(path, owner)
-    return digests
+            sizes[owner] = _required(path, owner)
+    return sizes
 
 
 @timed
-def attestation(config: Path) -> str:
-    """The digest a worker must match to treat the gate as proof."""
+def attestation(config: Path) -> int:
+    """The size total a worker must match to treat the gate as proof."""
     config = _resolve(config)
-    digest = hashlib.sha256()
-    digest.update(_suite_digest(config).encode())
-    for owner, value in sorted(input_digests(config).items()):
-        digest.update(b'\0')
-        digest.update(owner.encode())
-        digest.update(b'\0')
-        digest.update(value.encode())
-    return digest.hexdigest()
+    count = ByteCount()
+    count.update(str(_suite_size(config)).encode())
+    for owner, value in sorted(input_sizes(config).items()):
+        count.update(b'\0')
+        count.update(owner.encode())
+        count.update(b'\0')
+        count.update(str(value).encode())
+    return count.total
 
 
 #: Per-process memo of `enforced` verdicts, keyed by resolved config.
 #: A worker asks the same question several times (gate, preflight, trainer);
-#: replaying `attestation` for each is redundant re-hashing of the same bytes.
+#: replaying `attestation` for each is redundant re-counting of the same bytes.
 _enforced: dict | None = None
+
+
+def _must_enforce(expected: str, resolved: Path) -> bool:
+    """Whether an expected attestation fails to match this process's inputs.
+
+    A supervisor publishes the total as text in the environment; an unreadable
+    value is not proof, so it degrades to full enforcement with the traceback
+    recorded rather than crashing the worker.
+    """
+    try:
+        token = int(expected)
+    except ValueError:
+        _LOG.warning('[data-gate] unreadable attestation in ' + ATTESTATION_ENV
+                     + '; re-verifying every input\n' + traceback.format_exc())
+        return True
+    return token != attestation(resolved)
 
 
 def enforced(config: Path) -> bool:
     """Whether this process must run the data tests itself.
 
     False only inside a suite whose supervisor already ran the gate over exactly
-    these configuration and input bytes.
+    these configuration and input sizes.
     """
     if os.environ.get(FORCE_ENV) == '1':
         return True
@@ -221,10 +238,10 @@ def enforced(config: Path) -> bool:
         key = str(resolved)
         verdict = _enforced.get(key)
         if verdict is None:
-            verdict = expected != attestation(resolved)
+            verdict = _must_enforce(expected, resolved)
             _enforced[key] = verdict
         return verdict
-    return expected != attestation(resolved)
+    return _must_enforce(expected, resolved)
 
 
 def trusted(config: Path, owner: str) -> bool:
@@ -300,7 +317,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--attestation-only', action='store_true',
-                        help='print this configuration/input digest and exit')
+                        help='print this configuration/input size total and exit')
     args = parser.parse_args()
     if args.attestation_only:
         print(attestation(args.config))

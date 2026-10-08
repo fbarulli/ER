@@ -63,9 +63,9 @@ def _render_finetune_script() -> str:
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",
-        # The ONE whole-file digest helper, injected by the same staging
+        # The ONE structural size helper, injected by the same staging
         # helper the kernel stager uses (never hand-copied: it cannot drift).
-        "SHA256_OF": laya_lane._sha256_of_source(),
+        "SIZE_OF": laya_lane._file_bytes_of_source(),
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
         "SESSION_REPORT": laya_lane._session_report_helper(),

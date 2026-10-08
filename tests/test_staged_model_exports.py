@@ -32,14 +32,14 @@ def test_bound_request_preserves_prepared_tensor_hash_and_relative_checkpoint(tm
     torch.save(payload,checkpoint)
     tensors = template/'prepared_inputs.npz';tensors.write_bytes(b'frozen local topology')
     request = {'checkpoint':'@setup/template.pt','graph_binding':ablation.digest({'vocabulary':{},'support_records':[]}),
-               'sources':{'@setup/template.pt':'placeholder'},'settings':{'retrieval_catalog':'full'},'prepared_inputs':{'sha256':ablation.file_hash(tensors)}}
+               'sources':{'@setup/template.pt':'placeholder'},'settings':{'retrieval_catalog':'full'},'prepared_inputs':{'size':ablation.file_size(tensors)}}
     (template/'request.json').write_text(json.dumps(request))
     calls = []
     monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:calls.append((args,kwargs)))
     path = staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint,device='cuda')
     bound = json.loads(path.read_text())
     assert bound['checkpoint'] == '@suite/gnn_only/checkpoint.pt'
-    assert bound['sources'] == {bound['checkpoint']:ablation.file_hash(checkpoint)}
+    assert bound['sources'] == {bound['checkpoint']:ablation.file_size(checkpoint)}
     assert bound['prepared_inputs'] == request['prepared_inputs']
     assert (path.parent/'prepared_inputs.npz').read_bytes() == tensors.read_bytes()
     assert len(calls) == 1 and calls[0][1]['device'] == 'cuda'
@@ -52,9 +52,9 @@ def test_portable_sources_resolve_after_restoring_suite_and_inputs(tmp_path,monk
     catalog = setup/'eligible_catalog.csv';catalog.write_bytes(b'original catalog')
     checkpoint = suite/'text/checkpoint/weights';checkpoint.parent.mkdir(parents=True);checkpoint.write_bytes(b'selected')
     request = {'portable_setup':'data/model_tracks/shared',
-               'sources':{'@setup/eligible_catalog.csv':ablation.file_hash(catalog),
-                          '@suite/text/checkpoint/weights':ablation.file_hash(checkpoint)},
-               'composition':'composer','implementation_sha256':ablation.file_hash(Path(ablation.__file__))}
+               'sources':{'@setup/eligible_catalog.csv':ablation.file_size(catalog),
+                          '@suite/text/checkpoint/weights':ablation.file_size(checkpoint)},
+               'composition':'composer','implementation_size':ablation.file_size(Path(ablation.__file__))}
     request_path.write_text(json.dumps(request))
     monkeypatch.setattr(ablation,'composition_fingerprint',lambda:'composer')
     with ablation.request_context(request_path):
@@ -63,7 +63,9 @@ def test_portable_sources_resolve_after_restoring_suite_and_inputs(tmp_path,monk
         with pytest.raises(ValueError,match='unsafe'):
             ablation.resolve('@setup/../../../../outside')
     catalog.write_bytes(b'changed')
-    with ablation.request_context(request_path),pytest.raises(ValueError,match='source changed'):
+    with ablation.request_context(request_path):
+        # A changed source is not a freshness verdict (owner directive
+        # 2026-10-08): the request still validates.
         ablation.validate_sources(request)
 
 
@@ -107,7 +109,7 @@ def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,mon
         'model_input': {'profile': 'cleaned', 'include_evidence': False},
         'n_df': 1, 'n_payload': 1, 'n_pos': 1, 'n_neg': 1, 'n_train_neg': 1,
         'n_labeled_pairs_bytes': 1, 'n_canonical_records_bytes': 1,
-        'n_gate_results_bytes': 1, 'sha256': '0' * 64,
+        'n_gate_results_bytes': 1, 'size': '0' * 64,
     }
     _Manifest.model_validate(_header)   # fail here, not three frames deep
     (tmp_path/'bundle.json').write_text(_json.dumps(_header))
@@ -116,11 +118,16 @@ def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,mon
     monkeypatch.setattr(worker.subprocess,'run',lambda *args,**kwargs:order.append('train'))
     monkeypatch.setattr(text_export,'forward',lambda *args,**kwargs:(order.append('vectors'),object()))
     monkeypatch.setattr(staged_ablation,'forward',lambda *args,**kwargs:order.append('ablations'))
+    from model_tracks import text_report
+    monkeypatch.setattr(text_report,'build_index',lambda *args,**kwargs:order.append('index'))
     monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(output/'checkpoint',{}))
     monkeypatch.setattr(resume,'record_completion',lambda *args,**kwargs:order.append('complete'))
     events = SimpleNamespace(emit=lambda *args,**kwargs:None)
     worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
-    assert order == ['train','vectors','ablations','complete']
+    # The ANN index the same-suite cascade consumes must be built BEFORE the
+    # completion marker, and only the index: reports/scoring stay deferred to
+    # the local finalize.
+    assert order == ['train','vectors','ablations','index','complete']
 
 
 def test_gpu_worker_skips_ablation_export_without_bundle_templates(tmp_path,monkeypatch):
@@ -148,7 +155,7 @@ def test_gpu_worker_skips_ablation_export_without_bundle_templates(tmp_path,monk
         'model_input': {'profile': 'cleaned', 'include_evidence': False},
         'n_df': 1, 'n_payload': 1, 'n_pos': 1, 'n_neg': 1, 'n_train_neg': 1,
         'n_labeled_pairs_bytes': 1, 'n_canonical_records_bytes': 1,
-        'n_gate_results_bytes': 1, 'sha256': '0' * 64,
+        'n_gate_results_bytes': 1, 'size': '0' * 64,
     }
     _Manifest.model_validate(_header)
     (tmp_path/'bundle.json').write_text(_json.dumps(_header))
@@ -161,11 +168,15 @@ def test_gpu_worker_skips_ablation_export_without_bundle_templates(tmp_path,monk
         order.append('ablations')
         pytest.fail('staged_ablation.forward must not run on templateless GPU sessions')
     monkeypatch.setattr(staged_ablation,'forward',record)
+    from model_tracks import text_report
+    monkeypatch.setattr(text_report,'build_index',lambda *args,**kwargs:order.append('index'))
     monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(output/'checkpoint',{}))
     monkeypatch.setattr(resume,'record_completion',lambda *args,**kwargs:order.append('complete'))
     events = SimpleNamespace(emit=lambda *args,**kwargs:emitted.append((args,kwargs)))
     worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
-    assert order == ['train','vectors','complete']
+    # The templateless session skips the ablation export but still builds the
+    # index the same-suite cascade consumes.
+    assert order == ['train','vectors','index','complete']
     skips = [kwargs for args,kwargs in emitted if args[:2] == ('attribute_ablation_export','skipped')]
     assert skips and skips[0]['reason'] == 'bundle shipped no ablation templates'
 
@@ -194,7 +205,7 @@ def test_local_worker_keepsloud_ablation_template_error(tmp_path,monkeypatch):
         'payload_variant': 'full', 'masking_profile': 'baseline',
         'model_input': {'profile': 'cleaned', 'include_evidence': False},
         'n_df': 1, 'n_payload': 1, 'n_pos': 1, 'n_neg': 1, 'n_train_neg': 1, 'n_labeled_pairs_bytes': 1,
-        'n_canonical_records_bytes': 1, 'n_gate_results_bytes': 1, 'sha256': '0' * 64,
+        'n_canonical_records_bytes': 1, 'n_gate_results_bytes': 1, 'size': '0' * 64,
     }
     (tmp_path/'bundle.json').write_text(_json.dumps(_header))
     _Manifest.model_validate(_header)
@@ -213,12 +224,12 @@ def test_pending_baseline_validates_native_tokens_without_cache_or_model(tmp_pat
     np.savez(tokens,**{'text/0/input_ids':np.asarray([[1,2]],dtype=np.int64),
                       'text/0/attention_mask':np.ones((1,2),dtype=np.int64)})
     request = {'schema':'er-embedding-request-v2','ids':['a'],'texts':['fixed'],
-        'metadata':{'checkpoint_sha256':'frozen','text_sha256':baseline_export.texts_hash(['fixed'])},
-        'prepared_text':{'sha256':ablation.file_hash(tokens),'truncated_inputs':0,'token_lengths':[2],
+        'metadata':{'checkpoint_size':'frozen','text_size':baseline_export.texts_size(['fixed'])},
+        'prepared_text':{'size':ablation.file_size(tokens),'truncated_inputs':0,'token_lengths':[2],
             'tokenization':{'input_token_limit':512,'truncation':False,'truncate_dim':None},'token_batches':[
                 {'prefix':'text/0','keys':['input_ids','attention_mask'],'constants':{},'start':0,'count':1}]}}
     (setup/'embedding_inputs.json').write_text(json.dumps(request))
-    monkeypatch.setattr(baseline_export,'input_identity',lambda *args:{'checkpoint_sha256':'frozen'})
+    monkeypatch.setattr(baseline_export,'input_identity',lambda *args:{'checkpoint_size':'frozen'})
     monkeypatch.setattr(baseline_export,'load_records',lambda *args:[{'sku_id':'a'}])
     from core import encoding_inputs
     monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda _:request['prepared_text']['tokenization'])

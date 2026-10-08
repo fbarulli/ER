@@ -1,5 +1,5 @@
 """Frozen baseline ablation before training, with saved-vector CPU reporting."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 from typing import Literal
@@ -10,7 +10,7 @@ from core.bundle import bundle_spec
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.tracing import flush_stage_trace, stage_trace
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import file_size, load_records, load_text_cache
 from graph_tracks.report import dev_threshold
 from graph_tracks.train import load_pairs
 from model_tracks.ablation import checkpoint_identity, report, request_context, resolve, source_name, write
@@ -50,10 +50,10 @@ class BaselineCalibration(BaseModel):
     model_config = ConfigDict(frozen=True, extra='forbid', allow_inf_nan=False)
     track: Literal['text'] = 'text'
     checkpoint_role: Literal['baseline'] = 'baseline'
-    checkpoint_sha256: str
-    vectors_sha256: str
-    listings_sha256: str
-    pairs_sha256: str
+    checkpoint_size: int = Field(ge=0)
+    vectors_size: int = Field(ge=0)
+    listings_size: int = Field(ge=0)
+    pairs_size: int = Field(ge=0)
     threshold: float
     threshold_source: Literal['dev_youden'] = 'dev_youden'
     calibration_split: Literal['dev'] = 'dev'
@@ -108,36 +108,36 @@ def _dev_scores(pairs_path, records, vectors):
 
 
 @timed
-def _calibrated_calibration(checkpoint_sha256, vectors_path, metadata, records_path, pairs_path, labels, scores):
+def _calibrated_calibration(checkpoint_size, vectors_path, metadata, records_path, pairs_path, labels, scores):
     """The BaselineCalibration for the untrained checkpoint, or identity raise."""
     with _LOG.section('ablation.baseline.calibrate'):
-        if metadata.get('checkpoint_sha256') != checkpoint_sha256:
+        if metadata.get('checkpoint_size') != checkpoint_size:
             from core.tracing import SCOPE_ENTITY
             trace().add(
                 "complete", "calibration_rejected",
                 scope=SCOPE_ENTITY, key='text',
                 reason='baseline calibration vectors differ from the frozen checkpoint; '
                        'the baseline is quarantined rather than refit',
-                detail={'vectors_checkpoint_sha256': metadata.get('checkpoint_sha256'),
-                        'frozen_checkpoint_sha256': checkpoint_sha256,
+                detail={'vectors_checkpoint_size': metadata.get('checkpoint_size'),
+                        'frozen_checkpoint_size': checkpoint_size,
                         'vectors': source_name(vectors_path)},
                 source=source_name(vectors_path),
             )
             flush_trace()
             raise ValueError('baseline calibration vectors differ from frozen checkpoint')
-        calibration = BaselineCalibration(checkpoint_sha256=checkpoint_sha256,
-            vectors_sha256=file_hash(vectors_path), listings_sha256=file_hash(records_path),
-            pairs_sha256=file_hash(pairs_path), threshold=dev_threshold(labels, scores),
+        calibration = BaselineCalibration(checkpoint_size=checkpoint_size,
+            vectors_size=file_size(vectors_path), listings_size=file_size(records_path),
+            pairs_size=file_size(pairs_path), threshold=dev_threshold(labels, scores),
             dev_pairs=len(labels), dev_positives=int(labels.sum()),
             dev_negatives=int((labels == 0).sum()))
     trace().add(
         "complete", "calibration",
         in_count=int(len(labels)), out_count=1, key='text',
         reason='the untrained baseline threshold is fit on the dev split and never on test',
-        detail={'checkpoint_sha256': checkpoint_sha256,
-                'vectors_sha256': calibration.vectors_sha256,
-                'listings_sha256': calibration.listings_sha256,
-                'pairs_sha256': calibration.pairs_sha256,
+        detail={'checkpoint_size': checkpoint_size,
+                'vectors_size': calibration.vectors_size,
+                'listings_size': calibration.listings_size,
+                'pairs_size': calibration.pairs_size,
                 'threshold': calibration.threshold,
                 'dev_pairs': calibration.dev_pairs,
                 'dev_positives': calibration.dev_positives,
@@ -195,7 +195,7 @@ def _frozen_calibration(request_path, calibration):
             in_count=1, out_count=1, key='text',
             reason='the untrained baseline checkpoint identity and frozen threshold are sealed together',
             detail={'binding': source_name(binding),
-                    'checkpoint_sha256': calibration.checkpoint_sha256,
+                    'checkpoint_size': calibration.checkpoint_size,
                     'threshold': calibration.threshold,
                     'pre_existed': binding.exists()},
             source=source_name(binding),
@@ -217,14 +217,14 @@ def _persist_baseline(request_path, result):
                               indent=2, allow_nan=False) + '\n').encode('utf-8')
         path.write_bytes(payload)
         # Hash the bytes we just wrote instead of reading 7 MB back off disk.
-        digest = hashlib.sha256(payload).hexdigest()
-        (request_path.parent/'report.sha256').write_text(digest+'\n')
+        digest = ByteCount(payload).total
+        (request_path.parent/'report.size').write_text(str(digest)+'\n')
         trace().add(
             "complete", "persisted",
             in_count=None, out_count=2, key='text',
-            reason='the baseline report and its sha256 sidecar are written beside the request',
-            detail={'report': source_name(path), 'report_sha256': digest,
-                    'sidecar': source_name(request_path.parent/'report.sha256'),
+            reason='the baseline report and its size sidecar are written beside the request',
+            detail={'report': source_name(path), 'report_size': digest,
+                    'sidecar': source_name(request_path.parent/'report.size'),
                     'rows': len(result['rows']), 'threshold': result['threshold']},
             source=source_name(path),
         )
@@ -261,8 +261,8 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
         )
     with _LOG.section('ablation.baseline.calibration'):
         with request_context(request_path):
-            checkpoint_sha256 = checkpoint_identity(resolve(request['checkpoint']))
-            calibration = _calibrated_calibration(checkpoint_sha256, vectors_path, metadata,
+            checkpoint_size = checkpoint_identity(resolve(request['checkpoint']))
+            calibration = _calibrated_calibration(checkpoint_size, vectors_path, metadata,
                                                   records_path, pairs_path, labels, scores)
             binding = _frozen_calibration(request_path, calibration)
             result = _frozen_report(request_path, calibration, saved=binding)

@@ -3,12 +3,12 @@
 The handoff boundary (``training.handoff``) validates every training input
 once per preparation run and writes ``run_dir/handoff.json``.  This module
 turns that report into a portable attestation the trainer can verify with a
-single streaming digest instead of re-running the full validation stack:
+single structural size read instead of re-running the full validation stack:
 after the boundary, training is just training.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import time
 from datetime import datetime, timezone
@@ -20,7 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from core.timing import Timing, emit_timing
 
 SCHEMA: Final = 'er-training-attestation-v1'
-_SHA256: Final = r'^[0-9a-f]{64}$'
 
 
 class TrainingAttestation(BaseModel):
@@ -33,8 +32,8 @@ class TrainingAttestation(BaseModel):
     run_dir: str
     finished_at: str
     bundle_path: str
-    bundle_sha256: str = Field(pattern=_SHA256)
-    provenance_digest: str | None = Field(default=None, pattern=_SHA256)
+    bundle_size: int = Field(ge=0)
+    provenance_size: int | None = Field(default=None, ge=0)
     provenance_verified: str | None = None
     plan_identity: dict[str, Any] | None = None
     checks: dict[str, Any]
@@ -58,14 +57,14 @@ def record_provenance_verification(attestation: TrainingAttestation) -> str:
             provenance = payload.get("provenance") if isinstance(payload, dict) else None
             if not isinstance(provenance, dict):
                 status = "unusable_manifest_provenance"
-            elif attestation.provenance_digest is None:
-                status = "missing_digest"
+            elif attestation.provenance_size is None:
+                status = "missing_size"
             else:
                 canonical = json.dumps(
                     provenance, sort_keys=True, separators=(",", ":")
                 )
-                digest = hashlib.sha256(canonical.encode()).hexdigest()
-                status = "verified" if digest == attestation.provenance_digest else "mismatch"
+                size = ByteCount(canonical.encode()).total
+                status = "verified" if size == attestation.provenance_size else "mismatch"
     except Exception:
         status = "unreadable_manifest"
     attestation.provenance_verified = status
@@ -76,15 +75,15 @@ def record_provenance_verification(attestation: TrainingAttestation) -> str:
     return status
 
 
-def _stream_sha256(path: Path) -> str:
+def _stream_size(path: Path) -> int:
     started = time.monotonic()
-    digest = hashlib.sha256()
+    digest = ByteCount()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    emit_timing(f"[timing] training.attestation digest {path.name}: "
+    emit_timing(f"[timing] training.attestation size {path.name}: "
                 f"{time.monotonic() - started:.3f}s")
-    return digest.hexdigest()
+    return digest.total
 
 
 def _read_json(path: Path, *, what: str) -> dict[str, Any]:
@@ -110,7 +109,7 @@ def load_attestation(path: Path) -> TrainingAttestation:
     payload = _read_json(path, what="training attestation")
     attestation = _validated_attestation(payload, path)
     emit_timing(f"[timing] training.attestation loaded path={path.name} "
-                f"bundle_sha256={attestation.bundle_sha256} "
+                f"bundle_size={attestation.bundle_size} "
                 f"seconds={time.monotonic() - started:.3f}")
     return attestation
 
@@ -128,12 +127,12 @@ def verify_attestation(attestation: TrainingAttestation, *, bundle_path: Path) -
     if not path.is_file():
         raise ValueError(f"attested prepared bundle missing: {path}")
     timing = Timing("training.attestation")
-    with timing.section("bundle_sha256"):
-        digest = _stream_sha256(path)
-    if digest != attestation.bundle_sha256:
+    with timing.section("bundle_size"):
+        digest = _stream_size(path)
+    if digest != attestation.bundle_size:
         raise ValueError(
-            f"attested bundle sha256 mismatch for {path}: "
-            f"computed {digest} != attested {attestation.bundle_sha256}"
+            f"attested bundle size mismatch for {path}: "
+            f"computed {digest} != attested {attestation.bundle_size}"
         )
 
 
@@ -181,15 +180,15 @@ def _handoff_report(payload: dict[str, Any], handoff_path: Path) -> Any:
         raise ValueError(f"handoff report rejected: {handoff_path}: {error}") from error
 
 
-def _header_sha256(header: dict[str, Any], *, handoff_path: Path) -> str:
-    digest = header.get("sha256")
-    if not isinstance(digest, str) or len(digest) != 64:
-        raise ValueError(f"handoff report bundle_header lacks a bundle sha256: {handoff_path}")
-    return digest
+def _header_size(header: dict[str, Any], *, handoff_path: Path) -> int:
+    size = header.get("size")
+    if not isinstance(size, int) or size < 0:
+        raise ValueError(f"handoff report bundle_header lacks a bundle size: {handoff_path}")
+    return size
 
 
-def _provenance_digest(run_dir: Path) -> str | None:
-    """Digest the run manifest's provenance block, if the sibling exists."""
+def _provenance_size(run_dir: Path) -> int | None:
+    """The canonical provenance block's byte length, if the sibling exists."""
     from core.common import training_cfg
 
     path = Path(run_dir) / training_cfg().preparation.manifest_file
@@ -200,7 +199,7 @@ def _provenance_digest(run_dir: Path) -> str | None:
     if not isinstance(provenance, dict):
         return None
     canonical = json.dumps(provenance, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return ByteCount(canonical.encode()).total
 
 
 def _handoff_attestation(payload: dict[str, Any], handoff_path: Path,
@@ -218,8 +217,8 @@ def _handoff_attestation(payload: dict[str, Any], handoff_path: Path,
         run_dir=str(handoff_path.parent),
         finished_at=finished_at,
         bundle_path=str(Path(bundle_path)),
-        bundle_sha256=_header_sha256(report.bundle_header, handoff_path=handoff_path),
-        provenance_digest=_provenance_digest(handoff_path.parent),
+        bundle_size=_header_size(report.bundle_header, handoff_path=handoff_path),
+        provenance_size=_provenance_size(handoff_path.parent),
         plan_identity=(dict(attestation_block.plan_identity) if attestation_block else None),
         checks=report.checks,
         attested_at=datetime.now(timezone.utc).isoformat(),
@@ -231,7 +230,7 @@ def attestation_from_handoff(handoff_path: Path, *, bundle_path: Path) -> Traini
 
     The provenance digest is taken from the run manifest sibling
     (``run_dir/manifest.json``) when it exists; without it the attestation
-    carries ``provenance_digest=None``.
+    carries ``provenance_size=None``.
     """
     handoff_path = Path(handoff_path)
     started = time.monotonic()
@@ -239,7 +238,7 @@ def attestation_from_handoff(handoff_path: Path, *, bundle_path: Path) -> Traini
     attestation = _handoff_attestation(payload, handoff_path, bundle_path=bundle_path)
     record_provenance_verification(attestation)
     emit_timing(f"[timing] training.attestation built_from_handoff path={handoff_path.name} "
-                f"bundle_sha256={attestation.bundle_sha256} "
+                f"bundle_size={attestation.bundle_size} "
                 f"seconds={time.monotonic() - started:.3f}")
     return attestation
 
@@ -261,6 +260,6 @@ def read_attestation(path: Path, *, bundle_path: Path) -> TrainingAttestation:
     record_provenance_verification(attestation)
     emit_timing(f"[timing] training.attestation read path={path.name} "
                 f"kind={'attestation' if payload.get('schema') == SCHEMA else 'handoff'} "
-                f"bundle_sha256={attestation.bundle_sha256} "
+                f"bundle_size={attestation.bundle_size} "
                 f"seconds={time.monotonic() - started:.3f}")
     return attestation

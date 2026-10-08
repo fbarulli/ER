@@ -123,8 +123,6 @@ BucketKey = Annotated[str, Field(pattern=r"^(choice|score|noul):(2|3-5|6-10|11\+
 # the bucket keys (the block that answers when no bucket matched).
 MinConfidenceKey = BucketKey | Literal["default"]
 
-Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-
 # A count read back FROM DISK. ``coverage_contracts.Count`` is strict=True by
 # design (in-process counters): it rejects "7", 7.0 and numpy ints, i.e. every
 # pandas/csv-sourced row. Emitter-aligned rows may legitimately be validated
@@ -384,18 +382,19 @@ class EvalRowKey(BaseModel):
 class EvalProvenance(BaseModel):
     """What produced this report and which inputs it rests on.
 
-    Digests live in ONE declared mapping rather than N hard-coded field names:
-    the real receipts key their digests differently per artifact (the corpus
-    receipt carries ``corpus_sha256`` and a nested ``sha256`` map; the decision
-    receipt carries ``decision_csv_sha256``). The per-source requirement below
-    names only the key the contract demands for that source.
+    Inputs live in ONE declared mapping rather than N hard-coded field names:
+    the real receipts key their inputs differently per artifact (the corpus
+    receipt carries ``corpus_size`` and a nested size map; the decision
+    receipt carries ``decision_csv_size``). The per-source requirement below
+    names only the key the contract demands for that source. Every value is a
+    structural byte size — no content is fingerprinted anywhere.
     """
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     source: EvalSource
     model_id: str = Field(min_length=1)
     laya_package: str | None = None
-    digests: dict[str, Digest] = Field(default_factory=dict)
+    inputs: dict[str, int] = Field(default_factory=dict)
     # A fine-tune eval's most important traceability fact: was the scored split
     # really held out, and how many items overlapped training data.
     is_held_out: bool | None = None
@@ -406,20 +405,20 @@ class EvalProvenance(BaseModel):
 
     @model_validator(mode="after")
     def source_inputs_present(self):
-        # The digests a source may name for its scored INPUT; at least one must be
-        # present. ``laya_cli_eval`` accepts either the decision CSV the harness
-        # derived its dataset from or that dataset itself: the kaggle evals kernel
-        # writes ``evals_dataset_sha256`` (verified 2026-10-08 against the staged
-        # EVAL_KERNEL_SCRIPT receipt), so demanding a key that producer cannot
-        # emit would make the requirement unfalsifiable-but-unsatisfiable.
+        # The structural input keys a source may name for its scored INPUT; at
+        # least one must be present. ``laya_cli_eval`` accepts either the
+        # decision CSV the harness derived its dataset from or that dataset
+        # itself: the kaggle evals kernel writes ``evals_dataset_size``, so
+        # demanding a key that producer cannot emit would make the requirement
+        # unfalsifiable-but-unsatisfiable.
         required = {
-            "finetune_corpus": ("corpus_sha256",),
-            "identity_decision_csv": ("decision_csv_sha256",),
-            "laya_cli_eval": ("decision_csv_sha256", "evals_dataset_sha256"),
+            "finetune_corpus": ("corpus_size",),
+            "identity_decision_csv": ("decision_csv_size",),
+            "laya_cli_eval": ("decision_csv_size", "evals_dataset_size"),
         }.get(self.source)
-        if required and not (set(required) & set(self.digests)):
+        if required and not (set(required) & set(self.inputs)):
             raise ValueError(
-                f"source={self.source} requires one of digests[{', '.join(required)}]")
+                f"source={self.source} requires one of inputs[{', '.join(required)}]")
         return self
 
 
@@ -656,8 +655,8 @@ class TraceabilityCoverage(CoverageModel):
     @field_serializer("dimension_values")
     def _canonical_dimension_values(self, value):
         """Sort each declared value set so a written artifact's bytes are
-        stable: a ``set`` would otherwise serialize in process-hash order and
-        make two identical runs differ."""
+        stable: a ``set`` would otherwise serialize in process-dependent order
+        and make two identical runs differ."""
         return {dimension: sorted(values) for dimension, values in value.items()}
 
     @model_validator(mode="after")
@@ -856,7 +855,7 @@ def write_report(key: str, fields: dict, document: TraceabilityReport) -> Path:
 __all__ = [
     "AbstentionBlock", "AttributeAttribution", "AttributeAttributionRow",
     "Brier", "BucketKey", "CORE_RECORD_DIMENSIONS", "Count",
-    "DIMENSION_ALIASES", "Digest", "Dimension", "DimensionPolicy",
+    "DIMENSION_ALIASES", "Dimension", "DimensionPolicy",
     "EvalProvenance", "EvalRowKey", "EvalSource", "MetricBlock",
     "MinConfidenceKey", "N_QTYPES", "PersistedCount", "QTypeName",
     "RecordDimension", "Share",

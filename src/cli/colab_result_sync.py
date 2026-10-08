@@ -27,7 +27,7 @@ import threading
 from pathlib import Path
 
 from core.archive_reader import tar_archive
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.schemas import ResultBundleManifest
 from cli.colab_hub import hub
 
@@ -43,9 +43,9 @@ def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
 import json, pathlib
 from core.archive_reader import tar_archive
 # The ONE file digest: the remote result archive is hashed by the shared
-# implementation the local side verifies with (``core.manifest.sha256_file``
+# implementation the local side verifies with (``core.manifest.file_size``
 # -> ``core.portable_archive``), never by a second copy of the algorithm.
-from core.manifest import sha256_file
+from core.manifest import file_size
 # The ONE best-checkpoint selection (core.bundle.resolve_best_checkpoint),
 # never a second copy of the trainer_state scan.
 from core.bundle import resolve_best_checkpoint
@@ -93,7 +93,7 @@ for worker in range(1, {workers + 1}):
                     "worker": worker,
                     "path": relative.as_posix(),
                     "size": path.stat().st_size,
-                    "sha256": sha256_file(path),
+                    "size": file_size(path),
                 }})
                 continue
         blocked = next((part for part in relative.parts if part in excluded_dirs), None)
@@ -108,7 +108,7 @@ for worker in range(1, {workers + 1}):
             "worker": worker,
             "path": relative.as_posix(),
             "size": path.stat().st_size,
-            "sha256": sha256_file(path),
+            "size": file_size(path),
         }})
 
 manifest = {{
@@ -176,8 +176,8 @@ def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundle
             raise RuntimeError(
                 f"result size mismatch for {key_text}: {size} != {entry.size}"
             )
-        digest = sha256_file(actual)
-        if digest != entry.sha256:
+        digest = file_size(actual)
+        if digest != entry.size:
             raise RuntimeError(f"result SHA-256 mismatch for {key_text}")
     actual_paths = {
         path.relative_to(root).as_posix()

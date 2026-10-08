@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import time
 from collections.abc import Sequence
@@ -158,21 +158,21 @@ def prepare_training_tokens(model, payload, *, batch_size=256):
         timing.mark('prompt_' + str(position))
     return {"version": 1, "policy": policy, "texts": texts, "variants": variants,
             "task_contract": PreparedTaskContract.from_model(model).model_dump(),
-            "payload_sha256": payload_sha256(payload)}
+            "payload_size": payload_size(payload)}
 
 
-def payload_sha256(payload) -> str:
-    """Stable digest over the frozen payload text list (write- and read-side)."""
-    return hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()
+def payload_size(payload) -> int:
+    """Structural size of the frozen payload text list (write- and read-side)."""
+    return ByteCount(json.dumps(list(payload), ensure_ascii=False).encode()).total
 
 
 class PreparedTokenLookup:
     """No fixed-text tokenizer calls; explicitly registered dynamic text only."""
 
-    def __init__(self, model, table, payload, *, payload_digest: str | None = None):
+    def __init__(self, model, table, payload, *, recorded_size: int | None = None):
         self._require_policy(model, table)
-        digest = payload_sha256(payload) if payload_digest is None else payload_digest
-        self._require_payload(table, payload, digest)
+        expected_size = payload_size(payload) if recorded_size is None else recorded_size
+        self._require_payload(table, payload, expected_size)
         self.table = table
         validate_training_tokens(table)
         self.indices = {text: index for index, text in enumerate(table["texts"])}
@@ -189,8 +189,8 @@ class PreparedTokenLookup:
         if table.get("version") != 1 or table["policy"] != checkpoint_policy(model):
             raise ValueError("prepared training tokenizer/checkpoint policy mismatch; rebuild locally")
 
-    def _require_payload(self, table, payload, digest: str) -> None:
-        if table["payload_sha256"] != digest:
+    def _require_payload(self, table, payload, size: int) -> None:
+        if table["payload_size"] != size:
             raise ValueError("prepared training token payload mismatch; rebuild locally")
 
     def _require_fixed_membership(self, payload) -> None:

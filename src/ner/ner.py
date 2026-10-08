@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import logging
 import os
@@ -477,23 +476,20 @@ def _make_model_archive(nlp, destination: Path):
     return destination
 
 
-def _sha256_file(path: Path) -> str:
-    """Return a streaming content hash for a final NER artifact.
+def _file_size(path: Path) -> int:
+    """The structural size of a final NER artifact: bytes on disk.
 
-    PINNED STANDALONE COPY — the ONE allowed copy of the digest outside
+    PINNED STANDALONE COPY — the ONE allowed copy of the size accessor outside
     ``core``. `ner.py` also runs on a bare Colab/remote runtime that receives
     only `ner.py` + `core/archive_reader.py` (see `colab_ner.upload_inputs`),
-    so `core.manifest` / `core.portable_archive` are not importable there. The
-    algorithm is the shared one (lowercase hex, streamed), and
-    `tests/test_bundle_standalone.py::test_ner_producer_digest_agrees_with_the_shared_primitive`
-    pins it byte-for-byte against `core.manifest.sha256_file` (the consumer
-    side, `colab_ner._sha256_file`, delegates to that shared primitive).
+    so `core.manifest` / `core.portable_archive` are not guaranteed importable
+    there. Identity is names + byte sizes (owner directive 2026-10-08), and
+    `tests/test_bundle_standalone.py::
+    test_ner_producer_size_agrees_with_the_shared_primitive` pins this measure
+    against the consumer side, `colab_ner._file_size`, which delegates to the
+    shared primitive.
     """
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return path.stat().st_size
 
 
 def _write_artifact_manifest(artifacts: list[Path]) -> Path:
@@ -518,7 +514,7 @@ def _write_artifact_manifest(artifacts: list[Path]) -> Path:
                 f"Cannot publish NER artifact manifest; missing {artifact}"
             )
         entries[artifact.name] = {
-            "sha256": _sha256_file(artifact),
+            "size": _file_size(artifact),
             "bytes": artifact.stat().st_size,
         }
 
@@ -1211,8 +1207,8 @@ def main():
     # small manifest below additionally hashes this metadata file itself and
     # is written LAST, making it the remote completion/integrity marker.
     metadata["artifact_hashes"] = {
-        errors_path.name: _sha256_file(errors_path),
-        final_model_archive.name: _sha256_file(final_model_archive),
+        errors_path.name: _file_size(errors_path),
+        final_model_archive.name: _file_size(final_model_archive),
     }
     metadata_path.write_text(
         json.dumps(

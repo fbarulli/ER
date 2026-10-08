@@ -286,7 +286,7 @@ layouts:
     fields: {}
   # The evaluation traceability document (owner: core.eval_trace): the per-slice
   # / per-attribute contract report for one lane and track. A SEPARATE artifact
-  # on purpose — the frozen ablation report carries a .sha256 sidecar, so extra
+  # on purpose — the frozen ablation report is a frozen document, so extra
   # keys on it are forbidden; this is the artifact that declares the shared
   # vocabulary. fields: one lane name + one track.
   traceability_report:
@@ -396,6 +396,49 @@ layouts:
     root: repo
     owner: core.dataset
     template: "data/track_setup"
+    fields: {}
+  # The dataset's declared SETS and their SPLIT leaves (owner: core.dataset),
+  # bound here, not spelled in code, so Dataset resolves each through the same
+  # accessor every other module uses (common.artifact()). These bind INPUT
+  # locations (not generated outputs), exactly as ``suite_package_config``
+  # already binds a checked-in file; the ``files:`` block is a closed schema
+  # (DataFilesSpec), so the free ``layouts:`` map is where a new binding lands
+  # without a second declaration.
+  #   ``dataset_laya``       — the laya set's corpus tree.
+  #   ``laya_train``/``laya_dev``/``laya_validation`` — its three declared splits
+  #     (the corpus's held-out leaf on disk is test.jsonl; the DECLARED split
+  #     name is ``validation``, and this binding owns the name -> leaf mapping).
+  #   ``dataset_smoke_200``  — the smoke set (declares no splits).
+  #   ``dataset_3k``         — the official 3k cohort CSV at the repo root.
+  dataset_laya:
+    root: repo
+    owner: core.dataset
+    template: "data/laya"
+    fields: {}
+  laya_train:
+    root: data
+    owner: core.dataset
+    template: "laya/train.jsonl"
+    fields: {}
+  laya_dev:
+    root: data
+    owner: core.dataset
+    template: "laya/dev.jsonl"
+    fields: {}
+  laya_validation:
+    root: data
+    owner: core.dataset
+    template: "laya/test.jsonl"
+    fields: {}
+  dataset_smoke_200:
+    root: repo
+    owner: core.dataset
+    template: "data/prepared/smoke_200"
+    fields: {}
+  dataset_3k:
+    root: repo
+    owner: core.dataset
+    template: "dataset_3k.csv"
     fields: {}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─

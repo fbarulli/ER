@@ -88,10 +88,11 @@ def test_the_checkout_lists_have_one_home():
 # ── the data bundle feeds BOTH lanes ────────────────────────────────────────
 
 
-def test_one_data_bundle_serves_the_cpu_and_the_gpu_lane():
+def test_one_data_bundle_serves_the_bundle_and_the_training_lane():
     bundle = spec().data_bundle
-    cpu, gpu = spec().lane_for("CPU"), spec().lane_for("T4")
-    assert cpu is spec().lanes["cpu"] and gpu is spec().lanes["gpu"]
+    bundle_lane, training_lane = spec().lane_for("CPU"), spec().lane_for("T4")
+    assert bundle_lane is spec().lanes.bundle
+    assert training_lane is spec().lanes.training
     # Both lanes train from the same prepared setup and the same suite config.
     assert bundle.setup_dir == "data/prepared/smoke_200"
     assert bundle.suite_config.startswith(bundle.setup_dir + "/")
@@ -100,14 +101,50 @@ def test_one_data_bundle_serves_the_cpu_and_the_gpu_lane():
     assert training_cfg().preparation.smoke_dir == bundle.setup_dir
 
 
+def test_the_lane_set_is_the_class_shape_not_a_name_check():
+    """Exactly two lanes, one required field each: no third lane can be spelled.
+
+    The retired contract was a ``{"cpu", "gpu"}`` set-membership check on
+    free-form keys; now ``ColabLanesSpec`` has one field per lane, so a missing
+    lane, an extra lane, and the old key names are all refused by the model.
+    """
+    declared = spec()
+    assert set(type(declared.lanes).model_fields) == {"bundle", "training"}
+    assert declared.lanes.declared() == (declared.lanes.bundle, declared.lanes.training)
+
+    payload = declared.model_dump()
+    # A missing lane.
+    with pytest.raises(ValidationError):
+        ColabSpec.model_validate({**payload, "lanes": {"bundle": payload["lanes"]["bundle"]}})
+    # An extra lane.
+    with pytest.raises(ValidationError):
+        ColabSpec.model_validate({**payload, "lanes": {
+            **payload["lanes"], "extra": payload["lanes"]["bundle"]}})
+    # The retired cpu/gpu key names.
+    with pytest.raises(ValidationError):
+        ColabSpec.model_validate({**payload, "lanes": {"cpu": {}, "gpu": {}}})
+
+
+def test_the_lanes_must_have_distinct_sessions_and_transcripts():
+    """Two concurrent lanes may not share a VM session or truncate one file."""
+    payload = spec().model_dump()
+    lanes = payload["lanes"]
+    with pytest.raises(ValidationError, match="sessions must be distinct"):
+        ColabSpec.model_validate({**payload, "lanes": {
+            **lanes, "training": {**lanes["bundle"], "log_name": "other.log"}}})
+    with pytest.raises(ValidationError, match="transcripts must be distinct"):
+        ColabSpec.model_validate({**payload, "lanes": {
+            **lanes, "training": {**lanes["bundle"], "session": "other-session"}}})
+
+
 def test_the_class_resolves_the_data_bundle_for_both_lanes():
     declared = spec()
     for gpu in ("CPU", "T4", "A100", "cpu"):
         assert declared.data_bundle_for(gpu) is declared.data_bundle
         assert declared.suite_config_for(gpu) == declared.data_bundle.suite_config
         assert declared.session_for(gpu) == (
-            declared.lanes["cpu"].session if gpu.upper() == "CPU"
-            else declared.lanes["gpu"].session)
+            declared.lanes.bundle.session if gpu.upper() == "CPU"
+            else declared.lanes.training.session)
 
 
 def test_lane_env_is_assembled_by_the_class():
@@ -189,9 +226,9 @@ def test_the_preflight_reports_the_class_resolved_lane():
     lane = json.loads(output)["lane"]
     declared = spec()
     assert lane["gpu"] == "CPU"
-    assert lane["session"] == declared.lanes["cpu"].session
+    assert lane["session"] == declared.lanes.bundle.session
     assert lane["transcript"] == declared.lane_log_relative_path(
-        declared.lanes["cpu"].session)
+        declared.lanes.bundle.session)
     assert lane["suite_config"] == declared.data_bundle.suite_config
     assert lane["entrypoint_env"]["ER_GPU_TRAINING_ONLY"] == "1"
     assert lane["entrypoint_env"]["PYTHONUNBUFFERED"] == "1"
@@ -235,22 +272,22 @@ def test_the_smoke_entrypoint_asks_the_class_for_its_lane():
 
 def test_per_lane_sessions_and_transcripts_are_declared():
     declared = spec()
-    assert declared.lanes["cpu"].session == "smoke-cpu"
-    assert declared.lanes["gpu"].session == "smoke-gpu"
-    assert declared.lanes["cpu"].log_name == "lane_cpu.log"
-    assert declared.lanes["gpu"].log_name == "lane_gpu.log"
+    assert declared.lanes.bundle.session == "smoke-cpu"
+    assert declared.lanes.training.session == "smoke-gpu"
+    assert declared.lanes.bundle.log_name == "lane_cpu.log"
+    assert declared.lanes.training.log_name == "lane_gpu.log"
     assert declared.transcript_name("smoke-cpu") == "lane_cpu.log"
     assert declared.transcript_name("smoke-gpu") == "lane_gpu.log"
     # The configured session keeps the default transcript; any other isolated
     # session gets its own file so concurrent lanes never truncate one.
     assert declared.transcript_name(declared.session) == declared.default_log_name
-    assert declared.transcript_name("er-prep-50pct") == "lane_er-prep-50pct.log"
+    assert declared.transcript_name("er-prep-3k") == "lane_er-prep-3k.log"
 
 
 def test_lane_identity_is_not_respelled_in_python():
     declared = spec()
-    literals = {declared.lanes["cpu"].session, declared.lanes["gpu"].session,
-                declared.lanes["cpu"].log_name, declared.lanes["gpu"].log_name}
+    literals = {declared.lanes.bundle.session, declared.lanes.training.session,
+                declared.lanes.bundle.log_name, declared.lanes.training.log_name}
     offenders = {
         path.relative_to(ROOT).as_posix(): sorted(
             literal for literal in literals
@@ -267,8 +304,8 @@ def test_launcher_log_name_follows_the_declared_lane():
     import sys
 
     declared = spec()
-    for session, expected in ((declared.lanes["cpu"].session, "lane_cpu.log"),
-                              (declared.lanes["gpu"].session, "lane_gpu.log"),
+    for session, expected in ((declared.lanes.bundle.session, "lane_cpu.log"),
+                              (declared.lanes.training.session, "lane_gpu.log"),
                               (declared.session, declared.default_log_name)):
         completed = subprocess.run(
             [sys.executable, "-c",
@@ -356,8 +393,17 @@ def test_the_config_declares_the_rule():
 #: zero occurrences in src/: a re-derived request hash compared against a
 #: recorded one, the not-yet-produced input allowance, and the retired
 #: freshness-gate remnants.
+#:
+#: SCOPE: this guard scans ``src/**`` — the whole tree, not only the Colab files
+#: — because these patterns are file-independent. It is still ONE of two
+#: freshness guards: the repo-wide, concept-level sweep (stale/mtime/TTL
+#: vocabulary and the per-file allowlist for liveness/crash/identity checks)
+#: lives in ``tests/test_no_freshness_checks.py``. A literal that only a
+#: concept-level scan can classify (e.g. a hand-written env dict in
+#: ``src/model_tracks/colab.py`` repeating PYTHONPATH/ER_GPU_TRAINING_ONLY
+#: instead of calling ``ColabSpec.lane_env``) is that guard's job.
 _FORBIDDEN_FRESHNESS_PATTERNS = (
-    "request_sha256=",
+    "request_size=",
     "allow_gpu_pending",
     "GPU_PENDING",
     "ER_DATA_GATE_GPU_PENDING",
@@ -380,7 +426,7 @@ def test_no_freshness_pattern_can_reappear_in_src():
 def test_no_recorded_hash_is_compared_against_a_recomputed_one():
     """The other half of the rule: a recorded digest is never the fresh test."""
     comparisons = re.compile(
-        r"request_sha256['\"]?\]?\s*[!=]=|['\"]request_sha256['\"]\s*\)?\s*[!=]=")
+        r"request_size['\"]?\]?\s*[!=]=|['\"]request_size['\"]\s*\)?\s*[!=]=")
     offenders = [path.relative_to(ROOT).as_posix()
                  for path in _python_sources()
                  if comparisons.search(path.read_text(encoding="utf-8"))]
@@ -396,6 +442,6 @@ def test_result_contracts_have_no_freshness_parameter():
 
     for function in (prepare_embeddings.validate_result,
                      prepare_embeddings.validate_prepared_provenance):
-        assert "request_sha256" not in inspect.signature(function).parameters
-    assert "request_sha256" not in ablation.validate_vectors.__code__.co_names
-    assert "request_sha256" not in post_training_ablation.SavedAblationReport.model_fields
+        assert "request_size" not in inspect.signature(function).parameters
+    assert "request_size" not in ablation.validate_vectors.__code__.co_names
+    assert "request_size" not in post_training_ablation.SavedAblationReport.model_fields

@@ -43,7 +43,7 @@ better than S0 but still > X; REJECTED if worse than S0 or equal-and-unhelpful.
 from __future__ import annotations
 
 import ast
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import sys
 import time
@@ -76,12 +76,12 @@ SIBLING_CAP = 1_000
 BARS = (0.05, 0.10, 0.20)
 
 
-def sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
+def size_of(path: Path) -> int:
+    h = ByteCount()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
-    return h.hexdigest()
+    return h.total
 
 
 def load_dataset() -> pd.DataFrame:
@@ -157,7 +157,7 @@ def _extended_conflict(a_id, b_id, a_extra: frozenset, b_extra: frozenset,
 def main() -> None:
     t_start = time.time()
     df = load_dataset()
-    print(f"[data] rows={len(df):,} sha256={sha256_of(DATASET_CSV)[:12]}...")
+    print(f"[data] rows={len(df):,} size={size_of(DATASET_CSV)}...")
 
     valid = gtin_validity(df["gtin"].astype(str)).to_numpy()
     # gtin_validity only quarantines the 34 held GTIN KEYS; the dedupe protocol

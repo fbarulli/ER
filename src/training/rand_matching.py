@@ -28,7 +28,7 @@ Example::
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from decimal import Decimal
@@ -77,7 +77,7 @@ from core.graph_diagnostics import (
     empty_candidate_graph_diagnostics,
 )
 from core.gtin import is_valid_gtin_checksum
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.ranking_metrics import youden_threshold
 from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
 from core.model_input import (
@@ -124,11 +124,11 @@ def preprocessing_fingerprint_inputs(structured_config: dict) -> dict[str, objec
       constants) and ``core.model_input._normalized_tokens`` (the normaliser).
       Editing either file changes the encoder text while every data input above
       stays identical, so without their digests a code edit would silently keep
-      a stale index valid — the same seam one level up.
+      an outdated index in service — the same seam one level up.
 
       The granularity is deliberately COARSE (whole module, not the individual
       symbols): an unrelated edit inside either file forces one rebuild, which
-      costs time, whereas the alternative this closes is a stale index served
+      costs time, whereas the alternative this closes is an outdated index served
       as valid, which nobody sees. Over-invalidation is visible and cheap;
       under-invalidation is silent and wrong.
     """
@@ -136,10 +136,10 @@ def preprocessing_fingerprint_inputs(structured_config: dict) -> dict[str, objec
         "structured_features": structured_config,
         "model_input": model_input_composition().model_dump(),
         "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
-        "vocabulary": sha256_file(VOCABULARY_CONFIG_PATH),
+        "vocabulary": file_size(VOCABULARY_CONFIG_PATH),
         "composition_code": {
-            "core.model_input": sha256_file(model_input_module.__file__),
-            "pipeline": sha256_file(pipeline.__file__),
+            "core.model_input": file_size(model_input_module.__file__),
+            "pipeline": file_size(pipeline.__file__),
         },
     }
 
@@ -807,7 +807,7 @@ def _threshold_grid(
 class _FileProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
-    sha256: str = Field(min_length=64, max_length=64)
+    size: int = Field(ge=0)
     rows: int | None = Field(default=None, ge=0)
 
 
@@ -1438,13 +1438,13 @@ class RandMatcher:
             if self.structured_enabled and bool(self.structured_config["feed_to_loss"])
             else 0.0
         )
-        self.preprocessing_fingerprint = hashlib.sha256(
+        self.preprocessing_fingerprint = ByteCount(
             json.dumps(
                 preprocessing_fingerprint_inputs(self.structured_config),
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8")
-        ).hexdigest()
+        ).total
 
     def _prepare_item_inputs(self) -> None:
         """Per-item gate infos, composed texts and structured features."""
@@ -3709,27 +3709,27 @@ def _evaluate_holdout(
     return metrics, diagnostics, disagreements, ann_misses, ablation
 
 
-def _sha256_path(path: Path) -> tuple[str, int]:
-    """Fingerprint one file or a checkpoint directory deterministically."""
+def _path_size(path: Path) -> tuple[int, int]:
+    """Measure one file or a checkpoint directory deterministically."""
     if path.is_symlink():
         raise ValueError(f"provenance path must not be a symlink: {path}")
     if path.is_file():
-        return sha256_file(path), 1
+        return file_size(path), 1
     if not path.is_dir():
         raise FileNotFoundError(f"provenance path does not exist: {path}")
-    digest = hashlib.sha256()
+    size = ByteCount()
     files = sorted(
         child for child in path.rglob("*") if child.is_file() and not child.is_symlink()
     )
     for child in files:
-        digest.update(str(child.relative_to(path)).encode("utf-8"))
-        digest.update(sha256_file(child).encode("ascii"))
-    return digest.hexdigest(), len(files)
+        size.update(str(child.relative_to(path)).encode("utf-8"))
+        size.update(str(file_size(child)).encode("ascii"))
+    return size.total, len(files)
 
 
 def _file_provenance(path: Path, rows: int | None = None) -> _FileProvenance:
-    digest, _ = _sha256_path(path)
-    return _FileProvenance(path=str(path), sha256=digest, rows=rows)
+    size, _ = _path_size(path)
+    return _FileProvenance(path=str(path), size=size, rows=rows)
 
 
 def _write_provenance(
@@ -3743,7 +3743,7 @@ def _write_provenance(
     holdout_labels: pd.DataFrame,
     final_threshold: float,
 ) -> None:
-    checkpoint_hash, checkpoint_files = _sha256_path(matcher.checkpoint)
+    checkpoint_size, checkpoint_files = _path_size(matcher.checkpoint)
     provenance = _SubmissionProvenance(
         dataset_deduped=_file_provenance(
             F["dataset_deduped"],
@@ -3765,7 +3765,7 @@ def _write_provenance(
         training_config=_file_provenance(TRAINING_CONFIG_PATH),
         checkpoint=_FileProvenance(
             path=str(matcher.checkpoint),
-            sha256=checkpoint_hash,
+            size=checkpoint_size,
             rows=checkpoint_files,
         ),
         final_threshold=final_threshold,

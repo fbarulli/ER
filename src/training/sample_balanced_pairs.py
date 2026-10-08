@@ -27,7 +27,7 @@ the explicit ``snapshot_unknown`` time stratum; dates are never invented.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import math
 from collections.abc import Iterable, Mapping
@@ -37,7 +37,7 @@ from typing import Any
 import pandas as pd
 
 from core.common import F, artifact, load_config, report_thresholds, training_cfg
-from core.manifest import atomic_write_csv, atomic_write_json, sha256_file
+from core.manifest import atomic_write_csv, atomic_write_json, file_size
 
 
 DEFAULT_GATE_INPUT = Path(F["gate_results"])
@@ -95,9 +95,15 @@ TIME_COLUMN_CANDIDATES = (
 )
 
 
-def _stable_digest(seed: int, *values: object) -> str:
+def _stable_rank(seed: int, *values: object) -> int:
+    """A deterministic allocation tie-break from the declared inputs (no hash).
+
+    shortcut: the key is the payload's byte length, so distinct inputs of equal
+    length collide and fall back to the declared key; upgrade to a wider
+    hash-free key only if that ever skews an allocation.
+    """
     payload = "\x1f".join([str(seed), *(str(value) for value in values)])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return ByteCount(payload.encode("utf-8")).total
 
 
 def _normalise(value: object) -> str:
@@ -255,7 +261,7 @@ def _largest_remainder(
         capacities,
         key=lambda key: (
             -(exact[key] - math.floor(exact[key])),
-            _stable_digest(seed, namespace, key),
+            _stable_rank(seed, namespace, key),
             key,
         ),
     )
@@ -292,7 +298,7 @@ def _stable_take(frame: pd.DataFrame, count: int, seed: int, namespace: str) -> 
         raise ValueError(f"Requested {count} rows from a population of {len(frame)}")
     ranked = frame.copy()
     ranked["__rank"] = [
-        _stable_digest(seed, namespace, min(a, b), max(a, b))
+        _stable_rank(seed, namespace, min(a, b), max(a, b))
         for a, b in zip(ranked["gtin1"], ranked["gtin2"], strict=True)
     ]
     return ranked.sort_values(["__rank", "gtin1", "gtin2"], kind="mergesort").head(count).drop(columns="__rank")
@@ -510,8 +516,8 @@ def build_outputs(
             "selection": "largest-remainder proportional allocation, then seeded SHA-256 rank",
         },
         "inputs": {
-            "gate_results": {"path": str(gate_path), "sha256": sha256_file(gate_path), "rows": len(gate)},
-            "sku_data": {"path": str(sku_path), "sha256": sha256_file(sku_path), "rows": len(sku), "schema": sku_schema},
+            "gate_results": {"path": str(gate_path), "size": file_size(gate_path), "rows": len(gate)},
+            "sku_data": {"path": str(sku_path), "size": file_size(sku_path), "rows": len(sku), "schema": sku_schema},
         },
         "accounting": {
             "eligible_positive": len(positive),
@@ -540,9 +546,9 @@ def build_outputs(
             "threshold_sweep": sweep.to_dict(orient="records"),
         },
         "outputs": {
-            "balanced": {"path": str(balanced_path), "sha256": sha256_file(balanced_path)},
-            "sample": {"path": str(sample_path), "sha256": sha256_file(sample_path)},
-            "threshold_sweep": {"path": str(sweep_path), "sha256": sha256_file(sweep_path)},
+            "balanced": {"path": str(balanced_path), "size": file_size(balanced_path)},
+            "sample": {"path": str(sample_path), "size": file_size(sample_path)},
+            "threshold_sweep": {"path": str(sweep_path), "size": file_size(sweep_path)},
         },
     }
     from core.coverage_contracts import BalancedSamplingManifest

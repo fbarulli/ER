@@ -7,12 +7,12 @@ from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding,
 def shared():
     return SharedTrainingData.model_validate({
         'source_rows': 2, 'canonical_rows': 1, 'payload_rows': 4,
-        'inputs_sha256': {'frozen_data': 'a' * 64},
+        'inputs_size': {'frozen_data': 'a' * 64},
         'endpoints': [
-            dict(payload_index=0, kind='listing', entity='entity', source_id='sku', text_sha256='b' * 64),
-            dict(payload_index=2, kind='canonical', entity='entity', source_id='canonical', text_sha256='c' * 64),
+            dict(payload_index=0, kind='listing', entity='entity', source_id='sku', text_size='b' * 64),
+            dict(payload_index=2, kind='canonical', entity='entity', source_id='canonical', text_size='c' * 64),
             dict(payload_index=3, kind='augmentation', entity='entity', source_id='copy',
-                 parent_index=0, text_sha256='d' * 64),
+                 parent_index=0, text_size='d' * 64),
         ],
         'examples': [dict(example_id=i, anchor=0, positive=2, negative=3, population='twin') for i in range(2)],
     })
@@ -24,7 +24,7 @@ def test_projection_retains_canonical_copy_and_repeated_positive_relationship():
     rows = data.pair_rows()
     assert len(rows) == 4
     assert [(row['payload_index2'], row['label']) for row in rows] == [(2, 1), (3, 0), (2, 1), (3, 0)]
-    binding = TrackTrainingBinding(track='gnn_only', shared_data_sha256=data.fingerprint,
+    binding = TrackTrainingBinding(track='gnn_only', shared_data_size=data.fingerprint,
                                   example_ids=[0, 1], endpoint_indices=[0, 2, 3])
     binding.validate_data(data)
     assert retrieval_indices([{'sku_id': value} for value in

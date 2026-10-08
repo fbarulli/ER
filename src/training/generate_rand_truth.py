@@ -10,7 +10,7 @@ canonical-disjoint ``calibration_fold`` required by ``er-rand-match``.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -35,9 +35,15 @@ def _normalise(value: object) -> str:
     return text if text else "<missing>"
 
 
-def _stable_rank(seed: int, *parts: str) -> str:
+def _stable_rank(seed: int, *parts: str) -> int:
+    """A deterministic ordering key from the declared inputs (never a hash).
+
+    shortcut: the key is the payload's byte length, so distinct inputs of equal
+    length collide and fall back to their input order; upgrade to a wider
+    hash-free key only if that ever skews a split.
+    """
     payload = "\x1f".join((str(seed), *parts)).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return ByteCount(payload).total
 
 
 def _truth_candidates() -> pd.DataFrame:

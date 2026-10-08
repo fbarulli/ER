@@ -17,15 +17,15 @@ Added 2026-10-08; refreshed after the consolidation audit (commits `5bc48c9`,
 - [~] `model_tracks/parallel.py` — postprocess-cascade sequential barrier is now the documented SSOT (`run.py` delegates to `parallel.run_postprocess_track` and `parallel.split_tracks`); a real GPU/CPU end-to-end suite run is still unproven.
 - [x] `tests/test_tracks_direct_download.py` — green.
 - [x] `local_complete` cascade branch present (delegates to `bundle_steps._complete_cascade_track`); `post_training_ablation` + `archive_verification` with cascade remain unproven end-to-end.
-- [x] Regenerate stale fixtures: `smoke_200`, `smoke_500`, `data/track_setup` all carry `cascade.yaml` and no `hybrid`.
+- [x] Regenerate stale fixtures: `smoke_200` and `data/track_setup` carry `cascade.yaml` and no `hybrid`.
 - [x] `src/training/run_plan.py` — frozen-input materialization maps bare keys → `*_csv` members (`_FROZEN_INPUT_MEMBERS`); `test_smoke_run_plan` green.
 - [x] `src/model_tracks/smoke_inputs.py` — repo-relative fixture paths resolved against `TRAIN_ROOT` before `relative_to`.
-- [x] `data/prepared/smoke_500` — regenerated (cascade template present).
+- [x] `data/prepared/smoke_500` — regenerated (cascade template present); since BINNED (owner directive 2026-10-08, only `dataset.csv`/`dataset_3k.csv`/`data/prepared/smoke_200` remain).
 
 ## Lanes
 - [ ] Colab + Kaggle transports load/save `Bundle`; Kaggle finalize kernel is wired, colab finalize is not.
 - [ ] Kaggle `embedding_kernel_slug` (`fbarulli/er-embed-gpu`) — **no embed kernel exists on the account**; push one or remove the embed objective.
-- [ ] Colab `cohort_label` SSOT — hardcodes `dataset.csv`/`50pct` and returns `dataset_10k` for the 10k export while Kaggle returns `10k`; needs a `colab.*.cohort_tags` config key.
+- [ ] Colab `cohort_label` SSOT (still open after the 2026-10-08 bin): `cli/colab_lane.py` hardcodes the retired `50pct` branch, so a committed `dataset_3k.csv` is labeled by its stem (`dataset_3k`) while Kaggle returns `3k`; needs a declared tag map (e.g. a `colab.*.cohort_tags` config key).
 - [ ] `cli/laya_lane.py` kernel-template helper duplication (`log` ×4, `resolve_input` ×4, `sha256_of` ×2): inject shared fragments via the existing token mechanism (artifact-byte-risky; deferred).
 - [ ] `_env_dot_value` vs `_env_value` near-duplicates in `cli/`.
 

@@ -35,8 +35,8 @@ from core.timing import Timing
 from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
-from graph_tracks.text_cache import checkpoint_hash
-from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors, file_hash, source_name
+from graph_tracks.text_cache import checkpoint_size
+from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors, file_size, source_name
 from model_tracks.ablation_cohort import prepare_cohort
 from model_tracks.package import package_member
 from model_tracks.resume import TRAINING_TRACKS
@@ -158,7 +158,7 @@ def _template_checkpoint(setup,baseline,track,vocabulary,support):
     if track != 'text':
         checkpoint = setup/(track+'__ablation_template.pt')
         payload = {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
-            'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
+            'text_metadata':{'checkpoint_size':checkpoint_size(baseline),'composition':model_input_composition().model_dump(mode='json')}},
             'vocabulary':vocabulary,'support_records':support}
         torch.save(payload,checkpoint)
     return checkpoint
@@ -182,8 +182,8 @@ def _track_request(setup,checkpoint,track,*,cohort,frozen_config,baseline,compos
 def _track_cohort(track,request,common_cohort):
     """Freeze the suite cohort on the text track; every other must match it."""
     if track == 'text':
-        return (request['cohort_sha256'], request['coverage'])
-    if (request['cohort_sha256'], request['coverage']) != common_cohort:
+        return (request['cohort_size'], request['coverage'])
+    if (request['cohort_size'], request['coverage']) != common_cohort:
         raise ValueError('all models must ablate exactly the same cohort and attributes')
     return common_cohort
 
@@ -352,7 +352,7 @@ def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
                 if checkpoint_role == 'baseline' else
                 'the trained selected checkpoint is bound as the ablated model'),
         detail={'role': checkpoint_role, 'checkpoint': source_name(checkpoint),
-                'checkpoint_sha256': identity, 'bound_source': bound,
+                'checkpoint_size': identity, 'bound_source': bound,
                 'replaced_source': old_checkpoint},
         source=source_name(checkpoint),
     )
@@ -408,7 +408,7 @@ def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_mo
                 if existed else
                 'no valid export existed, so the lane encoded it on the frozen checkpoint'),
         detail={'vectors': source_name(vectors),
-                'sha256': file_hash(vectors) if present else None,
+                'size': file_size(vectors) if present else None,
                 'bytes': vectors.stat().st_size if present else 0,
                 'reused_existing_export': existed, 'vectors_present': present,
                 'device': device,
@@ -428,7 +428,7 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
         reason='the track template frozen before training supplies the interventions and tensors',
         detail={'track': track, 'template': source_name(template),
                 'portable_setup': request.get('portable_setup'),
-                'cohort_sha256': request.get('cohort_sha256'),
+                'cohort_size': request.get('cohort_size'),
                 'variants': len(request.get('variants', []))},
         source=source_name(template / _request_name()),
     )

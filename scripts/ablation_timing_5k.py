@@ -25,7 +25,7 @@ Deterministic cohort rule (recorded, fixed forever):
 Outputs per round in artifacts/abl_opt/rounds/round<N>/:
   timings.log ([timing] lines behind ER_TIMING_LOG), ranking.csv
   (cProfile per-function wall ranking), profile.prof, fingerprints.json
-  (output-content hashes for the byte-identical mandate), phase summary on
+  (output-content sizes for the byte-identical mandate), phase summary on
   stdout. Regenerable inputs live under artifacts/abl_opt/inputs/ (npz is
   gitignored; rebuild with --rebuild-cache).
 """
@@ -34,7 +34,7 @@ from __future__ import annotations
 import argparse
 import cProfile
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import pstats
 import shutil
@@ -77,12 +77,12 @@ REPORT_NOTE = ('inputs recorded 2026-10-08: catalog=dataset_5k.csv '
                'coverage=sampled sample_pairs=100; retrieval_catalog=full')
 
 
-def sha_bytes(value) -> str:
-    return hashlib.sha256(value).hexdigest()
+def byte_size(value) -> int:
+    return ByteCount(value).total
 
 
-def sha_json(value) -> str:
-    return sha_bytes(json.dumps(value, sort_keys=True, ensure_ascii=False,
+def json_size(value) -> int:
+    return byte_size(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                 default=lambda o: '{{unserializable:%r}}' % (o,))
                      .encode('utf-8'))
 
@@ -97,9 +97,9 @@ def sha_npz(path: Path) -> dict:
             if hasattr(value, 'dtype') and shape:
                 out[key] = [list(shape), str(value.dtype)]
                 raw = np.ascontiguousarray(value).view(np.uint8)
-                out[key] += [sha_bytes(raw.tobytes())]
+                out[key] += [byte_size(raw.tobytes())]
             else:
-                out[key] = sha_json(value.tolist() if hasattr(value, 'tolist') else str(value))
+                out[key] = json_size(value.tolist() if hasattr(value, 'tolist') else str(value))
     return out
 
 
@@ -143,7 +143,7 @@ def ensure_inputs(profile=False, rebuild_cache=False):
     if not THRESHOLD_STATE.exists():
         THRESHOLD_STATE.write_text(json.dumps({'threshold': 0.35, 'note': REPORT_NOTE}))
     if not BINDING.exists():
-        BINDING.write_text(json.dumps({'track': 'text', 'checkpoint_sha256': identity,
+        BINDING.write_text(json.dumps({'track': 'text', 'checkpoint_size': identity,
                                        'threshold': json.loads(THRESHOLD_STATE.read_text())['threshold'],
                                        'note': REPORT_NOTE}, sort_keys=True))
     if rebuild_cache or not SAVED_TEXT.exists():
@@ -155,7 +155,7 @@ def build_saved_text_cache():
     """One-time CPU encode of the 5k-catalog native baseline texts, then
     freeze the shared saved-text cache npz used by encode(saved_text=...)."""
     from model_tracks.ablation import prepare
-    from graph_tracks.text_cache import texts_hash
+    from graph_tracks.text_cache import texts_size
     from core.model_input import model_input_composition
     work = ABL / 'cache_staging'
     config = CONFIG
@@ -173,9 +173,9 @@ def build_saved_text_cache():
         vectors = np.asarray(data['vectors'], dtype=np.float32)
     # baseline encode produces variant vectors too; seeded text cache uses
     # the candidate vectors (baseline text of every catalog id).
-    metadata = {'checkpoint_sha256': request['sources'].get(request['checkpoint'], ''),
+    metadata = {'checkpoint_size': request['sources'].get(request['checkpoint'], ''),
                 'composition': request['composition'],
-                'text_sha256': texts_hash([request['texts'][i]
+                'text_size': texts_size([request['texts'][i]
                                            for i in request['candidate_text_indices']]),
                 'tokenization': request['prepared_inputs']['tokenization'],
                 'embedding_dtype': 'float32'}
@@ -212,21 +212,21 @@ def rank_profile(prof, out_csv: Path, top=40):
     return rows[:top]
 
 
-volatile = {'implementation_sha256', 'composition', 'sources'}
+volatile = {'implementation_size', 'composition', 'sources'}
 
 
 def fingerprint_prepare(request_path: Path):
     request = json.loads(request_path.read_text())
     cleaned = {k: v for k, v in request.items() if k not in volatile}
     cleaned['prepared_inputs_plan'] = {k: v for k, v in request['prepared_inputs'].items()
-                                       if k != 'sha256'}
-    return sha_json(cleaned)
+                                       if k != 'size'}
+    return json_size(cleaned)
 
 
 def fingerprint_report(path: Path):
     report = json.loads(path.read_text())
     cleaned = {k: v for k, v in report.items() if k not in volatile}
-    return sha_json(cleaned)
+    return json_size(cleaned)
 
 
 def run_round(round_no: int, rebuild_cache=False):
@@ -255,7 +255,7 @@ def run_round(round_no: int, rebuild_cache=False):
     idle_ok = wait_for_idle(limit=MAX_LOAD, timeout_s=WAIT_TIMEOUT_S)
 
     summary = {'idle_ok': idle_ok, 'load_avg_at_start': load_avg(), 'notes': REPORT_NOTE, 'cohort': '5k', 'pairs_source': str(PAIRS),
-               'checkpoint_sha256': identity, 'torch_threads': 4}
+               'checkpoint_size': identity, 'torch_threads': 4}
     load_start = load_avg()
     started = time.perf_counter()
     profiler.enable()

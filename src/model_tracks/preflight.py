@@ -1,6 +1,6 @@
 """Validate the prepared populations before provisioning a shared VM."""
 from pathlib import Path
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import subprocess
 import pandas as pd
@@ -9,15 +9,15 @@ from model_tracks.config import load_config
 from model_tracks.resume import TRAINING_TRACKS, TRACKS
 
 
-def _payload_digest(payload):
-    """Preserve json.dumps(list(payload)) bytes without its full JSON allocation."""
-    digest = hashlib.sha256(b'[')
+def _payload_size(payload) -> int:
+    """Measure json.dumps(list(payload)) bytes without its full JSON allocation."""
+    size = ByteCount(b'[')
     for index, text in enumerate(payload):
         if index:
-            digest.update(b', ')
-        digest.update(json.dumps(text, ensure_ascii=False).encode())
-    digest.update(b']')
-    return digest.hexdigest()
+            size.update(b', ')
+        size.update(json.dumps(text, ensure_ascii=False).encode())
+    size.update(b']')
+    return size.total
 
 
 def _setup_layout():
@@ -104,7 +104,7 @@ def preflight(config: Path) -> dict:
     """
     from core.common import TRAIN_ROOT, SEED, resolve_model, training_cfg
     from graph_tracks.preflight import preflight as graph_preflight, runtime_versions
-    from graph_tracks.text_cache import checkpoint_hash
+    from graph_tracks.text_cache import checkpoint_size
     from training.prepared_bundle import canonical_payload_rows, load_prepared_bundle, prepared_holdout
     from training.folds import normalize_gtin
     cfg = load_config(config)
@@ -117,7 +117,7 @@ def preflight(config: Path) -> dict:
         load_graph_config(root / layout.track_config(track), expected_track=track)
     load_text_config(root / layout.text_config)
     model = Path(resolve_model(cfg.text_model))
-    if checkpoint_hash(model) != setup['text_checkpoint_sha256']:
+    if checkpoint_size(model) != setup['text_checkpoint_size']:
         raise ValueError('text baseline differs from frozen text checkpoint')
     checks = {'gnn_only':graph_preflight(root/layout.track_config('gnn_only'),check_device=False,require_dvc=False)}
     # ── report_test consistency (loud, 2026-10-08) ─────────────────────────
@@ -143,8 +143,8 @@ def preflight(config: Path) -> dict:
     # ── scored-half support floor (TODO "Support-floor gate") ──────────────
     # Refuse to publish a suite whose dev/test halves cannot support the
     # metric they are scored with (dev 1286/9, test 1276/7 shipped). Smokes
-    # sample the same population and are exempt, like every other
-    # stale/thin-population check here.
+    # sample the same population and are exempt, like the other population
+    # gates below.
     support_floor = scored_support_floor()
     scored_support = (
         assert_scored_support(checks['gnn_only']['pairs'], floor=support_floor)
@@ -177,8 +177,8 @@ def preflight(config: Path) -> dict:
     export_request = json.loads((root/layout.text_export_request).read_text())
     if bundle['training_tokens']['policy'] != export_request['plan']['tokenization']:
         raise ValueError('training native tokenizer differs from prepared suite export')
-    payload_digest = _payload_digest(bundle['payload'])
-    if bundle['training_tokens']['payload_sha256'] != payload_digest or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
+    payload_size = _payload_size(bundle['payload'])
+    if bundle['training_tokens']['payload_size'] != payload_size or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
         raise ValueError('training native tokens differ from frozen payload')
     validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
     from core.common import runtime
@@ -201,7 +201,7 @@ def preflight(config: Path) -> dict:
     text_binding.validate_data(shared)
     for track in ('gnn_only',):
         validate_projection(root, shared, track=track)
-    shared_summary = {'sha256': shared.fingerprint, 'examples': len(shared.examples),
+    shared_summary = {'size': shared.fingerprint, 'examples': len(shared.examples),
                       'endpoints': len(shared.endpoints), 'graph_pair_rows': 2 * len(shared.examples),
                       'tracks': list(TRACKS)}
     del shared, text_binding
@@ -254,7 +254,7 @@ def preflight(config: Path) -> dict:
     if diet.returncode and not diet_warning:
         raise ValueError('text bundle diet preflight failed:\n' + diet.stdout + diet.stderr)
     return {'shared_training_data': shared_summary,
-            'text': {'bundle_sha256': manifest.sha256, 'payload': manifest.payload_variant,
+            'text': {'bundle_size': manifest.size, 'payload': manifest.payload_variant,
                      'masking_profile': manifest.masking_profile, 'rows': manifest.n_df,
                      'diet': {'status': 'warning' if diet_warning else 'pass', 'log': diet.stdout}},
             **checks, 'cascade_mode': 'text ranker retrieves, gnn_only scorer decides; no fused embedding',

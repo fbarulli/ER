@@ -1,6 +1,6 @@
 """Verify and report a rebuilt-population JEV audit without making API calls."""
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import math
 import sys
@@ -36,9 +36,9 @@ def main():
     ledger_path = directory / 'sample_ledger.json'
     ledger = json.loads(ledger_path.read_text())
     entry = next(row for row in ledger if row['round'] == args.round)
-    sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-    assert sha(sample_path) == entry['sample_sha256']
-    assert sha(states_path) == summary['input_states_sha256']
+    sha = lambda path: ByteCount(path.read_bytes()).total
+    assert sha(sample_path) == entry['sample_size']
+    assert sha(states_path) == summary['input_states_size']
     successful = {}
     errors = Counter()
     for line in result_path.read_text().splitlines():
@@ -52,7 +52,7 @@ def main():
                    'state': {'record_a': states[row['input_scope']][row['gtin1']],
                              'record_b': states[row['input_scope']][row['gtin2']]},
                    'questions': build_questions()}
-        assert row['request_sha256'] == hashlib.sha256(json.dumps(request).encode()).hexdigest()
+        assert row['request_size'] == ByteCount(json.dumps(request).encode()).total
         assert row['noul'] == _extract_noul(row['raw_response'], 'is_same_product')
         assert math.isfinite(row['noul']) and 0 <= row['noul'] <= 1
         successful[key(row)] = row
@@ -112,7 +112,7 @@ def main():
                   'completed_utc': max(row['completed_utc'] for row in successful.values()),
                   'calls_completed': len(successful), 'unique_pairs': len(primary),
                   'request_hashes_verified': True, 'raw_responses_saved': True,
-                  'sha256': {str(path.relative_to(ROOT)): sha(path) for path in (sample_path, states_path, result_path, summary_path, report_path)}}
+                  'size': {str(path.relative_to(ROOT)): sha(path) for path in (sample_path, states_path, result_path, summary_path, report_path)}}
     (directory / f'audit_run_{args.round}.json').write_text(json.dumps(provenance, indent=2) + '\n')
     entry.update(status='tested', calls_completed=len(successful))
     temporary = ledger_path.with_suffix('.json.tmp')

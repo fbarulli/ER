@@ -8,7 +8,7 @@ No optimization, threshold fitting, synthetic labels or implicit cache reuse.
 from __future__ import annotations
 import argparse
 import copy
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import time
 import tempfile
@@ -116,12 +116,12 @@ def resolve(path):
     return path if path.is_absolute() else TRAIN_ROOT / path
 
 
-def digest(value):
-    """Kept exclusively for deterministic content-addressed directory naming."""
-    hasher = hashlib.sha256()
+def content_size(value) -> int:
+    """The structural byte size of one request, for deterministic directory naming."""
+    hasher = ByteCount()
     for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
         hasher.update(chunk.encode())
-    return hasher.hexdigest()
+    return hasher.total
 
 
 def source_name(path):
@@ -368,11 +368,11 @@ def _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, list
 def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_checkpoint,
                       candidate_ids, candidate_text, candidate_records, ids, pool, chosen, variants, attributes):
     return {'schema': 'er-attribute-ablation-v2', 'track': track, 'checkpoint_role': checkpoint_role, 'settings': cfg.model_dump(),
-            'sources': sources, 'composition': "skipped", 'implementation_sha256': "skipped",
+            'sources': sources, 'composition': "skipped", 'implementation_size': "skipped",
             'checkpoint': source_name(checkpoint), 'text_checkpoint': source_name(text_checkpoint) if text_checkpoint else None,
             'candidate_ids': candidate_ids, 'candidate_text_indices': candidate_text, 'candidate_records': candidate_records,
             'ids': ids, 'texts': pool.texts, 'pairs': chosen, 'variants': variants,
-            'cohort_sha256': digest(chosen),
+            'cohort_size': content_size(chosen),
             'coverage': {'mode': cfg.coverage, 'pair_rows': len(chosen),
                          'by_scope': pd.Series([p.get('evaluation_scope', p['split']) for p in chosen]).value_counts().to_dict(),
                          'by_label': pd.Series([p['label'] for p in chosen]).value_counts().to_dict(),
@@ -389,7 +389,7 @@ def _persist_prepared(request, cfg, token_cache):
     with tempfile.TemporaryDirectory(dir=resolve(cfg.output_dir)) as tmp:
         prepared = Path(tmp) / 'prepared_inputs.npz'
         request['prepared_inputs'] = prepare_inputs(request, prepared, token_cache=token_cache)
-        output = resolve(cfg.output_dir) / digest(request)[:24]
+        output = resolve(cfg.output_dir) / str(content_size(request))[:24]
         output.mkdir(parents=True, exist_ok=True)
         destination = output / prepared.name
         if not destination.exists():
@@ -636,11 +636,11 @@ def _threshold_from_csv(path, value, track, checkpoint):
 
 def _threshold_from_json(path, value):
     document = json.loads(path.read_text())
-    claimed_sha256 = None
+    claimed_size = None
     track = None
     checkpoint = None
     if isinstance(document, dict):
-        claimed_sha256 = document.get('checkpoint_sha256') or document.get('vectors_metadata', {}).get('checkpoint_sha256')
+        claimed_size = document.get('checkpoint_size') or document.get('vectors_metadata', {}).get('checkpoint_size')
     values = []
     attested = {'track': set(), 'checkpoint': set()}
 
@@ -665,7 +665,7 @@ def _threshold_from_json(path, value):
         if seen:
             if key == 'track': track = next(iter(seen))
             else: checkpoint = next(iter(seen))
-    return values, track, checkpoint, claimed_sha256
+    return values, track, checkpoint, claimed_size
 
 
 def frozen_threshold(source, value):
@@ -674,13 +674,13 @@ def frozen_threshold(source, value):
         raise ValueError('threshold source must be an existing saved report')
     if path.suffix == '.csv':
         values, track, checkpoint = _threshold_from_csv(path, value, None, None)
-        claimed_sha256 = None
+        claimed_size = None
     else:
-        values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
+        values, track, checkpoint, claimed_size = _threshold_from_json(path, value)
     if not any(isinstance(x, (int, float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
-    return {'path': source_name(path), 'sha256': 'skipped', 'selection': 'saved baseline; never refitted during ablation',
-            'track': track, 'checkpoint': checkpoint, 'checkpoint_sha256': claimed_sha256}
+    return {'path': source_name(path), 'size': 'skipped', 'selection': 'saved baseline; never refitted during ablation',
+            'track': track, 'checkpoint': checkpoint, 'checkpoint_size': claimed_size}
 
 
 def verify_threshold_binding(request, provenance):
@@ -689,7 +689,7 @@ def verify_threshold_binding(request, provenance):
     checkpoint = request.get('checkpoint')
     if not checkpoint:
         raise ValueError('threshold requires a checkpoint identity in the request')
-    return {'track': request['track'], 'checkpoint_sha256': 'skipped', 'verified': True}
+    return {'track': request['track'], 'checkpoint_size': 'skipped', 'verified': True}
 
 
 @scoped_request
@@ -718,7 +718,7 @@ def validate_vectors(request_path, result):
 # --- Refactored Comparison Rows Generation ---
 
 def _get_cached_retrieval_metrics(vec, retrieval, comparison_cache):
-    key = hashlib.sha256(vec.tobytes()).hexdigest()
+    key = ByteCount(vec.tobytes()).total
     if key not in comparison_cache:
         comparison_cache[key] = (retrieval.ranks(vec), retrieval.ann_hits(vec))
     return comparison_cache[key]
@@ -770,11 +770,11 @@ def _report_document(request, request_path, result, cfg, rows, npairs, threshold
             'request_path': source_name(request_path),
             'result_path': source_name(result),
             'sources': request['sources'], 'composition': request['composition'],
-            'implementation_sha256': request['implementation_sha256'], 'embedding_dtype': 'float32', 'threshold': threshold,
+            'implementation_size': request['implementation_size'], 'embedding_dtype': 'float32', 'threshold': threshold,
             'threshold_source': str(threshold_source), 'threshold_provenance': threshold_provenance, 'threshold_binding': threshold_binding, 'split': cfg.split, 'sample_pairs': npairs,
             'intervention': request['intervention'], 'retrieval_scope': request['retrieval_scope'],
             'missing_axes': request['missing_axes'], 'retrieval_catalog_count': len(candidate_ids),
-            'cohort_sha256': request.get('cohort_sha256'), 'coverage': request.get('coverage'),
+            'cohort_size': request.get('cohort_size'), 'coverage': request.get('coverage'),
             'retrieval_intervention': 'query only; fixed candidates', 'rows': rows}
 
 
@@ -799,7 +799,7 @@ def _setup_retrieval_comparison(request, request_path, cfg, candidate_vectors, v
 def _compute_baseline_metrics(retrieval, vectors):
     baseline_ranks = retrieval.ranks(vectors[0])
     ann_baseline = retrieval.ann_hits(vectors[0])
-    comparison_cache = {hashlib.sha256(vectors[0].tobytes()).hexdigest(): (baseline_ranks, ann_baseline)}
+    comparison_cache = {ByteCount(vectors[0].tobytes()).total: (baseline_ranks, ann_baseline)}
     return baseline_ranks, ann_baseline, comparison_cache
 
 def _finalize_and_save_report(request, request_path, result, cfg, rows, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids, save, config):

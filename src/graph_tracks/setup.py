@@ -55,9 +55,9 @@ from core.tracing import (
     TRACE_MAX_BATCH_ROWS,
     TraceRun,
 )
-from graph_tracks.data import census, file_hash, fit_vocabulary, load_records
+from graph_tracks.data import census, file_size, fit_vocabulary, load_records
 from graph_tracks.prepare import prepare
-from graph_tracks.text_cache import checkpoint_hash
+from graph_tracks.text_cache import checkpoint_size
 from graph_tracks.train import write_json
 
 _LOG = RunLogger(__name__)
@@ -416,7 +416,7 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     if output.exists():
         raise FileExistsError(output)
     checkpoint = checkpoint.resolve()
-    baseline_hash = checkpoint_hash(checkpoint)
+    baseline_size = checkpoint_size(checkpoint)
     catalog = load_dataset_deduped().fillna('')
     data = load_base_data(catalog, payload_variant='full')
     timing.mark('checkpoint_catalog_and_base_data')
@@ -445,13 +445,13 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     records = load_records(listings, trace=trace)
     write_json(output / layout.census, census(records, fit_vocabulary(records, trace=trace)))
     timing.mark('graph_features_and_census')
-    _write_setup_manifest(output, accounting, baseline_hash, checkpoint, pairs,
+    _write_setup_manifest(output, accounting, baseline_size, checkpoint, pairs,
                           F, git_revision())
     templates = _load_setup_templates(Path(TRAIN_ROOT))
-    _write_track_configs(output, templates, listings, baseline_hash)
+    _write_track_configs(output, templates, listings, baseline_size)
     _write_text_config(output, templates)
     _record_artifacts(trace, output, frame, assignments, pairs, listings, records)
-    timing.mark('hashes_manifest_and_track_configs')
+    timing.mark('sizes_manifest_and_track_configs')
     trace.write()
     return output
 
@@ -626,27 +626,27 @@ def _config_layout() -> str:
 
 
 def _pair_lineage_document(accounting: dict, output: Path, F) -> dict:
-    """The pair-lineage document: lineage + the input hashes an auditor re-verifies."""
+    """The pair-lineage document: lineage + the input sizes an auditor re-verifies."""
     return {'schema': 'er-graph-pair-lineage-v1',
             'pairs': accounting.pop('pair_lineage'),
             'source_trace_columns': accounting['source_trace_columns'],
             'missing_axes': accounting['missing_axes'],
             'augmentation': accounting['augmentation'],
-            'listing_pairs_sha256': file_hash(output / _setup_layout().pairs),
-            'source_labels_sha256': file_hash(F['labeled_pairs'])}
+            'listing_pairs_size': file_size(output / _setup_layout().pairs),
+            'source_labels_size': file_size(F['labeled_pairs'])}
 
 
-def _write_setup_manifest(output: Path, accounting: dict, baseline_hash: str,
+def _write_setup_manifest(output: Path, accounting: dict, baseline_size: int,
                           checkpoint: Path, pairs: pd.DataFrame, F, revision: str) -> None:
     """The setup manifest: the run's identity + pairing policy + pair counts."""
     from core.common import SEED
     from core.identity_policy import POLICY_PATH
     write_json(output / _setup_layout().manifest, {
         'schema': 'er-track-setup-v1', 'git_revision': revision, 'seed': SEED,
-        'source_catalog_sha256': file_hash(F['dataset_deduped']),
-        'labeled_pairs_sha256': file_hash(F['labeled_pairs']),
-        'identity_policy_sha256': file_hash(POLICY_PATH),
-        'text_checkpoint': str(checkpoint), 'text_checkpoint_sha256': baseline_hash,
+        'source_catalog_size': file_size(F['dataset_deduped']),
+        'labeled_pairs_size': file_size(F['labeled_pairs']),
+        'identity_policy_size': file_size(POLICY_PATH),
+        'text_checkpoint': str(checkpoint), 'text_checkpoint_size': baseline_size,
         'text_checkpoint_status': 'local baseline; fine-tuning history not inferred',
         'split_protocol': 'training.folds.derive_holdout',
         'pair_protocol': 'first listing per labeled entity plus same-entity positive chains',
@@ -684,7 +684,7 @@ def _suite_report_test() -> bool | None:
 
 
 def _write_track_configs(output: Path, templates: dict, listings: Path,
-                         baseline_hash: str) -> None:
+                         baseline_size: int) -> None:
     """Render each graph track's runnable config against this setup tree."""
     from graph_tracks.artifacts import name
     from graph_tracks.config import GraphConfig

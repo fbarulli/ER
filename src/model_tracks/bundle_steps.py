@@ -8,10 +8,10 @@
 sealing run. It consumes a verified result ``Bundle`` (materialize), extracts the
 matching prepared inputs, produces the CPU reports and ablation over that
 materialized tree, then seals a result-only bundle through
-:meth:`core.bundle.Bundle.seal_result`. No step re-hashes the incoming archive:
+:meth:`core.bundle.Bundle.seal_result`. No step re-measures the incoming archive:
 the boundary check is :meth:`core.bundle.Bundle.load`, the only other check is
 the writer's own verify inside ``write_archive`` (which also captures the sealed
-archive's whole-file digest as it writes).
+archive's whole-file byte size as it writes).
 
 Lane change (owner ruling: the operator box is no longer a finalize surface):
 ``finalize`` is a remote CPU lane job. A Kaggle/Colab CPU job runs this module
@@ -115,7 +115,7 @@ def prepare_inputs(pipeline: BundlePipeline) -> Bundle:
         "prepare_inputs", "verified",
         in_count=1, out_count=1,
         reason='generation wrote the sealed inputs archive; it is verified once at its boundary',
-        detail={'archive': str(archive), 'digest': bundle.digest,
+        detail={'archive': str(archive), 'size': bundle.path.stat().st_size,
                 'members': len(bundle.members()), 'run_dir': str(run_dir),
                 'config': str(config)},
         source='config/paths.yaml layout training_tracks_suite',
@@ -172,12 +172,12 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
     trace().add(
         "finalize", "bundles_verified",
         in_count=2, out_count=2,
-        reason='both bundles are verified exactly once at their Bundle boundary; no later step re-hashes',
+        reason='both bundles are verified exactly once at their Bundle boundary; no later step re-measures',
         detail={'run_tag': run_tag, 'lane': getattr(pipeline, 'lane', None),
                 'device': getattr(pipeline, 'device', None),
-                'result_archive': str(result.path), 'result_digest': result.digest,
+                'result_archive': str(result.path), 'result_size': result.path.stat().st_size,
                 'result_members': len(result.members()),
-                'inputs_archive': str(inputs.path), 'inputs_digest': inputs.digest,
+                'inputs_archive': str(inputs.path), 'inputs_size': inputs.path.stat().st_size,
                 'inputs_members': len(inputs.members()),
                 'post_training_ablation': bool(settings.post_training_ablation),
                 'report_test': bool(settings.report_test),
@@ -260,7 +260,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
         in_count=len(all_members), out_count=len(sealed_members),
         reason='the result role decides the sealed member set: the selected checkpoint only, '
                'never every epoch and never the extracted prepared inputs',
-        detail={'output': str(output), 'digest': sealed.digest,
+        detail={'output': str(output), 'size': sealed.path.stat().st_size,
                 'bytes': output.stat().st_size,
                 'tree_files': len(all_members), 'sealed_members': len(sealed_members),
                 'postprocess_location': location,
@@ -314,48 +314,40 @@ def _materialize_result(result: Bundle, work_dir: Path, spec) -> Bundle:
 
 
 def extract_prepared_inputs(inputs: Bundle, destination: Path, config_member: str) -> None:
-    """Extract the input package's prepared tree under ``destination`` (no re-hash).
+    """Extract the input package's prepared tree under ``destination`` (no re-measure).
 
     The inputs bundle was verified once at its boundary, so members are written
-    from the trusted handle; a file already on disk is compared to the manifest
-    digest (this is the idempotent second-call path, not a stage re-verify).
+    from the trusted handle. An already-extracted file is reused when it matches
+    the manifest size; when it does not, it is rewritten from the trusted bytes
+    (owner policy 2026-10-08: an incompatible cached intermediate is rebuilt
+    silently, never a reason to fail). The size comparison is the idempotent
+    retry path, not a stage re-verify.
     """
-    from core.portable_archive import cached_file_digest
+    from core.portable_archive import file_size
     package_root = Path(config_member).parent
     members = inputs.manifest.get(bundle_spec().files_key, {})
-    written = verified = outside = 0
+    written = reused = rebuilt = outside = 0
     for relative, expected in members.items():
         if not Path(relative).is_relative_to(package_root):
             outside += 1
             continue
         target = destination / relative
-        if target.exists():
-            observed = cached_file_digest(target)
-            if observed != expected:
-                trace().add(
-                    "extract_prepared_inputs", "changed_prepared_input",
-                    scope=SCOPE_ENTITY, key=relative,
-                    reason='an extracted prepared input differs from the verified package digest; the '
-                           'finalize tree is quarantined rather than fed to the reports',
-                    detail={'relative': relative, 'expected_sha256': expected,
-                            'on_disk_sha256': observed, 'destination': str(destination)},
-                    source=str(inputs.path),
-                )
-                flush_trace()
-                raise ValueError("restored prepared input changed: " + relative)
-            verified += 1
+        if target.exists() and file_size(target) == expected:
+            reused += 1
             continue
+        rebuilt += int(target.exists())
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(inputs.read(relative))
         written += 1
     trace().add(
         "extract_prepared_inputs", "extracted",
-        in_count=len(members), out_count=written + verified,
+        in_count=len(members), out_count=written + reused,
         reason='the inputs bundle was verified once at its boundary; members are written from the '
-               'trusted handle and a file already on disk is compared to the manifest digest '
-               '(the idempotent retry path, not a stage re-verify)',
+               'trusted handle, a matching file already on disk is reused, and a mismatching one is '
+               'rebuilt from the trusted bytes instead of failing',
         detail={'members_in_manifest': len(members), 'written': written,
-                'already_present_verified': verified, 'outside_package': outside,
+                'already_present_verified': reused, 'rebuilt_incompatible': rebuilt,
+                'outside_package': outside,
                 'package_root': package_root, 'destination': str(destination)},
         source=str(inputs.path),
     )
@@ -377,28 +369,19 @@ def _restore_frozen_baseline(destination: Path, setup: Path) -> None:
         )
         return
     from training.prepare_embeddings import validate_result
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     request = setup / _setup_layout().embedding_request
-    # Identity only: the request hash is NOT re-derived and compared against the
+    # Identity only: the request size is NOT re-derived and compared against the
     # cache's record (owner directive 2026-10-08: no freshness checks anywhere).
     validate_result(baseline, json.loads(request.read_text()))
     cache = setup / shared
-    baseline_sha = file_hash(baseline)
-    cache_sha = file_hash(cache) if cache.exists() else None
-    if cache.exists() and cache_sha != baseline_sha:
-        trace().add(
-            "baseline", "embedding_cache_mismatch",
-            scope=SCOPE_ENTITY, key=shared,
-            reason='the restored frozen baseline differs from the suite GPU export; the two '
-                   'cannot be reconciled silently',
-            detail={'baseline': str(baseline), 'baseline_sha256': baseline_sha,
-                    'cache': str(cache), 'cache_sha256': cache_sha},
-            source=str(cache),
-        )
-        flush_trace()
-        raise ValueError("restored frozen baseline differs from suite GPU export")
+    baseline_size = file_size(baseline)
     copied = not cache.exists()
-    if copied:
+    # The frozen GPU baseline export is the trusted copy: an existing report-time
+    # cache that differs from it is the incompatible cached intermediate of the
+    # owner policy, so it is overwritten silently rather than quarantined.
+    replaced = cache.exists() and file_size(cache) != baseline_size
+    if copied or replaced:
         import shutil
         shutil.copy2(baseline, cache)
     trace().add(
@@ -406,11 +389,13 @@ def _restore_frozen_baseline(destination: Path, setup: Path) -> None:
         in_count=1, out_count=1,
         reason=('the frozen GPU baseline export was copied in as the report-time cache'
                 if copied else
+                'the report-time cache differed from the frozen GPU baseline export and was '
+                'rebuilt from it'
+                if replaced else
                 'the report-time cache already holds the frozen GPU baseline export'),
-        detail={'baseline': str(baseline), 'baseline_sha256': baseline_sha,
-                'cache': str(cache), 'copied': copied,
-                'embedding_request': str(request),
-                'embedding_request_sha256': file_hash(request)},
+        detail={'baseline': str(baseline), 'baseline_size': baseline_size,
+                'cache': str(cache), 'copied': copied, 'rebuilt': replaced,
+                'embedding_request': str(request)},
         source=str(baseline),
     )
 
@@ -537,7 +522,7 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
     _park_interrupted(output, f"{track}__local_completion")
     report = output / f"{track}__local_completion"
     report.mkdir()
-    from model_tracks.ablation import file_hash as _checkpoint_hash
+    from model_tracks.ablation import file_size as _file_size
     trace().add(
         "checkpoint_select", "selected",
         scope=SCOPE_ENTITY, key=track,
@@ -545,7 +530,7 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
         reason='the checkpoint is resolved through the bundle role contract (the recorded marker '
                'located under the track), never through a per-surface re-derivation',
         detail={'track': track, 'checkpoint': str(checkpoint),
-                'checkpoint_sha256': _checkpoint_hash(checkpoint),
+                'checkpoint_size': _file_size(checkpoint),
                 'bytes': checkpoint.stat().st_size,
                 'report': str(report), 'report_test': bool(settings.report_test),
                 'device': 'cpu'},

@@ -1,5 +1,5 @@
 """Preparation must reject stale prerequisites, record measured counts, and stop on failure."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 import subprocess
@@ -10,18 +10,18 @@ import pytest
 from training.prepare_all import refresh_gate_census, verify_stage_manifest, prepare_all
 
 
-def test_resume_rejects_changed_prerequisite_bytes(tmp_path):
+def test_stage_manifest_usable_reports_changed_prerequisite_bytes(tmp_path):
     path=tmp_path/'pairs.csv';path.write_text('gtin1,gtin2\n1,2\n')
-    digest=hashlib.sha256(path.read_bytes()).hexdigest()
+    digest=ByteCount(path.read_bytes()).total
     manifest=tmp_path/'manifest.json'
     manifest.write_text(json.dumps({'schema_version':'1','stage':'pairs','started':'2026-10-04',
                                    'status':'complete','inputs':[], 'row_accounting':{},
                                    'environment':{}, 'expected_outputs':[],
-                                   'outputs':[{'path':str(path),'sha256':digest}]}))
-    verify_stage_manifest(manifest)
+                                   'outputs':[{'path':str(path),'size':digest}]}))
+    assert verify_stage_manifest(manifest) is True
     path.write_text('gtin1,gtin2\n1,3\n')
-    with pytest.raises(ValueError,match='Stale prerequisite'):
-        verify_stage_manifest(manifest)
+    # A changed prerequisite is not an error: the caller rebuilds (no raise).
+    assert verify_stage_manifest(manifest) is False
 
 
 def test_census_is_measured_and_recorded_without_config_rewrite(tmp_path):
@@ -71,16 +71,16 @@ def test_failed_stage_stops_preparation_and_retains_smoke(tmp_path,monkeypatch):
     assert smoke.read_text()=='existing smoke bytes'
 
 
-def test_resume_rejects_corrupted_prepared_output(tmp_path):
+def test_reusable_outputs_report_a_corrupted_prepared_output(tmp_path):
     from training.prepare_all import PreparedFile, verify_reusable_outputs
     artifact = tmp_path / 'graph.npz'
     artifact.write_bytes(b'original')
     inventory = {str(artifact): PreparedFile(
-        sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(), bytes=artifact.stat().st_size)}
-    verify_reusable_outputs(inventory)
+        size=ByteCount(artifact.read_bytes()).total, bytes=artifact.stat().st_size)}
+    assert verify_reusable_outputs(inventory) == []
     artifact.write_bytes(b'changed!')
-    with pytest.raises(ValueError, match='Stale prepared resume input'):
-        verify_reusable_outputs(inventory)
+    # The mismatch is reported for a silent rebuild, never raised.
+    assert verify_reusable_outputs(inventory) == [str(artifact)]
 
 
 def test_census_rejects_reversed_duplicate(tmp_path):
@@ -99,8 +99,8 @@ def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeyp
     alias = tmp_path / 'alias'
     alias.symlink_to(artifact)
     calls = []
-    original = preparation.sha256
-    monkeypatch.setattr(preparation, 'sha256', lambda path: (calls.append(path), original(path))[1])
+    original = preparation.size
+    monkeypatch.setattr(preparation, 'size', lambda path: (calls.append(path), original(path))[1])
     first = preparation.file_inventory([artifact, artifact, alias])
     assert len(calls) == len(first) == 1
     stat = artifact.stat()
@@ -126,7 +126,7 @@ def test_provenance_includes_nested_json(tmp_path, monkeypatch):
     for name in ('CONFIG_PATH', 'TRAINING_CONFIG_PATH', 'VOCABULARY_CONFIG_PATH'):
         monkeypatch.setattr(common, name, training)
     monkeypatch.setattr(common, 'DATA_PATH', raw)
-    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_hash', lambda path, **kwargs: '0'*64)
+    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_size', lambda path, **kwargs: '0'*64)
     first = preparation.preparation_provenance(tmp_path, training, 'model')
     policy.write_text('{"version": 2}')
     assert preparation.preparation_provenance(tmp_path, training, 'model') != first
@@ -168,13 +168,13 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
         elif 'graph_tracks.setup' in command:
             setup.mkdir()
             (setup/'setup_manifest.json').write_text(json.dumps({
-                'source_catalog_sha256': preparation.sha256(files['dataset_deduped']),
-                'labeled_pairs_sha256': preparation.sha256(files['labeled_pairs']),
-                'text_checkpoint_sha256': '0'*64,
+                'source_catalog_size': preparation.size(files['dataset_deduped']),
+                'labeled_pairs_size': preparation.size(files['labeled_pairs']),
+                'text_checkpoint_size': '0'*64,
             }))
         elif 'training.train' in command:
             bundle = Path(command[command.index('--prepare-bundle') + 1])
-            bundle.parent.mkdir(parents=True)
+            bundle.parent.mkdir(parents=True, exist_ok=True)
             bundle.write_bytes(b'bundle')
             Path(str(bundle)+'.json').write_text('{}')
         elif 'model_tracks.package' in command:
@@ -203,10 +203,13 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
     prepare_all(run_dir=run_dir, resume_from='suite_inputs')
     assert len(calls) == 1 and 'model_tracks.package' in calls[0]
     assert verified == [True, True]
-    # A reference edit must invalidate resume, even with unchanged size.
+    # A reference edit must NOT fail the resume: every stage rebuilds silently
+    # (owner directive 2026-10-08: no freshness gate decides reuse).
     files['number_reference'].write_text('modified')
-    with pytest.raises(ValueError, match='Stale prepared resume input'):
-        prepare_all(run_dir=run_dir, resume_from='suite_inputs')
+    calls.clear()
+    manifest_path = prepare_all(run_dir=run_dir, resume_from='suite_inputs')
+    assert len(calls) > 1 and 'model_tracks.package' in ' '.join(' '.join(c) for c in calls)
+    assert json.loads(manifest_path.read_text())['status'] == 'complete'
 
 
 def test_bundle_copy_remains_independent(tmp_path):

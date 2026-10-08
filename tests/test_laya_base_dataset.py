@@ -19,11 +19,30 @@ from cli import laya_lane
 REVISION_PIN = "abc123def"
 
 
+def _hosted_slug(role: str) -> str:
+    """The hosted-dataset slug the lane must use for ``role`` (registry SSOT)."""
+    from core.hosted_dataset import hosted_registry
+
+    return hosted_registry().by_role(role).slug
+
+
+def _drop_hosted_role(monkeypatch, role: str) -> None:
+    """Serve a registry that lacks ``role`` (the fail-loud pin, never a path)."""
+    from core import laya_config
+    from core.hosted_dataset import hosted_registry
+
+    base = hosted_registry()
+    entries = {slug: entry for slug, entry in base.entries.items()
+               if entry.role != role}
+    monkeypatch.setattr(laya_config, "hosted_registry",
+                        lambda: base.model_copy(update={"entries": entries}))
+
+
 def _spec(tmp_path, monkeypatch, **updates):
+    # only the KERNEL slug is spec config here: the corpus/corpus-base/ckpt
+    # DATASET slugs come from the hosted registry (config/hosted_datasets.yaml)
     cfg_spec = LayaSpec(**{
         "finetune_kernel_slug": "fbarulli/er-laya-finetune",
-        "finetune_dataset_slug": "fbarulli/er-laya-train",
-        "base_model_dataset": "fbarulli/er-laya-base",
         **updates,
     })
     monkeypatch.setattr(laya_lane, "_spec", lambda: cfg_spec)
@@ -60,11 +79,12 @@ def test_staged_finetune_kernel_attaches_the_base_dataset(
     receipt = laya_lane.stage_finetune_kernel(run_tag="laya_test")
     stage = Path(receipt["staged"])
     metadata = json.loads((stage / "kernel-metadata.json").read_text())
-    # the base-model dataset rides alongside the corpus dataset
+    # the base-model dataset rides alongside the corpus dataset (both are
+    # hosted entries, never a slug spelled in this lane)
     assert metadata["dataset_sources"] == [
-        "fbarulli/er-laya-train", "fbarulli/er-laya-base"]
+        _hosted_slug("corpus"), _hosted_slug("base")]
     assert receipt["base_model"] == {
-        "dataset": "fbarulli/er-laya-base",
+        "dataset": _hosted_slug("base"),
         "archive": "convaiinnovations-laya.tar.zst",
         "dir": "convaiinnovations-laya",
     }
@@ -92,12 +112,15 @@ def test_rendered_kernel_extracts_and_points_base_at_local_dir(
     assert "huggingface_hub" not in script
 
 
-def test_finetune_kernel_fails_loud_without_base_dataset(
+def test_finetune_kernel_fails_loud_when_the_registry_lacks_the_base_role(
         tmp_path, monkeypatch):
-    _spec(tmp_path, monkeypatch, base_model_dataset=None)
+    """The base checkpoint travels as the hosted `base` dataset: a registry
+    without that role fails loud — never a Hub fetch, never a guess."""
+    _spec(tmp_path, monkeypatch)
     _corpus(tmp_path)
     _hermetic_staging(monkeypatch)
-    with pytest.raises(RuntimeError, match="base_model_dataset"):
+    _drop_hosted_role(monkeypatch, "base")
+    with pytest.raises(KeyError, match="base"):
         laya_lane.stage_finetune_kernel(run_tag="laya_test")
 
 
@@ -265,12 +288,12 @@ def test_staged_finetune_eval_kernel_attaches_corpus_and_checkpoint(
     assert metadata["code_file"] == "laya_finetune_eval.py"
     # the corpus dataset rides beside the fine-tuned checkpoint dataset
     assert metadata["dataset_sources"] == [
-        "fbarulli/er-laya-train", "fbarulli/er-laya-finetune-ckpt"]
+        _hosted_slug("corpus"), _hosted_slug("ckpt")]
     assert (stage / "laya_finetune_eval.py").is_file()
     # the corpus payload lands beside THIS kernel so the push gate finds it
     assert (stage / "dataset_payload" / "test.jsonl").is_file()
     assert receipt["kind"] == "finetune-eval"
-    assert receipt["checkpoint_dataset"] == "fbarulli/er-laya-finetune-ckpt"
+    assert receipt["checkpoint_dataset"] == _hosted_slug("ckpt")
     assert receipt["checkpoint_dir_hint"] == "checkpoint"
     assert receipt["eval_split"] == "test"
     assert receipt["eval_jsonl"] == "test.jsonl"
@@ -307,13 +330,24 @@ def test_rendered_finetune_eval_kernel_is_eval_only(tmp_path, monkeypatch):
     assert "laya-train" not in script
 
 
-def test_finetune_eval_kernel_fails_loud_without_checkpoint_source(
+def test_finetune_eval_kernel_skips_the_ckpt_attach_with_an_explicit_path(
         tmp_path, monkeypatch):
-    _spec(tmp_path, monkeypatch, finetune_ckpt_dataset=None)
+    """An explicit --checkpoint path beats the hosted `ckpt` dataset: the
+    kernel bakes the path and attaches ONLY the corpus dataset."""
+    _spec(tmp_path, monkeypatch)
     _corpus(tmp_path)
     _hermetic_staging(monkeypatch)
-    with pytest.raises(RuntimeError, match="checkpoint"):
-        laya_lane.stage_finetune_eval_kernel(run_tag="laya_test")
+    local = tmp_path / "checkpoint"
+    local.mkdir()
+    receipt = laya_lane.stage_finetune_eval_kernel(run_tag="laya_test",
+                                                   checkpoint_path=local)
+    stage = Path(receipt["staged"])
+    metadata = json.loads((stage / "kernel-metadata.json").read_text())
+    assert metadata["dataset_sources"] == [_hosted_slug("corpus")]
+    assert receipt["checkpoint_dataset"] == _hosted_slug("ckpt")
+    assert receipt["checkpoint_path"] == str(local)
+    script = (stage / "laya_finetune_eval.py").read_text()
+    assert f'CHECKPOINT_PATH = "{local}"' in script
 
 
 def _fake_laya_train():
@@ -534,17 +568,17 @@ def test_corpus_traceability_reports_the_min_confidence():
               "eval_split": "test", "batch_size": 16,
               "abstention_thresholds": {"noul:2": 0.7}}
     document = laya_lane.corpus_traceability(
-        report, model_id="laya", digests={"corpus_sha256": digest})
+        report, model_id="laya", digests={"corpus_size": digest})
     # the fitted map's "default" sentinel is the gate when nothing is pinned
     assert document.provenance.min_confidence is None
     report["abstention_thresholds"] = {"noul:2": 0.7, "default": 0.7}
     document = laya_lane.corpus_traceability(
-        report, model_id="laya", digests={"corpus_sha256": digest})
+        report, model_id="laya", digests={"corpus_size": digest})
     assert document.provenance.min_confidence == 0.7
     # an explicit pin wins over the fitted default
     report["min_confidence"] = 0.9
     document = laya_lane.corpus_traceability(
-        report, model_id="laya", digests={"corpus_sha256": digest})
+        report, model_id="laya", digests={"corpus_size": digest})
     assert document.provenance.min_confidence == 0.9
 
 

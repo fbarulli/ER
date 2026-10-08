@@ -20,13 +20,33 @@ from core.schemas import LayaSpec
 from cli import laya_lane
 
 
+def _hosted_slug(role: str) -> str:
+    """The hosted-dataset slug the lane must use for ``role`` (registry SSOT)."""
+    from core.hosted_dataset import hosted_registry
+
+    return hosted_registry().by_role(role).slug
+
+
+def _drop_hosted_role(monkeypatch, role: str) -> None:
+    """Serve a registry that lacks ``role`` (the fail-loud pin, never a path)."""
+    from core import laya_config
+    from core.hosted_dataset import hosted_registry
+
+    base = hosted_registry()
+    entries = {slug: entry for slug, entry in base.entries.items()
+               if entry.role != role}
+    monkeypatch.setattr(laya_config, "hosted_registry",
+                        lambda: base.model_copy(update={"entries": entries}))
+
+
 def _spec(tmp_path, monkeypatch, **updates):
-    """Point the lane at a tmp TRAIN_ROOT + hermetic cfg."""
-    cfg_spec = LayaSpec(**{
-        "export_dataset_slug": "fbarulli/er-laya-decision",
-        "dataset_slug": "fbarulli/er-laya-payload",
-        **updates,
-    })
+    """Point the lane at a tmp TRAIN_ROOT + hermetic cfg.
+
+    No hosted slug is set here: the lane reads every one from the registry
+    (``config/hosted_datasets.yaml``), so these tests assert the registry's own
+    values (``_hosted_slug``).
+    """
+    cfg_spec = LayaSpec(**updates)
     monkeypatch.setattr(laya_lane, "_spec", lambda: cfg_spec)
     monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
     # Hermetic branch: the real config may carry a local branch pin (e.g.
@@ -111,6 +131,39 @@ def test_laya_spec_additive_and_yaml_unchanged():
     assert cfg_spec.gpu == "T4"
     assert cfg_spec.checkpoint_hub == "convaiinnovations/laya"
     assert cfg_spec.question_schema == "config/laya.question.json"
+
+
+def test_laya_spec_references_the_hosted_registry():
+    """SSOT pin: LayaSpec declares NO hosted slug.
+
+    The six fields this lane used to carry (`base_model_dataset`,
+    `dataset_slug`, `export_dataset_slug`, `finetune_dataset_slug`,
+    `finetune_ckpt_dataset`, `holdout_dataset_slug`) are gone: every slug is
+    read from the registry, and ``config/hosted_datasets.yaml`` is the ONE
+    place a hosted slug is spelled (the lane's kernel slugs are not hosted
+    datasets and stay fields).
+    """
+    from core import laya_config
+    from core.hosted_dataset import hosted_registry
+
+    removed = {
+        "base_model_dataset", "dataset_slug", "export_dataset_slug",
+        "finetune_dataset_slug", "finetune_ckpt_dataset",
+        "holdout_dataset_slug",
+    }
+    assert not removed & set(LayaSpec.model_fields)
+    source = Path(laya_config.__file__).read_text(encoding="utf-8")
+    registry = hosted_registry()
+    # no hosted slug as a CODE literal (a comment may name one): the registry
+    # document is the only place a slug is declared
+    literals = {node.value for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)}
+    assert not literals & set(registry.slugs())
+    spec = LayaSpec()
+    assert spec.hosted_slug("requests") == "fbarulli/er-laya-requests"
+    assert spec.hosted_slug("base") == "fbarulli/er-laya-base"
+    assert spec.mount_root == Path("/kaggle/input")
 
 
 @pytest.mark.parametrize("updates", [
@@ -242,10 +295,16 @@ def test_unbound_csv_binding_fails_loud(tmp_path, monkeypatch):
         laya_lane.stage_decision_input("kaggle", decision_kind="attribute")
 
 
-def test_stage_decision_kernel_fails_loud_without_slug(tmp_path, monkeypatch):
-    _spec(tmp_path, monkeypatch, export_dataset_slug=None)
-    with pytest.raises(RuntimeError, match="export_dataset_slug"):
+def test_stage_decision_kernel_fails_loud_without_the_hosted_role(
+        tmp_path, monkeypatch):
+    """The slug is not a knob: a registry that does not declare the decision
+    roles fails the stage loudly BEFORE any payload write."""
+    _spec(tmp_path, monkeypatch)
+    _drop_hosted_role(monkeypatch, "decisions")
+    with pytest.raises(KeyError, match="decisions"):
         laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = tmp_path / "results/laya_lane/kaggle/attribute"
+    assert not (stage / "kernel-metadata.json").exists()
 
 
 def test_stage_decision_kernel_fails_loud_when_disabled(tmp_path, monkeypatch):
@@ -261,7 +320,7 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     _dataset_fixture(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
-    assert receipt["kernel"] == "fbarulli/er-laya-decision"
+    assert receipt["kernel"] == _hosted_slug("decisions")
     assert receipt["kind"] == "attribute"
     assert receipt["gpu"] == "T4 (single)"
     assert receipt["run_tag"].startswith("laya_")
@@ -307,14 +366,14 @@ def test_stage_kaggle_payload_contract(tmp_path, monkeypatch):
     assert "_runtime_root = Path(root)" not in script
     assert '_runtime_files = ("dataset.csv"' in script
     assert "[runtime-preflight] verified %d required files" in script
-    # BUG 2 fix: the inputs travel as the dataset — metadata attaches the
-    # slug and the staging receipt records the dataset payload files
-    assert metadata["dataset_sources"] == ["fbarulli/er-laya-payload"]
+    # the inputs travel as the hosted `requests` dataset — metadata attaches
+    # the registry's slug and the staging receipt records the dataset payload
+    assert metadata["dataset_sources"] == [_hosted_slug("requests")]
     payload_dir = stage / "dataset_payload"
     assert (payload_dir / "dataset-metadata.json").is_file()
     assert (payload_dir / "dataset.csv").is_file()
     assert (payload_dir / "laya.question.json").is_file()
-    assert receipt["dataset"]["slug"] == "fbarulli/er-laya-payload"
+    assert receipt["dataset"]["slug"] == _hosted_slug("requests")
     # the kernel resolves the RENAMED csv by name (the dataset csv lands
     # under /kaggle/input/<slug>/dataset.csv; rglob finds it)
     assert 'DECISION_CSV = "dataset.csv"' in script
@@ -335,12 +394,10 @@ def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     receipt = laya_lane.stage_decision_kernel(decision_kind="identity")
     assert receipt["kind"] == "identity"
     assert (Path(receipt["staged"]) / "laya_decision.py").is_file()
-    # laya-evals is its own (optional) kernel: a separate eval script.
-    eval_spec_state = laya_lane._spec().model_copy(update={
-        "export_dataset_slug": "fbarulli/er-laya-eval"})
-    monkeypatch.setattr(laya_lane, "_spec", lambda: eval_spec_state)
+    # laya-evals is its own (optional) kernel: a separate eval script, and it
+    # publishes under the SAME hosted `decisions` dataset (kernel id == slug).
     eval_receipt = laya_lane.stage_decision_kernel(decision_kind="laya-cli-eval")
-    assert eval_receipt["kernel"] == "fbarulli/er-laya-eval"
+    assert eval_receipt["kernel"] == _hosted_slug("decisions")
     assert eval_receipt["code_file"] == "laya_evals.py"
     assert (Path(eval_receipt["staged"]) / "laya_evals.py").is_file()
     # the eval kernel carries the same preflight inventory bake
@@ -356,17 +413,6 @@ def test_stage_identity_and_eval_kinds(tmp_path, monkeypatch):
     # the eval harness is unlatched by config default; the receipt records
     # what toggle state the kernel actually holds
     assert eval_receipt["evals_enabled"] is False
-
-
-def test_stage_decision_kernel_fails_loud_without_dataset_slug(
-        tmp_path, monkeypatch):
-    """BUG 2 regression pin: the kernel inputs travel as the dataset; an
-    unset laya.dataset_slug may never stage a push-less payload silently."""
-    _spec(tmp_path, monkeypatch, dataset_slug=None)
-    _question_schema(tmp_path, monkeypatch)
-    _dataset_fixture(tmp_path, monkeypatch)
-    with pytest.raises(RuntimeError, match="dataset_slug"):
-        laya_lane.stage_decision_kernel(decision_kind="attribute")
 
 
 def test_stage_decision_kernel_refuses_stale_published_tip(
@@ -405,7 +451,7 @@ def test_dataset_payload_contract(tmp_path, monkeypatch):
     _question_schema(tmp_path, monkeypatch)
     _dataset_fixture(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
-    import hashlib
+    from core.portable_archive import ByteCount
 
     receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
     stage = Path(receipt["staged"])
@@ -414,7 +460,7 @@ def test_dataset_payload_contract(tmp_path, monkeypatch):
         (payload / "dataset-metadata.json").read_text())
     assert metadata == {
         "title": "er laya requests",
-        "id": "fbarulli/er-laya-payload",
+        "id": _hosted_slug("requests"),
         "licenses": [{"name": "other"}],
     }
     data = Path(receipt["decision_input"])
@@ -422,9 +468,9 @@ def test_dataset_payload_contract(tmp_path, monkeypatch):
     assert (payload / "laya.question.json").is_file()
     payload_receipt = json.loads(
         (payload / "dataset_payload.receipt.json").read_text())
-    assert payload_receipt["dataset"] == "fbarulli/er-laya-payload"
-    assert payload_receipt["files"]["dataset.csv"] == hashlib.sha256(
-        data.read_bytes()).hexdigest()
+    assert payload_receipt["dataset"] == _hosted_slug("requests")
+    assert payload_receipt["files"]["dataset.csv"] == ByteCount(
+        data.read_bytes()).total
     # the attach itself is recorded in the KERNel staging receipt; the
     # executed publish adds action + version later (see the publish pin)
     assert receipt["dataset"]["payload"] == str(payload)
@@ -667,11 +713,11 @@ def test_decision_input_flag_forwards_override(tmp_path, monkeypatch):
     receipt = json.loads((stage / "attribute.receipt.json").read_text())
     # the kernel receipt carries the override (the decision-input receipt
     # of the same name is superseded by the kernel receipt co-located there)
-    import hashlib
+    from core.portable_archive import ByteCount
 
     assert receipt["decision_input"].endswith("alternate.csv")
-    assert receipt["decision_sha256"] == hashlib.sha256(
-        alternate.read_bytes()).hexdigest()
+    assert receipt["decision_size"] == ByteCount(
+        alternate.read_bytes()).total
 
 
 # ── accuracy/F1 metric contract (owner order 2026-10-07) ──────────────────
@@ -843,10 +889,10 @@ def test_builder_emits_all_pairs_in_row_order_with_fv_columns(tmp_path):
     assert census["rows"] == 2
     assert census["label_distribution"] == {"0": 1, "1": 1}
     assert census["missing_sku_lookups"] == 0
-    import hashlib
+    from core.portable_archive import ByteCount
 
-    assert census["sha256"] == hashlib.sha256(
-        output.read_bytes()).hexdigest()
+    assert census["size"] == ByteCount(
+        output.read_bytes()).total
 
 
 def test_builder_missing_sku_lookup_fails_loud_before_writing(tmp_path):
@@ -1059,14 +1105,14 @@ def test_corpus_build_emits_laya_jsonl_counts_and_receipt(tmp_path):
     assert receipt["package_state_rule"] == builder.PACKAGE_STATE_RULE
 
     # every split jsonl: laya case shape, questions verbatim, valid labels
-    import hashlib
+    from core.portable_archive import ByteCount
 
     for key in ("train", "dev", "test"):
         path = out / f"{key}.jsonl"
         lines = path.read_text(encoding="utf-8").splitlines()
         assert len(lines) == receipt["split_sizes"][key]
-        assert receipt["sha256"][f"{key}.jsonl"] == hashlib.sha256(
-            path.read_bytes()).hexdigest()
+        assert receipt["size"][f"{key}.jsonl"] == ByteCount(
+            path.read_bytes()).total
         for line in lines:
             record = json.loads(line)
             assert set(record) == {"state", "questions", "expected",
@@ -1102,7 +1148,7 @@ def test_corpus_build_emits_laya_jsonl_counts_and_receipt(tmp_path):
         if "package_state" in json.loads(line)["expected"]]
     assert package.count("true") == 3
     assert package.count("false") == 2
-    assert receipt["sha256"]["train.jsonl"]  # present
+    assert receipt["size"]["train.jsonl"]  # present
 
 
 def test_corpus_fallback_is_quarantined_never_in_corpus(tmp_path):
@@ -1142,7 +1188,7 @@ def test_corpus_build_is_deterministic(tmp_path):
                                 gate_path=gate, question_path=question_path,
                                 output_dir=second, seed=1729)
     # a rerun reproduces every byte (seed + deterministic split allocation)
-    assert receipt_one["sha256"] == receipt_two["sha256"]
+    assert receipt_one["size"] == receipt_two["size"]
     for name in ("train.jsonl", "dev.jsonl", "test.jsonl",
                  "unknown_pairs.csv", "receipt.json"):
         assert (first / name).read_bytes() == (second / name).read_bytes()
@@ -1199,7 +1245,7 @@ def test_fetch_plan_is_json_serializable_end_to_end(tmp_path, monkeypatch):
     if not report_path.is_file():
         pytest.skip(f"real artifact not present: {report_path}")
     digest = "6" * 64
-    receipt = {"corpus_sha256": {"train.jsonl": digest},
+    receipt = {"corpus_size": {"train.jsonl": digest},
                "output_dir": "/kaggle/working/checkpoint"}
 
     def fake_run(args, **kwargs):
@@ -1220,7 +1266,7 @@ def test_fetch_plan_is_json_serializable_end_to_end(tmp_path, monkeypatch):
                                           execute=True)
     document = plan["traceability"]["train_report.json"]
     assert isinstance(document, dict)  # JSON form, never a pydantic model
-    assert document["provenance"]["digests"]["corpus_sha256"] == digest
+    assert document["provenance"]["digests"]["corpus_size"] == digest
     # the plan is exactly what main() prints
     assert json.loads(json.dumps(plan)) == plan
 
@@ -1248,7 +1294,7 @@ def test_fetch_emits_the_record_grain_traceability_artifact(tmp_path, monkeypatc
     monkeypatch.setitem(common._BINDING_ROOTS, "results", tmp_path)
     monkeypatch.setattr(common, "trace_artifact", lambda *args, **kwargs: None)
     receipt = {"gpu_kind": "identity", "batch_size": 4, "split": "dev",
-               "decision_csv_sha256": "8" * 64}
+               "decision_csv_size": "8" * 64}
 
     def fake_run(args, **kwargs):
         destination = Path(args[args.index("-p") + 1])
@@ -1283,7 +1329,7 @@ def test_fetch_emits_the_record_grain_traceability_artifact(tmp_path, monkeypatc
 def test_base_model_archive_seals_as_an_inputs_bundle(tmp_path, monkeypatch):
     """The base-model dataset archive seals through the shared writer.
 
-    The receipt's sha256 token IS the sealed digest (the archive is never read
+    The receipt's size token IS the sealed digest (the archive is never read
     back), and the archive loads as an `inputs` Bundle while the
     `rl_agent_config.json` layout `extract_base_model` resolves stays intact.
     """
@@ -1303,7 +1349,7 @@ def test_base_model_archive_seals_as_an_inputs_bundle(tmp_path, monkeypatch):
     archive = tmp_path / "stage" / "convaiinnovations-laya.tar.zst"
     assert receipt["bundle_role"] == "inputs"
     assert receipt["manifest"] == laya_lane.BASE_MODEL_MANIFEST_FILE
-    assert receipt["sha256"] == laya_lane.sha256_file(archive)
+    assert receipt["size"] == laya_lane.file_size(archive)
     handle = Bundle.load(archive, BundleRole.inputs,
                          manifest_name=laya_lane.BASE_MODEL_MANIFEST_FILE)
     assert "convaiinnovations-laya/rl_agent_config.json" in handle.members()

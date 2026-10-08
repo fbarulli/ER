@@ -90,7 +90,7 @@ from pathlib import Path
 
 from core.common import TRAINING_CONFIG_PATH, TRAIN_ROOT, ner_config, resolve_model, training_cfg
 from core.archive_reader import tar_archive
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 NER_SOURCE_DIR = Path(__file__).resolve().parent
 ARTIFACT_MANIFEST_NAME = "ner_artifacts_manifest.json"
@@ -503,17 +503,16 @@ def monitor_training(settings: dict) -> None:
     log("[train] remote process finished")
 
 
-def _sha256_file(path: Path) -> str:
-    """Hash one downloaded NER artifact through the SHARED digest home.
+def _file_size(path: Path) -> int:
+    """Measure one downloaded NER artifact through the SHARED size home.
 
-    ``core.manifest.sha256_file`` forwards to
-    ``core.portable_archive.raw_file_digest``, the ONE implementation; this
+    ``core.manifest.file_size`` is the ONE structural size accessor; this
     consumer runs in the repo checkout and delegates there, so the verifying
-    side never re-implements (or drifts from) that algorithm. The producer
-    (`ner.ner._sha256_file`) is the single pinned standalone copy, because the
+    side never re-implements (or drifts from) that measure. The producer
+    (`ner.ner._file_size`) is the single pinned standalone copy, because the
     bare remote runtime it runs on ships no ``core.manifest``.
     """
-    return sha256_file(path)
+    return file_size(path)
 
 
 def _read_artifact_manifest(path: Path) -> dict[str, dict]:
@@ -534,11 +533,9 @@ def _read_artifact_manifest(path: Path) -> dict[str, dict]:
         )
     for name in EXPECTED_FINAL_ARTIFACTS:
         entry = artifacts[name]
-        digest = entry.get("sha256") if isinstance(entry, dict) else None
-        if not isinstance(digest, str) or len(digest) != 64 or any(
-            char not in "0123456789abcdef" for char in digest
-        ):
-            fail(f"NER artifact manifest has invalid sha256 for {name}")
+        size = entry.get("size") if isinstance(entry, dict) else None
+        if not isinstance(size, int) or size < 0:
+            fail(f"NER artifact manifest has invalid size for {name}")
     return artifacts
 
 
@@ -575,14 +572,14 @@ def download_if_exists(
         log(message)
 
 
-def _verify_download(path: Path, expected_sha256: str) -> None:
+def _verify_download(path: Path, expected_size: int) -> None:
     if not path.is_file():
         fail(f"Downloaded NER artifact is missing locally: {path}")
-    actual = _sha256_file(path)
-    if actual != expected_sha256:
+    actual = _file_size(path)
+    if actual != expected_size:
         fail(
-            f"NER download hash mismatch for {path}: "
-            f"remote={expected_sha256[:12]} local={actual[:12]}"
+            f"NER download size mismatch for {path}: "
+            f"remote={expected_size} local={actual}"
         )
 
 
@@ -593,7 +590,7 @@ def download_results(settings: dict) -> None:
     deliberately NOT a `Bundle`: the artifacts travel as separate HF objects,
     not as members of one sealed archive — see `ner._write_artifact_manifest`).
     The manifest is fetched FIRST and each artifact is accepted only when it
-    matches the remote-generated digest, so a partial transfer can never look
+    matches the remote-recorded size, so a partial transfer can never look
     complete.
     """
     remote = settings["remote_results_dir"]
@@ -610,7 +607,7 @@ def download_results(settings: dict) -> None:
     for name in EXPECTED_FINAL_ARTIFACTS:
         local_path = local / name
         download_if_exists(settings, f"{remote}/{name}", local_path)
-        _verify_download(local_path, manifest[name]["sha256"])
+        _verify_download(local_path, manifest[name]["size"])
 
     # This diagnostic is useful but is not a final deliverable, so a missing
     # log cannot be treated as a successful substitute for model artifacts.

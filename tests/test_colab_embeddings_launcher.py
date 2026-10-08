@@ -35,7 +35,7 @@ def test_remote_program_executes_without_indentation_error(tmp_path):
     with tarfile.open(package, 'w:gz') as archive:
         archive.add(source, arcname='encode.py')
     script = eval(compile(ast.Expression(assignment.value), '<launcher>', 'eval'),
-                  {'backend': module.backend, 'remote_package': str(package), 'remote_checkpoint': '/content/EuromonitoR/artifacts/models/all-MiniLM-L6-v2', 'job': str(tmp_path), 'package': package, 'device':'cuda', 'file_hash': lambda _: __import__('hashlib').sha256(package.read_bytes()).hexdigest()})
+                  {'backend': module.backend, 'remote_package': str(package), 'remote_checkpoint': '/content/EuromonitoR/artifacts/models/all-MiniLM-L6-v2', 'job': str(tmp_path), 'package': package, 'device':'cuda', 'file_size': lambda _: len(package.read_bytes())})
     with patch('subprocess.run') as run:
         exec(compile(script, '<remote>', 'exec'), {})
     args, kwargs = run.call_args
@@ -53,7 +53,7 @@ def test_local_handoff_validates_cache_before_suite(tmp_path):
         calls.append('cache')
         assert args[0] == cache
         assert args[1] == {}
-        return {'status': 'reused', 'sha256': 'verified'}
+        return {'status': 'reused', 'size': 'verified'}
     def preflight(config):
         calls.append('suite')
         assert config == tmp_path / 'config/model_tracks.yaml'
@@ -61,7 +61,7 @@ def test_local_handoff_validates_cache_before_suite(tmp_path):
     with patch.object(module, 'TRAIN_ROOT', tmp_path), \
          patch('core.common.resolve_model', return_value=str(tmp_path / 'checkpoint')), \
          patch.object(module, 'validate_result', side_effect=validate), \
-         patch.object(module, 'file_hash', return_value='verified'), \
+         patch.object(module, 'file_size', return_value='verified'), \
          patch('model_tracks.preflight.preflight', side_effect=preflight):
         module.complete_local_handoff(cache, {})
     assert calls == ['cache', 'suite']
@@ -120,7 +120,7 @@ def test_valid_embeddings_preserve_failed_training_handoff_evidence(tmp_path,mon
     module,_ = launcher()
     monkeypatch.setattr(module,'TRAIN_ROOT',tmp_path)
     monkeypatch.setattr(module,'validate_result',lambda *args,**kwargs:None)
-    monkeypatch.setattr(module,'file_hash',lambda *args:'verified')
+    monkeypatch.setattr(module,'file_size',lambda *args:'verified')
     cache = tmp_path/'vectors.npz'; cache.write_bytes(b'vectors')
     from model_tracks import preflight
     def blocked(*args):
@@ -129,5 +129,5 @@ def test_valid_embeddings_preserve_failed_training_handoff_evidence(tmp_path,mon
     result = module.complete_local_handoff(cache,{})
     document = json.loads(result.read_text())
     assert document['status'] == 'blocked'
-    assert document['sha256'] == 'verified'
+    assert document['size'] == 'verified'
     assert document['preflight']['error'] == 'diet coverage gate failed'

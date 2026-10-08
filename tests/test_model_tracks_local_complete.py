@@ -14,7 +14,7 @@ def _manifest(path, track, report_test):
     from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
     write_manifest(path, build_manifest(
         track=track, checkpoint='checkpoint-1/model.pt',
-        checkpoint_sha256='0' * 64, listings_sha256='1' * 64, pairs_sha256='2' * 64,
+        checkpoint_size='0' * 64, listings_size='1' * 64, pairs_size='2' * 64,
         threshold=0.5, threshold_source='dev_youden', test_reported=bool(report_test),
         model_selection='dev_pr_auc', retrieval_ks=[10]))
 
@@ -49,7 +49,7 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
             settings['text_index'] = 'results/graph_tracks/text__index'
             settings['gnn_checkpoint'] = 'results/graph_tracks/gnn_only__best_checkpoint.json'
         inline[f'data/model_tracks/shared/{track}.yaml'] = yaml.safe_dump(settings)
-    inputs = {'text': {'bundle_sha256': 'bundle'}}
+    inputs = {'text': {'bundle_size': 'bundle'}}
     input_zip = write_archive(tmp_path / 'input.zip', {}, inline=inline,
                               manifest_name='model_tracks_package.json', metadata={'preflight': inputs})
     root = tmp_path / 'remote'
@@ -129,7 +129,7 @@ def test_cascade_completes_locally_by_composing_the_trained_lanes(tmp_path, monk
     completion composes the text ranker export and the gnn_only decider export
     that the trained lanes already wrote, and identifies itself by that scorer.
     """
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     training_zip, input_zip, calls, _ = suite(tmp_path, monkeypatch, cascade_complete=False)
     final = complete(training_zip, input_zip, 'run')
     assert calls == ['text', 'gnn_only', 'cascade']
@@ -137,7 +137,7 @@ def test_cascade_completes_locally_by_composing_the_trained_lanes(tmp_path, monk
     assert json.loads((cascade / 'track_complete.json').read_text())['postprocess_complete'] is True
     report = json.loads((cascade / 'cascade__report_manifest.json').read_text())
     assert report['track'] == 'cascade'
-    assert report['checkpoint_sha256'] == file_hash(cascade / 'checkpoint-1/model.pt')
+    assert report['checkpoint_size'] == file_size(cascade / 'checkpoint-1/model.pt')
 
 
 def test_a_completed_cascade_is_never_recomposed(tmp_path, monkeypatch):
@@ -228,9 +228,9 @@ def test_completion_runs_configured_post_training_ablation(tmp_path,monkeypatch)
         for track in ('text', 'gnn_only', 'cascade'):
             folder = destination / track / 'ablation'; folder.mkdir(parents=True)
             (folder / 'report.json').write_text(json.dumps({
-                'track': track, 'request_sha256': '0' * 64, 'result_sha256': '0' * 64,
+                'track': track, 'request_size': '0' * 64, 'result_size': '0' * 64,
                 'threshold': 0.5, 'threshold_provenance': {'dev': True},
-                'threshold_binding': {'track': track, 'checkpoint_sha256': '0' * 64, 'verified': True},
+                'threshold_binding': {'track': track, 'checkpoint_size': '0' * 64, 'verified': True},
                 'rows': []}))
         return destination
     monkeypatch.setattr(post_training_ablation, 'complete_saved', complete_saved)
@@ -279,7 +279,7 @@ def test_legacy_source_pin_uses_the_runtime_inventory_ssot(tmp_path, monkeypatch
     from types import SimpleNamespace
 
     from core.bundle import _bundle_spec
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from model_tracks import local_complete
     from model_tracks.config import SuiteConfig
 
@@ -292,7 +292,7 @@ def test_legacy_source_pin_uses_the_runtime_inventory_ssot(tmp_path, monkeypatch
         'setup_dir': 's', 'text_bundle': 'b',
         'publish_git': False, 'publish_dvc': False})
     files = {
-        'src/a.py': file_hash(tmp_path / 'src' / 'a.py'),
+        'src/a.py': file_size(tmp_path / 'src' / 'a.py'),
         # Present but deliberately wrong: the registry is not on the pin surface.
         'artifacts/registry.json': '0' * 64,
     }

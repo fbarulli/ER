@@ -1,4 +1,4 @@
-import hashlib
+from core.portable_archive import ByteCount
 import types
 from core.archive_reader import tar_archive
 
@@ -22,9 +22,9 @@ def test_suite_inputs_use_verified_git_tar_and_reuse_it(tmp_path,monkeypatch):
     with tar_archive(transport) as package:
         assert package.getnames() == ['inputs.tar.zst']
         assert package.extractfile('inputs.tar.zst').read() == archive.read_bytes()
-    digest = hashlib.sha256(transport.read_bytes()).hexdigest()
+    digest = ByteCount(transport.read_bytes()).total
     assert prepare_git_inputs(archive,'run',publisher=publish) == transport
-    assert hashlib.sha256(transport.read_bytes()).hexdigest() == digest
+    assert ByteCount(transport.read_bytes()).total == digest
     assert published == [transport,transport]
 
 

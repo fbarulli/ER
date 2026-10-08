@@ -13,7 +13,7 @@ run (and it covers branches the fixture never reaches).
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import sys
@@ -218,11 +218,11 @@ def collect() -> dict:
             ('attribute_fields', attribute_fields),
             ('_normalized_stream', _normalized_stream),
         ):
-            digest = hashlib.sha256()
+            digest = ByteCount()
             for text in wide:
                 digest.update(json.dumps(_call(function, text), sort_keys=True).encode())
                 digest.update(b'\x00')
-            out[f'wide_{label}'] = digest.hexdigest()
+            out[f'wide_{label}'] = digest.total
     return out
 
 

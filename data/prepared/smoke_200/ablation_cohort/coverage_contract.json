@@ -1,0 +1,6481 @@
+{
+  "dimensions": {
+    "attribute": {
+      "counts": {
+        "unknown": 321
+      },
+      "policy": "not_applicable",
+      "reason": "the cohort frame carries no attribute column: pairs are stratified by population/scope/difficulty/split, and the per-attribute axis is measured separately by training.attribute_separation",
+      "unknown_policy": "a pair may carry several attribute slices, so membership (not partition) is the right multiplicity; a pair unobservable for every attribute is tagged 'unknown' rather than dropped"
+    },
+    "difficulty": {
+      "counts": {
+        "easy": 64,
+        "hard": 56,
+        "medium": 166,
+        "unknown": 35
+      },
+      "policy": "partition",
+      "reason": null,
+      "unknown_policy": "an unmeasured pair is retained as 'unknown'; easy/medium/hard are never invented"
+    },
+    "evaluation_scope": {
+      "counts": {
+        "bundle_diagnostic": 234,
+        "heldout": 20,
+        "mint_diagnostic": 27,
+        "training_diagnostic": 40
+      },
+      "policy": "partition",
+      "reason": null,
+      "unknown_policy": "a pair declares exactly one evaluation scope; a blank scope fails rather than being tagged 'unknown'"
+    },
+    "population": {
+      "counts": {
+        "base": 14,
+        "hard_negative": 10,
+        "masked": 2,
+        "positive": 17,
+        "real": 34,
+        "real_bundle": 234,
+        "twin": 10
+      },
+      "policy": "partition",
+      "reason": null,
+      "unknown_policy": "a pair declares the population it was drawn from; a pair without one is rejected, never tagged 'unknown'"
+    },
+    "split": {
+      "counts": {
+        "dev": 75,
+        "mixed": 4,
+        "test": 69,
+        "train": 173
+      },
+      "policy": "partition",
+      "reason": null,
+      "unknown_policy": "a pair belongs to exactly one split; a pair spanned by two is tagged mixed, never 'unknown'"
+    }
+  },
+  "records": [
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:2"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:3"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:4"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:5"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:6"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:7"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:8"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:9"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:10"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:11"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:12"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "clean:13"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:14"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:15"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:16"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:17"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:18"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:19"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:20"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:21"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:22"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:23"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:24"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:25"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:26"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:27"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:28"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:29"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:30"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:31"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:32"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:33"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:2"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:3"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:4"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:5"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:6"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:7"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:8"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:9"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:10"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:11"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:12"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:13"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:14"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:15"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:16"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:17"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:18"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:19"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:20"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:21"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:22"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:23"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:24"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:25"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:26"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:27"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:28"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:29"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:30"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:31"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:32"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:33"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:34"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:35"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:36"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:37"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:38"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:39"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:40"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:41"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:42"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:43"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:44"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:45"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:46"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:47"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:48"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:49"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:50"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:51"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:52"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:53"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:54"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:55"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:56"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:57"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:58"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:59"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:60"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:61"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:62"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:63"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:64"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:65"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:66"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:67"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:68"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:69"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:70"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:71"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:72"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:73"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:74"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:75"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:76"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:77"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:78"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:79"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:80"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:81"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:82"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:83"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:84"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:85"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:86"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:87"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:88"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:89"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:90"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:91"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:92"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:93"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:94"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:95"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:96"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:97"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:98"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:99"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:100"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:101"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:102"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:103"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:104"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:105"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:106"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:107"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:108"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:109"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:110"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:111"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:112"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:113"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:114"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:115"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:116"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:117"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:118"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:119"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:120"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:121"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:122"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:123"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:124"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:125"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:126"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:127"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:128"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:129"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:130"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:131"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:132"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:133"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:134"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:135"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:136"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:137"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:138"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:139"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:140"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:141"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:142"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:143"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:144"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:145"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:146"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:147"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:148"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:149"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:150"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:151"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:152"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:153"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:154"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:155"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:156"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:157"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:158"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:159"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:160"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:161"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:162"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:163"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:164"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:165"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:166"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:167"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:168"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:169"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:170"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:pos:171"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:172"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:173"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:174"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:175"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:176"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:pos:177"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:178"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:179"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:180"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:181"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:182"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:183"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:184"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:185"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:186"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:187"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:188"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:189"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:190"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:191"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:192"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:193"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:194"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:195"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "positive"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:pos:196"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:2"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:3"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:4"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:5"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:6"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:7"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:8"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:9"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:10"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:11"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:12"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:13"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:14"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:15"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:16"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:17"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:18"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:19"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:20"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "mixed"
+        ]
+      },
+      "record_id": "bundle:neg:21"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:22"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:23"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "mixed"
+        ]
+      },
+      "record_id": "bundle:neg:24"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:neg:25"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:neg:26"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:27"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:28"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:29"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:30"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:neg:31"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:2"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:3"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:4"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:5"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:6"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:7"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:8"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:9"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:10"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:11"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:12"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:13"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:14"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:15"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:16"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:17"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:18"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:19"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:20"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "mixed"
+        ]
+      },
+      "record_id": "bundle:train_neg:21"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:22"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:23"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "mixed"
+        ]
+      },
+      "record_id": "bundle:train_neg:24"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "bundle:train_neg:25"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "bundle_diagnostic"
+        ],
+        "population": [
+          "real_bundle"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "bundle:train_neg:26"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:27"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:28"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:29"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:30"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "mint_diagnostic"
+        ],
+        "population": [
+          "hard_negative"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "bundle:train_neg:31"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:0:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:0:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:1:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:1:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:2:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:2:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:3:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:3:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:4:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:4:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:5:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:5:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:6:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "base"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:6:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "masked"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:7:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "masked"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:7:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:8:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:8:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:9:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:9:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:10:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:10:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "medium"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:11:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:11:0"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "easy"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:12:1"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "hard"
+        ],
+        "evaluation_scope": [
+          "training_diagnostic"
+        ],
+        "population": [
+          "twin"
+        ],
+        "split": [
+          "train"
+        ]
+      },
+      "record_id": "objective:12:0"
+    }
+  ]
+}

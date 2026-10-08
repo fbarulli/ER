@@ -159,28 +159,28 @@ def test_kernel_bootstrap_ci_matches_core_and_drops_nonfinite():
     assert got["alpha"] == 0.05
 
 
-# ── DEFECT 2: sha256_of is ONE injected definition ─────────────────────────
+# ── DEFECT 2: size_of is ONE injected definition ───────────────────────────
 
-def test_sha256_of_is_a_single_injected_definition():
+def test_size_of_is_a_single_injected_definition():
     tree = ast.parse(Path(laya_lane.__file__).read_text())
-    assert not any(isinstance(node, ast.FunctionDef) and node.name == "sha256_of"
+    assert not any(isinstance(node, ast.FunctionDef) and node.name == "size_of"
                    for node in tree.body)
     for template in (laya_lane.FINETUNE_KERNEL_SCRIPT,
                      laya_lane.FINETUNE_EVAL_KERNEL_SCRIPT,
                      laya_lane.HOLDOUT_EVAL_KERNEL_SCRIPT):
-        assert "def sha256_of(" not in template
-        assert "@SHA256_OF@" in template
+        assert "def size_of(" not in template
+        assert "@SIZE_OF@" in template
 
 
-def test_sha256_of_source_matches_core_manifest_sha256(tmp_path):
-    from core.manifest import sha256_file
+def test_size_of_source_matches_core_manifest_size(tmp_path):
+    from core.manifest import file_size
 
-    namespace = {"hashlib": __import__("hashlib"), "Path": Path}
-    exec(compile(laya_lane._sha256_of_source(), "<sha256_of>", "exec"),
+    namespace = {"Path": Path}
+    exec(compile(laya_lane._file_bytes_of_source(), "<size_of>", "exec"),
          namespace)
     target = tmp_path / "payload.bin"
     target.write_bytes(b"hello holdout\n" * 4096)
-    assert namespace["sha256_of"](target) == sha256_file(target)
+    assert namespace["size_of"](target) == file_size(target)
 
 
 # ── DEFECT 3: hermetic staging + exec of the staged kernel helpers ──────────
@@ -219,8 +219,9 @@ def _hermetic_holdout_staging(tmp_path, monkeypatch):
     from core.common import training_cfg as _tcfg
     from core.schemas import LayaSpec
 
-    spec = LayaSpec(export_dataset_slug="fbarulli/er-laya-decision",
-                    dataset_slug="fbarulli/er-laya-payload")
+    # no hosted slug here: the lane reads them from the registry
+    # (config/hosted_datasets.yaml)
+    spec = LayaSpec()
     monkeypatch.setattr(laya_lane, "_spec", lambda: spec)
     monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
     base = _tcfg()
@@ -261,7 +262,7 @@ def test_stage_holdout_dataset_payload_hermetic(tmp_path, monkeypatch):
         {"true", "false"}
     assert receipt["rows"] == 2 and receipt["skipped"] == 0
     assert receipt["files"][laya_lane.HOLDOUT_JSONL] == \
-        laya_lane.sha256_file(payload / laya_lane.HOLDOUT_JSONL)
+        laya_lane.file_size(payload / laya_lane.HOLDOUT_JSONL)
 
 
 def _exec_staged_kernel_helpers(script: str) -> dict:
@@ -288,10 +289,10 @@ def test_stage_holdout_eval_kernel_hermetic_and_execs_helpers(
     staged = Path(receipt["staged"])
     script = (staged / laya_lane.HOLDOUT_EVAL_CODE_FILE).read_text(
         encoding="utf-8")
-    assert "@SHA256_OF@" not in script
+    assert "@SIZE_OF@" not in script
     assert "@HOLDOUT_EVAL_MODULE@" not in script
     assert "@RUNTIME_PREFLIGHT@" not in script
-    assert script.count("def sha256_of(") == 1
+    assert script.count("def size_of(") == 1
     assert receipt["threshold"] == 0.5
 
     namespace = _exec_staged_kernel_helpers(script)

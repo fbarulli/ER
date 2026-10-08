@@ -21,14 +21,14 @@ Usage
     /home/opc/ONE/ER/.venv/bin/python artifacts/abl_opt/textbench/bench_text.py \
         --label before --json artifacts/abl_opt/textbench/before.json
 
-Every bench returns a value; the sha256 of a canonical repr of ALL bench results
+Every bench returns a value; the size of a canonical repr of ALL bench results
 is printed as ``digest`` — an unchanged digest across two runs proves the
 optimization was byte-identical on the real fixture corpus.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import statistics
@@ -293,7 +293,7 @@ def main() -> int:
     for fn in benches.values():
         fn()
 
-    digest = hashlib.sha256()
+    digest = ByteCount()
     results = {}
     for name, fn in benches.items():
         samples = []
@@ -303,7 +303,7 @@ def main() -> int:
             value = fn()
             samples.append(time.perf_counter() - started)
         digest.update(name.encode())
-        digest.update(hashlib.sha256(canonical(value).encode()).digest())
+        digest.update(ByteCount(canonical(value).encode()).digest())
         results[name] = {
             'best': round(min(samples), 6),
             'median': round(statistics.median(samples), 6),
@@ -314,11 +314,11 @@ def main() -> int:
 
     total_best = round(sum(r['best'] for r in results.values()), 6)
     print(f'{"TOTAL(best)":20s} {total_best:.6f}s')
-    print(f'digest {digest.hexdigest()}')
+    print(f'digest {digest.total}')
     if args.json:
         Path(args.json).write_text(json.dumps(
             {'label': args.label, 'reps': args.reps, 'rows': len(rows),
-             'total_best': total_best, 'digest': digest.hexdigest(),
+             'total_best': total_best, 'digest': digest.total,
              'benches': results}, indent=2, sort_keys=True))
     return 0
 

@@ -27,7 +27,7 @@ from ner.ner_product_attributes import (
 )
 from pipeline import clean_sku_text, normalize_text
 from core.common import COLUMN_MAPPING, DATA_PATH, F, ensure_parent
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 
 def _json(value: object) -> str:
@@ -126,7 +126,7 @@ def build(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         )
     summary_rows = [
         {"metric": "source_path", "value": str(source.resolve()), "detail": "explicit input provenance"},
-        {"metric": "source_sha256", "value": sha256_file(source), "detail": "input bytes fingerprint"},
+        {"metric": "source_size", "value": file_size(source), "detail": "input bytes fingerprint"},
         {"metric": "rows", "value": len(evidence), "detail": "all raw rows retained"},
         {"metric": "empty_title_rows", "value": no_title, "detail": "written with empty evidence"},
         {"metric": "catalog_brand_not_found_in_title_rows", "value": no_brand_span, "detail": "written without BRAND span"},

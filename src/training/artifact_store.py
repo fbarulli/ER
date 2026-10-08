@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from core.common import training_cfg
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 
 # The worker's own bookkeeping files: written for completion/audit, never part
@@ -56,7 +56,7 @@ def publish(source: Path, run_id: str, worker: int) -> str:
         "run_id": run_id,
         "worker": worker,
         "files": [
-            {"path": str(p.relative_to(source)), "bytes": p.stat().st_size, "sha256": sha256_file(p)}
+            {"path": str(p.relative_to(source)), "bytes": p.stat().st_size, "size": file_size(p)}
             for p in sorted(files)
         ],
     }

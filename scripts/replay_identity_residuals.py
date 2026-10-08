@@ -1,7 +1,7 @@
 """Replay the frozen residual cohort; never resample away repaired/held cases."""
 from __future__ import annotations
 import dataclasses
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from collections import Counter
 from pathlib import Path
@@ -42,7 +42,7 @@ def main():
     summary={'cohort':'frozen original residuals; not a new sampling or full recall estimate',
         'cases':len(results),'actions':dict(Counter(r['disposition'] for r in results)),
         'decisions':dict(Counter(r['after_decision'] for r in results)),
-        'hashes':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in
+        'hashes':{str(p.relative_to(ROOT)):ByteCount(p.read_bytes()).total for p in
             [ROOT/'dataset.csv',ROOT/'config/identity_reviews.json',ROOT/'src/pipeline.py',ROOT/'src/core/url_evidence.py',folder/'residual_cases.json']}}
     (folder/'residual_replay.json').write_text(json.dumps({'summary':summary,'cases':results},indent=2)+'\n')
     lines=['# Frozen residual replay','','Each original case remains in this replay, including quarantined identifiers. This prevents improved metrics caused by silently removing difficult pairs.','','```json',json.dumps(summary,indent=2),'```','','| Case | Source SKUs | Before conflicts | After conflicts | Action |','|---|---|---|---|---|']

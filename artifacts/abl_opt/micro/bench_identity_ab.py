@@ -15,7 +15,6 @@ import os
 import re
 import sys
 import time
-from hashlib import sha256
 from pathlib import Path
 from statistics import median
 
@@ -25,6 +24,7 @@ os.environ.setdefault('EUROMONITOR_PROJECT_ROOT', str(ROOT))
 
 import pandas as pd  # noqa: E402
 
+from core.portable_archive import ByteCount as size  # noqa: E402
 import core.product_dimensions as pdims  # noqa: E402
 import core.sku_identity as sku  # noqa: E402
 from core.text import normalized_attribute_text, unicode_casefold  # noqa: E402
@@ -101,15 +101,15 @@ def plain(value):
     return value
 
 
-def digest(value) -> str:
-    return sha256(json.dumps(plain(value), sort_keys=True, default=plain).encode()).hexdigest()
+def size_of(value) -> int:
+    return size(json.dumps(plain(value), sort_keys=True, default=plain).encode()).total
 
 
 def ab(label: str, legacy, current, rows, reps: int) -> dict:
     legacy_out = [legacy(row) for row in rows]
     current_out = [current(row) for row in rows]
-    legacy_bytes = digest(legacy_out)
-    current_bytes = digest(current_out)
+    legacy_bytes = size_of(legacy_out)
+    current_bytes = size_of(current_out)
     legacy_samples, current_samples = [], []
     for _ in range(reps):
         started = time.perf_counter()
@@ -160,8 +160,8 @@ def ab_row_identity(rows, reps: int) -> dict:
                             identity.diet_claim, identity.sugar_claim, identity.gtin_trusted,
                             identity.gtin_key, identity.identity_review_reason, identity.completeness,
                             identity.dimensions.attributes if identity.dimensions else None)
-    legacy_bytes = digest([key(value) for value in legacy_out])
-    current_bytes = digest([key(value) for value in current_out])
+    legacy_bytes = size_of([key(value) for value in legacy_out])
+    current_bytes = size_of([key(value) for value in current_out])
     return {'function': 'sku_identity.row_identity (with r18 callees)', 'calls': len(rows), 'reps': reps,
             'before_seconds': round(before, 4), 'after_seconds': round(after, 4),
             'before_us_per_call': round(before / len(rows) * 1e6, 2),

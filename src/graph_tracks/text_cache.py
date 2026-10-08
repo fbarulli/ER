@@ -1,23 +1,23 @@
 """Frozen local MiniLM cache using the existing model-input composition SSOT."""
 from __future__ import annotations
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 
-_CONTENT_HASH_MEMO: dict[tuple, str] = {}
+_CONTENT_SIZE_MEMO: dict[tuple, str] = {}
 
 def composition_fingerprint():
     """Fingerprint the local composition code and all shipped parser config.
 
-    Same stat-signature memo as checkpoint_hash (mtime+size identify
+    Same stat-signature memo as checkpoint_size (mtime+size identify
     content). The fingerprinted files are editable source/config, so any
-    write to them changes mtime_ns and forces a re-hash; only repeated
-    READS within a process reuse the digest.
+    write to them changes mtime_ns and forces a re-measure; only repeated
+    READS within a process reuse the size.
     """
     from core.common import TRAIN_ROOT, training_cfg
     files = list((TRAIN_ROOT / 'src/core').rglob('*.py'))
@@ -34,17 +34,17 @@ def composition_fingerprint():
         info = path.stat()
         tracked.append((path.relative_to(TRAIN_ROOT).as_posix(), info.st_mtime_ns, info.st_size))
     signature = ('composition_fingerprint', tuple(tracked))
-    if len(_CONTENT_HASH_MEMO) > 64:
-        _CONTENT_HASH_MEMO.clear()
-    memoized = _CONTENT_HASH_MEMO.get(signature)
+    if len(_CONTENT_SIZE_MEMO) > 64:
+        _CONTENT_SIZE_MEMO.clear()
+    memoized = _CONTENT_SIZE_MEMO.get(signature)
     if memoized is not None:
         return memoized
-    digest = hashlib.sha256()
+    size = ByteCount()
     for path in files:
-        digest.update(path.relative_to(TRAIN_ROOT).as_posix().encode())
-        digest.update(bytes.fromhex(file_hash(path)))
-    _CONTENT_HASH_MEMO[signature] = digest.hexdigest()
-    return _CONTENT_HASH_MEMO[signature]
+        size.update(path.relative_to(TRAIN_ROOT).as_posix().encode())
+        size.update(str(file_size(path)).encode())
+    _CONTENT_SIZE_MEMO[signature] = size.total
+    return _CONTENT_SIZE_MEMO[signature]
 
 
 def compose_texts(catalog: Path, *, composer=None):
@@ -70,11 +70,11 @@ def compose_texts(catalog: Path, *, composer=None):
     return frame.sku_id.tolist(), texts
 
 
-def texts_hash(texts):
-    return hashlib.sha256(json.dumps(texts, ensure_ascii=False).encode()).hexdigest()
+def texts_size(texts):
+    return ByteCount(json.dumps(texts, ensure_ascii=False).encode()).total
 
 
-def checkpoint_hash(path: Path, *, use_memo: bool = True) -> str:
+def checkpoint_size(path: Path, *, use_memo: bool = True) -> str:
     if not path.is_dir():
         raise ValueError('checkpoint must be a local directory; remote revisions are not pinned here')
     files = sorted(p for p in path.rglob('*') if p.is_file())
@@ -82,23 +82,23 @@ def checkpoint_hash(path: Path, *, use_memo: bool = True) -> str:
         raise ValueError('empty checkpoint')
     # stat-signature caching assumes checkpoint files are immutable once
     # published (mtime+size identify content). Provenance gates pass
-    # use_memo=False: a re-hash must never be a stat comparison.
+    # use_memo=False: a re-measure must never be a stat comparison.
     tracked = []
     for file in files:
         info = file.stat()
         tracked.append((file.relative_to(path).as_posix(), info.st_mtime_ns, info.st_size))
-    signature = ('checkpoint_hash', str(path.resolve()), tuple(tracked))
-    if len(_CONTENT_HASH_MEMO) > 64:
-        _CONTENT_HASH_MEMO.clear()
-    memoized = _CONTENT_HASH_MEMO.get(signature) if use_memo else None
+    signature = ('checkpoint_size', str(path.resolve()), tuple(tracked))
+    if len(_CONTENT_SIZE_MEMO) > 64:
+        _CONTENT_SIZE_MEMO.clear()
+    memoized = _CONTENT_SIZE_MEMO.get(signature) if use_memo else None
     if memoized is not None:
         return memoized
-    digest = hashlib.sha256()
+    size = ByteCount()
     for file in files:
-        digest.update(str(file.relative_to(path)).encode())
-        digest.update(bytes.fromhex(file_hash(file)))
-    _CONTENT_HASH_MEMO[signature] = digest.hexdigest()
-    return _CONTENT_HASH_MEMO[signature]
+        size.update(str(file.relative_to(path)).encode())
+        size.update(str(file_size(file)).encode())
+    _CONTENT_SIZE_MEMO[signature] = size.total
+    return _CONTENT_SIZE_MEMO[signature]
 
 
 def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64, device='cpu', input_metadata=None):
@@ -110,9 +110,9 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     from sentence_transformers import SentenceTransformer
     if output.exists():
         raise FileExistsError(output)
-    source_hash = file_hash(catalog)
+    source_size = file_size(catalog)
     implementation = composition_fingerprint()
-    fingerprint = checkpoint_hash(checkpoint)
+    checkpoint_size_value = checkpoint_size(checkpoint)
     ids, texts = compose_texts(catalog)
     progress(f'loading MiniLM device={device}')
     model = SentenceTransformer(str(checkpoint), device=device, local_files_only=True)
@@ -126,19 +126,19 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     progress(f'encoding complete shape={vectors.shape}; writing cache')
     from core.identity_policy import POLICY_PATH
     from core.common import F
-    metadata = {'checkpoint_sha256': fingerprint,
+    metadata = {'checkpoint_size': checkpoint_size_value,
                 'embedding_dtype': 'float32',
-                'identity_policy_sha256': file_hash(POLICY_PATH),
-                'identity_dimensions_sha256': file_hash(F['identity_dimensions']),
+                'identity_policy_size': file_size(POLICY_PATH),
+                'identity_dimensions_size': file_size(F['identity_dimensions']),
                 'composition': model_input_composition().model_dump(mode='json'),
-                'catalog_sha256': source_hash,
-                'composition_implementation_sha256': implementation,
-                'text_sha256': texts_hash(texts)}
+                'catalog_size': source_size,
+                'composition_implementation_size': implementation,
+                'text_size': texts_size(texts)}
     if input_metadata is not None:
         if any(input_metadata.get(key) != value for key, value in metadata.items()):
             raise ValueError('Prepared text metadata differs from actual encoder inputs')
         metadata = {**input_metadata, **metadata}
-    if source_hash != file_hash(catalog) or fingerprint != checkpoint_hash(checkpoint):
+    if source_size != file_size(catalog) or checkpoint_size_value != checkpoint_size(checkpoint):
         raise ValueError('Embedding inputs changed during generation')
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('wb') as handle:

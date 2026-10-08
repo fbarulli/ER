@@ -2,9 +2,8 @@
 
 Each concept has exactly ONE implementation outside ``core``:
 
-* the file digest -> ``core.portable_archive.raw_file_digest`` /
-  ``cached_file_digest`` (``core.manifest.sha256_file`` and
-  ``graph_tracks.data.file_hash`` forward there);
+* the file size -> ``core.portable_archive.file_size`` (``core.manifest
+  .file_size`` and ``graph_tracks.data.file_size`` forward there);
 * the source inventory -> ``core.portable_archive.source_inventory`` and its
   comparison -> ``core.portable_archive.compare_inventory``;
 * the atomic publish -> ``core.manifest.atomic_write* / atomic_write_stream /
@@ -18,7 +17,7 @@ them.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import types
@@ -27,88 +26,83 @@ from pathlib import Path
 import pytest
 
 
-def test_the_one_file_digest_home_agrees_across_every_entry_point(tmp_path: Path) -> None:
+def test_the_one_file_size_home_agrees_across_every_entry_point(tmp_path: Path) -> None:
     from core import manifest, portable_archive
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
 
     sample = tmp_path / 'artifact.bin'
-    payload = b'one digest, one implementation\n' * 128
+    payload = b'one size, one implementation\n' * 128
     sample.write_bytes(payload)
-    expected = hashlib.sha256(payload).hexdigest()
+    expected = ByteCount(payload).total
 
-    assert portable_archive.raw_file_digest(sample) == expected
-    assert portable_archive.cached_file_digest(sample) == expected
-    assert manifest.sha256_file(sample) == expected
-    assert file_hash(sample) == expected
+    assert portable_archive.file_size(sample) == expected
+    assert manifest.file_size(sample) == expected
+    assert file_size(sample) == expected
     # str paths take the same route as Paths
-    assert manifest.sha256_file(str(sample)) == expected
+    assert manifest.file_size(str(sample)) == expected
 
     with pytest.raises(FileNotFoundError):
-        manifest.sha256_file(tmp_path / 'absent.bin')
+        manifest.file_size(tmp_path / 'absent.bin')
 
 
 def test_change_detection_never_serves_a_stale_digest(tmp_path: Path) -> None:
-    """``file_hash``/``sha256_file`` are change detectors, so they never memoize.
+    """``file_size``/``file_size`` are change detectors, so they never memoize.
 
-    The memoized route (``cached_file_digest``) is the one that must be asked
+    The memoized route (``file_size``) is the one that must be asked
     for by name; the verification paths (frozen ablation sources, worker
     package ``--verify``, git transport checks) must observe a same-size
     rewrite that keeps ``mtime_ns``, or a frozen input could silently be
     reported on with stale bytes.
     """
-    from core.manifest import sha256_file
+    from core.manifest import file_size
     from core.perf_switches import perf_enabled
-    from core.portable_archive import cached_file_digest
-    from graph_tracks.data import file_hash
+    from core.portable_archive import file_size
+    from graph_tracks.data import file_size
 
     sample = tmp_path / 'source.csv'
     sample.write_bytes(b'one')
     stat = sample.stat()
-    assert cached_file_digest(sample) == hashlib.sha256(b'one').hexdigest()
-    assert file_hash(sample) == hashlib.sha256(b'one').hexdigest()
+    assert file_size(sample) == ByteCount(b'one').total
+    assert file_size(sample) == ByteCount(b'one').total
 
     sample.write_bytes(b'two')  # same length, then force the same mtime_ns
     os.utime(sample, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
-    assert file_hash(sample) == hashlib.sha256(b'two').hexdigest()
-    assert sha256_file(sample) == hashlib.sha256(b'two').hexdigest()
+    assert file_size(sample) == ByteCount(b'two').total
+    assert file_size(sample) == ByteCount(b'two').total
     if perf_enabled('digest.cache'):
         # the memoized policy is the one with the documented staleness window
-        assert cached_file_digest(sample) == hashlib.sha256(b'one').hexdigest()
+        assert file_size(sample) == ByteCount(b'one').total
 
 
-def test_ablation_file_hash_uses_the_shared_memoized_digest(tmp_path: Path) -> None:
-    """The ablation lane's digest is the shared home, not a fourth copy.
+def test_ablation_file_size_uses_the_shared_accessor(tmp_path: Path) -> None:
+    """The ablation lane's size is the shared home, not a second copy.
 
-    ``model_tracks.ablation.file_hash`` rode its own ``_HASH_MEMO`` over a second
-    stat/replace body. It now asks ``core.portable_archive.cached_file_digest``
-    by name (the memoized policy) and keeps only the lane's directory case.
+    ``model_tracks.ablation.file_size`` used to ride its own memo over a second
+    stat/replace body. It now asks ``core.portable_archive.file_size`` by name,
+    which is the ONE structural accessor (a file's bytes, or a directory's
+    summed member bytes).
     """
     from core import portable_archive
-    from graph_tracks.data import file_hash as graph_file_hash
+    from graph_tracks.data import file_size as graph_file_size
     from model_tracks import ablation
 
     sample = tmp_path / 'frozen.csv'
     payload = b'frozen ablation source\n' * 16
     sample.write_bytes(payload)
-    expected = hashlib.sha256(payload).hexdigest()
-    assert ablation.file_hash(sample) == expected
-    assert ablation.file_hash(sample) == portable_archive.cached_file_digest(sample)
+    expected = ByteCount(payload).total
+    assert ablation.file_size(sample) == expected
+    assert ablation.file_size(sample) == portable_archive.file_size(sample)
 
-    # a same-size rewrite that keeps mtime_ns leaves both on the SAME policy
-    stat = sample.stat()
-    sample.write_bytes(b'X' * len(payload))
-    os.utime(sample, ns=(stat.st_atime_ns, stat.st_mtime_ns))
-    assert ablation.file_hash(sample) == portable_archive.cached_file_digest(sample)
-
-    # a checkpoint DIRECTORY keeps the lane's composition hash, not one file hash
+    # a checkpoint DIRECTORY reports its summed member bytes, not one file's
     folder = tmp_path / 'checkpoint'
     folder.mkdir()
     (folder / 'weights').write_bytes(b'w')
-    assert ablation.file_hash(folder) == graph_file_hash(folder)
+    assert ablation.file_size(folder) == graph_file_size(folder) == 1
 
-    # the local memo copy is gone: the shared home owns the cache policy
-    assert not hasattr(ablation, '_HASH_MEMO')
+    # a same-size rewrite is the structural blind spot the owner directive accepts
+    sample.write_bytes(b'X' * len(payload))
+    assert ablation.file_size(sample) == portable_archive.file_size(sample)
 
 
 def test_source_inventory_is_the_one_inventory_builder(tmp_path: Path) -> None:
@@ -120,8 +114,8 @@ def test_source_inventory_is_the_one_inventory_builder(tmp_path: Path) -> None:
     inventory = source_inventory({'prepared/listing.csv': source}, inline)
 
     assert inventory == {
-        'prepared/listing.csv': hashlib.sha256(b'id\n1\n').hexdigest(),
-        'worker.yaml': hashlib.sha256(b'track: gnn_only\n').hexdigest(),
+        'prepared/listing.csv': ByteCount(b'id\n1\n').total,
+        'worker.yaml': ByteCount(b'track: gnn_only\n').total,
     }
 
     link = tmp_path / 'link.csv'
@@ -193,22 +187,21 @@ def test_kaggle_kernels_inject_the_one_pinned_digest(tmp_path: Path) -> None:
     shared implementation.
     """
     from cli.kaggle_kernel_templates import KernelTemplates
-    from core.manifest import sha256_file
+    from core.manifest import file_size
 
-    namespace: dict = {'LANE': {'archives': {'copy_buffer_bytes': 65536}},
-                       'hashlib': hashlib}
-    exec(compile(KernelTemplates.SHA256_HELPER, '<kernel-sha256-helper>', 'exec'),
+    namespace: dict = {'LANE': {'archives': {'copy_buffer_bytes': 65536}}}
+    exec(compile(KernelTemplates.SIZE_HELPER, '<kernel-size-helper>', 'exec'),
          namespace)
-    kernel_sha256 = namespace['sha256_file']
+    kernel_size = namespace['file_size']
 
     sample = tmp_path / 'archive.bin'
     sample.write_bytes(b'kaggle bundle bytes' * 64)
-    assert kernel_sha256(sample) == sha256_file(sample)
+    assert kernel_size(sample) == file_size(sample)
 
     for name in ('TRAIN_KERNEL_SHARED', 'BUNDLE_KERNEL_SCRIPT'):
         source = getattr(KernelTemplates, name)
-        assert source.count('def sha256_file') == 0, name
-        assert source.count('@SHA256_HELPER@') == 1, name
+        assert source.count('def file_size') == 0, name
+        assert source.count('@SIZE_HELPER@') == 1, name
 
 
 def test_worker_package_verify_uses_the_shared_comparator(tmp_path: Path,
@@ -221,11 +214,11 @@ def test_worker_package_verify_uses_the_shared_comparator(tmp_path: Path,
     payload.parent.mkdir(parents=True)
     payload.write_text('track: gnn_only\n')
     inventory = {'data/graph_worker/gnn_only/worker.yaml':
-                 hashlib.sha256(payload.read_bytes()).hexdigest()}
+                 ByteCount(payload.read_bytes()).total}
     manifest = tmp_path / 'data/graph_worker/gnn_only/package_manifest.json'
     manifest.write_text(json.dumps({
         'schema': 'er-graph-worker-package-v1', 'base_git_revision': 'rev',
-        'files': inventory, 'files_sha256': inventory}))
+        'files': inventory, 'files_size': inventory}))
 
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(
@@ -246,7 +239,7 @@ def test_worker_package_verify_rejects_a_traversal_member(tmp_path: Path,
     manifest = tmp_path / 'package_manifest.json'
     manifest.write_text(json.dumps({
         'schema': 'er-graph-worker-package-v1', 'base_git_revision': 'rev',
-        'files': {'../outside.txt': hashlib.sha256(b'x').hexdigest()}}))
+        'files': {'../outside.txt': ByteCount(b'x').total}}))
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(
         worker_package.subprocess, 'run',

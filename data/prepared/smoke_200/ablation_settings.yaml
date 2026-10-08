@@ -1,0 +1,46 @@
+accelerator: T4
+attributes: []
+batch_size: 600
+coverage: all
+graph_fields:
+  carbonization:
+  - attribute.carbonation
+  count per unit:
+  - numeric.pack
+  flavour:
+  - attribute.flavor
+  pack material type:
+  - attribute.package_material
+  pack type:
+  - attribute.package_type
+  sweetener:
+  - attribute.sweetener
+  - attribute.sweetener_type
+  - attribute.sweetening
+  volume:
+  - numeric.volume_ml
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
+hnsw_m: 16
+output_dir: /home/opc/ONE/ER/data/prepared/smoke_200/ablation_templates
+report_path: results/attribute_ablation/report.json
+retrieval_catalog: full
+retrieval_ks:
+- 1
+- 5
+- 10
+sample_pairs: 100
+seed: 1729
+slice_columns:
+- difficulty_slice
+- population
+- masking_profile
+- target_mode
+- generation_variant
+- lineage_id
+- gate_decision
+- gate_reason
+- jev_round
+- jev_input_scope
+split: dev
+uniform_channels: true

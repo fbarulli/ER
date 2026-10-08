@@ -12,7 +12,7 @@ from core.audit_guard import (
 )
 from core.common import DATA_PATH, data_cfg
 from core.critical_attributes import NO_ADDED_SUGAR_RE, extract_critical_claims
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.sweetener_values import negated_sweetener_types
 
 
@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    fingerprint = sha256_file(DATA_PATH)
+    fingerprint = file_size(DATA_PATH)
     frame = pd.read_csv(DATA_PATH, **data_cfg().dataset_csv_read.model_dump()).rename(
         columns=data_cfg().column_mapping).fillna("")
     rows = []
@@ -29,7 +29,7 @@ def main():
             rows.append({"sku_id": str(row["sku_id"]), "sku_name_eng": row["sku_name_eng"],
                          "claims": sorted(extract_critical_claims(row["sku_name_eng"])["sweetener"]),
                          "negated_ingredients": sorted(negated_sweetener_types(row["sku_name_eng"]))})
-    assert fingerprint == sha256_file(DATA_PATH), "source changed during audit"
+    assert fingerprint == file_size(DATA_PATH), "source changed during audit"
     # Fail-closed guards: a screen that matched nothing (0%) or everything
     # (100%), or a vocabulary absent from the corpus, would make the counts
     # below meaningless. Only `screened_rows` is guarded for degeneracy:
@@ -50,7 +50,7 @@ def main():
         [row["sku_name_eng"] for row in rows], label="added-sugar",
     )
     report = {"scope": "Title-only semantic extraction; not full canonical or gate replay, source contradictions, or accuracy.",
-              "source_sha256": fingerprint, "source_rows": len(frame), "screened_rows": len(rows),
+              "source_size": fingerprint, "source_rows": len(frame), "screened_rows": len(rows),
               "no_sugar_rows": sum("no_sugar" in row["claims"] for row in rows),
               "no_added_sugar_rows": sum("no_added_sugar" in row["claims"] for row in rows),
               "negated_sugar_rows": sum("sugar" in row["negated_ingredients"] for row in rows), "rows": rows}

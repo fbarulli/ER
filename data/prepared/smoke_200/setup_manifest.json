@@ -40,6 +40,6 @@
   "source_trace_columns": [],
   "split_protocol": "training.folds.derive_holdout",
   "text_checkpoint": "artifacts/models/all-MiniLM-L6-v2",
-  "text_checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
+  "text_checkpoint_size": 281,
   "text_checkpoint_status": "local baseline; fine-tuning history not inferred"
 }

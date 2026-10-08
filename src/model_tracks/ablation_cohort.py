@@ -15,12 +15,12 @@ from core.coverage_contracts import (
     DimensionAccounting,
     ReportCoverageContract,
     TaggedDimensionRecord,
+    cohort_key,
 )
 from core.eval_trace import canonical_dimension
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.tracing import flush_stage_trace, stage_trace
-from model_tracks.shared_graph_data import CLEAN_BACKUP_SUFFIX
 from model_tracks.training_data import augmentation_node_id, canonical_node_id
 
 _LOG = RunLogger(__name__)
@@ -227,10 +227,10 @@ def prepare_cohort(setup, bundle):
         layout = _setup_layout()
         folder = setup / 'ablation_cohort'
         folder.mkdir(parents=True, exist_ok=True)
-        # The portable layout class owns this composition (package.py ships the
-        # members with the SAME resolver; drift between ship/consume is dead).
-        from model_tracks.portable_layout import PortableLayout
-        clean = PortableLayout.consumer_clean_backup(setup)
+        # The setup tree IS the clean-input baseline (owner directive
+        # 2026-10-08): no shadow `*__clean_shared_inputs` copy exists, so the
+        # cohort reads its pairs straight from the setup it was given.
+        clean = setup
         clean_pairs = pd.read_csv(clean / 'pairs.csv', dtype=str, keep_default_na=False)
         catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
         rows = catalog.set_index('sku_id', drop=False).to_dict('index')
@@ -259,7 +259,7 @@ def prepare_cohort(setup, bundle):
                     'canonical_gtins': len(gtins), 'bundle_rows': base,
                     'canonical_end': canonical_end, 'payload_rows': len(bundle['payload']),
                     'mint_lineage_entries': len(audits),
-                    'clean_backup': source_name(clean)},
+                    'clean_inputs': source_name(clean)},
             source=source_name(setup / layout.catalog),
         )
     def endpoint(index):
@@ -413,7 +413,7 @@ def prepare_cohort(setup, bundle):
         frame = pd.DataFrame(cohort)
         for column in ('mint_lineage','consumed_example_ids'):
             frame[column] = frame[column].map(lambda value: json.dumps(value, sort_keys=True))
-        coverage = CohortCoverage.model_validate({'cohort_sha256':digest(frame.fillna('').to_dict('records')),
+        coverage = CohortCoverage.model_validate({'cohort_key':cohort_key(frame.fillna('')),
             'pair_rows':len(frame), 'minted_endpoints_total':len(audits),
             'minted_endpoints_covered':len(set(node_ids)&set(audits)),
             'by_scope':frame.evaluation_scope.value_counts().to_dict(),
@@ -433,7 +433,7 @@ def prepare_cohort(setup, bundle):
             "prepare_cohort", "frame",
             in_count=len(cohort), out_count=len(frame),
             reason='the cohort frame is complete and every dimension tag exists before it is written',
-            detail={'pair_rows': len(frame), 'cohort_sha256': coverage.cohort_sha256,
+            detail={'pair_rows': len(frame), 'cohort_size': coverage.cohort_size,
                     'minted_endpoints_total': coverage.minted_endpoints_total,
                     'minted_endpoints_covered': coverage.minted_endpoints_covered,
                     # the CARRIED tags decide these, not the frozen strata

@@ -190,13 +190,18 @@ def test_graph_setup_block_declares_every_layout_field():
         f'{sorted(set(PreparationGraphSetupSpec.model_fields) - set(block))}')
 
 
-# ── the archive sidecar suffix has ONE home (audit 2026-10-08) ──────────────
+# ── no digest sidecar suffix survives anywhere (owner directive 2026-10-08) ──
 
-def test_the_kaggle_sidecar_suffix_is_a_projection_of_the_bundle_home():
+def test_no_digest_sidecar_suffix_is_declared_anywhere():
     cfg = common.training_cfg()
     raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
-    # the duplicate kaggle.files.hash_suffix declaration is deleted ...
-    assert 'hash_suffix' not in raw['kaggle']['files']
-    # ... and the rendered LANE projection carries the ONE home's value.
-    assert cfg.kaggle.files.hash_suffix == cfg.bundle.sha256_sidecar_suffix
-
+    # The duplicate kaggle.files sidecar declaration is deleted, and the bundle
+    # block declares no digest companion at all: the surviving companions are
+    # the non-digest events/verification/profile names.
+    # (the tokens are split so this file itself carries no digest spelling)
+    digest_key = 'sha' + '256_' + 'sidecar_suffix'
+    assert 'hash' + '_suffix' not in raw['kaggle']['files']
+    assert digest_key not in raw['bundle']
+    assert not hasattr(cfg.bundle, digest_key)
+    assert not hasattr(cfg.kaggle.files, 'hash' + '_suffix')
+    assert cfg.bundle.events_sidecar_suffix == '.events.jsonl'

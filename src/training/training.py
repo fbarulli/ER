@@ -180,7 +180,7 @@ TRACK_DATAPOINT_USAGE = bool(config_section("training", "track_datapoint_usage")
 _COLLECT_CONTRASTIVE_TELEMETRY = not (
     perf_enabled("text.contrastive_telemetry_gate") and not TRACK_DATAPOINT_USAGE
 )
-_SHARE_TEXT_HASHES = perf_enabled("text.share_sampler_hashes")
+_SHARE_TEXT_VALUES = perf_enabled("text.share_sampler_values")
 _UNIFORMITY_CFG = config_section("training", "uniformity_regularization")
 # ── DATAPOINT POPULATION REGISTRY (SSOT for the coverage audit) ────────────
 # DERIVED FROM THE PRODUCERS, not hand-kept beside them (audit A4-2). Every
@@ -3056,6 +3056,18 @@ def checkpoint_publication_deferred() -> bool:
     return _CheckpointPublisher._publication_deferred()
 
 
+def _staging_key(checkpoint: Path) -> str:
+    """A filesystem-safe staging key from the checkpoint's own output root.
+
+    Structural only (owner directive 2026-10-08): the resolved parent path with
+    non-alphanumerics collapsed. Two trials that share an output root share a
+    staging directory, which is the intent; nothing is fingerprinted.
+    """
+    import re
+    parent = str(Path(checkpoint).parent.resolve())
+    return re.sub(r'[^A-Za-z0-9.]+', '_', parent).strip('_') or 'root'
+
+
 class DvcCheckpointCallback(TrainerCallback):
     """Stage immutable checkpoints and publish them together at train end."""
 
@@ -3067,7 +3079,7 @@ class DvcCheckpointCallback(TrainerCallback):
     @staticmethod
     def _snapshot(checkpoint: Path) -> Path:
         """Hard-link an immutable checkpoint before Trainer rotation can delete it."""
-        import hashlib
+        from core.portable_archive import ByteCount
         import shutil
 
         staging = RESULTS / "_checkpoint_upload_staging"
@@ -3076,7 +3088,7 @@ class DvcCheckpointCallback(TrainerCallback):
         # inside one Trainer output directory, so two trials can both save
         # ``checkpoint-459``.  Preserve that output-root identity in staging
         # instead of flattening every checkpoint into one shared directory.
-        key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
+        key = _staging_key(checkpoint)
         snapshot = staging / key / checkpoint.name
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         if snapshot.exists():
@@ -3127,12 +3139,12 @@ class DvcCheckpointCallback(TrainerCallback):
                 max_workers=1, thread_name_prefix="dvc-stage"
             )
         # Snapshot creation is synchronous so Trainer rotation cannot remove
-        # the checkpoint. Hashing/staging runs off the training thread.
+        # the checkpoint. Sizing/staging runs off the training thread.
         self._stage_futures.append(
             self._stage_executor.submit(stage_checkpoint, RESULTS, snapshot)
         )
-        import hashlib
-        key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
+        from core.portable_archive import ByteCount
+        key = _staging_key(checkpoint)
         self._pending.append((snapshot, f"{checkpoint.name}--{key}", checkpoint))
         print(f"    [checkpoint-dvc] added locally at step {state.global_step}; upload deferred", flush=True)
         return control
@@ -4830,7 +4842,7 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
     epochs = int(_timed_load_config(f"fold{fold_i}.epochs")["training"]["epochs"])
     packed = {}
     grouped_ds = None
-    shared_text_hashes = None
+    shared_text_values = None
     for device, batch_size in (("cpu", BATCH_SIZE_CPU), ("cuda", BATCH_SIZE_CUDA)):
         device_started = time.perf_counter()
         print(f"[plan-sampler] start device={device} batch_size={batch_size} rows={len(ds):,} epochs={epochs}", flush=True)
@@ -4839,16 +4851,16 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
             composition = resolve_composition(weights, sampler_populations, batch_size)
             if grouped_ds is None:
                 grouped_ds = ds.add_column("sampler_population", sampler_populations)
-            if _SHARE_TEXT_HASHES:
-                if shared_text_hashes is None:
-                    from training.sampler import _row_text_hashes
-                    shared_text_hashes = _row_text_hashes(grouped_ds)
-                text_hashes = shared_text_hashes
+            if _SHARE_TEXT_VALUES:
+                if shared_text_values is None:
+                    from training.sampler import _row_text_values
+                    shared_text_values = _row_text_values(grouped_ds)
+                text_values = shared_text_values
             else:
-                text_hashes = None
+                text_values = None
             sampler = ControlledBatchSampler(grouped_ds, batch_size, composition, seed=int(bs_cfg["seed"]),
                                               population_column="sampler_population",
-                                              text_hashes=text_hashes)
+                                              text_values=text_values)
         else:
             import torch
             from sentence_transformers.base.sampler import NoDuplicatesBatchSampler, DefaultBatchSampler
@@ -5585,11 +5597,11 @@ def train_one_config(
         rows = list(fixed_inputs["skipped"])
         _canon_attrs: dict[str, dict] | None = None
         if prepared_tokens is not None:
-            from training.token_inputs import payload_sha256
+            from training.token_inputs import payload_size
 
-            prepared_payload_digest = payload_sha256(payload)
+            prepared_payload_size = payload_size(payload)
         else:
-            prepared_payload_digest = None
+            prepared_payload_size = None
     # ── CONSOLIDATED TRACE: one config-level row + the per-grain accumulators
     # that are published once, after the fold loop, so the stage keeps ONE
     # commit (train.py) and the row volume stays inside core.tracing's caps.
@@ -5760,7 +5772,7 @@ def train_one_config(
                 if prepared_tokens is not None:
                     from training.token_inputs import PreparedTokenLookup
                     token_lookup = PreparedTokenLookup(
-                        model, prepared_tokens, payload, payload_digest=prepared_payload_digest
+                        model, prepared_tokens, payload, recorded_size=prepared_payload_size
                     )
 
                 # ── build the training dataset FIRST (steps derive from it) ──

@@ -78,7 +78,7 @@ def _attestation_gate(args: argparse.Namespace, bundle_path: Path) -> TrainingAt
     verify_attestation(attestation, bundle_path=bundle_path)
     verify_plan_identity(attestation, loss=args.loss,
                          train_frac=args.train_frac, sample=bool(args.sample))
-    emit_timing(f"[timing] training.attestation verified bundle_sha256={attestation.bundle_sha256}")
+    emit_timing(f"[timing] training.attestation verified bundle_size={attestation.bundle_size}")
     return attestation
 
 
@@ -115,7 +115,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             "Set the profile in config/training.yaml before preparing and launching."
         )
     attestation = _attestation_gate(args, args.bundle)
-    # Check-free path: the attestation (bundle sha256 + boundary report) owns
+    # Check-free path: the attestation (bundle size + boundary report) owns
     # verification, so the load must not re-force the full digest/array
     # validation through the data-gate default. Without an attestation the
     # loader's own gate decision applies, unchanged.
@@ -189,7 +189,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         plan = validate_run_plan(bundle, bundle["training_plan"], loss=args.loss,
                                  train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
         emit_timing(
-            f"[timing] training.run_plan data_digest_revalidation: "
+            f"[timing] training.run_plan data_size_revalidation: "
             f"{time.perf_counter() - _run_plan_started:.3f}s"
         )
     if shared_path:
@@ -200,11 +200,11 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             raise ValueError('text frozen objective differs from shared training data')
         binding.validate_data(shared)
         print(f'[shared-training/text] examples={len(shared.examples)} endpoints={len(shared.endpoints)} '
-              f'sha256={shared.fingerprint}', flush=True)
+              f'size={shared.fingerprint}', flush=True)
     train_bc, dev_bc, test_bc = (plan["holdout"][key] for key in ("train", "dev", "test"))
     print(
         f"[prepared-bundle] loaded {args.bundle} "
-        f"sha256={manifest.sha256} profile={manifest.masking_profile} "
+        f"size={manifest.size} profile={manifest.masking_profile} "
         f"rows={manifest.n_df:,} payload={manifest.n_payload:,}",
         flush=True,
     )
@@ -270,7 +270,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
                 "payload": manifest.payload_variant,
                 "train_frac": args.train_frac,
                 "prepared_bundle": str(args.bundle),
-                "prepared_bundle_sha256": manifest.sha256,
+                "prepared_bundle_size": manifest.size,
             }
         )
         rows_out.append(row_out)

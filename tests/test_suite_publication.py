@@ -58,7 +58,7 @@ def _completion_manifest(track):
     from graph_tracks.report_manifest import build as build_manifest
     return json.dumps(build_manifest(
         track=track, checkpoint='checkpoint-1/model.pt',
-        checkpoint_sha256='0' * 64, listings_sha256='1' * 64, pairs_sha256='2' * 64,
+        checkpoint_size='0' * 64, listings_size='1' * 64, pairs_size='2' * 64,
         threshold=0.5, threshold_source='dev_youden', test_reported=False,
         model_selection='dev_pr_auc', retrieval_ks=[10]))
 
@@ -74,7 +74,7 @@ def _sealed_run(tmp_path, *, markers, marker_paths=None, extra_members=None,
     itself. Publication must resolve exactly one selected member under the
     Bundle's documented rule, whatever the run left behind.
     """
-    import hashlib, io
+    import io
     import torch
     from model_tracks.config import SuiteConfig
     files = {
@@ -104,7 +104,7 @@ def _sealed_run(tmp_path, *, markers, marker_paths=None, extra_members=None,
         files[checkpoint] = payload
         files[checkpoint.rsplit('/', 1)[0] + '/gnn_only__checkpoint_manifest.json'] = json.dumps({
             'schema': 'er-graph-checkpoint-v1', 'track': 'gnn_only',
-            'files': {checkpoint.rsplit('/', 1)[1]: hashlib.sha256(payload).hexdigest()},
+            'files': {checkpoint.rsplit('/', 1)[1]: ByteCount(payload).total},
             'inference_only': True})
     files.update(extra_members or {})
     for index, marker in enumerate(markers, start=1):
@@ -114,8 +114,8 @@ def _sealed_run(tmp_path, *, markers, marker_paths=None, extra_members=None,
     for track in ('text', 'gnn_only', 'cascade'):
         files[f'{track}/track_inventory.json'] = json.dumps({
             'track': track, 'files': {
-                name.split('/', 1)[1]: hashlib.sha256(
-                    value if isinstance(value, bytes) else value.encode()).hexdigest()
+                name.split('/', 1)[1]: ByteCount(
+                    value if isinstance(value, bytes) else value.encode()).total
                 for name, value in files.items() if name.startswith(track + '/')}}).encode()
     root = tmp_path / 'tree'
     for name, value in files.items():

@@ -83,7 +83,7 @@ def model_input_spec() -> TrainingSpec.ModelInputSpec:
 
 
 def model_input_composition() -> TrainingSpec.ModelInputComposition:
-    """The ACTIVE composition, for fingerprints, traces, manifests, bundles.
+    """The ACTIVE composition, for traces, manifests and bundles.
 
     Any artifact whose contents depend on the encoder text — a persisted
     embedding index, a checkpoint, a frozen payload bundle above all — must be

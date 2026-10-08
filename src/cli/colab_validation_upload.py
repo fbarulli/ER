@@ -20,7 +20,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.manifest import sha256_file
+from core.manifest import file_size
 from cli.colab_hub import hub, timed_colab
 
 
@@ -61,16 +61,9 @@ def _remote_checkout_copy(source: Path) -> str | None:
     relative = source.resolve().relative_to(surface.TRAIN_ROOT.resolve()).as_posix()
     remote = f"{surface.REMOTE_ROOT}/{relative}"
     probe = surface._BOOTSTRAP + f"""
-import hashlib, pathlib
+import pathlib
 path = pathlib.Path({remote!r})
-if path.is_file():
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    print(digest.hexdigest(), flush=True)
-else:
-    print("", flush=True)
+print(path.stat().st_size if path.is_file() else "", flush=True)
 """
     try:
         reported = surface.run_colab_exec_capture(surface.SESSION, probe, timeout=120).strip()
@@ -82,7 +75,7 @@ else:
             flush=True,
         )
         return None
-    if reported and reported == sha256_file(source):
+    if reported and reported == file_size(source):
         return remote
     return None
 
@@ -313,7 +306,7 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
             print(
                 surface._stamp(),
                 f"[upload] validation {key}={source} reused the verified VM "
-                f"checkout copy {checkout_copy} (sha256 matches; not uploaded)",
+                f"checkout copy {checkout_copy} (size matches; not uploaded)",
                 flush=True,
             )
             continue

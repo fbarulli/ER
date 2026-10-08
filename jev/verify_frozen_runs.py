@@ -23,11 +23,11 @@ def main():
             assert row['status']=='ok' and all(row[k]==v for k,v in staged[key(row)].items())
             state={'record_a':states[row['input_scope']][row['gtin1']], 'record_b':states[row['input_scope']][row['gtin2']]}
             request={'model':ADAPTERS['openrouter']['model'],'state':state,'questions':build_questions()}
-            assert row['request_sha256']==hashlib.sha256(json.dumps(request).encode()).hexdigest()
+            assert row['request_size']==ByteCount(json.dumps(request).encode()).total
             assert row['noul']==_extract_noul(row['raw_response'],'is_same_product')
             assert 0 <= row['noul'] <= 1
         item.update(status='tested',calls_completed=len(rows))
-        provenance={'round':n,'adapter':'openrouter','model':ADAPTERS['openrouter']['model'],'questions':build_questions(),'completed_utc':max(x['completed_utc'] for x in rows),'calls_completed':len(rows),'unique_pairs':item['unique_pairs'],'request_hashes_verified':True,'raw_responses_saved':True,'sha256':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in (sample_path,result_path,states_path)}}
+        provenance={'round':n,'adapter':'openrouter','model':ADAPTERS['openrouter']['model'],'questions':build_questions(),'completed_utc':max(x['completed_utc'] for x in rows),'calls_completed':len(rows),'unique_pairs':item['unique_pairs'],'request_hashes_verified':True,'raw_responses_saved':True,'size':{str(p.relative_to(ROOT)):ByteCount(p.read_bytes()).total for p in (sample_path,result_path,states_path)}}
         (ROOT/'jev'/f'audit_run_{n}.json').write_text(json.dumps(provenance,indent=2)+'\n')
         print(f'Round {n}: {len(rows)} complete; all request hashes and raw response scores verified.')
         if n==5:

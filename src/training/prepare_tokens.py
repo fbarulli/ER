@@ -2,51 +2,35 @@
 from __future__ import annotations
 import argparse
 import gzip
-import json
 import pickle
 from pathlib import Path
 
-from core.common import F, load_config, load_local_sentence_transformer, resolve_model
+from core.common import load_config, load_local_sentence_transformer, resolve_model
 from core.run_log import RunLogger
 from core.step_trace import timed
-from training.prepared_bundle import load_prepared_bundle, _digest
+from training.prepared_bundle import load_prepared_bundle, _size_of
 from training.token_inputs import prepare_training_tokens, validate_training_tokens
 
 _LOG = RunLogger(__name__)
-_FROZEN_INPUT_KEYS = ('canonical_records', 'gate_results', 'labeled_pairs')
-
-
-def _setup_layout():
-    """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import prepared_setup_layout
-    return prepared_setup_layout()
-
-
-def _fail_on_stale_frozen(bundle: dict) -> None:
-    """Every frozen artifact in the bundle must still match the on-disk F map."""
-    for key in _FROZEN_INPUT_KEYS:
-        if bundle[key + '_csv'] != Path(F[key]).read_bytes():
-            raise ValueError(f'prepared bundle contains stale frozen {key}; rebuild CPU preparation')
-
-
-def _fail_on_setup_drift(setup: Path, checkpoint: str) -> None:
-    """A prepared setup must match the on-disk catalog and the requested checkpoint."""
-    from graph_tracks.text_cache import checkpoint_hash
-    manifest = json.loads((setup / _setup_layout().manifest).read_text())
-    if manifest['source_catalog_sha256'] != _digest(Path(F['dataset_deduped'])):
-        raise ValueError('prepared setup contains stale source catalog; rebuild CPU preparation')
-    if manifest['text_checkpoint_sha256'] != checkpoint_hash(Path(checkpoint)):
-        raise ValueError('prepared setup checkpoint differs from requested native tokenizer checkpoint')
 
 
 def _verify_or_prepare_tokens(model, bundle: dict) -> None:
-    """Reuse an existing native table (verified) or tokenize the payload once."""
+    """Reuse a compatible native table, else build it once (rebuild silently).
+
+    Integrity only (owner directive 2026-10-08): the recorded token policy and
+    payload digest are checked against the bundle's payload. An incompatible
+    table is not called stale — it is rebuilt from the payload in place.
+    """
     if "training_tokens" in bundle:
         from training.token_inputs import PreparedTokenLookup
-        PreparedTokenLookup(model, bundle["training_tokens"], bundle["payload"])
-        _LOG.info('[training tokens/local] existing native table verified; no duplicate tokenization')
-    else:
-        bundle['training_tokens'] = prepare_training_tokens(model, bundle['payload'])
+        try:
+            PreparedTokenLookup(model, bundle["training_tokens"], bundle["payload"])
+        except ValueError:
+            _LOG.info('[training tokens/local] existing native table is incompatible; rebuilding')
+        else:
+            _LOG.info('[training tokens/local] existing native table verified; no duplicate tokenization')
+            return
+    bundle['training_tokens'] = prepare_training_tokens(model, bundle['payload'])
 
 
 def _atomic_save_bundle(path: Path, header, bundle: dict):
@@ -55,7 +39,7 @@ def _atomic_save_bundle(path: Path, header, bundle: dict):
     try:
         with gzip.open(temporary, 'wb', compresslevel=6) as stream:
             pickle.dump(bundle, stream, protocol=pickle.HIGHEST_PROTOCOL)
-        updated = header.model_copy(update={'sha256': _digest(temporary)})
+        updated = header.model_copy(update={'size': _size_of(temporary)})
         temporary.replace(path)
         sidecar = path.with_suffix(path.suffix + '.json')
         sidecar_tmp = sidecar.with_suffix(sidecar.suffix + '.tmp')
@@ -68,12 +52,8 @@ def _atomic_save_bundle(path: Path, header, bundle: dict):
 
 @timed(prefix='prepare_tokens')
 def prepare_bundle_tokens(path: Path, checkpoint: str, *, setup: Path | None = None):
-    # Fail on frozen input/config drift before spending local tokenizer time.
-    os.environ['PREPARED_BUNDLE_DRIFT_STRICT'] = 'true'
+    # The bundle's own digest is verified at load; no provenance freshness gate.
     header, bundle = load_prepared_bundle(path)
-    _fail_on_stale_frozen(bundle)
-    if setup is not None:
-        _fail_on_setup_drift(setup, checkpoint)
     model = load_local_sentence_transformer(checkpoint, device='cpu')
     _LOG.info(f'[training tokens/local] rows={len(bundle["payload"]):,} checkpoint={checkpoint}')
     _verify_or_prepare_tokens(model, bundle)
@@ -81,7 +61,7 @@ def prepare_bundle_tokens(path: Path, checkpoint: str, *, setup: Path | None = N
     from training.run_plan import prepare_run_plan
     bundle['training_plan'] = prepare_run_plan(bundle)
     updated = _atomic_save_bundle(path, header, bundle)
-    _LOG.info(f'[training tokens/local] complete unique={len(bundle["training_tokens"]["texts"]):,} sha256={updated.sha256}')
+    _LOG.info(f'[training tokens/local] complete unique={len(bundle["training_tokens"]["texts"]):,} size={updated.size}')
     return updated
 
 

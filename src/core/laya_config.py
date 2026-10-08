@@ -3,6 +3,13 @@
 Relocated 2026-10-07 from core.schemas (one lane one file; schemas.py stays
 the megafile's shared core). core.schemas re-exports LayaSpec so every
 existing import surface stays byte-identical.
+
+The hosted Kaggle datasets this lane stages and attaches (base checkpoint,
+requests, decisions, corpus, checkpoint, holdout) are NOT declared here: they
+live once in ``config/hosted_datasets.yaml`` and this module REFERENCES them
+through :class:`core.hosted_dataset.HostedRegistry` (:meth:`LayaSpec.hosted`,
+:meth:`LayaSpec.hosted_slug`, :attr:`LayaSpec.mount_root`). The lane names the
+ROLE it wants; the registry owns the slug, the mount root and the members.
 """
 
 from __future__ import annotations
@@ -11,6 +18,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from core.hosted_dataset import HostedRegistry, hosted_registry
+
+
+#: The hosted-dataset ROLES this lane consumes (the ``roles`` vocabulary of
+#: ``config/hosted_datasets.yaml``). Naming them here declares WHICH hosted
+#: datasets the lane uses; the registry owns what each one resolves to, so no
+#: ``owner/handle`` slug is re-spelled in this module.
+LayaHostedRole = Literal["base", "requests", "decisions", "corpus", "ckpt",
+                         "holdout"]
 
 
 class FinetuneSpec(BaseModel):
@@ -126,7 +143,9 @@ class LayaSpec(BaseModel):
     existing default flips. The block declares what the lane stages and
     what its preconditions check; the SSOT `config/paths.yaml` `files:`
     bindings are REFERENCES (resolved through core.common.F), never
-    duplicated.
+    duplicated. The hosted Kaggle datasets are REFERENCES too: the lane
+    names a ROLE and reads its slug, mount root and members from the
+    registry (:meth:`hosted`, :meth:`hosted_slug`, :attr:`mount_root`).
 
     Whitespace/careat: `laya_decision_epochs <= 0` DISABLES the lane (no
     payload may stage a GPU session); the knob makes "laya decisions off"
@@ -150,14 +169,14 @@ class LayaSpec(BaseModel):
     # Face hub). Kept for the decision kinds that still load a checkpoint
     # by id; the FINE-TUNE path no longer uses it (see base_model_* below).
     checkpoint_hub: str = "convaiinnovations/laya"
-    # The fine-tune BASE checkpoint travels as its OWN kaggle dataset: the
-    # 647 MB local snake_local tree ships as a `.tar.zst` (plain git caps
-    # at 100 MB), the transport the project already uses for large
-    # payloads. The finetune kernel attaches this dataset, extracts the
-    # archive under /kaggle/input to a local dir, and passes the extracted
-    # DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local dir
-    # carrying rl_agent_config.json and never calls the Hub.
-    base_model_dataset: str | None = "fbarulli/er-laya-base"
+    # The fine-tune BASE checkpoint travels as its OWN hosted kaggle dataset
+    # (role `base` in config/hosted_datasets.yaml): the 647 MB local
+    # snake_local tree ships as a `.tar.zst` (plain git caps at 100 MB), the
+    # transport the project already uses for large payloads. The finetune
+    # kernel attaches that dataset (spec.hosted_slug("base")), extracts the
+    # archive under the registry's mount root to a local dir, and passes the
+    # extracted DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local
+    # dir carrying rl_agent_config.json and never calls the Hub.
     base_model_archive: str = "convaiinnovations-laya.tar.zst"
     # The single top-level member of base_model_archive (extraction yields
     # a dir of this name); used as a deterministic hint before the rglob.
@@ -176,27 +195,25 @@ class LayaSpec(BaseModel):
     # (TRAIN_ROOT-relative; scripts/laya_build_dataset.py writes it). A path
     # knob, not a literal: relocating the corpus is config alone.
     finetune_corpus_dir: str = "data/laya"
-    # Both kaggle dataset slugs ('owner/slug') are owner-picked
-    # 2026-10-07 (no silent default account; kaggle_slug=None sibling
-    # precedent).
-    dataset_slug: str | None = "fbarulli/er-laya-requests"
-    export_dataset_slug: str | None = "fbarulli/er-laya-decisions"
+    # The decision inputs and the published decisions are hosted datasets
+    # (roles `requests` / `decisions`); the lane reads their slugs from the
+    # registry, never from a knob, so no account is ever guessed in code
+    # (the registry validates every slug as owner/handle). The `decisions`
+    # slug IS the decision kinds' kernel id.
     # The fine-tune corpus (data/laya/{train,dev,test}.jsonl + receipt.json,
-    # scripts/laya_build_dataset.py) travels as its OWN kaggle dataset and the
-    # trained checkpoint is its own kernel — distinct slugs from the decision
-    # payloads so a dataset version never drops the decision inputs.
-    finetune_dataset_slug: str | None = "fbarulli/er-laya-train"
+    # scripts/laya_build_dataset.py) travels as the hosted `corpus` dataset and
+    # the trained checkpoint as the hosted `ckpt` dataset — distinct entries
+    # from the decision payloads so a dataset version never drops the decision
+    # inputs.
     finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
     # ── fine-tune EVAL-only path (held-out score, no retrain) ─────────────
     # A dedicated eval-only kernel scores a fine-tuned checkpoint on the
-    # corpus held-out split: it attaches the SAME corpus dataset
-    # (finetune_dataset_slug) + the fine-tuned checkpoint dataset
-    # (finetune_ckpt_dataset), loads the checkpoint, and runs
+    # corpus held-out split: it attaches the hosted `corpus` dataset + the
+    # hosted `ckpt` dataset, loads the checkpoint, and runs
     # `laya.train.calibration_records` + `evaluate_records`. No training,
-    # no Hub fetch. The checkpoint dataset is optional when the operator
-    # bakes an explicit local/attached path instead.
+    # no Hub fetch. An explicit local/attached `--checkpoint` path makes the
+    # kernel skip the `ckpt` dataset attach instead.
     finetune_eval_kernel_slug: str | None = "fbarulli/er-laya-finetune-eval"
-    finetune_ckpt_dataset: str | None = "fbarulli/er-laya-finetune-ckpt"
     # Deterministic member-dir hint inside the attached checkpoint dataset
     # (mirrors base_model_dir); the kernel rglobs `rl_agent_config.json` as
     # a fallback when the hint misses.
@@ -209,10 +226,9 @@ class LayaSpec(BaseModel):
     # Scores a fine-tuned checkpoint on the component-disjoint holdout (real
     # pairs + P0 + gate strata; scripts/laya_holdout.py) IN-SESSION and writes
     # the clustered, gate-stratified report, so verification never runs
-    # locally. Attaches the staged holdout dataset (holdout_dataset_slug) + the
-    # checkpoint dataset (finetune_ckpt_dataset).
+    # locally. Attaches the staged hosted `holdout` dataset + the hosted `ckpt`
+    # dataset.
     holdout_eval_kernel_slug: str | None = "fbarulli/er-laya-holdout-eval"
-    holdout_dataset_slug: str | None = "fbarulli/er-laya-holdout"
     holdout_csv: str = "data/laya/holdout.csv"
     holdout_eval_batch_size: int = Field(default=16, ge=1, le=256)
     holdout_eval_bootstrap: int = Field(default=2000, ge=0, le=100000)
@@ -244,6 +260,25 @@ class LayaSpec(BaseModel):
     # ONNX export path (Agent backend='onnx'); the kernel wiring is
     # pending (see docs/laya-lane.md 'Caveats'). Recorded, not hidden.
     onnx: bool = False
+
+    # ── the hosted-dataset reference (config/hosted_datasets.yaml) ────────
+    @property
+    def hosted(self) -> HostedRegistry:
+        """The hosted-dataset registry — the ONE owner of the lane's slugs."""
+        return hosted_registry()
+
+    def hosted_slug(self, role: LayaHostedRole) -> str:
+        """The ``owner/handle`` slug of the hosted dataset playing ``role``.
+
+        Fails loud (``KeyError``) on a role the registry does not declare:
+        a missing precondition can never stage a payload.
+        """
+        return self.hosted.by_role(role).slug
+
+    @property
+    def mount_root(self) -> Path:
+        """Where a session mounts every attached dataset (``/kaggle/input``)."""
+        return self.hosted.mount_root
 
     @model_validator(mode="after")
     def _declared_paths_are_portable(self) -> "LayaSpec":

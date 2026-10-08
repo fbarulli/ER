@@ -46,13 +46,13 @@ class RetrievalConfig(BaseModel):
 class RetrievalReportContext(RetrievalConfig):
     """Validated retrieval settings plus the provenance of scored vectors."""
     checkpoint: Path
-    listings_sha256: str = Field(min_length=1)
+    listings_size: int = Field(ge=0)
 
     @classmethod
-    def from_config(cls, cfg: RetrievalConfig, checkpoint: Path, listings_sha256: str):
+    def from_config(cls, cfg: RetrievalConfig, checkpoint: Path, listings_size: int):
         return cls.model_validate({
             **{key: getattr(cfg, key) for key in RetrievalConfig.model_fields},
-            'checkpoint': checkpoint, 'listings_sha256': listings_sha256,
+            'checkpoint': checkpoint, 'listings_size': listings_size,
         })
 
 
@@ -93,7 +93,7 @@ class GraphConfig(RetrievalConfig):
     #: Fused text embedding cache. Only the retired hybrid used this; no track
     #: declares it any more, so it is rejected everywhere it is still passed.
     text_cache: str | None = None
-    text_checkpoint_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+    text_checkpoint_size: int | None = Field(default=None, ge=0)
     #: Cascade-only: the trained text ANN (ranker) and the trained gnn_only
     #: scorer checkpoint (decider). The cascade fuses nothing; it consumes both
     #: artifacts exactly as trained.
@@ -139,14 +139,14 @@ class GraphConfig(RetrievalConfig):
             # smoke fixture leaves both null, exactly like gnn_only.yaml.
             if self.text_cache:
                 raise ValueError('cascade forbids the fused text_cache; it consumes the trained text index and gnn scorer')
-            if self.text_checkpoint_sha256:
+            if self.text_checkpoint_size:
                 raise ValueError('cascade forbids a fused text checkpoint reference')
         else:
             if self.text_cache:
                 raise ValueError('gnn_only forbids text_cache')
             if self.text_index or self.gnn_checkpoint:
                 raise ValueError('gnn_only forbids cascade artifact references')
-            if self.text_checkpoint_sha256:
+            if self.text_checkpoint_size:
                 raise ValueError('gnn_only forbids a text checkpoint reference')
         if not all((self.listings, self.pairs, self.output_dir)):
             raise ValueError("input and output paths must not be empty")

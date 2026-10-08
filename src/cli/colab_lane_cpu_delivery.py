@@ -44,7 +44,7 @@ class ColabCPULaneDelivery:
         """The remote delivery assembly, ending with its transport token.
 
         The archive is hashed once as it is written and the token lands beside
-        it (``bundle_delivery.tar.zst.sha256``); the operator-side boundary is
+        it (``bundle_delivery.tar.zst.size``); the operator-side boundary is
         :func:`cli.colab_bundle_transport.verify_transport_digest`, the one
         integrity check of this VM crossing.
         """
@@ -202,12 +202,13 @@ with tar_archive(delivery, "w") as tar:
         print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
 
     @timed
-    def _verify_delivery_boundary(self, local: Path, run_id: str) -> str:
+    def _verify_delivery_boundary(self, local: Path, run_id: str) -> int:
         """The ONE integrity check of this VM crossing, then the token receipt.
 
-        The VM recorded ``<archive>.sha256`` as it finished writing; this reads
+        The VM recorded ``<archive>.size`` as it finished writing; this reads
         that token back over the existing control channel (a small text read,
-        never a second archive transfer) and hashes the delivered archive once
+        never a second archive transfer) and verifies the delivered archive's
+        byte size once
         (:func:`cli.colab_bundle_transport.verify_transport_digest`). A
         mismatch fails loud with the partial kept; a VM whose lane script
         predates the token is reported as unverified, loudly, rather than
@@ -226,11 +227,11 @@ with tar_archive(delivery, "w") as tar:
         if not expected:
             print(_stamp(), "[bundle] WARNING: the VM recorded no delivery digest "
                   "token; this delivery's bytes are unverified against the writer"
-                  f" (local sha256={observed})", flush=True)
+                  f" (local size={observed})", flush=True)
             self.result_event(run_id, "download", "digest_absent", archive=str(local),
-                              archive_sha256=observed)
+                              archive_size=observed)
             return observed
         self.result_event(run_id, "download", "verified", archive=str(local),
-                          archive_sha256=observed)
-        print(_stamp(), f"[bundle] delivery verified sha256={observed}", flush=True)
+                          archive_size=observed)
+        print(_stamp(), f"[bundle] delivery verified size={observed}", flush=True)
         return observed

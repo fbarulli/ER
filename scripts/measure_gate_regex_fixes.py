@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import DATA_PATH, TRAIN_ROOT, data_cfg, training_cfg
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.project_root import find_project_root
 if __package__ in (None, ""):
     # Permit the documented direct script command as well as test imports.
@@ -47,8 +47,8 @@ def snapshot(target: Path, *, label: str, chunk_rows: int) -> dict:
 
     mapping = data_cfg().column_mapping
     meta = {"kind": "er.raw_extraction_snapshot.v1", "label": label,
-            "raw_dataset_path": str(DATA_PATH), "raw_dataset_sha256": sha256_file(DATA_PATH),
-            "code_fingerprints": {str(path): sha256_file(TRAIN_ROOT / path)
+            "raw_dataset_path": str(DATA_PATH), "raw_dataset_size": file_size(DATA_PATH),
+            "code_fingerprints": {str(path): file_size(TRAIN_ROOT / path)
                                   for path in ["src/pipeline.py", "src/core/text.py", "src/core/critical_attributes.py",
                                                "src/core/url_evidence.py", "src/core/sweetener_values.py",
                                                "src/ner/ner_product_attributes.py", "src/core/date_evidence.py",
@@ -74,7 +74,7 @@ def snapshot(target: Path, *, label: str, chunk_rows: int) -> dict:
                 output.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
                 count += 1
             print(f"[{label}] extracted {count:,} raw rows; errors={sum(errors.values())}", flush=True)
-    if sha256_file(DATA_PATH) != meta["raw_dataset_sha256"]:
+    if file_size(DATA_PATH) != meta["raw_dataset_size"]:
         raise RuntimeError("raw dataset changed during extraction snapshot")
     temporary.replace(target)
     summary = {**meta, "rows": count, "errors": dict(errors), "snapshot": str(target)}
@@ -91,7 +91,7 @@ def compare(before_path: Path, after_path: Path, target: Path) -> dict:
     threshold = float(training_cfg().gate.raw_conf_threshold)
     with gzip.open(before_path, "rt") as before, gzip.open(after_path, "rt") as after, gzip.open(changed_path, "wt") as changes:
         old_meta, new_meta = json.loads(next(before)), json.loads(next(after))
-        if old_meta["raw_dataset_sha256"] != new_meta["raw_dataset_sha256"]:
+        if old_meta["raw_dataset_size"] != new_meta["raw_dataset_size"]:
             raise ValueError("snapshots describe different raw source datasets")
         for old_line, new_line in zip(before, after, strict=True):
             old, new = json.loads(old_line), json.loads(new_line)
@@ -193,7 +193,7 @@ def regression_report(fixture_path: Path, target: Path) -> dict:
         pairs.append({**sample, "current_gate": current, "status": "pass" if passed else "fail"})
     report = {"schema_version": "er.gate_regex_regression_results.v1",
               "scope": "Tracked actual source sample re-extraction against independently specified corrections; pair gate evaluates frozen canonical inputs separately.",
-              "fixture": str(fixture_path), "fixture_sha256": sha256_file(fixture_path),
+              "fixture": str(fixture_path), "fixture_size": file_size(fixture_path),
               "passed_listings": sum(sample["status"] == "pass" for sample in samples),
               "failed_listings": sum(sample["status"] == "fail" for sample in samples),
               "listings": samples, "frozen_canonical_pairs": pairs}

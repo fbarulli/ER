@@ -1,0 +1,145 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# hosted_datasets.yaml — the HOSTED-dataset REGISTRY declaration.
+# Owner: src/core/hosted_dataset.py (class HostedRegistry / entry HostedDataset).
+#
+# This file is the ONE home of the hosted Kaggle/Colab dataset surface declared
+# in dataclass.md section 4.3: which dataset exists (slug + human name), what it
+# is FOR (role), which way it travels (direction: input = mount-in, output =
+# publish), which files it carries (members), which kernels attach it (attach),
+# where it mounts on a Kaggle session and where it is staged locally.
+#
+# No call site re-spells a slug: consumers ask the registry
+# (HostedRegistry.entry / by_role / by_direction / kernel_inputs /
+#  kernel_outputs / mount_path / local_path). LayaSpec / KaggleSpec / ColabSpec
+# are the intended consumers and must REFERENCE these entries, never re-declare
+# a slug.
+#
+# Zero literals in code: the mount root, the mount/local templates, the
+# direction/role/kernel-kind vocabularies and every entry live HERE. The class
+# only reads this document (through core.common.load_validated_yaml).
+#
+# Naked data: this file declares ADDRESSES and ROLES only — no hashes, no
+# versions, no freshness verdicts. `on_kaggle` is a fact about today's hosting
+# state (er-laya-holdout and er-laya-finetune-ckpt do NOT exist on Kaggle yet),
+# never a validity gate.
+#
+# Validated by HostedRegistrySpec (src/core/hosted_dataset.py); an unknown
+# role/direction/kernel kind, a duplicate slug/role/mount or a mount that does
+# not match its slug's handle crashes loud with the offending entry named.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: er-hosted-datasets
+
+# Mount address on a session (mirrors kaggle.remote.input_dir) + the ONE
+# template that renders a dataset's mount directory: /kaggle/input/<handle>.
+mount_root: /kaggle/input
+mount_template: "{root}/{mount}"
+
+# Staged local dir root (repo-relative, resolved through TRAIN_ROOT) + the ONE
+# template that renders an entry's staged directory: results/hosted/<local>.
+staging_root: results/hosted
+local_template: "{root}/{local}"
+
+# ── declared vocabularies (a value outside these fails loud) ────────────────
+directions: [input, output]
+roles: [base, corpus, requests, decisions, holdout, ckpt, bundle, embeddings]
+kernel_kinds:
+  [bundle, train, embed, finalize, decision, finetune, finetune-eval, holdout-eval]
+
+# ── the datasets (dataclass.md 4.3) ─────────────────────────────────────────
+# `mount` is the directory Kaggle mounts the dataset under, i.e. the handle
+# (slug tail) — the class validates mount == slug tail so a typo cannot point
+# a kernel at a directory that will not exist.
+# `local` is the staged directory name under staging_root.
+# `directions` is ORDERED: for `er-laya-finetune-ckpt` it reads output→input.
+# `bundle_role` reuses core.bundle.BundleRole for the entries that travel as a
+# sealed Bundle (inputs = prepared inputs driving training, result = the
+# selected trained result); it is null for datasets that are not bundles.
+datasets:
+  - slug: fbarulli/er-laya-base
+    name: Laya fine-tune base checkpoint (snake_local tree archive)
+    role: base
+    directions: [input]
+    attach: [finetune]
+    members: [convaiinnovations-laya.tar.zst]
+    mount: er-laya-base
+    local: er-laya-base
+    on_kaggle: true
+    bundle_role: null
+
+  - slug: fbarulli/er-laya-train
+    name: Laya fine-tune corpus (train/dev/test JSONL)
+    role: corpus
+    directions: [input]
+    attach: [finetune, finetune-eval]
+    members: [train.jsonl, dev.jsonl, test.jsonl, receipt.json]
+    mount: er-laya-train
+    local: er-laya-train
+    on_kaggle: true
+    bundle_role: null
+
+  - slug: fbarulli/er-laya-requests
+    name: Laya decision requests (input CSV + typed-question schema)
+    role: requests
+    directions: [input]
+    attach: [decision]
+    members: [dataset.csv, laya.question.json]
+    mount: er-laya-requests
+    local: er-laya-requests
+    on_kaggle: true
+    bundle_role: null
+
+  - slug: fbarulli/er-laya-decisions
+    name: Laya decision outputs (published per decision kind)
+    role: decisions
+    directions: [output]
+    attach: [decision]
+    members: [dataset.csv]
+    mount: er-laya-decisions
+    local: er-laya-decisions
+    on_kaggle: true
+    bundle_role: null
+
+  - slug: fbarulli/er-laya-holdout
+    name: Laya component-disjoint holdout (real pairs + P0 + gate strata)
+    role: holdout
+    directions: [input]
+    attach: [holdout-eval]
+    members: [holdout.csv]
+    mount: er-laya-holdout
+    local: er-laya-holdout
+    on_kaggle: false
+    bundle_role: null
+
+  - slug: fbarulli/er-laya-finetune-ckpt
+    name: Laya fine-tuned checkpoint (published by finetune, mounted by evals)
+    role: ckpt
+    directions: [output, input]
+    attach: [finetune, finetune-eval, holdout-eval]
+    members: [rl_agent_config.json]
+    mount: er-laya-finetune-ckpt
+    local: er-laya-finetune-ckpt
+    on_kaggle: false
+    bundle_role: result
+
+  - slug: fbarulli/er-10k-bundle
+    name: ER 10k prepared-inputs bundle (sealed transport)
+    role: bundle
+    directions: [input]
+    attach: [bundle, train, finalize]
+    members: [all_tracks_inputs.tar.zst, manifest.json, timings.json]
+    mount: er-10k-bundle
+    local: er-10k-bundle
+    on_kaggle: true
+    bundle_role: inputs
+
+  - slug: fbarulli/er-embed-requests
+    name: ER embedding requests (request plan + prepared text tokens)
+    role: embeddings
+    directions: [input]
+    attach: [embed]
+    members: [request.json, prepared_text.npz]
+    mount: er-embed-requests
+    local: er-embed-requests
+    on_kaggle: true
+    bundle_role: null

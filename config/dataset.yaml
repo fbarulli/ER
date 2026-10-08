@@ -1,13 +1,14 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# dataset.yaml — the project dataset's MEMBER DECLARATION (owner: core.dataset).
+# dataset.yaml — the project dataset's DECLARATION (owner: core.dataset).
 #
 # This file does NOT hold paths. Every entry names a binding that already lives
 # in the phone book (config/paths.yaml ``files:`` / ``layouts:``), and
 # src/core/dataset.py resolves it through the SAME accessors every other module
 # uses (core.common.F / core.common.artifact). It is a declaration of WHICH
 # bindings are the dataset's surface — the source export, the derived CSVs, the
-# canonical/prepared layout — not a second copy of their addresses. A binding
-# that is not declared in paths.yaml fails loud in Dataset.from_config.
+# canonical/prepared layout, the official SETS and their SPLITS — not a second
+# copy of their addresses. A binding that is not declared in paths.yaml fails
+# loud in Dataset.from_config.
 #
 # It is deliberately NOT a registry or a versioning tool: there are no hashes,
 # no revisions and no freshness verdicts here. The only integrity surface the
@@ -18,12 +19,25 @@
 # crashes with the file named rather than silently dropping a member.
 #
 # ``source``  the ONE inspected raw export the dataset is derived from.
-# ``members`` the line-item artifacts (the digest surface): each resolves to a
+# ``members`` the line-item artifacts (the structural census surface): each resolves to a
 #             ``files:`` binding and is loaded through the shared read spec
 #             (config/paths.yaml ``dataset_csv_read``).
 # ``layout``  the declared TREE roots that hold the dataset's derived, bundled
 #             outputs (prepared/* and track_setup/*); resolved through
-#             ``layouts:`` and NOT part of the line-item digest.
+#             ``layouts:`` and NOT part of the line-item census.
+# ``sets``    the declared data SETS, each with its own SPLITS. A set is a named
+#             data surface (its own binding) plus the named splits that divide
+#             it; ``splits: {}`` declares that a set has NO splits, and the
+#             class says so rather than inventing one. The owner directive
+#             (2026-10-08) names exactly three sets: laya (train/dev/validation),
+#             full (full + validation only), smoke (no splits).
+# ``validation_size``  the validation split's SIZE, FLEX by construction: a
+#             fraction of the population in (0, 1) OR an absolute row count
+#             (>= 1). Read from here, never a hardcoded count in code.
+# ``binned_sets``  the DECLARED bin list: sets the owner has removed from the
+#             official surface. NAMES ONLY — this file never resolves, reads or
+#             deletes them; the modules that still bind them are fixed
+#             elsewhere. Declared so "what is binned" has ONE auditable home.
 # ═══════════════════════════════════════════════════════════════════════════
 
 name: er-product-identity
@@ -31,6 +45,9 @@ name: er-product-identity
 source: {via: files, key: dataset}
 
 members:
+  # The 3k set (the official 3k cohort). A line-item member so consumers reach
+  # it through Dataset.member("dataset_3k"); never a code literal.
+  dataset_3k: {via: layouts, key: dataset_3k}
   dataset_deduped: {via: files, key: dataset_deduped}
   sku_to_rep: {via: files, key: sku_to_rep}
   canonical_records: {via: files, key: canonical_records}
@@ -42,3 +59,39 @@ members:
 layout:
   prepared: {via: layouts, key: dataset_prepared}
   track_setup: {via: layouts, key: dataset_track_setup}
+
+# ── the declared SETS and their SPLITS (owner directive 2026-10-08) ────────
+sets:
+  # The laya set: the fine-tune corpus, split train / dev / validation. The
+  # held-out leaf on disk is data/laya/test.jsonl; ``laya_validation`` binds it
+  # under the DECLARED split name (paths.yaml owns the address).
+  laya:
+    binding: {via: layouts, key: dataset_laya}
+    splits:
+      train: {via: layouts, key: laya_train}
+      dev: {via: layouts, key: laya_dev}
+      validation: {via: layouts, key: laya_validation}
+  # The full set: the ONE raw export as the training population ("full") plus
+  # the single scored validation population ("validation") — full + validation
+  # ONLY (no separate train/dev leaves exist for it).
+  full:
+    binding: {via: files, key: dataset}
+    splits:
+      full: {via: files, key: dataset}
+      validation: {via: files, key: final_validation}
+  # The smoke set: a fixture, not a training population. It declares NO splits.
+  smoke:
+    binding: {via: layouts, key: dataset_smoke_200}
+    splits: {}
+
+# The validation split's SIZE: FLEX (a fraction in (0, 1) or an absolute row
+# count >= 1), declared once here. Never a hardcoded count in code.
+validation_size: 0.5
+
+# ── DECLARED BIN LIST (names only; nothing here is resolved or deleted) ────
+binned_sets:
+  - dataset_50pct.csv
+  - dataset_10k.csv
+  - data/prepared/smoke_500
+  - data/prepared/*__clean_shared_inputs
+  - data/track_setup__clean_shared_inputs

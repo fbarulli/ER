@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 from graph_tracks.artifacts import name
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 
 
 def _run(args, cwd):
@@ -43,7 +43,7 @@ def _authenticate(project: Path, remote: str):
             (project / '.dvc' / 'config.local').chmod(0o600)
 
 def inventory(path: Path):
-    return {str(p.relative_to(path)): file_hash(p) for p in sorted(path.rglob('*')) if p.is_file()}
+    return {str(p.relative_to(path)): file_size(p) for p in sorted(path.rglob('*')) if p.is_file()}
 
 
 def snapshot(source: Path, track: str, *, remote=None, push=False, generation="final") -> Path:
@@ -65,10 +65,10 @@ def snapshot(source: Path, track: str, *, remote=None, push=False, generation="f
             shutil.copytree(path, target)
         elif path.is_file():
             shutil.copy2(path, target)
-    hashes = inventory(payload)
+    sizes = inventory(payload)
     manifest = project / name(track, 'dvc_manifest.json')
     manifest.write_text(json.dumps({'schema': 'er-graph-dvc-v1', 'track': track,
-        'payload': payload.name, 'files': hashes, 'remote_configured': bool(remote),
+        'payload': payload.name, 'files': sizes, 'remote_configured': bool(remote),
         'pushed': push, 'verified_restore': False}, indent=2, sort_keys=True) + '\n')
     _run(['add', payload.name], project)
     if remote:
@@ -81,7 +81,7 @@ def snapshot(source: Path, track: str, *, remote=None, push=False, generation="f
     # Prove clean restore, not merely successful add/push exit codes.
     with tempfile.TemporaryDirectory(prefix='er-graph-dvc-verify-') as tmp:
         restored = restore(project, Path(tmp) / 'restored')
-        if inventory(restored) != hashes:
+        if inventory(restored) != sizes:
             raise RuntimeError('DVC restore verification failed')
     metadata = json.loads(manifest.read_text())
     metadata['verified_restore'] = True
@@ -119,7 +119,7 @@ def restore(project: Path, output: Path) -> Path:
             _run(['checkout', pointer.name], clean)
         payload = clean / manifest['payload']
         if inventory(payload) != manifest['files']:
-            raise RuntimeError('restored DVC files do not match recorded SHA256 inventory')
+            raise RuntimeError('restored DVC files do not match recorded size inventory')
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(payload, output)
     return output

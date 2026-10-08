@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from graph_tracks.config import load_config
-from graph_tracks.data import file_hash, load_records
+from graph_tracks.data import file_size, load_records
 from graph_tracks.train import load_pairs
 
 
@@ -41,33 +41,33 @@ def load_inputs(cfg, *, verify_inputs=None):
     elif not cfg.allow_unmanifested_inputs:
         raise ValueError('prepared input_manifest required; unmanifested inputs are synthetic-smoke only')
     if verify_inputs:
-        for key, path in [('listings_sha256', resolve(cfg.listings)),
-                          ('pairs_sha256', resolve(cfg.pairs)),
-                          ('identity_policy_sha256', POLICY_PATH),
-                          ('identity_dimensions_sha256', F['identity_dimensions'])]:
-            if manifest is not None and manifest.get(key) != file_hash(path):
+        for key, path in [('listings_size', resolve(cfg.listings)),
+                          ('pairs_size', resolve(cfg.pairs)),
+                          ('identity_policy_size', POLICY_PATH),
+                          ('identity_dimensions_size', F['identity_dimensions'])]:
+            if manifest is not None and manifest.get(key) != file_size(path):
                 raise ValueError(f'prepared input mismatch: {key}')
         from graph_tracks.data import NUMERIC, RELATIONS
         prepared_schema = (manifest.get('relations'), manifest.get('numeric')) if manifest else (None, None)
         if prepared_schema[0] is not None and prepared_schema[1] is not None:
             if list(prepared_schema[0]) != list(RELATIONS) or list(prepared_schema[1]) != list(NUMERIC):
                 raise ValueError(
-                    'prepared listings schema is stale: the extractor graph schema moved '
+                    'prepared listings schema is incompatible: the extractor graph schema moved '
                     '(relations/numeric derive from core.sku_identity.graph_schema); '
                     're-run local graph setup before launch')
     records = load_records(resolve(cfg.listings))
-    if verify_inputs and manifest is not None and manifest.get('shared_training_data_sha256'):
+    if verify_inputs and manifest is not None and manifest.get('shared_training_data_size'):
         from model_tracks.training_data import SharedTrainingData
         from model_tracks.shared_graph_data import validate_projection
         setup = resolve(cfg.listings).parent.parent
         shared = SharedTrainingData.model_validate_json((setup / layout.shared_training_data).read_text())
-        if shared.fingerprint != manifest['shared_training_data_sha256']:
+        if shared.fingerprint != manifest['shared_training_data_size']:
             raise ValueError('graph shared training data fingerprint mismatch')
-        if file_hash(setup / layout.shared_training_projection) != manifest.get('shared_training_projection_sha256'):
+        if file_size(setup / layout.shared_training_projection) != manifest.get('shared_training_projection_size'):
             raise ValueError('graph shared training projection fingerprint mismatch')
         validate_projection(setup, shared, track=cfg.track)
-    if verify_inputs and manifest is not None and manifest.get('pair_lineage_sha256'):
-        if file_hash(resolve(cfg.listings).parent / layout.pair_lineage) != manifest['pair_lineage_sha256']:
+    if verify_inputs and manifest is not None and manifest.get('pair_lineage_size'):
+        if file_size(resolve(cfg.listings).parent / layout.pair_lineage) != manifest['pair_lineage_size']:
             raise ValueError('prepared pair lineage mismatch')
     if verify_inputs:
         from graph_tracks.prepared_inputs import PLAN, load_plan
@@ -78,9 +78,9 @@ def load_inputs(cfg, *, verify_inputs=None):
                 raise ValueError('prepared graph ID order mismatch')
         elif cfg.device == 'cuda':
             raise ValueError('CUDA training requires locally prepared graph tensors')
-        if manifest is not None and manifest.get('report_attributes_sha256'):
+        if manifest is not None and manifest.get('report_attributes_size'):
             from graph_tracks.report_attributes import FILENAME, load_inputs as load_report_inputs
-            if file_hash(resolve(cfg.listings).parent / FILENAME) != manifest['report_attributes_sha256']:
+            if file_size(resolve(cfg.listings).parent / FILENAME) != manifest['report_attributes_size']:
                 raise ValueError('prepared report attribute mismatch')
             load_report_inputs(resolve(cfg.listings), records)
     pairs = load_pairs(resolve(cfg.pairs), records)

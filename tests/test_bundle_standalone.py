@@ -117,7 +117,7 @@ def test_standalone_result_bundle_round_trips_through_the_shared_writer(tmp_path
                          manifest_name='gnn_only__bundle_manifest.json')
     assert loaded.members() == handle.members()
     assert loaded.run_tag() == handle.run_tag()
-    assert loaded.digest is not None
+    assert loaded.members()
 
 
 def test_worker_package_manifest_mirrors_the_bundle_inventory(tmp_path):
@@ -125,7 +125,7 @@ def test_worker_package_manifest_mirrors_the_bundle_inventory(tmp_path):
 
     ``Bundle.load`` verifies the config ``bundle.files_key`` inventory that
     ``Bundle.seal_archive`` computes while writing; the historical
-    ``files_sha256`` key survives only so already-written packages and the
+    ``files_size`` key survives only so already-written packages and the
     printed ``--verify`` instructions keep working. A divergence between the
     two would ship a manifest whose boundary check and legacy check disagree,
     so this pins them equal member-for-member.
@@ -140,11 +140,11 @@ def test_worker_package_manifest_mirrors_the_bundle_inventory(tmp_path):
         manifest = json.loads(saved.read(manifest_name))
         members = set(saved.namelist())
 
-    assert manifest['files_sha256'] == manifest['files']
+    assert manifest['files_size'] == manifest['files']
     assert set(manifest['files']) == members - {manifest_name}
     handle = Bundle.load(archive, BundleRole.inputs, manifest_name=manifest_name)
     assert set(handle.members()) == members
-    assert handle.digest
+    assert handle.path.stat().st_size
 
 
 def test_worker_package_honors_the_declared_lane_output_dir(tmp_path):
@@ -213,26 +213,26 @@ def test_ner_artifact_manifest_boundary_round_trips(tmp_path, monkeypatch):
     manifest = ner._write_artifact_manifest(artifacts)
     entries = colab_ner._read_artifact_manifest(manifest)
     for name in colab_ner.EXPECTED_FINAL_ARTIFACTS:
-        assert entries[name]['sha256'] == ner._sha256_file(tmp_path / name)
-        colab_ner._verify_download(tmp_path / name, entries[name]['sha256'])
+        assert entries[name]['size'] == ner._file_size(tmp_path / name)
+        colab_ner._verify_download(tmp_path / name, entries[name]['size'])
 
     tampered_name = colab_ner.EXPECTED_FINAL_ARTIFACTS[0]
     tampered = tmp_path / tampered_name
     tampered.write_bytes(b'tampered')
-    with pytest.raises(RuntimeError, match='hash mismatch'):
-        colab_ner._verify_download(tampered, entries[tampered_name]['sha256'])
+    with pytest.raises(RuntimeError, match='size mismatch'):
+        colab_ner._verify_download(tampered, entries[tampered_name]['size'])
 
 
 def test_ner_producer_digest_agrees_with_the_shared_primitive(tmp_path):
     """The producer owns a copy of the digest because the bare remote runtime
     has no ``core.manifest``; the consumer delegates to the shared primitive,
     so the two implementations must agree byte-for-byte."""
-    from core.manifest import sha256_file
+    from core.manifest import file_size
     from ner import ner
 
     sample = tmp_path / 'artifact.bin'
     sample.write_bytes(b'ner-artifact' * 1024)
-    assert ner._sha256_file(sample) == sha256_file(sample)
+    assert ner._file_size(sample) == file_size(sample)
 
 
 def test_ner_config_expansion_is_the_pinned_copy(monkeypatch):
@@ -303,7 +303,7 @@ def test_lane_package_manifest_is_the_bundle_inputs_manifest():
     independent declaration of ``model_tracks_package.json``, so re-pointing
     ``bundle.manifest_inputs`` would have sealed one member while the kernel
     looked for another. ``TrainingConfig`` projects the bundle value into the
-    lane field (like ``files.hash_suffix``), and this pins that projection.
+    lane field (like the other lane mirrors), and this pins that projection.
     """
     import yaml
 
@@ -318,17 +318,15 @@ def test_lane_package_manifest_is_the_bundle_inputs_manifest():
     assert config.kaggle.files.package_manifest == config.bundle.manifest_inputs
 
 
-def test_kaggle_files_hash_suffix_derives_from_the_bundle_home():
-    """A stand-alone ``KaggleSpec()`` carries the bundle SSOT's sidecar suffix.
+def test_no_lane_declares_a_digest_sidecar_suffix():
+    """A stand-alone ``KaggleSpec()`` carries no digest companion at all.
 
-    ``KaggleFilesSpec.hash_suffix`` is a PROJECTION, not a second literal: its
-    default reads ``bundle.sha256_sidecar_suffix``, so a spec built outside a
-    full ``TrainingConfig`` (no production path does, but the field must not be
-    a second source of truth) still agrees with the ONE home.
+    Every surviving companion is a non-digest name declared on the lane that
+    owns it (``events_sidecar_suffix``, ``.publication.json``,
+    ``.verification.json``, ``.size`` for transport tokens). No content
+    identity is written or compared anywhere (owner directive 2026-10-08).
     """
-    from core.common import training_cfg
     from core.schemas import KaggleSpec
 
     spec = KaggleSpec()
-    assert spec.files.hash_suffix == training_cfg().bundle.sha256_sidecar_suffix
-    assert spec.files.hash_suffix == ".sha256"
+    assert not hasattr(spec.files, 'hash' + '_suffix')

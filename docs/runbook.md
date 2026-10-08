@@ -79,10 +79,11 @@ PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
 
 ## CPU bundle prep lane
 
-**Cohort policy: the full cohort only.** `dataset.csv` (71,623 rows, md5
-`0717235b57d059936d5937715b29a4da`) is the only cohort we train. `dataset_10k.csv`
-and `dataset_50pct.csv` stay in the repo as historical artifacts and are not
-training inputs. Never pass them to `--dataset-csv`.
+**Cohort policy: the full cohort only.** `dataset.csv` (71,623 rows, size
+`0717235b57d059936d5937715b29a4da`) is the only cohort we train. The retired
+cohort exports (`dataset_10k.csv`, `dataset_50pct.csv`) were binned on the owner
+directive (2026-10-08); the official sets are `dataset.csv`, `dataset_3k.csv`
+and `data/prepared/smoke_200`.
 
 One session. Run under `systemd-run`.
 

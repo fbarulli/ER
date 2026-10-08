@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -119,7 +119,7 @@ def main(argv=None):
               'items_with_no_new_eligible_partners': int(frame.new_no_eligible_partners.sum()),
               'items_losing_all_eligible_partners': int((~frame.old_no_eligible_partners & frame.new_no_eligible_partners).sum()),
               'previous_run_item_cohorts': previous,
-              'current_artifact_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in ['data/canonical_records.csv', 'data/gate_results.csv', 'data/labeled_pairs.csv']},
+              'current_artifact_size': {name: ByteCount((ROOT / name).read_bytes()).total for name in ['data/canonical_records.csv', 'data/gate_results.csv', 'data/labeled_pairs.csv']},
               'meaning': 'Complete canonical-item census, including items with no candidates or labels. Positive and negative partners follow each snapshot\'s configured gate-derived labeled population. Partner-link counts count both endpoints and are not independent pair counts. Historical run cohorts reuse their item IDs, then obtain partners from each complete old/new catalog; saved pair judgments are not reassigned to new partners.'}
     (OUTPUT / 'same_items_summary.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

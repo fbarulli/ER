@@ -4,9 +4,8 @@ P1 STRUCTURAL GAP (TODO.md AUGMENTATION TIERED ACTIONS): the bundle builder
 only ran load_prepared_bundle for shape validation — a rebuild "succeeded"
 while scripts/diet_manifest.py still exited 2 on the stale bundle
 (neg_aug_frac 0.2119 < 0.30 floor). The gate now runs inside
-_build_local_training_bundles and raises SystemExit on a violated clause,
-and the cached-bundle path refuses a bundle whose gate fails, forcing the
-loud rebuild failure.
+_build_local_training_bundles and raises SystemExit on a violated clause, so
+a bundle that misses the diet floor fails loud instead of shipping.
 
 TIER 1(e) rides along: prepared_bundle_drift_strict (required field of the
 training config, config/training.yaml declares it; env
@@ -166,9 +165,6 @@ class DietGateWiringTest(unittest.TestCase):
         ))
         stack.enter_context(mock.patch.object(
             colab, "_run_diet_gate", return_value=verdict
-        ))
-        stack.enter_context(mock.patch.object(
-            colab, "_tree_digest", return_value="wire-test"
         ))
         stack.enter_context(mock.patch("sys.stdout", captured))
         try:

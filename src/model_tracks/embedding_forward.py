@@ -5,8 +5,8 @@ import json
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from graph_tracks.data import file_hash
-from graph_tracks.text_cache import checkpoint_hash
+from graph_tracks.data import file_size
+from graph_tracks.text_cache import checkpoint_size
 
 
 EmbeddingDevice = Literal['cpu', 'cuda']
@@ -28,7 +28,7 @@ class PreparedEmbeddingForward(BaseModel):
     tokens_path: Path
     plan: dict
     row_count: int = Field(gt=0)
-    tokens_sha256: str
+    tokens_size: int = Field(ge=0)
     embedding_dtype: ClassVar[str] = 'float32'
     normalization_atol: ClassVar[float] = 1e-4
 
@@ -41,16 +41,16 @@ class PreparedEmbeddingForward(BaseModel):
         from sentence_transformers import SentenceTransformer
         from core.encoding_inputs import PreparedTokenInputs, tokenization_policy, load_token_features
         validate_embedding_device(self.device)
-        request_hash = file_hash(self.request_path)
-        checkpoint_digest = checkpoint_hash(self.checkpoint)
-        if file_hash(self.tokens_path) != self.tokens_sha256:
+        request_size = file_size(self.request_path)
+        measured_checkpoint_size = checkpoint_size(self.checkpoint)
+        if file_size(self.tokens_path) != self.tokens_size:
             raise ValueError('embedding tokens changed before forwarding')
         if model is None:
             model = SentenceTransformer(str(self.checkpoint), device=self.device, local_files_only=True)
-        elif (getattr(model, '_er_checkpoint_sha256', None) != checkpoint_digest
+        elif (getattr(model, '_er_checkpoint_size', None) != measured_checkpoint_size
               or model.device.type != self.device):
             raise ValueError('shared embedding model checkpoint/device differs from prepared export')
-        model._er_checkpoint_sha256 = checkpoint_digest
+        model._er_checkpoint_size = measured_checkpoint_size
         model.eval()
         if tokenization_policy(model) != self.plan['tokenization']:
             raise ValueError('checkpoint native tokenizer differs from prepared export')
@@ -62,12 +62,12 @@ class PreparedEmbeddingForward(BaseModel):
             for batch in self.plan['token_batches']:
                 vectors = model(load_token_features(arrays, batch, self.device))['sentence_embedding']
                 outputs.append(torch.nn.functional.normalize(vectors, p=2, dim=1))
-        if (file_hash(self.request_path) != request_hash
-                or file_hash(self.tokens_path) != self.tokens_sha256
-                or checkpoint_hash(self.checkpoint) != checkpoint_digest):
+        if (file_size(self.request_path) != request_size
+                or file_size(self.tokens_path) != self.tokens_size
+                or checkpoint_size(self.checkpoint) != measured_checkpoint_size):
             raise ValueError('embedding inputs changed during forwarding')
         model._er_forward_performance = perf.summary()
-        return outputs.numpy(), model, checkpoint_digest, request_hash
+        return outputs.numpy(), model, measured_checkpoint_size, request_size
 
     @staticmethod
     def write(output, ids, vectors, metadata, validate):

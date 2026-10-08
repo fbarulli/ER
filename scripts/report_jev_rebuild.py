@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from collections import Counter
 from pathlib import Path
@@ -14,8 +14,8 @@ from core.project_root import find_project_root
 ROOT = find_project_root(Path(__file__))
 
 
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def file_size(path: Path) -> int:
+    return ByteCount(path.read_bytes()).total
 
 
 def read(path: Path) -> pd.DataFrame:
@@ -86,7 +86,7 @@ def main() -> None:
         'label_population_changes': label_delta['_merge'].value_counts().to_dict(),
         'retained_pairs_changed_label': int(((label_delta['_merge'] == 'both') & (label_delta.true_label_old != label_delta.true_label_new)).sum()),
         'round_7_saved_jev_bands_by_rebuilt_gate': dict(saved_jev),
-        'source_sha256': {name: digest(ROOT / name) for name in ['dataset.csv', 'data/canonical_records.csv', 'data/gate_results.csv', 'data/labeled_pairs.csv']},
+        'source_size': {name: file_size(ROOT / name) for name in ['dataset.csv', 'data/canonical_records.csv', 'data/gate_results.csv', 'data/labeled_pairs.csv']},
         'meaning': 'Rebuilt gate-derived training labels, not new human or JEV truth labels. Previous CSVs remain in before/. Stored retailer descriptions are short captured fields. Existing prepared training bundles require fresh preparation before training.',
     }
     (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

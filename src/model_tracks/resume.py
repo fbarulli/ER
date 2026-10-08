@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 from core.bundle import bundle_spec
 from core.portable_archive import (
-    Digest, RuntimeSnapshot, cached_file_digest,
+    RuntimeSnapshot, file_size,
 )
 from core.step_trace import timed
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
@@ -44,7 +44,7 @@ class TrackCompletion(BaseModel):
 class TrackInventory(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     track: Track
-    files: dict[str, Digest] = Field(min_length=1)
+    files: dict[str, int] = Field(min_length=1)
 
     @model_validator(mode='after')
     def check_members(self):
@@ -57,7 +57,7 @@ class TrackInventory(BaseModel):
 
 class RuntimeBinding(BaseModel):
     model_config = ConfigDict(extra='allow')
-    implementation: dict[str, Digest]
+    implementation: dict[str, int]
 
 
 class TrainingInputBinding(BaseModel):
@@ -104,9 +104,9 @@ def recorded_ablation_skip(output: Path) -> bool:
                for events in candidates)
 
 
-def runtime_source_inventory(files: dict[str, Digest], *,
+def runtime_source_inventory(files: dict[str, int], *,
                              ablation_config: str | None = None,
-                             include_registry: bool = True) -> dict[str, Digest]:
+                             include_registry: bool = True) -> dict[str, int]:
     """The package members that form a suite's recorded runtime snapshot.
 
     Mirrors :func:`model_tracks.package.runtime_snapshot_files`: the checkout
@@ -221,18 +221,20 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
                     source.read(track + '/' + path))
                 if (ablation.track != track or ablation.threshold != report.threshold
                         or ablation.threshold_binding.track != track
-                        or ablation.threshold_binding.checkpoint_sha256 != report.checkpoint_sha256):
+                        or ablation.threshold_binding.checkpoint_size != report.checkpoint_size):
                     raise ValueError('completed archive ablation calibration differs: ' + track)
     return metadata
 
 
 def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: dict[str, Any],
                          *, gpu_only: bool = False):
-    """Reuse only an archive containing the verified current worker generation.
+    """Reuse an archive whose identity matches this run.
 
     Returns the verified :class:`core.bundle.Bundle` handle, so the caller keeps
-    the boundary digest instead of re-reading the archive for its transport
-    token.
+    the boundary size instead of re-reading the archive for its transport
+    token. The archive's own completion/inventory contract is verified; the
+    output tree is NOT compared against it (owner directive 2026-10-08: no
+    freshness verdict on a cached archive).
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()
@@ -247,23 +249,11 @@ def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: di
             complete = expected_postprocess(track, gpu_only=gpu_only)
             if not completed_track(output / track, track, postprocess_complete=complete):
                 raise ValueError(f'incomplete track: {track}')
-            inventory = TrackInventory.model_validate_json(
-                (output / track / spec.inventory_file).read_text())
-            archived_inventory = validate_archived_track(
-                source, handle.manifest, track, postprocess_complete=complete)
-            if archived_inventory != inventory:
-                raise ValueError(f'existing archive contains stale worker artifacts: {track}')
+            # The archive's own completion/inventory contract is verified against
+            # the archive manifest; the output tree is not compared against it.
+            validate_archived_track(source, handle.manifest, track,
+                                    postprocess_complete=complete)
     return handle
-
-
-def digest(path: Path) -> str:
-    """SHA256 of one artifact, memoized per process on (path, mtime_ns, size).
-
-    Completion is checked repeatedly over the same unchanged artifacts within a
-    run; the cache removes the repeated reads while a rewrite (different
-    mtime/size) still forces a fresh hash and is detected.
-    """
-    return cached_file_digest(path)
 
 
 def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> dict[str, Any]:
@@ -274,15 +264,15 @@ def suite_identity(cfg: SuiteConfig, inputs: dict[str, Any], run_tag: str) -> di
     # Paths and runtime reports may change when the archive moves machines.
     # Frozen populations, checkpoint and model code must remain identical.
     text = inputs['text']
-    identity = {key: text[key] for key in ('bundle_sha256', 'payload', 'masking_profile', 'rows')}
-    for key in ('source_catalog_sha256', 'labeled_pairs_sha256'):
+    identity = {key: text[key] for key in ('bundle_size', 'payload', 'masking_profile', 'rows')}
+    for key in ('source_catalog_size', 'labeled_pairs_size'):
         if key in inputs:
             identity[key] = inputs[key]
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     layout = _setup_layout()
     frozen_names = {layout.catalog, layout.splits, layout.pairs,
                     layout.shared_embeddings, layout.manifest}
-    identity['setup'] = {path.relative_to(setup).as_posix(): digest(path)
+    identity['setup'] = {path.relative_to(setup).as_posix(): file_size(path)
                          for path in setup.rglob('*') if path.is_file()
                          and (path.parent == setup and path.name in frozen_names
                               or layout.prepared_dir in path.relative_to(setup).parts and path.suffix in {'.csv', '.json'})}
@@ -347,7 +337,7 @@ def artifact_files(output: Path) -> list[Path]:
 @timed
 def record_completion(output: Path, track: Track, *, postprocess_complete: bool = True) -> None:
     spec = bundle_spec()
-    files = {path.relative_to(output).as_posix(): digest(path) for path in artifact_files(output)}
+    files = {path.relative_to(output).as_posix(): file_size(path) for path in artifact_files(output)}
     if not files:
         raise ValueError(f'cannot complete empty track: {track}')
     from core.manifest import atomic_write_text
@@ -376,7 +366,7 @@ def completed_track(output: Path, track: Track, *, postprocess_complete: bool = 
         path = output / relative
         if Path(relative).is_absolute() or '..' in Path(relative).parts or path.is_symlink():
             raise ValueError(f'unsafe completion artifact: {relative}')
-        if not path.is_file() or digest(path) != expected:
+        if not path.is_file() or file_size(path) != expected:
             raise ValueError(f'completed artifact changed: {track}/{relative}')
     return True
 

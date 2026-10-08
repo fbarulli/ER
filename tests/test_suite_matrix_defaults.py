@@ -52,12 +52,12 @@ def _settings(source: Path):
 def test_the_baked_sml_matrix_is_canonical():
     matrix = canonical_suite_matrix()
     assert [(row.size, row.name, row.device) for row in matrix.suites] == [
-        ("S", "smoke_200", "cpu"), ("M", "50pct", "cpu"), ("L", "full", "cuda"),
+        ("S", "smoke_200", "cpu"), ("M", "3k", "cpu"), ("L", "full", "cuda"),
     ]
 
 
 def test_unknown_suite_configs_still_work():
-    assert canonical_suite_matrix().entry("smoke_500") is None
+    assert canonical_suite_matrix().entry("not_a_suite") is None
 
 
 def test_the_device_flip_pattern_owns_the_defaults():

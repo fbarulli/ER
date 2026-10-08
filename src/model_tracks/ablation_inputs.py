@@ -21,7 +21,7 @@ import torch
 from core.run_log import RunLogger
 from core.model_input import model_input_composition
 from training.prepare_all_trace import timed
-from graph_tracks.data import GraphBatch, RELATIONS, tensorize, file_hash
+from graph_tracks.data import GraphBatch, RELATIONS, tensorize, file_size
 from graph_tracks.pooling import topology
 from model_tracks.ablation import checkpoint_identity, digest, resolve
 from model_tracks.text_export import prepare_tokens
@@ -93,7 +93,7 @@ def _hybrid_metadata(request,payload):
     """Hybrid's text checkpoint sha and model composition must match training."""
     if request['track'] == 'hybrid':
         metadata = payload['manifest']['text_metadata']
-        if metadata['checkpoint_sha256'] != checkpoint_identity(resolve(request['text_checkpoint'])) or metadata['composition'] != model_input_composition().model_dump(mode='json'):
+        if metadata['checkpoint_size'] != checkpoint_identity(resolve(request['text_checkpoint'])) or metadata['composition'] != model_input_composition().model_dump(mode='json'):
             raise ValueError('hybrid text checkpoint/composition differs from training')
 
 
@@ -184,7 +184,7 @@ def _freeze_arrays(arrays, output):
 def _publish(arrays, output, plan):
     """Write the compressed tensor file, hash it and report the plan census."""
     _freeze_arrays(arrays,output)
-    plan['sha256'] = file_hash(output)
+    plan['size'] = file_size(output)
     print(f'[ablation/local] prepared token batches={len(plan["token_batches"])} unique inference jobs={len(plan["jobs"])}',flush=True)
 
 

@@ -51,9 +51,10 @@ class KaggleRuntime:
     def cohort_label(dataset_csv: Path) -> str:
         """Cohort tag mirroring cli.colab_data_bundle_prep.cohort_label values.
 
-        `full` for the SSOT default export, `50pct` for the half-cohort, else a
-        sanitized stem. The SAME tags keep the two lanes' transcripts mutually
-        attributable without importing the colab module.
+        `full` for the SSOT default export, the export's declared tag for any
+        other committed export, else a sanitized stem. The SAME tags keep the
+        two lanes' transcripts mutually attributable without importing the colab
+        module.
         """
         from cli import kaggle_lane as lane
 
@@ -71,7 +72,7 @@ class KaggleRuntime:
         """Root-relative export filename for a cohort tag (inverse cohort_label).
 
         `full` = the SSOT default export; any other tag must name an export_csvs
-        entry whose filename carries the tag (50pct). Fail-loud on unknown.
+        entry (a root-relative, self-describing filename). Fail-loud on unknown.
         """
         from cli import kaggle_lane as lane
 

@@ -289,7 +289,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
            'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
            'EUROMONITOR_REMOTE_TRAINING':'1' if gpu_only else os.environ.get('EUROMONITOR_REMOTE_TRAINING', '0'),
-           'ER_DATA_GATE': gate.attestation,
+           'ER_DATA_GATE': str(gate.attestation),
            'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
     with _LOG.section('phase.worker_launch', workers=len(commands) + len(postprocess_tracks), device=cfg.device):
@@ -389,16 +389,15 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from model_tracks.resume import verify_suite_archive
         existing = verify_suite_archive(archive_path, output, run_tag, identity,
                                         gpu_only=gpu_only)
-        archive_sha = existing.digest
-        archive_sidecar(archive_path, spec.sha256_sidecar_suffix).write_text(archive_sha + '\n')
-        events.emit('collection', 'verified', archive=str(archive_path), sha256=archive_sha,
+        archive_size = existing.path.stat().st_size
+        events.emit('collection', 'verified', archive=str(archive_path), size=archive_size,
                     reused=True)
         trace().add(
             'run', 'collection',
             in_count=len(existing.members()), out_count=len(existing.members()),
             reason='a sealed archive for this run already exists and verifies against the current '
                    'result tree, so it is reused instead of rewritten',
-            detail={'archive': str(archive_path), 'digest': archive_sha, 'reused': True,
+            detail={'archive': str(archive_path), 'size': archive_size, 'reused': True,
                     'members': len(existing.members()), 'format': cfg.result_archive_format},
             source=str(archive_path),
         )
@@ -432,7 +431,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         return archive_path
     from core.bundle import Bundle, BundleRole
     # The timing surfaces default into output/logs (bffadd3) and are appended
-    # to by this very collection step, so the archive would hash bytes that
+    # to by this very collection step, so the archive would size bytes that
     # change mid-write ("archive integrity mismatch: logs/timings.log").
     # Freeze them out of the output tree first; the archived copies stay.
     for _variable in ('ER_TIMING_OUT', 'ER_TIMING_LOG'):
@@ -444,7 +443,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     if not publication:
         events.emit('publication', 'skipped', reason='publication disabled in suite config')
     # The result role owns the member set (selected checkpoint only) and the
-    # sealing writer; this stage neither re-derives the predicate nor re-hashes.
+    # sealing writer; this stage neither re-derives the predicate nor re-measures.
     result_bundle = Bundle.from_directory(output, BundleRole.result)
     files = result_bundle.collect_result_members()
     tree_files = result_bundle.members()
@@ -462,22 +461,21 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # Single-archive handoff (owner #5): the final events are emitted (and
     # fsynced by WorkerEvents) BEFORE the seal, so the one downloaded archive
     # carries the complete stream including the publication decision. The
-    # post-seal transport token travels in the .sha256 sidecar.
+    # post-seal transport token travels in the .size sidecar.
     events.emit('collection', 'sealing', tracks=list(TRACKS), files=len(files),
                 publication=publication)
     with _LOG.section('phase.archive_write', files=len(files), format=cfg.result_archive_format):
         sealed = result_bundle.seal_result(archive_path,
                                            metadata={spec.run_tag_key: run_tag},
                                            profile=cfg.profiling)
-        archive_sidecar(archive_path, spec.sha256_sidecar_suffix).write_text(sealed.digest + '\n')
-        events.emit('collection', 'complete', archive=str(archive_path), sha256=sealed.digest,
+        events.emit('collection', 'complete', archive=str(archive_path), size=archive_path.stat().st_size,
                     bytes=archive_path.stat().st_size)
         trace().add(
             'run', 'seal',
             in_count=len(files), out_count=len(files),
-            reason='one sealed result archive is written by the role writer, which hashes each '
-                   'member exactly once while writing and captures the whole-file digest there',
-            detail={'archive': str(archive_path), 'digest': sealed.digest,
+            reason='one sealed result archive is written by the role writer, which sizes each '
+                   'member exactly once while writing and captures the whole-file size there',
+            detail={'archive': str(archive_path), 'size': sealed.path.stat().st_size,
                     'bytes': archive_path.stat().st_size, 'members': len(files),
                     'format': cfg.result_archive_format, 'run_tag': run_tag,
                     'profile': bool(cfg.profiling)},
@@ -487,7 +485,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if publication:
             from model_tracks.local_complete import _publish
             events.emit('publication', 'starting', archive=str(archive_path))
-            # `sealed` is the writer's own handle: its digest came from the
+            # `sealed` is the writer's own handle: its size came from the
             # sealing pass, so publication reuses it rather than re-loading the
             # archive it just wrote (one integrity check per VM crossing).
             _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation,

@@ -4,7 +4,7 @@
 post-training across Colab and Kaggle, GPU and CPU. It is a pydantic value type
 over an on-disk archive plus the contract its role implies; integrity is checked
 EXACTLY ONCE at the boundary (``Bundle.load``), then the object is trusted, so no
-stage re-hashes or re-parses members.
+stage re-reads or re-parses members.
 
 ``BundlePipeline`` is the only code allowed to perform bundling: generation
 (prepare inputs) and finalize (select checkpoint + post-process + ablation). It
@@ -16,7 +16,6 @@ module spells no literal.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from contextlib import contextmanager
 from enum import Enum
@@ -26,7 +25,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.archive_reader import open_archive
-from core.portable_archive import source_inventory, verify_archive_digest
+from core.portable_archive import source_inventory, verify_archive
 
 #: The epoch-checkpoint directory name prefix (``checkpoint-281``); the role
 #: contract, the best-checkpoint resolver, and the layout walks share this one
@@ -240,7 +239,6 @@ class Bundle(BaseModel):
     path: Path
     manifest_name: str
     manifest: dict[str, Any] = Field(default_factory=dict)
-    digest: str | None = None
     local: Path | None = None  # materialized working tree, set by materialize()
     #: Member names captured by the boundary verify; a path-backed handle then
     #: answers members()/has() without re-parsing (or re-inflating) the archive.
@@ -249,12 +247,11 @@ class Bundle(BaseModel):
     # ------------------------------------------------------------------ load
     @classmethod
     def load(cls, path: Path | str, role: BundleRole | str, *,
-             expected_digest: str | None = None,
              manifest_name: str | None = None) -> "Bundle":
         """Verify ``path`` once at the boundary, then return a trusted handle.
 
-        ``expected_digest`` is the transport's recorded sha256 (Colab ``.sha256``,
-        Kaggle receipt ``archive_sha256``, git transport inventory). A mismatch is
+        The boundary checks the sealed manifest's member name set and every
+        member's byte size (no content identity is computed anywhere). A failure is
         the corruption guard: fail loud, keep the partial, never install.
 
         The boundary also enforces the role's membership contract (see
@@ -266,18 +263,14 @@ class Bundle(BaseModel):
         path = Path(path)
         name = manifest_name or globals()["manifest_name"](role)
         names: list[str] = []
-        manifest, observed = verify_archive_digest(path, name, names=names)
-        if expected_digest is not None and observed != expected_digest:
-            raise ValueError(
-                f"bundle failed the boundary integrity check: {path}\n"
-                f"  observed sha256={observed}\n  expected sha256={expected_digest}")
+        manifest = verify_archive(path, name, names=names)
         spec = _bundle_spec()
         if role is BundleRole.result and spec.run_tag_key not in manifest:
             raise ValueError(f"bundle manifest {name} carries no {spec.run_tag_key}: {path}")
         if name == globals()["manifest_name"](role):
             _refuse_role_violation(role, names, where=f"bundle {path}")
         return cls(role=role, path=path, manifest_name=name,
-                   manifest=manifest, digest=observed,
+                   manifest=manifest,
                    member_names=tuple(sorted(names)))
 
     @classmethod
@@ -302,7 +295,7 @@ class Bundle(BaseModel):
             names = _DirectoryReader(directory).namelist()
             _refuse_role_violation(role, names, where=f"bundle tree {directory}")
         return cls(role=role, path=directory, manifest_name=name,
-                   manifest=manifest, digest=None, local=directory)
+                   manifest=manifest, local=directory)
 
     # --------------------------------------------------------------- members
     @contextmanager
@@ -552,11 +545,10 @@ class Bundle(BaseModel):
                      manifest_name: str | None = None) -> "Bundle":
         """Write ``files`` as one sealed archive for ``role`` — the only writer.
 
-        Every bundling step seals through here: the writer hashes each source
-        exactly once while writing and verifies the written bytes, and the
-        sealed archive's whole-file SHA256 is captured during that same write,
-        so the returned handle's ``digest`` is the transport token with no
-        re-read and no second integrity pass.
+        Every bundling step seals through here: the writer sizes each source
+        exactly once while writing and verifies the written byte counts, so the
+        sealed archive is confirmed against its frozen inventory with no re-read
+        and no second integrity pass.
 
         The returned handle is the writer's own: its manifest mirrors the
         archive's (caller metadata plus the member inventory the writer froze),
@@ -584,16 +576,14 @@ class Bundle(BaseModel):
         if name == globals()["manifest_name"](role):
             _refuse_role_violation(role, (*files, *inline),
                                    where=f"the bundle to seal at {output}")
-        # The inventory the sealed manifest carries, from the same memoized
-        # source-digest pass the writer uses: the handle below can then answer
-        # the completion contract's member inventory without re-reading bytes.
+        # The inventory the sealed manifest carries, from the same source-size
+        # pass the writer uses: the handle below can then answer the completion
+        # contract's member inventory without re-reading bytes.
         inventory = source_inventory(files, inline)
-        hasher = hashlib.sha256()
         write_archive(output, files, manifest_name=name, metadata=payload,
-                      inline=inline, profile=profile, digest=hasher)
+                      inline=inline, profile=profile)
         return cls(role=role, path=output, manifest_name=name,
                    manifest={**payload, spec.files_key: inventory},
-                   digest=hasher.hexdigest(),
                    member_names=tuple(sorted({*files, *inline, name})))
 
     def seal_result(self, output: Path | str, *,
@@ -632,7 +622,7 @@ class Bundle(BaseModel):
             names = list(manifest.get(spec.files_key, {}))
             _refuse_role_violation(role, names, where=f"bundle {path}")
         return cls(role=role, path=Path(path), manifest_name=name,
-                   manifest=manifest, digest=None)
+                   manifest=manifest)
 
     @staticmethod
     def _track_root(root: Path, track: str) -> Path:
@@ -698,7 +688,7 @@ class BundlePipeline(BaseModel):
     #: spec's non-local location; the local lane passes its own).
     postprocess_location: str | None = None
     #: Extra manifest entries the sealing step records (transport identity such
-    #: as the source archive digests); the step's own keys always win.
+    #: as the source archive names and sizes); the step's own keys always win.
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def prepare_inputs(self) -> "Bundle":

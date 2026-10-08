@@ -214,14 +214,14 @@ def list_runs() -> list[RunIndexEntry]:
             continue
         entries.append(RunIndexEntry(run_id=Path(line).stem, dvc_file=f"{base}/{line}"))
     commits = _git("log", "--format=%H %s", "--", base)
-    digests = {}
+    commit_ids = {}
     for row in commits.splitlines():
         head, _, message = row.partition(" ")
         if message.startswith("results: training run "):
-            digest_id = message.removeprefix("results: training run ").split(" ", 1)[0]
-            digests[digest_id] = head[:10]
+            commit_id = message.removeprefix("results: training run ").split(" ", 1)[0]
+            commit_ids[commit_id] = head[:10]
     for entry in entries:
-        entry.commit = digests.get(entry.run_id)
+        entry.commit = commit_ids.get(entry.run_id)
     return entries
 
 

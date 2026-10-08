@@ -45,9 +45,10 @@ unqualified append:
 
 1. A run id is attached to every row. It is resolved, in order, from
    ``EUROMONITOR_TRACE_RUN``, then the launcher's ``EUROMONITOR_RUN_ID``
-   (train.py's existing immutable-run doctrine), and otherwise from a content
-   fingerprint of the run's shared artifacts (``canonical_records.csv`` +
-   ``gate_results.csv``). The fingerprint is what makes the TWO-STAGE flow
+   (train.py's existing immutable-run doctrine), and otherwise from a structural
+   identity of the run's shared artifacts (``canonical_records.csv`` +
+   ``gate_results.csv``): their declared names and byte sizes. The identity is
+   what makes the TWO-STAGE flow
    work with no orchestrator: stage 1 writes those artifacts, stage 2 READS
    them, so both stages compute the same run id and their rows land in one run.
 2. Writing a stage REPLACES that stage's rows for the current run in place
@@ -70,7 +71,7 @@ its own RESULTS subtree: the suite spawns its trained tracks with
 ``EUROMONITOR_RESULTS_DIR=<run>/<track>`` so each worker's artifacts stay its
 own. A lane that re-derives ``RESULTS/logs/training_trace.csv`` therefore writes
 a DIFFERENT file, and its per-lane ``EUROMONITOR_RUN_ID`` outranks the run
-fingerprint, so its rows can never join the data-prep rows of the same run.
+structural identity, so its rows can never join the data-prep rows of the same run.
 Launchers close that by handing every spawned lane :func:`run_trace_env` — the
 run's ONE destination (``EUROMONITOR_TRACE_PATH``), the run's id
 (``EUROMONITOR_TRACE_RUN``) and the lane's own name
@@ -81,9 +82,10 @@ own (run, stage, producer) subset: without it the second lane's commit would
 replace the first's rows. Concurrent writers of one file serialize their
 read -> merge -> write cycle on a sibling lock file (:func:`_trace_lock`).
 
-The run id itself is the run's artifacts' fingerprint, so a stage that runs
+The run id itself is the structural identity of the run's artifacts, so a stage
+that runs
 BEFORE those artifacts exist cannot know it (resolving then returns the
-PREVIOUS run's fingerprint). Such a run pins :data:`TRACE_PENDING_RUN` for the
+PREVIOUS run's identity). Such a run pins :data:`TRACE_PENDING_RUN` for the
 early stages and calls :func:`adopt_run` once its own artifacts exist, so the
 whole run lands under ONE id — the same id the training side reproduces.
 
@@ -142,7 +144,6 @@ green run is never broken. The strict contract stays in :func:`accounting`.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from collections.abc import Iterable, Iterator, Mapping
@@ -191,7 +192,7 @@ LAUNCHER_RUN_ENV = "EUROMONITOR_RUN_ID"
 # do, because each worker owns its own artifacts) must pin these two, or the
 # lanes FRAGMENT the trace: each would derive its own <lane>/logs/training_trace.csv
 # from RESULTS, and its per-lane EUROMONITOR_RUN_ID would outrank the run
-# fingerprint, so the rows could never join the data-prep rows of the same run.
+# structural identity, so the rows could never join the data-prep rows of the same run.
 # The pins are resolved by the launcher (whose RESULTS is the run root) and are
 # the only way a child learns the RUN's destination instead of re-deriving a
 # lane-local one:
@@ -206,13 +207,13 @@ LAUNCHER_RUN_ENV = "EUROMONITOR_RUN_ID"
 TRACE_PATH_ENV = "EUROMONITOR_TRACE_PATH"
 TRACE_LANE_ENV = "EUROMONITOR_TRACE_LANE"
 # The run id a preparation run's rows carry BEFORE the artifacts that define its
-# identity exist (core.tracing.run_artifact_fingerprint). resolve_run_id() at
-# that moment would return the PREVIOUS run's fingerprint, which is worse than
+# identity exist (core.tracing.run_artifact_sizes). resolve_run_id() at
+# that moment would return the PREVIOUS run's identity, which is worse than
 # "unknown": it attributes this run's rows to another run. prepare_all pins this
 # and adopts the rows once the run's own artifacts exist (see adopt_run).
 TRACE_PENDING_RUN = "run-pending"
 # The shared artifacts that DEFINE a data-prep run: stage 1 writes both, stage 2
-# reads both, so the fingerprint is the same on both sides of the handoff.
+# reads both, so the structural identity is the same on both sides of the handoff.
 RUN_FINGERPRINT_SOURCES: tuple[str, ...] = ("canonical_records", "gate_results")
 RUN_UNBOUND = "run-unbound"
 # Runs kept in the file, newest first (whole runs, never a partial one). Five
@@ -406,7 +407,7 @@ def _explicit_run_identity() -> dict[str, object] | None:
 
     The provenance matters as much as the value: when a file holds two runs, a
     reader must be able to see WHY they are two runs. The resolution rule plus
-    the fingerprint inputs are written into each stage's ``run_identity`` row.
+    the identity inputs are written into each stage's ``run_identity`` row.
     """
     for variable in (TRACE_RUN_ENV, LAUNCHER_RUN_ENV):
         value = str(os.environ.get(variable, "")).strip()
@@ -419,17 +420,20 @@ def _explicit_run_identity() -> dict[str, object] | None:
     return None
 
 
-def _fingerprint_run_identity(
+def _structural_run_identity(
     sources: dict[str, dict[str, object]],
 ) -> dict[str, object]:
-    """The content fingerprint of the run artifacts that define a run."""
+    """The structural identity of the run artifacts that define a run.
+
+    Declared artifact names plus their byte sizes — never a content digest.
+    """
     joined = "|".join(
-        f"{name}:{entry['size']}:{entry['sha256']}"
+        f"{name}:{entry['size']}"
         for name, entry in sources.items()
     )
     return {
-        "run_id": f"run-{hashlib.sha256(joined.encode()).hexdigest()[:12]}",
-        "resolution": "content fingerprint of the run artifacts",
+        "run_id": f"run-{joined}",
+        "resolution": "structural identity of the run artifacts (names + sizes)",
         "sources": sources,
     }
 
@@ -439,25 +443,24 @@ def resolve_run_identity() -> dict[str, object]:
     explicit = _explicit_run_identity()
     if explicit is not None:
         return explicit
-    sources = run_artifact_fingerprint()
+    sources = run_artifact_sizes()
     if not sources:
         return {
             "run_id": RUN_UNBOUND,
             "resolution": "no run artifact on disk yet",
             "sources": {},
         }
-    return _fingerprint_run_identity(sources)
+    return _structural_run_identity(sources)
 
 
 @timed
-def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
-    """Size + sha256 of every artifact that defines the current run.
+def run_artifact_sizes() -> dict[str, dict[str, object]]:
+    """Path + byte size of every artifact that defines the current run.
 
-    Runs on every unbound TraceRun write, so its hashing cost is traced; the
-    stage's own artifacts are the digest input.
+    Runs on every unbound TraceRun write; the stage's own artifacts are the
+    identity input.
     """
     from core.common import F
-    from core.manifest import sha256_file
 
     found: dict[str, dict[str, object]] = {}
     for key in RUN_FINGERPRINT_SOURCES:
@@ -470,7 +473,6 @@ def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
         found[key] = {
             "path": path.as_posix(),
             "size": int(path.stat().st_size),
-            "sha256": sha256_file(path),
         }
     return found
 
@@ -1196,8 +1198,8 @@ class TraceRun:
         # An explicit run id is for hermetic callers (tests, smokes). The
         # default is resolved at WRITE time, never at construction: stage 1
         # constructs its writer before it writes the very artifacts the run
-        # fingerprint is taken from, so an early resolution would tag stage 1
-        # with the PREVIOUS run and split the two stages apart.
+        # structural identity is taken from, so an early resolution would tag
+        # stage 1 with the PREVIOUS run and split the two stages apart.
         self._run_id = run_id
         # The lane this process writes for: explicit for hermetic callers, else
         # the launcher's pin (see the pin block above). It qualifies the row's
@@ -1633,8 +1635,8 @@ class TraceRun:
         """The stage's first row: which run these rows belong to, and why.
 
         Written automatically (not by the caller) so every stage commit is
-        self-describing: the run id, the rule that produced it, and the size +
-        sha256 of each artifact the fingerprint was taken from. Two runs in one
+        self-describing: the run id, the rule that produced it, and the path +
+        byte size of each artifact the identity was taken from. Two runs in one
         file are therefore explainable from the file.
         """
         identity = self._resolved_identity()
@@ -1926,9 +1928,9 @@ def adopt_run(
 ) -> int:
     """Move one run's rows onto its real run id, whole rows at a time.
 
-    A run's identity is its artifacts' fingerprint (``run_artifact_fingerprint``),
+    A run's identity is its artifacts' structural record (``run_artifact_sizes``),
     and the stages that run BEFORE those artifacts exist cannot know it: resolving
-    then would return the PREVIOUS run's fingerprint and attribute this run's rows
+    then would return the PREVIOUS run's identity and attribute this run's rows
     to another run. ``prepare_all`` therefore pins ``TRACE_PENDING_RUN`` for
     those stages and adopts their rows here, once the run's own artifacts exist,
     so the whole preparation run is ONE run in the file — the same id the
@@ -2041,7 +2043,7 @@ __all__ = [
     "record",
     "resolve_run_id",
     "resolve_run_identity",
-    "run_artifact_fingerprint",
+    "run_artifact_sizes",
     "run_trace_env",
     "sample_keys",
     "stage_trace",

@@ -16,7 +16,7 @@ safe summaries.
 
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import re
 from pathlib import Path
 
@@ -109,8 +109,8 @@ def _key(value: object) -> str:
 
 
 def _stable_seed(seed: int, repeat: int) -> int:
-    digest = hashlib.sha256(f"{seed}:{repeat}".encode()).hexdigest()
-    return int(digest[:8], 16)
+    # Deterministic, hash-free derivation from the declared integers alone.
+    return (seed * 1000003 + repeat) % (2**31 - 1)
 
 
 def _endpoint_keys(row: pd.Series, side: str) -> tuple[str, ...]:

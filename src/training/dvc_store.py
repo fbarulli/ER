@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from core import common
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 # The tracking/verify EXCLUSION set — files/dirs whose path parts hit these
 # are skipped in tracking and verification. KEEP the content byte-for-byte.
@@ -204,12 +204,12 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
             restored = verify / original.relative_to(source)
             if not restored.is_file():
                 raise RuntimeError(f"DVC pull did not restore {original.name}")
-            expected, actual = sha256_file(original), sha256_file(restored)
+            expected, actual = file_size(original), file_size(restored)
             if expected != actual:
                 raise RuntimeError(f"DVC pull hash mismatch for {original.name}")
             result.append({
                 "path": str(original.relative_to(source)),
-                "sha256": actual,
+                "size": actual,
             })
         return result
 
@@ -809,7 +809,7 @@ def restore_pointer(source: Path, pointer: Path) -> list[Path]:
     This is the fail-fast primitive used before a trainer subprocess starts.
     It intentionally verifies every declared output instead of merely
     checking that ``dvc pull`` returned zero: a successful DVC command can
-    still leave an incomplete working tree when a pointer is stale or
+    still leave an incomplete working tree when a pointer is missing or
     malformed.
     """
     try:

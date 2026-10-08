@@ -49,8 +49,8 @@ def main() -> None:
         target = Path(args.save)
         target.write_text(json.dumps({'label': args.label, 'wall_seconds': result['wall_seconds'],
                                       'fingerprint_request': result['fingerprint_request'],
-                                      'prepared_inputs_sha256': json.loads(request_path.read_text())
-                                      ['prepared_inputs']['sha256']}, indent=2))
+                                      'prepared_inputs_size': json.loads(request_path.read_text())
+                                      ['prepared_inputs']['size']}, indent=2))
     print(json.dumps(result, indent=2))
 
 

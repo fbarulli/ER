@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 from graph_tracks.artifacts import name
-from graph_tracks.data import NUMERIC, RELATIONS, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
+from graph_tracks.data import NUMERIC, RELATIONS, file_size, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN
 from graph_tracks.train import load_pairs, train
 from graph_tracks.infer import GraphEncoder, export
@@ -76,7 +76,7 @@ def test_vocabulary_and_inductive_batch_invariance():
 
 def test_cache_alignment_and_zero_guard(tmp_path):
     path = tmp_path / 'cache.npz'
-    metadata = json.dumps({'checkpoint_sha256': 'x', 'composition': 'test'})
+    metadata = json.dumps({'checkpoint_size': 'x', 'composition': 'test'})
     np.savez(path, ids=['b', 'a'], embeddings=np.eye(2, dtype='float32'), metadata=metadata)
     vectors, _ = load_text_cache(path, ['a', 'b'])
     np.testing.assert_array_equal(vectors, np.eye(2)[::-1])
@@ -108,7 +108,7 @@ def test_worker_export_and_resume(tmp_path, monkeypatch):
     from training.hnsw_index import PersistentHnswIndex
     index = PersistentHnswIndex(target / name(track, 'index'), ef_construction=200, M=16, ef_search=100)
     index.load(ids=[r['sku_id'] for r in population()], dim=8, checkpoint=checkpoint,
-               model_name='gnn_only', preprocessing_fingerprint=file_hash(listings))
+               model_name='gnn_only', preprocessing_fingerprint=file_size(listings))
     labels, distances = index.query(vectors[:1], top_k=3)
     assert labels.shape == (1, 3)
     assert np.isfinite(distances).all()
@@ -244,7 +244,7 @@ def test_prepared_manifest_hash_drift_fails(tmp_path, monkeypatch):
     _, _, _, config = inputs(tmp_path)
     cfg = yaml.safe_load(config.read_text())
     manifest = tmp_path / 'input_manifest.json'
-    manifest.write_text(json.dumps({'listings_sha256': 'wrong'}))
+    manifest.write_text(json.dumps({'listings_size': 'wrong'}))
     cfg['input_manifest'] = str(manifest)
     config.write_text(yaml.safe_dump(cfg))
     with pytest.raises(ValueError, match='prepared input mismatch'):

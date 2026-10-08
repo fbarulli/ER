@@ -1,5 +1,5 @@
 """Verify and compare the user-requested 50-pair repeat without new calls."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -25,8 +25,8 @@ def main():
     for row in rows:
         state = {'record_a':states[row['input_scope']][row['gtin1']], 'record_b':states[row['input_scope']][row['gtin2']]}
         request = {'model':row['model'], 'state':state, 'questions':build_questions()}
-        digest = hashlib.sha256(json.dumps(request).encode()).hexdigest()
-        assert digest == row['request_sha256'] == row['prior_request_sha256']
+        digest = ByteCount(json.dumps(request).encode()).total
+        assert digest == row['request_size'] == row['prior_request_size']
         before, after = band(row['prior_jev_score']), band(row['noul'])
         transitions[before+'->'+after] += 1
         cohorts[row['stratum']][after] += 1

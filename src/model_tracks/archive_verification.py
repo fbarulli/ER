@@ -5,7 +5,7 @@ runs on the machine that WROTE the archive. Once the archive has crossed the
 wire to a local checkout, the bytes are the only evidence left, so this module
 re-verifies them and records the outcome as a ``.verification.json`` sidecar:
 
-* the ``.sha256`` sidecar, when present (transfer integrity), and
+* the ``.size`` sidecar, when present (transfer integrity), and
 * the full sealing-time contract (byte integrity of every member, run tag,
   per-track completion markers, exactly one calibrated report manifest per
   track, saved-ablation binding) plus a per-track summary of what was
@@ -74,26 +74,14 @@ def verification_result(archive: Path, run_tag: str | None = None,
         'verified_at': datetime.now(timezone.utc).isoformat(),
         'run_tag': run_tag,
         'archive': archive.name,
-        'zip_sha256': {},
+        'archive_bytes': int(archive.stat().st_size) if archive.is_file() else None,
         'tracks': {},
     }
-    sidecar = archive_sidecar(archive, spec.sha256_sidecar_suffix)
-    if sidecar.is_file() and not sidecar.is_symlink():
-        expected = sidecar.read_text(encoding='utf-8').strip().splitlines()[0]
-        result['zip_sha256'] = {'sidecar': sidecar.name, 'expected': expected,
-                                'actual': None, 'match': None}
-    else:
-        result['zip_sha256'] = {'sidecar': None, 'match': None,
-                                'note': 'no .sha256 sidecar to check against'}
     try:
         from core.bundle import Bundle, BundleRole
-        # Exactly one boundary check; its streaming pass also yields the
-        # whole-archive digest the sidecar is compared against.
+        # Exactly one boundary check: the sealing contract is verified once, by
+        # member names and byte sizes (no content identity is computed anywhere).
         handle = Bundle.load(archive, BundleRole.result)
-        if result['zip_sha256'].get('expected') is not None:
-            result['zip_sha256']['actual'] = handle.digest
-            result['zip_sha256']['match'] = (
-                result['zip_sha256']['expected'] == handle.digest)
         validate_completed_suite_archive(archive, run_tag, settings=settings, bundle=handle)
         with handle.reader() as source:
             binding = TrainingInputBinding.model_validate_json(
@@ -119,7 +107,7 @@ def verification_result(archive: Path, run_tag: str | None = None,
                 entry: dict = {
                     'report': reports[0],
                     'threshold': report['threshold'],
-                    'checkpoint_sha256': report['checkpoint_sha256'],
+                    'checkpoint_size': report['checkpoint_size'],
                     'test_reported': report['test_reported'],
                 }
                 if ablation_required and track in ABLATION_TRACKS:

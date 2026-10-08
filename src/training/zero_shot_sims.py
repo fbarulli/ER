@@ -11,9 +11,9 @@ embedding_similarities.csv when a resume read is about to happen), writes
 the sims CSV atomically (atomic_write_csv — the incremental per-model
 write can no longer leave a truncated CSV on the final path, which a
 skip-if-exists rerun would then treat as good), and publishes
-results/manifests/zero_shot_sims.json LAST. The per-model `.model_fp`
-fingerprint stamps become manifest OUTPUTS (sha256-pinned), so a torn or
-tampered stamp is detectable without a re-run.
+results/manifests/zero_shot_sims.json LAST. Resume reuses stored sim columns by
+pair sequence and traceability columns alone; there is no recorded-fingerprint
+freshness stamp (owner directive 2026-10-08).
 
 ROW ACCOUNTING (code truth): every selected gate pair is scored and every
 selected pair is written — the `[keep]` projection at the write is a COLUMN
@@ -24,7 +24,7 @@ pair (hard_no included — the eval lane draws its negatives from hard_no
 rows; skipping them was the silent class drop that rule closed).
 """
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import random
@@ -155,8 +155,8 @@ def _masked_inputs(
     return output
 
 
-def _mask_config_fingerprint(seed: int) -> str:
-    """Fingerprint the validated masking SSOT and deterministic seed."""
+def _mask_config_fingerprint(seed: int) -> int:
+    """Structural size of the validated masking SSOT and deterministic seed."""
     spec = training_cfg().masking
     payload = {
         "seed": seed,
@@ -166,9 +166,9 @@ def _mask_config_fingerprint(seed: int) -> str:
         "mask_lo": spec.mask_lo,
         "mask_hi": spec.mask_hi,
     }
-    return hashlib.sha256(
+    return ByteCount(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    ).total
 
 
 def _build_trace_frame(
@@ -204,9 +204,9 @@ def _build_trace_frame(
             "model_input_text1": m1["model_input"],
             "model_input_text2": m2["model_input"],
         }
-        lineage_id = hashlib.sha256(
-            json.dumps(lineage_payload, sort_keys=True, default=str).encode("utf-8")
-        ).hexdigest()[:16]
+        lineage_id = (
+            f"{gtin1}:{gtin2}:{mask_fp}"
+        )
         source1, source2 = source_rows[gtin1], source_rows[gtin2]
         trace_rows.append(
             {
@@ -336,7 +336,7 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
     out = F["embedding_similarities"]
     # Stage manifest (SILENT_DROPS task 7) — begin BEFORE the work. The
     # fresh-resume read below consumes the PREVIOUS run's CSV, so when that
-    # read is about to happen it is recorded as an input too (hashed
+    # read is about to happen it is recorded as an input too (sized
     # before the file is replaced). Seed = the SSOT seed; encode calls are
     # deterministic, the component split downstream (not this stage) is
     # what consumes RNG.
@@ -354,7 +354,7 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
     # copy (number-free + schema-free canonical only), which made the eval
     # measure a payload the model no longer ran on while its own text
     # fingerprint — computed from the strings it built — stayed valid and
-    # silently resumed the stale sims.
+    # silently reused sims computed from the old texts.
     from core.model_input import build_canonical_text, model_input_info
     from core.structured_features import canonical_info
 
@@ -412,31 +412,15 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
         unique_gtins=len(unique_gtins),
     )
 
-    # resume: models already scored in a previous (crashed) run are skipped —
-    # but ONLY when the stored pair SET matches the current gate rows exactly.
-    # The old check (column exists & notna) silently reused stale sims when
-    # data_prep regenerated gate_results with different pairs/canonicals —
-    # a drift bug: sims from the OLD canonicals attached to NEW gate rows.
-    # CANONICAL-TEXT GUARD: the pair sequence alone is NOT sufficient — the
-    # phrase-variation fix (2026-09-07) changed 3,205 canonical texts without
-    # touching a single gate pair; the encoded texts changed, so every stored
-    # sim is stale even though the pairs match. A cheap text fingerprint (the
-    # sha256 of the joined canonical texts actually about to be encoded) pins
-    # the sims to the exact canonical content they were computed from.
-    import hashlib as _hashlib
-
-    _canon_fp = _hashlib.sha256(
-        json.dumps(
-            {"model_inputs": model_texts, "mask_config": mask_fp},
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:16]
+    # resume: models already scored in a previous (crashed) run are skipped
+    # when the stored pair SET and the traceability columns match the current
+    # gate rows. Structural only (owner directive 2026-10-08): no recorded
+    # canonical-text fingerprint is re-derived to call stored sims stale; a
+    # resumed column rides along on every incremental write.
     have: list[str] = []
-    # fresh-resumed columns (already on disk with a valid fingerprint stamp) must
-    # ride along on EVERY incremental write — the old write rebuilt the CSV from
-    # `results` alone, silently DROPPING every resumed column (empirically
-    # verified: score minilm after multilingual -> multilingual column vanished
-    # while its stamp stayed). Carry them in `done` so the write keeps them.
+    # Resumed columns must ride along on EVERY incremental write — the old
+    # write rebuilt the CSV from `results` alone, silently DROPPING every
+    # resumed column. Carry them in `done` so the write keeps them.
     resumed: dict[str, pd.Series] | None = None
     if out.exists():
         done = pd.read_csv(out, dtype={"gtin1": str, "gtin2": str})
@@ -445,7 +429,7 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
         if key_new != key_old:
             print(
                 "[resume] gate pair sequence changed since the last scoring — "
-                "re-scoring ALL models (stale sims discarded)",
+                "re-scoring ALL models (existing sims discarded)",
                 flush=True,
             )
             done = None
@@ -457,43 +441,14 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
             )
             done = None
         else:
-            # PER-MODEL fingerprint stamps: a column resumes ONLY when its own
-            # stamp matches the canonical texts about to be encoded. No stamp
-            # (column predates the contract) = provenance unverifiable = the
-            # column re-scores; deleting stamps must never upgrade stale to
-            # fresh. All-columns-stale still discards the whole CSV for a clean
-            # rewrite (no half-CSV mixes old and new canonical scores).
-            stale_cols = []
-            for c in done.columns:
-                if not (c.startswith("sim_") and done[c].notna().all()):
-                    continue
-                stamp = out.parent / f"{out.name}.model_fp.{c}"
-                fp_col = stamp.read_text().strip() if stamp.exists() else None
-                if fp_col != _canon_fp:
-                    stale_cols.append(c)
-            if stale_cols:
-                print(
-                    f"[resume] canonical texts changed (fp {_canon_fp}); stale "
-                    f"columns re-scored: {stale_cols}",
-                    flush=True,
-                )
-                done = None
-            else:
-                have = [
-                    c
-                    for c in done.columns
-                    if c.startswith("sim_") and done[c].notna().all()
-                ]
-                if have:
-                    # keep the fresh columns' data for the incremental write
-                    resumed = {c: done[c].copy() for c in have}
-                    print(f"resuming — already scored: {have}", flush=True)
-
-    # fingerprint stamps written by THIS run become manifest outputs (the
-    # resumed-fresh ones are re-written only if their lane re-scores; a
-    # skipped lane keeps its existing stamp on disk — not an output of
-    # this run, so it is not claimed as one)
-    manifest_stamps: list[Path] = []
+            have = [
+                c
+                for c in done.columns
+                if c.startswith("sim_") and done[c].notna().all()
+            ]
+            if have:
+                resumed = {c: done[c].copy() for c in have}
+                print(f"resuming — already scored: {have}", flush=True)
 
     for model_index, (model_key, model_path) in enumerate(models.items(), start=1):
         col = SIM_COLUMNS[model_key]
@@ -549,8 +504,8 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
         del model, embeddings
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        # carry resumed-fresh columns through the write (they are still valid:
-        # pair sequence AND fingerprint both verified above)
+        # carry resumed columns through the write (their pair sequence and
+        # traceability columns were verified above)
         if resumed:
             for c, vals in resumed.items():
                 if c not in results.columns:
@@ -565,14 +520,6 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
         ]
         atomic_write_csv(results[keep], ensure_parent(out), index=False)
         print(f"    wrote {col} ({len(results):,} rows)", flush=True)
-        # per-model fingerprint stamp: certifies THIS column's scores against
-        # the exact canonical texts they were computed from. Written after the
-        # column's own successful write — a crash in a LATER model (deberta on
-        # CPU) never invalidates the completed ones, and a changed-canonical
-        # run leaves every stamp mismatched so only truly-fresh columns resume.
-        stamp_path = out.parent / f"{out.name}.model_fp.{col}"
-        stamp_path.write_text(_canon_fp)
-        manifest_stamps.append(stamp_path)
         wandb_ctx.log_metrics(
             {
                 "zero_shot/model_completed": 1,
@@ -621,7 +568,6 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
             c for c in sim_cols if final[c].notna().all()
         ),
         "unique_gtins_encoded": len(unique_gtins),
-        "canonical_text_fp": _canon_fp,
         "mask_config_fingerprint": mask_fp,
         "masking_status_counts": {
             side: final[f"mask_status{side}"].value_counts().to_dict()
@@ -630,16 +576,8 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
         "model_provenance": model_provenance,
         "lanes_scored_this_run": sorted(models),
     }
-    outputs = [out] + manifest_stamps
-    # expected_outputs = what THIS run must have produced: the CSV always,
-    # a fingerprint stamp only when its lane actually scored (a resumed-
-    # skipped lane keeps its OLD stamp on disk — valid, but not written by
-    # this run, so it is an output of the run that wrote it, not this one)
-    expected = [F["embedding_similarities"]] + [
-        f"{out.name}.model_fp.{SIM_COLUMNS[k]}"
-        for k in models
-        if SIM_COLUMNS[k] not in have  # only lanes that scored this run
-    ]
+    outputs = [out]
+    expected = [F["embedding_similarities"]]
     manifest_path = finish_manifest(
         manifest,
         outputs=outputs,

@@ -70,7 +70,7 @@ from __future__ import annotations
 
 import csv
 import gzip
-import hashlib
+from core.portable_archive import ByteCount
 import importlib.util
 import json
 import pickle
@@ -625,8 +625,8 @@ def _dump_line(record: dict) -> str:
     return json.dumps(record, ensure_ascii=False)
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def _file_bytes(path: Path) -> int:
+    return Path(path).stat().st_size
 
 
 def _load_prepared_bundle(path: Path) -> dict:
@@ -873,7 +873,7 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
 
     document = json.loads(question_path.read_text(encoding="utf-8"))
     questions = document["questions"]
-    question_sha = _sha256(question_path)
+    question_size = _file_bytes(question_path)
     # corpus composition: explicit argument > config block > historical default.
     corpus = _corpus_config(document, corpus_config)
     if seed is None:
@@ -1192,19 +1192,19 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
         "split_ratios": {key: ratios[key] for key in SPLIT_ORDER},
         "split_sizes": split_sizes,
         "split_counts": split_counts,
-        "question_schema_sha256": question_sha,
-        "sha256": {
-            **{f"{key}.jsonl": _sha256(split_paths[key])
+        "question_schema_size": question_size,
+        "size": {
+            **{f"{key}.jsonl": _file_bytes(split_paths[key])
                for key in SPLIT_ORDER},
-            "unknown_pairs.csv": _sha256(unknown_path),
+            "unknown_pairs.csv": _file_bytes(unknown_path),
         },
     }
-    # One stable digest over the whole corpus body (the split files in
+    # One stable size over the whole corpus body (the split files in
     # frozen SPLIT_ORDER), for the report and the determinism test.
-    corpus_digest = hashlib.sha256()
+    corpus_size = ByteCount()
     for key in SPLIT_ORDER:
-        corpus_digest.update(split_paths[key].read_bytes())
-    receipt["corpus_sha256"] = corpus_digest.hexdigest()
+        corpus_size.update(split_paths[key].read_bytes())
+    receipt["corpus_size"] = corpus_size.total
     # Additive: the composition-census blocks land ONLY when a knob is set, so
     # a default config keeps the landed receipt bytes exactly.
     if rebalance_census.get("enabled"):
@@ -1283,9 +1283,9 @@ def main() -> None:
     if "identity_rebalance" in receipt:
         print("[laya-build-dataset] identity_rebalance="
               + json.dumps(receipt["identity_rebalance"]))
-    for name, digest in receipt["sha256"].items():
-        print(f"[laya-build-dataset] sha256 {name} {digest}")
-    print(f"[laya-build-dataset] corpus_sha256={receipt['corpus_sha256']}")
+    for name, size in receipt["size"].items():
+        print(f"[laya-build-dataset] size {name} {size}")
+    print(f"[laya-build-dataset] corpus_size={receipt['corpus_size']}")
     print("[laya-build-dataset] -> "
           + str(Path(sources["output_dir"]) / "receipt.json"))
 

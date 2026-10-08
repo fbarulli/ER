@@ -1,6 +1,6 @@
 from pathlib import Path
 from unittest.mock import patch
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import types
 
@@ -17,8 +17,8 @@ def fixture_setup(tmp_path, *, overlapping=False):
     catalog.to_csv(setup / 'eligible_catalog.csv', index=False)
     pd.DataFrame({'sku_id': ['a', 'b', 'c'],
                   'split': ['train', 'dev', 'test']}).to_csv(setup / 'listing_splits.csv', index=False)
-    digest = hashlib.sha256((setup / 'eligible_catalog.csv').read_bytes()).hexdigest()
-    (setup / 'prepared/input_manifest.json').write_text(json.dumps({'catalog_sha256': digest}))
+    digest = ByteCount((setup / 'eligible_catalog.csv').read_bytes()).total
+    (setup / 'prepared/input_manifest.json').write_text(json.dumps({'catalog_size': digest}))
     return setup
 
 

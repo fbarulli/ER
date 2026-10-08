@@ -47,7 +47,7 @@ def _sidecar_manifest(tmp_path: Path) -> Path:
         n_labeled_pairs_bytes=1,
         n_canonical_records_bytes=1,
         n_gate_results_bytes=1,
-        sha256='a' * 64,
+        size='a' * 64,
     )
     manifest = PreparedBundleManifest.model_validate(payload)
     sidecar = tmp_path / 'bundle.json'
@@ -140,7 +140,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
     checkpoint = tmp_path / 'checkpoint'
     (setup / 'setup_manifest.json').write_text(json.dumps(
-        {'text_checkpoint': str(checkpoint), 'text_checkpoint_sha256': 'baseline'}))
+        {'text_checkpoint': str(checkpoint), 'text_checkpoint_size': 'baseline'}))
     if parent_cache == 'present':
         (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
     parent_config, preparations = stage_smoke_parent(setup, monkeypatch)
@@ -160,16 +160,16 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     monkeypatch.setattr(graph_tracks.prepare, 'prepare', lambda *_: None)
     import training.prepare_embeddings as embedding_job
     request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
-               'texts': ['a', 'b'], 'metadata': {'text_sha256': 'text-hash'}}
+               'texts': ['a', 'b'], 'metadata': {'text_size': 'text-hash'}}
     monkeypatch.setattr(embedding_job, 'prepare_request', lambda *_: request)
     monkeypatch.setattr(embedding_job, 'validate_prepared_provenance', lambda *_: None)
     (setup / 'embedding_inputs.json').write_text(json.dumps(request))
     (setup / 'prepared').mkdir(exist_ok=True)
     (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *args: (np.zeros((2, 2)), {}))
-    monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
+    monkeypatch.setattr(graph_tracks.data, 'file_size', lambda _: 'hash')
     cache_calls = []
-    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_hash',
+    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_size',
                         lambda _: 'changed' if parent_cache == 'checkpoint_changed' else 'baseline')
     monkeypatch.setattr(graph_tracks.text_cache, 'create_cache',
                         lambda *args, **kwargs: cache_calls.append((args, kwargs)))
@@ -247,7 +247,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
     args = trainer._parse_args()
     args.sample = 100 if sample else None
     manifest = SimpleNamespace(payload_variant='full', masking_profile='default',
-                               sha256='test', n_df=1, n_payload=1,
+                               size='test', n_df=1, n_payload=1,
                                model_dump=lambda: {})
     pairs = np.empty((0, 2), dtype=int)
     bundle = dict(training_plan={'holdout': {'train': {'1'}, 'dev': set(), 'test': {'test'}}}, training_tokens={'test_fixture': True}, df=pd.DataFrame({'gtin': ['1']}), payload=['item'],
@@ -303,7 +303,7 @@ def test_suite_preflight_has_no_source_catalog_freshness_gate(tmp_path, monkeypa
     """ZERO freshness checks (owner directive 2026-10-08, repo-wide).
 
     A catalog whose bytes no longer match the setup manifest's recorded
-    ``source_catalog_sha256`` is no longer a staleness verdict; the preflight
+    ``source_catalog_size`` is no longer a staleness verdict; the preflight
     walks past the removed comparison and fails on the next structural step
     instead (this fixture provides no prepared lane config).
     """
@@ -312,7 +312,7 @@ def test_suite_preflight_has_no_source_catalog_freshness_gate(tmp_path, monkeypa
 
     setup = tmp_path / 'setup'
     setup.mkdir()
-    (setup / 'setup_manifest.json').write_text(json.dumps({'source_catalog_sha256': 'old'}))
+    (setup / 'setup_manifest.json').write_text(json.dumps({'source_catalog_size': 'old'}))
     source = tmp_path / 'catalog.csv'
     source.write_text('sku_id\nnew\n')
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
@@ -383,8 +383,8 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     catalog.assign(split='train')[['sku_id', 'split']].to_csv(setup / 'listing_splits.csv', index=False)
     pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
     import graph_tracks.text_cache
-    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_hash', lambda _: 'baseline')
-    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint': str(tmp_path/'checkpoint'), 'text_checkpoint_sha256': 'baseline'}))
+    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_size', lambda _: 'baseline')
+    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint': str(tmp_path/'checkpoint'), 'text_checkpoint_size': 'baseline'}))
     (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
     parent_config, preparations = stage_smoke_parent(setup, monkeypatch)
     positive = {'anchor_payload_idx': 8, 'pair_payload_idx': 4, 'copy_payload_idx': 9}
@@ -409,14 +409,14 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     monkeypatch.setattr(graph_tracks.prepare, 'prepare', lambda *_: None)
     import training.prepare_embeddings as embedding_job
     request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
-               'texts': ['a', 'b'], 'metadata': {'text_sha256': 'text-hash'}}
+               'texts': ['a', 'b'], 'metadata': {'text_size': 'text-hash'}}
     monkeypatch.setattr(embedding_job, 'prepare_request', lambda *_: request)
     monkeypatch.setattr(embedding_job, 'validate_prepared_provenance', lambda *_: None)
     (setup / 'embedding_inputs.json').write_text(json.dumps(request))
     (setup / 'prepared').mkdir(exist_ok=True)
     (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *_: (np.zeros((2, 2)), {}))
-    monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
+    monkeypatch.setattr(graph_tracks.data, 'file_size', lambda _: 'hash')
     prepare_smoke(setup, tmp_path / 'smoke', sample=2, suite_config=parent_config)
     assert captured['df'].sku_id.tolist() == ['a', 'b']
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C', 'D', 'negative copy', 'positive counterpart']

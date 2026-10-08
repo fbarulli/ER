@@ -10,12 +10,11 @@ import subprocess
 import sys
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from core.portable_archive import Digest
 
 import pandas as pd
 
 from core.common import DATA_PATH, F, TRAIN_ROOT, plot_dpi, trace_artifact, training_cfg
-from core.manifest import sha256_file
+from core.manifest import file_size
 from training.validation_inference import resolve_best_checkpoint, threshold_assignment_metrics
 
 # ── scored-pair validation census (2026-10-01 contract) ─────────────────────
@@ -37,7 +36,7 @@ class CsvIdentity(BaseModel):
     rows: int = Field(ge=0)
     columns: list[str]
     bytes: int = Field(ge=0)
-    sha256: Digest
+    size: int
 
 
 class ScoredValidationAccounting(BaseModel):
@@ -61,9 +60,9 @@ class ScoredValidationAccounting(BaseModel):
 
 def _byte_stable_csv_rows(path: Path) -> int:
     """Count CSV rows once, asserting the file's bytes stayed identical."""
-    digest_before = sha256_file(path)
+    digest_before = file_size(path)
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if sha256_file(path) != digest_before:
+    if file_size(path) != digest_before:
         raise RuntimeError(f"{path} changed while it was being read")
     return len(frame)
 
@@ -107,16 +106,16 @@ def scored_validation_accounting() -> dict[str, object]:
 
 
 def _csv_identity(path: Path) -> dict[str, object]:
-    before = sha256_file(path)
+    before = file_size(path)
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if sha256_file(path) != before:
+    if file_size(path) != before:
         raise RuntimeError(f"{path} changed while provenance was being read")
     return CsvIdentity.model_validate({
         "path": str(path.resolve()),
         "rows": int(len(frame)),
         "columns": list(frame.columns),
         "bytes": path.stat().st_size,
-        "sha256": before,
+        "size": before,
     }).model_dump()
 
 

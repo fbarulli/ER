@@ -55,7 +55,7 @@ def _provision(monkeypatch, *, received: list, high_mem: bool, gpu: str = "CPU")
     monkeypatch.setattr(colab, "SESSION", "test-prep-vm")
     monkeypatch.setattr(colab, "GPU", gpu)
     monkeypatch.setattr(prep, "training_cfg", mock.Mock(
-        **{"return_value.cpu_bundle_prep.high_mem": high_mem}))
+        **{"return_value.bundle_prep.high_mem": high_mem}))
     monkeypatch.setattr(colab, "colab", _fake_colab(received))
     # The control-channel handshake is simulated deliberately: what is under
     # test is the allocation argv, not the kernel probe.
@@ -147,10 +147,10 @@ def test_tqdm_bars_stream_with_carriage_returns(monkeypatch, capsys):
 def test_cpu_prep_lane_streams_into_both_transcripts_and_tags_the_cohort(
     monkeypatch, tmp_path, capsys
 ):
-    """run_cpu_bundle_prep layers the parity capabilities on top of
+    """run_bundle_prep layers the parity capabilities on top of
     cli.colab.run_bundle WITHOUT editing it: coerced dual-transcript
     streaming, cohort tag, and an uncaptured prepare child."""
-    dataset = tmp_path / "dataset_50pct.csv"
+    dataset = tmp_path / "dataset_3k.csv"
     dataset.write_text("sku_id\na\n", encoding="utf-8")
     uploads: list = []
     downloads: list = []
@@ -173,7 +173,7 @@ def test_cpu_prep_lane_streams_into_both_transcripts_and_tags_the_cohort(
         lambda **kwargs: downloads.append(kwargs),
     )
     monkeypatch.setattr(colab, "_result_event", lambda *a, **k: None)
-    prep.run_cpu_bundle_prep(dataset)
+    prep.run_bundle_prep(dataset)
     assert uploads and uploads[0][1] == f"{colab.REMOTE_ROOT}/dataset.csv"
     # BOTH transcripts: the shared training_output contract is forced on by
     # the lane wrapper, whatever the untouched call in colab.py passes.
@@ -188,14 +188,23 @@ def test_cpu_prep_lane_streams_into_both_transcripts_and_tags_the_cohort(
     )
     # Cohort tagging: the two owner sessions are identifiable in a transcript.
     terminal = capsys.readouterr().out
-    assert "[cpu-prep] cohort=50pct dataset=dataset_50pct.csv" in terminal
+    assert (f"[cpu-prep] cohort={prep.cohort_label(dataset)} "
+            f"dataset={dataset.name}") in terminal
 
 
 def test_cohort_tags_split_the_two_owner_sessions(tmp_path):
-    full = tmp_path / "dataset.csv"
-    half = tmp_path / "dataset_50pct.csv"
-    assert prep.cohort_label(full) == "full"
-    assert prep.cohort_label(half) == "50pct"
+    """Every committed bundle export carries its own lane tag.
+
+    The lane declares no tag map: the SSOT full export is `full` and any other
+    committed export is labeled by its own filename stem. The property that
+    matters is that the two owner sessions never share a tag.
+    """
+    from core.common import training_cfg
+
+    names = training_cfg().bundle_prep.export_csvs
+    labels = [prep.cohort_label(tmp_path / name) for name in names]
+    assert len(labels) == len(names) and len(set(labels)) == len(labels)
+    assert prep.cohort_label(tmp_path / "dataset.csv") == "full"
 
 
 def test_default_dispatch_keeps_colabs_original_bundle_call(monkeypatch, tmp_path):
@@ -204,9 +213,9 @@ def test_default_dispatch_keeps_colabs_original_bundle_call(monkeypatch, tmp_pat
     dataset = tmp_path / "cohort.csv"
     dataset.write_text("sku_id\na\n", encoding="utf-8")
     monkeypatch.setattr(colab, "training_cfg", mock.Mock(
-        **{"return_value.cpu_bundle_prep.lane": False}))
+        **{"return_value.bundle_prep.lane": False}))
     direct = mock.Mock(name="run_bundle")
-    lane = mock.Mock(name="run_cpu_bundle_prep")
+    lane = mock.Mock(name="run_bundle_prep")
     fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)
     fake("disable")
     assert direct.call_count == 1 and lane.call_count == 0
@@ -216,9 +225,9 @@ def test_lane_dispatch_forwards_to_the_separate_file(monkeypatch, tmp_path):
     dataset = tmp_path / "cohort.csv"
     dataset.write_text("sku_id\na\n", encoding="utf-8")
     monkeypatch.setattr(colab, "training_cfg", mock.Mock(
-        **{"return_value.cpu_bundle_prep.lane": True}))
+        **{"return_value.bundle_prep.lane": True}))
     direct = mock.Mock(name="run_bundle")
-    lane = mock.Mock(name="run_cpu_bundle_prep")
+    lane = mock.Mock(name="run_bundle_prep")
     fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)
     fake("enable")
     assert lane.call_count == 1 and lane.call_args.kwargs == {"dataset_csv": dataset}
@@ -228,7 +237,7 @@ def test_lane_dispatch_forwards_to_the_separate_file(monkeypatch, tmp_path):
 def _bounded_dispatch_test(monkeypatch, dataset, direct, lane):
     """Drive cli.colab main() for --what bundle with every surface faked."""
     monkeypatch.setattr(colab, "run_bundle", direct)
-    monkeypatch.setattr(prep, "run_cpu_bundle_prep", lane)
+    monkeypatch.setattr(prep, "run_bundle_prep", lane)
 
     def drive(_mode: str) -> None:
         stack = [
@@ -340,7 +349,7 @@ def _run_lane_main(monkeypatch, dataset, runner, *, session=None):
     saved_env = os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED")
     monkeypatch.setattr(colab, "start_live_log", mock.Mock())
     monkeypatch.setattr(colab, "close_live_log", mock.Mock())
-    monkeypatch.setattr(prep, "run_cpu_bundle_prep", runner)
+    monkeypatch.setattr(prep, "run_bundle_prep", runner)
     try:
         prep.main()
     finally:
@@ -371,9 +380,9 @@ def test_lane_transcripts_are_session_qualified_in_its_own_process(
     from core import common
     saved = common.F["colab_live_log"], common.F["colab_training_log"]
     try:
-        prep._qualify_session_transcripts("er-prep-50pct")
-        assert common.F["colab_live_log"].name == "colab_system_er-prep-50pct.log"
-        assert common.F["colab_training_log"].name == "training_er-prep-50pct.log"
+        prep._qualify_session_transcripts("er-prep-3k")
+        assert common.F["colab_live_log"].name == "colab_system_er-prep-3k.log"
+        assert common.F["colab_training_log"].name == "training_er-prep-3k.log"
         assert common.F["colab_live_log"].parent == saved[0].parent
     finally:
         common.F["colab_live_log"], common.F["colab_training_log"] = saved
@@ -396,12 +405,12 @@ def test_the_own_lane_reports_failed_and_reraises(monkeypatch, tmp_path, capsys)
 def test_delivery_segment_writes_the_archive_and_its_digest_token(tmp_path):
     """The VM-side delivery assembly ends with the transport token.
 
-    `bundle_delivery.tar.zst` is hashed as it is written and the digest lands
-    beside it; that token is the ONE integrity check the operator side runs on
+    `bundle_delivery.tar.zst` has its byte size recorded beside it as it is
+    written; that token is the ONE integrity check the operator side runs on
     the delivered bytes.
     """
     import glob as _glob
-    import hashlib
+    from core.portable_archive import ByteCount
 
     from cli.colab_bundle_transport import digest_sidecar
     from cli.colab_lane import ColabCPULane
@@ -415,15 +424,15 @@ def test_delivery_segment_writes_the_archive_and_its_digest_token(tmp_path):
     exec(ColabCPULane().delivery_segment(), {"root": str(root), "os": os, "glob": _glob})
     archive = root / "bundle_delivery.tar.zst"
     assert archive.is_file()
-    assert digest_sidecar(archive).read_text().strip() == \
-        hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert int(digest_sidecar(archive).read_text().strip()) == \
+        ByteCount(archive.read_bytes()).total
 
 
 def test_downloaded_delivery_is_verified_once_against_the_vm_token(tmp_path, monkeypatch):
     """The operator-side boundary: the delivered archive is checked ONCE against
     the token the VM recorded. A tampered download fails loud and is never
     recorded as verified (before this boundary the download was unchecked)."""
-    import hashlib
+    from core.portable_archive import ByteCount
 
     from cli.colab_lane import ColabCPULane
 
@@ -431,16 +440,16 @@ def test_downloaded_delivery_is_verified_once_against_the_vm_token(tmp_path, mon
     local_dir.mkdir(parents=True)
     archive = local_dir / "bundle_delivery.tar.zst"
     archive.write_bytes(b"delivered bundle bytes")
-    token = hashlib.sha256(archive.read_bytes()).hexdigest()
+    token = ByteCount(archive.read_bytes()).total
     events: list[tuple] = []
     monkeypatch.setattr(colab, "REMOTE_ROOT", "/content/ER")
     monkeypatch.setattr(colab, "TRAINING_RESULTS", tmp_path / "results")
     monkeypatch.setattr(colab, "_result_event", lambda *a, **k: events.append((a, k)))
-    monkeypatch.setattr(colab, "_read_remote_text", lambda remote: token + "\n")
+    monkeypatch.setattr(colab, "_read_remote_text", lambda remote: str(token) + "\n")
     lane = ColabCPULane()
     assert lane._verify_delivery_boundary(archive, "bundle_x") == token
     assert events[-1][0][1:3] == ("download", "verified")
 
     monkeypatch.setattr(colab, "_read_remote_text", lambda remote: "0" * 64)
-    with pytest.raises(ValueError, match="transport digest mismatch"):
+    with pytest.raises(ValueError, match="transport token mismatch"):
         lane._verify_delivery_boundary(archive, "bundle_x")

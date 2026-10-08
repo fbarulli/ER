@@ -409,12 +409,12 @@ def datagen_track():
         _fmetric(0, 'cells changed vs pre-change'),
         _fmetric(13_250, 'distinct valid GTINs'),
         _fmetric(139, 'review-quarantined GTINs'),
-        _fmetric(m.get('inputs', [{}])[0].get('sha256', '')[:12], 'dataset.csv SHA (unchanged)'),
+        _fmetric(m.get('inputs', [{}])[0].get('size', '')[:12], 'dataset.csv SHA (unchanged)'),
     ])
     gtin_compare = _fcompare([(name, current, 'PASS')
                               for name, original, current in gtin_ledger])
 
-    gtin_evidence = _fevidence(f'dataset.csv (sha256 {m.get("inputs", [{}])[0].get("sha256", "?")[:20]}…)',
+    gtin_evidence = _fevidence(f'dataset.csv (size {m.get("inputs", [{}])[0].get("size", "?")[:20]}…)',
                                'GTIN ledger re-measured on the same byte-identical export — session ledger (2026-09-30):\n'
                                + '\n'.join(f'{k}: {v:,}' for k, v in [
                                    ('missing (NA) gtin', 41_545),
@@ -519,11 +519,11 @@ def datagen_track():
     bundle_evidence = _fevidence('data/prepared/full/worker_1_baseline.pkl.gz.json + worker_2_baseline.pkl.gz.json',
                                  json.dumps({'worker_1': {'n_df': w1.get('n_df'), 'n_payload': w1.get('n_payload'),
                                                           'n_pos': w1.get('n_pos'), 'n_neg': w1.get('n_neg'),
-                                                          'sha256': w1.get('sha256'),
+                                                          'size': w1.get('size'),
                                                           'masking_frac': w1.get('masking_config', {}).get('frac')},
                                              'worker_2': {'n_df': w2.get('n_df'), 'n_payload': w2.get('n_payload'),
                                                           'n_pos': w2.get('n_pos'), 'n_neg': w2.get('n_neg'),
-                                                          'sha256': w2.get('sha256'),
+                                                          'size': w2.get('size'),
                                                           'masking_frac': w2.get('masking_config', {}).get('frac')}},
                                             indent=1) if isinstance(w1, dict) and isinstance(w2, dict)
                                  else 'worker manifests not readable')
@@ -625,7 +625,7 @@ def datagen_track():
         ('Generation could reach any of the 37 attribute keys',
          f"{len(groups)} donor-capable groups only; juice_content has no comparable evidence, so nothing is minted for it", 'PASS'),
         ('Run knobs could drift from the analysis knobs',
-         'difficulty slices from the config <code>difficulty:</code> block, hashed provenance + composition_fingerprint attested in <code>handoff.json</code>, same SSOT knobs feed post-training analysis', 'PASS'),
+         'difficulty slices from the config <code>difficulty:</code> block, sized provenance + composition_fingerprint attested in <code>handoff.json</code>, same SSOT knobs feed post-training analysis', 'PASS'),
     ])
     gen_evidence = _fevidence(f'{bundle_source} (bundle header augmentation_coverage) + results/training_prep/<run>/handoff.json',
                               json.dumps({'requested_counts': ac.get('requested_counts'),

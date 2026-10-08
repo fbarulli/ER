@@ -106,7 +106,7 @@ def test_checkout_authoritative_predicate():
 def test_archive_inventory_key_follows_the_config(monkeypatch, tmp_path):
     from core import common
     from core.bundle import Bundle, BundleRole
-    from core.portable_archive import inventory_key_home, verify_archive_digest
+    from core.portable_archive import inventory_key_home, verify_archive
 
     monkeypatch.setattr(common.training_cfg().bundle, 'files_key', 'custom_inventory')
     assert inventory_key_home() == 'custom_inventory'
@@ -119,7 +119,7 @@ def test_archive_inventory_key_follows_the_config(monkeypatch, tmp_path):
         manifest = json.loads(archive.read('m.json'))
     assert set(manifest) == {'custom_inventory'}
     assert 'files' not in manifest
-    metadata, _ = verify_archive_digest(output, 'm.json')
+    metadata = verify_archive(output, 'm.json')
     assert 'custom_inventory' in metadata
     loaded = Bundle.load(output, 'inputs', manifest_name='m.json')
     assert 'custom_inventory' in loaded.manifest

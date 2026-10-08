@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import re
@@ -61,8 +61,8 @@ from core.eval_trace import (
     derived_record_census,
     write_report,
 )
-from core.laya_config import LayaSpec
-from core.manifest import atomic_write_json, sha256_file
+from core.laya_config import LayaHostedRole, LayaSpec
+from core.manifest import atomic_write_json, file_size
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
@@ -78,8 +78,8 @@ EVAL_KERNEL_CODE_FILE = "laya_evals.py"
 COLAB_NOTEBOOK_NAME = "laya_decision_colab.py"
 QUESTION_SCHEMA_FILE = "laya.question.json"
 # The kernel's inputs do NOT travel with `kaggle kernels push`: they are
-# the er-laya-requests dataset (spec.dataset_slug), staged as its own
-# payload dir (moved on --execute, mirroring the kernels-push path).
+# the hosted `requests` dataset (spec.hosted_slug("requests")), staged as its
+# own payload dir (moved on --execute, mirroring the kernels-push path).
 DATASET_PAYLOAD_DIR = "dataset_payload"
 DATASET_METADATA_FILE = "dataset-metadata.json"
 DATASET_CSV_NAME = "dataset.csv"  # DECISION_CSV resolves THIS name
@@ -91,9 +91,9 @@ BASE_MODEL_MANIFEST_FILE = "base_model_manifest.json"
 
 # ── fine-tune kind (owner: "lets run laya") ────────────────────────────────
 # The JSONL corpus built by scripts/laya_build_dataset.py (data/laya/
-# {train,dev,test}.jsonl + receipt.json) travels as its OWN kaggle dataset
-# (spec.finetune_dataset_slug), distinct from the decision payloads'
-# er-laya-requests dataset: a corpus version must never drop the decision
+# {train,dev,test}.jsonl + receipt.json) travels as its OWN hosted kaggle
+# dataset (the `corpus` role), distinct from the decision payloads'
+# hosted `requests` dataset: a corpus version must never drop the decision
 # inputs (and vice versa). The kernel wraps the REAL `laya-train` CLI on a
 # single T4 and tars the checkpoint back.
 FINETUNE_DECISION = "finetune"
@@ -105,9 +105,10 @@ FINETUNE_CORPUS_RECEIPT = "receipt.json"
 # A dedicated `--decision finetune-eval` kernel loads a fine-tuned checkpoint
 # and scores the corpus HELD-OUT split (default test.jsonl) with
 # `laya.train.load_checkpoint` -> `calibration_records` -> `evaluate_records`.
-# It attaches the SAME corpus dataset (er-laya-train) + the fine-tuned
-# checkpoint dataset, installs laya, and writes eval_report.json + a receipt
-# into /kaggle/working for fetch-back. NO training, NO Hub.
+# It attaches the SAME corpus dataset (the hosted `corpus` role) + the
+# fine-tuned checkpoint dataset (the hosted `ckpt` role), installs laya, and
+# writes eval_report.json + a receipt into /kaggle/working for fetch-back.
+# NO training, NO Hub.
 FINETUNE_EVAL_DECISION = "finetune-eval"
 FINETUNE_EVAL_CODE_FILE = "laya_finetune_eval.py"
 FINETUNE_EVAL_REPORT_FILE = "eval_report.json"
@@ -118,7 +119,7 @@ FINETUNE_EVAL_RECEIPT_FILE = "laya_finetune-eval.receipt.json"
 # strata) in-session and writes the clustered, gate-stratified report, so the
 # honest verification never runs on the operator box. The holdout travels as a
 # staged JSONL dataset (one composed identity state + label + stratum per row);
-# the checkpoint rides the finetune_ckpt_dataset.
+# the checkpoint rides the hosted `ckpt` dataset.
 HOLDOUT_EVAL_DECISION = "holdout-eval"
 HOLDOUT_EVAL_CODE_FILE = "laya_holdout_eval.py"
 HOLDOUT_EVAL_REPORT_FILE = "holdout_report.json"
@@ -639,22 +640,22 @@ def corpus_traceability(report: dict, *, model_id: str, digests: dict,
 def corpus_digest(receipt: dict) -> str:
     """The corpus digest a fetched lane receipt carries.
 
-    The finetune receipt keys ``corpus_sha256`` by corpus file name; the eval-only
+    The finetune receipt keys ``corpus_size`` by corpus file name; the eval-only
     receipt names the scored held-out split directly.
     """
-    corpus = receipt.get("corpus_sha256")
+    corpus = receipt.get("corpus_size")
     if isinstance(corpus, dict):
         for name in FINETUNE_CORPUS_FILES:
             if isinstance(corpus.get(name), str):
                 return corpus[name]
     if isinstance(corpus, str):
         return corpus
-    for key in ("eval_jsonl_sha256", "eval_data_sha256"):
+    for key in ("eval_jsonl_size", "eval_data_size"):
         value = receipt.get(key)
         if isinstance(value, str):
             return value
-    raise KeyError("receipt carries no corpus digest (corpus_sha256 / "
-                   "eval_jsonl_sha256 / eval_data_sha256)")
+    raise KeyError("receipt carries no corpus digest (corpus_size / "
+                   "eval_jsonl_size / eval_data_size)")
 
 
 def metric_block_or_none(payload: dict) -> MetricBlock | None:
@@ -738,7 +739,7 @@ def record_grain_traceability(decision_kind: str, *, receipt: dict,
             "not a per-row decision CSV (see corpus_traceability)")
     source = decision_source(decision_kind)
     digests = {key: receipt[key] for key in
-               ("decision_csv_sha256", "evals_dataset_sha256")
+               ("decision_csv_size", "evals_dataset_size")
                if isinstance(receipt.get(key), str)}
     # What the receipt can name, and the explicit unknown when it names nothing:
     # a guessed 'test' split would be a fabricated tag.
@@ -815,7 +816,7 @@ def fetched_traceability(receipt: dict, reports: dict, *,
         for name in sorted(metric_members):
             documents[name] = corpus_traceability(
                 metric_members[name], model_id=model_id,
-                digests={"corpus_sha256": digest}).model_dump(mode="json")
+                digests={"corpus_size": digest}).model_dump(mode="json")
     else:
         for name in _CORPUS_REPORT_NAMES:
             if isinstance(reports.get(name), dict):
@@ -892,7 +893,7 @@ def _log_lane(line: str) -> None:
 
 # ── decision-input staging (dry-safe; fail-loud on a missing contract) ─────
 def _measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:
-    """Stdlib CSV census: header check + row count + sha256 + bytes.
+    """Stdlib CSV census: header check + row count + size + bytes.
 
     Deliberately NOT pandas: staging must run anywhere (including a box
     without the frame stack), and the contract is only the columns.
@@ -916,7 +917,7 @@ def _measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:
     if rows == 0:
         raise ValueError(f"decision input has no data rows: {path}")
     return {"rows": rows, "columns": list(header),
-            "sha256": sha256_file(path), "bytes": path.stat().st_size}
+            "size": file_size(path), "bytes": path.stat().st_size}
 
 
 # The accuracy/F1 metric contract a harvest agent needs when a decision
@@ -967,7 +968,7 @@ def _census_csv(path: Path, wanted_columns: tuple[str, ...],
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"decision input not found: {path}")
-    digest = hashlib.sha256()
+    digest = ByteCount()
     labels: Counter = Counter()
     with path.open("rb") as handle:
         def lines():
@@ -1009,7 +1010,7 @@ def _census_csv(path: Path, wanted_columns: tuple[str, ...],
             },
         }
     return {"rows": rows, "columns": list(header),
-            "sha256": digest.hexdigest(), "bytes": path.stat().st_size,
+            "size": digest.total, "bytes": path.stat().st_size,
             "expectation": expectation}
 
 
@@ -1018,9 +1019,9 @@ def stage_decision_input(kind: str, *, decision_kind: str,
     """Stage ONE decision CSV under results/laya_lane/<kind>/<decision>/.
 
     The staged copy is receipted with the measured census (rows, columns,
-    sha256, bytes) — the transport-identity contract the kaggle-lane
+    size, bytes) — the transport-identity contract the kaggle-lane
     package receipts carry. `override` names an alternate source CSV on
-    this box (e.g. dataset_50pct.csv for the half cohort).
+    this box (e.g. dataset_3k.csv for the 3k cohort).
     """
     if decision_kind not in DECISION_BINDINGS:
         raise ValueError(f"unknown decision kind: {decision_kind!r}")
@@ -1038,14 +1039,14 @@ def stage_decision_input(kind: str, *, decision_kind: str,
         "binding": decision_binding(decision_kind),
         "source": str(source), "staged": str(destination),
         "rows": census["rows"], "columns": census["columns"],
-        "sha256": census["sha256"], "bytes": census["bytes"],
+        "size": census["size"], "bytes": census["bytes"],
         "description": entry["description"],
         **census["expectation"],
     }
     atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
     _log_lane(f"staged decision input [{kind}/{decision_kind}] "
               f"{source.name} rows={census['rows']} "
-              f"sha256={census['sha256'][:12]} -> {destination}")
+              f"size={census['size']} -> {destination}")
     return receipt
 
 
@@ -1074,7 +1075,7 @@ def stage_question_schema(kind: str, *,
         "question_schema": spec.question_schema,
         "staged": str(destination),
         "questions": sorted(questions),
-        "sha256": sha256_file(source),
+        "size": file_size(source),
     }
     atomic_write_json(receipt, stage / "question.receipt.json")
     _log_lane(f"staged question schema [{kind}] {source.name} "
@@ -1095,7 +1096,7 @@ def stage_question_schema(kind: str, *,
 # inventory, which never matches a dataset-carried payload).
 LAYA_RUNTIME_PREFLIGHT = '''\
 _runtime_files = ("@DECISION_CSV@", @QUESTION_SCHEMA_FILE@)
-INPUT_ROOT = Path("/kaggle/input")
+INPUT_ROOT = Path("@MOUNT_ROOT@")
 
 
 def laya_runtime_preflight():
@@ -1123,7 +1124,7 @@ laya_runtime_preflight()
 # literal-evals.
 FINETUNE_RUNTIME_PREFLIGHT = '''\
 _runtime_files = ("@TRAIN_JSONL@", "@DEV_JSONL@", "@TEST_JSONL@")
-INPUT_ROOT = Path("/kaggle/input")
+INPUT_ROOT = Path("@MOUNT_ROOT@")
 
 
 def laya_runtime_preflight():
@@ -1153,7 +1154,7 @@ laya_runtime_preflight()
 # in `resolve_checkpoint()` instead.
 FINETUNE_EVAL_RUNTIME_PREFLIGHT = '''\
 _runtime_files = ("@EVAL_JSONL@",)
-INPUT_ROOT = Path("/kaggle/input")
+INPUT_ROOT = Path("@MOUNT_ROOT@")
 
 
 def laya_runtime_preflight():
@@ -1232,10 +1233,14 @@ def _template(script: str, values: dict[str, str]) -> str:
 
     The byte-exact token loop lives in ``KernelTemplates.substitute`` (the
     kaggle lane's renderer); this lane delegates so the two can never drift.
+    ``@MOUNT_ROOT@`` is injected here, once, for every rendered payload: the
+    session mount root is declared in the hosted registry
+    (``config/hosted_datasets.yaml``), never in a template.
     """
     from cli.kaggle_kernel_templates import KernelTemplates
 
-    return KernelTemplates.substitute(script, values)
+    return KernelTemplates.substitute(
+        script, {"MOUNT_ROOT": str(_spec().mount_root), **values})
 
 
 def _git_revision() -> str:
@@ -1255,21 +1260,27 @@ def decision_tag() -> str:
     return datetime.now(ZoneInfo("UTC")).strftime("%m%dT%H%M%SZ")
 
 
-def _sha256_of_source() -> str:
-    """The ONE whole-file sha256 helper rendered into every laya kernel.
+def _file_bytes_of_source() -> str:
+    """The ONE structural size helper rendered into every laya kernel.
 
     Each laya kernel runs on /kaggle before any repo checkout, so it cannot
-    import ``core``. Instead this single helper is injected at staging time;
-    its body is ``core.portable_archive.raw_file_digest`` (the ONE digest
-    implementation, which ``core.manifest.sha256_file`` forwards to), so a
-    remote receipt hash can never drift from the operator-box digest.
+    import ``core``. Instead this single helper is injected at staging time.
+    It reports bytes on disk (files) or summed member bytes (directories),
+    which is exactly what ``core.portable_archive.file_size`` returns, so a
+    remote receipt size can never drift from the operator box. No content is
+    fingerprinted anywhere (owner directive 2026-10-08).
     """
-    import inspect
-
-    from core.portable_archive import raw_file_digest
-
-    return inspect.getsource(raw_file_digest).replace(
-        "def raw_file_digest(", "def sha256_of(", 1)
+    return (
+        "def size_of(path):\n"
+        "    \"\"\"Byte size of one path: a file's st_size, or a directory's\n"
+        "    summed regular-file st_size. Never a content digest.\"\"\"\n"
+        "    import pathlib\n"
+        "    target = pathlib.Path(path)\n"
+        "    if target.is_dir():\n"
+        "        return sum(member.stat().st_size for member in target.rglob('*')\n"
+        "                   if member.is_file() and not member.is_symlink())\n"
+        "    return target.stat().st_size\n"
+    )
 
 
 def _holdout_eval_module_source() -> str:
@@ -1298,7 +1309,7 @@ results + receipt into /kaggle/working for hash-verified fetch-back.
 from __future__ import annotations
 
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import subprocess
@@ -1323,7 +1334,7 @@ REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
 
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -1403,10 +1414,10 @@ def main():
         "checkpoint_hub": CHECKPOINT_HUB,
         "batch_size": BATCH_SIZE,
         "min_confidence": MIN_CONFIDENCE,
-        "question_schema_sha256": hashlib.sha256(
-            questions_path.read_bytes()).hexdigest(),
-        "decision_csv_sha256": hashlib.sha256(
-            decision_csv.read_bytes()).hexdigest(),
+        "question_schema_size": ByteCount(
+            questions_path.read_bytes()).total,
+        "decision_csv_size": ByteCount(
+            decision_csv.read_bytes()).total,
     }
     (WORKING / "laya_decision.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
@@ -1433,7 +1444,7 @@ report.md + receipt into /kaggle/working.
 from __future__ import annotations
 
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import subprocess
@@ -1452,7 +1463,7 @@ REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
 
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -1497,10 +1508,10 @@ def main():
         "gpu": "T4 (single)",
         "run_tag": RUN_TAG,
         "laya_package": LAYA_PACKAGE,
-        "question_schema_sha256": hashlib.sha256(
-            questions_path.read_bytes()).hexdigest(),
-        "evals_dataset_sha256": hashlib.sha256(
-            dataset_jsonl.read_bytes()).hexdigest(),
+        "question_schema_size": ByteCount(
+            questions_path.read_bytes()).total,
+        "evals_dataset_size": ByteCount(
+            dataset_jsonl.read_bytes()).total,
     }
     (WORKING / "laya_evals.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
@@ -1998,7 +2009,7 @@ fetch-back.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import math
 import os
@@ -2033,7 +2044,7 @@ REVISION = "@REVISION@"
 @SESSION_REPORT@
 
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -2158,7 +2169,7 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
         output_dir=str(out_dir), config=config, device=device)
 
 
-@SHA256_OF@
+@SIZE_OF@
 
 
 def evaluate_held_out(test_path, checkpoint, device):
@@ -2261,9 +2272,9 @@ def _finetune_session(distributed, session):
             "gpu_usage": summarize_gpu_usage(WORKING / "gpu_usage.log"),
             "recipe": FINETUNE_CONFIG,
             "output_dir": str(WORKING / "checkpoint"),
-            "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
-                              DEV_JSONL: sha256_of(dev),
-                              TEST_JSONL: sha256_of(test)},
+            "corpus_size": {TRAIN_JSONL: size_of(train),
+                              DEV_JSONL: size_of(dev),
+                              TEST_JSONL: size_of(test)},
         }
         if isinstance(summary, dict):
             for key in ("train_items", "calibration_items", "eval_items",
@@ -2344,7 +2355,7 @@ hash-verified fetch-back. NO training, NO Hub.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import subprocess
@@ -2372,7 +2383,7 @@ REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
 
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -2430,7 +2441,7 @@ def resolve_checkpoint():
         "(rl_agent_config.json); attach the checkpoint dataset")
 
 
-@SHA256_OF@
+@SIZE_OF@
 
 
 def fit_eval_calibration(laya_train, records):
@@ -2547,10 +2558,10 @@ def main():
         "eval_split": EVAL_SPLIT,
         "eval_mode": "held_out",
         "is_held_out": True,
-        "eval_jsonl_sha256": sha256_of(eval_path),
+        "eval_jsonl_size": size_of(eval_path),
         "checkpoint": str(checkpoint),
         "eval_calibration": EVAL_CALIBRATION,
-        "report_sha256": sha256_of(report_path),
+        "report_size": size_of(report_path),
     }
     (WORKING / "laya_finetune-eval.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
@@ -2570,7 +2581,7 @@ if __name__ == "__main__":
 def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
                           question_source: Path,
                           decision_source: Path) -> dict[str, Any]:
-    """Stage the DATASET payload for spec.dataset_slug (dry-safe).
+    """Stage the DATASET payload of the hosted `requests` dataset (dry-safe).
 
     Builds results/laya_lane/kaggle/<decision>/dataset_payload/: the
     kaggle `dataset-metadata.json` (title/id/licenses per the kaggle-lane
@@ -2580,15 +2591,11 @@ def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
 
     Boundary (deliberately NOT a `Bundle`): a kaggle dataset payload is a
     DIRECTORY, so there is no single container to carry a Bundle manifest;
-    integrity is the receipt's `files` inventory (the same name -> sha256
+    integrity is the receipt's `files` inventory (the same name -> size
     shape `Bundle`'s manifest uses), re-verified by the consumer after the
     dataset attaches. Forcing an archive here would change what kaggle
     versions and what the kernel resolves by name.
     """
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.dataset_slug is unset; name the input dataset "
-            "(owner/slug) before staging")
     stage = staging_dir() / "kaggle" / decision_kind / DATASET_PAYLOAD_DIR
     stage.mkdir(parents=True, exist_ok=True)
     metadata = {"title": "er laya requests", "id": dataset_slug,
@@ -2601,7 +2608,7 @@ def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
         "dataset": dataset_slug,
         "payload": str(stage),
         "metadata": metadata,
-        "files": {name: sha256_file(stage / name) for name in payload_files},
+        "files": {name: file_size(stage / name) for name in payload_files},
     }
     atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
     _log_lane(f"staged dataset payload [{decision_kind}] {dataset_slug} "
@@ -2635,10 +2642,6 @@ def package_base_model(*, source_dir: Path, dataset_slug: str,
     if not (source_dir / "rl_agent_config.json").is_file():
         raise FileNotFoundError(
             f"base-model source {source_dir} carries no rl_agent_config.json")
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.base_model_dataset is unset; name the base-model "
-            "dataset (owner/slug) before packaging")
     stage = Path(output_dir) if output_dir else staging_dir() / "base_model"
     stage.mkdir(parents=True, exist_ok=True)
     archive_path = stage / archive_name
@@ -2666,7 +2669,7 @@ def package_base_model(*, source_dir: Path, dataset_slug: str,
         "bundle_role": BundleRole.inputs.value,
         "manifest": BASE_MODEL_MANIFEST_FILE,
         "bytes": archive_path.stat().st_size,
-        "sha256": sealed.digest,
+        "size": sealed.path.stat().st_size,
         "metadata": metadata,
     }
     atomic_write_json(receipt, stage / "base_model.receipt.json")
@@ -2675,19 +2678,27 @@ def package_base_model(*, source_dir: Path, dataset_slug: str,
     return receipt
 
 
+#: decision kind -> the hosted-dataset ROLE its input payload is staged as.
+#: Every other kind stages the shared `requests` dataset.
+_KIND_DATASET_ROLE: dict[str, LayaHostedRole] = {
+    FINETUNE_DECISION: "corpus",
+    FINETUNE_EVAL_DECISION: "corpus",
+    HOLDOUT_EVAL_DECISION: "holdout",
+}
+
+
 def publish_laya_dataset(decision_kind: str, *, run_tag: str,
                          execute: bool) -> dict[str, Any]:
     """`--execute`-gated create-or-version of the laya inputs dataset.
 
     The staged play_500.csv + laya.question.json do NOT travel with
-    `kaggle kernels push`: the kernel attaches spec.dataset_slug
-    (fbarulli/er-laya-requests), so the dataset must exist remotely
-    BEFORE the push. Dry run: returns the plan, never spawns a kaggle
-    subprocess. Executed: datasets create when the dataset does not
-    exist remotely, else datasets version (-r --dir-mode zip -m
-    "laya inputs <tag>"); the helpers are IMPORTED from the kaggle lane
-    (cli.kaggle_datasets / cli.kaggle_lane), never copied. The dataset
-    version is recorded in the decision receipt.
+    `kaggle kernels push`: the kernel attaches the hosted `requests`
+    dataset, so the dataset must exist remotely BEFORE the push. Dry run:
+    returns the plan, never spawns a kaggle subprocess. Executed: datasets
+    create when the dataset does not exist remotely, else datasets version
+    (-r --dir-mode zip -m "laya inputs <tag>"); the helpers are IMPORTED
+    from the kaggle lane (cli.kaggle_datasets / cli.kaggle_lane), never
+    copied. The dataset version is recorded in the decision receipt.
     """
     payload = staging_dir() / "kaggle" / decision_kind / DATASET_PAYLOAD_DIR
     metadata_file = payload / DATASET_METADATA_FILE
@@ -2703,18 +2714,8 @@ def publish_laya_dataset(decision_kind: str, *, run_tag: str,
         raise RuntimeError(
             "--activate gate: no staged dataset payload at "
             f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
-    corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION)
-    if decision_kind == HOLDOUT_EVAL_DECISION:
-        slug, key = _spec().holdout_dataset_slug, "holdout_dataset_slug"
-    else:
-        slug = (_spec().finetune_dataset_slug if corpus_kind
-                else _spec().dataset_slug)
-        key = "finetune_dataset_slug" if corpus_kind else "dataset_slug"
+    slug = _spec().hosted_slug(_KIND_DATASET_ROLE.get(decision_kind, "requests"))
     plan["slug"] = slug
-    if not slug:
-        raise RuntimeError(
-            f"config laya.{key} is unset; name the dataset (owner/slug) "
-            "before an executed attach")
     from cli import kaggle_lane as lane
     from cli.kaggle_datasets import KaggleDatasets
 
@@ -2766,7 +2767,8 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
       (+ the staged question schema + decision input receipts).
     Fail-loud preconditions (no silent skip):
       * spec.laya_decision_epochs > 0 (0 = disabled, nothing may stage);
-      * spec.export_dataset_slug set (the target kernel owner/slug);
+      * the hosted `decisions` (kernel id) + `requests` (inputs) datasets
+        resolve from the registry;
       * the question schema + decision CSV stage from their SSOT bindings.
     """
     spec = _spec()
@@ -2788,18 +2790,11 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         raise RuntimeError(
             "config laya.laya_decision_epochs <= 0: the decision lane is "
             "disabled (no payload may stage a GPU session)")
-    slug = spec.export_dataset_slug
-    if not slug:
-        raise RuntimeError(
-            "config laya.export_dataset_slug is unset; name the target "
-            "kernel (owner/slug) before staging")
-    dataset_slug = spec.dataset_slug
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.dataset_slug is unset; the kernel inputs travel "
-            "as that dataset (owner/slug) — the staged play_500.csv + "
-            "laya.question.json do NOT ride `kaggle kernels push`; "
-            "name it before staging")
+    # The decision kinds' kernel id IS the hosted `decisions` dataset slug and
+    # their inputs ride the hosted `requests` dataset (registry SSOT: both
+    # resolve from config/hosted_datasets.yaml, never from a code literal).
+    slug = spec.hosted_slug("decisions")
+    dataset_slug = spec.hosted_slug("requests")
     # ── the published-tip invariant ('origin/<branch> == HEAD'): the pin
     # resolves BEFORE any payload write; a pin that misses the fetched
     # branch tip never stages (the 84ce2d0-vs-02dec14 staged-race class).
@@ -2869,9 +2864,9 @@ def stage_decision_kernel(*, decision_kind: str, revision: str | None = None,
         "staged": str(stage),
         "code_file": code_file,
         "question_schema": question["staged"],
-        "question_sha256": question["sha256"],
+        "question_size": question["size"],
         "decision_input": staged_csv,
-        "decision_sha256": input_receipt["sha256"],
+        "decision_size": input_receipt["size"],
         "dataset": {"slug": dataset_slug,
                     "payload": dataset_receipt["payload"],
                     "files": dataset_receipt["files"]},
@@ -2911,15 +2906,11 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
 
     Builds results/laya_lane/kaggle/<kind>/dataset_payload/: the kaggle
     `dataset-metadata.json` + the three split JSONL + the builder receipt.
-    Distinct from the decision datasets (spec.dataset_slug) so a corpus
-    version never drops the decision inputs (and vice versa). `kind` names
-    the staging surface (`finetune` or the eval-only `finetune-eval`), so
-    each kernel's push gate finds its own `dataset_payload` beside it.
+    Distinct from the decision payloads (the hosted `requests` dataset) so a
+    corpus version never drops the decision inputs (and vice versa). `kind`
+    names the staging surface (`finetune` or the eval-only `finetune-eval`),
+    so each kernel's push gate finds its own `dataset_payload` beside it.
     """
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.finetune_dataset_slug is unset; name the corpus "
-            "dataset (owner/slug) before staging")
     corpus_dir = Path(corpus_dir)
     stage = staging_dir() / "kaggle" / kind / DATASET_PAYLOAD_DIR
     # Boundary (deliberately NOT a `Bundle`): like the decision payload, this
@@ -2943,7 +2934,7 @@ def stage_finetune_dataset_payload(*, dataset_slug: str,
         "dataset": dataset_slug,
         "payload": str(stage),
         "metadata": metadata,
-        "files": {name: sha256_file(stage / name) for name in files},
+        "files": {name: file_size(stage / name) for name in files},
     }
     atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
     _log_lane(f"staged finetune dataset payload {dataset_slug} "
@@ -2986,10 +2977,6 @@ def stage_holdout_dataset_payload(*, dataset_slug: str, holdout_csv: Path,
     Only labelled rows travel — the gate strata are label-less difficulty tags,
     not truth, and must not enter the checkpoint's held-out score.
     """
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.holdout_dataset_slug is unset; name the holdout "
-            "dataset (owner/slug) before staging")
     questions = json.loads(
         Path(question_path).read_text(encoding="utf-8"))["questions"]
     composer = _pairs_composer()
@@ -3028,7 +3015,7 @@ def stage_holdout_dataset_payload(*, dataset_slug: str, holdout_csv: Path,
     receipt = {
         "dataset": dataset_slug, "payload": str(stage), "rows": len(lines),
         "skipped": skipped, "question_schema": str(question_path),
-        "files": {HOLDOUT_JSONL: sha256_file(stage / HOLDOUT_JSONL)},
+        "files": {HOLDOUT_JSONL: file_size(stage / HOLDOUT_JSONL)},
     }
     atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
     _log_lane(f"staged holdout dataset payload {dataset_slug} "
@@ -3048,7 +3035,7 @@ held-out verification, never the in-sample training eval). NO training, NO Hub.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import subprocess
@@ -3072,7 +3059,7 @@ REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
 
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -3112,7 +3099,7 @@ def resolve_checkpoint():
     raise FileNotFoundError("attached inputs carried no checkpoint")
 
 
-@SHA256_OF@
+@SIZE_OF@
 
 
 # The holdout metric/CI helpers are NOT re-implemented here. They are embedded
@@ -3225,7 +3212,7 @@ def main():
         "device": device,
         "checkpoint": str(checkpoint),
         "holdout": str(holdout),
-        "holdout_sha256": sha256_of(holdout),
+        "holdout_size": size_of(holdout),
         "rows": len(rows),
         "overall_accuracy": report["overall"]["metrics"]["accuracy"],
         "overall_f1": report["overall"]["metrics"]["f1"],
@@ -3263,12 +3250,8 @@ def stage_holdout_eval_kernel(*, revision: str | None = None,
         raise RuntimeError(
             "config laya.holdout_eval_kernel_slug is unset; name the target "
             "kernel (owner/slug) before staging")
-    dataset_slug = spec.holdout_dataset_slug
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.holdout_dataset_slug is unset; the holdout travels as "
-            "that dataset (owner/slug) — name it before staging")
-    ckpt_dataset = spec.finetune_ckpt_dataset
+    dataset_slug = spec.hosted_slug("holdout")
+    ckpt_dataset = spec.hosted_slug("ckpt")
     repository = training_cfg().kaggle.repository
     branch = training_cfg().kaggle.branch
     revision = revision or _git_revision()
@@ -3285,9 +3268,7 @@ def stage_holdout_eval_kernel(*, revision: str | None = None,
     stage = staging_dir() / "kaggle" / HOLDOUT_EVAL_DECISION
     stage.mkdir(parents=True, exist_ok=True)
     tag = run_tag or spec.run_tag_prefix + decision_tag()
-    dataset_sources = [dataset_slug]
-    if ckpt_dataset:
-        dataset_sources.append(ckpt_dataset)
+    dataset_sources = [dataset_slug, ckpt_dataset]
     from cli.kaggle_kernels import KaggleKernels
 
     metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
@@ -3305,7 +3286,7 @@ def stage_holdout_eval_kernel(*, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
-        "SHA256_OF": _sha256_of_source(),
+        "SIZE_OF": _file_bytes_of_source(),
         "HOLDOUT_EVAL_MODULE": repr(_holdout_eval_module_source()),
     }
     preflight = _template(LAYA_RUNTIME_PREFLIGHT, {
@@ -3349,7 +3330,8 @@ def stage_finetune_kernel(*, revision: str | None = None,
       (+ the staged corpus dataset payload).
     Fail-loud preconditions (no silent skip):
       * spec.laya_decision_epochs > 0 (0 = disabled, nothing may stage);
-      * spec.finetune_kernel_slug + spec.finetune_dataset_slug set;
+      * spec.finetune_kernel_slug set + the hosted `corpus`/`base` entries
+        resolve from the registry;
       * the corpus JSONL + receipt stage from data/laya (spec constant).
     """
     spec = _spec()
@@ -3362,17 +3344,8 @@ def stage_finetune_kernel(*, revision: str | None = None,
         raise RuntimeError(
             "config laya.finetune_kernel_slug is unset; name the target "
             "kernel (owner/slug) before staging")
-    dataset_slug = spec.finetune_dataset_slug
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.finetune_dataset_slug is unset; the corpus travels "
-            "as that dataset (owner/slug) — name it before staging")
-    base_dataset = spec.base_model_dataset
-    if not base_dataset:
-        raise RuntimeError(
-            "config laya.base_model_dataset is unset; the base checkpoint "
-            "travels as that dataset (owner/slug) — the finetune kernel "
-            "must extract a LOCAL dir, never fetch from the Hub")
+    dataset_slug = spec.hosted_slug("corpus")
+    base_dataset = spec.hosted_slug("base")
     # The published-tip invariant ('origin/<branch> == HEAD') resolves
     # BEFORE any payload write, exactly like stage_decision_kernel.
     repository = training_cfg().kaggle.repository
@@ -3415,7 +3388,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
-        "SHA256_OF": _sha256_of_source(),
+        "SIZE_OF": _file_bytes_of_source(),
         "DEVICE_PATCH": FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": FINETUNE_PERF_PATCH_SOURCE,
         # The kernel-side session self-report (its host twin is
@@ -3474,8 +3447,8 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
       as the finetune kind).
     Fail-loud preconditions (no silent skip):
       * spec.laya_decision_epochs > 0 (0 = disabled, nothing may stage);
-      * spec.finetune_eval_kernel_slug + spec.finetune_dataset_slug set;
-      * a checkpoint source: spec.finetune_ckpt_dataset OR checkpoint_path;
+      * spec.finetune_eval_kernel_slug set + the hosted `corpus`/`ckpt`
+        entries resolve from the registry;
       * spec.finetune_eval_split names a corpus split.
 
     The kernel loads the attached checkpoint and scores the attached split:
@@ -3493,17 +3466,8 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
         raise RuntimeError(
             "config laya.finetune_eval_kernel_slug is unset; name the target "
             "eval kernel (owner/slug) before staging")
-    dataset_slug = spec.finetune_dataset_slug
-    if not dataset_slug:
-        raise RuntimeError(
-            "config laya.finetune_dataset_slug is unset; the corpus travels "
-            "as that dataset (owner/slug) — name it before staging")
-    ckpt_dataset = spec.finetune_ckpt_dataset
-    if not ckpt_dataset and not checkpoint_path:
-        raise RuntimeError(
-            "config laya.finetune_ckpt_dataset is unset and no checkpoint "
-            "path was given; the eval-only kernel needs a fine-tuned "
-            "checkpoint dataset (owner/slug) or an explicit path")
+    dataset_slug = spec.hosted_slug("corpus")
+    ckpt_dataset = spec.hosted_slug("ckpt")
     split = spec.finetune_eval_split
     if split not in FINETUNE_EVAL_SPLIT_FILES:
         raise ValueError(
@@ -3553,7 +3517,7 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
-        "SHA256_OF": _sha256_of_source(),
+        "SIZE_OF": _file_bytes_of_source(),
     }
     # two-pass substitution (the preflight bakes its own literal tuple
     # first; the push gate literal-evals `_runtime_files`).
@@ -3599,7 +3563,8 @@ def stage_colab_notebook(*, decision_kind: str,
 
     Returns a receipt dict; the payload script lands at
     results/laya_lane/colab/<decision_kind>/laya_decision_colab.py.
-    Fail-loud preconditions match stage_decision_kernel (epochs, slug).
+    Fail-loud preconditions match stage_decision_kernel (epochs): the
+    notebook is a delivery contract and carries no hosted dataset.
     """
     spec = _spec()
     if decision_kind not in DECISION_BINDINGS:
@@ -3609,10 +3574,6 @@ def stage_colab_notebook(*, decision_kind: str,
         raise RuntimeError(
             "config laya.laya_decision_epochs <= 0: the decision lane is "
             "disabled (no payload may stage a session)")
-    if not spec.export_dataset_slug and not spec.dataset_slug:
-        raise RuntimeError(
-            "config laya.export_dataset_slug / dataset_slug both unset; "
-            "name the target surface (owner/slug) before staging")
     question = stage_question_schema("colab")
     input_receipt = stage_decision_input("colab",
                                          decision_kind=decision_kind)
@@ -3699,24 +3660,24 @@ _KIND_KERNEL_SLUG_ATTR = {
 def kernel_slug(decision_kind: str) -> str:
     """The pushed Kaggle kernel slug a decision kind runs on (stop target).
 
-    Decision kinds publish to ``export_dataset_slug`` (their kernel id IS the
-    export slug); the two fine-tune kinds carry dedicated kernel slugs. Fail
-    loud when the knob is unset — never guess an account.
+    Decision kinds publish under the hosted ``decisions`` dataset — their
+    kernel id IS that dataset's slug (registry SSOT); the two fine-tune kinds
+    carry dedicated kernel slugs. Fail loud when a knob is unset — never guess
+    an account.
     """
     spec = _spec()
     if decision_kind in _KIND_KERNEL_SLUG_ATTR:
         attr = _KIND_KERNEL_SLUG_ATTR[decision_kind]
-    elif decision_kind in DECISION_BINDINGS:
-        attr = "export_dataset_slug"
-    else:
-        raise ValueError(f"unknown decision kind: {decision_kind!r}; "
-                         f"expected {list(DECISION_BINDINGS)}")
-    slug = getattr(spec, attr, None)
-    if not slug:
-        raise RuntimeError(
-            f"config laya.{attr} is unset; name the target kernel (owner/slug) "
-            f"before addressing {decision_kind!r}")
-    return slug
+        slug = getattr(spec, attr)
+        if not slug:
+            raise RuntimeError(
+                f"config laya.{attr} is unset; name the target kernel "
+                f"(owner/slug) before addressing {decision_kind!r}")
+        return slug
+    if decision_kind in DECISION_BINDINGS:
+        return spec.hosted_slug("decisions")
+    raise ValueError(f"unknown decision kind: {decision_kind!r}; "
+                     f"expected {list(DECISION_BINDINGS)}")
 
 
 def _session_report_helper() -> str:
@@ -4055,7 +4016,7 @@ def local_eval_checkpoint(checkpoint_dir: Path, *,
         "eval_mode": "held_out",
         "is_held_out": True,
         "eval_data": str(eval_data),
-        "eval_data_sha256": sha256_file(eval_data),
+        "eval_data_size": file_size(eval_data),
         "checkpoint": str(checkpoint_dir),
         "eval_calibration": calibration,
         "report": str(out_dir / FINETUNE_EVAL_REPORT_FILE),
@@ -4237,8 +4198,8 @@ def main() -> None:
     if args.execute and args.kind == "kaggle":
         stage_dir = Path(receipt["staged"])
         # the inputs travel as the dataset BEFORE the push (the kernel
-        # metadata attaches spec.dataset_slug; a missing/drifting dataset
-        # would FileNotFoundError resolve_input once boot passes)
+        # metadata attaches the hosted `requests` dataset; a missing/drifting
+        # dataset would FileNotFoundError resolve_input once boot passes)
         dataset_plan = publish_laya_dataset(args.decision,
                                             run_tag=receipt["run_tag"],
                                             execute=True)

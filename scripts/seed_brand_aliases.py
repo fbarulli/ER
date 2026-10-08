@@ -51,7 +51,7 @@ sys.path.insert(0, str(TRAIN_ROOT / "src"))
 
 from core.common import DATA_PATH, load_dataset, _read_vocabulary, VOCABULARY_CONFIG_PATH
 from core.gtin import normalize_and_validate_gtin
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.sku_identity import brand_conflict, normalize_brand
 from core.text import normalized_attribute_text
 
@@ -344,7 +344,7 @@ def main() -> None:
     document["brand_aliases_provenance"] = {
         "generated_by": "scripts/seed_brand_aliases.py",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "dataset_sha256": sha256_file(DATA_PATH),
+        "dataset_size": file_size(DATA_PATH),
         "measurement_date": "2026-09-29",
         "measured_at_commit": "0452692",
         "current_corpus_at_head": "5001027",

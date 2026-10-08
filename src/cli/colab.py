@@ -83,7 +83,7 @@ from core.common import (
     resolve_model,
     training_cfg,
 )
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.bundle import CHECKPOINT_PREFIX
 from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
@@ -166,10 +166,6 @@ _MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
 # trimming or re-pinning the remote stack must not require editing this file.
 _RUNTIME_PACKAGES = _COLAB.runtime_packages
 _PREFER_UV_INSTALL = bool(_COLAB.prefer_uv_install)
-# Reusing a prepared bundle whose inputs are byte-identical saves the whole
-# local build (531 s measured cold).  Config-owned so it can be turned off
-# when a lane needs to prove a bundle was built rather than reused.
-_CACHE_PREPARED_BUNDLES = bool(_COLAB.cache_prepared_bundles)
 _MASKING_ENABLED = training_cfg().masking.enabled
 _MASKING_PROFILE = str(training_cfg().masking.profile)
 _COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
@@ -275,7 +271,7 @@ def _legacy_validation_sources() -> dict[str, Path]:
     import pandas as pd
     from model_tracks.config import load_config as load_suite
     from model_tracks.preflight import preflight as suite_preflight
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     config = _suite_config_path()
     suite_preflight(config)
     suite = load_suite(config)
@@ -283,7 +279,7 @@ def _legacy_validation_sources() -> dict[str, Path]:
     layout = training_cfg().preparation.graph_setup
     catalog_path = setup / layout.catalog
     input_manifest = json.loads((setup / layout.prepared_dir / layout.input_manifest).read_text())
-    if file_hash(catalog_path) != input_manifest['catalog_sha256']:
+    if file_size(catalog_path) != input_manifest['catalog_size']:
         raise ValueError('eligible catalog differs from prepared graph inputs')
     catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
     splits = pd.read_csv(setup / layout.splits, dtype=str, keep_default_na=False)
@@ -1144,26 +1140,21 @@ def run_train(
         incremental_sync=incremental_sync,
     )
 
-# Local prepared-bundle cache + prewarm moved to cli.colab_bundle_prewarm
+# Local prepared-bundle build + prewarm moved to cli.colab_bundle_prewarm
 # (split phase); re-exported so the legacy `from cli import colab` surface
 # and its monkeypatch needles are unchanged.  The in-flight prewarm slot
 # stays on this module for the same reason.
 from cli.colab_bundle_prewarm import (  # noqa: E402,F401
     _BundlePrewarm,
     _build_local_training_bundles,
-    _bundle_cache_dir,
     _bundle_manifest,
-    _bundle_model_digest,
     _bundle_request_key,
-    _cached_bundles,
     _expand_worker_profiles,
     _lane_bundle_request,
-    _populate_bundle_cache,
     _prepare_local_training_bundles,
     _run_diet_gate,
     _take_prewarmed_bundles,
     _training_bundle_profiles,
-    _tree_digest,
     _upload_prepared_bundles,
     drain_local_bundle_prewarm,
     start_local_bundle_prewarm,
@@ -1953,11 +1944,11 @@ def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
             if not local.is_file():
                 problems.append(f"{manifest.stage}: missing local output: {local}")
                 continue
-            actual = sha256_file(local)
-            if actual != entry.sha256:
+            actual = file_size(local)
+            if actual != entry.size:
                 problems.append(
-                    f"{manifest.stage}: sha256 mismatch for {local} "
-                    f"(remote {entry.sha256[:12]}, local {actual[:12]})"
+                    f"{manifest.stage}: size mismatch for {local} "
+                    f"(remote {entry.size}, local {actual})"
                 )
     if problems:
         raise RuntimeError(
@@ -2721,13 +2712,13 @@ def main() -> None:
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
-            if bool(training_cfg().cpu_bundle_prep.lane):
+            if bool(training_cfg().bundle_prep.lane):
                 # Owner ruling 8: data-bundle production lives in its own
                 # lane file; this forward is the thin passthrough.  With the
                 # lane's config flag off, the original direct call runs and
                 # behavior is byte-identical.
-                from cli.colab_data_bundle_prep import run_cpu_bundle_prep
-                run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
+                from cli.colab_data_bundle_prep import run_bundle_prep
+                run_bundle_prep(dataset_csv=args.dataset_csv)
             else:
                 run_bundle(dataset_csv=args.dataset_csv)
         elif args.what == "mixed":

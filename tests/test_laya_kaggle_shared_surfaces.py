@@ -62,6 +62,11 @@ def test_laya_templates_render_identically_through_the_shared_loop():
     the files the lane stages (two passed bakes included).
     """
     spec = laya_lane._spec()
+    from core.hosted_dataset import hosted_registry
+
+    # the ONE thing the lane's renderer adds to the shared loop: the session
+    # mount root, declared in the hosted registry (`config/hosted_datasets.yaml`)
+    mount_root = str(hosted_registry().mount_root)
     values = {
         "LAYA_PACKAGE": spec.laya_package,
         "CHECKPOINT_HUB": spec.checkpoint_hub,
@@ -89,8 +94,13 @@ def test_laya_templates_render_identically_through_the_shared_loop():
                  laya_lane.NOTEBOOK_SCRIPT)
     for template in templates:
         assert laya_lane._template(template, values) == \
-            KernelTemplates.substitute(template, values)
-        assert laya_lane._template(template, {}) == template
+            KernelTemplates.substitute(template, {"MOUNT_ROOT": mount_root,
+                                                  **values})
+        # no mount-root token ever survives into a staged payload
+        assert "@MOUNT_ROOT@" not in laya_lane._template(template, values)
+    # a template carrying no token is not rewritten at all
+    assert laya_lane._template(laya_lane.NOTEBOOK_SCRIPT, {}) == \
+        laya_lane.NOTEBOOK_SCRIPT
     # the two-pass bake (preflight rendered FIRST, then dropped into the script)
     for preflight_name, script_name in (
             ("LAYA_RUNTIME_PREFLIGHT", "DECISION_KERNEL_SCRIPT"),
@@ -101,7 +111,8 @@ def test_laya_templates_render_identically_through_the_shared_loop():
         merged = {**values,
                   "RUNTIME_PREFLIGHT": laya_lane._template(preflight, values)}
         assert laya_lane._template(script, merged) == \
-            KernelTemplates.substitute(script, merged)
+            KernelTemplates.substitute(script, {"MOUNT_ROOT": mount_root,
+                                                **merged})
 
 
 def test_render_runtime_reproduces_the_legacy_chain_bytes():
@@ -109,14 +120,14 @@ def test_render_runtime_reproduces_the_legacy_chain_bytes():
     from cli import kaggle_lane as lane
 
     spec = lane._spec()
-    script = "@COMMAND_RUNNER@\n@SHA256_HELPER@\nLANE = json.loads(@LANE_JSON@)\n"
+    script = "@COMMAND_RUNNER@\n@SIZE_HELPER@\nLANE = json.loads(@LANE_JSON@)\n"
     from core.common import data_cfg, training_cfg
 
     payload = spec.model_dump(mode="json")
     payload["paths"] = data_cfg().paths.model_dump(mode="json")
     payload["archives"] = training_cfg().archives.model_dump(mode="json")
     legacy = (script.replace("@COMMAND_RUNNER@", KernelTemplates.REMOTE_COMMAND_RUNNER)
-              .replace("@SHA256_HELPER@", KernelTemplates.SHA256_HELPER)
+              .replace("@SIZE_HELPER@", KernelTemplates.SIZE_HELPER)
               .replace("@LANE_JSON@", repr(json.dumps(payload))))
     assert KernelTemplates.render_runtime(script, spec) == legacy
 
@@ -242,9 +253,7 @@ def test_laya_stage_emits_the_owners_metadata_document(tmp_path, monkeypatch):
 
     from core.schemas import LayaSpec
 
-    monkeypatch.setattr(laya_lane, "_spec", lambda: LayaSpec(
-        export_dataset_slug="owner/er-laya-decision",
-        dataset_slug="owner/er-laya-payload"))
+    monkeypatch.setattr(laya_lane, "_spec", lambda: LayaSpec())
     monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
     from core.common import training_cfg as _tcfg
 
@@ -292,7 +301,7 @@ def test_laya_stage_emits_the_owners_metadata_document(tmp_path, monkeypatch):
     args, kwargs = calls[0]
     assert written == real(*args, **kwargs)
     assert list(written) == list(real(*args, **kwargs))
-    assert kwargs["dataset_sources"] == ["owner/er-laya-payload"]
+    assert kwargs["dataset_sources"] == ["fbarulli/er-laya-requests"]
     assert written["code_file"] == "laya_decision.py"
 
 

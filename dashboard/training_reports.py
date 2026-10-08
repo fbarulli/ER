@@ -693,25 +693,25 @@ def _verification_html(result):
     body = (f'<details open><summary style="color:{color};font-weight:600">'
             f'Archive verification: {escape(status)} '
             f'({escape(str(result.get("verified_at", "unknown")))})</summary>')
-    sha = result.get('zip_sha256') or {}
+    sha = result.get('zip_size') or {}
     if sha.get('match') is True:
-        body += '<p>sha256 sidecar: match</p>'
+        body += '<p>size sidecar: match</p>'
     elif sha.get('match') is False:
-        body += (f'<p style="color:#cf222e">sha256 sidecar: MISMATCH — expected '
+        body += (f'<p style="color:#cf222e">size sidecar: MISMATCH — expected '
                  f'{escape(str(sha.get("expected")))} · actual {escape(str(sha.get("actual")))}</p>')
     else:
-        body += '<p>sha256 sidecar: not present</p>'
+        body += '<p>size sidecar: not present</p>'
     if result.get('error'):
         body += f'<pre style="overflow:auto">{escape(str(result["error"]))}</pre>'
     tracks = result.get('tracks') or {}
     if tracks:
         body += ('<table><tr><th>track</th><th>report</th><th>threshold</th>'
-                 '<th>checkpoint sha256</th><th>test reported</th><th>ablation</th></tr>')
+                 '<th>checkpoint size</th><th>test reported</th><th>ablation</th></tr>')
         for track, entry in tracks.items():
             ablation = 'bound' if entry.get('ablation') else '—'
             body += (f'<tr><td>{escape(str(track))}</td><td>{escape(str(entry.get("report")))}</td>'
                      f'<td>{escape(str(entry.get("threshold")))}</td>'
-                     f'<td>{escape(str(entry.get("checkpoint_sha256")))}</td>'
+                     f'<td>{escape(str(entry.get("checkpoint_size")))}</td>'
                      f'<td>{escape(str(entry.get("test_reported")))}</td><td>{ablation}</td></tr>')
         body += '</table>'
     body += '</details>'
@@ -755,7 +755,7 @@ def training(run: str | None = None):
             if verification is None:
                 verify_url = '/training/verify?' + urlencode({'run': selected})
                 body += (f'<p><a href="{escape(verify_url, quote=True)}">Verify archive</a> — re-checks the '
-                         f'sha256 sidecar and the sealing-time contract, then records the outcome as '
+                         f'size sidecar and the sealing-time contract, then records the outcome as '
                          f'{escape(archive_sidecar(path, ".verification.json").name)}.</p>')
             else:
                 body += _verification_html(verification)

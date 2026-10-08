@@ -64,7 +64,7 @@ such: it is never added to a row-funnel term.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import re
@@ -1673,9 +1673,9 @@ class NegativeSupply(BaseModel):
             "coverage": coverage.model_dump(mode="json"),
             "populations": frame["population"].value_counts().to_dict(),
             "funnel": self.funnel,
-            "pairs_sha256": hashlib.sha256(
+            "pairs_size": ByteCount(
                 (folder / "pairs.csv").read_bytes()
-            ).hexdigest(),
+            ).total,
         }
 
     def _coverage_counts(self, covered: set[int]) -> tuple[int, int]:
@@ -1838,14 +1838,14 @@ class SupplyTrace:
             "pairs", "emitted",
             reason=(
                 "the emitted table is the lane's ONLY interface to the "
-                "trainer/evaluator: one row per population, plus the sha256 of "
+                "trainer/evaluator: one row per population, plus the size of "
                 "the bytes published"
             ),
             detail={
                 "populations": populations,
                 "pairs": int(sum(populations.values())),
                 "run_tag": str(manifest.get("run_tag", "")),
-                "pairs_sha256": str(manifest.get("pairs_sha256", "")),
+                "pairs_size": str(manifest.get("pairs_size", "")),
             },
             source="results/negative_supply/<run_tag>/pairs.csv",
         )

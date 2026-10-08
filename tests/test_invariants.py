@@ -40,7 +40,7 @@ import yaml
 
 from core.bundle import Bundle, BundleRole, _bundle_spec, manifest_name
 from core.bundle import _bundle_spec as _spec
-from core.portable_archive import verify_archive_digest, write_archive
+from core.portable_archive import verify_archive, write_archive
 
 
 def _write(path: Path, content: str) -> Path:
@@ -155,7 +155,7 @@ def test_bundle_role_contracts_are_enforced_on_load(tmp_path):
 
     An ``inputs`` bundle must carry no weights, and a ``result`` bundle must
     carry only the selected checkpoint. Both archives below are well formed
-    (``verify_archive_digest`` accepts them); the only remaining refusal reason
+    (``verify_archive`` accepts them); the only remaining refusal reason
     is the role contract.
     """
     spec = _spec()
@@ -186,7 +186,7 @@ def test_bundle_role_contracts_are_enforced_on_load(tmp_path):
     for role, archive, label in (
             (BundleRole.inputs, inputs_archive, "an inputs bundle carrying weights"),
             (BundleRole.result, result_archive, "a result bundle carrying every epoch")):
-        verify_archive_digest(archive, manifest_name(role))  # fixture is well formed
+        verify_archive(archive, manifest_name(role))  # fixture is well formed
         try:
             Bundle.load(archive, role)
         except ValueError:
@@ -288,20 +288,17 @@ def test_kaggle_train_ships_the_sealed_result_bundle_the_finalize_boundary_accep
         "WORKING": working, "RUN_TAG": run_tag, "REVISION": "abc123def",
         "SUITE_CONFIG": spec.train_suite_config, "root": tmp_path,
         "LANE": {"files": {"result_archive": "{kind}.tar.zst",
-                           "result_manifest": "{kind}.manifest.json",
-                           "hash_suffix": ".sha256"}},
-        "sha256_file": lambda path: __import__("hashlib").sha256(
-            Path(path).read_bytes()).hexdigest(),
+                           "result_manifest": "{kind}.manifest.json"}},
+        "file_size": lambda path: Path(path).stat().st_size,
     }
     exec(compile(TRAIN_RESULT_BUNDLE_SHIP, "<train-result-ship>", "exec"), namespace)
     digest = namespace["stage_result_archive"](output, kind="result_bundle", extra={})
 
     manifest = json.loads((working / "result_bundle.manifest.json").read_text())
-    assert manifest["archive_sha256"] == digest == sealed.digest
-    # The finalize kernel's exact boundary: Bundle.load(..., "result",
-    # expected_digest=<the manifest's archive_sha256>).
-    handle = Bundle.load(working / "result_bundle.tar.zst", "result",
-                         expected_digest=manifest.get("archive_sha256"))
+    assert manifest["archive_size"] == digest == sealed.path.stat().st_size
+    # The finalize kernel's exact boundary: Bundle.load(..., "result"),
+    # verified once by the sealed member inventory (names + byte sizes).
+    handle = Bundle.load(working / "result_bundle.tar.zst", "result")
     assert handle.run_tag() == run_tag
     assert bundle_spec.manifest_result in handle.members()
     # The old shape (a tree tarball with an out-of-archive manifest) is exactly
@@ -771,14 +768,10 @@ _CONFIG_SSOT_BASELINE_DUPLICATED = frozenset({
     "'data/dataset_deduped.csv' (training.yaml:colab.training_dataset_csv <- src/cli/colab.py, src/cli/colab_lane_contracts.py)",
     "'data/prepared/smoke_200' (training.yaml:preparation.smoke_dir <- src/cli/colab_lane_cpu_provision.py)",
     "'dataset-metadata.json' (training.yaml:kaggle.files.dataset_metadata <- src/cli/laya_lane.py)",
-    "'dataset.csv' (training.yaml:cpu_bundle_prep.export_csvs.[0] <- src/cli/colab_bundle.py, src/cli/colab_lane.py)",
+    "'dataset.csv' (training.yaml:bundle_prep.export_csvs.[0] <- src/cli/colab_bundle.py, src/cli/colab_lane.py)",
     "'dataset.csv' (training.yaml:kaggle.export_csvs.[0] <- src/cli/colab_bundle.py, src/cli/colab_lane.py)",
     "'dataset.csv' (training.yaml:kaggle.packaged_data_name <- src/cli/colab_bundle.py, src/cli/colab_lane.py)",
     "'dataset.csv' (training.yaml:ner.data_prep.input_csv <- src/cli/colab_bundle.py, src/cli/colab_lane.py)",
-    "'dataset_10k.csv' (training.yaml:cpu_bundle_prep.export_csvs.[2] <- src/core/common.py)",
-    "'dataset_10k.csv' (training.yaml:kaggle.export_csvs.[2] <- src/core/common.py)",
-    "'dataset_50pct.csv' (training.yaml:cpu_bundle_prep.export_csvs.[1] <- src/core/common.py)",
-    "'dataset_50pct.csv' (training.yaml:kaggle.export_csvs.[1] <- src/core/common.py)",
     "'kernel-metadata.json' (training.yaml:kaggle.files.kernel_metadata <- src/cli/laya_lane.py, src/core/runtime_inputs.py)",
     "'lane.log' (training.yaml:kaggle.files.autowatch_log <- src/cli/colab.py, src/cli/colab_self_watch.py)",
     "'lane.log' (training.yaml:kaggle.files.lane_log <- src/cli/colab.py, src/cli/colab_self_watch.py)",

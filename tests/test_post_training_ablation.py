@@ -45,8 +45,8 @@ def test_saved_ablation_rejects_calibration_for_other_checkpoint(tmp_path):
     # A full calibrated report whose checkpoint identity misses the selected one.
     from graph_tracks.report_manifest import build as build_manifest
     write(track/'text__completion_manifest.json', build_manifest(
-        track='text', checkpoint=str(checkpoint), checkpoint_sha256='f' * 64,
-        listings_sha256='1' * 64, pairs_sha256='2' * 64,
+        track='text', checkpoint=str(checkpoint), checkpoint_size='f' * 64,
+        listings_size='1' * 64, pairs_size='2' * 64,
         threshold=.5, threshold_source='dev_youden', test_reported=False,
         model_selection='dev_pr_auc', retrieval_ks=[10]))
     with pytest.raises(ValueError,match='calibration differs'):

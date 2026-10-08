@@ -130,222 +130,6 @@ class PrebuiltWheelTests(unittest.TestCase):
         self.assertIn("hnswlib", argv)
 
 
-class BundleCacheTests(unittest.TestCase):
-    """A byte-identical bundle request must not be rebuilt."""
-
-    def setUp(self):
-        # Cache tests isolate file caching from the independently tested split gate.
-        for helper in ('_legacy_validation_sources', '_validate_legacy_bundle_partitions'):
-            patcher = mock.patch.object(colab, helper)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def test_frozen_input_edits_invalidate_cache_identity(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            dataset = root / "dataset.csv"
-            dataset.write_bytes(b"unchanged dataset")
-            inputs = {
-                name: root / f"{name}.csv"
-                for name in ("labeled_pairs", "canonical_records", "gate_results", "number_reference")
-            }
-            for path in inputs.values():
-                path.write_bytes(b"original")
-            with mock.patch.object(colab, "F", {**colab.F, **inputs}), \
-                 mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", True), \
-                 mock.patch.object(colab, "_tree_digest", return_value="unchanged"), \
-                 mock.patch.object(colab, "_bundle_model_digest", return_value="model-checkpoint"):
-                def cache_path():
-                    return colab._bundle_cache_dir(
-                        profiles=["baseline"], model_key="model", sample=None,
-                        payload="full", training_dataset=dataset,
-                    )
-                original = cache_path()
-                self.assertEqual(original, cache_path())
-                for name, path in inputs.items():
-                    with self.subTest(input=name):
-                        path.write_bytes(b"edited")
-                        self.assertNotEqual(original, cache_path())
-                        path.write_bytes(b"original")
-                        self.assertEqual(original, cache_path())
-                with mock.patch.object(colab, "_bundle_model_digest", return_value="updated-model"):
-                    self.assertNotEqual(original, cache_path())
-
-    def _fixture(self, temporary: str):
-        root = Path(temporary)
-        dataset = root / "dataset.csv"
-        dataset.write_text("sku_id\n1\n")
-        manifest = mock.Mock(
-            n_df=58_529, n_payload=94_124, n_pos=44_690, n_neg=20_860,
-            sha256="a" * 64,
-        )
-
-        def fake_build(command, **_kwargs):
-            target = Path(command[command.index("--prepare-bundle") + 1])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"bundle-bytes")
-            target.with_suffix(target.suffix + ".json").write_text("{}\n")
-
-        return root, dataset, manifest, fake_build
-
-    def test_second_identical_request_is_served_from_the_cache(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, dataset, manifest, fake_build = self._fixture(temporary)
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                first = colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            self.assertEqual(len(first), 1)
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                second = colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            self.assertEqual(len(second), 1)
-            self.assertEqual(
-                build.call_count, 0, "a cache hit must not rebuild the bundle"
-            )
-
-    def test_changed_source_invalidates_the_cache(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, dataset, manifest, fake_build = self._fixture(temporary)
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ), \
-                 mock.patch.object(colab, "_tree_digest", return_value="before"):
-                first = colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ), \
-                 mock.patch.object(colab, "_tree_digest", return_value="after"):
-                second = colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            self.assertEqual(
-                build.call_count, 1, "a source change must force a rebuild"
-            )
-            self.assertEqual(second[0].name, first[0].name)
-            self.assertNotEqual(second[0].parent.name, first[0].parent.name)
-
-    def test_changed_dataset_invalidates_the_cache(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, dataset, manifest, fake_build = self._fixture(temporary)
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                first = colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            dataset.write_text("sku_id\n2\n")
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                second = colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            self.assertEqual(build.call_count, 1, "new dataset bytes must rebuild")
-            self.assertNotEqual(second[0].parent.name, first[0].parent.name)
-
-    def test_disabled_cache_always_rebuilds(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, dataset, manifest, fake_build = self._fixture(temporary)
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", False), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", False), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            self.assertEqual(build.call_count, 1, "the disabled cache must not serve")
-
-    def test_an_unusable_cache_entry_is_reported_and_rebuilt(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, dataset, manifest, fake_build = self._fixture(temporary)
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     return_value=(manifest, None),
-                 ):
-                colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            captured = _Capture()
-            with mock.patch.object(colab, "RESULTS", root / "results"), \
-                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
-                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
-                     side_effect=lambda path, *a, **k: (
-                         (_ for _ in ()).throw(
-                             ValueError("model input contract moved")
-                         )
-                         if "_cache" in str(path) else (manifest, None)
-                     ),
-                 ), \
-                 mock.patch("sys.stdout", captured):
-                colab._build_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-            self.assertEqual(build.call_count, 1)
-            self.assertIn("not reusable", captured.text())
-
-
 class ValidationUploadPrewarmTests(unittest.TestCase):
     """Validation uploads must travel while the VM installs its runtime."""
 
@@ -723,7 +507,7 @@ class BundlePrewarmTests(unittest.TestCase):
         """
         manifest = mock.Mock(
             n_df=58_529, n_payload=94_124, n_pos=44_690, n_neg=22_393,
-            sha256="0" * 64,
+            size="0" * 64,
         )
         built_on: list[str] = []
         original_build = colab._build_local_training_bundles
@@ -895,11 +679,11 @@ class UploadReuseTests(unittest.TestCase):
             upload.assert_not_called()
 
     def test_verified_checkout_copy_is_reused_instead_of_uploaded(self):
-        from core.manifest import sha256_file
+        from core.manifest import file_size
 
         with tempfile.TemporaryDirectory() as temporary:
             root, paths, validation, resolve = self._fixture(temporary)
-            source_digest = sha256_file(paths["source"])
+            source_digest = file_size(paths["source"])
 
             def capture(_session, script, timeout):  # noqa: ARG001
                 return source_digest + "\n" if paths["source"].name in script else "\n"

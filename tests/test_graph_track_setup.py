@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from pathlib import Path
 import json
-import hashlib
+from core.portable_archive import ByteCount
 import zipfile
 import yaml
 
@@ -75,15 +75,15 @@ def test_preflight_and_portable_package_hashes(tmp_path):
     archive_path = package(config, tmp_path / 'worker.zip')
     with zipfile.ZipFile(archive_path) as archive:
         manifest = json.loads(archive.read('data/graph_worker/gnn_only/package_manifest.json'))
-        for path, expected in manifest['files_sha256'].items():
-            assert hashlib.sha256(archive.read(path)).hexdigest() == expected
+        for path, expected in manifest['files_size'].items():
+            assert ByteCount(archive.read(path)).total == expected
         settings = yaml.safe_load(archive.read('data/graph_worker/gnn_only/worker.yaml'))
         assert settings['device'] == 'cuda'
         assert settings['report_test'] is False
         assert not Path(settings['listings']).is_absolute()
     assert not (tmp_path / 'runs').exists()
     (listings.parent / 'pairs.csv').write_text('tampered')
-    with pytest.raises(ValueError, match='pairs_sha256'):
+    with pytest.raises(ValueError, match='pairs_size'):
         preflight(config)
 
 
@@ -156,7 +156,8 @@ def test_the_setup_csv_and_text_config_have_one_writer():
 #: through. ``handoff`` is handed the spec by its caller, so it has no accessor.
 _CONSOLIDATED_UNITS = (
     ('training.prepare_embeddings', '_setup_layout'),
-    ('training.prepare_tokens', '_setup_layout'),
+    # training.prepare_tokens reads no setup layout: the frozen-CSV/setup-drift
+    # gate that did was removed (owner directive 2026-10-08; data stays naked).
     ('training.handoff', None),
     ('graph_tracks.preflight', '_setup_layout'),
     ('graph_tracks.train', '_setup_layout'),

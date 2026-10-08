@@ -28,7 +28,7 @@ class KaggleDatasets:
         return lane.ExportCensus(
             rows=int(len(frame)),
             bytes=int(path.stat().st_size),
-            sha256=lane.sha256_file(path),
+            size=lane.file_size(path),
             columns=[str(column) for column in frame.columns],
         )
 
@@ -67,11 +67,11 @@ class KaggleDatasets:
             "export": str(source),
             "export_bytes": census.bytes,
             "export_rows": census.rows,
-            "export_sha256": census.sha256,
+            "export_size": census.size,
             "export_columns": census.columns,
             "archive": str(archive),
             "archive_bytes": int(archive.stat().st_size),
-            "archive_sha256": lane.sha256_file(archive),
+            "archive_size": lane.file_size(archive),
             "metadata": metadata,
         }
         receipt_path = stage / f"{label}{spec.receipt_suffix}"
@@ -100,7 +100,7 @@ class KaggleDatasets:
             "metadata": package.metadata_path,
             "slug": spec.slug,
             "rows": package.census.rows,
-            "export_sha256": package.census.sha256,
+            "export_size": package.census.size,
         }
         if not execute:
             return plan
@@ -122,7 +122,7 @@ class KaggleDatasets:
         """Fetch the published dataset back and verify it against the receipt.
 
         The receipt written by `package_export` is the transport-identity
-        contract: a fetch-back whose sha256 differs from the packaged archive
+        contract: a fetch-back whose size differs from the packaged archive
         raises RuntimeError instead of silently accepting drift.
         """
         from cli import kaggle_lane as lane
@@ -138,7 +138,7 @@ class KaggleDatasets:
         plan: dict[str, Any] = {
             "mode": "executed" if execute else "dry-run",
             "slug": spec.slug,
-            "expected_archive_sha256": receipt["archive_sha256"],
+            "expected_archive_size": receipt["archive_size"],
         }
         if not execute:
             return plan
@@ -158,11 +158,11 @@ class KaggleDatasets:
         if not fetched_candidates:
             raise RuntimeError(f"kaggle download produced no archive under {stage}")
         fetched = fetched_candidates[0]
-        observed = lane.sha256_file(fetched)
-        if observed != receipt["archive_sha256"]:
+        observed = lane.file_size(fetched)
+        if observed != receipt["archive_size"]:
             raise RuntimeError(
-                "fetched dataset archive sha256 mismatch: "
-                f"expected {receipt['archive_sha256']} observed {observed}"
+                "fetched dataset archive size mismatch: "
+                f"expected {receipt['archive_size']} observed {observed}"
             )
         plan["fetched_archive"] = str(fetched)
         plan["verified"] = True
@@ -205,7 +205,7 @@ class KaggleDatasets:
             "rows": int(len(frame)),
             "unique_items": int(frame[expected[1]].nunique()),
             "unmatched_items": unmatched,
-            "sha256": lane.sha256_file(output_path),
+            "size": lane.file_size(output_path),
             "columns": expected,
         }
         lane.atomic_write_json(
@@ -243,9 +243,9 @@ class KaggleDatasets:
     def _newest_bundle_install() -> Path | None:
         """Newest verified bundle install: staging_dir/<cohort>/bundle with the
         archive + kernel receipt contract, hash-consistent against its own
-        receipt. Cohort directories are the --cohort tag vocabulary (full, 50pct,
-        10k — the kernel-side remap tags; never the _fetch/_kernel staging dirs
-        or the packaged-export cohort_label spellings)."""
+        receipt. Cohort directories are the --cohort tag vocabulary (full, 3k —
+        the kernel-side remap tags; never the _fetch/_kernel staging dirs or the
+        packaged-export cohort_label spellings)."""
         from cli import kaggle_lane as lane
 
         installs: list[Path] = []
@@ -256,7 +256,7 @@ class KaggleDatasets:
             if not (archive.is_file() and receipt_path.is_file()):
                 continue
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            if receipt.get("archive_sha256") != lane.sha256_file(archive):
+            if receipt.get("archive_size") != lane.file_size(archive):
                 continue
             installs.append(install)
         if not installs:
@@ -355,11 +355,11 @@ class KaggleDatasets:
         receipt_path = install / lane._spec().files.bundle_receipt
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         archive = install / lane._spec().files.bundle_archive
-        observed = lane.sha256_file(archive)
-        expected = receipt.get("archive_sha256")
+        observed = lane.file_size(archive)
+        expected = receipt.get("archive_size")
         if not expected or observed != expected:
             raise RuntimeError(
-                f"bundle install sha256 mismatch before publish: install "
+                f"bundle install size mismatch before publish: install "
                 f"{observed} vs kernel receipt {expected} ({receipt_path})")
         cohort = install.parent.name
         conflict = lane._cohort_marker_conflict(slug, cohort)
@@ -375,7 +375,7 @@ class KaggleDatasets:
             "revision": receipt.get("revision"),
             "stage": str(stage),
             "archive": str(archive),
-            "archive_sha256": observed,
+            "archive_size": observed,
             "archive_bytes": int(archive.stat().st_size),
         })
         if not execute:
@@ -394,7 +394,7 @@ class KaggleDatasets:
                 shutil.copy2(member, stage / member.name)
         version_message = (f"er bundle: cohort={cohort} "
                            f"revision={receipt.get('revision') or 'unknown'} "
-                           f"archive_sha256={observed[:12]}")
+                           f"archive_size={observed}")
         executable = lane._require_kaggle_executable(spec.kaggle_executable)
         plan["command"] = KaggleDatasets.dataset_publish_commands(
             executable, stage, message=version_message,

@@ -17,7 +17,7 @@ rerun reproduces the file byte-for-byte.
 from __future__ import annotations
 
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import random
 from pathlib import Path
 
@@ -78,7 +78,7 @@ def main() -> None:
         writer = csv.DictWriter(handle, fieldnames=header, lineterminator="\n")
         writer.writeheader()
         writer.writerows(ordered)
-    digest = hashlib.sha256(OUTPUT.read_bytes()).hexdigest()
+    digest = ByteCount(OUTPUT.read_bytes()).total
     with OUTPUT.open(newline="", encoding="utf-8") as handle:
         written = list(csv.DictReader(handle))
     empty = sum(1 for row in written if row["attribute"] == "")
@@ -86,7 +86,7 @@ def main() -> None:
                          if len(row["attribute"]) > LONG_THRESHOLD)
     print(f"[laya-play-sample] rows={len(written)} "
           f"attribute-empty={empty} long-attribute={long_attribute} "
-          f"sha256={digest} -> {OUTPUT}")
+          f"size={digest} -> {OUTPUT}")
 
 
 if __name__ == "__main__":

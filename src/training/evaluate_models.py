@@ -75,7 +75,7 @@ EMBED_SIM_CSV = F["embedding_similarities"]
 CANON_CSV = F["canonical_records"]
 
 # Stage manifest (SILENT_DROPS task 7) — begin BEFORE the work: all three
-# input CSVs are hashed now so the record pins exactly what this stage
+# input CSVs are sized now so the record pins exactly what this stage
 # read. Seed = the SSOT seed; the component split below consumes RNG
 # through it (component_folds(seed=SEED)), so the split this manifest
 # certifies is the seeded one.
@@ -143,7 +143,7 @@ if _unmapped_canon:
         f"canonical mapping in {CANON_CSV.name} (e.g. {_bad}) — the "
         "dtype=str join above makes this impossible for a canonical with "
         "a leading-zero UPC-12 spelling, so a live miss means the canon "
-        "file itself is stale; rebuild it (pipeline data-prep lane) before "
+        "file itself is out of date; rebuild it (pipeline data-prep lane) before "
         "scoring"
     )
 

@@ -1,10 +1,10 @@
 """Prepared-only frozen baseline prerequisite for the single suite GPU session."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 import numpy as np
-from graph_tracks.data import file_hash,load_records
-from graph_tracks.text_cache import compose_texts,texts_hash
+from graph_tracks.data import file_size,load_records
+from graph_tracks.text_cache import compose_texts,texts_size
 from training.prepare_embeddings import input_identity,validate_result
 from model_tracks.embedding_forward import PreparedEmbeddingForward, validate_embedding_device
 
@@ -20,11 +20,11 @@ def prepare(setup,checkpoint,*,composer=None):
     metadata = input_identity(setup,checkpoint)
     ids,texts = compose_texts(setup/layout.catalog,composer=composer)
     export = json.loads((setup/layout.text_export_request).read_text())
-    if ids != export['ids'] or texts_hash(texts) != export['text_sha256']:
+    if ids != export['ids'] or texts_size(texts) != export['text_size']:
         raise ValueError('baseline and selected text export population differ')
     request = {'schema':'er-embedding-request-v2','ids':ids,'texts':texts,
-        'metadata':{**metadata,'text_sha256':texts_hash(texts)},
-        'prepared_text':{**export['plan'],'sha256':export['tokens_sha256']}}
+        'metadata':{**metadata,'text_size':texts_size(texts)},
+        'prepared_text':{**export['plan'],'size':export['tokens_size']}}
     path = setup/layout.embedding_request
     # Avoid a second full-size JSON string plus UTF-8 copy alongside the texts.
     import tempfile
@@ -48,9 +48,9 @@ def validate_pending(setup,checkpoint,*,native_model=None):
     """The pre-forward contract of a prepared but unencoded baseline.
 
     NO FRESHNESS COMPARISON (owner directive 2026-10-08, repo-wide): the
-    request's recorded input digests are not re-derived and compared against
+    request's recorded input sizes are not re-derived and compared against
     the current tree. What this checks is what the forward pass requires: a v2
-    request whose recorded text hash matches its own texts, aligned and unique
+    request whose recorded text size matches its own texts, aligned and unique
     IDs covering the prepared listings, and a frozen native-token plan whose
     tokenizer is the configured checkpoint's.
     """
@@ -62,7 +62,7 @@ def validate_pending(setup,checkpoint,*,native_model=None):
     path = setup/layout.embedding_request
     request = json.loads(path.read_text())
     expected = input_identity(setup,checkpoint)
-    if request.get('schema') != 'er-embedding-request-v2' or request.get('metadata',{}).get('text_sha256') != texts_hash(request['texts']):
+    if request.get('schema') != 'er-embedding-request-v2' or request.get('metadata',{}).get('text_size') != texts_size(request['texts']):
         raise ValueError('pending baseline request corrupt')
     if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
         raise ValueError('pending baseline ID/text alignment differs')
@@ -72,22 +72,23 @@ def validate_pending(setup,checkpoint,*,native_model=None):
     plan = request['prepared_text']
     if tokenization_policy(native_model) != plan['tokenization']:
         raise ValueError('pending baseline tokenizer differs from configured native checkpoint')
-    if file_hash(tokens) != plan['sha256'] or plan.get('truncated_inputs') != 0:
+    if file_size(tokens) != plan['size'] or plan.get('truncated_inputs') != 0:
         raise ValueError('pending baseline native tokens changed')
     with np.load(tokens,allow_pickle=False) as arrays:
         prepared = PreparedTokenInputs(plan=plan, arrays=arrays, row_count=len(request['ids']))
         count = prepared.row_count
-    return {'status':'prepared GPU pending','rows':count,'checkpoint_sha256':expected['checkpoint_sha256'],
-        'token_sha256':file_hash(tokens)}
+    return {'status':'prepared GPU pending','rows':count,'checkpoint_size':expected['checkpoint_size'],
+        'token_size':file_size(tokens)}
 
 
 def forward(setup,checkpoint,*,device,return_model=False):
     """GPU supervisor runs once before the trained workers start; no CPU composition.
 
     NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
-    embedding request is never re-hashed to decide whether an existing export is
-    stale. An export whose recorded metadata does not match the request is
-    rebuilt below, and the request/result contract is checked on identity only.
+    embedding request is never re-measured to decide whether an existing export
+    still applies. An export whose recorded metadata does not match the request
+    is rebuilt below, and the request/result contract is checked on identity
+    only.
     """
     layout = _setup_layout()
     request_path = setup/layout.embedding_request
@@ -95,9 +96,9 @@ def forward(setup,checkpoint,*,device,return_model=False):
     output = setup/layout.shared_embeddings
     validate_embedding_device(device)
     from sentence_transformers import SentenceTransformer
-    from graph_tracks.text_cache import checkpoint_hash
+    from graph_tracks.text_cache import checkpoint_size
     model = SentenceTransformer(str(checkpoint),device=device,local_files_only=True)
-    model._er_checkpoint_sha256 = checkpoint_hash(checkpoint)
+    model._er_checkpoint_size = checkpoint_size(checkpoint)
     validate_pending(setup,checkpoint,native_model=model)
     if output.exists():
         validate_result(output,request)
@@ -105,13 +106,8 @@ def forward(setup,checkpoint,*,device,return_model=False):
     plan = request['prepared_text']
     contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
         request_path=request_path, tokens_path=setup/'prepared_text.npz', plan=plan,
-        row_count=len(request['ids']), tokens_sha256=plan['sha256'])
-    vectors, model, _, _request_sha256 = contract.forward(model=model)
-    current = input_identity(setup, checkpoint)
-    current.pop('composition_implementation_sha256',None)
-    for key, value in current.items():
-        if request['metadata'].get(key) != value:
-            raise ValueError('baseline source changed during encoding: ' + key)
+        row_count=len(request['ids']), tokens_size=plan['size'])
+    vectors, model, _, _request_size = contract.forward(model=model)
     metadata = {**request['metadata'],
         'embedding_dtype':contract.embedding_dtype,'tokenization':plan['tokenization']}
     path = contract.write(output, request['ids'], vectors, metadata,

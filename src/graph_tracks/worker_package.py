@@ -2,10 +2,10 @@
 
 Sealing goes through the shared writer (``Bundle.seal_archive``), so the ZIP is
 written and verified exactly once and the returned archive IS a loadable
-``inputs`` Bundle. The package manifest keeps the historical ``files_sha256``
+``inputs`` Bundle. The package manifest keeps the historical ``files_size``
 inventory (already-published packages and the printed ``--verify`` instructions
 keep working) alongside the Bundle-facing ``files`` inventory the shared writer
-records; both are the same name -> sha256 map.
+records; both are the same name -> size map.
 """
 from __future__ import annotations
 
@@ -17,18 +17,18 @@ from core.bundle import Bundle, BundleRole
 
 import yaml
 
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 from graph_tracks.preflight import preflight
 
 
 def _legacy_inventory_key() -> str:
-    """The historical member-inventory manifest key (``files_sha256``).
+    """The historical member-inventory manifest key (``files_size``).
 
-    Derived from the Bundle spec (``bundle.files_key`` + ``_sha256``), never
+    Derived from the Bundle spec (``bundle.files_key`` + ``_size``), never
     re-spelled: the authoritative inventory key is the config one.
     """
     from core.common import training_cfg
-    return f"{training_cfg().bundle.files_key}_sha256"
+    return f"{training_cfg().bundle.files_key}_size"
 
 
 def _setup_layout():
@@ -55,7 +55,7 @@ def _package_base(track: str) -> Path:
 
 
 def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
-    """The historical ``files_sha256`` inventory (same shape as ``files``).
+    """The historical ``files_size`` inventory (same shape as ``files``).
 
     ``Bundle.seal_archive`` recomputes the authoritative ``bundle.files_key``
     inventory through the ONE builder (``core.portable_archive
@@ -151,7 +151,7 @@ def verify(manifest_path: Path) -> None:
 
     Prefers the Bundle-facing inventory (``training_cfg().bundle.files_key``,
     the key ``Bundle.load`` checks) and falls back to the historical
-    ``files_sha256`` mirror so already-written packages still verify.
+    ``files_size`` mirror so already-written packages still verify.
     """
     from core.common import TRAIN_ROOT, training_cfg
     manifest = json.loads(manifest_path.read_text())
@@ -173,7 +173,7 @@ def verify(manifest_path: Path) -> None:
         path = (TRAIN_ROOT / target).resolve()
         if not path.is_relative_to(TRAIN_ROOT.resolve()):
             raise ValueError(f'worker package file mismatch: {target}')
-        actual[target] = file_hash(path)
+        actual[target] = file_size(path)
     compare_inventory(inventory, actual, mismatch='worker package file mismatch')
 
 

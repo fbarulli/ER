@@ -237,7 +237,7 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
     ``graph_tracks.report.report_cascade`` just wrote.
     """
     from graph_tracks.artifacts import name
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
     from core.common import TRAIN_ROOT
     listings = (TRAIN_ROOT / lane.listings).resolve()
@@ -250,8 +250,8 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
         roles = json.loads(report_path.read_text(encoding='utf-8')).get('roles')
     manifest = build_manifest(
         track='cascade', checkpoint=str(artifacts['gnn_checkpoint']),
-        checkpoint_sha256=file_hash(artifacts['gnn_checkpoint']),
-        listings_sha256=file_hash(listings), pairs_sha256=file_hash(pairs),
+        checkpoint_size=file_size(artifacts['gnn_checkpoint']),
+        listings_size=file_size(listings), pairs_size=file_size(pairs),
         threshold=0.5, threshold_source='dev_youden', test_reported=bool(lane.report_test),
         model_selection='dev_pr_auc', retrieval_ks=list(lane.retrieval_ks), roles=roles)
     write_manifest(output / name('cascade', 'report_manifest.json'), manifest)
@@ -502,6 +502,24 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 del selected_text_model
             else:
                 del selected_graph_encoder
+    if track == 'text' and gpu_only:
+        # The cascade (a same-suite postprocess track) reads output/text__index,
+        # which the full text report builds; gpu_only defers that report, so
+        # build just the ANN index here or the cascade fails with "cascade text
+        # ranker index missing". Reports/scoring stay deferred to the local
+        # finalize.
+        with _LOG.section('phase.postprocess_index', track=track):
+            from model_tracks.text_report import build_index
+            built_index = build_index(output, setup)
+            if built_index is not None:
+                trace().add(
+                    "postprocess", "completed",
+                    scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
+                    reason='gpu_only builds only the text ANN index the cascade consumes; '
+                           'reports are deferred to the local finalize',
+                    detail={'track': track, 'index': str(built_index), 'gpu_only': True},
+                    source=str(built_index),
+                )
     if track == 'text' and not gpu_only:
         with _LOG.section('phase.postprocess', track=track, report_test=cfg.report_test):
             from model_tracks.text_report import complete

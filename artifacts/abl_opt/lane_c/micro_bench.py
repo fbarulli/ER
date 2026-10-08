@@ -19,8 +19,8 @@ time.process_time() measures only this process, and the reported number is the
 best (minimum) of repeated passes, which is the most stable estimator of the
 work actually removed.
 
-Also emits a sha256 digest per target over its full output. A change that
-speeds a target up but alters its output is a regression, and the digest makes
+Also emits a structural size per target over its full output. A change that
+speeds a target up but alters its output is a regression, and the size makes
 that visible in the same run as the timing.
 
 Usage:
@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import sys
@@ -57,7 +57,7 @@ def load_rows() -> list[dict[str, str]]:
 
 
 def canonical(value):
-    """Order-insensitive canonical form for the digest.
+    """Order-insensitive canonical form for the size.
 
     Sets/frozensets have no insertion-order contract, and repr(frozenset) order
     depends on the hash layout, so a raw repr would report a "difference"
@@ -78,28 +78,28 @@ def canonical(value):
 
 
 class Sink:
-    """Cheap digest of every observed result (correctness gate)."""
+    """Cheap size of every observed result (correctness gate)."""
 
-    __slots__ = ("_hash", "count")
+    __slots__ = ("_count", "count")
 
     def __init__(self) -> None:
-        self._hash = hashlib.sha256()
+        self._count = ByteCount()
         self.count = 0
 
     def add(self, value: object) -> None:
-        self._hash.update(repr(canonical(value)).encode("utf-8", "surrogatepass"))
-        self._hash.update(b"\x1e")
+        self._count.update(repr(canonical(value)).encode("utf-8", "surrogatepass"))
+        self._count.update(b"\x1e")
         self.count += 1
 
-    def digest(self) -> str:
-        return self._hash.hexdigest()[:16]
+    def size(self) -> int:
+        return self._count.total
 
 
 class CountingSink:
     """Timing sink: counts samples and nothing else.
 
     Hashing inside the timed region would add a constant per-sample cost to
-    every target and dilute the effect being measured, so the digest pass runs
+    every target and dilute the effect being measured, so the size pass runs
     separately and is not timed.
     """
 
@@ -111,8 +111,8 @@ class CountingSink:
     def add(self, value: object) -> None:
         self.count += 1
 
-    def digest(self) -> str:
-        return ""
+    def size(self) -> int:
+        return 0
 
 
 def build_targets(rows):
@@ -264,15 +264,15 @@ def main() -> int:
             continue
         counted = CountingSink()
         best, reps = measure(target, counted, args.min_seconds, args.max_reps)
-        digest_sink = Sink()
-        target(digest_sink)
+        size_sink = Sink()
+        target(size_sink)
         results["targets"][name] = {
             "cpu_seconds": round(best, 6), "reps": reps,
-            "samples_per_pass": counted.count, "digest": digest_sink.digest(),
+            "samples_per_pass": counted.count, "size": size_sink.size(),
         }
         total += best
         print(f"{best:9.4f}s x{reps:<3d} {counted.count:>8d} samples  {name}"
-              f"  [{digest_sink.digest()}]", flush=True)
+              f"  [{size_sink.size()}]", flush=True)
     results["total_cpu_seconds"] = round(total, 6)
     print(f"{total:9.4f}s TOTAL")
     Path(args.out).write_text(json.dumps(results, indent=2, sort_keys=True))

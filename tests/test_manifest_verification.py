@@ -10,7 +10,7 @@ halves of that contract:
   * the handoff boundary's helper verifies what exists and skips what a later
     lane has not published yet.
 """
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 
@@ -34,7 +34,7 @@ def _write_manifest(manifest_dir, *, stage="dedupe", output_bytes=b"hello"):
         status="complete",
         inputs=[],
         outputs=[ManifestFile(
-            path=str(output), sha256=hashlib.sha256(output_bytes).hexdigest(),
+            path=str(output), size=ByteCount(output_bytes).total,
             rows=None, cols=None, expected=True)],
         row_accounting={},
         environment={},
@@ -52,7 +52,7 @@ def test_verify_manifest_passes_on_valid_manifest(tmp_path):
 def test_verify_manifest_rejects_tampered_output(tmp_path):
     manifest_dir, output = _write_manifest(tmp_path / "manifests")
     output.write_bytes(b"tampered")
-    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+    with pytest.raises(RuntimeError, match="size mismatch"):
         verify_manifest("dedupe", manifest_dir=manifest_dir)
 
 
@@ -60,9 +60,9 @@ def test_verify_manifest_rejects_edited_recorded_hash(tmp_path):
     manifest_dir, _ = _write_manifest(tmp_path / "manifests")
     path = manifest_dir / "dedupe.json"
     document = json.loads(path.read_text())
-    document["outputs"][0]["sha256"] = "f" * 64
+    document["outputs"][0]["size"] = "f" * 64
     path.write_text(json.dumps(document))
-    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+    with pytest.raises(RuntimeError, match="size mismatch"):
         verify_manifest("dedupe", manifest_dir=manifest_dir)
 
 
@@ -79,7 +79,7 @@ def test_handoff_manifest_verify_rejects_tampered(tmp_path):
     manifest_dir = _manifest_directory(tmp_path)
     _, output = _write_manifest(manifest_dir, stage="dedupe")
     output.write_bytes(b"tampered")
-    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+    with pytest.raises(RuntimeError, match="size mismatch"):
         _verify_published_manifests(manifest_dir)
 
 

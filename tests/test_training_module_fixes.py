@@ -9,7 +9,7 @@ digest helper, and the unrelated-pair selection memo identity guard.
 
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import random
 
@@ -28,10 +28,10 @@ from training.run_plan import validate_epoch_batches
 from training.sampler import (
     ControlledBatchSampler,
     FrozenBatchSampler,
-    _row_text_hashes,
+    _row_text_values,
     resolve_composition,
 )
-from training.token_inputs import payload_sha256
+from training.token_inputs import payload_size
 from training.training import (
     _build_mnrl_training_triples,
     _build_mnrl_triple_populations,
@@ -49,7 +49,7 @@ def _attestation(plan_identity):
         run_dir="run",
         finished_at="finished",
         bundle_path="bundle.pkl.gz",
-        bundle_sha256="0" * 64,
+        bundle_size=1234,
         plan_identity=plan_identity,
         checks={},
         attested_at="now",
@@ -88,9 +88,9 @@ def test_verify_attestation_binds_bundle_bytes(tmp_path):
     bundle = tmp_path / "bundle.pkl.gz"
     bundle.write_bytes(b"frozen-bytes")
     good = _attestation({"loss": "mnrl"})
-    good = good.model_copy(update={"bundle_sha256": hashlib.sha256(b"frozen-bytes").hexdigest()})
+    good = good.model_copy(update={"bundle_size": ByteCount(b"frozen-bytes").total})
     verify_attestation(good, bundle_path=bundle)
-    with pytest.raises(ValueError, match="sha256 mismatch"):
+    with pytest.raises(ValueError, match="size mismatch"):
         verify_attestation(_attestation({"loss": "mnrl"}), bundle_path=bundle)
 
 
@@ -152,9 +152,9 @@ def test_controlled_batch_sampler_is_deterministic_per_seed_and_epoch():
     assert [list(batch) for batch in replay] == first
 
 
-def test_row_text_hash_column_form_matches_row_form():
+def test_row_text_value_column_form_matches_row_form():
     dataset = _sampler_dataset()
-    column_form = _row_text_hashes(dataset)
+    column_form = _row_text_values(dataset)
     row_form = []
     text_columns = {"sentence1", "sentence2", "anchor", "positive", "negative"}
     for index in range(len(dataset)):
@@ -355,9 +355,9 @@ def test_dynamic_mask_transform_tracks_epoch_and_ann_version():
 
 def test_payload_digest_helper_matches_recorded_formula():
     payload = ["alpha", "beta �sym", "gamma"]
-    expected = hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()
-    assert payload_sha256(payload) == expected
-    assert payload_sha256(list(payload)) == payload_sha256(tuple(payload))
+    expected = ByteCount(json.dumps(list(payload), ensure_ascii=False).encode()).total
+    assert payload_size(payload) == expected
+    assert payload_size(list(payload)) == payload_size(tuple(payload))
 
 
 def _unrelated_fixture():

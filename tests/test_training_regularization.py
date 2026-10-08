@@ -563,7 +563,7 @@ class BundleProvenanceTests(unittest.TestCase):
 
     def test_loader_rejects_mismatched_augmentation_features_with_valid_hash(self) -> None:
         import gzip
-        import hashlib
+        from core.portable_archive import ByteCount
         import json
         import pickle
         import tempfile
@@ -588,7 +588,7 @@ class BundleProvenanceTests(unittest.TestCase):
 
             manifest_path = path.with_suffix(path.suffix + ".json")
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            manifest["size"] = ByteCount(path.read_bytes()).total
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "augmentation features disagree"):

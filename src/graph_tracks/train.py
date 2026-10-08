@@ -32,7 +32,7 @@ from sklearn.metrics import average_precision_score, precision_recall_curve
 from graph_tracks.config import load_config
 from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.tracking import GraphWandb
-from graph_tracks.data import SPLITS, census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
+from graph_tracks.data import SPLITS, census, file_size, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
 from core.bundle import CHECKPOINT_PREFIX
 from core.perf_switches import perf_enabled
@@ -429,23 +429,23 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         manifest = {"schema": "er-graph-run-v1", "track": cfg.track, "run_tag": run_tag,
                     "config": cfg.model_dump(), "git_revision": revision,
                     "input_manifest": input_manifest,
-                    "input_manifest_sha256": file_hash(resolve(cfg.input_manifest)) if cfg.input_manifest else None,
-                    "listings_sha256": file_hash(resolve(cfg.listings)),
-                    "pairs_sha256": file_hash(resolve(cfg.pairs)),
-                    "text_cache_sha256": file_hash(resolve(cfg.text_cache)) if cfg.text_cache else None,
+                    "input_manifest_size": file_size(resolve(cfg.input_manifest)) if cfg.input_manifest else None,
+                    "listings_size": file_size(resolve(cfg.listings)),
+                    "pairs_size": file_size(resolve(cfg.pairs)),
+                    "text_cache_size": file_size(resolve(cfg.text_cache)) if cfg.text_cache else None,
                     "text_metadata": text_metadata, "graph_context": "training-listings-only",
                     "augmentation": {"masking": False, "gendata": False},
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
                     "optimizer_backend": optimizer_policy.resolved_backend(cfg.device),
                     "aggregation_backend": resolve_aggregation(cfg.aggregation_backend, cfg.device),
-                    "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
-                        {"core/gpu_execution.py": file_hash(TRAIN_ROOT / "src/core/gpu_execution.py"),
-                         "core/execution_policy.py": file_hash(TRAIN_ROOT / "src/core/execution_policy.py")},
-                    "resume_checkpoint_sha256": file_hash(resume) if resume else None}
-        if input_manifest and input_manifest.get('shared_training_data_sha256'):
+                    "implementation_size": {p.name: file_size(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
+                        {"core/gpu_execution.py": file_size(TRAIN_ROOT / "src/core/gpu_execution.py"),
+                         "core/execution_policy.py": file_size(TRAIN_ROOT / "src/core/execution_policy.py")},
+                    "resume_checkpoint_size": file_size(resume) if resume else None}
+        if input_manifest and input_manifest.get('shared_training_data_size'):
             manifest['augmentation'] = {
                 'source': 'shared frozen training objective',
-                'shared_training_data_sha256': input_manifest['shared_training_data_sha256']}
+                'shared_training_data_size': input_manifest['shared_training_data_size']}
         best_metric, best_path, start_epoch = -1., None, 0
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
                     'resume' if resume else 'fresh', resume, cfg.epochs)
@@ -455,7 +455,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 current_manifest = json.loads(current_manifest_path.read_text())
                 if current_manifest.get("track") != cfg.track or current_manifest.get("run_tag") != run_tag:
                     raise ValueError("resume output belongs to a different run")
-                for key in ("listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256"):
+                for key in ("listings_size", "pairs_size", "text_cache_size", "input_manifest_size"):
                     if current_manifest.get(key) != manifest[key]:
                         raise ValueError(f"resume output mismatch: {key}")
             if checkpoint_track(resume) != cfg.track:
@@ -466,7 +466,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError('resume aggregation backend mismatch')
             if prior['config'].get('optimizer_backend', 'auto') != cfg.optimizer_backend:
                 raise ValueError('resume optimizer backend mismatch')
-            for key in ("track", "listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256"):
+            for key in ("track", "listings_size", "pairs_size", "text_cache_size", "input_manifest_size"):
                 if prior[key] != manifest[key]:
                     raise ValueError(f"resume mismatch: {key}")
             for key, value in prior["config"].items():
@@ -729,7 +729,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     _bundle_spec().trainer_best_key: str(best_path.parent)})
                 # Completion marker is written LAST, matching worker conventions.
                 write_json(checkpoint_dir / name(cfg.track, _colab_spec().checkpoint_manifest_name), {
-                    "schema": "er-graph-checkpoint-v1", "files": {checkpoint.name: file_hash(checkpoint)},
+                    "schema": "er-graph-checkpoint-v1", "files": {checkpoint.name: file_size(checkpoint)},
                     "epoch": epoch, "track": cfg.track})
                 write_json(output / name(cfg.track, "best_checkpoint.json"), {"path": str(best_path), "metric": best_metric})
                 with (output / name(cfg.track, "epoch_metrics.jsonl")).open("a") as handle:

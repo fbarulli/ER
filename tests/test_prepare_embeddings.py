@@ -66,13 +66,13 @@ def inputs(tmp_path, monkeypatch):
     (checkpoint / 'weights').write_bytes(b'frozen')
     listings = setup / 'prepared/listings.json'
     listings.write_text(json.dumps([{'sku_id': 'a'}, {'sku_id': 'b'}]))
-    expected = {'listings_sha256': job.file_hash(listings), 'catalog_sha256': job.file_hash(catalog),
-                'identity_policy_sha256': job.file_hash(POLICY_PATH),
-                'identity_dimensions_sha256': job.file_hash(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
-                'checkpoint_sha256': job.checkpoint_hash(checkpoint),
+    expected = {'listings_size': job.file_size(listings), 'catalog_size': job.file_size(catalog),
+                'identity_policy_size': job.file_size(POLICY_PATH),
+                'identity_dimensions_size': job.file_size(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
+                'checkpoint_size': job.checkpoint_size(checkpoint),
                 'composition': model_input_composition().model_dump(mode='json')}
     (setup / 'prepared/input_manifest.json').write_text(json.dumps(expected))
-    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint_sha256': expected['checkpoint_sha256']}))
+    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint_size': expected['checkpoint_size']}))
     monkeypatch.setattr(job, 'load_records', lambda _: [{'sku_id': 'a'}, {'sku_id': 'b'}])
     monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['text a', 'text b']))
     calls = []
@@ -91,7 +91,7 @@ def test_generate_reuse_and_reject_stale_cache(tmp_path, monkeypatch):
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
     assert len(calls) == 1
-    (checkpoint / 'weights').write_bytes(b'changed')
+    (checkpoint / 'weights').write_bytes(b'changed-and-longer')
     with pytest.raises(ValueError, match='checkpoint differs'):
         job.prepare(setup, checkpoint, device='cpu')
 
@@ -136,7 +136,7 @@ def test_reuse_rebuilds_an_incompatible_cache(tmp_path, monkeypatch, change):
 
 
 def test_reuse_accepts_changed_composition_implementation(tmp_path, monkeypatch):
-    # owner order 2026-10-07: the composition_implementation_sha256 field stays
+    # owner order 2026-10-07: the composition_implementation_size field stays
     # recorded, but is never compared; fingerprint drift must not block reuse.
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
@@ -154,7 +154,7 @@ def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):
     request = json.loads(request_path.read_text())
     request['texts'][0] = 'tampered text'
     request_path.write_text(json.dumps(request))
-    with pytest.raises(ValueError, match='text content hash'):
+    with pytest.raises(ValueError, match='text content size'):
         job.validate_prepared_provenance(cache, metadata)
 
 
@@ -178,7 +178,7 @@ def test_no_request_digest_freshness_gate(tmp_path, monkeypatch):
     that disagrees with the request file is ignored rather than compared."""
     import inspect
 
-    assert 'request_sha256' not in inspect.signature(job.validate_result).parameters
+    assert 'request_size' not in inspect.signature(job.validate_result).parameters
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     request = job.prepare_request(setup, checkpoint)
@@ -186,7 +186,7 @@ def test_no_request_digest_freshness_gate(tmp_path, monkeypatch):
     with np.load(cache, allow_pickle=False) as data:
         ids, vectors = data['ids'], data['embeddings']
         metadata = json.loads(str(data['metadata']))
-    metadata['request_sha256'] = 'a-request-hash-from-another-run'
+    metadata['request_size'] = 'a-request-hash-from-another-run'
     np.savez(cache, ids=ids, embeddings=vectors, metadata=json.dumps(metadata))
     job.validate_result(cache, request)
 
@@ -211,7 +211,7 @@ def test_data_gate_census_tracks_are_json_serializable():
                           tracks={'hybrid': TrackInputCensus(
                               listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
                               text_dimension=3, device='cuda')},
-                          attestation='a' * 64)
+                          attestation=4096)
     payload = census_tracks(gate)
     events = WorkerEvents(Path('log'), 'suite', 'census-test', filename='census.jsonl')
     events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)
@@ -228,7 +228,7 @@ def test_data_gate_census_tracks_are_json_serializable(tmp_path):
                           tracks={'hybrid': TrackInputCensus(
                               listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
                               text_dimension=3, device='cuda')},
-                          attestation='a' * 64)
+                          attestation=4096)
     payload = census_tracks(gate)
     events = WorkerEvents(tmp_path, 'suite', 'census-test', filename='census.jsonl')
     events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)

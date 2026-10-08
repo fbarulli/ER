@@ -1,7 +1,7 @@
 import json
 import zipfile
 import pytest
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 
 
 @pytest.mark.parametrize('publishing,released,corrupt', [(True, True, False), (False, True, False), (True, False, False), (True, True, True)])
@@ -15,13 +15,12 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
                     publish_dvc=publishing, publish_git=False)
     inputs = tmp_path / 'inputs.zip'
     # A REAL verified package: `colab.run` opens it through the ONE inputs
-    # `Bundle.load` boundary (manifest + every member hashed once), so a zip
+    # `Bundle.load` boundary (manifest + every member checked once), so a zip
     # holding only the suite config no longer passes. `revision` is the
     # package's own revision, which the checkout script fetches separately.
-    import hashlib as _hashlib
     from model_tracks.package import package_member as _member
     _members = {_member('suite_package_config'): json.dumps(settings).encode()}
-    _inventory = {name: _hashlib.sha256(blob).hexdigest()
+    _inventory = {name: len(blob)
                   for name, blob in _members.items()}
     with zipfile.ZipFile(inputs, 'w') as archive:
         for name, blob in _members.items():
@@ -44,7 +43,7 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     # a tiny fixture archive is never parsed as a real tar.zst; the returned
     # whole-file digest still drives the corruption check.
     monkeypatch.setattr(colab, 'verify_result_archive',
-                        lambda path: (dict(run_tag='run', files={}), file_hash(path)))
+                        lambda path: (dict(run_tag='run', files={}), file_size(path)))
     monkeypatch.setattr(backend, 'GPU', 'CPU')
     monkeypatch.setattr(backend, '_env_value', lambda _: None)
     monkeypatch.setattr(backend, '_wandb_env_script', lambda: '')
@@ -53,7 +52,7 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         compile(command[-1], '<remote-stage>', 'exec')
         events.append('train')
     monkeypatch.setattr(backend, 'run_detached_stage', stage)
-    monkeypatch.setattr(backend, '_read_remote_text', lambda _: file_hash(payload))
+    monkeypatch.setattr(backend, '_read_remote_text', lambda _: file_size(payload))
     monkeypatch.setattr(backend, 'run_colab_exec_capture', lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     def download(remote, target):
         events.append('download')

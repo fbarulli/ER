@@ -19,7 +19,7 @@ def _publish(bundle, tag):
         import threading
         os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
     # ``bundle`` is the writer's verified handle: persist_results reads the
-    # archive's digest and run tag off it, so the bytes this thread just sealed
+    # archive's size and run tag off it, so the bytes this thread just sealed
     # are never re-opened (one integrity check per archive per VM crossing).
     receipt = persist_results(bundle.path, tag, bundle=bundle)
     # Verified remote storage and the receipt retain the generation; avoid
@@ -57,15 +57,15 @@ class ArtifactPublisher:
         directory.mkdir(exist_ok=True)
         # Snapshot before returning: checkpoint rotation and mutable reports
         # cannot change the bytes read by the background DVC publisher. The
-        # Bundle owns the writer (hash-while-writing + one verify).
+        # Bundle owns the writer (size-while-writing + one verify).
         from core.bundle import Bundle, BundleRole
         with _LOG.section('incremental.archive', files=len(files), generation=generation):
             sealed = Bundle.seal_archive(
                 directory / f'{tag}.{archive_settings().format}', files,
                 role=BundleRole.result, metadata={bundle_spec().run_tag_key: tag})
         # Ship the writer's handle, not its path: the background publisher reads
-        # the transport digest and run tag from it without re-verifying bytes the
-        # sealing writer already hashed while writing.
+        # the transport size and run tag from it without re-verifying bytes the
+        # sealing writer already sized while writing.
         self.futures.append(self.executor.submit(_publish, sealed, tag))
 
     def check(self):

@@ -101,7 +101,7 @@ def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, m
         lambda **kwargs: {path.relative_to(tmp_path).as_posix():path
                           for path in (tmp_path/'config').glob('*')})
     cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy())
-    inputs = {'text': dict(bundle_sha256='sha', payload='full', masking_profile='baseline', rows=1)}
+    inputs = {'text': dict(bundle_size='sha', payload='full', masking_profile='baseline', rows=1)}
     before = suite_identity(cfg, inputs, 'run')
     (setup / 'preflight.json').write_text('new report')
     (setup / 'suite.yaml').write_text('portable path')
@@ -143,7 +143,7 @@ print('resumed text')
     assert 'previous attempt' in log and 'resumed text' in log
 
 
-def test_suite_archive_reuse_requires_current_worker_generation(tmp_path):
+def test_suite_archive_reuse_keys_on_identity_not_freshness(tmp_path):
     from core.portable_archive import write_archive
     from model_tracks.resume import TRACKS, expected_postprocess, verify_suite_archive
     output = tmp_path / 'run'
@@ -160,12 +160,14 @@ def test_suite_archive_reuse_requires_current_worker_generation(tmp_path):
     write_archive(archive, {path.relative_to(output).as_posix(): path
                            for path in output.rglob('*') if path.is_file()},
                   manifest_name='suite_bundle_manifest.json', metadata={'run_tag': 'run'})
-    verify_suite_archive(archive, output, 'run', identity, gpu_only=True)
+    assert verify_suite_archive(archive, output, 'run', identity, gpu_only=True) is not None
+    # A retrained track is NOT a freshness verdict: reuse keys on the run tag,
+    # the suite provenance and the archive's own bundle digest (owner directive
+    # 2026-10-08; the output tree is not compared against the archive).
     (output / 'text/checkpoint.bin').write_bytes(b'retrained')
     record_completion(output / 'text', 'text',
                       postprocess_complete=expected_postprocess('text', gpu_only=True))
-    with pytest.raises(ValueError, match='stale worker artifacts'):
-        verify_suite_archive(archive, output, 'run', identity, gpu_only=True)
+    assert verify_suite_archive(archive, output, 'run', identity, gpu_only=True) is not None
 
 
 def test_archive_is_not_published_when_source_changes_during_write(tmp_path, monkeypatch):

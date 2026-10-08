@@ -87,7 +87,7 @@ python laya_backend.py --kind kaggle --decision attribute
 # nothing to --execute)
 python laya_backend.py --kind colab --decision identity
 
-# push the staged payload (needs laya.export_dataset_slug + kaggle json)
+# push the staged payload (needs the hosted `decisions` dataset + kaggle json)
 python laya_backend.py --kind kaggle --decision attribute --execute
 ```
 
@@ -247,25 +247,32 @@ python scripts/laya_compare.py \
 
 `staging_dir` (results/laya_lane), `question_schema`
 (`config/laya.question.json`), `decision_csv_bindings` (per-kind F
-bindings), `dataset_slug` / `export_dataset_slug` (fail-loud when unset —
-no silent default account for the kaggle payload bindings; the kaggle-lane
-`slug: null` precedent), `run_tag_prefix` (laya_), `gpu` (Literal "T4"),
+bindings), `run_tag_prefix` (laya_), `gpu` (Literal "T4"),
 `laya_decision_batch_size` (8, 1..128), `laya_decision_epochs` (1..8; **0
 disables the lane entirely**), `laya_decision_max_rows` (2500),
 `min_router_confidence` (0.0 = no gate), `calibration` / `onnx` /
 `laya_evals_enabled` toggles, `checkpoint_hub` (`convaiinnovations/laya`),
 `laya_package` (`laya`).
 
-Fine-tune surface: `finetune_kernel_slug` (`fbarulli/er-laya-finetune`),
-`finetune_dataset_slug` (`fbarulli/er-laya-train`), `base_model_dataset`
-(`fbarulli/er-laya-base`, the attached base checkpoint — no Hub fetch),
-`finetune_ckpt_dataset` (`fbarulli/er-laya-finetune-ckpt`, for the eval-only
-kind), and the `finetune:` recipe block (epochs 8, micro_batch 8, grad_accum 8,
-seed 1729, loss `soft-ce`).
+**The hosted Kaggle datasets are NOT knobs**: the lane names a ROLE and reads
+its slug, mount root and members from the hosted registry
+(`config/hosted_datasets.yaml` -> `core.hosted_dataset.HostedRegistry` via
+`LayaSpec.hosted_slug(role)` / `LayaSpec.mount_root`). Roles: `requests`
+(decision inputs), `decisions` (published decisions — its slug IS the decision
+kinds' kernel id), `corpus` (fine-tune JSONL), `base` (attached base
+checkpoint — no Hub fetch), `ckpt` (fine-tuned checkpoint), `holdout`
+(component-disjoint verification set). A registry without the role fails the
+stage loudly (KeyError), and no account is ever guessed in code.
+
+Fine-tune surface: `finetune_kernel_slug` (`fbarulli/er-laya-finetune` — the
+KERNEL slugs stay config, they are Kaggle kernels rather than hosted datasets),
+`finetune_eval_kernel_slug`, `holdout_eval_kernel_slug`, and the `finetune:`
+recipe block (epochs 8, micro_batch 8, grad_accum 8, seed 1729, loss
+`soft-ce`).
 
 The committed config/training.yaml does NOT carry a `laya:` block yet —
-the schema default factory (`src/core/laya_config.py`) supplies the slugs and
-recipe above and keeps the load byte-identical (additive contract; the same one
+the schema default factory (`src/core/laya_config.py`) supplies the recipe above
+and keeps the load byte-identical (additive contract; the same one
 `kaggle:` rode at its landing). Add the block only to override a default.
 
 ## Logging convention + artifact paths

@@ -1,7 +1,7 @@
 """One validated training population, shared by every model adapter."""
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import io
 from itertools import chain
 import json
@@ -73,7 +73,7 @@ class TrainingEndpoint(BaseModel):
     entity: str
     source_id: str
     parent_index: int | None = Field(default=None, ge=0)
-    text_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    text_size: int = Field(ge=0)
 
     @model_validator(mode='after')
     def lineage(self):
@@ -112,7 +112,7 @@ class SharedTrainingData(BaseModel):
     source_rows: int = Field(gt=0)
     canonical_rows: int = Field(ge=0)
     payload_rows: int = Field(gt=0)
-    inputs_sha256: dict[str, str]
+    inputs_size: dict[str, int]
     endpoints: list[TrainingEndpoint]
     examples: list[TrainingExample] = Field(min_length=1)
 
@@ -145,12 +145,12 @@ class SharedTrainingData(BaseModel):
         return self
 
     @property
-    def fingerprint(self) -> str:
-        digest = hashlib.sha256()
+    def fingerprint(self) -> int:
+        size = ByteCount()
         encoder = TrainingJSONEncoder(sort_keys=True, ensure_ascii=False)
         for chunk in encoder.iterencode(self):
-            digest.update(chunk.encode())
-        return digest.hexdigest()
+            size.update(chunk.encode())
+        return size.total
 
     def iter_pair_rows(self):
         """Yield graph relationships in frozen order without a second population."""
@@ -218,12 +218,12 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
                      gtins[index-source_rows] if kind == 'canonical' else augmentation_node_id(index))
         endpoints.append(TrainingEndpoint(payload_index=index, kind=kind, entity=entity,
             source_id=source_id, parent_index=copies.get(index),
-            text_sha256=hashlib.sha256(bundle['payload'][index].encode()).hexdigest()))
+            text_size=ByteCount(bundle['payload'][index].encode()).total))
     return SharedTrainingData(source_rows=source_rows, canonical_rows=len(gtins),
-        payload_rows=len(bundle['payload']), inputs_sha256={
-            'frozen_data': plan['identity']['data_sha256'],
+        payload_rows=len(bundle['payload']), inputs_size={
+            'frozen_data': plan['identity']['data_size'],
             **{
-            key: hashlib.sha256(bundle[key]).hexdigest()
+            key: ByteCount(bundle[key]).total
             for key in ('canonical_records_csv', 'labeled_pairs_csv', 'gate_results_csv')}},
         endpoints=endpoints, examples=examples)
 
@@ -231,12 +231,12 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
 class TrackTrainingBinding(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     track: Literal['text', 'gnn_only']
-    shared_data_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    shared_data_size: int = Field(ge=0)
     example_ids: list[int]
     endpoint_indices: list[int]
 
     def validate_data(self, shared: SharedTrainingData):
-        if (self.shared_data_sha256 != shared.fingerprint or
+        if (self.shared_data_size != shared.fingerprint or
                 self.example_ids != [row.example_id for row in shared.examples] or
                 self.endpoint_indices != [row.payload_index for row in shared.endpoints]):
             raise ValueError(f'{self.track} training population differs from shared data')

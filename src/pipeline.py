@@ -1168,9 +1168,9 @@ class ListingCardBuilder:
     # ── phase 3: product type ──────────────────────────────────────────────
 
     def resolve_product_type(self) -> None:
-        """Scalar flavor digest, per-dimension ledgers, then the config
+        """Scalar flavor summary, per-dimension ledgers, then the config
         product-type ladder on the title with the category fallback."""
-        # Scalar flavor digest (deterministic first value) preserves the
+        # Scalar flavor summary (deterministic first value) preserves the
         # historical CSV contract for the downstream readers.
         self._flavor_hint = sorted(self.flavor_set)[0] if self.flavor_set else ""
         for dimension in ("carbonation", "sweetener", "pulp", "organic"):

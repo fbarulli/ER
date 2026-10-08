@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import random
 import sys
@@ -134,10 +134,10 @@ def main():
     summary = {'seed':args.seed,'retained_pairs':len(retained),'requested_pairs':args.pairs,'unique_pairs':len(selected),'calls':len(doubled),
                'excluded_previously_staged_or_tested_pairs':len(excluded), 'candidate_pairs_replayed':len(candidates),
                'allocations':allocation, 'attribute_coverage':{'|'.join(k):v for k,v in sorted(coverage.items())},
-               'source_sha256':{name:hashlib.sha256((ROOT/'data'/name).read_bytes()).hexdigest() for name in ('gate_results.csv','canonical_records.csv')},
+               'source_size':{name:ByteCount((ROOT/'data'/name).read_bytes()).total for name in ('gate_results.csv','canonical_records.csv')},
                'meaning':'Positive/negative are CURRENT gate decisions, not human ground truth. Similarity high >= 0.8; lower < 0.8. Attribute-balanced selection within each stratum from a deterministic candidate subsample; not a prevalence estimate.'}
     (ROOT/'jev'/f'sample_{args.round}_summary.json').write_text(json.dumps(summary,indent=2)+'\n')
-    print(json.dumps({k:v for k,v in summary.items() if k not in ('attribute_coverage','source_sha256')},indent=2))
+    print(json.dumps({k:v for k,v in summary.items() if k not in ('attribute_coverage','source_size')},indent=2))
     print('Staged only; no live calls.')
 
 if __name__ == '__main__': main()

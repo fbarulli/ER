@@ -60,7 +60,7 @@ def test_recovery_rejects_traversal(tmp_path):
 def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, monkeypatch):
     import core.common
     from model_tracks import colab
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     monkeypatch.setattr(core.common, 'RESULTS', tmp_path / 'results')
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     # Input publication occurs before worker execution regardless of the
@@ -74,15 +74,14 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     monkeypatch.setattr(publish, 'push_artifacts', record_publication)
     inputs = tmp_path / 'inputs.zip'
     # A REAL verified package: colab.run opens it through verified_archive()
-    # and re-hashes every member against the manifest inventory, so a zip
+    # and re-checks every member against the manifest inventory, so a zip
     # holding only the suite config no longer passes. `revision` is the
     # package's own revision, which the checkout script fetches separately.
-    import hashlib as _hashlib
     from model_tracks.package import package_member as _member
     _suite = ('setup_dir: shared\ntext_bundle: shared/text.pkl.gz\ndevice: cpu\n'
               'publish_git: false\npublish_dvc: false\n').encode()
     _members = {_member('suite_package_config'): _suite}
-    _inventory = {name: _hashlib.sha256(blob).hexdigest()
+    _inventory = {name: len(blob)
                   for name, blob in _members.items()}
     with zipfile.ZipFile(inputs, 'w') as archive:
         for name, blob in _members.items():
@@ -112,7 +111,7 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
         GIT_REMOTE_NAME='origin', BRANCH='training', _BOOTSTRAP='', _RESULT_DOWNLOAD_TIMEOUT_SECONDS=30,
         _WORKER_TIMEOUT_SECONDS=30, run_colab_exec_stream=exec_remote,
         _upload_with_retries=lambda *a, **k: None, _wandb_env_script=lambda: '',
-        run_detached_stage=detached, _read_remote_text=lambda _: file_hash(saved),
+        run_detached_stage=detached, _read_remote_text=lambda _: file_size(saved),
         _download_one_remote_file=download)
     # `model_tracks.colab.run` does `from cli import colab as backend`, which
     # resolves the attribute on the ALREADY-IMPORTED cli package before

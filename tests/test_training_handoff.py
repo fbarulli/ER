@@ -1,5 +1,5 @@
 """The handoff boundary attests loss/batch correctness and loads the bundle once."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,7 +51,7 @@ def _frozen_plan(loss, rows, batch_sizes, epochs):
                for device, bs in batch_sizes.items()}
     return {'version': 1,
             'identity': {'loss': loss, 'train_frac': 1.0, 'sample': False,
-                         'seed': SEED, 'config_sha256': '0' * 64, 'data_sha256': '1' * 64},
+                         'seed': SEED, 'config_size': '0' * 64, 'data_size': '1' * 64},
             'holdout': {'train': [], 'dev': [], 'test': []},
             'inputs': {'skipped': False,
                        'folds': [{'objective': {'dataset': {'anchor': list(rows)},
@@ -72,9 +72,9 @@ def _handoff_env(tmp_path, monkeypatch, plan):
     for path in files.values():
         path.write_text('bytes')
     (setup / 'setup_manifest.json').write_text(json.dumps({
-        'source_catalog_sha256': preparation.sha256(files['dataset_deduped']),
-        'labeled_pairs_sha256': preparation.sha256(files['labeled_pairs']),
-        'text_checkpoint_sha256': '0' * 64, 'smoke': False}))
+        'source_catalog_size': preparation.size(files['dataset_deduped']),
+        'labeled_pairs_size': preparation.size(files['labeled_pairs']),
+        'text_checkpoint_size': '0' * 64, 'smoke': False}))
     bundle = root / 'bundle.pkl.gz'
     bundle.write_bytes(b'bundle')
     Path(str(bundle) + '.json').write_text('{}')
@@ -94,12 +94,12 @@ def _handoff_env(tmp_path, monkeypatch, plan):
                 {'input_ids': np.array([1, 2]), 'attention_mask': np.array([1, 1])},
                 {'input_ids': np.array([3]), 'attention_mask': np.array([1])}]}},
             'policy': {'input_token_limit': 8, 'padding_side': 'right'}}
-    header = SimpleNamespace(sha256='a' * 64, payload_variant='full',
-                             masking_profile='base', model_dump=lambda **kwargs: {'sha256': 'a' * 64})
+    header = SimpleNamespace(size=1234, payload_variant='full',
+                            masking_profile='base', model_dump=lambda **kwargs: {'size': 1234})
     monkeypatch.setattr('training.prepared_bundle.load_prepared_bundle',
                         lambda path, *, verify_inputs: (header, prepared))
     monkeypatch.setattr('model_tracks.package.verify',
-                        lambda path: {'preflight': {'shared_training_data': {'sha256': 's' * 64}}})
+                        lambda path: {'preflight': {'shared_training_data': {'size': 's' * 64}}})
     suite = SuiteConfig(setup_dir='setup', text_bundle='setup/text.pkl.gz')
     return {'root': root, 'smoke': smoke, 'smoke_file': smoke_file, 'setup': setup,
             'files': files, 'bundle': bundle, 'archive': archive, 'suite': suite,
@@ -114,7 +114,7 @@ def _verify(env, **overrides):
                      full_bundle=env['bundle'], text_bundle=env['bundle'],
                      suite_archive=env['archive'], provenance=env['provenance'],
                      smoke_dir=env['smoke'],
-                     smoke_original={str(env['smoke_file']): hashlib.sha256(b'smoke').hexdigest()},
+                     smoke_original={str(env['smoke_file']): ByteCount(b'smoke').total},
                      reusable_paths=list(env['files'].values()))
     arguments.update(overrides)
     return verify_training_loads(**arguments)
@@ -138,10 +138,10 @@ def test_handoff_attests_loss_batch_contract_and_inventories_outputs(tmp_path, m
     assert attestation['batch_sizes'] == {device: int(runtime('batch_size_' + device))
                                           for device in ('cpu', 'cuda')}
     assert {entry['input'] for entry in saved['inputs']} >= {'text_bundle', 'suite_package'}
-    assert saved['bundle_header'] == {'sha256': 'a' * 64}
+    assert saved['bundle_header'] == {'size': 1234}
     assert saved['suite_package']['preflight']
     inventory = saved['final_inventory']
-    assert inventory[str(tmp_path / 'bundle.pkl.gz')]['sha256'] == hashlib.sha256(b'bundle').hexdigest()
+    assert inventory[str(tmp_path / 'bundle.pkl.gz')]['size'] == ByteCount(b'bundle').total
     assert set(inventory) >= {str(path) for path in tmp_path.glob('*.csv')}
 
 
@@ -151,35 +151,41 @@ def test_handoff_rejects_loss_drift(tmp_path, monkeypatch):
         _verify(_handoff_env(tmp_path, monkeypatch, plan))
 
 
-def test_handoff_rejects_mutated_smoke_inputs(tmp_path, monkeypatch):
+def test_handoff_does_not_gate_on_drift(tmp_path, monkeypatch):
+    """Owner directive 2026-10-08: the boundary has no freshness verdicts.
+
+    Drifted provenance, changed bundle copies and a moved graph-setup hash are
+    read back for the record, never compared to decide whether data still
+    applies; the bundle digest at load is the boundary's integrity check.
+    """
+    env = _handoff_env(tmp_path, monkeypatch, None)
+    report = _verify(env, provenance={'text_checkpoint': 'f' * 64})
+    assert report.status == 'pass'
+    assert 'frozen_csv_agreement' not in report.checks
+    assert 'smoke_unchanged' not in report.checks
+    env['files']['canonical_records'].write_text('mutated')
+    _verify(env)  # a changed bundle copy is not a staleness failure
+    env['files']['canonical_records'].write_text('bytes')
+    manifest = env['setup'] / 'setup_manifest.json'
+    document = json.loads(manifest.read_text())
+    document['source_catalog_size'] = '9' * 64
+    manifest.write_text(json.dumps(document))
+    report = _verify(env)
+    assert report.checks['graph_setup']['source_catalog_size'] == '9' * 64
+
+
+def test_handoff_accepts_mutated_smoke_inputs(tmp_path, monkeypatch):
     from model_tracks.config import SuiteConfig
     env = _handoff_env(tmp_path, monkeypatch, None)
     env['smoke_file'].write_text('mutated')
-    with pytest.raises(ValueError, match='Smoke files changed'):
-        _verify(env)
+    # The smoke tree is no longer re-hashed against its start-of-run snapshot.
+    assert _verify(env).status == 'pass'
 
 
 def test_handoff_without_frozen_plan_records_absence(tmp_path, monkeypatch):
     report = _verify(_handoff_env(tmp_path, monkeypatch, None))
     assert report.loss_batch_correctness is None
     assert 'plan' in report.checks['loss_batch_correctness']
-
-
-def test_handoff_rejects_provenance_drift_stale_csvs_and_graph_manifest(tmp_path, monkeypatch):
-    import training.prepare_all as preparation
-    env = _handoff_env(tmp_path, monkeypatch, None)
-    with pytest.raises(ValueError, match='changed during the run'):
-        _verify(env, provenance={'text_checkpoint': 'f' * 64})
-    env['files']['canonical_records'].write_text('mutated')
-    with pytest.raises(ValueError, match='Bundle contains stale canonical_records'):
-        _verify(env)
-    env['files']['canonical_records'].write_text('bytes')
-    manifest = env['setup'] / 'setup_manifest.json'
-    document = json.loads(manifest.read_text())
-    document['source_catalog_sha256'] = '9' * 64
-    manifest.write_text(json.dumps(document))
-    with pytest.raises(ValueError, match='Graph inputs contain stale'):
-        _verify(env)
 
 
 # ── the ONE consolidated trace (core.tracing, stage verify_handoff) ─────────
@@ -204,7 +210,7 @@ def test_handoff_trace_enumerates_every_check_load_and_the_report(tmp_path, monk
         row = _step(frame, f'check.{name}')
         assert row["reason"] == 'passed'
         assert detail_json(row["detail"])["verdict"] == 'passed'
-    assert detail_json(_step(frame, 'check.bundle_load')["detail"])["readback"]['sha256'] == 'a' * 64
+    assert detail_json(_step(frame, 'check.bundle_load')["detail"])["readback"]['size'] == 1234
     assert detail_json(_step(frame, 'check.inventory')["detail"])["readback"]['artifacts'] == len(
         report.final_inventory)
 
@@ -213,14 +219,14 @@ def test_handoff_trace_enumerates_every_check_load_and_the_report(tmp_path, monk
     assert metered['inputs'] == len(report.inputs)
     assert metered['loads'] == sum(entry.loads for entry in report.inputs)
     assert metered['bytes'] == sum(entry.bytes for entry in report.inputs)
-    assert metered['sha256_pinned'] == sum(1 for entry in report.inputs if entry.sha256)
+    assert metered['size_pinned'] == sum(1 for entry in report.inputs if entry.size)
     named = frame[frame["step"] == 'loads.input']
     assert set(named["scope"]) == {'entity'}
     assert set(named["key"]) == {entry.input for entry in report.inputs}
     bundle_row = named[named["key"] == 'text_bundle'].iloc[0]
     assert detail_json(bundle_row["detail"]) == {
         'path': str(tmp_path / 'bundle.pkl.gz'), 'loads': 1, 'bytes': len(b'bundle'),
-        'seconds': detail_json(bundle_row["detail"])['seconds'], 'sha256': 'a' * 64,
+        'seconds': detail_json(bundle_row["detail"])['seconds'], 'size': 1234,
     }
 
     # the report's own census, and it agrees with the report object
@@ -229,7 +235,7 @@ def test_handoff_trace_enumerates_every_check_load_and_the_report(tmp_path, monk
     assert handoff['loads'] == len(report.inputs)
     assert handoff['inventory_artifacts'] == len(report.final_inventory)
     assert handoff['loss_batch_attested'] is True
-    assert handoff['bundle_sha256'] == 'a' * 64
+    assert handoff['bundle_size'] == 1234
     assert handoff['total_seconds'] == report.total_seconds
 
 

@@ -120,7 +120,7 @@ def _local_suite(tmp_path, monkeypatch, *, cascade_complete=False,
             settings["text_index"] = "results/graph_tracks/text__index"
             settings["gnn_checkpoint"] = "results/graph_tracks/gnn_only__best_checkpoint.json"
         inline[f"data/model_tracks/shared/{track}.yaml"] = _yaml(settings)
-    inputs = {"text": {"bundle_sha256": "bundle"}}
+    inputs = {"text": {"bundle_size": "bundle"}}
     input_zip = write_archive(tmp_path / "input.zip", {}, inline=inline,
                               manifest_name="model_tracks_package.json",
                               metadata={"preflight": inputs})
@@ -187,7 +187,7 @@ def _manifest(path, track, report_test):
     from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
     write_manifest(path, build_manifest(
         track=track, checkpoint="checkpoint-1/model.pt",
-        checkpoint_sha256="0" * 64, listings_sha256="1" * 64, pairs_sha256="2" * 64,
+        checkpoint_size="0" * 64, listings_size="1" * 64, pairs_size="2" * 64,
         threshold=0.5, threshold_source="dev_youden", test_reported=bool(report_test),
         model_selection="dev_pr_auc", retrieval_ks=[10]))
 
@@ -240,13 +240,13 @@ def test_finalize_emits_materialize_postprocess_checkpoint_and_seal_rows(
     assert select["scope"] == tracing.SCOPE_ENTITY and select["key"] == "gnn_only"
     select_detail = tracing.detail_json(select["detail"])
     assert select_detail["checkpoint"].endswith("checkpoint-1/model.pt")
-    assert len(select_detail["checkpoint_sha256"]) == 64
+    assert int(select_detail["checkpoint_size"]) > 0
 
     # the seal: tree files in, selected-only members out
     seal = only(frame, "finalize", "finalize.seal")
     seal_detail = tracing.detail_json(seal["detail"])
     assert seal_detail["sealed_members"] == int(seal["out_count"]) <= int(seal["in_count"])
-    assert seal_detail["digest"] and seal_detail["run_tag"] == "run"
+    assert seal_detail["size"] and seal_detail["run_tag"] == "run"
 
     # the extraction funnel: written + already-present == the package members
     extract = only(frame, "finalize", "extract_prepared_inputs.extracted")
@@ -263,7 +263,7 @@ def test_finalize_emits_materialize_postprocess_checkpoint_and_seal_rows(
     } <= local, local
     boundaries = only(frame, "local_complete", "complete.boundaries")
     boundary_detail = tracing.detail_json(boundaries["detail"])
-    assert boundary_detail["training_digest"] and boundary_detail["input_digest"]
+    assert boundary_detail["training_size"] and boundary_detail["input_size"]
     published = only(frame, "local_complete", "complete.published")
     assert int(published["out_count"]) == 1
 
@@ -315,7 +315,7 @@ def test_suite_supervisor_emits_selection_gate_seal_and_publication_rows(
 
     seal = only(frame, "suite_run", "run.seal")
     seal_detail = tracing.detail_json(seal["detail"])
-    assert seal_detail["digest"] and int(seal["out_count"]) > 0
+    assert seal_detail["size"] and int(seal["out_count"]) > 0
     assert seal_detail["bytes"] == archive.stat().st_size
 
     publication = only(frame, "suite_run", "run.publication")
@@ -335,7 +335,7 @@ def test_worker_emits_command_training_inference_and_ablation_skip_rows(
     from core import common
     from model_tracks import worker
     from training import prepared_bundle, validation_inference
-    from model_tracks import text_export, staged_ablation
+    from model_tracks import text_export, staged_ablation, text_report
 
     setup = tmp_path / "setup"
     setup.mkdir()
@@ -356,12 +356,13 @@ def test_worker_emits_command_training_inference_and_ablation_skip_rows(
               "model_input": {"profile": "cleaned", "include_evidence": False},
               "n_df": 1, "n_payload": 1, "n_pos": 1, "n_neg": 1, "n_train_neg": 1,
               "n_labeled_pairs_bytes": 1, "n_canonical_records_bytes": 1,
-              "n_gate_results_bytes": 1, "sha256": "0" * 64}
+              "n_gate_results_bytes": 1, "size": "0" * 64}
     PreparedBundleManifest.model_validate(header)
     (tmp_path / "bundle.json").write_text(_json(header))
     monkeypatch.setattr(worker, "wait_for_start", lambda *a: None)
     monkeypatch.setattr(worker.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
     monkeypatch.setattr(text_export, "forward", lambda *a, **k: (None, object()))
+    monkeypatch.setattr(text_report, "build_index", lambda *a, **k: output / "text__index")
     monkeypatch.setattr(staged_ablation, "forward",
                         lambda *a, **k: pytest.fail("no template means no forward"))
     monkeypatch.setattr(validation_inference, "resolve_best_checkpoint",
@@ -381,6 +382,13 @@ def test_worker_emits_command_training_inference_and_ablation_skip_rows(
     skip = only(frame, "worker", "attribute_ablation_export.skipped")
     assert skip["scope"] == tracing.SCOPE_ENTITY and skip["key"] == "text"
     assert skip["reason"] == "bundle_shipped_no_ablation_templates"
+
+    # The GPU-only text lane still builds the ANN index the same-suite cascade
+    # consumes; only reports/scoring are deferred to the local finalize.
+    index_row = only(frame, "worker", "postprocess.completed")
+    index_detail = tracing.detail_json(index_row["detail"])
+    assert index_detail["gpu_only"] is True
+    assert index_detail["index"].endswith("text__index")
 
     # the completion marker the worker records for a GPU-only text lane
     completion = only(frame, "worker", "completion.verified")
@@ -414,7 +422,7 @@ def test_staged_forward_records_template_checkpoint_and_vectors(tmp_path, monkey
                "graph_binding": ablation.digest({"vocabulary": {}, "support_records": []}),
                "sources": {"@setup/template.pt": "placeholder"},
                "settings": {"retrieval_catalog": "full"},
-               "prepared_inputs": {"sha256": ablation.file_hash(tensors)}}
+               "prepared_inputs": {"size": ablation.file_size(tensors)}}
     (template / "request.json").write_text(json.dumps(request))
     monkeypatch.setattr(staged_ablation, "encode", lambda *a, **k: None)
 
@@ -435,7 +443,7 @@ def test_staged_forward_records_template_checkpoint_and_vectors(tmp_path, monkey
     # the stub encoder produced nothing: the row says so instead of inventing a digest
     assert vectors_detail["reused_existing_export"] is False
     assert vectors_detail["vectors_present"] is False
-    assert vectors_detail["sha256"] is None
+    assert vectors_detail["size"] is None
 
 
 def test_baseline_forward_records_the_frozen_text_template(tmp_path, monkeypatch,
@@ -571,7 +579,7 @@ def test_ablation_prepare_encode_report_rows_land(tmp_path, monkeypatch, trace_t
     frozen = tmp_path / "baseline.json"
     frozen.write_text(json.dumps({
         "threshold": 0.5, "track": "text",
-        "checkpoint_sha256": ab.checkpoint_identity(paths["checkpoint"])}))
+        "checkpoint_size": ab.checkpoint_identity(paths["checkpoint"])}))
     report_path = ab.report(request_path, vectors, 0.5, threshold_source=str(frozen),
                             config=paths["config"])
     assert report_path.is_file() and vectors.is_file()
@@ -646,7 +654,7 @@ def test_baseline_ablation_complete_rows(tmp_path, monkeypatch, trace_target):
                                                          {"sku_id": "c"}])
     monkeypatch.setattr(ba, "load_text_cache",
                         lambda path, ids: (np.eye(3, 4, dtype=np.float32),
-                                           {"checkpoint_sha256": identity}))
+                                           {"checkpoint_size": identity}))
     monkeypatch.setattr(ba, "load_pairs", lambda path, records: {
         "dev": (np.array([[0, 1], [1, 2]]), np.array([1, 0]))})
 
@@ -660,7 +668,7 @@ def test_baseline_ablation_complete_rows(tmp_path, monkeypatch, trace_target):
 
     calibration = only(frame, "baseline_ablation", "complete.calibration")
     calibration_detail = tracing.detail_json(calibration["detail"])
-    assert calibration_detail["checkpoint_sha256"] == identity
+    assert calibration_detail["checkpoint_size"] == identity
     assert calibration_detail["dev_pairs"] == 2
     assert calibration_detail["dev_positives"] == 1
     assert calibration_detail["dev_negatives"] == 1
@@ -683,8 +691,6 @@ def test_ablation_cohort_rows_and_difficulty_skip_census(tmp_path, monkeypatch, 
     repo = Path(__file__).resolve().parents[1]
     setup = tmp_path / "smoke_200"
     shutil.copytree(repo / "data/prepared/smoke_200", setup)
-    shutil.copytree(repo / "data/prepared/smoke_200__clean_shared_inputs",
-                    tmp_path / "smoke_200__clean_shared_inputs")
     from training.prepared_bundle import load_prepared_bundle
 
     _, bundle = load_prepared_bundle(setup / "text_prepared.pkl.gz", verify_inputs=False)
@@ -754,7 +760,7 @@ def test_staged_prepare_suite_rows_and_staging_census(tmp_path, monkeypatch, tra
         staging.mkdir(parents=True)
         (staging / "prepared_inputs.npz").write_bytes(b"tensors")
         (staging / "request.json").write_text(json.dumps({
-            "sources": {}, "cohort_sha256": "cohort", "coverage": {"mode": "sampled"},
+            "sources": {}, "cohort_size": "cohort", "coverage": {"mode": "sampled"},
             "variants": [], "checkpoint": "template.pt", "text_checkpoint": None,
             "settings": {"retrieval_catalog": "full"}}))
         return staging / "request.json"
@@ -835,5 +841,5 @@ def test_snapshot_completion_records_inventory_and_receipt(tmp_path, monkeypatch
 
     receipt = only(frame, "snapshot_completion", "complete.receipt")
     receipt_detail = tracing.detail_json(receipt["detail"])
-    assert receipt_detail["final_archive_sha256"] and receipt_detail["run_tag"] == "run"
+    assert receipt_detail["final_archive_size"] and receipt_detail["run_tag"] == "run"
     assert receipt_detail["working_tree_mismatches"] == inventory_detail["working_tree_mismatches"]

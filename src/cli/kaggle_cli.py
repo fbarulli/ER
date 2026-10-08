@@ -215,7 +215,7 @@ class KaggleCLI:
             print(
                 lane._stamp(),
                 f"[kaggle-lane] packaged {package.export_path} "
-                f"rows={package.census.rows} sha256={package.census.sha256[:12]} "
+                f"rows={package.census.rows} size={package.census.size} "
                 f"-> {package.archive_path}",
                 flush=True,
             )

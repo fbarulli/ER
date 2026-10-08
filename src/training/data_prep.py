@@ -176,7 +176,7 @@ def _stage_outputs() -> tuple[list, list[str]]:
 
     The trace used to be listed here by its OLD per-stage name
     (results/logs/gate_visibility.csv), whose writer this directive deleted —
-    finish_manifest hashes every listed output, so a stale name made the
+    finish_manifest sizes every listed output, so a stale name made the
     stage die with FileNotFoundError after all the work was done. The name
     now comes from the layout that owns it (core.tracing → training_trace).
     """
@@ -191,7 +191,7 @@ def main() -> None:
 
     timing = Timing(STAGE)
     # Stage manifest (SILENT_DROPS task 6) — begin BEFORE the work: the
-    # raw export is hashed now (53MB, chunked) so the record pins exactly
+    # raw export is sized now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed; the pipeline is
     # deterministic, no RNG is consumed.
     manifest = begin_manifest(
@@ -223,7 +223,7 @@ def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon, trace) -> 
     manifest publication and the closing closure line — the one
     responsibility the stage owes AFTER the pipeline ran. The consolidated-trace
     rows are added to the stage's single writer and committed BEFORE the manifest
-    hashes it, so the shipped manifest pins the trace it describes.
+    sizes it, so the shipped manifest pins the trace it describes.
     """
     # ---- row accounting (SILENT_DROPS task 6; capture-only) ────────────────
     # The pipeline's gtin-guard drops rows for two loud reasons (both

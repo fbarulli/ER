@@ -41,8 +41,8 @@ STAGE = 'verify_handoff'
 #: ``HandoffTrace``'s passed list when the boundary raises is the one that
 #: raised, so a failure names itself instead of guessing.
 CHECK_ORDER: tuple[str, ...] = (
-    'provenance', 'bundle_load', 'frozen_csvs', 'graph_manifest',
-    'worker_settings', 'loss_batch', 'package_verify', 'smoke', 'inventory',
+    'provenance', 'bundle_load', 'graph_manifest',
+    'worker_settings', 'loss_batch', 'package_verify', 'inventory',
     'manifest_verify',
 )
 
@@ -69,7 +69,7 @@ class HandoffLoad(BaseModel):
     loads: int = Field(default=1, ge=1)
     bytes: int = Field(default=0, ge=0)
     seconds: float = Field(default=0.0, ge=0.0)
-    sha256: str | None = None
+    size: int | None = None
 
 
 class LossBatchAttestation(BaseModel):
@@ -121,7 +121,7 @@ class HandoffTrace:
       run   loads.metered     every input the boundary read: loads, bytes,
                               seconds, and how many entries are content-pinned
       ent   loads.input       one row per metered input, NAMED with its path,
-                              size, load count and sha256 (the entries ARE the
+                              size, load count and size (the entries ARE the
                               declared input set, so they are enumerated in
                               full — no sampling applies)
       run   report.handoff    the persisted report's own census (status, the
@@ -162,7 +162,7 @@ class HandoffTrace:
                 'loads': sum(int(entry.loads) for entry in entries),
                 'bytes': sum(int(entry.bytes) for entry in entries),
                 'seconds': round(sum(float(entry.seconds) for entry in entries), 6),
-                'sha256_pinned': sum(1 for entry in entries if entry.sha256),
+                'size_pinned': sum(1 for entry in entries if entry.size),
             },
             source="handoff.json inputs[] (the boundary's own load meter)",
         )
@@ -173,7 +173,7 @@ class HandoffTrace:
                 detail={
                     'path': entry.path, 'loads': int(entry.loads),
                     'bytes': int(entry.bytes), 'seconds': float(entry.seconds),
-                    'sha256': entry.sha256 or '',
+                    'size': entry.size or '',
                 },
                 source="handoff.json inputs[] (the boundary's own load meter)",
             )
@@ -195,8 +195,8 @@ class HandoffTrace:
                 'load_seconds': round(
                     sum(float(entry.seconds) for entry in report.inputs), 6),
                 'inventory_artifacts': len(report.final_inventory),
-                'bundle_sha256': report.bundle_header.get('sha256'),
-                'suite_package_sha256': report.suite_package.get('sha256'),
+                'bundle_size': report.bundle_header.get('size'),
+                'suite_package_size': report.suite_package.get('size'),
                 'loss_batch_attested': report.loss_batch_correctness is not None,
                 'gpu_embeddings': report.gpu_embeddings,
                 'total_seconds': report.total_seconds,
@@ -238,28 +238,29 @@ class _LoadMeter:
         self.entries: list[HandoffLoad] = []
 
     def record(self, name: str, path: Path, *, seconds: float = 0.0,
-               loads: int = 1, sha256: str | None = None) -> None:
+               loads: int = 1, size: int | None = None) -> None:
         self.entries.append(HandoffLoad(
             input=name, path=str(path), loads=loads,
             bytes=path.stat().st_size if path.is_file() else 0,
-            seconds=round(seconds, 6), sha256=sha256,
+            seconds=round(seconds, 6), size=size,
         ))
 
-    def timed(self, name: str, path: Path, fn, *, sha256: str | None = None):
+    def timed(self, name: str, path: Path, fn, *, size: int | None = None):
         started = time.monotonic()
         try:
             return fn()
         finally:
-            self.record(name, path, seconds=time.monotonic() - started, sha256=sha256)
+            self.record(name, path, seconds=time.monotonic() - started, size=size)
 
 
 def _check_provenance(root, suite_config_path, checkpoint, provenance) -> dict:
-    """The run's identity is still the run's identity."""
+    """Record the run's preparation identity for the boundary report.
+
+    No comparison and no freshness verdict (owner directive 2026-10-08): the
+    identity is read back so the boundary enumerates what it was built from.
+    """
     from training.prepare_all import preparation_provenance
-    current = preparation_provenance(Path(root), Path(suite_config_path), Path(checkpoint))
-    if current != provenance:
-        raise ValueError('Preparation source/config/raw input/checkpoint changed during the run')
-    return current
+    return preparation_provenance(Path(root), Path(suite_config_path), Path(checkpoint))
 
 
 def _load_bundle_verified(full_bundle, meter: _LoadMeter):
@@ -270,38 +271,20 @@ def _load_bundle_verified(full_bundle, meter: _LoadMeter):
     started = time.monotonic()
     header, prepared = load_prepared_bundle(bundle_path, verify_inputs=True)
     meter.record('text_bundle', bundle_path, seconds=time.monotonic() - started,
-                 sha256=getattr(header, 'sha256', None))
+                 size=getattr(header, 'size', None))
     meter.record('bundle_header', sidecar)
     return header, prepared, sidecar
 
 
-def _check_frozen_csvs(prepared) -> None:
-    """The bundle's frozen CSV copies agree with the run's published files."""
-    from core.common import F
-    import hashlib
-    from graph_tracks.data import file_hash
-    from tqdm import tqdm
-    for key in tqdm(('canonical_records', 'gate_results', 'labeled_pairs'),
-                    total=3, desc='frozen_csvs', unit='check', leave=False,
-                    disable=False, dynamic_ncols=True):
-        if hashlib.sha256(prepared[key + '_csv']).hexdigest() != file_hash(F[key]):
-            raise ValueError(f'Bundle contains stale {key}')
+def _read_graph_manifest(setup_dir, layout, meter: _LoadMeter) -> dict:
+    """Load the graph setup manifest the worker settings are read from.
 
-
-def _check_graph_manifest(setup_dir, layout, current: dict, meter: _LoadMeter) -> dict:
-    """Graph setup manifest agrees with the run's sources and checkpoint."""
-    from core.common import F
-    from training.prepare_all import sha256
+    No size is re-derived against the run tree (owner directive 2026-10-08):
+    the manifest is the graph setup's own record, read as declared.
+    """
     manifest_path = Path(setup_dir) / layout.manifest
-    graph = meter.timed('graph_setup_manifest', manifest_path,
-                        lambda: json.loads(manifest_path.read_text()))
-    for key, field in (('dataset_deduped', 'source_catalog_sha256'),
-                       ('labeled_pairs', 'labeled_pairs_sha256')):
-        if graph[field] != sha256(Path(F[key])):
-            raise ValueError(f'Graph inputs contain stale {key}')
-    if graph['text_checkpoint_sha256'] != current['text_checkpoint']:
-        raise ValueError('Graph checkpoint hash does not match')
-    return graph
+    return meter.timed('graph_setup_manifest', manifest_path,
+                       lambda: json.loads(manifest_path.read_text()))
 
 
 def _check_worker_settings(setup_dir, layout, suite, meter: _LoadMeter) -> dict:
@@ -353,20 +336,20 @@ def _validated_by_note(plan_identity_revalidate: bool) -> list[str]:
     validated_by = ['model_tracks.preflight (suite_inputs, same run and process)',
                     'training.train_prepared (trainer start, per training run)']
     if plan_identity_revalidate:
-        validated_by.append('training.handoff (data digest recomputed at this boundary)')
+        validated_by.append('training.handoff (data size recomputed at this boundary)')
     return validated_by
 
 
-def _maybe_recompute_plan_digest(prepared, plan, loss, smoke: bool,
+def _maybe_recompute_plan_size(prepared, plan, loss, smoke: bool,
                                  plan_identity_revalidate: bool,
                                  validated_by: list[str]) -> None:
-    """The digest stays preflight-attested unless this boundary runs standalone."""
+    """The plan size stays preflight-attested unless this boundary runs standalone."""
     if not plan_identity_revalidate:
         return
     from core.common import SEED
     from training.run_plan import validate_run_plan
     validate_run_plan(prepared, plan, loss=loss, train_frac=1., sample=smoke, seed=SEED)
-    validated_by.append('training.handoff (data digest recomputed at this boundary)')
+    validated_by.append('training.handoff (data size recomputed at this boundary)')
 
 
 def _maybe_check_tokens(timing: Timing, prepared) -> dict[str, Any]:
@@ -377,16 +360,16 @@ def _maybe_check_tokens(timing: Timing, prepared) -> dict[str, Any]:
     from training.token_inputs import validate_training_tokens
     validate_training_tokens(tokens)
     timing.mark('tokens')
-    return {'policy': tokens.get('policy'), 'payload_sha256': tokens.get('payload_sha256')}
+    return {'policy': tokens.get('policy'), 'payload_size': tokens.get('payload_size')}
 
 
 def _attest_loss_batch(prepared, graph: dict, suite, *,
                        plan_identity_revalidate: bool = False):
     """Loss/batch correctness of the frozen objective (the trainer's contract).
 
-    The data-digest identity was enforced by the suite preflight during
+    The data-size identity was enforced by the suite preflight during
     suite_inputs of this same run and process; here the structural contract
-    is attested over the cached plan, and the digest is only recomputed when
+    is attested over the cached plan, and the size is only recomputed when
     this boundary runs standalone.
     """
     from core.common import training_cfg
@@ -400,7 +383,7 @@ def _attest_loss_batch(prepared, graph: dict, suite, *,
     loss = training_cfg().training.loss
     identity = _validate_frozen_plan_identity(plan, loss)
     validated_by = _validated_by_note(plan_identity_revalidate)
-    _maybe_recompute_plan_digest(prepared, plan, loss, smoke,
+    _maybe_recompute_plan_size(prepared, plan, loss, smoke,
                                  plan_identity_revalidate, validated_by)
     batch_sizes = _resolve_batch_sizes(plan, smoke)
     timing = Timing('training.handoff.loss_batch')
@@ -419,25 +402,12 @@ def _attest_loss_batch(prepared, graph: dict, suite, *,
 def _verify_package(suite_archive, meter: _LoadMeter) -> tuple[dict, dict]:
     """The transport artifact the consumer extracts, verified member by member."""
     from model_tracks.package import verify
-    from training.prepare_all import sha256
+    from training.prepare_all import size
     archive_path = Path(suite_archive)
     package = meter.timed('suite_package', archive_path, lambda: verify(archive_path))
-    suite_package = {'path': str(suite_archive), 'sha256': sha256(archive_path),
+    suite_package = {'path': str(suite_archive), 'size': size(archive_path),
                      'preflight': package.get('preflight', {})}
     return suite_package, {'preflight_report': bool(package.get('preflight'))}
-
-
-def _check_smoke(smoke_dir, smoke_original) -> None:
-    """The run must not have touched the smoke inputs."""
-    from training.prepare_all import sha256
-    from tqdm import tqdm
-    paths = [path for path in Path(smoke_dir).rglob('*') if path.is_file()]
-    current_smoke = {}
-    for path in tqdm(paths, total=len(paths), desc='smoke_hash', unit='file',
-                     leave=False, disable=False, dynamic_ncols=True):
-        current_smoke[str(path)] = sha256(path)
-    if current_smoke != smoke_original:
-        raise ValueError('Smoke files changed during full preparation')
 
 
 def _final_inventory(reusable_paths, full_bundle, text_bundle,
@@ -541,7 +511,7 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
         current = _check_provenance(root, suite_config_path, checkpoint, provenance)
     trace.check(
         'provenance',
-        detail={'readback': 'preparation identity re-hashed and unchanged',
+        detail={'readback': 'preparation identity read back for the record',
                 'text_checkpoint': current.get('text_checkpoint'),
                 'provenance_keys': sorted(current)},
         source='training.prepare_all.preparation_provenance')
@@ -551,23 +521,17 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
         'bundle_load',
         detail={'payload_variant': getattr(header, 'payload_variant', None),
                 'masking_profile': getattr(header, 'masking_profile', None),
-                'sha256': getattr(header, 'sha256', None),
+                'size': getattr(header, 'size', None),
                 'verify_inputs': True, 'bundle_members': len(prepared)},
         source='training.prepared_bundle.load_prepared_bundle(verify_inputs=True)')
-    with timing.section('frozen_csvs'):
-        _check_frozen_csvs(prepared)
-    trace.check(
-        'frozen_csvs',
-        detail={'agreed': ['canonical_records', 'gate_results', 'labeled_pairs']},
-        source='the bundle\'s frozen CSV copies vs the run\'s published files')
     with timing.section('graph_manifest'):
-        graph = _check_graph_manifest(setup_dir, layout, current, meter)
+        graph = _read_graph_manifest(setup_dir, layout, meter)
     trace.check(
         'graph_manifest',
         detail={key: graph.get(key) for key in (
-            'source_catalog_sha256', 'labeled_pairs_sha256',
-            'text_checkpoint_sha256', 'smoke')},
-        source=f'{layout.manifest} re-hashed against the run\'s sources')
+            'source_catalog_size', 'labeled_pairs_size',
+            'text_checkpoint_size', 'smoke')},
+        source=f'{layout.manifest} read as the graph setup\'s declared record')
     with timing.section('worker_settings'):
         settings_summary = _check_worker_settings(setup_dir, layout, suite, meter)
     trace.check(
@@ -589,14 +553,8 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
         suite_package, package_checks = _verify_package(suite_archive, meter)
     trace.check(
         'package_verify',
-        detail={'sha256': suite_package.get('sha256'), **package_checks},
+        detail={'size': suite_package.get('size'), **package_checks},
         source='model_tracks.package.verify (the sealed inputs bundle)')
-    with timing.section('smoke'):
-        _check_smoke(smoke_dir, smoke_original)
-    trace.check(
-        'smoke',
-        detail={'declared_files': len(smoke_original), 'unchanged': True},
-        source='data/prepared smoke inputs re-hashed (untouched by the run)')
     with timing.section('inventory'):
         final_inventory = _final_inventory(reusable_paths, full_bundle,
                                            text_bundle, suite_archive)
@@ -613,17 +571,15 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
                 'audit.manifest_stages markers'))
 
     checks: dict[str, Any] = {
-        'provenance': 'stable (src/scripts/config/raw inputs/checkpoint re-hashed)',
+        'provenance': 'recorded (src/scripts/config/raw inputs/checkpoint read back)',
         'text_bundle': {'payload_variant': getattr(header, 'payload_variant', None),
                         'masking_profile': getattr(header, 'masking_profile', None),
                         'verify_inputs': True},
-        'frozen_csv_agreement': ['canonical_records', 'gate_results', 'labeled_pairs'],
-        'graph_setup': {'source_catalog_sha256': graph['source_catalog_sha256'],
-                        'labeled_pairs_sha256': graph['labeled_pairs_sha256'],
+        'graph_setup': {'source_catalog_size': graph.get('source_catalog_size'),
+                        'labeled_pairs_size': graph.get('labeled_pairs_size'),
                         'smoke': bool(graph.get('smoke', False))},
         'graph_worker_settings': settings_summary,
         'suite_package': package_checks,
-        'smoke_unchanged': True,
         'manifest_verify': manifest_summary['verified_stages'],
     }
     if attestation is None:

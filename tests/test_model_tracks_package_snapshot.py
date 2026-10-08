@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import zipfile
-import hashlib
+from core.portable_archive import ByteCount
 import json
 
 import yaml
@@ -99,7 +99,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     from model_tracks import training_data as shared_training_data_mod
     from model_tracks import shared_graph_data as shared_graph_data_mod
     shared_stub = shared_training_data_mod.SharedTrainingData.model_construct(
-        source_rows=1, canonical_rows=0, payload_rows=1, inputs_sha256={},
+        source_rows=1, canonical_rows=0, payload_rows=1, inputs_size={},
         examples=[], endpoints=[])
     monkeypatch.setattr(prepared_bundle_mod, 'load_prepared_bundle', lambda _: (SimpleNamespace(), {}))
     monkeypatch.setattr(shared_training_data_mod, 'from_bundle', lambda *a, **k: shared_stub)
@@ -162,7 +162,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     # the SEAL: the transport token the boundary re-checks, and the archive's
     # real size on disk — the trace states what the transport will carry
     sealed = tracing.detail_json(frame[frame['step'] == 'archive.sealed'].iloc[0]['detail'])
-    assert sealed['sha256'] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert sealed['size'] == ByteCount(output.read_bytes()).total
     assert sealed['bytes'] == output.stat().st_size
     assert sealed['members'] == collected['archive_members']
     assert sealed['role'] == 'inputs'
@@ -195,8 +195,8 @@ def test_suite_preflight_has_no_recorded_digest_freshness_gate(tmp_path, monkeyp
     setup = tmp_path / 'setup'
     setup.mkdir()
     (setup / 'setup_manifest.json').write_text(json.dumps({
-        'source_catalog_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
-        'labeled_pairs_sha256': hashlib.sha256(b'previous supervision\n').hexdigest(),
+        'source_catalog_size': ByteCount(source.read_bytes()).total,
+        'labeled_pairs_size': ByteCount(b'previous supervision\n').total,
     }))
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', {'dataset_deduped': source, 'labeled_pairs': labels})

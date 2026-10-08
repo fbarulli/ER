@@ -21,7 +21,7 @@ from graph_tracks.config import load_text_config
 from model_tracks.config import load_config as load_suite_config
 
 #: Smoke children a checked-in fixture may carry (portable, checkout-relative).
-SMOKE_FIXTURES = ("data/prepared/smoke_200", "data/prepared/smoke_500")
+SMOKE_FIXTURES = ("data/prepared/smoke_200",)
 #: Prepared setup directories regenerated to the current contract.
 REGENERATED = (*SMOKE_FIXTURES, "data/track_setup")
 

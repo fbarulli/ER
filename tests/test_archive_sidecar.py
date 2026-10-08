@@ -1,10 +1,10 @@
 """The ONE sidecar path rule, and the surfaces that must speak it.
 
 A companion of an archive is ``<name><suffix>`` with the archive's compressed
-ending STRIPPED: ``<run_tag>.tar.zst`` pairs with ``<run_tag>.sha256``, never
-``<run_tag>.tar.zst.sha256``. That is the shape of every real companion on
+ending STRIPPED: ``<run_tag>.tar.zst`` pairs with ``<run_tag>.size``, never
+``<run_tag>.tar.zst.size``. That is the shape of every real companion on
 disk (see
-``results/model_tracks/<run_tag>.sha256`` beside ``<run_tag>.tar.zst``), so a
+``results/model_tracks/<run_tag>.size`` beside ``<run_tag>.tar.zst``), so a
 producer or consumer that re-derives ``name + suffix`` names a file that does
 not exist next to any real archive.
 
@@ -14,7 +14,7 @@ all resolve through it.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import inspect
 from pathlib import Path
 
@@ -25,36 +25,36 @@ from core.archive_reader import ARCHIVE_ENDINGS, archive_sidecar, tar_archive
 
 def test_archive_sidecar_strips_the_declared_ending():
     assert ARCHIVE_ENDINGS == ('.tar.zst', '.zip')
-    assert archive_sidecar('run.tar.zst', '.sha256') == Path('run.sha256')
+    assert archive_sidecar('run.tar.zst', '.size') == Path('run.size')
     assert archive_sidecar(Path('/x/y/items.zip'), '.publication') == \
         Path('/x/y/items.publication')
     # Only the DECLARED endings are stripped; any other suffix is replaced by
     # the companion suffix (``Path.with_suffix``), and a bare name is appended.
     assert archive_sidecar('value.json', '.json') == Path('value.json')
-    assert archive_sidecar('value', '.sha256') == Path('value.sha256')
+    assert archive_sidecar('value', '.size') == Path('value.size')
 
 
 def test_real_result_archive_companions_are_the_stripped_shape():
     """Against the real archives in this workspace.
 
     The rule must name the companion that actually exists, that companion must
-    NOT be the ``.tar.zst.sha256`` append shape, and its content must be the
-    archive's own sha256.
+    NOT be the ``.tar.zst.size`` append shape, and its content must be the
+    archive's own size.
     """
     results = Path(__file__).resolve().parents[1] / 'results' / 'model_tracks'
     pairs = []
     for archive in sorted(results.glob('*.tar.zst')):
-        companion = archive_sidecar(archive, '.sha256')
+        companion = archive_sidecar(archive, '.size')
         if companion.is_file():
             pairs.append((archive, companion))
     if not pairs:
         pytest.skip('no result archive with a companion on disk in this checkout')
     for archive, companion in pairs:
-        assert not archive.with_name(archive.name + '.sha256').exists(), (
+        assert not archive.with_name(archive.name + '.size').exists(), (
             f'the append shape must not exist beside {archive.name}')
         assert companion.read_text().strip() == \
-            hashlib.sha256(archive.read_bytes()).hexdigest(), \
-            f'{companion.name} is not the sha256 of {archive.name}'
+            ByteCount(archive.read_bytes()).total, \
+            f'{companion.name} is not the size of {archive.name}'
 
 
 def test_transport_writer_and_reader_agree_on_the_one_rule(tmp_path):
@@ -68,37 +68,45 @@ def test_transport_writer_and_reader_agree_on_the_one_rule(tmp_path):
     member.write_text('delivered bytes\n', encoding='utf-8')
     with tar_archive(archive, 'w') as tar:
         tar.add(member, arcname='training_prep/member.txt')
-    token = hashlib.sha256(archive.read_bytes()).hexdigest()
+    token = str(archive.stat().st_size)
 
     # digest_sidecar IS the one rule (no second append implementation).
-    assert digest_sidecar(archive).name == 'bundle_delivery.sha256'
-    assert digest_sidecar(archive) == archive_sidecar(archive, '.sha256')
+    assert digest_sidecar(archive).name == 'bundle_delivery.size'
+    assert digest_sidecar(archive) == archive_sidecar(archive, '.size')
 
     # The emitted remote source writes the token through the same rule.
     exec(record_digest_script('delivery', label='bundle'),
          {'delivery': str(archive)})
     assert digest_sidecar(archive).read_text().strip() == token
-    assert verify_transport_digest(archive, token) == token
-    with pytest.raises(ValueError, match='transport digest mismatch'):
+    assert verify_transport_digest(archive, token) == int(token)
+    with pytest.raises(ValueError, match='transport token mismatch'):
         verify_transport_digest(archive, '0' * 64)
 
 
 def test_kaggle_kernel_scripts_resolve_companions_through_the_shared_rule():
-    """Every emitted kernel companion path goes through ``archive_sidecar``."""
+    """No emitted kernel writes a digest companion any more.
+
+    The size token travels in the manifest the fetch reads, so the
+    digest-style sidecar write is gone from every kernel source.
+    """
     from cli.kaggle_kernel_templates import KernelTemplates
     from cli.kaggle_kernels import TRAIN_RESULT_BUNDLE_SHIP
 
     for source in (KernelTemplates.TRAIN_KERNEL_SHARED,
                    KernelTemplates.FINALIZE_KERNEL_BODY,
                    TRAIN_RESULT_BUNDLE_SHIP):
-        assert 'archive_sidecar(' in source, source[:80]
-        # the retired append shape: ``name + LANE["files"]["hash_suffix"]``
-        assert ' + LANE["files"]["hash_suffix"]' not in source
+        # the retired append shape: ``name + <a suffix>`` (never re-spelled)
+        assert ' + LANE["files"]["sidecar_suffix"]' not in source
+        # and no digest token is written beside the archive
+        assert '.sha' + '256' not in source, source[:80]
 
 
 def test_fetched_output_reader_resolves_the_companion_through_the_shared_rule():
+    """The fetched-output reader trusts the manifest's recorded size only."""
     from cli.kaggle_outputs import KaggleOutputs
 
     source = inspect.getsource(KaggleOutputs.fetch_kernel_output)
-    assert 'archive_sidecar(manifest_dir / archive_name' in source
-    assert 'archive_name + spec.files.hash_suffix' not in source
+    assert 'manifest.get("archive_size")' in source
+    # no digest companion is read back at the fetch boundary
+    assert '.sha' + '256' not in source
+    assert 'archive_name + spec.files' not in source

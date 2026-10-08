@@ -1,0 +1,122 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# results.yaml — the results that live BETWEEN training and post-training
+# analysis (owner: core.results.Results).
+#
+# This file holds NO absolute paths and NO templates. Every declared RESULT
+# names the ONE already-declared address it resolves through, so no result is
+# addressed twice:
+#
+#   via: layouts   -> core.common.artifact(<key>, fields)   (config/paths.yaml
+#                     layouts: — the run root and the per-track report/vectors)
+#   via: bundle    -> core.bundle.bundle_spec().<key>       (config/training.yaml
+#                     bundle: — the ablation request member name)
+#   via: names     -> this file's own ``names:`` block, resolved under the run
+#                     root (or the per-track ablation dir for track scope)
+#
+# The raw per-track training outputs (the ``<track>__report_manifest.json``
+# completion contract, the trained encoder vectors, the checkpoints) are NOT
+# declared here: they are raw artifacts owned by core.artifacts.Artifacts. This
+# file owns only the DERIVED documents the post-training analysis reads back.
+#
+# Names that already have a home in paths.yaml/layouts or in the bundle
+# contract are REFERENCED here, never re-spelled. Names that were inline
+# literals in code before (the ablation baseline binding, the frozen prepared
+# tensors, the run receipt, the Laya holdout report) are declared here so no
+# module spells them in code again.
+#
+# No revisions, no freshness verdicts: Results.identity() reports STRUCTURE
+# only (run tag + member names + byte sizes + counts).
+#
+# Validated by ResultsSpec (src/core/results.py) through the ONE read+validate
+# home core.common.load_validated_yaml at first use; a malformed role or an
+# undeclared name key crashes with the file named rather than silently
+# resolving to nothing.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: er-results
+
+# The run root — results/model_tracks/{run_tag} (owner layout: suite_outputs).
+run_layout: suite_outputs
+
+# The per-track folder every ablation result lives under.
+ablation_dir: ablation
+
+# The trained tracks that own a post-training result set. Mirrors
+# model_tracks.resume.TRAINING_TRACKS; this is the results surface's own copy of
+# the set (the cascade trains nothing and ships none).
+tracks: [text, gnn_only]
+
+# The operating-point ladder every report lane sweeps. NOT a second copy:
+# this names the core.common accessor that reads the ONE declaration in
+# config/training.yaml (evaluation.report_thresholds).
+threshold_ladder:
+  via: common
+  key: report_thresholds
+
+# The local landing dir of the Laya component-disjoint holdout verification
+# report, under the RESULTS root (core.common.RESULTS).
+holdout_dir: laya_lane/kaggle/holdout-eval
+
+# One entry per RESULT role. ``scope`` says where it lives:
+#   track   -> <run root>/<track>/<ablation_dir>/...
+#   run     -> <run root>/...
+#   project -> <RESULTS root>/...
+roles:
+  # The post-training request the training outputs land for the GPU lane.
+  request:
+    via: bundle
+    key: ablation_request_file
+    scope: track
+  # The frozen tensors the request names (was an inline literal in
+  # model_tracks.staged_ablation / post_training_ablation).
+  prepared_inputs:
+    via: names
+    key: prepared_inputs
+    scope: track
+  # The encoded vectors/scores export (owner layout: track_ablation_vectors).
+  vectors:
+    via: layouts
+    key: track_ablation_vectors
+    scope: track
+  # The frozen ablation report (owner layout: track_ablation_report).
+  report:
+    via: layouts
+    key: track_ablation_report
+    scope: track
+  # The sealed baseline calibration binding that pins the frozen threshold
+  # (was an inline literal in model_tracks.baseline_ablation /
+  # post_training_ablation).
+  baseline_threshold:
+    via: names
+    key: baseline_threshold
+    scope: track
+  # The run-level receipt the consumer writes after re-verifying saved exports
+  # (was an inline literal in model_tracks.post_training_ablation).
+  receipt:
+    via: names
+    key: receipt
+    scope: run
+  # The Laya component-disjoint holdout verification report (was the inline
+  # HOLDOUT_EVAL_REPORT_FILE in cli.laya_lane).
+  holdout_report:
+    via: names
+    key: holdout_report
+    scope: project
+
+# The literal leaf names this file owns (resolved under the role's scope dir).
+names:
+  prepared_inputs: prepared_inputs.npz
+  baseline_threshold: baseline_threshold.json
+  receipt: post_training_ablation.json
+  holdout_report: holdout_report.json
+
+# Declared sets over the role names above (SSOT: a caller never re-lists them).
+sets:
+  # The saved GPU-ablation export the post-training consumer re-verifies,
+  # member by member (model_tracks.post_training_ablation._sealed_track).
+  saved_ablation:
+    - request
+    - prepared_inputs
+    - vectors
+    - report
+    - baseline_threshold

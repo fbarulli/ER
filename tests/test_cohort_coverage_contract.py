@@ -1,10 +1,9 @@
 """The GENERAL coverage contract, adopted by the real cohort producer.
 
 The inputs here are the REAL ones, not a synthetic stand-in: the committed
-``smoke_200`` prepared fixture (setup + its clean-shared-inputs backup + its
-prepared bundle) is driven through the real
-``model_tracks.ablation_cohort.prepare_cohort``, and the frame it emits is what
-the contract is validated against.
+``smoke_200`` prepared fixture (its setup tree + its prepared bundle) is driven
+through the real ``model_tracks.ablation_cohort.prepare_cohort``, and the frame
+it emits is what the contract is validated against.
 
 Three decisive properties:
 
@@ -36,10 +35,6 @@ def _run_real_cohort(work: Path) -> Path:
     """Copy the real fixture and run the real producer on it. -> cohort folder."""
     setup = work / SETUP_NAME
     shutil.copytree(REPO / 'data/prepared' / SETUP_NAME, setup)
-    shutil.copytree(
-        REPO / 'data/prepared' / f'{SETUP_NAME}__clean_shared_inputs',
-        work / f'{SETUP_NAME}__clean_shared_inputs',
-    )
     from training.prepared_bundle import load_prepared_bundle
 
     _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz', verify_inputs=False)
@@ -155,7 +150,7 @@ def test_untagged_unaccounted_and_mis_declared_cohorts_are_rejected() -> None:
 
     # a declared stratum set that disagrees with the carried tags is rejected
     mis_declared = CohortCoverage.model_validate({
-        'cohort_sha256': '0' * 64, 'pair_rows': 2,
+        'cohort_size': '0' * 64, 'pair_rows': 2,
         'minted_endpoints_total': 0, 'minted_endpoints_covered': 0,
         'by_scope': {'heldout': 1, 'bundle_diagnostic': 1},
         'by_population': {'real': 2},

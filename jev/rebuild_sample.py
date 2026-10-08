@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import math
 import random
@@ -20,8 +20,8 @@ def pair_key(row):
     return tuple(sorted((row['gtin1'], row['gtin2'])))
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def file_size(path) -> int:
+    return ByteCount(path.read_bytes()).total
 
 
 def reserved_pairs(directory):
@@ -137,7 +137,7 @@ def main():
                     'records': ROOT / 'data/canonical_records.csv'}
     if args.previous_pairs_csv:
         source_paths['previous_pairs'] = args.previous_pairs_csv
-    hashes = {name: digest(path) for name, path in source_paths.items()}
+    hashes = {name: file_size(path) for name, path in source_paths.items()}
     excluded = reserved_pairs(directory)
     with args.gate_csv.open(newline='', encoding='utf-8') as handle:
         gates = {}
@@ -240,7 +240,7 @@ def main():
         if pair_key(row) in check_keys:
             sample.append({**row, 'gtin1': b, 'gtin2': a, 'gate_reason': reverse['reason'],
                            'input_scope': 'original_data', 'copy': 'b_swapped'})
-    if hashes != {name: digest(path) for name, path in source_paths.items()}:
+    if hashes != {name: file_size(path) for name, path in source_paths.items()}:
         raise ValueError('source changed while sampling; rerun with a stable snapshot')
     listings = [listing for state in states['original_data'].values() for listing in state['listings']]
     description_lengths = [len(str(listing.get('description_short_eng') or '')) for listing in listings]
@@ -248,7 +248,7 @@ def main():
                'seed': args.seed, 'requested_pairs': pair_count, 'requested_calls': args.calls,
                'positive_fraction': args.positive_fraction, 'order_check_allocations': check_allocations, 'unique_pairs': len(selected),
                'calls': len(sample), 'source_paths': {k: str(v) for k, v in source_paths.items()},
-               'source_sha256': hashes, 'row_accounting': dict(accounting),
+               'source_size': hashes, 'row_accounting': dict(accounting),
                'source_label_population': dict(population), 'eligible_pairs': len(rows),
                'current_training_pairs_staged': pair_count - len(diagnostics),
                'lost_positive_partner_checks': len(diagnostics),
@@ -265,21 +265,21 @@ def main():
         with paths[name].open('x', encoding='utf-8') as handle:
             json.dump(value, handle, ensure_ascii=False, indent=1)
             handle.write('\n')
-    summary['input_states_sha256'] = digest(paths['states'])
+    summary['input_states_size'] = file_size(paths['states'])
     with paths['summary'].open('x', encoding='utf-8') as handle:
         json.dump(summary, handle, indent=2)
         handle.write('\n')
     ledger.append({'round': args.round, 'kind': 'rebuilt_labeled_pairs_original_audit',
                    'status': 'staged_not_tested', 'sample': str(paths['sample'].relative_to(ROOT)),
-                   'sample_sha256': digest(paths['sample']),
+                   'sample_size': file_size(paths['sample']),
                    'checkpoint': str(paths['checkpoint'].relative_to(ROOT)),
-                   'input_states_sha256': summary['input_states_sha256'], 'source_sha256': hashes,
+                   'input_states_size': summary['input_states_size'], 'source_size': hashes,
                    'calls_staged': len(sample), 'calls_completed': 0, 'unique_pairs': len(selected),
                    'pairs': [list(pair_key(row)) for row in sorted(selected, key=pair_key)]})
     temporary = ledger_path.with_suffix('.json.tmp')
     temporary.write_text(json.dumps(ledger, indent=2) + '\n')
     temporary.replace(ledger_path)
-    print(json.dumps({k: v for k, v in summary.items() if k not in ('source_paths', 'source_sha256')}, indent=2))
+    print(json.dumps({k: v for k, v in summary.items() if k not in ('source_paths', 'source_size')}, indent=2))
     print('Staged only; no live calls.')
 
 

@@ -12,7 +12,7 @@ import argparse
 from collections import OrderedDict
 from collections.abc import Iterator
 import gc
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
@@ -186,7 +186,7 @@ def _prepare_shared_population(setup, bundle):
         shared = from_bundle(bundle)
     with trace_step('package.write_shared_files'):
         _dump_model_json(shared, setup / _setup_layout().shared_training_data)
-        text_binding = TrackTrainingBinding(track='text', shared_data_sha256=shared.fingerprint,
+        text_binding = TrackTrainingBinding(track='text', shared_data_size=shared.fingerprint,
             example_ids=[row.example_id for row in shared.examples],
             endpoint_indices=[row.payload_index for row in shared.endpoints])
         _dump_model_json(text_binding, setup / _setup_layout().text_training_binding)
@@ -210,20 +210,19 @@ def _prepare_graph_inputs(setup):
         prepare_training(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv',batch_size=sizes.pop())
 
 
-def _streamed_json_digest(value) -> str:
-    """STREAMED, never materialized content digest for composition keys.
+def _streamed_json_size(value) -> str:
+    """STREAMED, never materialized byte size for composition keys.
 
     `json.dumps` builds the whole document as one contiguous string before
-    hashing; the packaging pass composes thousands of rows while the token
+    measuring; the packaging pass composes thousands of rows while the token
     cache is still resident, so `JSONEncoder.iterencode` is used with the
-    SAME kwargs the emitted bytes always had — every content-addressed
-    name derived from this digest is byte-identical to the shared
-    encoder's output; only peak memory drops.
+    SAME kwargs the emitted bytes always had — the size recorded for a row is
+    identical to the shared encoder's output; only peak memory drops.
     """
-    hasher = hashlib.sha256()
+    size = ByteCount()
     for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
-        hasher.update(chunk.encode())
-    return hasher.hexdigest()
+        size.update(chunk.encode())
+    return size.total
 
 
 def _make_composer():
@@ -245,15 +244,15 @@ def _make_composer():
         cache_bytes = 0
         # Frozen endpoint text is a CONTRACT, not a hint: a virtual endpoint whose
         # bundle text is empty is still authoritative, so virtualness decides and an
-        # empty cell is a value rather than a reason to recompose. The digest itself
-        # is verified once per endpoint by the shared graph projection.
+        # empty cell is a value rather than a reason to recompose. The endpoint
+        # row itself is verified once per endpoint by the shared graph projection.
         def compose(row):
             nonlocal cache_bytes
             frozen = frozen_endpoint_text(row.get('sku_id'), row.get('frozen_payload'),
                                           column_present='frozen_payload' in row)
             if frozen is not None:
                 return frozen
-            key = _streamed_json_digest({'row':row,'composition':composition_contract})
+            key = _streamed_json_size({'row':row,'composition':composition_contract})
             if key in composed:
                 composed.move_to_end(key)
                 return composed[key]
@@ -449,7 +448,7 @@ def _write_package_archive(output: Path, cfg, setup: Path,
                            files: dict, checks: dict) -> tuple[Any, dict[str, str]]:
     """Inline the portable configs, then seal the inputs bundle for one run.
 
-    Returns the sealed Bundle (its ``digest`` is the transport token the
+    Returns the sealed Bundle (its manifest carries the member inventory the
     boundary re-checks) and the inlined config members, so the caller can trace
     what was sealed without reopening the archive.
     """
@@ -460,7 +459,7 @@ def _write_package_archive(output: Path, cfg, setup: Path,
         inline = {name: yaml.safe_dump(value, sort_keys=False)
                   for name, value in _portable_config_models(cfg, setup).items()}
     with trace_step('package.write_archive'):
-        # The Bundle owns the one writer (hash-while-writing + one verify), so
+        # The Bundle owns the one writer (size-while-writing + one verify), so
         # the inputs archive is sealed here exactly like every other crossing.
         sealed = Bundle.seal_archive(
             output, files, role=BundleRole.inputs, inline=inline, profile=True,
@@ -481,8 +480,8 @@ class PackageTrace:
     """Stage ``suite_inputs`` in the ONE consolidated trace (``core.tracing``).
 
     The packaging step sealed one archive and published its member inventory,
-    but reported nothing to the trace: "what shipped, how big, and under which
-    hash" meant reopening the archive, and a shrunk or bloated member set was
+    but reported nothing to the trace: "what shipped, how big, and its member
+    inventory" meant reopening the archive, and a shrunk or bloated member set was
     invisible until a GPU worker failed. Emitted here:
 
       run   members.collected    collected candidate members -> the members the
@@ -493,7 +492,7 @@ class PackageTrace:
       ent   member               each sampled member, NAMED, with its byte size
                                  and its local source path
       run   member.sample_budget the entity-sampling budget actually spent
-      run   archive.sealed       the sealed archive: whole-file sha256, bytes,
+      run   archive.sealed       the sealed archive: whole-file size, bytes,
                                  member count, the inlined portable configs and
                                  the preflight verdict
 
@@ -583,12 +582,12 @@ class PackageTrace:
             'archive', 'sealed',
             reason=(
                 'the inputs bundle is the one transport artifact: sealed and '
-                'verified once by its writer, so its whole-file sha256 is the '
+                'verified once by its writer, so its whole-file size is the '
                 'token every boundary re-checks'
             ),
             detail={
                 'path': str(archive),
-                'sha256': sealed.digest,
+                'size': sealed.path.stat().st_size,
                 'bytes': _member_bytes(archive),
                 'members': len(records),
                 'source_bytes': collected_bytes,
@@ -658,10 +657,9 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
     """Seal stopped workers' portable state as one recovery bundle.
 
     The recovery role is the ``all epochs + optimizer`` contract: nothing is
-    selected away, and the sealed archive is verified once by its writer. The
-    writer's whole-file digest is published beside the archive as the transport
-    sidecar here, so no caller re-reads (and re-hashes) the sealed bytes to
-    produce the token a download checks against.
+    selected away, and the sealed archive is written and verified once by its
+    writer (:meth:`core.bundle.Bundle.seal_archive` sizes every member as it
+    writes), so no caller re-reads the sealed bytes for a transport token.
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()
@@ -676,7 +674,6 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
         destination, files, role=BundleRole.recovery,
         metadata={'schema': RECOVERY_SCHEMA, spec.run_tag_key: run_tag,
                   'input_package': input_package})
-    archive_sidecar(destination, spec.sha256_sidecar_suffix).write_text(sealed.digest + '\n')
     return sealed.path
 
 
@@ -696,8 +693,8 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
     """Restore ZIP or tar.zst once through the verified recovery Bundle.
 
     The archive is verified exactly once at the :meth:`core.bundle.Bundle.load`
-    boundary (member digests, traversal and symlink safety), and the verified
-    tree is then materialized and published only after every digest passed.
+    boundary (member sizes, traversal and symlink safety), and the verified
+    tree is then materialized and published only after every size check passed.
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()

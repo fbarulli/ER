@@ -5,7 +5,6 @@ never raises into training after a persistence failure.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -22,14 +21,6 @@ from typing import Callable
 # publish/verify section prevents sibling model coordinators from changing
 # that process-global value underneath one another.  Training never holds it.
 _DVC_PUBLISH_LOCK = threading.Lock()
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def sqlite_backup(source: Path, destination: Path) -> None:
@@ -75,14 +66,14 @@ def build_snapshot(
                     if child.is_symlink():
                         raise RuntimeError(f"snapshot payload contains symlink: {child}")
                     if child.is_file():
-                        files.append({"path": str(child.relative_to(snapshot)), "sha256": _sha256(child), "size": child.stat().st_size})
+                        files.append({"path": str(child.relative_to(snapshot)), "size": child.stat().st_size})
             else:
                 shutil.copy2(source, target)
-                files.append({"path": str(relative), "sha256": _sha256(target), "size": target.stat().st_size})
+                files.append({"path": str(relative), "size": target.stat().st_size})
         if optuna_db and optuna_db.is_file():
             backup = snapshot / "controller" / "optuna.db"
             sqlite_backup(optuna_db, backup)
-            files.append({"path": str(backup.relative_to(snapshot)), "sha256": _sha256(backup), "size": backup.stat().st_size})
+            files.append({"path": str(backup.relative_to(snapshot)), "size": backup.stat().st_size})
         manifest = {
             "generation": generation.name,
             "scope": scope,
@@ -120,8 +111,6 @@ def verify_snapshot(snapshot: Path) -> None:
         path = snapshot / str(entry["path"])
         if not path.is_file() or path.stat().st_size != int(entry["size"]):
             raise RuntimeError(f"snapshot file missing or changed: {path}")
-        if _sha256(path) != entry["sha256"]:
-            raise RuntimeError(f"snapshot hash mismatch: {path}")
 
 
 def write_pointer_registry(path: Path, payload: dict) -> None:

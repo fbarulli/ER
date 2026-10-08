@@ -1,6 +1,6 @@
 """Bound CPU preparation plans for GPU workers; no encoder forward passes."""
 from __future__ import annotations
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import math
 from pathlib import Path
@@ -54,10 +54,10 @@ def validate_collapse_regulation(config):
     functions have all they need to regulate collapse.  We check ONLY the
     uniformity regularizer and the collapse guardrail; every unrelated config
     key (laya/kaggle/paths/script lanes) is ignored on purpose, because the
-    plan's data/row identity is already bound by ``data_sha256``.
+    plan's data/row identity is already bound by ``data_size``.
 
     Pure and cheap by construction: O(number of collapse knobs) dict reads of
-    an already-loaded config object.  No ``data_digest``, no array work, no
+    an already-loaded config object.  No ``data_size``, no array work, no
     model/dataset load, no full-config serialisation, no config reload.
     """
     config = config or {}
@@ -118,29 +118,29 @@ def validate_collapse_regulation(config):
     return config
 
 
-def data_digest(bundle):
-    digest = hashlib.sha256()
+def data_size(bundle) -> int:
+    size = ByteCount()
     for key in ('payload','row_bc','country','mask_audit','hard_negative_mask_audit','holdout_populations'):
         value = bundle.get(key)
         if isinstance(value,np.ndarray): value=value.tolist()
-        digest.update(json.dumps({key:value},sort_keys=True,ensure_ascii=False,default=str).encode())
-    digest.update(json.dumps(bundle['df'].to_dict(orient='list'),sort_keys=True,ensure_ascii=False,default=str).encode())
+        size.update(json.dumps({key:value},sort_keys=True,ensure_ascii=False,default=str).encode())
+    size.update(json.dumps(bundle['df'].to_dict(orient='list'),sort_keys=True,ensure_ascii=False,default=str).encode())
     for key in ('pos','hp_pairs','neg','train_neg','structured_features','emb0'):
         array=np.asarray(bundle[key])
-        digest.update(key.encode());digest.update(str(array.dtype).encode());digest.update(str(array.shape).encode())
-        digest.update(array.tobytes())
+        size.update(key.encode());size.update(str(array.dtype).encode());size.update(str(array.shape).encode())
+        size.update(array.tobytes())
     for key in ('neg_sources','train_neg_sources'):
-        digest.update(json.dumps(np.asarray(bundle[key]).tolist(),ensure_ascii=False).encode())
+        size.update(json.dumps(np.asarray(bundle[key]).tolist(),ensure_ascii=False).encode())
     for key in ('labeled_pairs_csv','canonical_records_csv','gate_results_csv'):
-        digest.update(bundle[key])
-    return digest.hexdigest()
+        size.update(bundle[key])
+    return size.total
 
 
 def plan_identity(bundle,*,loss,train_frac,sample,seed=SEED):
     if not 0 < train_frac <= 1:
         raise ValueError('local training plan requires 0 < train_frac <= 1')
     return {'loss':loss,'train_frac':float(train_frac),'sample':bool(sample),'seed':int(seed),
-            'data_sha256':data_digest(bundle)}
+            'data_size':data_size(bundle)}
 
 
 #: The frozen input files a prepared bundle carries inline. The bundle member
@@ -215,8 +215,8 @@ def validate_run_plan(bundle,plan,*,loss,train_frac,sample,seed=SEED):
     identity = dict(plan.get('identity') or {})
     # Bind only the identity fields we still own. A frozen plan built before
     # the whole-config hash was retired still carries a legacy
-    # `config_sha256` key; ignoring it is exactly what lets the existing
-    # bundle validate without a rebuild. `data_sha256` is the real binding.
+    # `config_size` key; ignoring it is exactly what lets the existing
+    # bundle validate without a rebuild. `data_size` is the real binding.
     bound = {key: identity.get(key) for key in expected}
     if plan.get('version')!=1 or bound!=expected:
         raise ValueError('prepared training row plan differs from loss/train_frac/sample/seed/data; rebuild locally')

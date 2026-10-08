@@ -1,0 +1,28 @@
+{
+  "by_difficulty": {
+    "easy": 64,
+    "hard": 56,
+    "medium": 166,
+    "unknown": 35
+  },
+  "by_population": {
+    "base": 14,
+    "hard_negative": 10,
+    "masked": 2,
+    "positive": 17,
+    "real": 34,
+    "real_bundle": 234,
+    "twin": 10
+  },
+  "by_scope": {
+    "bundle_diagnostic": 234,
+    "heldout": 20,
+    "mint_diagnostic": 27,
+    "training_diagnostic": 40
+  },
+  "cohort_sha256": "6823129c2f4988af35f1313543eb40c3d916c134cc002c0fbf75e2e787a43f47",
+  "minted_endpoints_covered": 22,
+  "minted_endpoints_total": 22,
+  "pair_rows": 321,
+  "unknown_difficulty_policy": "retain unknown; never invent easy/hard labels"
+}

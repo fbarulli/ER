@@ -194,7 +194,9 @@ class NegativeSupplyCoverage(CoverageModel):
 
 
 class CohortCoverage(CoverageModel):
-    cohort_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: Structural cohort identity: row count + the declared column names.
+    #: Never a content digest (owner directive 2026-10-08).
+    cohort_key: str = Field(min_length=1)
     pair_rows: Count
     minted_endpoints_total: Count
     minted_endpoints_covered: Count
@@ -232,7 +234,17 @@ class ProductVariationRow(CoverageModel):
 
 class SamplingArtifact(CoverageModel):
     path: str = Field(min_length=1)
-    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    size: int = Field(ge=0)
+
+
+def cohort_key(frame) -> str:
+    """The structural identity of a sampled cohort frame.
+
+    Row count plus the declared column names, in sorted order: no content
+    identity is computed anywhere (owner directive 2026-10-08).
+    """
+    columns = ','.join(sorted(str(column) for column in frame.columns))
+    return f"rows={len(frame)};cols={columns}"
 
 
 class SamplingInput(SamplingArtifact):

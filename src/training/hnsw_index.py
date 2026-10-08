@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -37,9 +37,9 @@ def normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(matrix / norms, dtype=np.float32)
 
 
-def _ids_sha256(ids: Sequence[str]) -> str:
+def _ids_size(ids: Sequence[str]) -> int:
     payload = "\n".join(str(value) for value in ids).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return ByteCount(payload).total
 
 
 class PersistentHnswIndex:
@@ -125,7 +125,7 @@ class PersistentHnswIndex:
             "ef_construction": self.ef_construction,
             "M": self.M,
             "ef_search": self.ef_search,
-            "id_sha256": _ids_sha256(normalized_ids),
+            "id_size": _ids_size(normalized_ids),
             "preprocessing_fingerprint": preprocessing_fingerprint,
             "files": {
                 "index": INDEX_FILENAME,
@@ -179,7 +179,7 @@ class PersistentHnswIndex:
             "normalized": True,
             "ef_construction": self.ef_construction,
             "M": self.M,
-            "id_sha256": _ids_sha256(normalized_ids),
+            "id_size": _ids_size(normalized_ids),
             "preprocessing_fingerprint": preprocessing_fingerprint,
         }
         mismatches = {
@@ -188,7 +188,7 @@ class PersistentHnswIndex:
             if metadata.get(key) != value
         }
         if mismatches:
-            raise ValueError(f"persisted HNSW metadata is stale: {mismatches}")
+            raise ValueError(f"persisted HNSW metadata is incompatible with the requested identity: {mismatches}")
         mapping = pd.read_csv(self.output_dir / MAPPING_FILENAME, dtype=str)
         mapping["ann_label"] = pd.to_numeric(mapping["ann_label"], errors="raise")
         mapped_ids = mapping.sort_values("ann_label")["gtin"].astype(str).tolist()
@@ -199,7 +199,7 @@ class PersistentHnswIndex:
         )
         if embeddings.shape != (len(normalized_ids), int(dim)):
             raise ValueError(
-                f"persisted embedding shape is stale: {embeddings.shape}"
+                f"persisted embedding shape is incompatible: {embeddings.shape}"
             )
         hnswlib = _hnswlib()
         index = hnswlib.Index(space=self.space, dim=int(dim))

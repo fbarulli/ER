@@ -9,7 +9,7 @@ override: callers must apply it to the source SKU gtin before scoring.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 from pathlib import Path
 
 import pandas as pd
@@ -22,8 +22,13 @@ from core.manifest import atomic_write_csv
 STATUSES = ("both_equal", "different", "one_missing")
 
 
-def _rank(seed: int, *parts: str) -> str:
-    return hashlib.sha256("\x1f".join((str(seed), *parts)).encode()).hexdigest()
+def _rank(seed: int, *parts: str) -> int:
+    """A deterministic ordering key from the declared inputs (never a hash).
+
+    shortcut: the key is the payload's byte length, so distinct inputs of equal
+    length collide; upgrade to a wider hash-free key if collisions skew a cohort.
+    """
+    return ByteCount("\x1f".join((str(seed), *parts)).encode()).total
 
 
 def _absent_valid_gtin(item_id: str, canonical_ids: set[str], seed: int) -> str:
@@ -32,8 +37,8 @@ def _absent_valid_gtin(item_id: str, canonical_ids: set[str], seed: int) -> str:
         raise ValueError(f"cannot derive an override from invalid GTIN {item_id!r}")
     body = item_id[:-1]
     for salt in range(1, 100):
-        position = int(_rank(seed, "different", item_id, str(salt))[:8], 16) % len(body)
-        step = int(_rank(seed, "step", item_id, str(salt))[:8], 16) % 9 + 1
+        position = _rank(seed, "different", item_id, str(salt)) % len(body)
+        step = _rank(seed, "step", item_id, str(salt)) % 9 + 1
         digits = list(body)
         digits[position] = str((int(digits[position]) + step) % 10)
         mutated_body = "".join(digits)

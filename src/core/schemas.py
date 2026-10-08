@@ -79,7 +79,6 @@ defaults to an inline literal at the call site.
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import math
@@ -278,7 +277,6 @@ class ResultBundleFile(BaseModel):
     worker: int = Field(ge=1)
     path: str = Field(min_length=1)
     size: int = Field(ge=0)
-    sha256: str = Field(min_length=64, max_length=64, pattern=r"[0-9a-f]{64}")
 
 
 class ResultBundleExcludedFile(BaseModel):
@@ -1705,12 +1703,12 @@ class TrainingSpec(BaseModel):
     class ModelInputComposition(BaseModel):
         """The ACTIVE encoder-text contract, as recorded on artifacts.
 
-        The fields say WHICH composition was selected; ``fingerprint`` is a
-        stable digest of ALL of them, so an artifact can name its input
-        contract and two artifacts built from different compositions are
-        distinguishable without diffing the text itself. Written to the run
-        trace, the checkpoint manifest, the prepared-bundle manifest and the
-        ANN reuse fingerprint — one record, not four shapes.
+        The fields say WHICH composition was selected; together they ARE the
+        composition's identity, so an artifact can name its input contract and
+        two artifacts built from different compositions are distinguishable
+        without diffing the text itself. Written to the run trace, the
+        checkpoint manifest, the prepared-bundle manifest and the ANN reuse
+        record — one record, not four shapes.
 
         The redundancy flags are part of the identity ON PURPOSE: flipping one
         changes the encoder text, so leaving it out would let a persisted index
@@ -1725,27 +1723,18 @@ class TrainingSpec(BaseModel):
         keep_redundant_attribute_words: bool
         emit_singleton_pack_token: bool
         parser_revision: int = 1
-        fingerprint: str = Field(min_length=64, max_length=64)
 
         @classmethod
         def from_spec(
             cls, spec: TrainingSpec.ModelInputSpec
         ) -> TrainingSpec.ModelInputComposition:
-            payload = {
-                "profile": spec.profile,
-                "include_evidence": spec.include_evidence,
-                "emit_field_markers": spec.emit_field_markers,
-                "keep_redundant_attribute_words": spec.keep_redundant_attribute_words,
-                "emit_singleton_pack_token": spec.emit_singleton_pack_token,
-                "parser_revision": 2 if spec.profile == "cleaned" else 1,
-            }
             return cls(
-                **payload,
-                fingerprint=hashlib.sha256(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-                        "utf-8"
-                    )
-                ).hexdigest(),
+                profile=spec.profile,
+                include_evidence=spec.include_evidence,
+                emit_field_markers=spec.emit_field_markers,
+                keep_redundant_attribute_words=spec.keep_redundant_attribute_words,
+                emit_singleton_pack_token=spec.emit_singleton_pack_token,
+                parser_revision=2 if spec.profile == "cleaned" else 1,
             )
 
     class LateEpochLrDecaySpec(BaseModel):
@@ -2579,12 +2568,13 @@ class RuntimePackagesSpec(BaseModel):
         return values
 
 
-class CpuBundlePrepSpec(BaseModel):
+class BundlePrepSpec(BaseModel):
     """CPU data-bundle prep lane settings (owner structural ruling 8).
 
     Strictly ISOLATED additions consumed ONLY by src/cli/
     colab_data_bundle_prep.py and its thin passthroughs in cli.colab —
-    nothing on the GPU-training runtime path reads this block.
+    nothing on the GPU-training runtime path reads this block. It is the prep
+    half of the ``bundle`` lane (``colab.lanes.bundle``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2595,24 +2585,22 @@ class CpuBundlePrepSpec(BaseModel):
     # True = cli.colab's --what bundle dispatch forwards to the lane;
     # False (default) keeps the original direct call, byte-identical.
     lane: bool = False
-    # Committed cohort exports this lane accepts (root-relative, self-describing
-    # filenames). The Colab CPU bundle lane owns this list outright; it no
-    # longer borrows kaggle.export_csvs, so Kaggle config edits cannot change
-    # what Colab bundles.
+    # Committed official-set exports this lane accepts (root-relative,
+    # self-describing filenames). The Colab CPU bundle lane owns this list
+    # outright; it no longer borrows kaggle.export_csvs, so Kaggle config edits
+    # cannot change what Colab bundles.
     export_csvs: tuple[str, ...] = (
-        "dataset.csv", "dataset_50pct.csv", "dataset_10k.csv",
+        "dataset.csv", "dataset_3k.csv",
     )
 
 
 class ColabLaneSpec(BaseModel):
     """One Colab lane's identity: its session name and its transcript basename.
 
-    The Colab lanes are ``cpu`` (``--gpu CPU``) and ``gpu`` (``--gpu <accel>``).
     Declaring the per-lane session and transcript HERE is what lets
-    ``cli.colab.LANE_LOG_NAME`` derive instead of re-spelling
-    ``lane_cpu.log``/``lane_gpu.log``, and lets ``scripts/run_colab_smoke.sh``
-    ask the launcher for the lane's session instead of hardcoding
-    ``smoke-cpu``/``smoke-gpu``.
+    ``cli.colab.LANE_LOG_NAME`` derive instead of re-spelling the declared
+    transcript basenames, and lets ``scripts/run_colab_smoke.sh`` ask the
+    launcher for the lane's session instead of hardcoding its name.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -2626,6 +2614,38 @@ class ColabLaneSpec(BaseModel):
         if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
             raise ValueError("Colab lane transcript names must be non-empty basenames")
         return value
+
+
+class ColabLanesSpec(BaseModel):
+    """The two Colab lanes an accelerator request selects, one field each.
+
+    ``bundle`` is ``--gpu CPU`` (the CPU data-bundle lane); ``training`` is any
+    other accelerator (the GPU training lane). One REQUIRED field per lane
+    makes a third lane, a missing lane, or a misspelled key structurally
+    impossible — the lane set is the class shape, not a set membership check on
+    free-form strings. ``declared()`` is the ONE enumeration of both lanes, so
+    consumers iterate here instead of re-listing the names.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    bundle: ColabLaneSpec
+    training: ColabLaneSpec
+
+    def declared(self) -> tuple[ColabLaneSpec, ColabLaneSpec]:
+        """Both lanes, in declaration order."""
+        return (self.bundle, self.training)
+
+    @model_validator(mode="after")
+    def _sessions_and_transcripts_are_distinct(self) -> "ColabLanesSpec":
+        """Concurrent lanes must never share a VM session or truncate one file."""
+        sessions = [lane.session for lane in self.declared()]
+        if len(set(sessions)) != len(sessions):
+            raise ValueError("colab.lanes sessions must be distinct")
+        transcripts = [lane.log_name for lane in self.declared()]
+        if len(set(transcripts)) != len(transcripts):
+            raise ValueError("colab.lanes transcripts must be distinct")
+        return self
 
 
 class ColabWandbSpec(BaseModel):
@@ -2819,11 +2839,12 @@ class ColabSpec(BaseModel):
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
     # Per-lane identity (owner directive 2026-10-08): the two Colab lanes an
-    # accelerator request selects (``cpu`` = ``--gpu CPU``, ``gpu`` = anything
-    # else) each own their session name and transcript basename. cli.colab
-    # derives LANE_LOG_NAME from ``transcript_name`` and the smoke script asks
-    # the launcher for the lane's session, so neither re-spells the pair.
-    lanes: dict[str, ColabLaneSpec] = Field(min_length=1)
+    # accelerator request selects, ``bundle`` (``--gpu CPU``) and ``training``
+    # (anything else), each owning its session name and transcript basename.
+    # cli.colab derives LANE_LOG_NAME from ``transcript_name`` and the smoke
+    # script asks the launcher for the lane's session, so neither re-spells
+    # the pair.
+    lanes: ColabLanesSpec
     # The ONE Colab transcript directory (repo-relative, under the canonical
     # logs root) and the fallback names for the configured session and for any
     # other (isolated) session.
@@ -2859,7 +2880,6 @@ class ColabSpec(BaseModel):
     smoke_inference_sample: int = Field(ge=1)
     runtime_packages: RuntimePackagesSpec
     prefer_uv_install: bool
-    cache_prepared_bundles: bool
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
@@ -2943,24 +2963,6 @@ class ColabSpec(BaseModel):
                     f"colab.checkout_paths must be repository-relative: {entry!r}")
         return value
 
-    @field_validator("lanes")
-    @classmethod
-    def _lanes_are_the_two_lanes(
-        cls, value: dict[str, ColabLaneSpec]
-    ) -> dict[str, ColabLaneSpec]:
-        """The only two Colab lanes are the accelerator request's two outcomes."""
-        if set(value) != {"cpu", "gpu"}:
-            raise ValueError(
-                "colab.lanes must declare exactly the cpu and gpu lanes, got "
-                f"{sorted(value)}")
-        sessions = [spec.session for spec in value.values()]
-        logs = [spec.log_name for spec in value.values()]
-        if len(set(sessions)) != len(sessions):
-            raise ValueError("colab.lanes sessions must be distinct")
-        if len(set(logs)) != len(logs):
-            raise ValueError("colab.lanes transcripts must be distinct")
-        return value
-
     @field_validator("log_dir")
     @classmethod
     def _log_dir_is_under_the_log_root(cls, value: str) -> str:
@@ -2993,15 +2995,15 @@ class ColabSpec(BaseModel):
         carries one. There is no staleness test anywhere on the Colab lanes —
         freshness/integrity comes from the data bundle, i.e. the sealed
         ``Bundle`` whose role contract is verified exactly once at the boundary
-        (``core.bundle.Bundle.load`` / ``core.portable_archive.verify_archive_digest``).
-        A downstream consumer that re-derives a hash and compares it against a
-        recorded one is a bug, not a check.
+        (``core.bundle.Bundle.load``), by member names and byte sizes.
+        A downstream consumer that re-derives a content identity and compares it
+        against a recorded one is a bug, not a check.
         """
         if self.freshness_checks:
             raise ValueError(
                 "colab.freshness_checks cannot be enabled: the Colab lanes never "
-                "re-derive a hash to test staleness (integrity is the bundle digest "
-                "at the boundary)")
+                "re-derive a content identity to test staleness (the boundary "
+                "verifies the bundle's member names and sizes)")
         return self
 
     @model_validator(mode="after")
@@ -3036,8 +3038,8 @@ class ColabSpec(BaseModel):
 
     # ── lane identity accessors ────────────────────────────────────────────
     def lane_for(self, gpu: str) -> ColabLaneSpec:
-        """The lane an accelerator request selects (only ``CPU`` is the CPU lane)."""
-        return self.lanes["cpu"] if str(gpu).upper() == "CPU" else self.lanes["gpu"]
+        """The lane an accelerator request selects (only ``CPU`` is ``bundle``)."""
+        return self.lanes.bundle if str(gpu).upper() == "CPU" else self.lanes.training
 
     def session_for(self, gpu: str) -> str:
         """The VM session name for one accelerator request."""
@@ -3045,7 +3047,8 @@ class ColabSpec(BaseModel):
 
     def lane_by_session(self, session: str) -> ColabLaneSpec | None:
         """The declared lane whose session is ``session``, if any."""
-        return next((spec for spec in self.lanes.values() if spec.session == session), None)
+        return next((lane for lane in self.lanes.declared() if lane.session == session),
+                    None)
 
     def transcript_name(self, session: str) -> str:
         """The ONE transcript basename rule for a launcher session.
@@ -3246,33 +3249,6 @@ PREPARATION_REUSABLE_KEYS = (
 )
 
 
-#: The archive-sidecar suffix's typed fallback. The ONE runtime home is
-#: ``bundle.sha256_sidecar_suffix`` (config/training.yaml, via
-#: ``core.common.training_cfg``); this module-level constant is the schema
-#: default both :class:`BundleSpec` and :class:`KaggleFilesSpec` fall back to
-#: while ``TrainingConfig`` is itself mid-load (the projection then overwrites
-#: the Kaggle field with the real value). It is a single mirror, not a second
-#: source of truth.
-_SHA256_SIDECAR_SUFFIX = ".sha256"
-
-
-def _bundle_sidecar_suffix() -> str:
-    """The ONE archive-sidecar-suffix home, for KaggleFilesSpec's default.
-
-    ``KaggleFilesSpec.hash_suffix`` is a PROJECTION of
-    ``bundle.sha256_sidecar_suffix``, never an independent declaration. Reading
-    it lazily here (rather than restating the literal) means a stand-alone
-    ``KaggleSpec()`` carries the SSOT's suffix. During ``TrainingConfig``'s OWN
-    first validation the singleton is still being built, so the typed fallback
-    above stands in and the projection overwrites it immediately after.
-    """
-    try:
-        from core.common import training_cfg
-        return str(training_cfg().bundle.sha256_sidecar_suffix)
-    except (ImportError, NameError, AttributeError):
-        return _SHA256_SIDECAR_SUFFIX
-
-
 class KaggleFilesSpec(BaseModel):
     """Configured Kaggle files contract."""
 
@@ -3326,14 +3302,6 @@ class KaggleFilesSpec(BaseModel):
     dataset_metadata: str = 'dataset-metadata.json'
     log_glob: str = "*.log"
     install_dir: str = "{kind}"
-    #: Archive sidecar suffix. NOT an independent declaration: the ONE home is
-    #: ``bundle.sha256_sidecar_suffix`` and TrainingConfig copies that value in
-    #: (see ``_sidecar_suffix_has_one_home``). The field survives only because
-    #: the rendered kernel LANE contract (cli.kaggle_kernel_templates) and
-    #: cli.kaggle_outputs read ``spec.files.hash_suffix`` for every kind; its
-    #: default derives from the bundle SSOT (``_bundle_sidecar_suffix``) so a
-    #: stand-alone ``KaggleSpec()`` is not a second source of truth.
-    hash_suffix: str = Field(default_factory=_bundle_sidecar_suffix)
 
 
 class KaggleRemoteSpec(BaseModel):
@@ -3384,7 +3352,7 @@ class KaggleSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cohort_tags: tuple[str, ...] = ("full", "50pct", "10k")
+    cohort_tags: tuple[str, ...] = ("full", "3k")
     default_cohort: str = "full"
 
     files: KaggleFilesSpec = Field(default_factory=KaggleFilesSpec)
@@ -3394,10 +3362,10 @@ class KaggleSpec(BaseModel):
     # Dataset "owner/slug" to publish under; empty keeps every transport call
     # fail-loud until the owner names the target dataset.
     slug: str | None = None
-    # Cohort exports publishable by the lane, matched by self-describing
-    # cohort tags (same shape the cpu_bundle_prep cohort_label values take).
+    # Official-set exports publishable by the lane, matched by self-describing
+    # cohort tags (same shape the bundle_prep cohort_label values take).
     export_csvs: tuple[str, ...] = (
-        "dataset.csv", "dataset_50pct.csv", "dataset_10k.csv",
+        "dataset.csv", "dataset_3k.csv",
     )
     # Staging root (relative to TRAIN_ROOT) for packaged upload payloads and
     # verified download receipts.
@@ -3654,9 +3622,9 @@ class BundleSpec(BaseModel):
     # (an operator box is no longer a finalize surface; the lane is remote CPU).
     postprocess_location_local: str = "local CPU"
     postprocess_location_bundle: str = "bundle finalize"
-    # Transport sidecars: the whole-archive digest token and the retained
-    # failure-path event log (success folds the events into the result archive).
-    sha256_sidecar_suffix: str = _SHA256_SIDECAR_SUFFIX
+    # Transport sidecars: the retained failure-path event log (success folds
+    # the events into the result archive). No content-identity companion is
+    # written or read anywhere.
     events_sidecar_suffix: str = ".events.jsonl"
 
 
@@ -3752,8 +3720,8 @@ class TrainingConfig(BaseModel):
     tracking: TrackingSpec
     colab: ColabSpec
     # Isolated CPU data-bundle prep lane block (owner ruling 8) — never
-    # read on the GPU-training runtime path.
-    cpu_bundle_prep: CpuBundlePrepSpec = Field(default_factory=CpuBundlePrepSpec)
+    # read on the GPU-training runtime path; the prep half of colab.lanes.bundle.
+    bundle_prep: BundlePrepSpec = Field(default_factory=BundlePrepSpec)
     rand_matching: RandMatchingSpec
     difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
     # Kaggle dataset/export transport lane (additive; default factory so the
@@ -3827,22 +3795,6 @@ class TrainingConfig(BaseModel):
 
 
     @model_validator(mode="after")
-    def _sidecar_suffix_has_one_home(self) -> TrainingConfig:
-        """The archive sidecar suffix has ONE home: bundle.sha256_sidecar_suffix.
-
-        ``KaggleFilesSpec.hash_suffix`` is a PROJECTION, not an independent
-        declaration (its config/training.yaml copy is deleted). The rendered
-        kernel LANE contract (cli.kaggle_kernel_templates) and cli.kaggle_outputs
-        read ``spec.files.hash_suffix`` at runtime and are out of this task's
-        scope, so the field cannot be dropped yet; the bundle value is copied
-        into it here, so changing bundle.sha256_sidecar_suffix steers every
-        Kaggle sidecar name. A stand-alone ``KaggleSpec()`` (no production path
-        builds one) keeps the field's own fallback.
-        """
-        self.kaggle.files.hash_suffix = self.bundle.sha256_sidecar_suffix
-        return self
-
-    @model_validator(mode="after")
     def _lane_package_manifest_is_the_bundle_inputs_manifest(self) -> TrainingConfig:
         """``kaggle.files.package_manifest`` IS ``bundle.manifest_inputs``.
 
@@ -3852,7 +3804,8 @@ class TrainingConfig(BaseModel):
         a second, independent declaration of ``model_tracks_package.json``, so a
         re-pointed ``bundle.manifest_inputs`` would have sealed one member while
         the kernel looked for another. Copying the bundle value here (the same
-        projection pattern as ``hash_suffix`` above) gives the name ONE home.
+        projection pattern as ``package_manifest``'s neighbours) gives the name
+        ONE home.
         ``config/training.yaml`` still declares the value only because the
         rendered LANE contract reads it and is outside this change.
         """
@@ -3865,7 +3818,7 @@ class TrainingConfig(BaseModel):
 
         The Colab lane injects W&B settings into remote processes; the trainer
         itself reads ``tracking.wandb``. Copying the values here (the same
-        projection pattern as ``hash_suffix`` above) keeps ONE declaration of
+        projection pattern as the lane's other mirrors) keeps ONE declaration of
         the project and the dashboard mode, so retuning the mirror cannot leave
         the Colab lane reporting into a second, older project.
         """
@@ -3879,8 +3832,8 @@ class TrainingConfig(BaseModel):
 
         Both lanes read the SAME sealed inputs package that
         ``training.prepare_all`` writes and the Kaggle lane installs, so its
-        name has one home (the same projection pattern as ``hash_suffix``
-        above). The Colab data bundle still declares everything else about the
+        name has one home (the same projection pattern as the other lane
+        mirrors). The Colab data bundle still declares everything else about the
         package (its setup dir, suite config, and transport members); only the
         physical archive name is shared with the Kaggle lane's file contract.
         """
@@ -4637,7 +4590,7 @@ ZERO_SHOT_TRACE_COLUMNS: tuple[str, ...] = (
     "mask_applied2",
     "mask_realized_extent1",
     "mask_realized_extent2",
-    "mask_config_fingerprint",
+    "mask_config",
     "model_keys",
     "lineage_id",
 )
@@ -4672,9 +4625,9 @@ class ZeroShotTraceRow(BaseModel):
     mask_applied2: bool
     mask_realized_extent1: float = Field(ge=0.0, le=1.0)
     mask_realized_extent2: float = Field(ge=0.0, le=1.0)
-    mask_config_fingerprint: StrictStr = Field(min_length=64, max_length=64)
+    mask_config: StrictStr = Field(min_length=1)
     model_keys: StrictStr = Field(min_length=3)
-    lineage_id: StrictStr = Field(min_length=16, max_length=64)
+    lineage_id: StrictStr = Field(min_length=1, max_length=256)
 
 
 def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -5300,7 +5253,7 @@ class ManifestFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1)  # repo-root-relative POSIX path
-    sha256: str = Field(min_length=64, max_length=64)  # lowercase hex
+    size: int = Field(ge=0)  # bytes on disk (structural identity)
     rows: int | None = None  # CSV row count when known
     cols: int | None = None
     expected: bool | None = None
@@ -5330,7 +5283,7 @@ class StageManifest(BaseModel):
     # dict (not a nested model) so stages can add reasons without a
     # schema bump; the closure invariant above is what's contractual.
     row_accounting: dict[str, Any]
-    environment: dict[str, str]  # git_sha, config_sha256, seed, host
+    environment: dict[str, str]  # git_sha, config_files, seed, host
     expected_outputs: list[str]
 
 
@@ -5399,15 +5352,15 @@ class SuiteMatrixSpec(BaseModel):
 
 
 def canonical_suite_matrix() -> SuiteMatrixSpec:
-    """The baked S/M/L dataset matrix (owner defaults: S=200 smoke,
-    M=50%, L=full)."""
+    """The baked S/M/L dataset matrix over the official sets
+    (S=200 smoke, M=3k, L=full)."""
     return SuiteMatrixSpec(
         device_flip=SuiteDeviceFlip(),
         suites=(
             SuiteMatrixEntry(size="S", name="smoke_200",
                              suite_config="data/prepared/smoke_200/suite.yaml",
                              device="cpu"),
-            SuiteMatrixEntry(size="M", name="50pct", device="cpu"),
+            SuiteMatrixEntry(size="M", name="3k", device="cpu"),
             SuiteMatrixEntry(size="L", name="full",
                              suite_config="config/model_tracks.yaml",
                              device="cuda"),

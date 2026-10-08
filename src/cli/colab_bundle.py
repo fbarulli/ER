@@ -96,7 +96,7 @@ def main() -> None:
     ap.add_argument("--dataset-csv", type=Path, default=TRAIN_ROOT / "dataset.csv",
                     help="committed cohort export the sparse checkout carries and "
                          "the remote launcher remaps onto dataset.csv (default: "
-                         "repo-root dataset.csv; config cpu_bundle_prep.export_csvs "
+                         "repo-root dataset.csv; config bundle_prep.export_csvs "
                          "entries only — no upload exists on this lane)")
     ap.add_argument("--resume-from", default=None,
                     help="prepare_all --resume-from choice for a frozen run "

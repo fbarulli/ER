@@ -13,9 +13,46 @@ def _setup_layout():
     return prepared_setup_layout()
 
 
+def build_index(output: Path, setup: Path) -> Path | None:
+    """Build only the text ANN index (the artifact the cascade consumes).
+
+    On ``gpu_only`` lanes (``ER_GPU_TRAINING_ONLY=1``, set by the Colab tracks
+    lane) the full text report below is deferred to the local finalize, but the
+    ``cascade`` track runs in the SAME suite and reads ``output/text__index``
+    (``model_tracks.worker._cascade_artifacts``), so the index must exist before
+    the postprocess barrier releases the cascade. This builds just that index
+    from the already-exported vectors; reports and scoring stay deferred.
+    """
+    from graph_tracks.data import file_size, load_records
+    from model_tracks.text_export import validate as validate_export
+    from model_tracks.training_data import retrieval_indices
+    from training.hnsw_index import PersistentHnswIndex
+    from training.validation_inference import resolve_best_checkpoint
+    layout = _setup_layout()
+    cfg = load_text_config(setup / layout.text_config)
+    if not cfg.build_index:
+        print('[text-phase] index_build skipped reason=build_index_false', flush=True)
+        return None
+    checkpoint, _ = resolve_best_checkpoint(output)
+    vectors, _ = validate_export(output / 'text__vectors.npz', checkpoint, setup)
+    listings = setup / layout.prepared_dir / layout.listings
+    records = load_records(listings)
+    catalog_indices = retrieval_indices(records)
+    index_started = time.monotonic()
+    print(f"[text-phase] index_build start path={output / 'text__index'} vectors={len(vectors)} "
+          f"M={cfg.hnsw_m} ef_construction={cfg.hnsw_ef_construction} ef_search={cfg.hnsw_ef_search}", flush=True)
+    index = PersistentHnswIndex(output / 'text__index', ef_construction=cfg.hnsw_ef_construction,
+                               M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
+    index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
+                model_name='text', preprocessing_fingerprint=file_size(listings))
+    print(f"[text-phase] index_build complete path={output / 'text__index'} "
+          f"seconds={time.monotonic() - index_started:.3f}", flush=True)
+    return output / 'text__index'
+
+
 def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     from model_tracks.text_export import validate as validate_export
-    from graph_tracks.data import file_hash, load_records
+    from graph_tracks.data import file_size, load_records
     from graph_tracks.report import dev_threshold, pair_metrics, retrieval_report
     from graph_tracks.report_slices import report as slice_report
     from graph_tracks.train import load_pairs
@@ -51,7 +88,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     print(f"[text-phase] vector_export complete path={cache} shape={vectors.shape} "
           f"seconds={time.monotonic() - cache_started:.3f}", flush=True)
     cfg = settings
-    retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_hash(listings))
+    retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_size(listings))
     if cfg.build_index:
         index_started = time.monotonic()
         print(f"[text-phase] index_build start path={output / 'text__index'} vectors={len(vectors)} "
@@ -62,7 +99,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
         from model_tracks.training_data import retrieval_indices
         catalog_indices = retrieval_indices(records)
         index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
-                    model_name='text', preprocessing_fingerprint=file_hash(listings))
+                    model_name='text', preprocessing_fingerprint=file_size(listings))
         perf.record('index_build', time.monotonic() - index_started)
         print(f"[text-phase] index_build complete path={output / 'text__index'} seconds={time.monotonic() - index_started:.3f}", flush=True)
     else:
@@ -131,9 +168,9 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     # retrieval_protocol, ...). Both lanes now share one contract.
     write_manifest(output / 'text__completion_manifest.json', build_manifest(
         track='text', checkpoint=checkpoint,
-        checkpoint_sha256=file_hash(checkpoint),
-        listings_sha256=file_hash(listings),
-        pairs_sha256=file_hash(setup/'prepared/pairs.csv'),
+        checkpoint_size=file_size(checkpoint),
+        listings_size=file_size(listings),
+        pairs_size=file_size(setup/'prepared/pairs.csv'),
         threshold=threshold, threshold_source='dev_youden',
         test_reported='test' in scores, model_selection='dev_pr_auc',
         retrieval_ks=cfg.retrieval_ks, vectors_metadata=metadata,

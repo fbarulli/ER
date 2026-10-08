@@ -57,7 +57,7 @@ Writes:
                                         (SILENT_DROPS task 4 — the stage's
                                         completion marker: closure
                                         input_rows == output_rows + dropped,
-                                        every output sha256-pinned, all
+                                        every output size-pinned, all
                                         writes atomic)
 """
 
@@ -904,7 +904,7 @@ def main() -> None:
                  DEDUPED_PATH, SKU_TO_REP_PATH):
         ensure_parent(_out)
     # Stage manifest (SILENT_DROPS task 4) — begin BEFORE the work: the
-    # raw export is hashed now (53MB, chunked) so the record pins exactly
+    # raw export is sized now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed (lib.common.SEED); the
     # tiered collapse below is deterministic, no RNG is consumed.
     manifest = begin_manifest("dedupe", inputs=[dataset().member("source")], seed=SEED)

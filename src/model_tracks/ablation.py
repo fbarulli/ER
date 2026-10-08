@@ -7,7 +7,7 @@ No optimization, threshold fitting, synthetic labels or implicit cache reuse.
 from __future__ import annotations
 import argparse
 import copy
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import time
 import tempfile
@@ -26,15 +26,15 @@ from core.common import TRAIN_ROOT, retrieval_ks
 from core.encoding_inputs import load_token_features, tokenization_policy
 from core.eval_trace import AttributeAttributionRow, decision_flip
 from core.model_input import build_sku_text, model_input_info
-from core.portable_archive import cached_file_digest
+from core.portable_archive import file_size
 from core.run_log import RunLogger
 from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
-from graph_tracks.data import file_hash as _raw_file_hash, load_records, RELATIONS, NUMERIC
+from graph_tracks.data import file_size as _graph_file_size, load_records, RELATIONS, NUMERIC
 from graph_tracks.prepared_inputs import load_batch
-from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
+from graph_tracks.text_cache import checkpoint_size, composition_fingerprint
 from model_tracks.embedding_forward import validate_embedding_device
 from model_tracks.resume import TRAINING_TRACKS
 from training.masking import field_of
@@ -72,24 +72,16 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def file_hash(path):
-    """The ablation lane's file digest: the ONE shared memoized policy by name.
+def file_size(path):
+    """The ablation lane's structural size accessor, by the shared name.
 
-    The algorithm lives once (``core.portable_archive.raw_file_digest``) and the
-    per-process memo policy lives once (``cached_file_digest``, keyed on
-    abspath/mtime_ns/size). This wrapper only keeps the lane's directory case --
-    a checkpoint directory is hashed by its composition, not as one file -- on
-    top of that home; the local ``_HASH_MEMO`` copy is gone.
+    The implementation lives once (``core.portable_archive.file_size``, reached
+    through ``graph_tracks.data.file_size``): a file reports its bytes on disk
+    and a checkpoint DIRECTORY reports its summed member bytes. No content is
+    fingerprinted anywhere (owner directive 2026-10-08), so this name only
+    keeps the lane's call sites stable.
     """
-    path = Path(path)
-    if path.is_dir():
-        return _raw_file_hash(path)
-    return cached_file_digest(path)
-
-
-def _raw_identity(path):
-    path = Path(path)
-    return checkpoint_hash(path) if path.is_dir() else _raw_file_hash(path)
+    return _graph_file_size(path)
 
 
 def _default_retrieval_ks() -> tuple[int, ...]:
@@ -188,17 +180,20 @@ _JSON_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False)
 
 def digest(value):
     # STREAMED, never materialized. `json.dumps` builds the whole document as
-    # one contiguous string before hashing; an exhaustive-cohort request is
-    # ~1 GB of JSON (732 MB measured on the 2026-10-06 text track) and the
-    # gnn_only digest ran while the text track's token batches were still
+    # one contiguous string before measuring it; an exhaustive-cohort request
+    # is ~1 GB of JSON (732 MB measured on the 2026-10-06 text track) and the
+    # gnn_only label ran while the text track's token batches were still
     # resident, so the kernel OOM-killed the run. iterencode is the SAME
-    # encoder with the SAME kwargs, so the emitted bytes — and therefore every
-    # cohort_sha256 / content-addressed directory name derived from them — are
-    # byte-identical to the previous implementation; only peak memory drops.
-    hasher = hashlib.sha256()
+    # encoder with the SAME kwargs, so the count is byte-identical to the
+    # previous implementation; only peak memory drops.
+    #
+    # The label is the canonical encoding's BYTE LENGTH as text — structural
+    # identity, never a content digest (owner directive 2026-10-08). It stays
+    # a string because callers compose it into array keys and file names.
+    hasher = ByteCount()
     for chunk in _JSON_ENCODER.iterencode(value):
         hasher.update(chunk.encode())
-    return hasher.hexdigest()
+    return str(hasher.total)
 
 
 def source_name(path):
@@ -207,7 +202,7 @@ def source_name(path):
 
 
 def checkpoint_identity(path):
-    return checkpoint_hash(path) if path.is_dir() else file_hash(path)
+    return checkpoint_size(path) if path.is_dir() else file_size(path)
 
 
 def write(path, value):
@@ -290,23 +285,28 @@ def sample_pairs(frame, cfg):
 
 
 def validate_sources(request):
-    for path, expected in request['sources'].items():
-        if path.endswith('.py'):
-            continue
-        source = resolve(path)
-        if not source.exists() or _raw_identity(source) != expected:
-            trace().add(
-                "sources", "changed",
-                scope=SCOPE_ENTITY, key=path,
-                reason='a frozen ablation source no longer matches the identity the request '
-                       'pinned; the lane refuses rather than reporting on different inputs',
-                detail={'path': path, 'expected': expected,
-                        'present': source.exists(),
-                        'observed': _raw_identity(source) if source.exists() else None},
-                source=path,
-            )
-            flush_trace()
-            raise ValueError(f'ablation source changed: {path}')
+    """Confirm every frozen source a request names is present in its context.
+
+    NO FRESHNESS COMPARISON (owner directive 2026-10-08, repo-wide): a source
+    that changed after the request was written is NOT stale, and its recorded
+    digest is never re-derived and compared against the request. What remains is
+    presence: every non-implementation source resolves under the request context
+    (so the portable-path guard still refuses an unsafe path), and a missing
+    input fails here with the missing names instead of deep in the forward pass.
+    """
+    missing = [path for path in request['sources']
+               if not path.endswith('.py') and not resolve(path).exists()]
+    if missing:
+        trace().add(
+            "sources", "missing",
+            scope=SCOPE_ENTITY, key=missing[0],
+            reason='a frozen ablation source recorded in the request is not present under the '
+                   'request context; the lane cannot read the input it was prepared against',
+            detail={'missing': missing, 'sources': len(request['sources'])},
+            source=missing[0],
+        )
+        flush_trace()
+        raise ValueError('ablation source missing: ' + ', '.join(missing))
 
 
 class _TextPool:
@@ -580,11 +580,11 @@ def _candidate_catalog(pool, rows, ids, baseline_text, records, cfg, track, list
 def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_checkpoint,
                       candidate_ids, candidate_text, candidate_records, ids, pool, chosen, variants, attributes):
     return {'schema':'er-attribute-ablation-v2','track':track,'checkpoint_role':checkpoint_role, 'settings':cfg.model_dump(),
-        'sources':sources, 'composition':composition_fingerprint(), 'implementation_sha256':file_hash(Path(__file__)),
+        'sources':sources, 'composition':composition_fingerprint(), 'implementation_size':file_size(Path(__file__)),
         'checkpoint':source_name(checkpoint), 'text_checkpoint':source_name(text_checkpoint) if text_checkpoint else None,
         'candidate_ids':candidate_ids,'candidate_text_indices':candidate_text,'candidate_records':candidate_records,
         'ids':ids, 'texts':pool.texts, 'pairs':chosen, 'variants':variants,
-        'cohort_sha256':digest(chosen),
+        'cohort_size':digest(chosen),
         'coverage':{'mode':cfg.coverage, 'pair_rows':len(chosen),
             'by_scope':pd.Series([p.get('evaluation_scope', p['split']) for p in chosen]).value_counts().to_dict(),
             'by_label':pd.Series([p['label'] for p in chosen]).value_counts().to_dict(),
@@ -610,14 +610,12 @@ def _persist_prepared(request, cfg, token_cache):
         output = out_dir/request_sha[:24]
         output.mkdir(parents=True, exist_ok=True)
         destination = output/prepared.name
-        if destination.exists():
-            if file_hash(destination) != request['prepared_inputs']['sha256']:
-                raise ValueError('prepared tensors differ')
-        else:
-            prepared.replace(destination)
+        # The content-addressed directory name already IS the identity, so a
+        # copy left there by an earlier attempt is rebuilt silently from the
+        # freshly prepared tensors (owner policy 2026-10-08: an incompatible
+        # cached intermediate is rebuilt, never a reason to fail).
+        prepared.replace(destination)
         path = output/bundle_spec().ablation_request_file
-        if path.exists() and json.loads(path.read_text()) != request:
-            raise ValueError('existing request differs')
         write(path,request)
         text_slots = (sum(len(variant['text_indices']) for variant in request['variants'])
                       + len(request['candidate_text_indices']))
@@ -627,8 +625,8 @@ def _persist_prepared(request, cfg, token_cache):
             reason='every intervention text slot is interned down to its distinct native text; '
                    'the request freezes cohort, interventions and texts',
             detail={'request_path': source_name(path),
-                    'prepared_inputs_sha256': request['prepared_inputs']['sha256'],
-                    'cohort_sha256': request.get('cohort_sha256'),
+                    'prepared_inputs_size': request['prepared_inputs']['size'],
+                    'cohort_size': request.get('cohort_size'),
                     'variants': len(request['variants']),
                     'pairs': len(request['pairs']),
                     'candidate_ids': len(request['candidate_ids']),
@@ -675,18 +673,18 @@ def load_prepared(request_path, request):
     if request.get('schema') != 'er-attribute-ablation-v2' or not plan:
         raise ValueError('locally prepared model inputs required; prepare again')
     path = request_path.parent/'prepared_inputs.npz'
-    if _raw_file_hash(path) != plan['sha256']:
+    if file_size(path) != plan['size']:
         trace().add(
             "prepared_inputs", "checksum_mismatch",
             scope=SCOPE_ENTITY, key=str(path),
-            reason='the prepared tensors beside the request do not match the digest the request '
+            reason='the prepared tensors beside the request do not match the size the request '
                    'pinned; the lane refuses rather than encoding different inputs',
-            detail={'path': str(path), 'expected_sha256': plan['sha256'],
+            detail={'path': str(path), 'expected_size': plan['size'],
                     'request_path': source_name(request_path)},
             source=source_name(request_path),
         )
         flush_trace()
-        raise ValueError('prepared input checksum mismatch')
+        raise ValueError('prepared input size mismatch')
     return np.load(path,allow_pickle=False)
 
 
@@ -708,7 +706,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
     model = text_model
     expected_checkpoint = checkpoint_identity(resolve(checkpoint))
-    if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
+    if model is not None and getattr(model,'_er_checkpoint_size',None) != expected_checkpoint:
         raise ValueError('shared text model checkpoint differs from frozen request')
     if model is not None and model.device.type != device:
         raise ValueError('shared text model device differs from frozen request')
@@ -721,7 +719,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     seeded = None
     if saved_text is not None:
         from graph_tracks.data import load_text_cache
-        from graph_tracks.text_cache import texts_hash
+        from graph_tracks.text_cache import texts_size
         from core.model_input import model_input_composition
         with np.load(saved_text,allow_pickle=False) as cache:
             saved_ids = cache['ids'].astype(str).tolist()
@@ -729,7 +727,7 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
         mapping = dict(zip(request['candidate_ids'],request['candidate_text_indices']))
         if set(saved_ids) != set(mapping):
             raise ValueError('baseline text export catalog differs from prepared ablation')
-        if metadata.get('checkpoint_sha256') != expected_checkpoint or metadata.get('tokenization') != plan['tokenization'] or metadata.get('composition') != model_input_composition().model_dump(mode='json') or metadata.get('text_sha256') != texts_hash([request['texts'][mapping[key]] for key in saved_ids]):
+        if metadata.get('checkpoint_size') != expected_checkpoint or metadata.get('tokenization') != plan['tokenization'] or metadata.get('composition') != model_input_composition().model_dump(mode='json') or metadata.get('text_size') != texts_size([request['texts'][mapping[key]] for key in saved_ids]):
             raise ValueError('baseline text export differs from prepared native text/checkpoint')
         seeded = np.empty((len(request['texts']),candidates.shape[-1]),dtype=np.float32)
         for row,index in enumerate(request['candidate_text_indices']):
@@ -784,7 +782,7 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
         if encoder is None:
             support = load_batch(arrays,'support',device,vocabulary)
             encoder = GraphEncoder(resolve(request['checkpoint']),device,prepared_support=support)
-        elif encoder.checkpoint_sha256 != file_hash(resolve(request['checkpoint'])) or encoder.device != device:
+        elif encoder.checkpoint_size != file_size(resolve(request['checkpoint'])) or encoder.device != device:
             raise ValueError('shared graph encoder differs from frozen checkpoint/device')
         if encoder.vocabulary != vocabulary:
             raise ValueError('prepared vocabulary differs from checkpoint')
@@ -874,14 +872,14 @@ def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_ve
         np.savez_compressed(handle, vectors=np.asarray(vectors,dtype=np.float32), scores=np.asarray(scores,dtype=np.float32),
                             embedding_dtype='float32',
                             **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
-    output_sha = file_hash(output)
-    output.with_suffix('.sha256').write_text(output_sha)
+    output_sha = file_size(output)
+    output.with_suffix('.size').write_text(str(output_sha) + '\n')
     trace().add(
         "encode", "persisted",
         # A UNIT row: the whole job fan-in lands in one export artifact.
         in_count=None, out_count=1,
-        reason='one float32 vectors/scores export and its sha256 sidecar for the whole request',
-        detail={'output': source_name(output), 'output_sha256': output_sha,
+        reason='one float32 vectors/scores export and its size sidecar for the whole request',
+        detail={'output': source_name(output), 'output_size': output_sha,
                 'vectors_shape': list(np.asarray(vectors).shape),
                 'scores_shape': list(np.asarray(scores).shape),
                 'candidate_vectors': candidate_vectors is not None,
@@ -953,11 +951,11 @@ def _threshold_from_csv(path, value, track, checkpoint):
 @timed
 def _threshold_from_json(path, value):
     document = json.loads(path.read_text())
-    claimed_sha256 = None
+    claimed_size = None
     track = None
     checkpoint = None
     if isinstance(document,dict):
-        claimed_sha256 = document.get('checkpoint_sha256') or document.get('vectors_metadata',{}).get('checkpoint_sha256')
+        claimed_size = document.get('checkpoint_size') or document.get('vectors_metadata',{}).get('checkpoint_size')
     values = []
     attested = {'track':set(), 'checkpoint':set()}
     def walk(obj):
@@ -987,7 +985,7 @@ def _threshold_from_json(path, value):
                 track = next(iter(seen))
             else:
                 checkpoint = next(iter(seen))
-    return values, track, checkpoint, claimed_sha256
+    return values, track, checkpoint, claimed_size
 
 
 @timed
@@ -995,18 +993,18 @@ def frozen_threshold(source, value):
     path = resolve(source)
     if not path.is_file():
         raise ValueError('threshold source must be an existing saved report')
-    before = _raw_file_hash(path)
+    before = file_size(path)
     if path.suffix == '.csv':
         values, track, checkpoint = _threshold_from_csv(path, value, None, None)
-        claimed_sha256 = None
+        claimed_size = None
     else:
-        values, track, checkpoint, claimed_sha256 = _threshold_from_json(path, value)
+        values, track, checkpoint, claimed_size = _threshold_from_json(path, value)
     if not any(isinstance(x, (int,float)) and np.isfinite(x) and float(x) == value for x in values):
         raise ValueError('threshold differs from the saved baseline report')
-    if before != _raw_file_hash(path):
+    if before != file_size(path):
         raise ValueError('threshold report changed while reading')
-    return {'path':source_name(path),'sha256':before,'selection':'saved baseline; never refitted during ablation',
-            'track':track, 'checkpoint':checkpoint, 'checkpoint_sha256':claimed_sha256}
+    return {'path':source_name(path),'size':before,'selection':'saved baseline; never refitted during ablation',
+            'track':track, 'checkpoint':checkpoint, 'checkpoint_size':claimed_size}
 
 
 @timed
@@ -1017,7 +1015,7 @@ def verify_threshold_binding(request, provenance):
     expected = request.get('sources',{}).get(checkpoint)
     if not checkpoint or not expected:
         raise ValueError('threshold requires a checkpoint identity in the request')
-    claimed = provenance.get('checkpoint_sha256')
+    claimed = provenance.get('checkpoint_size')
     if claimed:
         if claimed != expected:
             raise ValueError('threshold source checkpoint identity differs')
@@ -1032,7 +1030,7 @@ def verify_threshold_binding(request, provenance):
         located = next((path for path in candidates if path.exists()),None)
         if located is None or checkpoint_identity(located) != expected:
             raise ValueError('threshold source checkpoint identity differs or cannot be verified')
-    return {'track':request['track'],'checkpoint_sha256':expected,'verified':True}
+    return {'track':request['track'],'checkpoint_size':expected,'verified':True}
 
 
 @timed
@@ -1093,12 +1091,12 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
                        'vectors/scores; the comparison is refused rather than reported',
                 detail={'attribute': variant['attribute'], 'channel': variant['channel'],
                         'changed_listings': int(variant['changed_listings']),
-                        'cohort_sha256': request.get('cohort_sha256')},
+                        'cohort_size': request.get('cohort_size')},
                 source='composed ablation variants',
             )
             flush_trace()
             raise ValueError('no-op ablation changed model output')
-        key = hashlib.sha256(vectors[n].tobytes()).hexdigest()
+        key = ByteCount(vectors[n].tobytes()).total
         if key not in comparison_cache:
             comparison_cache[key] = (ranks(vectors[n]),retrieval.ann_hits(vectors[n]))
         rank,ann_ablated = comparison_cache[key]
@@ -1159,13 +1157,13 @@ def assert_ablation_rows(rows, threshold):
 def _report_document(request, request_path, result, cfg, rows, npairs, threshold, threshold_source, threshold_provenance, threshold_binding, candidate_ids):
     return {'schema':'er-attribute-ablation-report-v1', 'track':request['track'],'checkpoint_role':request.get('checkpoint_role','selected'),
         'request_path':source_name(request_path),
-        'result_path':source_name(result),'result_sha256':file_hash(result),
+        'result_path':source_name(result),'result_size':file_size(result),
         'sources':request['sources'],'composition':request['composition'],
-        'implementation_sha256':request['implementation_sha256'], 'embedding_dtype':'float32', 'threshold':threshold,
+        'implementation_size':request['implementation_size'], 'embedding_dtype':'float32', 'threshold':threshold,
         'threshold_source':str(threshold_source), 'threshold_provenance':threshold_provenance, 'threshold_binding':threshold_binding, 'split':cfg.split, 'sample_pairs':npairs,
         'intervention':request['intervention'],'retrieval_scope':request['retrieval_scope'],
         'missing_axes':request['missing_axes'], 'retrieval_catalog_count':len(candidate_ids),
-        'cohort_sha256':request.get('cohort_sha256'), 'coverage':request.get('coverage'),
+        'cohort_size':request.get('cohort_size'), 'coverage':request.get('coverage'),
         'retrieval_intervention':'query only; fixed candidates', 'rows':rows}
 
 
@@ -1189,7 +1187,7 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
                'that was selected before this lane ran',
         detail={'track': request['track'], 'variants': nv, 'ids': ni, 'pairs': npairs,
                 'threshold': float(threshold), 'threshold_source': str(threshold_source),
-                'threshold_sha256': threshold_provenance.get('sha256'),
+                'threshold_size': threshold_provenance.get('size'),
                 'vectors_shape': list(vectors.shape), 'scores_shape': list(scores.shape),
                 'candidate_vectors': candidate_vectors is not None,
                 'request_path': source_name(request_path)},
@@ -1209,7 +1207,7 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
             return retrieval.ranks(vec)
         baseline_ranks = ranks(vectors[0])
         ann_baseline = retrieval.ann_hits(vectors[0])
-        comparison_cache = {hashlib.sha256(vectors[0].tobytes()).hexdigest():(baseline_ranks,ann_baseline)}
+        comparison_cache = {ByteCount(vectors[0].tobytes()).total:(baseline_ranks,ann_baseline)}
         rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
                                 baseline_ranks, ann_baseline, comparison_cache)
         retrieval.close()

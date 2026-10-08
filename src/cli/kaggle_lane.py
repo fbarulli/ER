@@ -10,13 +10,13 @@ What it owns (SSOT: config/training.yaml `kaggle:` block):
 
 * packaging  — a cohort export CSV becomes a Kaggle dataset payload: the
   archive the kaggle CLI uploads plus a config manifest recording the
-  measured rows + sha256 census (the same census shape the repo's audit
+  measured rows + size census (the same census shape the repo's audit
   pins use — measured at package time, never hardcoded).
 * upload     — `kaggle datasets create`/`version` driven through the
   configured executable; fail-loud (RuntimeError) on missing credentials,
   missing executable, or unset `kaggle.slug` — never a silent skip.
 * download   — `kaggle datasets download` fetch-back that verifies the
-  archive sha256 against the receipt written at package time (the
+  archive size against the receipt written at package time (the
   transport-identity contract the suite recovery machinery uses).
 * submission — validate/format a finished SKU_ITEM frame through the
   EXISTING `scripts.format_submission.format_submission` (imported, never
@@ -30,7 +30,7 @@ explicit flag. No default flips anywhere.
 """
 from __future__ import annotations
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import shutil
@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 from core.common import TRAIN_ROOT, training_cfg
-from core.manifest import atomic_write_json, atomic_write_text, sha256_file
+from core.manifest import atomic_write_json, atomic_write_text, file_size
 from core.runtime_inputs import checkout_members, checkout_inventory, checkout_preflight_script
 from cli.log_capture import progress_frames_to_lines
 from cli.kaggle_lifecycle import KernelLifecycle
@@ -66,7 +66,7 @@ class ExportCensus(BaseModel):
 
     rows: int = Field(ge=0)
     bytes: int = Field(ge=1)
-    sha256: str = Field(min_length=64, max_length=64)
+    size: int = Field(ge=0)
     columns: list[str] = Field(min_length=1)
 
 class KagglePackage(BaseModel):

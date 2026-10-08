@@ -42,7 +42,7 @@ Structure:
                              cli.colab.main enforces before provisioning.
 
 Envelope/telemetry/receipt/paths conventions follow the kaggle lane where
-the concerns overlap (receipt events, sha256 digests, polling helpers,
+the concerns overlap (receipt events, size digests, polling helpers,
 plan-mode dry runs).  No default flips anywhere: the facades keep their
 commands, flags, and byte-identical outputs.
 """
@@ -184,7 +184,7 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
         print(
             _stamp(),
             f"[cpu-prep] cohort={self.cohort_label(source)} dataset={source.name} "
-            f"sha256={self.export_digest(source)[:12]} "
+            f"size={self.export_digest(source)} "
             f"max_parallel_sessions={MAX_PARALLEL_PREP_SESSIONS}",
             flush=True,
         )

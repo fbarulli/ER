@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import time
-from hashlib import sha256
 from pathlib import Path
 from statistics import median
 
@@ -24,6 +23,7 @@ os.environ.setdefault('EUROMONITOR_PROJECT_ROOT', str(ROOT))
 
 import pandas as pd  # noqa: E402
 
+from core.portable_archive import ByteCount as size  # noqa: E402
 from core.product_dimensions import row_dimensions  # noqa: E402
 from core.sku_identity import row_identity  # noqa: E402
 
@@ -34,8 +34,8 @@ def load_rows(rows: int) -> list[dict]:
     return [dict(row) for _, row in frame.iterrows()]
 
 
-def digest_of(identities) -> str:
-    digest = sha256()
+def size_of(identities) -> int:
+    digest = size()
     for identity in identities:
         digest.update(json.dumps({
             'brand': sorted(identity.brand),
@@ -61,21 +61,21 @@ def digest_of(identities) -> str:
                 'malformed': list(identity.dimensions.malformed_parts),
             },
         }, sort_keys=True).encode())
-    return digest.hexdigest()
+    return digest.total
 
 
-def run_identity(rows) -> tuple[str, int]:
+def run_identity(rows) -> tuple[int, int]:
     identities = [row_identity(row) for row in rows]
-    return digest_of(identities), len(identities)
+    return size_of(identities), len(identities)
 
 
-def run_dimensions(rows) -> tuple[str, int]:
-    digest = sha256()
+def run_dimensions(rows) -> tuple[int, int]:
+    digest = size()
     for row in rows:
         evidence = row_dimensions(row)
         digest.update(json.dumps({k: sorted(v) for k, v in evidence.attributes.items()},
                                  sort_keys=True).encode())
-    return digest.hexdigest(), len(rows)
+    return digest.total, len(rows)
 
 
 def timeit(fn, reps: int):

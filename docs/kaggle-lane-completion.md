@@ -35,7 +35,7 @@ evidence base for what this lane is:
 - **cohort CSVs present in the box**: `dataset_50pct.csv` (49,225 rows,
   /tmp/opencode/er-50pct + repo root) alongside full `dataset.csv` — the
   [historical — pins removed 2026-10-06] bundle lanes re-pinned on-VM `audit.source_export_expected_rows/
-  _sha256` to ANY uploaded cohort (99c7ce8). Evidence the cohort/transport
+  _size` to ANY uploaded cohort (99c7ce8). Evidence the cohort/transport
   half of this lane is a real, in-progress production concern.
 
 ### What the lane is (definition)
@@ -78,13 +78,13 @@ transport). Surfaces:
 - `package_export(csv_path) -> Path`: package a cohort export
   (dataset_50pct.csv / dataset.csv / testing.csv fixture) into a Kaggle-
   dataset upload payload (zipped csv + staged `dataset_metadata.json`),
-  recording rows + sha256 (the same census shape the audit pins use, from
+  recording rows + size (the same census shape the audit pins use, from
   `core.common._validate_source_export`-measured values, NOT hardcoded).
 - `upload_dataset(csv)`: drive `kaggle datasets create/version` via
   subprocess with the packaged archive; fails loudly on missing
   credentials (`~/.kaggle/kaggle.json`), never silent-falls.
 - `download_dataset(slug, destination)`: hash-verified fetch back
-  (sha256 checked against the packaged manifest written at upload time).
+  (size checked against the packaged manifest written at upload time).
 - `main()` argparse: `--dataset-csv`, `--slug`, `--dee` … minimal flag set;
   config-owned values read from the new `config/training.yaml kaggle:` block.
 - DONE = module imports dry; a --dry-run end-to-end packaging run on the

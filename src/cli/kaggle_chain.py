@@ -64,7 +64,7 @@ class KaggleChain:
         if not fetch.get("verified") or fetch.get("failed"):
             raise RuntimeError(
                 f"chain {kind} fetch was not verified: {json.dumps(fetch)[:800]}")
-        plan_entry["fetched_sha256"] = fetch.get("archive_sha256")
+        plan_entry["fetched_size"] = fetch.get("archive_size")
         publish = fetch.get("publish") or {}
         plan_entry["publish"] = publish
         if expect_publish and not publish.get("published"):

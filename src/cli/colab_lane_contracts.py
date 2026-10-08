@@ -11,7 +11,7 @@ facades and the test fakes keep driving every lane through one patch surface.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import file_size
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -128,12 +128,9 @@ class ColabLaneBase:
         return self.training_results / ("colab_bundle_" + run_id)
 
     @timed
-    def export_digest(self, dataset_csv: Path) -> str:
-        digest = hashlib.sha256()
-        with Path(dataset_csv).open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+    def export_digest(self, dataset_csv: Path) -> int:
+        """The export's byte size (structural identity; content is never read)."""
+        return file_size(dataset_csv)
 
     def bundle_head(self) -> str:
         remote_root = self.remote_root

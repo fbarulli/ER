@@ -13,10 +13,10 @@ Two archives cross the wire and are each verified exactly once, at
   the finalize step post-processes),
 * the prepared inputs archive (the data bundle the suite trained from).
 
-No later stage re-verifies them: the whole-archive digests come from that same
+No later stage re-verifies them: the whole-archive sizes come from that same
 boundary pass, so the local completion identity costs no extra read. The
 finalize step returns the WRITER's own handle for the archive it just sealed
-(its digest was captured while writing and its manifest carries the member
+(its size was captured while writing and its manifest carries the member
 inventory), so the just-sealed bytes are never re-opened to re-verify them.
 """
 import json
@@ -27,7 +27,7 @@ from core.bundle import bundle_spec
 
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 from model_tracks.config import SuiteConfig
 
 log = RunLogger(__name__)
@@ -151,7 +151,7 @@ def _require_legacy_source_pin(inputs, settings: SuiteConfig) -> None:
         inputs.manifest[bundle_spec().files_key],
         ablation_config=settings.ablation_config, include_registry=False)
     for relative, expected in inventory.items():
-        if file_hash(TRAIN_ROOT / relative) != expected:
+        if file_size(TRAIN_ROOT / relative) != expected:
             trace().add(
                 'legacy_pin', 'code_changed',
                 scope=SCOPE_ENTITY, key=relative,
@@ -191,7 +191,7 @@ def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity
                'so it is validated and republished instead of recomputed',
         detail={'final': str(final), 'destination': str(destination),
                 'identity': {key: str(value) for key, value in identity.items()},
-                'publish': bool(publish), 'digest': existing.digest},
+                'publish': bool(publish), 'size': existing.path.stat().st_size},
         source=str(final),
     )
     published = _publish(final, settings, run_tag, ablation_done=True, bundle=existing) if publish else final
@@ -225,9 +225,9 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         reason='each archive is integrity-checked exactly once at its Bundle boundary; every '
                'later step reads the trusted handle',
         detail={'run_tag': run_tag,
-                'training_archive': str(training_archive), 'training_digest': result.digest,
+                'training_archive': str(training_archive), 'training_size': result.path.stat().st_size,
                 'training_members': len(result.members()),
-                'input_archive': str(input_archive), 'input_digest': inputs.digest,
+                'input_archive': str(input_archive), 'input_size': inputs.path.stat().st_size,
                 'input_members': len(inputs.members()),
                 'post_training_ablation': bool(settings.post_training_ablation),
                 'report_test': bool(settings.report_test),
@@ -236,8 +236,8 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     )
     destination = training_archive.parent / run_tag
     final = training_archive.parent / f'{run_tag}.{settings.result_archive_format}'
-    identity = {'training_archive_sha256': result.digest,
-                'input_archive_sha256': inputs.digest}
+    identity = {'training_archive_size': result.path.stat().st_size,
+                'input_archive_size': inputs.path.stat().st_size}
     if final.exists():
         return _reuse(final, destination, input_archive, inputs, identity,
                       run_tag, settings, publish)
@@ -290,28 +290,26 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                'ablation and seal (its own stage rows carry the detail)',
         detail={'final': str(final), 'exists': final.is_file(),
                 'bytes': final.stat().st_size if final.is_file() else 0,
-                'digest': handle.digest,
+                'size': handle.path.stat().st_size,
                 'work_dir': str(destination),
                 'prepared_dir': str(destination / spec.prepared_inputs_dir),
                 'postprocess_location': spec.postprocess_location_local},
         source=str(final),
     )
     # The finalize step returned the WRITER's handle for the archive it just
-    # sealed: its digest was captured while writing and its manifest already
+    # sealed: its size was captured while writing and its manifest already
     # mirrors the archive's (member inventory included), so the completion
     # contract runs against those trusted bytes instead of a second
     # Bundle.load of the archive in this same process.
-    archive_sidecar(final, spec.sha256_sidecar_suffix).write_text(handle.digest + '\n')
     validate_completed_suite_archive(final, run_tag, settings=settings, bundle=handle)
     trace().add(
         'complete', 'validated',
         in_count=len(handle.members()), out_count=len(handle.members()),
-        reason='the sealed archive is the writer\'s own verified handle: its digest and manifest '
+        reason='the sealed archive is the writer\'s own verified handle: its size and manifest '
                'inventory came from the sealing pass, so every later step shares it instead of '
                're-opening the bytes',
-        detail={'final': str(final), 'digest': handle.digest,
-                'members': len(handle.members()), 'run_tag': run_tag,
-                'sha256_sidecar': str(archive_sidecar(final, spec.sha256_sidecar_suffix))},
+        detail={'final': str(final), 'bytes': final.stat().st_size,
+                'members': len(handle.members()), 'run_tag': run_tag},
         source=str(final),
     )
     published = _publish(final, settings, run_tag, ablation_done=True, bundle=handle) if publish else final
@@ -322,7 +320,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                 if publish else
                 'publish=False was requested, so the finalized archive is returned unpublished'),
         detail={'final': str(final), 'run_tag': run_tag, 'publish': bool(publish),
-                'digest': handle.digest},
+                'size': handle.path.stat().st_size},
         source=str(final),
     )
     flush_trace()

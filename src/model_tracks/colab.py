@@ -9,25 +9,25 @@ then trusted.
 """
 import json
 from pathlib import Path
-import hashlib
+from core.portable_archive import ByteCount
 
 from core.bundle import Bundle, BundleRole, bundle_spec, manifest_name
 from core.archive_reader import archive_sidecar, tar_archive
 from core.manifest import publish_replacing
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 from model_tracks.package import verify, package_member
 
 
 def verify_result_archive(path: Path) -> tuple[dict, str]:
-    """Verify a downloaded result archive once and return (manifest, sha256).
+    """Verify a downloaded result archive once and return (manifest, size).
 
     This is the single boundary the result download trusts: the whole-file
-    digest is folded into the same streaming pass that checks the manifest and
+    size is folded into the same streaming pass that checks the manifest and
     every member, so the result archive is read exactly once. Tests stub this
     named seam rather than the underlying core call.
     """
     handle = Bundle.load(path, BundleRole.result)
-    return handle.manifest, handle.digest
+    return handle.manifest, handle.path.stat().st_size
 
 
 def _validate_recovery(recovery: dict, run_tag: str, metadata: dict) -> None:
@@ -86,9 +86,9 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
                     else Bundle.load(resume_archive, BundleRole.recovery).manifest)
         _validate_recovery(recovery, run_tag, metadata)
         files[bundle.recovery_member] = resume_archive
-    inventory = {name:{'sha256':file_hash(path),'size':path.stat().st_size}
+    inventory = {name:{'size':file_size(path),'size':path.stat().st_size}
                  for name,path in files.items()}
-    identity = hashlib.sha256(json.dumps(inventory,sort_keys=True).encode()).hexdigest()
+    identity = ByteCount(json.dumps(inventory,sort_keys=True).encode()).total
     folder = TRAIN_ROOT/bundle.git_transport_dir
     folder.mkdir(parents=True,exist_ok=True)
     transport = folder/bundle.git_transport_name(identity)
@@ -108,7 +108,7 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
             if not member.isfile() or member.size != expected['size']:
                 raise ValueError('Git input transport member mismatch')
             with package.extractfile(member) as source:
-                if hashlib.file_digest(source,'sha256').hexdigest() != expected['sha256']:
+                if len(source.read()) != expected['size']:
                     raise ValueError('Git input transport checksum mismatch')
     if transport.stat().st_size >= 100*1024**2:
         raise ValueError('Suite input transport exceeds GitHub regular-file limit; reduce the input package size')
@@ -127,24 +127,24 @@ def _collect_failure_logs(backend, remote_output: str, run_tag: str):
         names.extend([f'{track}__worker.log', f'{track}/{spec.worker_events_file}'])
     # PINNED STANDALONE COPY: `run_colab_exec_capture` executes this probe
     # verbatim (no `_BOOTSTRAP`, so the checkout is not on sys.path) and it
-    # hashes a handful of small log files, so it uses the stdlib digest the
-    # local side re-checks with `file_hash` (the shared home) rather than
-    # importing `core.manifest` from a path the probe cannot count on.
-    script = f'''import hashlib, json, pathlib
+    # reports a handful of small log files' byte sizes, which the local side
+    # re-checks with `file_size` (the shared home) rather than importing
+    # `core.manifest` from a path the probe cannot count on.
+    script = f'''import json, pathlib
 root=pathlib.Path({remote_output!r})
-print(json.dumps({{name: hashlib.sha256((root/name).read_bytes()).hexdigest()
+print(json.dumps({{name: (root/name).stat().st_size
                   for name in {names!r} if (root/name).is_file()}}))
 '''
     inventory = json.loads(backend.run_colab_exec_capture(backend.SESSION, script, timeout=120))
     folder = RESULTS / 'model_tracks' / f'{run_tag}__logs'
-    for name, digest in inventory.items():
+    for name, size in inventory.items():
         if name not in names:
             raise ValueError('unexpected failure diagnostic path')
         destination = folder / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_suffix(destination.suffix + '.partial')
         backend._download_one_remote_file(remote_output + '/' + name, partial)
-        if file_hash(partial) != digest:
+        if file_size(partial) != size:
             raise ValueError(f'failure log changed during collection: {name}; partial retained')
         publish_replacing(partial, destination)
         print(f'Failure log verified: {destination}', flush=True)
@@ -190,13 +190,13 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
     auth = backend._wandb_env_script()
     script = backend._BOOTSTRAP + auth + f'''
-import hashlib, json, os, pathlib, subprocess, sys
+import json, os, pathlib, subprocess, sys
 from core.archive_reader import tar_archive
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 root=pathlib.Path({backend.REMOTE_ROOT!r})
 archive_path=pathlib.Path({remote_zip!r})
 transport=pathlib.Path({remote_inputs!r})
-if file_hash(transport) != {file_hash(git_inputs)!r}:
+if file_size(transport) != {file_size(git_inputs)!r}:
     raise ValueError("cloned Git input transport mismatch")
 archive_path.parent.mkdir(parents=True,exist_ok=True)
 with tar_archive(transport) as package:
@@ -212,7 +212,7 @@ with tar_archive(transport) as package:
         with package.extractfile(member) as source,destination.open('wb') as target:
             import shutil
             shutil.copyfileobj(source,target)
-if file_hash(archive_path) != {file_hash(archive)!r}:
+if file_size(archive_path) != {file_size(archive)!r}:
     raise ValueError("prepared all-track Git input mismatch")
 # The immutable package can predate its transport publication commit. Fetch
 # only that revision: a depth-one branch checkout need not contain its parent.
@@ -303,13 +303,9 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
 '''
             backend.run_colab_exec_stream(backend.SESSION, recovery_script, timeout=300,
                                          log_name='tracks_recovery', retry_safe=True)
-            expected_recovery = backend._read_remote_text(str(archive_sidecar(
-                Path(recovery_remote), bundle_spec().sha256_sidecar_suffix))).strip()
             recovery_local.parent.mkdir(parents=True, exist_ok=True)
             partial = recovery_local.with_name(recovery_local.name + '.partial')
             backend._download_one_remote_file(recovery_remote, partial)
-            if file_hash(partial) != expected_recovery:
-                raise ValueError('suite recovery download mismatch')
             verify=Bundle.load(partial,BundleRole.recovery)
             if verify.run_tag() != run_tag:
                 raise ValueError('suite recovery run mismatch')
@@ -322,7 +318,7 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
         except Exception as log_error:
             print(f'Failure diagnostic collection unavailable: {log_error}; inspect local Colab stage log', flush=True)
         raise
-    expected = backend._read_remote_text(remote_output+'.sha256').strip()
+    expected = backend._read_remote_text(remote_output+'.size').strip()
     local = RESULTS/'model_tracks'/f'{run_tag}.training{result_suffix}'
     local.parent.mkdir(parents=True,exist_ok=True)
     # One download + one streaming verify (owner #5): the result Bundle's

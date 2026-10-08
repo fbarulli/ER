@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from core.bundle import Bundle, BundlePipeline, BundleRole, manifest_name
-from core.portable_archive import verify_archive_digest, write_archive
+from core.portable_archive import verify_archive, write_archive
 
 
 def _spec():
@@ -139,15 +139,16 @@ def test_load_rejects_truncated_archive(tmp_path: Path) -> None:
     assert Bundle.load(archive, BundleRole.result).role is BundleRole.result
 
 
-def test_load_expected_digest_mismatch_fails(tmp_path: Path) -> None:
+def test_load_verifies_the_sealed_member_inventory(tmp_path: Path) -> None:
     tree = tmp_path / "result"
     _result_tree(tree)
     archive = _seal(tree, tmp_path / "result.tar.zst")
-    _, observed = verify_archive_digest(archive, manifest_name(BundleRole.result))
+    manifest = verify_archive(archive, manifest_name(BundleRole.result))
 
-    assert Bundle.load(archive, BundleRole.result, expected_digest=observed).digest == observed
-    with pytest.raises(ValueError):
-        Bundle.load(archive, BundleRole.result, expected_digest="0" * 64)
+    assert manifest["files"]
+    handle = Bundle.load(archive, BundleRole.result)
+    # Every declared inventory member is present in the verified member list.
+    assert set(manifest["files"]).issubset(set(handle.members()))
 
 
 def test_result_role_keeps_only_selected_checkpoint(tmp_path: Path) -> None:
@@ -276,7 +277,7 @@ def test_pipeline_steps_are_wired() -> None:
 def test_seal_archive_captures_the_transport_digest_and_members(tmp_path: Path) -> None:
     """Sealing yields the whole-file digest without reading the archive back.
 
-    The digest is the transport token (the ``.sha256`` sidecar), and the member
+    The digest is the transport token (the ``.size`` sidecar), and the member
     list is captured by the same boundary pass that verifies the archive, so a
     later stage neither re-reads nor re-parses it.
     """
@@ -287,12 +288,12 @@ def test_seal_archive_captures_the_transport_digest_and_members(tmp_path: Path) 
 
     sealed = Bundle.seal_archive(archive, files, role=BundleRole.inputs,
                                  metadata={_spec().run_tag_key: "r-tag"})
-    _, observed = verify_archive_digest(archive, manifest_name(BundleRole.inputs))
-    assert sealed.digest == observed
+    observed = verify_archive(archive, manifest_name(BundleRole.inputs))
+    assert sealed.manifest[_spec().files_key] == observed[_spec().files_key]
     assert sealed.role is BundleRole.inputs
 
     handle = Bundle.load(archive, BundleRole.inputs)
-    assert handle.digest == observed
+    assert set(observed[_spec().files_key]).issubset(set(handle.members()))
     assert handle.members() == sorted(handle.member_names)
     # The member list came from the boundary pass: it still answers after the
     # archive path is gone, which is exactly "no stage re-parses".
