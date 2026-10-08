@@ -2248,6 +2248,24 @@ class HpoSpaceSpec(BaseModel):
     weight_decay: tuple[float, float]
     negative_mask_frac: tuple[float, float]
     uniformity_weight: tuple[float, float]
+    # TASK B item 5: optional categorical sweep over the scheduler menu. Null
+    # (the default) keeps lr_scheduler SSOT-fixed -> the TPE layout is
+    # unchanged; a list adds ONE categorical suggest at the END of the search.
+    lr_scheduler: list[str] | None = None
+
+    @field_validator("lr_scheduler")
+    @classmethod
+    def _schedulers_declared(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        allowed = {"linear", "cosine", "one_cycle", "plateau", "constant"}
+        unknown = sorted(set(value) - allowed)
+        if unknown or not value:
+            raise ValueError(
+                f"hpo.tpe_space.lr_scheduler choices must be non-empty and in "
+                f"{sorted(allowed)}, got {value!r}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _ranges_ordered(self) -> HpoSpaceSpec:

@@ -375,7 +375,13 @@ _LaneContext.Unregistered = UnregisteredDatapointPopulationError
 from core.common import hpo_cfg as _hpo_cfg_load
 
 _HPO_SETTINGS = _hpo_cfg_load()
-HPO_SPACE = {k: (lo, hi) for k, (lo, hi) in _HPO_SETTINGS["tpe_space"].items()}
+HPO_SPACE = {
+    k: tuple(v)
+    for k, v in _HPO_SETTINGS["tpe_space"].items()
+    if isinstance(v, (list, tuple)) and len(v) == 2
+}
+# TASK B item 5: optional categorical scheduler choices (null => not swept).
+HPO_SCHEDULERS = _HPO_SETTINGS["tpe_space"].get("lr_scheduler") or None
 
 # HPO objective protocol, SSOT: hpo.objective /
 # hpo.selection_skip_test_eval (validated by HpoSpec/ObjectiveSpec at load).
@@ -1707,7 +1713,22 @@ class _RuntimeTelemetry:
         _RuntimeTelemetry._proc_rss(telemetry)
         _RuntimeTelemetry._host_memory(telemetry)
         _RuntimeTelemetry._cuda_fact(telemetry)
+        _RuntimeTelemetry._gpu_utilization(telemetry)
         return telemetry
+
+    @staticmethod
+    def _gpu_utilization(telemetry: dict[str, float | int]) -> None:
+        """TASK B item 16: NVML util/power/clocks, config-gated (off default)."""
+        try:
+            from core.common import training_cfg
+
+            if not bool(training_cfg().advanced.telemetry.nvml):
+                return
+        except Exception:
+            return
+        from training.advanced import collect_nvml_telemetry
+
+        telemetry.update(collect_nvml_telemetry())
 
     @staticmethod
     def _proc_rss(telemetry: dict[str, float | int]) -> None:
@@ -1778,6 +1799,13 @@ class _RuntimeTelemetry:
             "rss_mb": "memory/worker_rss_mb",
             "memory_used_mb": "memory/total_used_mb",
             "memory_available_mb": "memory/total_available_mb",
+            # Present only when advanced.telemetry.nvml is enabled.
+            "gpu_util_pct": "gpu/util_pct",
+            "power_w": "gpu/power_w",
+            "sm_clock_mhz": "gpu/sm_clock_mhz",
+            "mem_clock_mhz": "gpu/mem_clock_mhz",
+            "temperature_c": "gpu/temperature_c",
+            "gpu_memory_used_mb": "gpu/memory_used_mb",
         }
         return {
             target: float(values[source])
@@ -3168,6 +3196,61 @@ class DvcCheckpointCallback(TrainerCallback):
                 self._stage_executor = None
             self._stage_futures = []
         return control
+
+
+class _WeightEmaCallback(TrainerCallback):
+    """TASK B item 1: epoch-wise weight EMA, persisted beside each checkpoint.
+
+    The EMA arithmetic lives in the tested ``training.advanced.EmaTracker``.
+    The callback folds the model's state dict in at each epoch boundary and
+    writes ``ema_state.pt`` into every checkpoint directory and the run output
+    dir, so the EMA model is checkpointed and resumable. (Best-model SELECTION
+    on the EMA dev AP is left to the caller; the online metric stays the
+    selection signal unless EMA selection is explicitly wired.)
+    """
+
+    def __init__(self, decay: float, warmup_updates: int = 0):
+        self._decay = float(decay)
+        self._warmup_updates = int(warmup_updates)
+        self._tracker = None
+
+    def _unwrap(self, model):
+        return getattr(model, "module", model)
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        if model is None or not state.is_world_process_zero:
+            return control
+        from training.advanced import EmaTracker
+
+        if self._tracker is None:
+            self._tracker = EmaTracker(
+                decay=self._decay, warmup_updates=self._warmup_updates
+            )
+        self._tracker.update(dict(self._unwrap(model).state_dict()))
+        return control
+
+    def _write(self, destination: Path) -> None:
+        if self._tracker is None:
+            return
+        import torch
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self._tracker.state_dict(), destination)
+
+    def on_save(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write(
+                Path(args.output_dir) / f"checkpoint-{state.global_step}" / "ema_state.pt"
+            )
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write(Path(args.output_dir) / "ema_state.pt")
+        return control
+
+    def state_dict(self):
+        return None if self._tracker is None else self._tracker.state_dict()
 
 
 class FineTunedAnnRefreshCallback(TrainerCallback):
@@ -5756,6 +5839,24 @@ def train_one_config(
                 model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
                 from core.encoding_inputs import enable_zero_truncation
                 enable_zero_truncation(model)
+                # TASK B item 6: TF32 + text torch.compile behind advanced.accel.*
+                # (both default OFF; compile also respects accel.compile perf gate).
+                _accel = training_cfg().advanced.accel
+                if on_cuda and _accel.tf32:
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.allow_tf32 = True
+                    print("    [accel] TF32 matmul/cudnn enabled", flush=True)
+                if _accel.compile:
+                    from core.fast_kernels import compile_model
+                    model[0].auto_model = compile_model(
+                        model[0].auto_model,
+                        name="text.encoder",
+                        mode=str(_accel.compile_mode),
+                    )
+                    print(
+                        f"    [accel] text encoder compile requested mode={_accel.compile_mode}",
+                        flush=True,
+                    )
                 token_lookup = None
                 if prepared_tokens is not None:
                     from training.token_inputs import PreparedTokenLookup
@@ -6162,6 +6263,10 @@ def train_one_config(
                     weight_decay=cfg["weight_decay"],
                     lr_scheduler_type=cfg["lr_scheduler"],
                     max_grad_norm=cfg["max_grad_norm"],
+                    # TASK B item 7: micro-batch accumulation (SSOT, default 1).
+                    gradient_accumulation_steps=int(
+                        training_cfg().advanced.gradient_accumulation_steps
+                    ),
                     bf16=native_bf16,
                     fp16=on_cuda and not native_bf16,
                     # early stopping: eval every eval_steps, stop on plateau,
@@ -6297,6 +6402,15 @@ def train_one_config(
                         early_stopping_threshold=cfg["es_threshold"],
                     ),
                 ]
+                # TASK B item 1: weight EMA (default OFF).
+                _ema_cfg = training_cfg().advanced.ema
+                if _ema_cfg.enabled:
+                    callbacks.append(
+                        _WeightEmaCallback(
+                            decay=float(_ema_cfg.decay),
+                            warmup_updates=int(_ema_cfg.warmup_updates),
+                        )
+                    )
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
                 # the collector never writes the trace itself (train_one_config
@@ -7065,6 +7179,37 @@ def train_one_config(
                 from core.common import load_config as _lc
 
                 _pr_auc = float(average_precision_score(_y, _all))
+                # TASK B item 2: post-hoc temperature scaling + ECE/Brier +
+                # reliability artifact. The temperature is fitted on the DEV
+                # carve ONLY; the test quarter is scored with it, never used to
+                # fit (leakage discipline). Default OFF.
+                _calibration_fields: dict[str, float] = {}
+                _cal_cfg = training_cfg().advanced.calibration
+                if _cal_cfg.enabled and len(_dev_all):
+                    from training.advanced import calibration_report
+
+                    _cal = calibration_report(
+                        _dev_all,
+                        _dev_y.astype(int),
+                        _all,
+                        _y.astype(int),
+                        n_bins=int(_cal_cfg.n_bins),
+                        min_temperature=float(_cal_cfg.min_temperature),
+                        max_temperature=float(_cal_cfg.max_temperature),
+                        fit=bool(_cal_cfg.temperature_scaling),
+                    )
+                    _calibration_fields = {
+                        f"calibration_{key}": value
+                        for key, value in _cal.items()
+                        if key != "reliability"
+                    }
+                    _reliability_path = (
+                        RESULTS / "logs" / run_tag / f"reliability_fold{fold_i}.json"
+                    )
+                    _reliability_path.parent.mkdir(parents=True, exist_ok=True)
+                    _reliability_path.write_text(
+                        json.dumps(_cal["reliability"], sort_keys=True), encoding="utf-8"
+                    )
                 # ══════════════════════════════════════════════════════════════
                 # HOLDOUT RETRIEVAL (ER-346) — two protocols, both reported
                 # ══════════════════════════════════════════════════════════════
@@ -7202,6 +7347,9 @@ def train_one_config(
                     "pr_auc": _pr_auc,
                     # 07-schema: AP under the same name the plots expect
                     "average_precision": _pr_auc,
+                    # TASK B item 2 fields (dev-fit temperature, dev/test ECE,
+                    # test Brier); empty when advanced.calibration is OFF.
+                    **_calibration_fields,
                     # The five bare, schema-pinned retrieval columns
                     # (hits_at_1/precision_at_k/recall_at_k) now carry the
                     # CORRECTED per-query pool; the degenerate historical pool is
@@ -8083,7 +8231,7 @@ class OptunaObjectiveOwner:
         identical even though the fixed-knob keys were interleaved in the old
         dict literal (they run no suggest calls).
         """
-        return {
+        suggested = {
             "epochs": trial.suggest_int("epochs", *HPO_SPACE["epochs"]),
             "lr": trial.suggest_float("lr", *HPO_SPACE["lr"], log=True),
             "warmup_ratio": trial.suggest_float(
@@ -8099,6 +8247,13 @@ class OptunaObjectiveOwner:
                 "uniformity_weight", *HPO_SPACE["uniformity_weight"]
             ),
         }
+        # TASK B item 5: appended LAST so the existing TPE suggest layout is
+        # byte-identical when hpo.tpe_space.lr_scheduler is null.
+        if HPO_SCHEDULERS:
+            suggested["lr_scheduler"] = trial.suggest_categorical(
+                "lr_scheduler", list(HPO_SCHEDULERS)
+            )
+        return suggested
 
     def _run_trial(self, trial, cfg: dict) -> list[dict]:
         """Train one protocol configuration over the selection folds."""

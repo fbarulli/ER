@@ -1259,6 +1259,10 @@ hpo:
     weight_decay: [0.0, 0.1]  # float
     negative_mask_frac: [0.0, 0.5]  # hard-negative masking; positive masking stays masking.frac
     uniformity_weight: [0.0, 0.05]  # trial-level anti-collapse regularizer
+    # TASK B item 5: optional categorical scheduler sweep. null keeps
+    # training.lr_scheduler SSOT-fixed (TPE layout unchanged); a list adds one
+    # categorical suggest at the END, over the advanced.LR_SCHEDULERS menu.
+    lr_scheduler: null
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
   n_jobs: 2                   # default parallel HPO trial workers
   persistence: "none"        # DVC disabled; retain HPO state only in the run workspace
