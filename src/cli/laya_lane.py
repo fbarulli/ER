@@ -1255,6 +1255,37 @@ def decision_tag() -> str:
     return datetime.now(ZoneInfo("UTC")).strftime("%m%dT%H%M%SZ")
 
 
+def _sha256_of_source() -> str:
+    """The ONE whole-file sha256 helper rendered into every laya kernel.
+
+    Each laya kernel runs on /kaggle before any repo checkout, so it cannot
+    import ``core``. Instead this single helper is injected at staging time;
+    its body is ``core.portable_archive.raw_file_digest`` (the ONE digest
+    implementation, which ``core.manifest.sha256_file`` forwards to), so a
+    remote receipt hash can never drift from the operator-box digest.
+    """
+    import inspect
+
+    from core.portable_archive import raw_file_digest
+
+    return inspect.getsource(raw_file_digest).replace(
+        "def raw_file_digest(", "def sha256_of(", 1)
+
+
+def _holdout_eval_module_source() -> str:
+    """The holdout kernel's metric/CI block, embedded from ``core.holdout_eval``.
+
+    The holdout kernel scores on Kaggle before any repo checkout, so it cannot
+    import ``core``; the module source is embedded verbatim and exec'd
+    in-kernel, so the remote report uses the ONE metric implementation
+    (single observed class -> ``pr_auc`` missing, never a fabricated 1.0) and
+    the ONE component bootstrap (``np.isfinite`` filter + ``n_boot``/``alpha``).
+    """
+    from core import holdout_eval
+
+    return Path(holdout_eval.__file__).read_text(encoding="utf-8")
+
+
 DECISION_KERNEL_SCRIPT = '''\
 """ER typed decisions via laya on a Kaggle GPU session (cli.laya_lane).
 
@@ -2127,12 +2158,7 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
         output_dir=str(out_dir), config=config, device=device)
 
 
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+@SHA256_OF@
 
 
 def evaluate_held_out(test_path, checkpoint, device):
@@ -2404,12 +2430,7 @@ def resolve_checkpoint():
         "(rl_agent_config.json); attach the checkpoint dataset")
 
 
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+@SHA256_OF@
 
 
 def fit_eval_calibration(laya_train, records):
@@ -3091,88 +3112,51 @@ def resolve_checkpoint():
     raise FileNotFoundError("attached inputs carried no checkpoint")
 
 
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+@SHA256_OF@
 
 
-def binary_metrics(labels, scores, threshold):
-    tp = fp = tn = fn = 0
-    for y, s in zip(labels, scores):
-        pred = 1 if s >= threshold else 0
-        if pred and y:
-            tp += 1
-        elif pred and not y:
-            fp += 1
-        elif not pred and y:
-            fn += 1
-        else:
-            tn += 1
-    def pr(tp, fp):
-        return tp / (tp + fp) if (tp + fp) else 0.0
-    def rc(tp, fn):
-        return tp / (tp + fn) if (tp + fn) else 0.0
-    precision, recall = pr(tp, fp), rc(tp, fn)
-    f1 = (2 * precision * recall / (precision + recall)
-          if (precision + recall) else 0.0)
-    n = tp + fp + tn + fn
-    return {"n": n, "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-            "accuracy": (tp + tn) / n if n else None,
-            "precision": precision, "recall": recall, "f1": f1}
+# The holdout metric/CI helpers are NOT re-implemented here. They are embedded
+# verbatim from core.holdout_eval (the ONE implementation, unit-tested
+# hermetically) and exec'd at runtime, so the remote report can never drift
+# from the operator-box module: a single observed class reports ``pr_auc`` as
+# missing (never a fabricated 1.0), and the component bootstrap keeps the
+# ``np.isfinite`` filter plus ``n_boot``/``alpha``.
+_HOLDOUT_EVAL_SOURCE = @HOLDOUT_EVAL_MODULE@
 
 
-def pr_auc(labels, scores):
-    import numpy as np
-    labels = np.asarray(labels)
-    if len(set(labels.tolist())) < 2:
-        return None
-    order = np.argsort(-np.asarray(scores, dtype=float))
-    hits = labels[order]
-    cum = np.cumsum(hits)
-    precision = cum / (np.arange(len(hits)) + 1)
-    return float((precision * hits).sum() / hits.sum())
+def _load_holdout_eval():
+    namespace = {}
+    exec(compile(_HOLDOUT_EVAL_SOURCE, "<core.holdout_eval>", "exec"),
+         namespace)
+    return namespace
 
 
-def bootstrap_ci(labels, scores, components, stat, n_boot, seed, alpha=0.05):
-    import numpy as np
-    components = np.asarray(components, dtype=object)
-    labels, scores = np.asarray(labels), np.asarray(scores)
-    unique = np.unique(components)
-    rows_of = {c: np.where(components == c)[0] for c in unique}
-    rng = np.random.default_rng(seed)
-    samples = []
-    for _ in range(int(n_boot)):
-        picks = rng.choice(unique, size=unique.size, replace=True)
-        idx = np.concatenate([rows_of[c] for c in picks])
-        value = stat(labels[idx], scores[idx])
-        if value is not None:
-            samples.append(float(value))
-    point = stat(labels, scores)
-    if not samples:
-        return {"point": point, "lo": None, "hi": None}
-    lo, hi = np.percentile(samples, [100 * alpha / 2, 100 * (1 - alpha / 2)])
-    return {"point": point, "lo": float(lo), "hi": float(hi)}
+def block(he, labels, scores, components, threshold):
+    binary_metrics = he["binary_metrics"]
+    cluster_bootstrap_ci = he["cluster_bootstrap_ci"]
+    metrics = binary_metrics(labels, scores, threshold=threshold)
 
+    def _stat(name):
+        def f(y, s):
+            return binary_metrics(y, s, threshold=threshold)[name]
+        return f
 
-def block(labels, scores, components, threshold):
-    m = binary_metrics(labels, scores, threshold)
-    def _f1(y, s):
-        return binary_metrics(y, s, threshold)["f1"]
-    def _precision(y, s):
-        return binary_metrics(y, s, threshold)["precision"]
-    def _recall(y, s):
-        return binary_metrics(y, s, threshold)["recall"]
     return {
-        "metrics": m,
-        "pr_auc": pr_auc(labels, scores),
+        "metrics": metrics,
+        "pr_auc": metrics["pr_auc"],
         "cis": {
-            "precision": bootstrap_ci(labels, scores, components, _precision, N_BOOT, SEED),
-            "recall": bootstrap_ci(labels, scores, components, _recall, N_BOOT, SEED),
-            "f1": bootstrap_ci(labels, scores, components, _f1, N_BOOT, SEED),
-            "pr_auc": bootstrap_ci(labels, scores, components, pr_auc, N_BOOT, SEED),
+            "precision": cluster_bootstrap_ci(
+                components, labels, scores, statistic=_stat("precision"),
+                n_boot=N_BOOT, seed=SEED),
+            "recall": cluster_bootstrap_ci(
+                components, labels, scores, statistic=_stat("recall"),
+                n_boot=N_BOOT, seed=SEED),
+            "f1": cluster_bootstrap_ci(
+                components, labels, scores, statistic=_stat("f1"),
+                n_boot=N_BOOT, seed=SEED),
+            "pr_auc": cluster_bootstrap_ci(
+                components, labels, scores, statistic=_stat("pr_auc"),
+                n_boot=N_BOOT, seed=SEED),
         },
     }
 
@@ -3180,6 +3164,7 @@ def block(labels, scores, components, threshold):
 def main():
     pip_install_laya()
     device = pick_device()
+    he = _load_holdout_eval()
     import numpy as np
     import torch
     from laya import train as laya_train
@@ -3216,7 +3201,7 @@ def main():
     by_stratum = {}
     for name in sorted(set(strata)):
         idx = [i for i, s in enumerate(strata) if s == name]
-        by_stratum[name] = block([labels[i] for i in idx],
+        by_stratum[name] = block(he, [labels[i] for i in idx],
                                  [scores[i] for i in idx],
                                  [components[i] for i in idx], THRESHOLD)
     report = {
@@ -3228,7 +3213,7 @@ def main():
         "skipped": skipped,
         "threshold": THRESHOLD,
         "n_boot": N_BOOT,
-        "overall": block(labels, scores, components, THRESHOLD),
+        "overall": block(he, labels, scores, components, THRESHOLD),
         "by_stratum": by_stratum,
     }
     WORKING.mkdir(parents=True, exist_ok=True)
@@ -3320,6 +3305,8 @@ def stage_holdout_eval_kernel(*, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
+        "SHA256_OF": _sha256_of_source(),
+        "HOLDOUT_EVAL_MODULE": repr(_holdout_eval_module_source()),
     }
     preflight = _template(LAYA_RUNTIME_PREFLIGHT, {
         **values, "DECISION_CSV": HOLDOUT_JSONL,
@@ -3428,6 +3415,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
+        "SHA256_OF": _sha256_of_source(),
         "DEVICE_PATCH": FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": FINETUNE_PERF_PATCH_SOURCE,
         # The kernel-side session self-report (its host twin is
@@ -3565,6 +3553,7 @@ def stage_finetune_eval_kernel(*, revision: str | None = None,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
+        "SHA256_OF": _sha256_of_source(),
     }
     # two-pass substitution (the preflight bakes its own literal tuple
     # first; the push gate literal-evals `_runtime_files`).

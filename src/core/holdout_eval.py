@@ -39,7 +39,8 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, *,
     """Thresholded binary metrics + PR-AUC for one slice.
 
     A slice with a single observed class scores ``precision``/``recall``/``f1``
-    as 0.0 (never a fabricated 1.0) and ``pr_auc`` as ``None`` — a metric that
+    per the sklearn ``zero_division=0`` convention (1.0 only when every
+    prediction is a true positive) and ``pr_auc`` as ``None`` — a metric that
     cannot be estimated is reported as missing, never as perfect.
     """
     y_true = np.asarray(y_true, dtype=int)
