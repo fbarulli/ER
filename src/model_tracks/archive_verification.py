@@ -34,8 +34,8 @@ VERIFICATION_SCHEMA = 'er-suite-verification-v1'
 
 def _spec():
     """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 def report_member(track: str) -> str:

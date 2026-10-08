@@ -26,8 +26,8 @@ from model_tracks.resume import POSTPROCESS_TRACKS, TRACKS, TRAINING_TRACKS
 
 def _spec():
     """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 @contextmanager

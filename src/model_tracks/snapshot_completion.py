@@ -51,8 +51,8 @@ def flush_trace():
 
 
 def _spec():
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 class SnapshotCompletionReceipt(BaseModel):

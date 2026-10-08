@@ -71,8 +71,8 @@ LOCAL_REPORT_CONFIG = "local_report.yaml"
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _shared_embeddings_name() -> str:
@@ -81,8 +81,8 @@ def _shared_embeddings_name() -> str:
 
 
 def _spec():
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 def _require(condition: bool, message: str) -> None:

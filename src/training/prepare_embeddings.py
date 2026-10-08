@@ -14,8 +14,8 @@ from graph_tracks.text_cache import checkpoint_hash, create_cache, compose_texts
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def input_identity(setup: Path, checkpoint: Path) -> dict:

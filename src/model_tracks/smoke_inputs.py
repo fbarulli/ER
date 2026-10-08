@@ -42,8 +42,8 @@ _SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache',
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _repoint_smoke_paths(settings: dict, *, setup: Path, output: Path,

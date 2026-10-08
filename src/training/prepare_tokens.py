@@ -18,8 +18,8 @@ _FROZEN_INPUT_KEYS = ('canonical_records', 'gate_results', 'labeled_pairs')
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _fail_on_stale_frozen(bundle: dict) -> None:

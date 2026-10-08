@@ -45,8 +45,8 @@ class WorkerEvents:
         if filename is None:
             # The per-worker event stream name is the bundle contract's own
             # (config SSOT); a caller may override it (the suite stream).
-            from core.bundle import _bundle_spec
-            filename = _bundle_spec().worker_events_file
+            from core.bundle import bundle_spec
+            filename = bundle_spec().worker_events_file
         self.path = output / filename
         self.track, self.run_tag = track, run_tag
         self.attempt = uuid.uuid4().hex

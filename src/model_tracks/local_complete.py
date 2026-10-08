@@ -56,8 +56,8 @@ def flush_trace():
 
 
 def _spec():
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done: bool = False, destination: Path | None = None, bundle=None) -> Path:

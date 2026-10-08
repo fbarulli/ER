@@ -114,9 +114,9 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
 def _collect_failure_logs(backend, remote_output: str, run_tag: str):
     """Collect diagnostics even when preflight never produced a suite manifest."""
     from core.common import RESULTS
-    from core.bundle import _bundle_spec
+    from core.bundle import bundle_spec
     from model_tracks.resume import TRACKS
-    spec = _bundle_spec()
+    spec = bundle_spec()
     names = [spec.suite_events_file]
     for track in TRACKS:
         names.extend([f'{track}__worker.log', f'{track}/{spec.worker_events_file}'])

@@ -20,8 +20,8 @@ _LOG = RunLogger(__name__)
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 #: The stage name this module owns in the ONE consolidated pipeline trace.
@@ -51,8 +51,8 @@ def flush_trace():
 
 def _spec():
     """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = False) -> dict:

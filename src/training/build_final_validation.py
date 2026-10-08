@@ -103,7 +103,8 @@ from core.common import F, RESULTS, SEED, load_dataset_deduped, training_cfg
 from core.manifest import atomic_write_csv
 from core.run_log import RunLogger
 from core.schemas import check_canonical_records_frame, upgrade_canonical_records_frame
-from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
+from core.tracing import (ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON,
+                          TRACE_BATCH_ROWS, TRACE_MAX_BATCH_ROWS, TraceRun)
 from training.folds import (
     component_ids,
     derive_holdout,
@@ -121,8 +122,8 @@ STAGE = "final_validation"
 # The assembler walks one labeled pair at a time; 4,096 pairs per BATCH row keeps
 # a real census to a handful of rows, and 16 traced batches bound the file while
 # the remainder is announced in ``labeled_census.batch_census``.
-_BATCH_PAIRS = 4096
-_MAX_BATCH_ROWS = 16
+_BATCH_PAIRS = TRACE_BATCH_ROWS
+_MAX_BATCH_ROWS = TRACE_MAX_BATCH_ROWS
 
 #: The three outcomes a labeled pair can have in the assembler. These strings are
 #: the trace's reason labels, so a reader greps outcomes, not prose.

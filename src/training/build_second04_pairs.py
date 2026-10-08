@@ -48,7 +48,8 @@ from core.schemas import (
     check_cross_country_pair_frame,
 )
 from core.step_trace import timed
-from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
+from core.tracing import (ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON,
+                          TRACE_BATCH_ROWS, TRACE_MAX_BATCH_ROWS, TraceRun)
 
 _LOG = RunLogger(__name__)
 
@@ -61,8 +62,8 @@ STAGE = "build_second04_pairs"
 # makes a real cohort a handful of rows while staying small enough to read, and
 # 16 traced batches keep the file bounded on a 25k-GTIN corpus; the remainder is
 # announced in ``pairs.batch_census`` instead of vanishing.
-_BATCH_GTINS = 4096
-_MAX_BATCH_ROWS = 16
+_BATCH_GTINS = TRACE_BATCH_ROWS
+_MAX_BATCH_ROWS = TRACE_MAX_BATCH_ROWS
 
 REQUIRED_COLUMNS = ("sku_id", "gtin", "country")
 

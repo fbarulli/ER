@@ -49,8 +49,8 @@ def _source_layout_key() -> str:
 
 def _spec():
     """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 def package_manifest() -> str:
@@ -83,8 +83,8 @@ def _target() -> Path:
 
 
 def _setup_layout():
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _sidecar(path: Path) -> Path:

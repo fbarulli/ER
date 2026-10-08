@@ -52,6 +52,7 @@ from core.tracing import (
     ENTITY_ROW_CAP,
     ENTITY_SAMPLE_PER_REASON,
     SCOPE_ENTITY,
+    TRACE_MAX_BATCH_ROWS,
     TraceRun,
 )
 from graph_tracks.data import census, file_hash, fit_vocabulary, load_records
@@ -72,8 +73,8 @@ def _setup_layout():
     lineage/manifest/census documents, the prepared dir and the rendered lane
     configs) is read from the ONE declared contract rather than spelled here.
     """
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def write_setup_frames(output: Path, *, catalog: pd.DataFrame,
@@ -117,7 +118,7 @@ def write_text_config(output: Path, settings: dict) -> Path:
 # the matching ``batch_census`` row rather than vanishing.
 _BATCH_ENTITIES = 512
 _BATCH_LABEL_ROWS = 2048
-_MAX_BATCH_ROWS = 16
+_MAX_BATCH_ROWS = TRACE_MAX_BATCH_ROWS
 
 
 class _PairLedger:

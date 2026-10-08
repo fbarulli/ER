@@ -11,8 +11,8 @@ from model_tracks.embedding_forward import PreparedEmbeddingForward, validate_em
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def prepare(setup,checkpoint,*,composer=None):

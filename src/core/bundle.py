@@ -39,6 +39,17 @@ def _bundle_spec():
     return training_cfg().bundle
 
 
+def bundle_spec():
+    """Public accessor for the bundle contract (``training_cfg().bundle``).
+
+    THE name every lane reads bundle member names through; the private
+    ``_bundle_spec`` remains the module-internal alias so the many internal
+    call sites don't churn. Keeping one public entry point stops lanes from
+    importing a private helper across the package boundary.
+    """
+    return _bundle_spec()
+
+
 class BundleRole(str, Enum):
     """What a bundle is for; the role pins the manifest and allowed behavior."""
 

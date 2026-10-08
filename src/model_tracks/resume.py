@@ -14,14 +14,14 @@ from model_tracks.config import SuiteConfig
 
 def _spec():
     """The bundle contract from config (lazy import keeps the cycle open)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+    from core.bundle import bundle_spec
+    return bundle_spec()
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 TRACKS = ('text', 'gnn_only', 'cascade')
 #: Tracks that train behind the shared start barrier. The cascade trains
