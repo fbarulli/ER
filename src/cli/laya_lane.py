@@ -3386,10 +3386,15 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
     output = result.stdout or ""
     rc = result.returncode
     plan["returncode"] = rc
-    if rc != 0:
+    # `kaggle kernels push` returns rc=0 even on a soft error — e.g. the
+    # GPU-session quota message "Kernel push error: Maximum batch GPU session
+    # count of 2 reached" — so the exit code alone is NOT fail-loud. Require the
+    # CLI's success line and reject any error text in its output.
+    lowered = (output or "").lower()
+    if rc != 0 or "error" in lowered or "successfully pushed" not in lowered:
         tail = output.strip()[-4000:] or "(kaggle produced no output)"
         raise RuntimeError(
-            f"kaggle command failed (rc={rc}): {' '.join(argv)}\n"
+            f"kaggle kernels push failed (rc={rc}): {' '.join(argv)}\n"
             f"--- kaggle output ---\n{tail}")
     plan["pushed"] = True
     try:

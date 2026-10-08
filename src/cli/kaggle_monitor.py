@@ -271,15 +271,26 @@ class KaggleMonitor:
         destination.parent.mkdir(parents=True, exist_ok=True)
         plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
         session_id: int | None = None
-        # Raw stream characters already persisted (the decoded ``data`` payload
-        # text, NOT the transformed lines) and how many the current reconnected
-        # attempt must still drop. A dropped SSE connection re-attaches at the
-        # session's FIRST line and replays a byte-exact prefix, so the follower
-        # skips exactly that many raw characters. Counting transformed lines
-        # (3c6d048) drifted as soon as ``progress_frames_to_lines``
-        # re-partitioned ``\r`` frames across different chunk boundaries: it
-        # duplicated the prefix and then swallowed the live tail — the tqdm
-        # regression this fixes.
+        # One follower per kernel: two writers race the transcript, each with
+        # its own replay state. Refuse to start if the recorded pid is alive; a
+        # stale pid left by a dead follower is overwritten.
+        lock_path = lane.lane_logs_dir() / f"{kernel}.follower.pid"
+        try:
+            holder = int(lock_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            holder = None
+        if holder is not None:
+            try:
+                os.kill(holder, 0)
+            except ProcessLookupError:
+                holder = None  # the previous follower is gone
+            except PermissionError:
+                pass  # alive (owned by another uid on this box)
+            if holder is not None:
+                raise RuntimeError(
+                    f"a stream follower for {slug} is already running "
+                    f"(pid {holder}); refusing a second writer on the transcript")
+        lane.atomic_write_text(lock_path, str(os.getpid()) + "\n")
         # On a dropped connection the midtier replays the WHOLE session from
         # line 0. We do NOT try to dedup that replay: byte/line/time counters all
         # drift because the replay is not a prefix of what we wrote, and the
