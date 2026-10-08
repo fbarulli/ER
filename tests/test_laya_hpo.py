@@ -359,6 +359,55 @@ def test_stage_kernel_requires_optuna_url(monkeypatch, tmp_path):
         laya_hpo.stage_laya_hpo_kernel()
 
 
+def _stage_colab(monkeypatch, tmp_path, url):
+    monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-colab-1")
+    monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
+    monkeypatch.setattr(laya_lane, "_git_revision", lambda: "b" * 40)
+    monkeypatch.setattr(laya_lane, "_env_value",
+                        lambda name: url if name == laya_hpo.OPTUNA_URL_ENV
+                        else None)
+    monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
+    monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
+                        lambda **kwargs: {"payload": "x", "files": {}})
+    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
+    from core import runtime_inputs
+    monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
+                        lambda rev, repo, branch: rev)
+    return laya_hpo.stage_laya_hpo_colab()
+
+
+def test_stage_colab_writes_entry_without_the_secret(monkeypatch, tmp_path):
+    secret = "postgresql://hpo_user:s3cret@db.example.com:5432/optuna"
+    receipt = _stage_colab(monkeypatch, tmp_path, secret)
+    stage = Path(receipt["staged"])
+    script = (stage / laya_hpo.HPO_CODE_FILE).read_text(encoding="utf-8")
+    entry = (stage / laya_hpo.COLAB_ENTRY_FILE).read_text(encoding="utf-8")
+    compile(script, str(stage / laya_hpo.HPO_CODE_FILE), "exec")
+    compile(entry, str(stage / laya_hpo.COLAB_ENTRY_FILE), "exec")
+    assert secret in script and secret not in entry
+    assert receipt["lane"] == "colab"
+    assert receipt["working"].startswith("/content")
+    assert set(receipt["registry"]) == {"laya", "text", "gnn", "cascade"}
+    assert secret not in json.dumps(receipt)
+    assert not (stage / "kernel-metadata.json").exists()  # colab is not a kernel
+
+
+def test_cli_lane_dispatch_registry_is_complete():
+    assert set(laya_hpo.STAGE_DISPATCH) == set(laya_hpo.LANES)
+    assert laya_hpo.STAGE_DISPATCH["kaggle"] == "stage_laya_hpo_kernel"
+    assert laya_hpo.STAGE_DISPATCH["colab"] == "stage_laya_hpo_colab"
+
+
+def test_stage_kernel_receipt_carries_registry_and_observability(monkeypatch,
+                                                                tmp_path):
+    receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    assert set(receipt["registry"]) == {"laya", "text", "gnn", "cascade"}
+    observability = receipt["observability"]
+    assert observability["events"].endswith("trial_events.jsonl")
+    assert observability["mirror"].endswith("study_mirror.jsonl")
+    assert observability["ledger"].endswith("hpo_trials.jsonl")
+
+
 def test_stage_kernel_bakes_secret_only_into_the_script(monkeypatch, tmp_path):
     secret = "postgresql://hpo_user:s3cret@db.example.com:5432/optuna"
     receipt = _stage(monkeypatch, tmp_path, secret)

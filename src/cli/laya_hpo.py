@@ -52,6 +52,8 @@ from training import (
     hpo_champions,
     hpo_control_plane,
     hpo_fencing,
+    hpo_observability,
+    hpo_registry,
     laya_hpo_options,
     laya_hpo_runtime,
 )
@@ -71,6 +73,8 @@ from training.laya_hpo_runtime import (
 HPO_DECISION = "laya-hpo"
 HPO_CODE_FILE = "laya_hpo.py"
 HPO_RECEIPT_FILE = "laya-hpo.receipt.json"
+COLAB_ENTRY_FILE = "laya_hpo_colab.py"
+LANES = ("kaggle", "colab")
 SPACE_FILE_NAME = "laya_hpo_space.yaml"
 DEFAULT_MODEL_KEY = "laya"
 TARGETS = ("config", "control")
@@ -210,6 +214,11 @@ def study_identity(*, space: dict[str, Any] | None = None,
             "name is generation-scoped so a new corpus/recipe can never mix "
             "into an old TPE history. Export it before staging.")
     key = (model_key or resolved_space.get("model_key") or DEFAULT_MODEL_KEY).strip()
+    registry = hpo_registry.default_registry()
+    if key not in registry:
+        raise ValueError(
+            f"laya HPO model_key {key!r} is not registered; "
+            f"expected one of {registry.keys()}")
     return generation, key, generation_study_name(
         generation_id=generation, model_key=key)
 
@@ -265,7 +274,8 @@ def hpo_runtime_source() -> str:
     """
     chunks: list[str] = []
     for module in (hpo_control_plane, hpo_fencing, hpo_champions,
-                   laya_hpo_runtime, laya_hpo_options):
+                   laya_hpo_runtime, laya_hpo_options, hpo_observability,
+                   hpo_registry):
         text = inspect.getsource(module)
         cleaned = "\n".join(
             line for line in text.splitlines()
@@ -309,6 +319,73 @@ def _current_git_branch() -> str:
     if not branch or branch == "HEAD":
         return training_cfg().kaggle.branch
     return branch
+
+
+# The runtime preflight is inline (not the finetune lane's constant) so it reads
+# the env-driven INPUTS root and thus works on BOTH Kaggle and Colab.
+_HPO_RUNTIME_PREFLIGHT = '''\
+_runtime_files = ("@TRAIN_JSONL@", "@DEV_JSONL@", "@TEST_JSONL@")
+
+
+def laya_runtime_preflight():
+    """Verify the ATTACHED corpus inputs under the lane's INPUTS root."""
+    missing = [name for name in _runtime_files
+               if not any(INPUTS.rglob(name))]
+    if missing:
+        raise FileNotFoundError(
+            "Runtime preflight missing attached inputs: " + ", ".join(missing))
+    print("[runtime-preflight] verified %d required files"
+          % len(_runtime_files), flush=True)
+
+
+laya_runtime_preflight()
+'''
+
+
+def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
+                        budget_trials: int, budget_jobs: int, url: str,
+                        repository: str, branch: str,
+                        revision: str) -> str:
+    """Render the ONE HPO kernel script (shared by the Kaggle and Colab lanes).
+
+    Output/input roots are runtime env (ER_LAYA_HPO_WORKING/INPUT) so the same
+    text runs on Kaggle (defaults) and Colab (the entry driver overrides them).
+    """
+    preflight = laya_lane._template(_HPO_RUNTIME_PREFLIGHT, {
+        "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],
+        "DEV_JSONL": laya_lane.FINETUNE_CORPUS_FILES[1],
+        "TEST_JSONL": laya_lane.FINETUNE_CORPUS_FILES[2],
+    })
+    values: dict[str, str] = {
+        "LAYA_PACKAGE": spec.finetune_package,
+        "RUN_TAG": tag,
+        "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],
+        "DEV_JSONL": laya_lane.FINETUNE_CORPUS_FILES[1],
+        "BASE_MODEL_ARCHIVE": spec.base_model_archive,
+        "BASE_MODEL_DIR": spec.base_model_dir,
+        "FINETUNE_DEVICE": spec.finetune.device,
+        "BASE_FINETUNE_CONFIG": repr(laya_lane.finetune_config(spec)),
+        "BASE_FINETUNE_CONTROL": repr(laya_lane.finetune_control(spec)),
+        "HPO_SPACE": repr(space),
+        "N_TRIALS": str(budget_trials),
+        "N_JOBS": str(budget_jobs),
+        "SEED": str(int(space["seed"])),
+        "GENERATION_ID": generation,
+        "MODEL_KEY": key,
+        "WANDB_API_KEY": laya_lane._env_value("WANDB_API_KEY") or "",
+        "WANDB_PROJECT": laya_lane._wandb_project(),
+        "REPOSITORY": repository,
+        "BRANCH": branch,
+        "REVISION": revision,
+        "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
+        "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
+        "HPO_RUNTIME_SOURCE": hpo_runtime_source(),
+        "OPTUNA_ENV_SCRIPT": _optuna_env_script(url),
+        "RUNTIME_PREFLIGHT": preflight,
+    }
+    script = laya_lane._template(_HPO_KERNEL_TEMPLATE, values)
+    _kernel_script_gate(script)
+    return script
 
 
 def stage_laya_hpo_kernel(*, revision: str | None = None,
@@ -372,40 +449,10 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
     budget_trials = int(n_trials if n_trials is not None else space["n_trials"])
     budget_jobs = int(n_jobs if n_jobs is not None else space["n_jobs"])
 
-    preflight = laya_lane._template(laya_lane.FINETUNE_RUNTIME_PREFLIGHT, {
-        "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],
-        "DEV_JSONL": laya_lane.FINETUNE_CORPUS_FILES[1],
-        "TEST_JSONL": laya_lane.FINETUNE_CORPUS_FILES[2],
-    })
-    values: dict[str, str] = {
-        "LAYA_PACKAGE": spec.finetune_package,
-        "RUN_TAG": tag,
-        "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],
-        "DEV_JSONL": laya_lane.FINETUNE_CORPUS_FILES[1],
-        "BASE_MODEL_ARCHIVE": spec.base_model_archive,
-        "BASE_MODEL_DIR": spec.base_model_dir,
-        "FINETUNE_DEVICE": spec.finetune.device,
-        "BASE_FINETUNE_CONFIG": repr(laya_lane.finetune_config(spec)),
-        "BASE_FINETUNE_CONTROL": repr(laya_lane.finetune_control(spec)),
-        "HPO_SPACE": repr(space),
-        "N_TRIALS": str(budget_trials),
-        "N_JOBS": str(budget_jobs),
-        "SEED": str(int(space["seed"])),
-        "GENERATION_ID": generation,
-        "MODEL_KEY": key,
-        "WANDB_API_KEY": laya_lane._env_value("WANDB_API_KEY") or "",
-        "WANDB_PROJECT": laya_lane._wandb_project(),
-        "REPOSITORY": repository,
-        "BRANCH": branch,
-        "REVISION": revision,
-        "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
-        "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
-        "HPO_RUNTIME_SOURCE": hpo_runtime_source(),
-        "OPTUNA_ENV_SCRIPT": _optuna_env_script(url),
-        "RUNTIME_PREFLIGHT": preflight,
-    }
-    script = laya_lane._template(_HPO_KERNEL_TEMPLATE, values)
-    _kernel_script_gate(script)
+    script = _compose_hpo_script(
+        spec=spec, space=space, generation=generation, key=key, tag=tag,
+        budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
+        repository=repository, branch=branch, revision=revision)
 
     metadata: dict[str, Any] = {
         "id": slug,
@@ -454,6 +501,9 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
         "profiler": space.get("profiler"),
         "options": laya_hpo_options.build_option_set(
             space, root="hpo_shared_cache").as_dict(),
+        "registry": hpo_registry.default_registry().describe(),
+        "observability": hpo_observability.TrialObserver(
+            "hpo_observability").as_dict(),
         "optuna_storage": {
             "required_env": OPTUNA_URL_ENV,
             "injected_into_kernel": True,
@@ -469,6 +519,118 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
     atomic_write_json(receipt, stage / HPO_RECEIPT_FILE)
     laya_lane._log_lane(
         f"staged kaggle laya-hpo kernel run_tag={tag} study={study_name} "
+        f"-> {stage}")
+    return receipt
+
+
+def _compose_colab_entry(script_name: str, working: str,
+                         input_root: str) -> str:
+    """The Colab driver: override the env roots and run the shared kernel.
+
+    It carries NO secret (the kernel script injects OPTUNA_STORAGE_URL itself).
+    """
+    return (
+        '"""ER laya HPO on Colab (cli.laya_hpo).\n\n'
+        "Sets the env-driven working/input roots, then runs the SAME staged\n"
+        "kernel script the Kaggle lane runs. Attach the corpus + base-model\n"
+        "archives under the input root first.\n"
+        '"""\n'
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n\n"
+        f"os.environ.setdefault('ER_LAYA_HPO_WORKING', {working!r})\n"
+        f"os.environ.setdefault('ER_LAYA_HPO_INPUT', {input_root!r})\n"
+        "os.makedirs(os.environ['ER_LAYA_HPO_WORKING'], exist_ok=True)\n"
+        "os.makedirs(os.environ['ER_LAYA_HPO_INPUT'], exist_ok=True)\n"
+        "script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
+        f"{script_name!r})\n"
+        "raise SystemExit(subprocess.run([sys.executable, script]).returncode)\n"
+    )
+
+
+def stage_laya_hpo_colab(*, revision: str | None = None,
+                         run_tag: str | None = None,
+                         generation_id: str | None = None,
+                         n_trials: int | None = None,
+                         n_jobs: int | None = None,
+                         space_config: str | Path | None = None,
+                         working: str = "/content/laya_hpo/working",
+                         input_root: str = "/content/laya_hpo/input"
+                         ) -> dict[str, Any]:
+    """Stage the Colab HPO payload (delivery contract; no session is opened).
+
+    Same script + branch pin + URL injection as Kaggle; the Colab driver only
+    overrides the working/input roots. Writes under
+    results/laya_lane/colab/laya-hpo/: laya_hpo.py + laya_hpo_colab.py +
+    laya-hpo.receipt.json.
+    """
+    spec = training_cfg().laya
+    space = load_space(space_config)
+    url = require_optuna_url()
+    generation, key, study_name = study_identity(
+        space=space, generation_id=generation_id)
+    dataset_slug = spec.finetune_dataset_slug
+    base_dataset = spec.base_model_dataset
+    if not dataset_slug or not base_dataset:
+        raise RuntimeError(
+            "laya-hpo needs spec.finetune_dataset_slug and "
+            "spec.base_model_dataset set before staging")
+    repository = training_cfg().kaggle.repository
+    branch = _current_git_branch()
+    revision = revision or laya_lane._git_revision()
+    from core import runtime_inputs
+
+    tip = runtime_inputs.require_published_tip_match(revision, repository, branch)
+    laya_lane.stage_finetune_dataset_payload(
+        dataset_slug=dataset_slug,
+        corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
+    stage = laya_lane.staging_dir() / "colab" / HPO_DECISION
+    stage.mkdir(parents=True, exist_ok=True)
+    tag = run_tag or (spec.run_tag_prefix + "hpo_" + laya_lane.decision_tag())
+    budget_trials = int(n_trials if n_trials is not None else space["n_trials"])
+    budget_jobs = int(n_jobs if n_jobs is not None else space["n_jobs"])
+    script = _compose_hpo_script(
+        spec=spec, space=space, generation=generation, key=key, tag=tag,
+        budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
+        repository=repository, branch=branch, revision=revision)
+    (stage / HPO_CODE_FILE).write_text(script, encoding="utf-8")
+    (stage / COLAB_ENTRY_FILE).write_text(
+        _compose_colab_entry(HPO_CODE_FILE, working, input_root),
+        encoding="utf-8")
+    receipt: dict[str, Any] = {
+        "lane": "colab",
+        "kind": HPO_DECISION,
+        "run_tag": tag,
+        "staged": str(stage),
+        "code_file": HPO_CODE_FILE,
+        "colab_entry": COLAB_ENTRY_FILE,
+        "working": working,
+        "input_root": input_root,
+        "study": {"generation_id": generation, "model_key": key,
+                  "study_name": study_name},
+        "space": {"path": str(space_path(space_config)),
+                  "version": space["space_version"],
+                  "digest": space_digest(space), "dials": sorted(space["dials"])},
+        "budget": {"n_trials": budget_trials, "n_jobs": budget_jobs,
+                   "seed": int(space["seed"])},
+        "objective": space["objective"],
+        "profiler": space.get("profiler"),
+        "options": laya_hpo_options.build_option_set(
+            space, root="hpo_shared_cache").as_dict(),
+        "registry": hpo_registry.default_registry().describe(),
+        "observability": hpo_observability.TrialObserver(
+            "hpo_observability").as_dict(),
+        "optuna_storage": {"required_env": OPTUNA_URL_ENV,
+                           "injected_into_kernel": True,
+                           "url_persisted_to_manifest": False},
+        "published_pin": {"repository": repository, "branch": branch,
+                          "revision": revision},
+        "published_tip": tip,
+    }
+    _assert_secret_absent(receipt, url)
+    atomic_write_json(receipt, stage / HPO_RECEIPT_FILE)
+    laya_lane._log_lane(
+        f"staged colab laya-hpo payload run_tag={tag} study={study_name} "
         f"-> {stage}")
     return receipt
 
@@ -525,6 +687,11 @@ WANDB_PROJECT = "@WANDB_PROJECT@"
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
 REVISION = "@REVISION@"
+
+# Output/input roots are overridable so the SAME kernel runs on Kaggle
+# (defaults) and Colab (the entry driver sets ER_LAYA_HPO_WORKING/INPUT).
+WORKING = Path(os.environ.get("ER_LAYA_HPO_WORKING") or "/kaggle/working")
+INPUTS = Path(os.environ.get("ER_LAYA_HPO_INPUT") or "/kaggle/input")
 @RUNTIME_PREFLIGHT@
 
 # The shared HPO primitives (training.hpo_control_plane / hpo_fencing /
@@ -532,8 +699,6 @@ REVISION = "@REVISION@"
 @OPTUNA_ENV_SCRIPT@
 @HPO_RUNTIME_SOURCE@
 
-WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
 WANDB_RUN = None
 # Per-trial globals the perf patch reads (this worker runs ONE trial at a
 # time; each worker is its own process, so the globals never race).
@@ -547,6 +712,9 @@ FINETUNE_CONTROL_RESULT = None
 OPTION_SET = None
 # Per-session shared-data cache manifests (auditable inventory).
 SHARED_CACHE_MANIFESTS = []
+# The worker's control-plane observer (trial_events CDC + study mirror +
+# offline hpo_trials ledger); set in run_worker.
+OBSERVER = None
 
 
 def log(line):
@@ -835,16 +1003,28 @@ def _record_cache_manifest(options):
         log("cache manifest skipped: " + str(error)[:160])
 
 
+def _observe(trial):
+    """Fan one committed trial out to the control-plane observer (best-effort)."""
+    try:
+        observer = globals().get("OBSERVER")
+        if observer is not None:
+            observer.observe(trial)
+    except Exception as error:
+        log("observer skipped: " + str(error)[:160])
+
+
 def make_objective(device, train_path, dev_path, base_model, lease_store,
                    champion_store):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     def objective(trial):
-        return objective_value(
+        value = objective_value(
             trial,
             lambda trial: run_trial(
                 trial, device, train_path, dev_path, base_model),
             lease_store, champion_store, GENERATION_ID, MODEL_KEY,
             objective_mode=options.objective_mode)
+        _observe(trial)
+        return value
     return objective
 
 
@@ -859,9 +1039,11 @@ def make_ddp_objective(options, lease_store, champion_store):
         def run_fn(t):
             dials = sample_dials(t, HPO_SPACE)
             return runner.run(int(t.number), {"dials": dials})
-        return objective_value(trial, run_fn, lease_store, champion_store,
-                               GENERATION_ID, MODEL_KEY,
-                               objective_mode=options.objective_mode)
+        value = objective_value(trial, run_fn, lease_store, champion_store,
+                                GENERATION_ID, MODEL_KEY,
+                                objective_mode=options.objective_mode)
+        _observe(trial)
+        return value
     return objective
 
 
@@ -917,6 +1099,17 @@ def run_ddp_trial(trial_number):
 
 def run_worker(device):
     ensure_optuna_url()
+    if MODEL_KEY != "laya":
+        # The registry carries a real search space + objective for every model
+        # key, but THIS lane's remote worker executes only the laya objective.
+        # Fail loud rather than silently score the wrong model.
+        registry = default_registry()
+        descriptor = registry.objective(MODEL_KEY)
+        raise SystemExit(
+            "[laya-hpo] model_key %r is registered (metric=%s, runner=%s) but "
+            "this lane executes only the 'laya' objective; run that model's own "
+            "HPO worker for remote execution" % (
+                MODEL_KEY, descriptor.metric, descriptor.runner))
     if os.environ.get("ER_LAYA_HPO_SKIP_INSTALL") != "1":
         pip_install_runtime()
         pip_install_laya()
@@ -927,6 +1120,8 @@ def run_worker(device):
     options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
     globals()["OPTION_SET"] = options
     options.resource_caps.apply_torch(torch)
+    observer = TrialObserver(WORKING / "hpo_observability")
+    globals()["OBSERVER"] = observer
 
     storage_config = storage_from_environment()
     storage = create_storage(storage_config)
@@ -1015,6 +1210,12 @@ def write_session_receipt():
         "dev_accuracy": trial.user_attrs.get("dev_accuracy"),
         "dev_loss": trial.user_attrs.get("dev_loss"),
     } for trial in study.trials]
+    # Control-plane observability: CDC events + local study mirror + offline
+    # ledger, rebuilt from the authoritative study at session end.
+    observer = TrialObserver(WORKING / "hpo_observability")
+    for trial in study.trials:
+        observer.observe(trial)
+    observer.flush()
     receipt = {
         "kernel": "laya-hpo",
         "run_tag": RUN_TAG,
@@ -1056,6 +1257,8 @@ def write_session_receipt():
         "selected": [int(t.number) for t in ensemble_trials],
     }
     receipt["shared_data"] = {"manifests": SHARED_CACHE_MANIFESTS[-8:]}
+    receipt["observability"] = observer.as_dict()
+    receipt["registry"] = default_registry().describe()
     WORKING.mkdir(parents=True, exist_ok=True)
     path = WORKING / "laya-hpo.receipt.json"
     path.write_text(json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
@@ -1133,18 +1336,26 @@ if __name__ == "__main__":
 '''
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Stage (and optionally push) the laya HPO kernel.
+# ── entry/CLI dispatch registry (one entry per lane) ───────────────────────
+STAGE_DISPATCH = {
+    "kaggle": "stage_laya_hpo_kernel",
+    "colab": "stage_laya_hpo_colab",
+}
 
-    Offline by default: ``stage_laya_hpo_kernel`` writes the payload and prints
-    the receipt. ``--execute`` additionally runs ``kaggle kernels push`` through
-    the landed laya lane's gated push (which records the session id for the
-    verified stop). The owner launches the sweep; this lane never starts one.
+
+def main(argv: list[str] | None = None) -> int:
+    """Stage (and optionally push) the laya HPO payload for one lane.
+
+    Offline by default: the staged receipts are printed. ``--execute`` (Kaggle
+    only) additionally runs ``kaggle kernels push`` through the landed laya
+    lane's gated push. The owner launches the sweep; this lane never starts one.
     """
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--lane", choices=LANES, default="kaggle",
+                        help="which delivery lane to stage (default: kaggle)")
     parser.add_argument("--execute", action="store_true",
                         help="push the staged kernel to Kaggle (default: "
-                             "offline dry-run staging only)")
+                             "offline dry-run staging only; kaggle lane)")
     parser.add_argument("--generation-id", default=None,
                         help="shared-study generation id (default: "
                              "EUROMONITOR_HPO_GENERATION_ID)")
@@ -1158,12 +1369,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--space", type=Path, default=None,
                         help="search-space YAML (default: the SSOT config)")
     args = parser.parse_args(argv)
-    receipt = stage_laya_hpo_kernel(
+    stage = globals()[STAGE_DISPATCH[args.lane]]
+    receipt = stage(
         revision=args.revision, run_tag=args.run_tag,
         generation_id=args.generation_id, n_trials=args.n_trials,
         n_jobs=args.n_jobs, space_config=args.space)
     print(json.dumps(receipt, indent=2, default=str), flush=True)
     if args.execute:
+        if args.lane != "kaggle":
+            raise SystemExit("--execute is a kaggle-lane operation")
         plan = laya_lane.push_kaggle_kernel(Path(receipt["staged"]),
                                             execute=True)
         print(json.dumps(plan, indent=2, default=str), flush=True)
@@ -1175,11 +1389,14 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "COLAB_ENTRY_FILE",
     "GENERATION_ID_ENV",
     "HPO_CODE_FILE",
     "HPO_DECISION",
     "HPO_RECEIPT_FILE",
+    "LANES",
     "OPTUNA_URL_ENV",
+    "STAGE_DISPATCH",
     "apply_dials",
     "finished_trial_count",
     "hpo_runtime_source",
@@ -1190,6 +1407,7 @@ __all__ = [
     "route_dials",
     "sample_dials",
     "space_digest",
+    "stage_laya_hpo_colab",
     "stage_laya_hpo_kernel",
     "study_identity",
     "validate_space",
