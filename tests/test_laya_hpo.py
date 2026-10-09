@@ -686,7 +686,7 @@ def test_stage_kernel_receipt_carries_the_option_set(monkeypatch, tmp_path):
     receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert receipt["options"]["scheduler"]["mode"] == "slots"
     assert receipt["options"]["sampler"]["kind"] == "tpe"
-    assert receipt["options"]["pruner"]["kind"] == "hyperband"
+    assert receipt["options"]["pruner"]["kind"] == "none"
     assert receipt["options"]["warm_start"]["mode"] == "base"
     assert "shared_data" not in receipt["options"]
     assert "core_allocator" not in receipt["options"]
@@ -1033,8 +1033,52 @@ def test_receipt_worker_cap_is_the_gpu_capped_plan(monkeypatch, tmp_path):
     """#8: max_workers is the GPU-capped worker plan (no shared-data cache)."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert "shared_data" not in receipt["options"]
-    # slots mode: 2 GPUs (n_jobs) x 1 slot, capped at max_concurrent_trials=2.
+    # slots mode: 2 GPUs (n_jobs) x 2 slots, capped at max_concurrent_trials=2.
     assert receipt["budget"]["max_workers"] == 2
+
+
+def _hpo_space_from_script(script: str) -> dict:
+    import ast
+
+    for node in ast.parse(script).body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and getattr(node.targets[0], "id", None) == "HPO_SPACE"):
+            return ast.literal_eval(node.value)
+    raise AssertionError("staged script carries no HPO_SPACE literal")
+
+
+def test_staging_seeds_the_ssot_baseline_once(monkeypatch, tmp_path):
+    """The staged space carries ONE enqueue seed equal to the FinetuneSpec recipe."""
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    space = _hpo_space_from_script(script)
+    seeds = space["options"]["warm_start"]["enqueue"]
+    assert len(seeds) == 1
+    seed = seeds[0]
+    assert set(seed) == set(space["dials"])
+    spec = laya_lane.training_cfg().laya
+    recipe = {**laya_lane.finetune_config(spec),
+              **laya_lane.finetune_control(spec)}
+    for name in ("encoder_lr", "head_lr", "micro_batch", "grad_accum",
+                 "weight_decay", "early_stop_patience", "lr_scheduler",
+                 "loss_schedule", "ema"):
+        assert seed[name] == recipe[name], name
+    assert receipt["budget"]["max_workers"] >= 2
+
+
+def test_staged_kernel_pins_the_config_declared_gpus_before_torch(monkeypatch,
+                                                                  tmp_path):
+    space_config = _write_space(
+        tmp_path,
+        lambda s: s["options"]["session"].update(cuda_visible_devices="0"))
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db",
+                          space_config=space_config)
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    pin = 'os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES'
+    assert pin in script
+    assert script.index(pin) < script.index("import torch")
 
 
 def test_build_snapshot_is_collision_free(tmp_path):

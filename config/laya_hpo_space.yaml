@@ -27,7 +27,8 @@ model_key: laya
 
 # TPE budget/sampler. `n_trials` is the CLUSTER budget for the generation
 # (shared across every worker and Kaggle session on this study name); each
-# worker splits the remaining budget so sessions do not multiply it.
+# worker splits the remaining budget so sessions do not multiply it. The budget
+# INCLUDES the seeded baseline trial: 1 baseline + 23 TPE sweep.
 n_trials: 24
 n_jobs: 2          # one GPU worker per visible T4 (2xT4 in a Kaggle session)
 seed: 1729
@@ -59,9 +60,9 @@ profiler:
 options:
   # A) trial parallelism
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 1            # slots mode: worker PROCESSES per GPU
+  slots_per_gpu: 2            # slots mode: worker PROCESSES per GPU
   max_concurrent_trials: 2    # ceiling across all GPUs/slots
-  mps: false                  # CUDA Multi-Process Service (slots mode)
+  mps: true                   # CUDA Multi-Process Service (slots mode)
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
     backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
@@ -77,7 +78,10 @@ options:
     multivariate: true        # TPE joint kernel (parameter interactions)
     constant_liar: true       # parallel workers do not chase in-flight points
   pruner:
-    kind: hyperband           # hyperband (recommended) | successive_halving | median | none
+    # OFF: every trial (including the seeded baseline) runs to full fidelity.
+    # Tradeoff: no intermediate-pruning savings, but the baseline cannot be
+    # pruned mid-run, so it always yields the clean reference/champion.
+    kind: none                  # none (baseline-safe) | hyperband | successive_halving | median
     n_startup_trials: 5
     n_warmup_steps: 1
     min_resource: 1
@@ -97,6 +101,9 @@ options:
   # C) warm start / ensembling
   warm_start:
     mode: base                # scratch | base | champion
+    baseline: true            # enqueue the SSOT FinetuneSpec recipe as ONE
+                              # trial, so the baseline runs concurrently with
+                              # the sweep (derived host-side, no code literal)
     enqueue: []               # known-good param dicts -> study.enqueue_trial
   ensemble:
     enabled: false            # average the top-k trials (data is fixed)
@@ -108,6 +115,11 @@ options:
     load_if_exists: true      # resume the shared study across sessions
     processes_only: true      # never study.optimize(n_jobs>1) threads
     offline: false            # true = single-process SQLite + offline ledger
+    # The session's visible GPUs, baked into the kernel BEFORE any torch
+    # import. "" = all devices (2xT4 -> one worker process per GPU = true
+    # parallelism). "0" = pin GPU 0 so slots_per_gpu processes share ONE T4
+    # through MPS (see the memory math in the lane docs).
+    cuda_visible_devices: ""
 
 
 # The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune

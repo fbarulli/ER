@@ -45,6 +45,7 @@ import yaml
 # Read-only reuse: the shared control plane, the landed laya fine-tune lane,
 # and the pure HPO runtime (injected verbatim into the remote kernel).
 from cli import laya_lane
+from cli.laya_hpo_baseline import BaselineSeedFactory
 from cli.laya_staging import LayaStagingFactory
 from cli.laya_transport import LayaTransportFactory
 from core.common import TRAIN_ROOT, training_cfg
@@ -396,7 +397,7 @@ laya_runtime_preflight()
 def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
                         budget_trials: int, budget_jobs: int, url: str,
                         repository: str, branch: str,
-                        revision: str,
+                        revision: str, cuda_visible_devices: str,
                         optuna_env_script: str | None = None) -> str:
     """Render the ONE HPO kernel script (shared by the Kaggle and Colab lanes).
 
@@ -430,6 +431,7 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,
+        "CUDA_VISIBLE_DEVICES": cuda_visible_devices,
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
         "HPO_RUNTIME_SOURCE": hpo_runtime_source(),
@@ -552,8 +554,8 @@ class HpoReceipt:
         receipt = self.common()
         plan = self.plan
         receipt["kernel"] = plan.kernel
-        receipt["gpu"] = ("T4 (2x when the session exposes it; one worker per "
-                          "device)")
+        receipt["gpu"] = ("T4 (2x when the session exposes it; "
+                          "slots_per_gpu worker processes per device)")
         receipt["dataset"] = {"slug": plan.dataset_slug,
                               "payload": plan.dataset_receipt["payload"],
                               "files": plan.dataset_receipt["files"]}
@@ -682,6 +684,10 @@ class LayaHpoStager:
     def plan(self) -> HpoStagePlan:
         spec = training_cfg().laya
         space = load_space(self.space_config)
+        # Seed the SSOT baseline recipe as one enqueued trial (when enabled)
+        # BEFORE repr(space) is baked, so the remote worker runs the baseline as
+        # one process concurrent with the sweep.
+        space = BaselineSeedFactory(spec).apply(space)
         options = self._options(space)
         offline = bool(options.session.offline)
         url = self._url(offline)
@@ -698,6 +704,7 @@ class LayaHpoStager:
             spec=spec, space=space, generation=generation, key=key, tag=tag,
             budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
             repository=repository, branch=branch, revision=revision,
+            cuda_visible_devices=options.session.cuda_visible_devices,
             optuna_env_script=self._optuna_env_script(offline))
         return HpoStagePlan(
             lane=self.lane, spec=spec, space=space, options=options, url=url,

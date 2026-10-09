@@ -106,6 +106,20 @@ def test_worker_pool_plan_caps_total_and_pins_devices():
     assert all(s.env["OMP_NUM_THREADS"] == "1" for s in specs)
 
 
+def test_worker_pool_plans_two_mps_slots_sharing_one_gpu():
+    """One T4, k=2 slots: two processes on device 0, each capped at half + MPS."""
+    pool = opt.WorkerPool(
+        slots_per_gpu=2, max_concurrent_trials=2,
+        resource_caps=opt.ResourceCaps({"cuda_alloc_fraction": 1.0}),
+        mps=opt.MpsController(True))
+    specs = pool.plan(gpu_count=1)
+    assert len(specs) == 2
+    assert {s.device_index for s in specs} == {0}
+    assert all(s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] == "0.5"
+               for s in specs)
+    assert all(s.env["CUDA_MPS_PIPE_DIRECTORY"] for s in specs)
+
+
 def test_trial_scheduler_registry_selects_slots_and_ddp():
     slots = opt.TrialScheduler.create({"parallelism": "slots",
                                        "slots_per_gpu": 1,
@@ -326,10 +340,11 @@ def test_build_option_set_reads_the_config_block():
     assert options.sampler.kind == "tpe"
     assert options.sampler.multivariate is True
     assert options.sampler.constant_liar is True
-    assert options.pruner.kind == "hyperband"  # recommended default
+    assert options.pruner.kind == "none"  # baseline must complete unpruned
     assert options.objective_mode.multi is False
     assert options.warm_start.mode == "base"
     assert options.session.processes_only is True
+    assert options.session.cuda_visible_devices == ""
     assert options.resource_caps.cuda_alloc_fraction == 1.0
     payload = options.as_dict()
     assert payload["scheduler"]["mode"] == "slots"
@@ -416,8 +431,10 @@ def test_warm_start_enqueued_trials_are_defensively_copied():
     assert policy.enqueued_trials()[0]["encoder_lr"] == 1.0e-5
 
 
-def test_space_pruner_default_is_hyperband():
-    assert laya_hpo.load_space()["options"]["pruner"]["kind"] == "hyperband"
+def test_space_pruner_is_off_to_protect_the_baseline():
+    # The seeded baseline must run to completion; `none` disables pruning so it
+    # can never be cut mid-run (the documented tradeoff: no prune savings).
+    assert laya_hpo.load_space()["options"]["pruner"]["kind"] == "none"
 
 
 if __name__ == "__main__":
