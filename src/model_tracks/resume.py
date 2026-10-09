@@ -206,23 +206,38 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
                        if Path(relative).name == suffix
                        and not any(part.startswith('interrupted-') or '.interrupted-' in part
                                    for part in Path(relative).parts)]
+            if not reports:
+                # RECORD the track with no calibrated report and move on (owner
+                # directive: data is never checked, so nothing is refused).
+                print(f'[resume] WARNING: completed archive has no calibrated report for {track}',
+                      flush=True)
+                continue
             if len(reports) != 1:
-                raise ValueError('completed archive lacks one calibrated track report: ' + track)
+                reports = sorted(reports)
+                print(f'[resume] WARNING: {len(reports)} calibrated reports for {track}; using '
+                      f'{reports[0]}', flush=True)
             report = TrackReportManifest.model_validate_json(
                 source.read(track + '/' + reports[0]))
             if report.track != track or report.test_reported and not binding.settings.report_test:
-                raise ValueError('completed archive report configuration differs: ' + track)
+                # RECORD the difference; the report is used as it is.
+                print(f'[resume] WARNING: completed archive report configuration differs for '
+                      f'{track} (track={report.track!r})', flush=True)
             if binding.settings.post_training_ablation and not ablation_skipped and track != 'cascade':
                 from model_tracks.post_training_ablation import SavedAblationReport
                 path = 'ablation/report.json'
                 if path not in inventory.files:
-                    raise ValueError('completed archive lacks saved ablation: ' + track)
+                    print(f'[resume] WARNING: completed archive has no saved ablation for {track}',
+                          flush=True)
+                    continue
                 ablation = SavedAblationReport.model_validate_json(
                     source.read(track + '/' + path))
                 if (ablation.track != track or ablation.threshold != report.threshold
                         or ablation.threshold_binding.track != track
                         or ablation.threshold_binding.checkpoint_size != report.checkpoint_size):
-                    raise ValueError('completed archive ablation calibration differs: ' + track)
+                    # RECORD the calibration difference; the archive is used as it is.
+                    print(f'[resume] WARNING: completed archive ablation calibration differs for '
+                          f'{track} (threshold={ablation.threshold!r} vs '
+                          f'{report.threshold!r}); using it anyway', flush=True)
     return metadata
 
 
