@@ -325,7 +325,7 @@ class LayaTransportFactory:
             fetch_output=self.collect_kaggle_result,
             fetch_failure=self.fetch_failed_result,
             stop=self.stop_kaggle_kernel,
-            stream_logs=KaggleMonitor.stream_kernel_logs,
+            stream_logs=KaggleMonitor.kernel_logs,
             kernel_status=KaggleKernels.kernel_status,
             capture_session=KaggleMonitor.capture_kernel_session_id,
             log_lane=self._runtime.log_lane,

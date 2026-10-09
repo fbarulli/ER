@@ -831,16 +831,15 @@ class KaggleKernels:
     def kernel_logs(slug: str, *, follow: bool = False) -> dict[str, Any]:
         """Read a kernel's REAL execution log (stdout/stderr), not status/files.
 
-        ONE-call delegate to the canonical SDK owner
-        (``KaggleMonitor.stream_kernel_logs``): the midtier
-        ``GetKernelSessionLogsStream`` SSE endpoint, which replays the latest
-        session and can tail a live one. ``follow=False`` (the tracking read)
-        uses bounded 429-aware reconnects and fails loud; ``follow=True`` tails
-        the whole session (the detached watcher's mode).
+        ONE-call delegate to the canonical owner (``KaggleMonitor.kernel_logs``),
+        which uses the installed ``kaggle`` API the ``kaggle kernels logs`` CLI
+        (``-f`` to follow) wraps. ``follow=False`` returns the latest session's
+        persisted log; ``follow=True`` tails the live session to END_OF_LOG with
+        bounded 429-aware reconnects and fails loud.
         """
-        from cli import kaggle_lane as lane
+        from cli.kaggle_monitor import KaggleMonitor
 
         if not slug or "/" not in slug:
             raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
-        return lane.stream_kernel_logs(slug, follow=follow)
+        return KaggleMonitor.kernel_logs(slug, follow=follow)
 

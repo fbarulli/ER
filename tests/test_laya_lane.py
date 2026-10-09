@@ -1416,7 +1416,7 @@ def test_laya_execute_retrieves_output_and_persists_handle(
                         lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
     monkeypatch.setattr(laya_lane.KaggleKernels, "stop_kernel",
                         lambda *a, **kw: {"stopped": True})
-    monkeypatch.setattr(KaggleMonitor, "stream_kernel_logs", lambda *a, **kw: {})
+    monkeypatch.setattr(KaggleMonitor, "kernel_logs", lambda *a, **kw: {})
     # the proxy never answers -> the session handle falls back to the kernel name
     import kagglesdk.kaggle_client
     monkeypatch.setattr(
