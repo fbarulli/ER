@@ -190,11 +190,13 @@ def test_linear_scheduler_decays():
     assert optimizer.param_groups[0]["lr"] < 1.0
 
 
-def test_plateau_with_warmup_fails_loud():
+def test_plateau_ignores_warmup_instead_of_failing():
     # plateau steps on the per-epoch dev metric; a per-update warmup is
-    # meaningless, so it must fail loud rather than be silently ignored.
-    with pytest.raises(ValueError, match="plateau"):
-        _factory(_optimizer(), "plateau", warmup=5)
+    # meaningless. An HPO draw may pair plateau with warmup_frac>0, so the
+    # factory ignores the warmup rather than failing (and burning) the trial.
+    factory = _factory(_optimizer(), "plateau", warmup=5)
+    assert factory.is_plateau and factory.warmup == 0
+    assert factory.build() is not None
 
 
 def test_onecycle_consumes_warmup_as_pct_start(monkeypatch):

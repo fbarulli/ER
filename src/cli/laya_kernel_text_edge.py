@@ -41,6 +41,33 @@ laya_runtime_preflight()
 '''
 
 
+# The holdout kernel attaches the staged holdout dataset and verifies the ONE
+# `holdout.jsonl` (rglob finds it under /kaggle/input/<slug>/). The questions
+# schema is embedded PER ROW in that JSONL, so there is no separate schema file
+# to attach — unlike the DECISION kernel's inventory (decision CSV + schema).
+HOLDOUT_RUNTIME_PREFLIGHT = '''\
+_runtime_files = ("@HOLDOUT_JSONL@",)
+INPUT_ROOT = Path("/kaggle/input")
+
+
+def laya_runtime_preflight():
+    """Verify the ATTACHED holdout JSONL (the holdout dataset mounts under
+    /kaggle/input/<slug>/ and rglob searches recursively by name); fail loud
+    before pip touches anything."""
+    missing = [name for name in _runtime_files
+               if not any(INPUT_ROOT.rglob(name))]
+    if missing:
+        raise FileNotFoundError(
+            "Runtime preflight missing attached inputs: "
+            + ", ".join(missing))
+    print("[runtime-preflight] verified %d required files"
+          % len(_runtime_files), flush=True)
+
+
+laya_runtime_preflight()
+'''
+
+
 DECISION_KERNEL_SCRIPT = '''\
 """ER typed decisions via laya on a Kaggle GPU session (cli.laya_lane).
 

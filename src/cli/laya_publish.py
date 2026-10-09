@@ -15,6 +15,7 @@ from cli.laya_recipe import (
     BASE_MODEL_MANIFEST_FILE,
     DATASET_METADATA_FILE,
     DATASET_PAYLOAD_DIR,
+    FINETUNE_CKPT_DECISION,
     FINETUNE_DECISION,
     FINETUNE_EVAL_DECISION,
     FINETUNE_SMOKE_DECISION,
@@ -106,6 +107,8 @@ class LayaPublishFactory:
                                         FINETUNE_EVAL_DECISION)
         if decision_kind == HOLDOUT_EVAL_DECISION:
             slug, key = spec.holdout_dataset_slug, "holdout_dataset_slug"
+        elif decision_kind == FINETUNE_CKPT_DECISION:
+            slug, key = spec.finetune_ckpt_dataset, "finetune_ckpt_dataset"
         elif decision_kind == FINETUNE_SMOKE_DECISION:
             slug = spec.finetune_smoke.dataset_slug
             key = "finetune_smoke.dataset_slug"

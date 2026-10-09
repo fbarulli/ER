@@ -100,6 +100,19 @@ def test_stage_holdout_eval_kernel_renders_and_writes_receipt(
     laya_lane._kernel_script_gate(script)
     laya_lane._module_scope_gate(script)
     assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
+    # The push gate's attached-inputs inventory is the holdout JSONL ONLY: the
+    # questions are embedded per row, so a separate schema file is never
+    # attached (the decision kernel's inventory would fail the staged payload).
+    inventory = {}
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and \
+                        target.id == "_runtime_files":
+                    inventory["_runtime_files"] = ast.literal_eval(node.value)
+    assert inventory["_runtime_files"] == (laya_lane.HOLDOUT_JSONL,)
+    payload = stage / laya_lane.DATASET_PAYLOAD_DIR
+    assert (payload / laya_lane.HOLDOUT_JSONL).is_file()
     # the checkpoint dataset rides alongside the holdout dataset
     metadata = json.loads((stage / "kernel-metadata.json").read_text())
     assert spec.holdout_dataset_slug in metadata["dataset_sources"]
@@ -129,3 +142,38 @@ def test_kernel_slug_covers_holdout_eval(monkeypatch):
     spec = LayaSpec(holdout_eval_kernel_slug="owner/holdout-eval")
     monkeypatch.setattr(laya_lane, "_spec", lambda: spec)
     assert laya_lane.kernel_slug("holdout-eval") == "owner/holdout-eval"
+
+
+def test_stage_finetune_ckpt_dataset_payload_copies_the_checkpoint(
+        tmp_path, monkeypatch):
+    """The recovered checkpoint stages as dataset_payload/checkpoint/."""
+    spec = _spec(tmp_path, monkeypatch)
+    source = tmp_path / "recovered"
+    (source / "tokenizer").mkdir(parents=True)
+    (source / "encoder").mkdir(parents=True)
+    (source / "rl_agent_config.json").write_text("{}", encoding="utf-8")
+    (source / "model.safetensors").write_bytes(b"the-real-weights")
+    (source / "encoder/config.json").write_text("{}", encoding="utf-8")
+    (source / "tokenizer/tokenizer.json").write_text("{}", encoding="utf-8")
+
+    receipt = laya_lane.stage_finetune_ckpt_dataset_payload(
+        dataset_slug=spec.finetune_ckpt_dataset, checkpoint_dir=source)
+
+    payload = Path(receipt["payload"])
+    assert (payload / "checkpoint/model.safetensors").read_bytes() == \
+        b"the-real-weights"
+    assert (payload / "checkpoint/rl_agent_config.json").is_file()
+    assert (payload / laya_lane.DATASET_METADATA_FILE).is_file()
+    assert receipt["member"] == "checkpoint"
+    assert receipt["files"]["checkpoint/model.safetensors"]
+
+
+def test_stage_finetune_ckpt_dataset_payload_fails_loud_without_config(
+        tmp_path, monkeypatch):
+    spec = _spec(tmp_path, monkeypatch)
+    source = tmp_path / "recovered"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(b"stub")
+    with pytest.raises(FileNotFoundError, match="rl_agent_config.json"):
+        laya_lane.stage_finetune_ckpt_dataset_payload(
+            dataset_slug=spec.finetune_ckpt_dataset, checkpoint_dir=source)

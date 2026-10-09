@@ -61,6 +61,13 @@ FINETUNE_EVAL_CODE_FILE = "laya_finetune_eval.py"
 FINETUNE_EVAL_REPORT_FILE = "eval_report.json"
 FINETUNE_EVAL_RECEIPT_FILE = "laya_finetune-eval.receipt.json"
 
+# ── fine-tune CKPT kind: publish the recovered checkpoint as a dataset ──────
+# The fine-tune kernel strands its checkpoint inside /kaggle/working (the JOB 1
+# regression). The recovery surface stages a locally recovered checkpoint dir
+# as the `finetune_ckpt_dataset` payload, so the eval/holdout kernels can
+# attach it instead of re-training.
+FINETUNE_CKPT_DECISION = "finetune-ckpt"
+
 # ── holdout-eval kind: component-disjoint verification, run on Kaggle ───────
 # Scores a fine-tuned checkpoint on the staged holdout (real pairs + P0 + gate
 # strata) in-session and writes the clustered, gate-stratified report, so the

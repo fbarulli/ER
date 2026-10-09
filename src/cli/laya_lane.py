@@ -42,6 +42,7 @@ from cli.laya_kernel_text_edge import (  # noqa: F401  (public lane surface)
     DECISION_KERNEL_SCRIPT,
     EVAL_KERNEL_SCRIPT,
     HOLDOUT_EVAL_KERNEL_SCRIPT,
+    HOLDOUT_RUNTIME_PREFLIGHT,
     LAYA_RUNTIME_PREFLIGHT,
     NOTEBOOK_SCRIPT,
 )
@@ -66,6 +67,7 @@ from cli.laya_recipe import (  # noqa: F401  (public lane surface)
     DECISION_KERNEL_CODE_FILE,
     EVAL_CALIBRATION_FIELDS,
     EVAL_KERNEL_CODE_FILE,
+    FINETUNE_CKPT_DECISION,
     FINETUNE_CODE_FILE,
     FINETUNE_CONFIG_FIELDS,
     FINETUNE_CONTROL_FIELDS,
@@ -295,6 +297,15 @@ def stage_finetune_dataset_payload(*, dataset_slug: str, corpus_dir: Path,
     return _staging_factory().stage_finetune_dataset_payload(
         dataset_slug=dataset_slug, corpus_dir=corpus_dir, kind=kind,
         title=title)
+
+
+def stage_finetune_ckpt_dataset_payload(*, dataset_slug: str,
+                                        checkpoint_dir: Path,
+                                        member: str = "checkpoint"
+                                        ) -> dict[str, Any]:
+    return _staging_factory().stage_finetune_ckpt_dataset_payload(
+        dataset_slug=dataset_slug, checkpoint_dir=checkpoint_dir,
+        member=member)
 
 
 def stage_holdout_dataset_payload(*, dataset_slug: str, holdout_csv: Path,

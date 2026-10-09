@@ -156,6 +156,8 @@ class DataFilesSpec(BaseModel):
     attribute_separation_values: str
     fold_metrics: str
     hpo_grid_csv: str
+    # The laya HPO search-space SSOT (cli.laya_hpo / training.hpo_registry).
+    laya_hpo_space: str
     # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead
     # field — F["hpo_tpe_best"] had zero readers anywhere.
     dedupe_summary: str
