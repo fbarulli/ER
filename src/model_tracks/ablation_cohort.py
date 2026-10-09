@@ -433,7 +433,7 @@ def prepare_cohort(setup, bundle):
             "prepare_cohort", "frame",
             in_count=len(cohort), out_count=len(frame),
             reason='the cohort frame is complete and every dimension tag exists before it is written',
-            detail={'pair_rows': len(frame), 'cohort_size': coverage.cohort_size,
+            detail={'pair_rows': len(frame), 'cohort_size': coverage.cohort_key,
                     'minted_endpoints_total': coverage.minted_endpoints_total,
                     'minted_endpoints_covered': coverage.minted_endpoints_covered,
                     # the CARRIED tags decide these, not the frozen strata
