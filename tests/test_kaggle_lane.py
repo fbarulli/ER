@@ -615,7 +615,7 @@ def test_supervise_records_kernel_log_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error",
                                           "raw": "KernelWorkerStatus.ERROR"})
-    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
+    monkeypatch.setattr(kaggle_lane, "kernel_logs",
                         lambda *a, **kw: {"kernel": "owner/er-train-gpu"})
     monkeypatch.setattr(
         kaggle_lane, "fetch_failed_kernel_log",
@@ -632,7 +632,7 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error",
                                           "raw": "KernelWorkerStatus.ERROR"})
-    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
+    monkeypatch.setattr(kaggle_lane, "kernel_logs",
                         lambda *a, **kw: None)
     monkeypatch.setattr(kaggle_lane, "fetch_failed_kernel_log",
                         lambda kind: {"kind": kind, "mode": "executed",
@@ -649,128 +649,6 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
     assert plan["failures"]["train"]["stop"]["stopped"] is True
     assert any("kernels" in parts and "push" in parts and "-p" in parts
                for parts in pushes), "session release must replace the version"
-
-
-def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeypatch):
-    import types
-    import requests
-    import kagglesdk.kaggle_client
-    import kagglesdk.kernels.types.kernels_api_service
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    frames = [
-        'data: {"stream_name":"stdout","time":1,"data":"+ git clone\\n"}',
-        'data: {"stream_name":"stderr","time":2,"data":"[timing] mark 1s\\n"}',
-        'data: {"stream_name":"stdout","time":3,"data":"phase complete\\n"}',
-    ]
-    pulls = []
-
-    class Stream:
-        state = {"dropped": False}
-
-        def iter_lines(self):
-            pulls.append(1)
-            if self.state["dropped"]:
-                # The midtier SSE proxy re-sends the WHOLE session from line 0
-                # on a reconnect; the follower must rewrite, never duplicate.
-                for frame in frames:
-                    yield frame
-                return
-            yield frames[0]
-            yield frames[1]
-            self.state["dropped"] = True
-            raise requests.exceptions.ChunkedEncodingError(
-                "Response ended prematurely")
-
-    fake_api = types.SimpleNamespace(
-        get_kernel_session_logs_stream=lambda request: Stream())
-    monkeypatch.setattr(
-        kagglesdk.kaggle_client, "KaggleClient",
-        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-            kernels_api_client=fake_api)))
-    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
-
-    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    # One roof (owner order 2026-10-07): every transcript landmark — decoded
-    # stdout AND the watcher's status lines — lands on the single
-    # logs/kaggle/lane.log (files.lane_log, the one declared transcript).
-    destination = tmp_path / "logs" / "kaggle" / "lane.log"
-    content = destination.read_text().splitlines()
-    assert [line for line in content
-            if line.startswith(("+ git", "[timing]", "phase"))] == \
-        ["+ git clone", "[timing] mark 1s", "phase complete"], \
-        "a whole-session replay must be rewritten exactly once, never duplicated"
-    assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
-
-
-def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkeypatch):
-    import types
-    import requests
-    import kagglesdk.kaggle_client
-    import kagglesdk.kernels.types.kernels_api_service
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    frames = [
-        'data: {"stream_name":"stdout","time":1,"data":"12%\\r35%\\r60%\\r"}',
-        'data: {"stream_name":"stdout","time":2,"data":"[timing] done\\n"}',
-    ]
-
-    class Stream:
-        def iter_lines(self):
-            yield from frames
-
-    fake_api = types.SimpleNamespace(
-        get_kernel_session_logs_stream=lambda request: Stream())
-    monkeypatch.setattr(
-        kagglesdk.kaggle_client, "KaggleClient",
-        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-            kernels_api_client=fake_api)))
-    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
-
-    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    # One roof: stream transcripts append to logs/kaggle/lane.log (files.lane_log).
-    content = (tmp_path / "logs" / "kaggle"
-               / "lane.log").read_text().splitlines()
-    # every \r frame is its own grep-able line, and the last bar stays tagged
-    # at the end of its chunk so the log tail shows the training tqdm strip
-    assert content == ["12%", "35%", "60%", "[tqdm] 60%", "[timing] done"]
-
-
-def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatch):
-    """Two consecutive runs overwrite, never append-sprawl (owner order)."""
-    import types
-    import kagglesdk.kaggle_client
-    from cli.log_capture import LaneTranscript
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
-
-    def run(tag):
-        class Stream:
-            def iter_lines(self):
-                yield (f'data: {{"stream_name":"stdout","time":1,'
-                       f'"data":"{tag} [timing] 1s\\n"}}')
-
-        fake_api = types.SimpleNamespace(
-            get_kernel_session_logs_stream=lambda request: Stream())
-        monkeypatch.setattr(
-            kagglesdk.kaggle_client, "KaggleClient",
-            lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-                kernels_api_client=fake_api)))
-        # Each run is a fresh process: its first _log_lane truncates the
-        # file and it holds no follower lock from a prior run.
-        monkeypatch.setattr(LaneTranscript, "_started", False)
-        kaggle_lane._log_lane(f"{tag} push rc=0")
-        (tmp_path / "logs" / "kaggle"
-         / "er-train-gpu.follower.pid").unlink(missing_ok=True)
-        kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-
-    run("first")
-    run("second")
-    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
-    assert "first" not in content, "a new run must overwrite the old transcript"
-    assert "second push rc=0" in content
-    assert "second [timing] 1s" in content
 
 
 def test_lane_logs_dir_is_under_canonical_logs_root(tmp_path, monkeypatch):
@@ -819,72 +697,6 @@ def test_stamp_matches_paris_local_format():
     assert re.fullmatch(
         r"\[kaggle-lane \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} (CET|CEST)\]",
         kaggle_lane._stamp())
-
-
-def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
-    """Kaggle surface invariant: every Kaggle-run writer lands in ONE log.
-
-    A laya Kaggle-run staging line, an ER watcher status line, the live
-    stream's decoded output, and the stream's OWN rate-limit diagnostic all
-    land in the single declared Kaggle transcript; no Kaggle writer creates a
-    second log roof (logs/laya, logs/colab), and the follower lock stays a
-    separate state file.
-    """
-    import types
-    from typing import ClassVar
-
-    import kagglesdk.kaggle_client
-
-    from cli import laya_lane
-    from cli.log_capture import LaneTranscript
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
-    monkeypatch.setattr(LaneTranscript, "_started", False)
-    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
-
-    # Staging (laya Kaggle writer) + watcher status (ER writer): one roof.
-    laya_lane._log_lane("staged laya decision payload")
-    kaggle_lane._log_lane("[owner/er-train-gpu] status=running")
-
-    class RateLimited(Exception):
-        status_code = 429
-
-    frames = [('data: {"stream_name":"stdout","time":1,'
-               '"data":"hello from the kernel\\n"}')]
-
-    class Stream:
-        state: ClassVar[dict[str, int]] = {"n": 0}
-
-        def iter_lines(self):
-            self.state["n"] += 1
-            yield frames[0]
-            if self.state["n"] == 1:
-                raise RateLimited("Too Many Requests")
-
-    fake_api = types.SimpleNamespace(
-        get_kernel_session_logs_stream=lambda request: Stream())
-    monkeypatch.setattr(
-        kagglesdk.kaggle_client, "KaggleClient",
-        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-            kernels_api_client=fake_api)))
-    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
-
-    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-
-    transcript = tmp_path / "logs" / "kaggle" / "lane.log"
-    body = transcript.read_text()
-    assert "staged laya decision payload" in body
-    assert "status=running" in body
-    assert "hello from the kernel" in body
-    assert "rate-limited (429)" in body
-    # No Kaggle writer created another log roof; the only .log is the transcript.
-    assert [path for path in (tmp_path / "logs").rglob("*.log")] == [transcript]
-    assert not (tmp_path / "logs" / "laya").exists()
-    assert not (tmp_path / "logs" / "colab").exists()
-    # The follower lock is state, not the transcript.
-    lock = tmp_path / "logs" / "kaggle" / "er-train-gpu.follower.pid"
-    assert lock.is_file() and lock != transcript
 
 
 # ── train-kernel bundle install: pinned checkout stays authoritative ─────────
@@ -1245,6 +1057,91 @@ def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkey
     assert plan["terminal_state"] == "complete"
     assert any("kernels" in parts and "push" in parts for parts in pushes), \
         "the stub replace must still be pushed"
+
+
+# ── delete: first-class teardown of a kernel by slug ───────────────────────
+
+def test_delete_kernel_dry_run_plans_the_slug_without_network(monkeypatch):
+    """Dry run names the intended slug/action and never reaches the SDK."""
+    import kagglesdk.kaggle_client
+
+    monkeypatch.setattr(kagglesdk.kaggle_client, "KaggleClient",
+                        lambda env: (_ for _ in ()).throw(
+                            AssertionError("dry-run must not reach the SDK")))
+    plan = kaggle_lane.delete_kernel("owner/er-train-gpu")
+    assert plan == {"mode": "dry-run", "action": "delete_kernel",
+                    "kernel": "owner/er-train-gpu"}
+
+
+# ── kernel_logs: the ONE kaggle-logs path for the real execution log ────────
+
+def test_kernel_logs_reads_the_kaggle_api_into_the_one_transcript(tmp_path, monkeypatch):
+    """The ONE log path calls the installed kaggle API the ``kaggle kernels
+    logs`` CLI wraps, appends real stdout to the declared transcript, and arms
+    the verified-stop handle from the self-reported session id."""
+    import importlib
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+
+    class FakeApi:
+        def authenticate(self):
+            pass
+
+        def kernels_logs(self, slug):
+            return "epoch 1 loss=0.5\n"
+
+        def kernels_logs_stream(self, slug):
+            yield {"data": "[kaggle-session] session_id=123456 container=x\n"}
+            yield {"data": "phase complete\n"}
+
+    kaggle_api = importlib.import_module("kaggle.api.kaggle_api_extended")
+    monkeypatch.setattr(kaggle_api, "KaggleApi", FakeApi)
+    plan = kaggle_lane.kernel_logs("owner/er-train-gpu", follow=True)
+    assert plan["terminal"] is True
+    transcript = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert "phase complete" in transcript
+    handle = tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id"
+    assert handle.read_text().strip() == "123456"
+
+
+# ── W&B real-time reader: the primary live tracking source ──────────────────
+
+def test_wandb_run_reader_reads_live_metrics_and_console(monkeypatch):
+    """The primary tracking source resolves the run by project/run_tag and
+    returns the latest metrics plus the live console output (no network)."""
+    import io
+
+    from core.wandb_ctx import WandbRunReader
+
+    class FakeFile:
+        def download(self, replace=True):
+            return io.StringIO("epoch 1 loss=0.5\n")
+
+    class FakeRun:
+        state = "running"
+        summary = {"loss": 0.5, "accuracy": 0.9}
+
+        def file(self, name):
+            assert name == "output.log"
+            return FakeFile()
+
+    class FakeApi:
+        def __init__(self):
+            self.paths: list[str] = []
+
+        def run(self, path):
+            self.paths.append(path)
+            return FakeRun()
+
+    api = FakeApi()
+    reader = WandbRunReader(run_tag="laya_123", project="e-r",
+                            poll_seconds=15.0, api=api)
+    update = reader.read_once()
+    assert api.paths == ["e-r/laya_123"]
+    assert update["state"] == "running"
+    assert update["metrics"] == {"loss": 0.5, "accuracy": 0.9}
+    assert "epoch 1 loss=0.5" in update["output"]
+    assert update["console_error"] is None
 
 
 # ── session-id capture: launch path records the id, stop consumes it ────────
@@ -1806,71 +1703,3 @@ def test_chain_with_embed_refuses_an_unconfigured_objective(tmp_path, monkeypatc
     with pytest.raises(RuntimeError, match="embed objective"):
         kaggle_lane.run_chain(cohort="10k", with_embed=True, execute=False)
 
-
-
-def test_stream_kernel_logs_persists_reported_session_id(tmp_path, monkeypatch):
-    """A kernel self-reports KAGGLE_KERNEL_RUN_ID on stdout; the follower must
-    persist it as <kernel>.session_id so the verified in-place stop can target
-    the exact session (the log-stream URL carries no id)."""
-    import types
-    import kagglesdk.kaggle_client
-    import kagglesdk.kernels.types.kernels_api_service
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    frames = [
-        'data: {"stream_name":"stdout","time":1,"data":"[kaggle-session] '
-        'session_id=123456789 container=kaggle_x-123456789-webtier\\n"}',
-    ]
-
-    class Stream:
-        def iter_lines(self):
-            for frame in frames:
-                yield frame
-
-    fake_api = types.SimpleNamespace(
-        get_kernel_session_logs_stream=lambda request: Stream())
-    monkeypatch.setattr(
-        kagglesdk.kaggle_client, "KaggleClient",
-        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-            kernels_api_client=fake_api)))
-
-    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    session_file = (tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id")
-    assert session_file.read_text().strip() == "123456789"
-
-
-
-def test_stream_follower_survives_more_than_stream_retries(tmp_path, monkeypatch):
-    """The follower must reconnect for the WHOLE session. It used to quit after
-    stream_retries (5) drops, which froze lane.log mid-run (the eval->train
-    transition was never captured)."""
-    import types
-    import requests
-    import kagglesdk.kaggle_client
-    import kagglesdk.kernels.types.kernels_api_service
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
-    calls = {"n": 0}
-
-    class Stream:
-        def iter_lines(self):
-            calls["n"] += 1
-            yield ('data: {"stream_name":"stdout","time":%d,'
-                   '"data":"attempt %d\\n"}' % (calls["n"], calls["n"]))
-            if calls["n"] < 8:
-                raise requests.exceptions.ChunkedEncodingError("drop")
-            # attempt 8 completes cleanly (END_OF_LOG)
-
-    fake_api = types.SimpleNamespace(
-        get_kernel_session_logs_stream=lambda request: Stream())
-    monkeypatch.setattr(
-        kagglesdk.kaggle_client, "KaggleClient",
-        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-            kernels_api_client=fake_api)))
-
-    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
-    assert calls["n"] == 8, "the follower must keep reconnecting past stream_retries"
-    assert "attempt 8" in content, "the final frame must be captured"
-    assert "follower exhausted" not in content

@@ -21,6 +21,7 @@ import os
 import subprocess
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable
 
@@ -120,19 +121,21 @@ class KernelWatcher:
                                 "kernel": slug, "poll_seconds": resolved_poll}
         if not execute:
             return plan
+        stream: dict[str, Any] = {}
         follower = threading.Thread(
-            target=spec.stream_logs, args=(slug,),
-            kwargs={"log_path": spec.log_path}, daemon=True,
+            target=self._stream, args=(slug,),
+            kwargs={"into": stream}, daemon=True,
             name=f"stream-{spec.which}")
         follower.start()
         # While the follower streams, (re)capture the session id: the push-time
-        # capture can miss the proxy window, and the SSE-derived id never lands
+        # capture can miss the proxy window, and the log-derived id never lands
         # when the stream 429s. The capture persists the kernel name as its
         # fallback, so the stop handle is never empty.
         self._capture_session(slug)
-        status, polls = self._poll_terminal(slug, resolved_poll)
+        status, polls = self._poll_terminal(slug, resolved_poll, stream)
         plan["status"] = status["status"]
         plan["polls"] = polls
+        plan["log_terminal"] = bool(stream.get("terminal"))
         # The release runs even against an already-terminal kernel, so no
         # session survives a finished run.
         plan.update(KernelLifecycle.harvest_and_stop(
@@ -157,12 +160,30 @@ class KernelWatcher:
         plan["receipt"] = str(spec.receipt_path)
         return plan
 
-    def _poll_terminal(self, slug: str, poll: float) -> tuple[dict[str, Any], int]:
+    def _stream(self, slug: str, *, into: dict[str, Any]) -> None:
+        """Tail the ONE kaggle-logs path into the shared transcript.
+
+        Runs in a background thread; a failure is recorded with its full
+        traceback so a dead follower is never mistaken for a slow session.
+        """
+        spec = self._spec
+        try:
+            into.update(spec.stream_logs(slug, follow=True,
+                                         log_path=spec.log_path))
+        except Exception as error:  # noqa: BLE001 - follower must not die silent
+            spec.log_lane(traceback.format_exc())
+            into["error"] = f"{type(error).__name__}: {error}"
+
+    def _poll_terminal(self, slug: str, poll: float,
+                       stream: dict[str, Any]) -> tuple[dict[str, Any], int]:
         """Poll at the configured cadence; log only state transitions.
 
         A status-query failure is retried (the platform hiccups under load)
         rather than ending the watch; a real transport error is recorded with
-        its message. Polling holds neither a session nor a quota.
+        its message. Polling holds neither a session nor a quota. The ONE log
+        path's END_OF_LOG is used as a terminal cue: when the follow stream
+        closes, the session has finished, so the exact status is confirmed once
+        (END_OF_LOG cannot say complete vs error) instead of waiting a full poll.
         """
         spec = self._spec
         polls = 0
@@ -180,6 +201,12 @@ class KernelWatcher:
                 last = status["status"]
             if status["status"] in TERMINAL_STATES:
                 return status, polls
+            if stream.get("terminal"):
+                confirmed = spec.kernel_status(slug=slug)
+                if confirmed["status"] in TERMINAL_STATES:
+                    spec.log_lane(
+                        f"[{slug}] log END_OF_LOG -> status={confirmed['status']}")
+                    return confirmed, polls
             time.sleep(poll)
 
     def _capture_session(self, slug: str) -> None:

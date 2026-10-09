@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -17,7 +18,7 @@ class KaggleCLI:
         parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                             "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
                             "train-kernel", "embed-kernel", "embed-objective", "finalize-kernel",
-                            "kernel-logs", "fetch-results", "stop", "supervise", "autowatch",
+                            "kernel-logs", "fetch-results", "stop", "delete", "supervise", "autowatch",
                             "kernel-stream", "chain"],
                             default="package")
         parser.add_argument("--dataset-csv", type=Path, default=None,
@@ -47,13 +48,16 @@ class KaggleCLI:
                             help="kernel-logs: explicit owner/slug (default: "
                                  "resolved from --kernel)")
         parser.add_argument("--follow", action="store_true",
-                            help="kernel-logs: poll until a terminal status")
+                            help="kernel-logs: tail the live execution log "
+                                 "stream until the session ends")
         parser.add_argument("--checkpoint", default=None,
                             help="embed-kernel: git-shipped checkpoint path "
                                  "(default: config kaggle.checkpoint)")
         parser.add_argument("--run-tag", default=None,
                             help="run tag for GPU kernels (default: from "
-                                 "config kaggle.run_tag_prefix + UTC stamp)")
+                                 "config kaggle.run_tag_prefix + UTC stamp); "
+                                 "kernel-logs: the W&B run tag to track "
+                                 "(default: the WANDB_RUN_NAME env var)")
         parser.add_argument("--cohort", choices=lane._spec().cohort_tags, default=None,
                             help="bundle-kernel/bundle-fetch: which root-level "
                                  "cohort export the CPU kernel remaps onto "
@@ -157,8 +161,13 @@ class KaggleCLI:
             spec = lane._spec()
             identity = lane.kernel_identity(args.kernel, spec)
             resolved = args.slug or identity.slug(spec)
-            print(json.dumps(lane.kernel_logs(slug=resolved, follow=args.follow,
-                                         execute=args.execute), indent=2), flush=True)
+            # Real-time tracking prefers the W&B run when a tag/key is available
+            # (Kaggle's log stream is throttled); kaggle-logs is the fallback.
+            run_tag = args.run_tag or os.environ.get("WANDB_RUN_NAME")
+            print(json.dumps(
+                lane.track_run(run_tag=run_tag, slug=resolved,
+                               follow=args.follow),
+                indent=2), flush=True)
             return
         if args.what == "fetch-results":
             kind = args.kind or "train"
@@ -187,7 +196,8 @@ class KaggleCLI:
             spec = lane._spec()
             identity = lane.kernel_identity(args.kernel, spec)
             resolved = args.slug or identity.slug(spec)
-            print(json.dumps(lane.stream_kernel_logs(resolved), indent=2), flush=True)
+            print(json.dumps(lane.kernel_logs(resolved, follow=True),
+                             indent=2), flush=True)
             return
         if args.what == "kernel-status":
             print(json.dumps(lane.kernel_status(which=args.kernel, slug=args.slug), indent=2), flush=True)
@@ -199,6 +209,16 @@ class KaggleCLI:
             print(json.dumps(lane.stop_kernel(slug=resolved, which=args.kernel,
                                          execute=args.execute,
                                          wait=not args.no_wait), indent=2), flush=True)
+            return
+        if args.what == "delete":
+            spec = lane._spec()
+            identity = lane.kernel_identity(args.kernel, spec)
+            resolved = args.slug or identity.slug(spec)
+            print(json.dumps(lane.delete_kernel(resolved, execute=args.execute),
+                             indent=2), flush=True)
+            if not args.execute:
+                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to "
+                      "delete the kernel", flush=True)
             return
         spec = lane._spec()
         if args.what == "submission":

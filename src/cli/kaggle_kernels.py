@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -773,4 +774,72 @@ class KaggleKernels:
                 f"stop did not reach a terminal state within the verify window "
                 f"({verdict}; session {resolved}, method {plan['cancel_method']})")
         return plan
+
+    @staticmethod
+    def _session_is_active(slug: str) -> bool:
+        """True while the kernel holds a live session (Kaggle refuses delete)."""
+        return KaggleKernels.kernel_status(slug)["status"] in (
+            "running", "queued", "cancelRequested", "cancelAcknowledged")
+
+    @staticmethod
+    def delete_kernel(slug: str, *, execute: bool = False,
+                      stop_first: bool = True) -> dict[str, Any]:
+        """Delete a kernel entirely (not just release its running session).
+
+        Kaggle refuses deletion while a session runs, so with ``stop_first``
+        (the default) a live session is first released through the canonical
+        ``stop_kernel`` owner, then the SDK ``delete_kernel`` endpoint
+        (``DELETE /api/v1/kernels/delete/{user_name}/{kernel_slug}``) removes
+        the kernel. Dry-run by default; only ``execute`` touches the network. A
+        refusal (e.g. 403) fails loud with the full traceback recorded, never
+        swallowed.
+        """
+        if not slug or "/" not in slug:
+            raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
+        plan: dict[str, Any] = {
+            "mode": "executed" if execute else "dry-run",
+            "action": "delete_kernel",
+            "kernel": slug,
+        }
+        if not execute:
+            return plan
+        from cli import kaggle_lane as lane
+        from kagglesdk.kaggle_client import KaggleClient
+        from kagglesdk.kaggle_env import KaggleEnv
+        from kagglesdk.kernels.types.kernels_api_service import (
+            ApiDeleteKernelRequest)
+
+        if stop_first and KaggleKernels._session_is_active(slug):
+            plan["stop"] = KaggleKernels.stop_kernel(
+                slug, which="delete", execute=True)
+        owner, _, kernel = slug.partition("/")
+        request = ApiDeleteKernelRequest()
+        request.user_name = owner
+        request.kernel_slug = kernel
+        try:
+            (KaggleClient(env=KaggleEnv.PROD).kernels.kernels_api_client
+             .delete_kernel(request))
+        except Exception as err:
+            lane._log_lane(traceback.format_exc())
+            raise RuntimeError(
+                f"delete failed for {slug}: {type(err).__name__}: {err}"
+            ) from err
+        plan["delete_method"] = "sdk_delete_kernel"
+        return plan
+
+    @staticmethod
+    def kernel_logs(slug: str, *, follow: bool = False) -> dict[str, Any]:
+        """Read a kernel's REAL execution log (stdout/stderr), not status/files.
+
+        ONE-call delegate to the canonical owner (``KaggleMonitor.kernel_logs``),
+        which uses the installed ``kaggle`` API the ``kaggle kernels logs`` CLI
+        (``-f`` to follow) wraps. ``follow=False`` returns the latest session's
+        persisted log; ``follow=True`` tails the live session to END_OF_LOG with
+        bounded 429-aware reconnects and fails loud.
+        """
+        from cli.kaggle_monitor import KaggleMonitor
+
+        if not slug or "/" not in slug:
+            raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
+        return KaggleMonitor.kernel_logs(slug, follow=follow)
 

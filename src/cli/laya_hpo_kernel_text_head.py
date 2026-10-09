@@ -29,6 +29,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+# Unbuffered worker processes: the wandb/output.log live reader must see lines
+# immediately (per-GPU workers inherit this via os.environ copies).
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
 TRAIN_JSONL = "@TRAIN_JSONL@"
