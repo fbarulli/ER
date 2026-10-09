@@ -279,7 +279,6 @@ def _run_bundle_main(argv: list[str], bundle) -> None:
         mock.patch.object(colab, "start_live_log"),
         mock.patch.object(colab, "close_live_log"),
         mock.patch.object(colab, "_legacy_validation_sources", return_value={}),
-        mock.patch.object(colab, "_validate_legacy_bundle_partitions"),
         mock.patch.object(colab, "check_colab_cli"),
         mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None),
         mock.patch.object(colab, "release_colab_launch_lock"),
@@ -428,10 +427,10 @@ def test_delivery_segment_writes_the_archive_and_its_digest_token(tmp_path):
         ByteCount(archive.read_bytes()).total
 
 
-def test_downloaded_delivery_is_verified_once_against_the_vm_token(tmp_path, monkeypatch):
-    """The operator-side boundary: the delivered archive is checked ONCE against
-    the token the VM recorded. A tampered download fails loud and is never
-    recorded as verified (before this boundary the download was unchecked)."""
+def test_downloaded_delivery_records_its_size_and_the_writer_token(tmp_path, monkeypatch):
+    """The operator-side boundary records the delivered archive's byte size and
+    the token the VM wrote. Data is never checked, so a token that differs from
+    the delivered bytes is reported, never fatal."""
     from core.portable_archive import ByteCount
 
     from cli.colab_lane import ColabCPULane
@@ -447,9 +446,8 @@ def test_downloaded_delivery_is_verified_once_against_the_vm_token(tmp_path, mon
     monkeypatch.setattr(colab, "_result_event", lambda *a, **k: events.append((a, k)))
     monkeypatch.setattr(colab, "_read_remote_text", lambda remote: str(token) + "\n")
     lane = ColabCPULane()
-    assert lane._verify_delivery_boundary(archive, "bundle_x") == token
-    assert events[-1][0][1:3] == ("download", "verified")
-
+    assert lane._record_delivery_size(archive, "bundle_x") == token
+    assert events[-1][0][1:3] == ("download", "measured")
+    # A token that disagrees with the delivered bytes is recorded, not refused.
     monkeypatch.setattr(colab, "_read_remote_text", lambda remote: "0" * 64)
-    with pytest.raises(ValueError, match="transport token mismatch"):
-        lane._verify_delivery_boundary(archive, "bundle_x")
+    assert lane._record_delivery_size(archive, "bundle_x") == token

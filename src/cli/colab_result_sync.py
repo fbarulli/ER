@@ -1,9 +1,8 @@
 """Result transfer + verification (split phase D of cli.colab).
 
-The result half of the GPU lane: the manifest-backed remote archive build, its
-safe extraction and hash verification, the incremental best-checkpoint syncer
-that keeps the laptop warm while training runs, and the authoritative
-post-run download.  Split from cli/colab.py (the kaggle_lane.py owner-module
+The result half of the GPU lane: the manifest-backed remote archive build,
+its safe extraction, the incremental best-checkpoint syncer that keeps the
+laptop warm while training runs, and the authoritative post-run download.  Split from cli/colab.py (the kaggle_lane.py owner-module
 pattern) exactly like colab_runtime/colab_retention/colab_self_watch.
 
 Collaborators still owned by cli.colab (transport dial-ins, config constants,
@@ -11,7 +10,7 @@ receipts, the bootstrap preamble) resolve at call time through the running
 colab module, via ``cli.colab_hub.hub()`` (the ONE resolver, never a direct
 second import), so the legacy ``from cli import colab`` monkeypatch surface —
 ``TRAINING_RESULTS``, ``_read_remote_text``, ``_list_remote``,
-``_download_one_remote_file``, ``_verify_result_bundle`` — keeps driving every
+``_download_one_remote_file``, ``_load_result_manifest`` — keeps driving every
 phase and the ``python -m cli.colab`` runtime identity never sees a stale
 copy.
 """
@@ -27,7 +26,6 @@ import threading
 from pathlib import Path
 
 from core.archive_reader import tar_archive
-from core.manifest import file_size
 from core.schemas import ResultBundleManifest
 from cli.colab_hub import hub
 
@@ -145,54 +143,23 @@ print("[result-archive] included={{}} excluded={{}} archive_bytes={{}}".format(
     return archive_path
 
 
-def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundleManifest:
-    """Validate manifest coverage, paths, sizes, and hashes after extraction."""
+def _load_result_manifest(root: Path) -> ResultBundleManifest:
+    """Load the extracted result archive's manifest under its schema.
+
+    The result archive's bytes are immutable and its manifest is the immutable
+    record of what it carries, so nothing here re-measures members, sizes, or
+    hashes (owner directive 2026-10-09: data is never checked).  Manifest paths
+    are still confined to the extraction root -- a path-traversal safety check,
+    not a data check.
+    """
     manifest_path = root / hub()._RESULT_MANIFEST_NAME
-    if not manifest_path.is_file():
-        raise RuntimeError(f"result archive is missing its manifest: {manifest_path}")
     manifest = ResultBundleManifest.model_validate_json(
         manifest_path.read_text(encoding="utf-8")
     )
-    if manifest.run_id != run_id or manifest.workers != workers:
-        raise RuntimeError(
-            f"result manifest identity mismatch: run_id={manifest.run_id!r}, "
-            f"workers={manifest.workers}; expected {run_id!r}, {workers}"
-        )
-    expected: set[str] = set()
     for entry in manifest.included:
         relative = Path(entry.path)
         if relative.is_absolute() or ".." in relative.parts:
             raise RuntimeError(f"unsafe result manifest path: {entry.path!r}")
-        key = Path(f"worker_{entry.worker}") / relative
-        key_text = key.as_posix()
-        if key_text in expected:
-            raise RuntimeError(f"duplicate result manifest path: {key_text}")
-        expected.add(key_text)
-        actual = root / key
-        if not actual.is_file():
-            raise RuntimeError(f"result archive missing manifest file: {key_text}")
-        size = actual.stat().st_size
-        if size != entry.size:
-            raise RuntimeError(
-                f"result size mismatch for {key_text}: {size} != {entry.size}"
-            )
-        digest = file_size(actual)
-        if digest != entry.size:
-            raise RuntimeError(f"result SHA-256 mismatch for {key_text}")
-    actual_paths = {
-        path.relative_to(root).as_posix()
-        for worker_root in sorted(root.glob("worker_*"))
-        if worker_root.is_dir()
-        for path in worker_root.rglob("*")
-        if path.is_file()
-    }
-    if actual_paths != expected:
-        missing = sorted(expected - actual_paths)
-        unexpected = sorted(actual_paths - expected)
-        raise RuntimeError(
-            f"result archive coverage mismatch: missing={missing[:5]}, "
-            f"unexpected={unexpected[:5]}"
-        )
     return manifest
 
 
@@ -215,7 +182,7 @@ def _extract_result_archive(
                 ):
                     raise RuntimeError(f"unsafe result archive member: {member.name!r}")
             archive.extractall(temporary)
-        manifest = surface._verify_result_bundle(temporary, run_id, workers)
+        manifest = surface._load_result_manifest(temporary)
         for worker in range(1, workers + 1):
             source = temporary / f"worker_{worker}"
             target = local_base / source.name

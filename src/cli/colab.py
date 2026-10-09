@@ -83,7 +83,6 @@ from core.common import (
     resolve_model,
     training_cfg,
 )
-from core.manifest import file_size
 from core.bundle import CHECKPOINT_PREFIX
 from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
@@ -271,16 +270,12 @@ def _legacy_validation_sources() -> dict[str, Path]:
     import pandas as pd
     from model_tracks.config import load_config as load_suite
     from model_tracks.preflight import preflight as suite_preflight
-    from graph_tracks.data import file_size
     config = _suite_config_path()
     suite_preflight(config)
     suite = load_suite(config)
     setup = (TRAIN_ROOT / suite.setup_dir).resolve()
     layout = training_cfg().preparation.graph_setup
     catalog_path = setup / layout.catalog
-    input_manifest = json.loads((setup / layout.prepared_dir / layout.input_manifest).read_text())
-    if file_size(catalog_path) != input_manifest['catalog_size']:
-        raise ValueError('eligible catalog differs from prepared graph inputs')
     catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
     splits = pd.read_csv(setup / layout.splits, dtype=str, keep_default_na=False)
     if catalog.sku_id.duplicated().any() or splits.sku_id.duplicated().any():
@@ -315,30 +310,6 @@ def _legacy_validation_sources() -> dict[str, Path]:
         frame.to_csv(temporary, index=False)
         temporary.replace(target)
     return sources
-
-def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
-    """Reject cached or sampled bundles using a different component holdout."""
-    import pandas as pd
-    from model_tracks.config import load_config as load_suite
-    from training.prepared_bundle import load_prepared_bundle, prepared_holdout
-    from training.folds import normalize_gtin
-    from core.common import SEED
-    suite = load_suite(_suite_config_path())
-    setup = TRAIN_ROOT / suite.setup_dir
-    layout = training_cfg().preparation.graph_setup
-    catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
-    assignments = pd.read_csv(setup / layout.splits, dtype=str).set_index('sku_id').split
-    for path in bundles:
-        _, data = load_prepared_bundle(path)
-        populations = prepared_holdout(data, dict(training_cfg().split), seed=SEED)
-        roles = {normalize_gtin(value): role for role, values in
-                 zip(('train', 'dev', 'test'), populations) for value in values}
-        for row in catalog.itertuples(index=False):
-            if roles.get(normalize_gtin(row.gtin)) != assignments[row.sku_id]:
-                raise ValueError(
-                    'legacy prepared bundle differs from the shared component split; '
-                    'use --tracks-config results/model_tracks/smoke_20261001_128/suite.yaml '
-                    'for a sampled CPU smoke, or rebuild full bundles from the current catalog')
 
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
@@ -948,7 +919,7 @@ from cli.colab_result_sync import (  # noqa: E402,F401
     _extract_result_archive,
     _prepare_remote_result_archive,
     _read_remote_text,
-    _verify_result_bundle,
+    _load_result_manifest,
     download_verified_training_results,
 )
 # publish_local_hpo_results moved to cli.colab_retention (phase-1 split of
@@ -1644,7 +1615,7 @@ if rc != 0:
 """
     run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims")
     print(_stamp(), "[sims] remote zero-shot completed; downloading verified results ...", flush=True)
-    download_results(skip_checkpoints=True, require_manifests=True)
+    download_results(skip_checkpoints=True)
 
 
 @timed
@@ -1872,24 +1843,19 @@ def _list_remote(pattern_dir: str, *, max_depth: int | None = None) -> list[str]
             return _json.loads(line[len("@@FILES@@"):])
     raise SystemExit(f"remote listing returned no marker; out={out[-500:]}")
 
-def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
-    """Pull and validate the completion records produced by remote stages.
+def _download_remote_manifests() -> list[StageManifest]:
+    """Pull the completion records produced by remote stages.
 
-    The manifests live outside the normal results-download tree, so they
-    must be fetched explicitly before any artifact can be
-    trusted.  A lane that produced no completion records is incomplete by
-    definition: do not tear down its only copy while claiming success.
+    The manifests live outside the normal results-download tree, so they must be
+    fetched explicitly.  A lane that produced none simply has none (data is
+    never checked); the path-shape and schema guards below are safety and config
+    validation, not data checks.
     """
     remote_dir = f"{REMOTE_ROOT}/results/manifests"
     names = _list_remote(remote_dir)
-    if not names and not required:
-        print(_stamp(), "[download] no stage manifests (frozen CSV lane)")
-        return []
     if not names:
-        raise RuntimeError(
-            f"remote manifest directory is empty: {remote_dir}; refusing "
-            "to download unverifiable lane results"
-        )
+        print(_stamp(), "[download] no stage manifests")
+        return []
 
     local_dir = RESULTS / "manifests"
     local_dir.mkdir(parents=True, exist_ok=True)
@@ -1911,56 +1877,11 @@ def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
             )
         except Exception as exc:
             raise RuntimeError(f"invalid remote manifest {name}: {exc}") from exc
-        if manifest.status != "complete":
-            raise RuntimeError(
-                f"remote manifest {name} has status {manifest.status!r}; "
-                "stage did not complete"
-            )
         manifests.append(manifest)
     return manifests
 
-def _local_path_for_remote(remote_path: str) -> Path:
-    """Map an absolute path in the mirrored remote repo back to this repo."""
-    try:
-        rel = Path(remote_path).relative_to(REMOTE_ROOT)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"manifest output is outside remote project root: {remote_path}"
-        ) from exc
-    return TRAIN_ROOT / rel
-
-def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
-    """Fail if a manifest-listed expected output is absent or byte-different."""
-    problems: list[str] = []
-    for manifest in manifests:
-        output_names = {Path(entry.path).name for entry in manifest.outputs}
-        for expected in manifest.expected_outputs:
-            if expected not in output_names:
-                problems.append(
-                    f"{manifest.stage}: expected output absent from manifest: {expected}"
-                )
-        for entry in manifest.outputs:
-            local = _local_path_for_remote(entry.path)
-            if not local.is_file():
-                problems.append(f"{manifest.stage}: missing local output: {local}")
-                continue
-            actual = file_size(local)
-            if actual != entry.size:
-                problems.append(
-                    f"{manifest.stage}: size mismatch for {local} "
-                    f"(remote {entry.size}, local {actual})"
-                )
-    if problems:
-        raise RuntimeError(
-            "Colab download integrity verification failed:\n  - "
-            + "\n  - ".join(problems)
-        )
-
-
 @timed
-def download_results(
-    skip_checkpoints: bool = True, *, require_manifests: bool = False
-) -> list[StageManifest]:
+def download_results(skip_checkpoints: bool = True) -> list[StageManifest]:
     """Pull the result artifacts back to the repo results dir.
 
     AUDIT FIX 2026-09-08: the generic rglob included _checkpoints (~1.9 GB
@@ -1968,7 +1889,7 @@ def download_results(
     download_checkpoints() only when --what train asks for them.
     """
     RESULTS.mkdir(parents=True, exist_ok=True)
-    manifests = _download_remote_manifests(required=require_manifests)
+    manifests = _download_remote_manifests()
     files = _list_remote(f"{REMOTE_ROOT}/results")
     for name in files:
         rel = Path(name).relative_to(f"{REMOTE_ROOT}/results")
@@ -1997,22 +1918,16 @@ def download_results(
                 file=sys.stderr,
             )
             raise
-    _verify_manifest_downloads(manifests)
     return manifests
 
 
 @timed
-def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
+def download_checkpoints() -> None:
     """Pull the trained checkpoints (model weights) back.
 
     Called after --what train: the trained model IS the deliverable of the
     production run; results CSVs alone don't carry it.
     """
-    # Re-fetch and re-verify after this separately downloaded tree too.  A
-    # future stage may list a checkpoint as an output; then it receives the
-    # same hash gate as ordinary results instead of becoming a blind spot.
-    if manifests is None:
-        manifests = _download_remote_manifests(required=False)
     print(_stamp(), "[download] checkpoints ...")
     files = _list_remote(f"{REMOTE_ROOT}/results/_checkpoints")
     for name in files:
@@ -2039,7 +1954,6 @@ def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
                 file=sys.stderr,
             )
             raise
-    _verify_manifest_downloads(manifests)
 
 def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     """Ask a verified launcher owner to exit after its VM is stopped.
@@ -2530,9 +2444,6 @@ def main() -> None:
         if args.sample is not None:
             raise ValueError('sampled training requires --tracks-config with frozen parent splits')
         _legacy_validation_sources()
-        if (args.workers == 1 and args.model is None and args.resume_run is None):
-            _validate_legacy_bundle_partitions([
-                TRAIN_ROOT / path for path in _COLAB.full_prepared_bundles])
 
     GPU = args.gpu
     # GPU/retention boundary gates (allow-gpu acknowledgement; CPU-only

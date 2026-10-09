@@ -1,31 +1,17 @@
-"""The Colab lane's transport boundary: ONE integrity check per VM crossing.
+"""The Colab lane's transport boundary: the sidecar token of a VM crossing.
 
 Every archive the Colab lane stages onto the VM or pulls back is handled here,
-so the rule ``core.bundle`` sets for Colab is the rule the lane follows: an
-artifact is verified exactly once, at the boundary it crosses, and the verified
-handle is then trusted (no stage re-measures members, no stage re-parses an
-archive).
+so the token rule the lane follows has one home.
 
-Two shapes cross this boundary:
-
-* a **role Bundle** (a sealed archive carrying a role manifest) — the writer
-  seals it through :meth:`core.bundle.Bundle.seal_archive`, which sizes each
-  source exactly once while writing AND freezes the member inventory in the
-  sealed manifest, and the reader loads it once through
-  :meth:`core.bundle.Bundle.load`, which re-checks that inventory. The Kaggle
-  transport is the worked example (the kernel templates seal/load ``all_tracks_inputs.tar.zst``
-  and the sealed result bundle this way); a Colab stage that ships a role Bundle
-  must do the same rather than measure members itself.
-* a **transport wrapper** — the CPU lane's delivery archive
-  (``bundle_delivery.tar.zst``), whose members are a ``training_prep`` run plus
-  data artifacts and which therefore is NOT a role tree. Its writer records the
-  whole-archive byte size with :func:`record_digest_script` (called from the
-  delivery segment itself, so the writer has ONE implementation), and its reader
-  verifies that token once with :func:`verify_transport_digest`.
+A **transport wrapper** such as the CPU lane's delivery archive
+(``bundle_delivery.tar.zst``) has its whole-archive byte size recorded by
+:func:`record_digest_script` (called from the delivery segment itself, so the
+writer has ONE implementation) and its measured delivered size read back with
+:func:`transport_archive_size`.
 
 The token is the delivered file's byte size, recorded under the `.size`
-companion suffix; no content identity is written or compared
-anywhere (owner directive 2026-10-08).
+companion suffix; it is a recorded receipt, never a refusal (owner directive
+2026-10-09: data is never checked).
 """
 from __future__ import annotations
 
@@ -78,21 +64,11 @@ def record_digest_script(archive_expression: str, *, label: str) -> str:
     )
 
 
-def verify_transport_digest(archive: Path | str, expected: str | None) -> int:
-    """Verify one crossing's token, ONCE, and return the observed byte size.
+def transport_archive_size(archive: Path | str) -> int:
+    """Return the delivered archive's byte size for the transport receipt.
 
-    ``expected`` is what the writer recorded (the remote sidecar, the fetched
-    kernel receipt, the archive manifest). A mismatch is fatal: the partial is
-    kept, never installed. ``expected`` unset/empty means the writer recorded no
-    token (an older lane script); the caller owns making that absence explicit.
-
-    No content identity exists anywhere (owner directive 2026-10-08): the token
-    is the delivered file's byte size, recorded as text by the remote script.
+    The writer records the same byte size in a sidecar; the caller owns reading
+    that recorded token back and reporting it. Neither copy refuses anything
+    (owner directive 2026-10-09: data is never checked).
     """
-    archive = Path(archive)
-    observed = file_size(archive)
-    if expected and str(observed) != expected.strip():
-        raise ValueError(
-            f"transport token mismatch for {archive}: observed size={observed} "
-            f"but the writer recorded {expected.strip()}")
-    return observed
+    return file_size(Path(archive))

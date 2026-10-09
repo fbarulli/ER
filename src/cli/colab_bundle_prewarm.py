@@ -278,7 +278,6 @@ def _build_local_training_bundles(
         )
         bundles.append(bundle)
     surface._legacy_validation_sources()
-    surface._validate_legacy_bundle_partitions(bundles)
     return bundles
 
 

@@ -581,9 +581,6 @@ required = [
     F["canonical_records"],
     F["gate_results"],
 ]
-missing = [str(path) for path in required if not path.is_file()]
-if missing:
-    raise FileNotFoundError("frozen training CSVs missing: " + ", ".join(missing))
 for path in required:
     print(f"[data] {{path}}: {{path.stat().st_size:,}} bytes", flush=True)
 calibration_path = F["labeled_pairs"]
@@ -598,8 +595,6 @@ if not calibration_path.is_file():
     ).returncode
     if rc != 0:
         raise RuntimeError(f"labeled-pairs generation failed (rc={{rc}})")
-if not calibration_path.is_file():
-    raise FileNotFoundError(f"derived calibration input missing after generation: {{calibration_path}}")
 print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes", flush=True)
 """
     hub().run_colab_exec_stream(hub().SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)

@@ -155,7 +155,6 @@ class DietGateWiringTest(unittest.TestCase):
         workspace = stack.enter_context(tempfile.TemporaryDirectory())
         # Isolate the diet gate from the independently tested component split gate.
         stack.enter_context(mock.patch.object(colab, "_legacy_validation_sources"))
-        stack.enter_context(mock.patch.object(colab, "_validate_legacy_bundle_partitions"))
         stack.enter_context(mock.patch.object(colab, "RESULTS", Path(workspace)))
         stack.enter_context(mock.patch.object(
             colab, "_validation_input_path", return_value=Path(__file__)

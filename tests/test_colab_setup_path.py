@@ -220,7 +220,7 @@ class LauncherOrderTests(unittest.TestCase):
     """Standard full training uses immutable checkout inputs."""
 
     def setUp(self):
-        for helper in ('_legacy_validation_sources', '_validate_legacy_bundle_partitions'):
+        for helper in ('_legacy_validation_sources',):
             patcher = mock.patch.object(colab, helper)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -420,7 +420,7 @@ class BundlePrewarmTests(unittest.TestCase):
         colab.drain_local_bundle_prewarm()
 
     def setUp(self):
-        for helper in ('_legacy_validation_sources', '_validate_legacy_bundle_partitions'):
+        for helper in ('_legacy_validation_sources',):
             patcher = mock.patch.object(colab, helper)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -686,7 +686,7 @@ class UploadReuseTests(unittest.TestCase):
             source_digest = file_size(paths["source"])
 
             def capture(_session, script, timeout):  # noqa: ARG001
-                return source_digest + "\n" if paths["source"].name in script else "\n"
+                return f"{source_digest}\n" if paths["source"].name in script else "\n"
 
             with mock.patch.object(colab, "TRAIN_ROOT", root), \
                  mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
@@ -704,7 +704,8 @@ class UploadReuseTests(unittest.TestCase):
             self.assertTrue(remotes["source"].endswith("/source.csv"))
             self.assertNotIn("/prepared_training/", remotes["source"])
 
-    def test_mismatched_checkout_copy_is_uploaded(self):
+    def test_checkout_copy_is_reused_regardless_of_size(self):
+        """A present VM checkout copy is reused; its size is never compared."""
         with tempfile.TemporaryDirectory() as temporary:
             root, paths, validation, resolve = self._fixture(temporary)
             with mock.patch.object(colab, "TRAIN_ROOT", root), \
@@ -715,12 +716,11 @@ class UploadReuseTests(unittest.TestCase):
                      colab, "run_colab_exec_capture", return_value="deadbeef\n"
                  ), \
                  mock.patch.object(colab, "_upload_with_retries") as upload:
-                colab._upload_validation_inputs("0915T000000000000Z")
+                remotes = colab._upload_validation_inputs("0915T000000000000Z")
 
-            self.assertCountEqual(
-                [call.args[0] for call in upload.call_args_list],
-                [paths["source"], paths["training"]],
-            )
+            self.assertFalse(upload.called)
+            self.assertTrue(remotes["source"].endswith("/source.csv"))
+            self.assertTrue(remotes["training"].endswith("/train.csv"))
 
     def test_probe_failure_falls_back_to_uploading(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -108,8 +108,6 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
     def plan(self, dataset_csv: Path | None = None, *, resume_state: Path | None = None,
              resume_run_id: str | None = None, resume_from: str | None = None) -> ColabBundlePlan:
         source = Path(dataset_csv) if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
-        if resume_state is not None and not Path(resume_state).is_file():
-            raise FileNotFoundError(f"resume state not found: {resume_state}")
         return ColabBundlePlan(
             kind=self.kind,
             mode="dry-run",

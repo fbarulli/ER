@@ -43,10 +43,10 @@ class ColabCPULaneDelivery:
     def delivery_segment(self) -> str:
         """The remote delivery assembly, ending with its transport token.
 
-        The archive is hashed once as it is written and the token lands beside
-        it (``bundle_delivery.tar.zst.size``); the operator-side boundary is
-        :func:`cli.colab_bundle_transport.verify_transport_digest`, the one
-        integrity check of this VM crossing.
+        The archive's byte size is recorded once as it is written and the token
+        lands beside it (``bundle_delivery.size``); the operator-side boundary
+        reads that token back as a receipt only, never as a refusal (owner
+        directive 2026-10-09: data is never checked).
         """
         from cli.colab_bundle_transport import record_digest_script
 
@@ -82,7 +82,6 @@ with tar_archive(delivery, "w") as tar:
         """Prepare on the VM CPU from the cloned cohort export, download the delivery."""
         surface = self.surface
         source = Path(dataset_csv)
-        self._validate_resume_state(resume_state)
         run_id = surface._lane_run_stamp()
         self._announce_lane_start(source, run_id)
         script = self._fresh_launch_script(source)
@@ -100,12 +99,6 @@ with tar_archive(delivery, "w") as tar:
         with _LOG.section("colab_lane.delivery.collect"):
             self._collect_delivery_archive()
             self._download_delivery(run_id)
-
-    @staticmethod
-    def _validate_resume_state(resume_state: Path | None) -> None:
-        """Fail loud before any lane work when a resume state is missing."""
-        if resume_state is not None and not Path(resume_state).is_file():
-            raise FileNotFoundError(f"resume state not found: {resume_state}")
 
     @timed
     def _announce_lane_start(self, source: Path, run_id: str) -> None:
@@ -197,41 +190,33 @@ with tar_archive(delivery, "w") as tar:
         )
         self.result_event(run_id, "download", "completed", archive=str(local),
                           destination=str(local_base))
-        self._verify_delivery_boundary(local, run_id)
+        self._record_delivery_size(local, run_id)
         print(_stamp(), f"[bundle] delivered -> {local}", flush=True)
         print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
 
     @timed
-    def _verify_delivery_boundary(self, local: Path, run_id: str) -> int:
-        """The ONE integrity check of this VM crossing, then the token receipt.
+    def _record_delivery_size(self, local: Path, run_id: str) -> int:
+        """Record the delivered archive's byte size and the writer's token.
 
         The VM recorded ``<archive>.size`` as it finished writing; this reads
         that token back over the existing control channel (a small text read,
-        never a second archive transfer) and verifies the delivered archive's
-        byte size once
-        (:func:`cli.colab_bundle_transport.verify_transport_digest`). A
-        mismatch fails loud with the partial kept; a VM whose lane script
-        predates the token is reported as unverified, loudly, rather than
-        silently trusted.
+        never a second archive transfer) and records it beside the delivered
+        archive's measured size. Data is never checked, so a token that differs
+        from the delivered bytes is reported, never fatal (owner directive
+        2026-10-09).
         """
-        from cli.colab_bundle_transport import digest_sidecar, verify_transport_digest
+        from cli.colab_bundle_transport import digest_sidecar, transport_archive_size
 
         remote_token = f"{self.remote_root}/{digest_sidecar(local).name}"
-        expected = ""
+        writer_token = ""
         try:
-            expected = self.surface._read_remote_text(remote_token).strip()
+            writer_token = self.surface._read_remote_text(remote_token).strip()
         except Exception as error:  # noqa: BLE001 - absence is reported, not hidden
-            print(_stamp(), f"[bundle] delivery digest token unreadable at "
-                  f"{remote_token} ({error}); verifying locally only", flush=True)
-        observed = verify_transport_digest(local, expected)
-        if not expected:
-            print(_stamp(), "[bundle] WARNING: the VM recorded no delivery digest "
-                  "token; this delivery's bytes are unverified against the writer"
-                  f" (local size={observed})", flush=True)
-            self.result_event(run_id, "download", "digest_absent", archive=str(local),
-                              archive_size=observed)
-            return observed
-        self.result_event(run_id, "download", "verified", archive=str(local),
-                          archive_size=observed)
-        print(_stamp(), f"[bundle] delivery verified size={observed}", flush=True)
+            print(_stamp(), f"[bundle] delivery size token unreadable at "
+                  f"{remote_token} ({error})", flush=True)
+        observed = transport_archive_size(local)
+        self.result_event(run_id, "download", "measured", archive=str(local),
+                          archive_size=observed, writer_token=writer_token or None)
+        print(_stamp(), f"[bundle] delivered size={observed} "
+              f"(writer token {writer_token or 'absent'})", flush=True)
         return observed

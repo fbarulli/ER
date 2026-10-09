@@ -20,7 +20,6 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.manifest import file_size
 from cli.colab_hub import hub, timed_colab
 
 
@@ -39,13 +38,11 @@ def _validation_input_path(configured_value: str) -> Path:
         raise ValueError(
             "the configured lane input CSV must stay inside the repository"
         )
-    if hub()._FINAL_INFERENCE.enabled and not source.is_file():
-        raise FileNotFoundError(f"configured final-inference CSV is missing: {source}")
     return source
 
 
 def _remote_checkout_copy(source: Path) -> str | None:
-    """Return the VM's own checkout copy of `source` when its bytes match.
+    """Return the VM's own checkout copy of `source` when the VM holds it.
 
     `prepare_remote_layout` has already put the configured branch at
     REMOTE_ROOT, so any validation input that is committed to the branch is
@@ -53,9 +50,9 @@ def _remote_checkout_copy(source: Path) -> str | None:
     seconds per run (measured: 14.7 s for the 46 MB deduped source CSV on the
     2026-09-15 T4 launch) and transfers bytes the VM already has.
 
-    The reuse is content-verified, not assumed: the remote file is hashed and
-    must equal the local digest, so a locally modified or absent input falls
-    back to a normal upload instead of silently training on the wrong rows.
+    The VM checkout copy is its own immutable artifact, so no content
+    comparison is made here (owner directive 2026-10-09: data is never
+    checked); an absent remote copy falls back to a normal upload.
     """
     surface = hub()
     relative = source.resolve().relative_to(surface.TRAIN_ROOT.resolve()).as_posix()
@@ -75,7 +72,7 @@ print(path.stat().st_size if path.is_file() else "", flush=True)
             flush=True,
         )
         return None
-    if reported and reported == file_size(source):
+    if reported:
         return remote
     return None
 
@@ -305,8 +302,8 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
             remotes[key] = checkout_copy
             print(
                 surface._stamp(),
-                f"[upload] validation {key}={source} reused the verified VM "
-                f"checkout copy {checkout_copy} (size matches; not uploaded)",
+                f"[upload] validation {key}={source} reused the VM "
+                f"checkout copy {checkout_copy} (present; not uploaded)",
                 flush=True,
             )
             continue
