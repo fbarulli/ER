@@ -48,6 +48,33 @@ class _TinyNet(torch.nn.Module):
         return self.head(torch.relu(self.encoder(x)))
 
 
+class _RankSplitNet(torch.nn.Module):
+    """Per-rank-different, per-iteration-dynamic used params + an unused param.
+
+    Rank 0 alternates ``head_a``/``head_b`` every step and rank 1 always routes
+    through ``head_b``; ``always_unused`` is never in the forward. The used
+    graph is therefore dynamic AND rank-dependent — the exact shape under which
+    ``find_unused_parameters`` lets each rank pick its own reduction buckets.
+    The deterministic contract must keep the ranks in lockstep regardless.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.encoder = torch.nn.Linear(4, 6)
+        self.head_a = torch.nn.Linear(6, 3)
+        self.head_b = torch.nn.Linear(6, 3)
+        self.always_unused = torch.nn.Linear(6, 3)
+        self.head_checkpointing = False
+        self.step = 0
+
+    def forward(self, x):
+        hidden = torch.relu(self.encoder(x))
+        self.step += 1
+        rank = int(os.environ.get("RANK", "0"))
+        head = self.head_a if rank == 0 and self.step % 2 else self.head_b
+        return head(hidden)
+
+
 class _Cfg:
     epochs = 2
     micro_batch = 2
@@ -354,16 +381,21 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
     assert "random.Random(config.seed + epoch).shuffle(epoch_items)" in script
 
 
-def test_ddp_find_unused_parameters_is_pinned():
-    """The 2xT4 run crashed with 'Expected to have finished reduction in the
-    prior iteration' — laya's model leaves parameters unused under DDP, so the
-    wrapper MUST pass find_unused_parameters=True. Pin it so it cannot regress."""
+def test_ddp_deterministic_reduction_contract_is_pinned():
+    """The 2xT4 run desynced: find_unused_parameters=True derives the reduction
+    from each rank's used-parameter graph, so per-rank-different data enqueues a
+    different number of collectives and the post-training staging barrier times
+    out. Pin the deterministic contract: no per-graph unused search, and every
+    trainable parameter pinned into the loss with an exactly-zero guard."""
     from cli import laya_lane as L
 
     src = L.FINETUNE_PERF_PATCH_SOURCE
     assert "DistributedDataParallel" in src
-    assert src.count("find_unused_parameters=True") >= 2, (
-        "both the CUDA and CPU DDP wrappers must set find_unused_parameters=True")
+    assert "find_unused_parameters=True" not in src, (
+        "the used-parameter graph must not drive the reduction buckets")
+    assert "find_unused_parameters=False" in src
+    assert "DeterministicDdp.wrap(" in src
+    assert "DeterministicDdp.loss_guard(params)" in src
 
 
 def _ddp_control_worker(rank, world_size, shared_dir, out_path):
@@ -495,3 +527,59 @@ def test_grad_norm_logging_does_not_change_training(monkeypatch):
     assert runs[0][0] == runs[1][0]
     for key, value in runs[0][1].items():
         assert torch.equal(value, runs[1][1][key]), key
+
+
+def _ddp_used_graph_worker(rank, world_size, out_path):
+    """Two ranks, dev+early-stop control, per-rank-different used params."""
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace()
+    assert namespace["init_distributed"](backend="gloo") is True
+    try:
+        import sys
+
+        import torch.distributed as dist
+
+        fake = _make_fake_laya([])
+        sys.modules["laya"] = fake
+        sys.modules["laya.train"] = fake.train
+        control = laya_lane.finetune_control()
+        control.update({"eval_dev": True, "early_stop": True,
+                        "early_stop_patience": 5})
+        namespace["FINETUNE_CONTROL"] = control
+        namespace["FINETUNE_DEV_ROWS"] = [{"i": 0, "label": 0}]
+        items = [{"i": index, "label": index % 3}
+                 for index in range(N_ITEMS)]
+        history = namespace["_perf_train_model"](
+            _RankSplitNet(), types.SimpleNamespace(pad_token_id=0), items,
+            _Cfg(), torch.device("cpu"), 8, 4)
+        results = [None for _ in range(world_size)]
+        histories = [None for _ in range(world_size)]
+        dist.all_gather_object(results, dict(namespace["FINETUNE_CONTROL_RESULT"]))
+        dist.all_gather_object(histories, history)
+        if rank == 0:
+            Path(out_path).write_text(json.dumps({
+                "results": results, "histories": histories,
+            }), encoding="utf-8")
+    finally:
+        namespace["destroy_if_distributed"]()
+
+
+def test_ddp_rank_specific_used_graph_stays_in_lockstep(tmp_path):
+    """The regression the staging barrier exposed: with find_unused_parameters
+    the ranks derive different reduction graphs (rank 0 uses head_a, rank 1
+    head_b, and one parameter is never used). The run must still complete and
+    every rank must agree on the control result and the loss history."""
+    out_path = str(tmp_path / "used_graph.json")
+    torch.multiprocessing.spawn(
+        _ddp_used_graph_worker, args=(WORLD, out_path), nprocs=WORLD,
+        join=True, start_method="spawn")
+    result = json.loads(Path(out_path).read_text(encoding="utf-8"))
+
+    assert result["histories"][0] == result["histories"][1]
+    assert all(math.isfinite(value) for value in result["histories"][0])
+    assert result["results"][0] == result["results"][1]
+    assert result["results"][0]["history"] == result["histories"][0]

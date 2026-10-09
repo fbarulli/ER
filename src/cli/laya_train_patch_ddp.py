@@ -143,6 +143,35 @@ def init_distributed(backend=None):
     return True
 
 
+class DeterministicDdp:
+    """DDP reductions that never depend on a rank's used-parameter graph.
+
+    Letting DDP search for unused parameters makes each rank derive its
+    reduction behaviour from ITS OWN used-parameter graph; with
+    per-rank-different data the ranks then enqueue a different number of
+    collectives and the next barrier (the post-training staging barrier) times
+    out. We disable that unused search and instead pin every trainable
+    parameter into the loss with an exactly-zero term, so the used set is
+    static and identical on every rank and the reduction order cannot diverge.
+    ``static_graph=True`` is deliberately NOT used: it also requires the used
+    set to be static, which the laya model does not guarantee per rank.
+    """
+
+    @staticmethod
+    def wrap(torch, model, device, local_rank):
+        kwargs = {"find_unused_parameters": False}
+        if device.type == "cuda":
+            kwargs.update(device_ids=[local_rank], output_device=local_rank)
+        return torch.nn.parallel.DistributedDataParallel(model, **kwargs)
+
+    @staticmethod
+    def loss_guard(params):
+        # 0 * sum(p) pulls every trainable param into the autograd graph with a
+        # zero loss and zero gradient, so find_unused_parameters=False never
+        # sees a missing grad, without changing the loss value or the grads.
+        return 0.0 * sum(p.sum() for p in params if p.requires_grad)
+
+
 def barrier_if_distributed():
     if not is_distributed():
         return
