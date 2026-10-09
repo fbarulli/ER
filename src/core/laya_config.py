@@ -234,7 +234,7 @@ class EvalCalibrationSpec(BaseModel):
 
 
 class FinetuneSmokeSpec(BaseModel):
-    """laya.finetune_smoke — the CPU end-to-end smoke of the finetune kernel.
+    """laya.finetune_smoke — the tiny end-to-end smoke of the finetune kernel.
 
     The NEW finetune kernel (dials + profiler + early-stop/dev-eval + the
     fail-loud fetchers) only ever ran on a T4. This block selects the smallest
@@ -242,6 +242,13 @@ class FinetuneSmokeSpec(BaseModel):
     / grad-accum 1, and DEDICATED dataset + kernel slugs so a smoke never
     versions or overwrites the production corpus/kernel. Every dial is config,
     never a code literal.
+
+    ``device`` is the ONE source of truth for the smoke's runtime: ``"cpu"``
+    (the default) keeps the original CPU smoke byte-for-byte, while ``"cuda"``
+    selects the same single-T4 path as the prod kind (the kernel metadata's
+    ``enable_gpu`` and the baked ``FINETUNE_DEVICE`` both derive from it), so a
+    GPU smoke proves the GPU code path end-to-end. There is deliberately no
+    separate ``enable_gpu`` bool: a bool + a device could disagree.
 
     There is deliberately no ``enabled`` flag: the dedicated ``finetune-smoke``
     decision kind IS the selector, so an illegal "smoke on the prod kind" state
@@ -260,6 +267,7 @@ class FinetuneSmokeSpec(BaseModel):
     epochs: int = Field(default=1, ge=1, le=8)
     micro_batch: int = Field(default=1, ge=1, le=64)
     grad_accum: int = Field(default=1, ge=1, le=64)
+    device: Literal["cpu", "cuda"] = "cpu"
 
 
 class LayaSpec(BaseModel):

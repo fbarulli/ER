@@ -350,6 +350,10 @@ laya:
     epochs: 1
     micro_batch: 1
     grad_accum: 1
+    # GPU smoke: prove the single-T4 code path end-to-end before 3k training.
+    # Schema default stays "cpu" (no default flips); this block opts the
+    # dedicated finetune-smoke kind onto the GPU.
+    device: "cuda"
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
 # consumed ONLY by that lane and its thin passthroughs in cli.colab; no

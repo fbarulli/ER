@@ -614,15 +614,17 @@ class LayaStagingFactory:
         stage = self._runtime.staging_dir() / "kaggle" / kind
         stage.mkdir(parents=True, exist_ok=True)
         tag = run_tag or spec.run_tag_prefix + self.decision_tag()
-        # the CPU smoke pins enable_gpu=False; the prod kind keeps the single
-        # T4 (the script pins CUDA_VISIBLE_DEVICES=0 either way). THE CORPUS +
-        # THE BASE CHECKPOINT TRAVEL AS DATASETS.
+        # ONE device source: the smoke's `laya.finetune_smoke.device` (default
+        # "cpu" = the original CPU smoke) or the prod `laya.finetune.device`.
+        device = smoke_spec.device if smoke else spec.finetune.device
+        # enable_gpu derives from the SAME device: a cpu smoke never requests a
+        # GPU; prod keeps its single T4 (the script pins CUDA_VISIBLE_DEVICES=0
+        # either way). THE CORPUS + THE BASE CHECKPOINT TRAVEL AS DATASETS.
         metadata = KaggleKernels.kernel_metadata(
-            slug, FINETUNE_CODE_FILE, enable_gpu=not smoke,
+            slug, FINETUNE_CODE_FILE, enable_gpu=(not smoke or device != "cpu"),
             dataset_sources=[dataset_slug, base_dataset])
         recipe = self._finetune_smoke_recipe() if smoke \
             else self._recipe.finetune_config()
-        device = "cpu" if smoke else spec.finetune.device
         values = {
             "LAYA_PACKAGE": spec.finetune_package,
             "BASE_MODEL_ARCHIVE": spec.base_model_archive,
@@ -660,7 +662,7 @@ class LayaStagingFactory:
         receipt = {
             "kernel": slug,
             "kind": kind,
-            "gpu": "CPU (smoke)" if smoke else "T4 (single)",
+            "gpu": "CPU (smoke)" if smoke and device == "cpu" else "T4 (single)",
             "run_tag": tag,
             "staged": str(stage),
             "code_file": FINETUNE_CODE_FILE,

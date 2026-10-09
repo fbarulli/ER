@@ -1,11 +1,12 @@
-"""CPU end-to-end smoke of the finetune kernel — offline pins.
+"""End-to-end smoke of the finetune kernel — offline pins.
 
 The smoke is the smallest honest validation of the NEW finetune kernel (dials +
 profiler + early-stop/dev-eval + the fail-loud fetchers): it reuses the SAME
-kernel template, staging and push surface, but pins CPU, a tiny subset corpus
-and DEDICATED slugs (``laya.finetune_smoke``). These pins prove the staged
-payload is CPU (never a GPU request), carries the smoke dials, and that the
-subset builder is deterministic and receipted.
+kernel template, staging and push surface, but pins a tiny subset corpus and
+DEDICATED slugs (``laya.finetune_smoke``). ``laya.finetune_smoke.device`` is
+the ONE runtime source (``"cpu"`` default, ``"cuda"`` for the GPU path). These
+pins prove the staged payload matches the device selection, carries the smoke
+dials, and that the subset builder is deterministic and receipted.
 """
 from __future__ import annotations
 
@@ -13,6 +14,9 @@ import ast
 import json
 import subprocess
 from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
 
 from cli import laya_lane
 from cli.laya_smoke import FinetuneSmokeCorpus
@@ -121,6 +125,28 @@ def test_smoke_kernel_stages_cpu_with_dedicated_slugs_and_dials(
     # the rendered payload still clears both staging-time AST gates
     laya_lane._kernel_script_gate(script)
     laya_lane._module_scope_gate(script)
+
+
+def test_smoke_kernel_stages_gpu_when_device_is_cuda(tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch, finetune_smoke=FinetuneSmokeSpec(
+        kernel_slug=SMOKE_KERNEL, dataset_slug=SMOKE_DATASET, device="cuda"))
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_finetune_kernel(run_tag="laya_smoke",
+                                              smoke=True)
+    stage = Path(receipt["staged"])
+    metadata = json.loads((stage / "kernel-metadata.json").read_text())
+    # device="cuda" is the ONE source: metadata + baked env + receipt agree
+    assert metadata["enable_gpu"] is True
+    assert receipt["device"] == "cuda"
+    assert receipt["gpu"] == "T4 (single)"
+    script = (stage / "laya_finetune.py").read_text()
+    assert _baked(script, "FINETUNE_DEVICE") == "cuda"
+
+
+def test_smoke_device_rejects_unknown_values():
+    with pytest.raises(ValidationError):
+        FinetuneSmokeSpec(device="tpu")
 
 
 def test_smoke_kind_routes_through_the_decision_dispatch(tmp_path, monkeypatch):
