@@ -4227,7 +4227,7 @@ class _PipelineSteering:
         self.trace.add_entities(
             "pair_decision",
             list(gate_frame.itertuples(index=False)),
-            key_of=lambda r: f"{r.gtin1}|{r.gtin2}",
+            key_of=lambda r: PairIdentity.of(r.gtin1, r.gtin2),
             reason_of=lambda r: f"{r.decision} :: {_reason_category(r.reason)}",
             detail_of=lambda r: json.dumps(
                 {
