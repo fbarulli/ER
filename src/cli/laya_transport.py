@@ -41,12 +41,25 @@ _KIND_KERNEL_SLUG_ATTR = {
 class LayaTransportFactory:
     """Resolves kernel slugs and drives the kaggle transport for one spec."""
 
+    #: Optional external kind -> slug hook. A sibling lane whose slug lives in
+    #: its OWN SSOT (not LayaSpec) registers here at import (cli.laya_hpo
+    #: registers the "laya-hpo" kind), so ``kernel_slug`` resolves without
+    #: duplicating the slug into LayaSpec or hardcoding it in the lane.
+    EXTERNAL_KIND_SLUGS: dict[str, str] = {}
+
     def __init__(self, spec: LayaSpec, runtime: LayaRuntimeFactory):
         self._spec = spec
         self._runtime = runtime
 
+    @classmethod
+    def register_external_kind(cls, kind: str, slug: str) -> None:
+        """Register a sibling lane's external decision kind -> kernel slug."""
+        cls.EXTERNAL_KIND_SLUGS[kind] = slug
+
     def kernel_slug(self, decision_kind: str) -> str:
         """The pushed Kaggle kernel slug a decision kind runs on (stop target)."""
+        if decision_kind in self.EXTERNAL_KIND_SLUGS:
+            return self.EXTERNAL_KIND_SLUGS[decision_kind]
         spec = self._spec
         if decision_kind == FINETUNE_SMOKE_DECISION:
             slug = spec.finetune_smoke.kernel_slug
