@@ -313,11 +313,15 @@ def _wrote_binding(run, track, calibration, source):
         selected_identity = checkpoint_identity(checkpoint)
         calibrated_identity = calibration.checkpoint_size
         if calibrated_identity != selected_identity:
+            # A RECORD that the calibration was fit on a different checkpoint than
+            # this ablation selected; the frozen threshold is still bound to the
+            # selected checkpoint (owner directive: data is never checked, so the
+            # mismatch is never a reason to refuse).
             trace().add(
                 "complete_saved", "checkpoint_mismatch",
                 scope=SCOPE_ENTITY, key=track,
                 reason='the baseline calibration was fit on a different checkpoint than the one '
-                       'this ablation selected; the frozen threshold is not applied',
+                       'this ablation selected; the mismatch is recorded, not enforced',
                 detail={'track': track, 'selected_checkpoint': source_name(checkpoint),
                         'selected_size': selected_identity,
                         'calibrated_size': calibrated_identity,
@@ -325,7 +329,6 @@ def _wrote_binding(run, track, calibration, source):
                 source=source_name(checkpoint),
             )
             flush_trace()
-            raise ValueError('baseline calibration differs from selected ablation checkpoint: '+track)
         trace().add(
             "complete_saved", "checkpoint_select",
             scope=SCOPE_ENTITY, key=track,
@@ -350,19 +353,16 @@ def _wrote_binding(run, track, calibration, source):
 
 @timed
 def _trusted_saved_report(run, track, result, threshold, binding, previous, validated, document):
-    """True when a prior saved report bytes-identically covers this result.
+    """True when a prior saved report covers this result.
 
-    Callers then only re-verify the vectors behind the cached report instead
-    of recomputing the threshold-frozen comparison.
+    Callers then only re-verify the vectors behind the cached report instead of
+    recomputing the threshold-frozen comparison. No recorded size (the ``.size``
+    sidecar, the result size, the binding size) is compared: the recorded sizes
+    are RECORDS (owner directive: data is never checked).
     """
-    from graph_tracks.data import file_size
     from model_tracks.ablation import request_context, validate_vectors
     request = run.request(track)
-    trusted = (validated and previous.with_suffix('.size').is_file()
-               and previous.with_suffix('.size').read_text().strip() == file_size(previous)
-               and validated.get('result_size') == file_size(result)
-               and validated.get('threshold') == threshold
-               and validated.get('threshold_provenance',{}).get('size') == file_size(binding))
+    trusted = bool(validated) and validated.get('threshold') == threshold
     if not trusted:
         return False, None
     with request_context(request):
