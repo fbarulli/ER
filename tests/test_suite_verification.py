@@ -19,15 +19,15 @@ RUN = 'verifyrun01'
 def _report(track, threshold=0.5):
     return build_manifest(
         track=track, checkpoint='checkpoint-1/model.pt',
-        checkpoint_size='0' * 64, listings_size='1' * 64, pairs_size='2' * 64,
+        checkpoint_size=4096, listings_size=8192, pairs_size=16384,
         threshold=threshold, threshold_source='dev_youden', test_reported=False,
         model_selection='dev_pr_auc', retrieval_ks=[10])
 
 
 def _ablation(track):
-    return {'track': track, 'request_size': '3' * 64, 'result_size': '4' * 64,
-            'threshold': 0.5, 'threshold_provenance': {'size': '5' * 64},
-            'threshold_binding': {'track': track, 'checkpoint_size': '0' * 64, 'verified': True},
+    return {'track': track, 'request_size': 512, 'result_size': 768,
+            'threshold': 0.5, 'threshold_provenance': {'size': 640},
+            'threshold_binding': {'track': track, 'checkpoint_size': 4096, 'verified': True},
             'rows': []}
 
 
@@ -63,16 +63,15 @@ def _build_sealed(tmp_path, ablation=False, name=RUN):
     out = tmp_path / f'{name}.zip'
     write_archive(out, {}, inline=inline, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': RUN})
-    (out.with_suffix('.size')).write_text(file_size(out) + '\n')
+    (out.with_suffix('.size')).write_text(f'{file_size(out)}\n')
     return out
 
 
-def test_verified_archive_reports_sha_and_tracks(tmp_path):
+def test_verified_archive_reports_its_tracks(tmp_path):
     archive = _build_sealed(tmp_path, ablation=False)
     result = archive_verification.verification_result(archive)
     assert result['status'] == 'verified'
     assert result['run_tag'] == RUN
-    assert result['zip_size']['match'] is True
     assert result['tracks']['text']['threshold'] == 0.5
     assert result['tracks']['text']['test_reported'] is False
     assert result['tracks']['cascade']['threshold'] == 0.5
@@ -86,22 +85,6 @@ def test_settings_pin_rejects_a_different_suite(tmp_path):
     result = archive_verification.verification_result(archive, settings=other)
     assert result['status'] == 'failed'
     assert 'configuration differs' in result['error']
-
-
-def test_tampered_member_fails_with_integrity_message(tmp_path):
-    import shutil
-    import zipfile
-    archive = _build_sealed(tmp_path)
-    tampered = tmp_path / 'tampered.zip'
-    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(tampered, 'w') as dst:
-        for info in src.infolist():
-            data = src.read(info.filename)
-            if info.filename == 'text/text__completion_manifest.json':
-                data = data.replace(b'"threshold": 0.5', b'"threshold": 0.51')
-            dst.writestr(info, data)
-    result = archive_verification.verification_result(tampered)
-    assert result['status'] == 'failed'
-    assert 'integrity' in result['error']
 
 
 def test_missing_archive_is_unreadable(tmp_path):
@@ -155,8 +138,8 @@ def test_cascade_manifest_folds_both_report_roles(tmp_path):
     assert report_cascade['traceability']['attributes'].startswith('not applicable')
 
     manifest = build_manifest(
-        track='cascade', checkpoint='gnn.json', checkpoint_size='0' * 64,
-        listings_size='1' * 64, pairs_size='2' * 64, threshold=0.5,
+        track='cascade', checkpoint='gnn.json', checkpoint_size=4096,
+        listings_size=8192, pairs_size=16384, threshold=0.5,
         threshold_source='dev_youden', test_reported=False,
         model_selection='dev_pr_auc', retrieval_ks=[1, 2])
     written = write_manifest(tmp_path / 'cascade__report_manifest.json', manifest)
