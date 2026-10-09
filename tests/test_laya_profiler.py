@@ -12,6 +12,7 @@ profiler).
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
@@ -75,6 +76,11 @@ def _fake_torch(profile_cls=_FakeProfiler):
     return types.SimpleNamespace(profiler=profiler)
 
 
+def _profiling_control():
+    """The baked control with profiling forced ON (default is now OFF)."""
+    return {**laya_lane.finetune_control(), "profile": True}
+
+
 def test_profile_default_on_and_schedule_knobs():
     ft = FinetuneSpec()
     assert ft.profile is True
@@ -107,13 +113,13 @@ def test_profiler_session_enabled_only_for_cuda_rank0(monkeypatch):
 
 def test_profiler_session_for_training_resolves_trace_dir(tmp_path):
     session = laya_controls.ProfilerSession.for_training(
-        _fake_torch(), laya_lane.finetune_control(), _device("cuda"), True,
+        _fake_torch(), _profiling_control(), _device("cuda"), True,
         str(tmp_path))
     assert session.enabled is True
     assert session._trace_dir == os.path.join(str(tmp_path), "profiler")
     # CPU auto-disables and never resolves a trace dir
     disabled = laya_controls.ProfilerSession.for_training(
-        _fake_torch(), laya_lane.finetune_control(), _device("cpu"), True,
+        _fake_torch(), _profiling_control(), _device("cpu"), True,
         str(tmp_path))
     assert disabled.enabled is False
 
@@ -122,7 +128,7 @@ def test_profiler_session_writes_trace_and_feeds_sink(tmp_path):
     captured = []
     torch_module = _fake_torch()
     session = laya_controls.ProfilerSession.for_training(
-        torch_module, laya_lane.finetune_control(), _device("cuda"), True,
+        torch_module, _profiling_control(), _device("cuda"), True,
         str(tmp_path), on_metrics=lambda rows, epoch, path:
         captured.append((rows, epoch, path)))
     assert session.start() is True
@@ -136,7 +142,7 @@ def test_profiler_session_writes_trace_and_feeds_sink(tmp_path):
     assert rows[0][0] == "aten::matmul" and rows[0][1] == 2.5
     # disabled session is a no-op
     off = laya_controls.ProfilerSession.for_training(
-        torch_module, laya_lane.finetune_control(), _device("cpu"), True,
+        torch_module, _profiling_control(), _device("cpu"), True,
         str(tmp_path))
     assert off.start() is False
     off.step()
@@ -144,14 +150,13 @@ def test_profiler_session_writes_trace_and_feeds_sink(tmp_path):
 
 
 def test_profiler_phase_gates_on_an_active_profiler(tmp_path):
-    control = laya_lane.finetune_control()
     inactive = laya_controls.ProfilerSession.for_training(
-        _fake_torch(), control, _device("cpu"), True, str(tmp_path))
-    with inactive.phase("forward"):   # null context, no record_function emit
+        _fake_torch(), _profiling_control(), _device("cpu"), True, str(tmp_path))
+    with inactive.phase("forward"):   # no record_function emit on CPU
         pass
 
     active = laya_controls.ProfilerSession.for_training(
-        _fake_torch(), control, _device("cuda"), True, str(tmp_path))
+        _fake_torch(), _profiling_control(), _device("cuda"), True, str(tmp_path))
     assert active.start() is True
     calls = []
     import contextlib
@@ -163,13 +168,33 @@ def test_profiler_phase_gates_on_an_active_profiler(tmp_path):
     active.close()
 
 
+def test_disabled_profiler_still_emits_phase_timings(tmp_path, monkeypatch,
+                                                     capsys):
+    """P1-A: wall-clock phases are recorded even when the torch profiler is
+    off (now the default); flush_epoch streams them and merges the JSON."""
+    out = tmp_path / "timings.json"
+    log = tmp_path / "timings.log"
+    monkeypatch.setenv("ER_TIMING_OUT", str(out))
+    monkeypatch.setenv("ER_TIMING_LOG", str(log))
+    session = laya_controls.ProfilerSession.for_training(
+        _fake_torch(), _profiling_control(), _device("cpu"), True, str(tmp_path))
+    with session.phase("forward"):
+        pass
+    session.flush_epoch(1)
+    line = "[timing] laya forward epoch=1 elapsed_seconds="
+    assert line in capsys.readouterr().out
+    assert line in log.read_text(encoding="utf-8")
+    document = json.loads(out.read_text(encoding="utf-8"))
+    assert document["components"]["laya"]["label"] == "laya"
+
+
 def test_profiler_session_is_fail_soft(tmp_path):
     class _Broken(_FakeProfiler):
         def export_chrome_trace(self, path):
             raise RuntimeError("boom")
 
     session = laya_controls.ProfilerSession.for_training(
-        _fake_torch(_Broken), laya_lane.finetune_control(), _device("cuda"),
+        _fake_torch(_Broken), _profiling_control(), _device("cuda"),
         True, str(tmp_path))
     assert session.start() is True
     session.step()   # trace handler error must not raise
@@ -180,7 +205,7 @@ def test_profiler_session_is_fail_soft(tmp_path):
             raise RuntimeError("no profiler")
 
     failing = laya_controls.ProfilerSession.for_training(
-        _fake_torch(_NoEnter), laya_lane.finetune_control(), _device("cuda"),
+        _fake_torch(_NoEnter), _profiling_control(), _device("cuda"),
         True, str(tmp_path))
     assert failing.start() is False
 
@@ -230,3 +255,8 @@ def test_rendered_kernel_annotates_phases_and_schedules_profiler():
     assert "record_shapes=False" in script
     assert "export_chrome_trace" in script
     assert "key_averages()" in script
+    # P1 instrumentation surfaces: one per-epoch flush, pre-train calibration
+    # timing and the previously-unlogged training knobs.
+    assert "flush_epoch(epoch + 1)" in script
+    assert 'phase("calibration_records")' in script
+    assert "amp_dtype=%s" in script and "grad_accum" in script

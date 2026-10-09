@@ -443,3 +443,55 @@ def test_ddp_control_dev_eval_checkpoint_resume_stay_in_lockstep(tmp_path):
     assert "epoch_0.pt" in result["checkpoints"]
     assert "epoch_1.pt" in result["checkpoints"]
     assert "best.pt" in result["checkpoints"]
+
+
+def test_apply_perf_patch_emits_calibration_records_timing(tmp_path,
+                                                           monkeypatch):
+    """P1-C: the pre-train dev evaluation runs before the training loop exists,
+    so the perf-patch wrapper is the seam that times it — one line per call."""
+    import sys
+
+    namespace = _load_ddp_namespace()
+    fake = _make_fake_laya([])
+    sys.modules["laya"] = fake
+    sys.modules["laya.train"] = fake.train
+    monkeypatch.delenv("ER_LAYA_PERF_PATCH", raising=False)
+    monkeypatch.delenv("ER_TIMING_OUT", raising=False)
+    monkeypatch.setenv("ER_TIMING_LOG", str(tmp_path / "timings.log"))
+    assert namespace["apply_perf_patch"]() is True
+    fake.train.calibration_records(None, None, [1, 2], None, 8, 4)
+    namespace["PHASE_TIMINGS"].flush(1)
+    lines = (tmp_path / "timings.log").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith(
+        "[timing] laya calibration_records epoch=1 elapsed_seconds=")
+
+
+def test_grad_norm_logging_does_not_change_training(monkeypatch):
+    """P1-F: moving the grad-norm .item() from every optimizer step to once per
+    epoch is logging-only — the clip and step are untouched, so the trained
+    weights are bit-identical with the grad-norm log on or off."""
+    import sys
+
+    namespace = _load_ddp_namespace()
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    monkeypatch.delenv("ER_LAYA_DDP", raising=False)
+    monkeypatch.delenv("ER_LAYA_PERF_PATCH", raising=False)
+    fake = _make_fake_laya([])
+    sys.modules["laya"] = fake
+    sys.modules["laya.train"] = fake.train
+    base = dict(laya_lane.finetune_control())
+    items = [{"i": index, "label": index % 3} for index in range(N_ITEMS)]
+    runs = []
+    for flag in (True, False):
+        namespace["FINETUNE_CONTROL"] = {**base, "log_grad_norm": flag}
+        torch.manual_seed(SEED)
+        model = _TinyNet()
+        history = namespace["_perf_train_model"](
+            model, types.SimpleNamespace(pad_token_id=0), items, _Cfg(),
+            torch.device("cpu"), 8, 4)
+        runs.append((history, {key: value.detach().clone()
+                               for key, value in model.state_dict().items()}))
+    assert runs[0][0] == runs[1][0]
+    for key, value in runs[0][1].items():
+        assert torch.equal(value, runs[1][1][key]), key

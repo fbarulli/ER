@@ -563,15 +563,162 @@ class DynamicPadder:
         return result
 
 
+class PhaseTimings:
+    """Rank-0 wall-clock accumulator for named phases (GPU-free, fail-soft).
+
+    Each ``phase(name)`` scope adds its wall time under ``name`` and records
+    the nesting depth, so overlapping scopes (``dev_eval`` wrapping
+    ``calibration``) are never summed into one another. ``flush(epoch)``
+    streams one ``[timing]`` line per phase to stdout + ``ER_TIMING_LOG`` and
+    merges a structured component into ``ER_TIMING_OUT`` (the ``core.timing``
+    JSON idiom), then starts a fresh epoch. A non-rank-0 accumulator records
+    and flushes nothing, so DDP ranks cannot race the shared output path.
+    """
+
+    class Scope:
+        """The context object returned by ``phase`` (times + optional inner)."""
+
+        def __init__(self, timings, name, inner):
+            self._timings = timings
+            self._name = name
+            self._inner = inner
+
+        def __enter__(self):
+            if self._inner is not None:
+                self._inner.__enter__()
+            self._timings.enter(self._name)
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            self._timings.exit(self._name)
+            if self._inner is not None:
+                return self._inner.__exit__(exc_type, exc, traceback)
+            return False
+
+    def __init__(self, rank0=True):
+        self.rank0 = bool(rank0)
+        self._current = {}
+        self._history = []
+        self._stack = []
+
+    def phase(self, name, inner=None):
+        return PhaseTimings.Scope(self, name, inner)
+
+    def enter(self, name):
+        if not self.rank0:
+            return
+        import time
+
+        self._stack.append((name, time.perf_counter()))
+
+    def exit(self, name):
+        if not self.rank0 or not self._stack:
+            return
+        import time
+
+        _name, started = self._stack.pop()
+        elapsed = time.perf_counter() - started
+        entry = self._current.setdefault(
+            _name, {"seconds": 0.0, "calls": 0, "depth": len(self._stack)})
+        entry["seconds"] += elapsed
+        entry["calls"] += 1
+
+    def flush(self, epoch):
+        if not self.rank0:
+            return
+        import os
+
+        for name, entry in self._current.items():
+            message = (f"[timing] laya {name} epoch={int(epoch)} "
+                       f"elapsed_seconds={entry['seconds']:.3f}")
+            print(message, flush=True)
+            PhaseTimings._append_line(os.environ.get("ER_TIMING_LOG"), message)
+            self._history.append({"section": name, "epoch": int(epoch),
+                                  "depth": int(entry["depth"]),
+                                  "calls": int(entry["calls"]),
+                                  "seconds": round(entry["seconds"], 3)})
+        self._write_json(os.environ.get("ER_TIMING_OUT"))
+        self._current = {}
+
+    @staticmethod
+    def _append_line(destination, message):
+        if not destination:
+            return
+        import os
+
+        parent = os.path.dirname(str(destination))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(str(destination), "a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+
+    def _write_json(self, destination):
+        if not destination:
+            return
+        import json
+        import os
+
+        parent = os.path.dirname(str(destination))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        document = {}
+        if os.path.exists(str(destination)):
+            try:
+                with open(str(destination), encoding="utf-8") as handle:
+                    document = json.load(handle)
+            except ValueError:
+                document = {}
+        components = dict(document.get("components", {}))
+        components["laya"] = {"label": "laya",
+                              "sections": list(self._history)}
+        temporary = str(destination) + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({**document, "components": components},
+                                    indent=2) + "\n")
+        os.replace(temporary, str(destination))
+
+
+class CalibrationTimingHook:
+    """Time every ``laya.train.calibration_records`` call once (rank 0).
+
+    Installed by the perf patch BEFORE the device patch, so the device wrapper
+    closes over THIS wrapper and the underlying function still does all the
+    work; only one timing scope is entered per call. The pre-train dev
+    evaluation runs before the training loop exists, so this is the only seam
+    that can time it.
+    """
+
+    def __init__(self, timings):
+        self._timings = timings
+
+    def install(self, laya_train):
+        original = laya_train.calibration_records
+        timings = self._timings
+
+        def calibration_records(model, tok, items, device, *args, **kwargs):
+            with timings.phase("calibration_records"):
+                return original(model, tok, items, device, *args, **kwargs)
+
+        laya_train.calibration_records = calibration_records
+        return timings
+
+    @classmethod
+    def install_for_rank(cls, laya_train, rank0):
+        return cls(PhaseTimings(rank0=rank0)).install(laya_train)
+
+
 class ProfilerSession:
     """A bounded, fail-soft ``torch.profiler`` wrapper (rank 0 + CUDA only).
 
     Writes one chrome trace per profiled epoch under ``<output_dir>/<dir>`` and
     feeds the top-ops table (by CUDA time) to an optional ``on_metrics`` sink.
+    Independent of the torch profiler, every ``phase()`` scope is also timed
+    into ``timings`` (rank 0), so wall-clock is recorded even when profiling
+    is off.
     """
 
     def __init__(self, torch_module, *, enabled, trace_dir, schedule,
-                 on_metrics=None, top_n=15):
+                 on_metrics=None, top_n=15, rank0=True, timings=None):
         self._torch = torch_module
         self.enabled = bool(enabled)
         self._trace_dir = trace_dir
@@ -580,6 +727,10 @@ class ProfilerSession:
         self._top_n = int(top_n)
         self._profiler = None
         self.epoch = 0
+        self.rank0 = bool(rank0)
+        self.timings = timings if timings is not None else PhaseTimings(
+            self.rank0)
+        self.timings.rank0 = self.rank0
 
     @staticmethod
     def enabled_for(control, device, rank0):
@@ -591,7 +742,7 @@ class ProfilerSession:
 
     @classmethod
     def for_training(cls, torch_module, control, device, rank0, output_dir,
-                     on_metrics=None):
+                     on_metrics=None, timings=None):
         enabled = cls.enabled_for(control, device, rank0)
         profile_dir = control.get("profile_dir")
         trace_dir = None
@@ -599,7 +750,7 @@ class ProfilerSession:
             trace_dir = os.path.join(str(output_dir), str(profile_dir))
         return cls(torch_module, enabled=enabled, trace_dir=trace_dir,
                    schedule=control.get("profile_schedule"),
-                   on_metrics=on_metrics)
+                   on_metrics=on_metrics, rank0=rank0, timings=timings)
 
     def start(self):
         if not self.enabled or self._profiler is not None:
@@ -626,17 +777,19 @@ class ProfilerSession:
             return False
 
     def phase(self, name):
-        """A zero-overhead annotation context when the profiler is not active.
+        """A timed phase scope, annotating the torch profiler only when live.
 
-        Emitting ``record_function`` unconditionally costs a little on every
-        loop iteration even when profiling is off, so the loop annotates
-        through this gate: a null context unless a live profiler is running.
+        Wall-clock is always accumulated on rank 0 (independent of the torch
+        profiler); ``record_function`` is entered only when a live profiler is
+        running, so the loop pays no profiler cost when profiling is off.
         """
-        if self._profiler is None:
-            import contextlib
+        inner = (self._torch.profiler.record_function(name)
+                 if self._profiler is not None else None)
+        return self.timings.phase(name, inner)
 
-            return contextlib.nullcontext()
-        return self._torch.profiler.record_function(name)
+    def flush_epoch(self, epoch):
+        """Emit + persist this epoch's accumulated phase wall-clock."""
+        self.timings.flush(epoch)
 
     def step(self):
         if self._profiler is None:

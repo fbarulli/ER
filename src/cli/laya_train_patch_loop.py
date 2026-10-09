@@ -509,11 +509,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         config.micro_batch, config.grad_accum, world_size)
     lr_factor = LrScaler.factor(effective_batch, control.get("base_batch"),
                                 control.get("lr_scaling"))
-    if lr_factor != 1.0:
-        LrScaler.apply(optimizer, lr_factor)
-        print("[perf-patch] lr_scaling=%s effective_batch=%d factor=%.4g"
-              % (control.get("lr_scaling"), effective_batch, lr_factor),
-              flush=True)
+    LrScaler.apply(optimizer, lr_factor)
+    print("[perf-patch] lr_scaling=%s effective_batch=%d world_size=%d "
+          "factor=%.4g"
+          % (control.get("lr_scaling"), effective_batch, world_size,
+             lr_factor), flush=True)
     # DDP: wrap the model (grads averaged across ranks) and shard the items
     # with a per-rank DistributedSampler. The shard length is equal on every
     # rank (pad-to-even), so the grad-accum window and the optimizer steps
@@ -556,6 +556,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     early_metric = control.get("early_stop_metric")
     use_scaler = (amp and device.type == "cuda" and amp_dtype != "bf16")
     scaler = torch.amp.GradScaler("cuda") if use_scaler else None
+    print("[perf-patch] amp=%s amp_dtype=%s checkpointing=%s scaler=%s scheduler=%s warmup=%d updates=%d steps_per_epoch=%d"
+          % (amp, amp_dtype or "none", checkpointing, use_scaler, scheduler_kind, warmup, updates, steps_per_epoch), flush=True)
 
     torch.manual_seed(config.seed)
     order_rng = random.Random(config.seed)
@@ -614,7 +616,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     stopped_epoch = None
     profiler = ProfilerSession.for_training(
         torch, control, device, is_rank0(),
-        globals().get("FINETUNE_OUTPUT_DIR"), on_metrics=WandbProfileSink.log)
+        globals().get("FINETUNE_OUTPUT_DIR"), on_metrics=WandbProfileSink.log,
+        timings=globals().get("PHASE_TIMINGS"))
     if profiler.enabled:
         profiler.start()
 
@@ -745,7 +748,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                         scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
                     if control.get("log_grad_norm") and grad_norm is not None:
-                        grad_norm_sum += min(float(grad_norm), config.grad_clip)
+                        grad_norm_sum += grad_norm.detach().clamp(max=config.grad_clip)
                         grad_steps += 1
                     if scaler is not None:
                         scaler.step(optimizer)
@@ -792,11 +795,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             dist.all_reduce(mean_tensor, op=dist.ReduceOp.SUM)
             mean = float(mean_tensor.item()) / dist_env()[2]
         history.append(mean)
-        print("epoch %d/%d mean loss %.4f (encode memo hits %d/%d)"
-              % (epoch + 1, config.epochs, mean, hits, lookups), flush=True)
         epoch_time = max(0.0, time.time() - epoch_started)
         lr_now = float(optimizer.param_groups[0]["lr"])
-        grad_norm_mean = (grad_norm_sum / grad_steps) if grad_steps else None
+        print("epoch %d/%d mean loss %.4f lr %.6g grad_accum %d hits %d/%d"
+              % (epoch + 1, config.epochs, mean, lr_now, epoch_grad_accum, hits, lookups), flush=True)
+        grad_norm_mean = ((grad_norm_sum / grad_steps).item() if grad_steps else None)
         # ── per-epoch dev evaluation (rank 0) + broadcast ───────────────
         dev = None
         if dev_enabled:
@@ -853,6 +856,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         extra["select/best_dev_accuracy"] = best_acc
         extra["select/bad_epochs"] = bad_epochs
         wandb_log_epoch(epoch, mean, extra)
+        profiler.flush_epoch(epoch + 1)
         with profiler.phase("checkpoint_save"):
             if on_epoch_end is not None:
                 on_epoch_end(epoch, mean)
@@ -927,6 +931,7 @@ def apply_perf_patch():
         print("[perf-patch] disabled via " + PERF_PATCH_ENV, flush=True)
         return False
     from laya import train as laya_train
+    globals()["PHASE_TIMINGS"] = CalibrationTimingHook.install_for_rank(laya_train, is_rank0())
     laya_train.train_model = _perf_train_model
     print("[perf-patch] laya.train.train_model patched: on-GPU loss (1 sync/"
           "epoch), single device move, encode memoization", flush=True)
