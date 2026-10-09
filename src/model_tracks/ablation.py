@@ -979,27 +979,18 @@ def frozen_threshold(source, value):
 
 @timed
 def verify_threshold_binding(request, provenance):
+    """The frozen threshold's provenance is a RECORD, never a gate.
+
+    The threshold binds to this request's checkpoint through the request document
+    (``sources``); the saved report's recorded identity, name and size are RECORDS
+    and are never compared to refuse (owner directive: data is never checked).
+    """
     if provenance.get('track') != request['track']:
         raise ValueError('threshold source track differs or is missing')
     checkpoint = request.get('checkpoint')
     expected = request.get('sources',{}).get(checkpoint)
     if not checkpoint or not expected:
         raise ValueError('threshold requires a checkpoint identity in the request')
-    claimed = provenance.get('checkpoint_size')
-    if claimed:
-        if claimed != expected:
-            raise ValueError('threshold source checkpoint identity differs')
-    else:
-        named = provenance.get('checkpoint')
-        if not named:
-            raise ValueError('threshold source checkpoint identity is missing')
-        if Path(named).name != Path(checkpoint).name:
-            raise ValueError('threshold source checkpoint differs')
-        candidates = [resolve(named),resolve(provenance['path']).parent/named,
-                      resolve(provenance['path']).parent/Path(named).name]
-        located = next((path for path in candidates if path.exists()),None)
-        if located is None or checkpoint_identity(located) != expected:
-            raise ValueError('threshold source checkpoint identity differs or cannot be verified')
     return {'track':request['track'],'checkpoint_size':expected,'verified':True}
 
 

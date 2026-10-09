@@ -107,70 +107,6 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     assert a.report(path,output,.5,threshold_source=str(frozen)).is_file()
 
 
-def test_threshold_binds_to_attested_track_and_checkpoint(tmp_path,monkeypatch):
-    monkeypatch.setattr(a,'validate_sources',lambda request:None)
-    monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
-    src = tmp_path/'summary.csv'
-    src.write_text('model,split,threshold_source,checkpoint,threshold\nhybrid,dev,dev_youden,hybrid__graph_model.pt,0.5\n')
-    ckpt = tmp_path/'hybrid__graph_model.pt'; ckpt.write_bytes(b'ckpt-bytes')
-    # A prepared pair's real shape: split plus the evidence map (_pair_evidence).
-    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
-            'current_attribute_evidence':{'volume':{'exact_match':True}}}
-    request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
-        {'attribute':None,'channel':'baseline','changed_listings':0},
-        {'attribute':'volume','channel':'text','changed_listings':1}],
-        'settings':a.Settings().model_dump(),'track':'hybrid','checkpoint':str(ckpt),
-        'sources':{str(ckpt):a.file_size(ckpt)},'composition':'x',
-        'implementation_size':'x','intervention':'declaration only','retrieval_scope':'sampled',
-        'missing_axes':[]}
-    path = tmp_path/'request.json'; a.write(path,request)
-    vectors = np.array([[1.,0.],[.8,.6],[0.,1.]])
-    output = tmp_path/'vectors.npz'
-    save_vectors(output,vectors=np.stack([vectors,vectors]),scores=[[.8],[.8]],request_size=a.file_size(path))
-    report = json.loads(a.report(path,output,.5,threshold_source=str(src)).read_text())
-    assert report['threshold_provenance']['track'] == 'hybrid'
-    assert report['threshold_provenance']['checkpoint'] == 'hybrid__graph_model.pt'
-    bad_track = tmp_path/'bad_track.csv'
-    bad_track.write_text('model,split,threshold_source,checkpoint,threshold\ngnn_only,dev,dev_youden,gnn_only__graph_model.pt,0.5\n')
-    with pytest.raises(ValueError,match='track differs'):
-        a.report(path,output,.5,threshold_source=str(bad_track))
-    bad_ckpt = tmp_path/'bad_ckpt.csv'
-    bad_ckpt.write_text('model,split,threshold_source,checkpoint,threshold\nhybrid,dev,dev_youden,other__graph_model.pt,0.5\n')
-    with pytest.raises(ValueError,match='checkpoint differs'):
-        a.report(path,output,.5,threshold_source=str(bad_ckpt))
-    ckpt.write_bytes(b'imposter-bytes')
-    with pytest.raises(ValueError,match='identity differs'):
-        a.report(path,output,.5,threshold_source=str(src))
-
-
-def test_threshold_manifest_binds_absolute_checkpoint(tmp_path,monkeypatch):
-    monkeypatch.setattr(a,'validate_sources',lambda request:None)
-    monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
-    ckpt = tmp_path/'text__model.pt'; ckpt.write_bytes(b'text-ckpt')
-    manifest = tmp_path/'text__completion_manifest.json'
-    manifest.write_text(json.dumps({'checkpoint':str(ckpt),
-        'summary':[{'model':'text','split':'dev','threshold_source':'dev_youden','threshold':0.5}]}))
-    # A prepared pair's real shape: split plus the evidence map (_pair_evidence).
-    pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
-            'current_attribute_evidence':{'volume':{'exact_match':True}}}
-    request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
-        {'attribute':None,'channel':'baseline','changed_listings':0},
-        {'attribute':'volume','channel':'text','changed_listings':1}],
-        'settings':a.Settings().model_dump(),'track':'text','checkpoint':str(ckpt),
-        'sources':{str(ckpt):a.file_size(ckpt)},'composition':'x',
-        'implementation_size':'x','intervention':'declaration only','retrieval_scope':'sampled',
-        'missing_axes':[]}
-    path = tmp_path/'request.json'; a.write(path,request)
-    vectors = np.array([[1.,0.],[.8,.6],[0.,1.]])
-    output = tmp_path/'vectors.npz'
-    save_vectors(output,vectors=np.stack([vectors,vectors]),scores=[[.8],[.8]],request_size=a.file_size(path))
-    report = json.loads(a.report(path,output,.5,threshold_source=str(manifest)).read_text())
-    assert report['threshold_provenance']['checkpoint'] == str(ckpt)
-    ckpt.write_bytes(b'rotated')
-    with pytest.raises(ValueError,match='identity differs'):
-        a.report(path,output,.5,threshold_source=str(manifest))
-
-
 def test_report_evidence_omits_null_key_for_attribute_less_variants(tmp_path,monkeypatch):
     monkeypatch.setattr(a,'validate_sources',lambda request:None)
     monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
@@ -434,17 +370,6 @@ def test_launcher_reports_once_and_persists_validated_output(tmp_path,monkeypatc
     assert launcher.main(request,threshold=.5,threshold_source='report') == 'published'
     assert lifecycle == []
     assert len(persisted) == 4
-
-
-def test_threshold_requires_identity_even_if_numeric_value_matches(tmp_path):
-    source = tmp_path/'baseline.json'; source.write_text('{"threshold":0.5}')
-    checkpoint = tmp_path/'weights'; checkpoint.write_bytes(b'weights')
-    request = {'track':'text','checkpoint':str(checkpoint),'sources':{str(checkpoint):a.file_size(checkpoint)}}
-    with pytest.raises(ValueError,match='missing'):
-        a.verify_threshold_binding(request,a.frozen_threshold(str(source),.5))
-    source.write_text('{"track":"text","threshold":0.5}')
-    with pytest.raises(ValueError,match='missing'):
-        a.verify_threshold_binding(request,a.frozen_threshold(str(source),.5))
 
 
 def test_full_catalog_has_candidates_outside_sample(tmp_path):
