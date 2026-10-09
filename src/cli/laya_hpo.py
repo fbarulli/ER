@@ -834,7 +834,6 @@ def stage_laya_hpo_colab(*, revision: str | None = None,
 # ── the embedded Kaggle kernel script (text home: cli.laya_hpo_kernel_text) ──
 from cli.laya_hpo_kernel_text import HPO_KERNEL_TEMPLATE as _HPO_KERNEL_TEMPLATE
 
-
 # ── entry/CLI dispatch registry (one entry per lane) ───────────────────────
 STAGE_DISPATCH = {
     "kaggle": "stage_laya_hpo_kernel",

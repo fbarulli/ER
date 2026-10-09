@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from cli.kaggle_kernels import KaggleKernels
 
@@ -45,7 +45,7 @@ class LayaTransportFactory:
     #: its OWN SSOT (not LayaSpec) registers here at import (cli.laya_hpo
     #: registers the "laya-hpo" kind), so ``kernel_slug`` resolves without
     #: duplicating the slug into LayaSpec or hardcoding it in the lane.
-    EXTERNAL_KIND_SLUGS: dict[str, str] = {}
+    EXTERNAL_KIND_SLUGS: ClassVar[dict[str, str]] = {}
 
     def __init__(self, spec: LayaSpec, runtime: LayaRuntimeFactory):
         self._spec = spec
