@@ -112,6 +112,11 @@ AGENTS.local.md
 !data/
 !data/*.csv
 
+# LAYA corpus/output payloads live in DVC (data/laya.dvc), not Git. The
+# jsonl splits are the large binaries; the small receipt.json declarations
+# stay Git-tracked alongside the pointer.
+data/laya/*.jsonl
+
 # graphify knowledge-graph artifacts (generated; rebuild with: graphify . )
 graphify-out/
 

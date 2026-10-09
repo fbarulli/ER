@@ -1,0 +1,6 @@
+outs:
+- md5: 3c03f9366b4885afd0a2111cda90e8b0.dir
+  size: 91665767
+  nfiles: 7
+  hash: md5
+  path: laya
