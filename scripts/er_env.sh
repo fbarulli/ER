@@ -15,14 +15,15 @@
 # Usage:
 #   scripts/er_env.sh venv     [worktree_root]  # print shared venv dir (exit 1 if absent)
 #   scripts/er_env.sh link     [worktree_root]  # ensure that worktree's .venv points at it
-#   scripts/er_env.sh activate [worktree_root]  # print exports to `eval` for it
 #
 # `worktree_root` defaults to the current directory. Exit codes: 0 ok; non-zero
 # = not an ER checkout, or the shared venv is missing (a real error — never
 # silently succeed).
 set -euo pipefail
 
-readonly VENV_PROMPT_DIR_MARKER='euromonitor-reconciliation'
+# The venv's prompt marker has ONE source of truth: the `prompt =` line uv
+# writes into the venv's pyvenv.cfg. `~/.bashrc` compares against it to
+# auto-switch; this script deliberately does not re-spell the literal.
 
 die() {
   printf 'er_env: %s\n' "$*" >&2
@@ -100,18 +101,8 @@ cmd_link() {
   printf 'er_env: %s -> %s\n' "$target" "$shared"
 }
 
-cmd_activate() {
-  local shared
-  shared="$(shared_venv_dir "${1:-}")"
-  [[ -x "$shared/bin/python" ]] || die "shared venv missing: $shared/bin/python"
-  printf 'export VIRTUAL_ENV=%q\n' "$shared"
-  printf 'case ":$PATH:" in *":%s/bin:"*) ;; *) export PATH=%q/bin:"$PATH" ;; esac\n' "$shared" "$shared"
-  printf 'export ER_VENV_PROMPT_MARKER=%q\n' "$VENV_PROMPT_DIR_MARKER"
-}
-
 case "${1:-}" in
-  venv)     cmd_venv "${2:-}" ;;
-  link)     cmd_link "${2:-}" ;;
-  activate) cmd_activate "${2:-}" ;;
-  *) die "usage: er_env.sh {venv|link|activate} [worktree_root]" ;;
+  venv) cmd_venv "${2:-}" ;;
+  link) cmd_link "${2:-}" ;;
+  *) die "usage: er_env.sh {venv|link} [worktree_root]" ;;
 esac
