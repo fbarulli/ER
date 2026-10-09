@@ -675,6 +675,12 @@ def test_hpo_receipt_and_publish_resolve_the_shared_contract(monkeypatch,
     _stage(monkeypatch, tmp_path, None)
     assert LayaTransportFactory.EXTERNAL_KIND_RECEIPTS[
         laya_hpo.HPO_DECISION] == laya_hpo.HPO_RECEIPT_FILE
+    # Simulate the detached `--watch` process, which starts in cli.laya_lane
+    # and never imports cli.laya_hpo: the lane boundary must re-register the
+    # descriptor or the harvest falls back to the guessed receipt name.
+    LayaTransportFactory.EXTERNAL_KIND_SLUGS.clear()
+    LayaTransportFactory.EXTERNAL_KIND_RECEIPTS.clear()
+    LayaTransportFactory.EXTERNAL_KIND_DATASETS.clear()
 
     monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
     spec = laya_lane.training_cfg().laya

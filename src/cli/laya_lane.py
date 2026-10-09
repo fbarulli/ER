@@ -208,11 +208,27 @@ def _staging_factory() -> LayaStagingFactory:
     return LayaTrainingRunFactory.build_staging(spec, runtime, training_cfg)
 
 
+def _register_external_lanes() -> None:
+    """Load external lane kinds into the transport registry (idempotent).
+
+    The HPO lane owns its external-kind descriptor (kernel slug, receipt name,
+    attached dataset) and registers it on import. A detached ``--watch`` process
+    starts in THIS module, so the owning lane must be imported at this boundary
+    or ``collect_kaggle_result`` falls back to the guessed receipt name.
+    """
+    from cli import laya_hpo
+
+    if laya_hpo.HPO_DECISION not in LayaTransportFactory.EXTERNAL_KIND_DATASETS:
+        laya_hpo.register_dispatch()
+
+
 def _publish_factory() -> LayaPublishFactory:
+    _register_external_lanes()
     return LayaPublishFactory(_spec(), _runtime())
 
 
 def _transport_factory() -> LayaTransportFactory:
+    _register_external_lanes()
     return LayaTransportFactory(_spec(), _runtime())
 
 
