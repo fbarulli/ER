@@ -42,13 +42,15 @@ GOLDEN_SHA256: dict[str, str] = {
     "identity": "e1ffd3e9b6d5ce3b241e77496b5d3939d899dd01fb34c4bf8a0d23c1099ebad8",
     "laya-cli-eval": "4193b9c3110394d1ce8dd962125812ed98153681bb70a978fca75b593bc5b0f7",
     "colab": "8de6069ff99110ba9ad165a5046bcb11ac3357f75694393461c15b1a8e6fc686",
-    # re-pinned for the combined kernel text: the deterministic-DDP fix
-    # (find_unused_parameters gone, DeterministicDdp.wrap + the zero-weight loss
-    # guard, unconditional epoch stop broadcast) is merged with the laya-lanes
-    # holdout/HPO surfaces; finetune/finetune-smoke carry both, holdout-eval
-    # carries the lanes runtime preflight.
-    "finetune": "d2d71da5bf77dedacdd0c61a9507a41500cfb84f2e16c3a3e4a7a1b2b6464852",
-    "finetune-smoke": "98fdc3c3645e39e5f9dea84299287110faa40ae38d77b091ed2cf1f43e345fc9",
+    # re-pinned ONCE for the combined candidate kernel text: the deterministic-DDP
+    # fix (find_unused_parameters gone, DeterministicDdp.wrap + the zero-weight
+    # loss guard, unconditional epoch stop broadcast), the laya-lanes
+    # holdout/HPO surfaces, and the laya-delete unbuffered-child fix
+    # (os.environ.setdefault("PYTHONUNBUFFERED", "1") so the live W&B/output.log
+    # readers see lines immediately) are all merged. Only finetune/finetune-smoke
+    # carry the unbuffered child block; holdout-eval keeps its lanes preflight.
+    "finetune": "b2e580e77e96202f978739efb8291138834fbff8be66821a9f84086edc89f832",
+    "finetune-smoke": "ef9b220cfc0c5a9f86e0f80069ab0efc1e282e4df625c564fb09d828414de13e",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
 }
