@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from core.archive_reader import archive_sidecar
+from core.artifacts import Artifacts
 from core.bundle import bundle_spec
 
 
@@ -109,7 +110,7 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None)
         raise ValueError('publication run mismatch')
     destination = TRAIN_ROOT/'artifacts/models/tracks'/run_tag
     if destination.exists():
-        existing = json.loads((destination/'models_manifest.json').read_text())
+        existing = json.loads(Artifacts.resolve('models_manifest', root=destination).read_text())
         if existing.get('source_archive_size') != handle.path.stat().st_size:
             raise ValueError('existing models came from a different suite archive')
         if any(file_size(destination/key) != size
@@ -147,7 +148,7 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None)
             for path in staged.rglob('*'):
                 if path.is_file() and path.stat().st_size>=100*1024**2:
                     raise ValueError(f'model file exceeds GitHub regular-file limit: {path.name}')
-            (staged/'models_manifest.json').write_text(json.dumps({
+            Artifacts.resolve('models_manifest', root=staged).write_text(json.dumps({
                 'run_tag':run_tag,'source_archive_size':handle.path.stat().st_size,'files':inventory,
                 'tracks':['text','gnn_only'],'graph_models_inference_only':True,
                 'cascade_composed_from':['text ranker (ANN candidates)','gnn_only pair scorer (decisions)']

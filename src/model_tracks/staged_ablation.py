@@ -27,8 +27,10 @@ from pathlib import Path
 import shutil
 import torch
 import yaml
+from core.artifacts import Artifacts
 from core.bundle import bundle_spec
 from core.model_input import model_input_composition
+from core.results import Results
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from core.timing import Timing
@@ -209,7 +211,8 @@ def _copy_template(setup,track,path,request):
     """Materialize the fixed template folder: tensors copy + frozen request."""
     target = _templates_dir(setup)/track
     target.mkdir(parents=True,exist_ok=True)
-    shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')
+    tensors = Results.leaf('prepared_inputs')
+    shutil.copy2(path.parent/tensors,target/tensors)
     write(target/_request_name(),request)
     return target
 
@@ -359,11 +362,12 @@ def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
 
 
 @timed
-def _bound_folder(output,template,request):
+def _bound_folder(run,track,template,request):
     """Materialize the bound request and local tensors into the output folder."""
-    folder = output/'ablation';folder.mkdir(parents=True,exist_ok=True)
-    shutil.copy2(template/'prepared_inputs.npz',folder/'prepared_inputs.npz')
-    path = folder/_request_name()
+    folder = run.track_dir(track);folder.mkdir(parents=True,exist_ok=True)
+    tensors = Results.leaf('prepared_inputs')
+    shutil.copy2(template/tensors,folder/tensors)
+    path = run.request(track)
     write(path,request)
     return path,folder
 
@@ -372,7 +376,8 @@ def _bound_folder(output,template,request):
 def _saved_text_default(request,*,output,setup,track,saved_text):
     """Default to the suite's saved vectors for the full local retrieval catalog."""
     if saved_text is None and request['settings']['retrieval_catalog'] == 'full' and request['settings'].get('coverage') != 'all':
-        saved_text = (output/'text__vectors.npz' if track == 'text' else None)
+        saved_text = (output / Artifacts.member_name('vectors', track='text')
+                      if track == 'text' else None)
     return saved_text
 
 
@@ -387,9 +392,9 @@ def _encode_vectors(path,vectors,*,device,saved_text,text_model,graph_encoder):
 
 
 @timed
-def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
+def _reuse_or_encode(path,run,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
     """Validated existing vectors win; otherwise the device owner encodes."""
-    vectors = folder/'vectors.npz'
+    vectors = run.vectors(track)
     existed = vectors.exists()
     if existed:
         validate_vectors(path,vectors)
@@ -420,6 +425,7 @@ def _reuse_or_encode(path,folder,request,*,output,setup,track,saved_text,text_mo
 @timed
 def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None,graph_encoder=None):
     """Bind the selected/baseline checkpoint onto its template and encode vectors."""
+    run = Results.for_root(output.parent)
     with _LOG.section('ablation_forward.bind_template'):
         template,request = _bind_template(setup,track)
     trace().add(
@@ -439,9 +445,9 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
         _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role)
     _LOG.info('ablation forward bound track=' + track + ' role=' + checkpoint_role)
     with _LOG.section('ablation_forward.write_bound_request'):
-        path,folder = _bound_folder(output,template,request)
+        path,folder = _bound_folder(run,track,template,request)
     with _LOG.section('ablation_forward.vectors'):
-        _reuse_or_encode(path,folder,request,output=output,setup=setup,track=track,
+        _reuse_or_encode(path,run,request,output=output,setup=setup,track=track,
             saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
     trace().add(
         "forward", "completed",

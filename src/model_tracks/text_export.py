@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import numpy as np
+from core.artifacts import Artifacts
 from graph_tracks.data import file_size, load_records, load_text_cache
 from graph_tracks.text_cache import checkpoint_size, compose_texts, composition_fingerprint, texts_size
 from model_tracks.embedding_forward import PreparedEmbeddingForward
@@ -102,7 +103,7 @@ def forward(output,setup,*,device,return_model=False):
         request_path=request_path, tokens_path=setup/'prepared_text.npz', plan=request['plan'],
         row_count=len(request['ids']), tokens_size=request['tokens_size'])
     vectors, model, checkpoint_size, _ = contract.forward()
-    path = output/'text__vectors.npz'
+    path = output / Artifacts.member_name('vectors', track='text')
     contract.write(path, request['ids'], vectors,
                    _export_metadata(request, checkpoint_size, contract, model),
                    lambda candidate: validate(candidate, checkpoint, setup))

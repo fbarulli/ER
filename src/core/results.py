@@ -6,18 +6,23 @@ Between training and post-training analysis there is a set of documents that
 belongs to neither lane: the post-training ablation REQUEST the training outputs
 land for the GPU lane, the frozen prepared tensors it names, the encoded
 VECTORS, the frozen ablation REPORT, the sealed BASELINE THRESHOLD binding, the
-run RECEIPT, and the Laya HOLDOUT verification report. Every consumer re-spelled those names: the request
-comes from the bundle contract, vectors/report from ``paths.yaml`` layouts, and
-``baseline_threshold.json``, ``prepared_inputs.npz``,
-``post_training_ablation.json`` and ``holdout_report.json`` are inline literals
-in ``model_tracks.baseline_ablation`` / ``post_training_ablation`` /
-``staged_ablation`` / ``cli.laya_lane``.
+run RECEIPT, and the Laya HOLDOUT verification report. Every consumer used to
+re-spell those names: the request comes from the bundle contract, vectors/report
+from ``paths.yaml`` layouts, and ``baseline_threshold.json``,
+``prepared_inputs.npz`` and ``post_training_ablation.json`` were inline literals
+in the model-track lane (``post_training_ablation`` / ``staged_ablation`` /
+``run`` / ``bundle_steps`` / ``local_complete`` / ``worker``), which now ask
+this class; ``holdout_report.json`` remains spelled by ``cli.laya_lane``'s
+generated Kaggle kernel script.
 
 :class:`Results` is the object that OWNS that surface for one suite run:
 
   path(name, track)     resolve one declared result role via the SSOT accessor
   paths(tracks)         every addressed result of the run
   request/report/...    the concrete per-track lookups (no literals at call sites)
+  track_dir(track)      the per-track folder holding that track's ablation results
+  leaf(name)            the declared leaf filename of a `names`-resolved role
+  for_root(root)        the same surface pinned at a MATERIALIZED run tree
   produce_request(...)  bind a frozen template onto the training-selected checkpoint
   write_request(...)    land that request where the GPU lane reads it
   saved(track)          the five-member saved-ablation export the consumer re-verifies
@@ -29,12 +34,14 @@ in ``model_tracks.baseline_ablation`` / ``post_training_ablation`` /
 
 DECLARATION
 -----------
-``config/results.yaml`` declares every role plus the ONE already-declared
-address it resolves through (``paths.yaml`` ``layouts:``, the bundle contract,
-or this file's own names). A name that already has a home is REFERENCED, never
-re-spelled. Resolution goes through the SAME accessors the rest of the tree
-calls (``core.common.artifact``, ``core.bundle.bundle_spec``), so a ``Results``
-member and the current inline call site return the identical absolute Path.
+``config/results.yaml`` declares every role plus the ONE already-declared source
+of its LEAF NAME (``paths.yaml`` ``layouts:``, the bundle contract, or this
+file's own names). A name that already has a home is REFERENCED, never
+re-spelled. The leaf is resolved under the RUN's own directory
+(``root/<track>/<ablation_dir>``), so a ``Results`` member returns the path of
+the tree the caller holds — the canonical ``results/model_tracks/<run_tag>``
+address from :func:`results`, or the relocated finalize/download tree from
+:meth:`Results.for_root`.
 
 DIVISION OF LABOR WITH ``Artifacts``
 ------------------------------------
@@ -81,9 +88,10 @@ _PROJECT = "project"
 class ResultRoleSpec(BaseModel):
     """One declared RESULT role: the ONE address it resolves through.
 
-    ``via`` selects the phone book the role is looked up in:
+    ``via`` selects the phone book the role's LEAF NAME comes from:
 
-      ``layouts``   ``core.common.artifact(key, {run_tag, track})``
+      ``layouts``   ``core.common.artifact(key, {run_tag, track}).name`` (the
+                    layout declares the filename; the run owns the directory)
       ``bundle``    ``core.bundle.bundle_spec().<key>``, resolved under the
                     track's ablation dir
       ``names``     this spec's own ``names[key]``, resolved under the scope dir
@@ -158,11 +166,12 @@ class ResultsSpec(BaseModel):
 
 def results_config_path() -> Path:
     """The declared result-spec document (``config/results.yaml``)."""
-    from core.common import TRAIN_ROOT
+    from core.common import CONFIG_DIR
 
-    return TRAIN_ROOT / "config" / CONFIG_NAME
+    return CONFIG_DIR / CONFIG_NAME
 
 
+@lru_cache(maxsize=1)
 def results_spec() -> ResultsSpec:
     """Read + validate the role declaration through the ONE read+validate home."""
     from core.common import load_validated_yaml
@@ -196,11 +205,14 @@ class Results(BaseModel):
 
     # ------------------------------------------------------------ construction
     @classmethod
-    def from_config(cls, run_tag: str, *, spec: ResultsSpec | None = None) -> "Results":
+    def from_config(cls, run_tag: str, *, spec: ResultsSpec | None = None,
+                    root: Path | None = None) -> "Results":
         """Resolve the declared roles against the validated config SSOT.
 
         ``spec`` is injectable so a test can pin resolution without touching the
-        real config; production callers use the default.
+        real config; production callers use the default. ``root`` pins a
+        MATERIALIZED run tree (a downloaded archive, a finalize work dir); the
+        default is the canonical ``suite_outputs`` address for ``run_tag``.
         """
         from core.common import artifact
 
@@ -210,7 +222,7 @@ class Results(BaseModel):
         return cls(
             name=spec.name,
             run_tag=run_tag,
-            root=artifact(spec.run_layout, {"run_tag": run_tag}),
+            root=artifact(spec.run_layout, {"run_tag": run_tag}) if root is None else Path(root),
             ablation_dir=spec.ablation_dir,
             tracks=tuple(spec.tracks),
             threshold_ladder=spec.threshold_ladder,
@@ -220,7 +232,37 @@ class Results(BaseModel):
             sets={key: tuple(value) for key, value in spec.sets.items()},
         )
 
-    # ------------------------------------------------------------------ paths
+    @classmethod
+    def for_root(cls, root: Path | str, run_tag: str | None = None, *,
+                 spec: ResultsSpec | None = None) -> "Results":
+        """The declared Results pinned at one MATERIALIZED run root.
+
+        A lane that holds a relocated run tree (the finalize work dir, a
+        downloaded suite) asks for the surface HERE rather than re-spelling the
+        members under its own root. ``run_tag`` defaults to the root's own name:
+        a run root is named by its tag (the ``suite_outputs`` layout).
+        """
+        root = Path(root)
+        return cls.from_config(run_tag or root.name, spec=spec, root=root)
+
+    # ------------------------------------------------------------------ lookups
+    @classmethod
+    def leaf(cls, name: str, *, spec: ResultsSpec | None = None) -> str:
+        """The declared leaf filename of a ``names``-resolved role (config SSOT).
+
+        A caller that materializes one declared document under a directory the
+        class does not address (the prepared-setup template folder) asks for the
+        leaf here instead of spelling it.
+        """
+        spec = results_spec() if spec is None else spec
+        role = spec.roles.get(name)
+        if role is None or role.via != "names":
+            raise KeyError(
+                f"results role {name!r} declares no leaf name; names-resolved roles: "
+                f"{sorted(key for key, value in spec.roles.items() if value.via == 'names')}"
+            )
+        return spec.names[role.key]
+
     def _role(self, name: str) -> ResultRoleSpec:
         """The declared role, or fail loud with the declared set."""
         role = self.roles.get(name)
@@ -255,7 +297,7 @@ class Results(BaseModel):
         if role.scope == _TRACK:
             if track is None:
                 raise ValueError(f"results role {name!r} is track-scoped; pass a track")
-            return self._resolve(name, role, self._track_dir(track), track=track)
+            return self._resolve(name, role, self.track_dir(track), track=track)
         if track is not None:
             raise ValueError(
                 f"results role {name!r} is {role.scope}-scoped; it takes no track"
@@ -264,14 +306,21 @@ class Results(BaseModel):
             return self._resolve(name, role, self.root)
         return self._resolve(name, role, self._project_dir())
 
-    def _track_dir(self, track: str) -> Path:
+    def track_dir(self, track: str) -> Path:
         """The per-track folder holding that track's ablation results."""
         return self.root / self._require_track(track) / self.ablation_dir
 
     def _resolve(
         self, name: str, role: ResultRoleSpec, folder: Path, track: str | None = None
     ) -> Path:
-        """One role rendered through the SSOT accessor its ``via`` names."""
+        """One role's DECLARED leaf under the run-owned folder.
+
+        ``via`` says where the leaf name is declared, never where the run is:
+        the run owns the directory (an actual run tree may be a RELOCATED copy
+        of the canonical ``results/...`` address, and a relocated tree must
+        address its OWN member). ``layouts`` therefore contributes the layout's
+        declared filename, and the layout's directory is the run's own root.
+        """
         if role.via == "names":
             return folder / self.names[role.key]
         if role.via == "bundle":
@@ -284,7 +333,9 @@ class Results(BaseModel):
         if role.via == "layouts":
             from core.common import artifact
 
-            return artifact(role.key, {"run_tag": self.run_tag, "track": track})
+            return folder / artifact(
+                role.key, {"run_tag": self.run_tag, "track": track or ""}
+            ).name
         raise ValueError(f"results role {name!r} declares unknown via {role.via!r}")
 
     def paths(self, tracks: tuple[str, ...] | None = None) -> dict[str, Path]:

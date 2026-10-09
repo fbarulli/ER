@@ -135,3 +135,31 @@ def test_resolve_reads_every_address_from_config(tmp_path):
         run.resolve("no_such_artifact")
     with pytest.raises(KeyError):
         run.track_members("no_such_track")
+
+
+def test_member_name_is_the_declared_filename():
+    """A track-root holder asks for the declared leaf, never its own literal."""
+    assert Artifacts.member_name("vectors", track="text") == "text__vectors.npz"
+    assert Artifacts.member_name("local_completion", track="gnn_only") == \
+        "gnn_only__local_completion"
+    assert Artifacts.member_name("models_manifest") == "models_manifest.json"
+    assert Artifacts.member_name("track_complete") == "track_complete.json"
+    # an address-only declaration has no fixed filename: fail loud, never guess.
+    with pytest.raises(ValueError, match="address-only"):
+        Artifacts.member_name("training_trace")
+    with pytest.raises(KeyError):
+        Artifacts.member_name("no_such_artifact")
+
+
+def test_resolve_is_a_declaration_query_needing_no_collection(tmp_path):
+    """A single member's address is a pure function of the declaration."""
+    assert Artifacts.resolve("vectors", track="text", root=tmp_path) == \
+        tmp_path / "text" / "text__vectors.npz"
+    assert Artifacts.resolve("reports", track="gnn_only", root=tmp_path) == \
+        tmp_path / "gnn_only" / "gnn_only__reports"
+    assert Artifacts.resolve("models_manifest", root=tmp_path) == \
+        tmp_path / "models_manifest.json"
+    assert Artifacts.resolve("resource_profile", root=tmp_path) == \
+        tmp_path / "resource_profile"
+    with pytest.raises(KeyError):
+        Artifacts.resolve("no_such_artifact", root=tmp_path)

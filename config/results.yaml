@@ -6,10 +6,12 @@
 # names the ONE already-declared address it resolves through, so no result is
 # addressed twice:
 #
-#   via: layouts   -> core.common.artifact(<key>, fields)   (config/paths.yaml
-#                     layouts: — the run root and the per-track report/vectors)
-#   via: bundle    -> core.bundle.bundle_spec().<key>       (config/training.yaml
-#                     bundle: — the ablation request member name)
+#   via: layouts   -> the declared filename of a config/paths.yaml ``layouts:``
+#                     entry (the per-track report/vectors), anchored under the
+#                     RUN's own track dir: a relocated run tree addresses its own
+#                     copy instead of the canonical results root
+#   via: bundle    -> config/training.yaml ``bundle:`` — the ablation request
+#                     member name
 #   via: names     -> this file's own ``names:`` block, resolved under the run
 #                     root (or the per-track ablation dir for track scope)
 #
@@ -73,12 +75,14 @@ roles:
     via: names
     key: prepared_inputs
     scope: track
-  # The encoded vectors/scores export (owner layout: track_ablation_vectors).
+  # The encoded vectors/scores export (the track_ablation_vectors layout
+  # declares its filename; the run owns the directory).
   vectors:
     via: layouts
     key: track_ablation_vectors
     scope: track
-  # The frozen ablation report (owner layout: track_ablation_report).
+  # The frozen ablation report (the track_ablation_report layout declares its
+  # filename; the run owns the directory).
   report:
     via: layouts
     key: track_ablation_report

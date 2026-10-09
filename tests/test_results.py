@@ -63,6 +63,29 @@ def test_roles_resolve_through_the_same_ssot_accessors():
         common.RESULTS / "laya_lane" / "kaggle" / "holdout-eval" / "holdout_report.json")
 
 
+def test_a_materialized_root_resolves_its_own_declared_members(tmp_path):
+    """A relocated run tree asks the class for its members, never its own literals."""
+    root = tmp_path / "moved-run"
+    run = Results.for_root(root)
+    assert run.run_tag == "moved-run"
+    assert run.receipt() == root / "post_training_ablation.json"
+    assert run.track_dir("text") == root / "text" / "ablation"
+    assert run.request("text") == (
+        root / "text" / "ablation" / common.training_cfg().bundle.ablation_request_file)
+    assert run.prepared_inputs("text") == root / "text" / "ablation" / "prepared_inputs.npz"
+    assert run.baseline_threshold("text") == (
+        root / "text" / "ablation" / "baseline_threshold.json")
+    # the layouts roles contribute only their declared filename: a relocated
+    # tree never addresses the canonical results root.
+    assert run.vectors("text") == root / "text" / "ablation" / "vectors.npz"
+    assert run.report("gnn_only") == root / "gnn_only" / "ablation" / "report.json"
+    # the declared leaf name is askable for a document materialized off-root.
+    assert Results.leaf("prepared_inputs") == "prepared_inputs.npz"
+    assert Results.leaf("receipt") == "post_training_ablation.json"
+    with pytest.raises(KeyError, match="declares no leaf name"):
+        Results.leaf("report")
+
+
 def test_paths_enumerates_every_addressed_role():
     run = _run(common.RESULTS / "model_tracks" / TAG)
     keys = set(run.paths())

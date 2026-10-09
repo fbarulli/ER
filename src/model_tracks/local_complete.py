@@ -23,7 +23,9 @@ import json
 from pathlib import Path
 from model_tracks.package import package_member
 from core.archive_reader import archive_sidecar
+from core.artifacts import Artifacts
 from core.bundle import bundle_spec
+from core.results import Results
 
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
@@ -116,7 +118,7 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
                 'publish', 'ablation',
                 reason='the frozen saved ablation reports are published from the sealed archive bytes',
                 detail={'run_state': str(run_state), 'recorded_skip': False},
-                source=str(run_state / 'post_training_ablation.json'),
+                source=str(Results.for_root(run_state, run_tag).receipt()),
             )
     if settings.publish_git:
         from model_tracks.publish import materialize
@@ -251,13 +253,13 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     # Transport timings were created after the immutable training archive was
     # sealed; preserve the receipt-carried sidecars beside the run state.
     import shutil
+    profile_dir = Artifacts.resolve('resource_profile', root=destination)
     copied, absent = [], []
     for suffix in ('.profile.json', '.dvc_profile.jsonl'):
         sidecar = archive_sidecar(training_archive, suffix)
         if sidecar.is_file():
-            metrics = destination / 'resource_profile'
-            metrics.mkdir(exist_ok=True)
-            shutil.copy2(sidecar, metrics / ('remote_training' + suffix))
+            profile_dir.mkdir(exist_ok=True)
+            shutil.copy2(sidecar, profile_dir / ('remote_training' + suffix))
             copied.append('remote_training' + suffix)
         else:
             absent.append(suffix)
@@ -267,14 +269,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         reason='the transport receipts were produced after the immutable training archive was '
                'sealed, so they ride beside the run state instead of inside the archive',
         detail={'copied': copied, 'absent': absent,
-                'destination': str(destination / 'resource_profile')},
+                'destination': str(profile_dir)},
         source=str(training_archive),
     )
     trace().add_entities(
         'complete.transport_timing', copied,
         key_of=lambda name: name,
         reason_of=lambda name: 'receipt_copied_beside_run_state',
-        detail_of=lambda name: {'artifact': name, 'destination': str(destination / 'resource_profile')},
+        detail_of=lambda name: {'artifact': name, 'destination': str(profile_dir)},
         source=str(training_archive),
     )
     pipeline = BundlePipeline(

@@ -12,6 +12,11 @@ Bundle class writes (one per ``BundleRole``).  Their names were spelled inline a
 each producer (``text_report.py``, ``graph_tracks/report.py``,
 ``model_tracks/bundle_steps.py``) and again at each consumer, so nothing could be
 asked "what did this run produce, and which member belongs to which role/track?".
+The model-track lane (``text_export``, ``text_report``, ``worker``,
+``bundle_steps``, ``publish``, ``run``, ``local_complete``,
+``post_training_ablation``) now asks this class for the filename or the address
+of every member it writes or reads.  ``graph_tracks/**`` and ``training/**``
+still spell theirs through their own helpers (out of this owner's scope).
 
 :class:`Artifacts` is that object.  It OWNS:
 
@@ -25,7 +30,11 @@ asked "what did this run produce, and which member belongs to which role/track?"
   * the LOOKUPS — per role (``inputs``/``recovery``/``result``; the vocabulary
     is :class:`core.bundle.BundleRole`'s values, declared once in
     ``artifacts.yaml`` ``roles:``) and per track (``text``/``gnn_only``/
-    ``cascade``);
+    ``cascade``), plus the SINGLE-MEMBER queries a producer/consumer uses
+    instead of a path literal: :meth:`Artifacts.resolve` (a declared key to its
+    Path) and :meth:`Artifacts.member_name` (the declared filename, for a
+    caller holding a track root it places itself). Both are classmethods: the
+    declaration, not a collected run, decides the answer;
   * the STRUCTURAL IDENTITY — :meth:`Artifacts.identity` (run tag + member names
     + byte sizes + counts).  There is NO content digest anywhere in this module:
     integrity is the sealed Bundle's boundary check, never a second verdict.
@@ -64,6 +73,7 @@ validated training config.
 from __future__ import annotations
 
 import traceback
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Literal
 
@@ -203,6 +213,7 @@ def artifacts_config_path() -> Path:
     return CONFIG_DIR / CONFIG_NAME
 
 
+@lru_cache(maxsize=1)
 def artifacts_spec() -> ArtifactSpec:
     """Read + validate the declaration through the ONE read+validate home."""
     from core.common import load_validated_yaml
@@ -306,6 +317,22 @@ def _checked_role(spec: ArtifactSpec, role: Any) -> str:
         raise ValueError(
             f"role {role!r} is not one of the declared roles {sorted(spec.roles)}")
     return value
+
+
+def _declared_names(spec: ArtifactSpec) -> list[str]:
+    """Every declared artifact key (the spec's whole surface)."""
+    return sorted({*spec.track_artifacts, *spec.run_artifacts,
+                   *spec.sealed_archives, *spec.results_owned})
+
+
+def _decl_for(spec: ArtifactSpec, key: str) -> ArtifactDecl:
+    """The declaration for one key, or fail loud with the declared surface."""
+    for group in (spec.track_artifacts, spec.run_artifacts,
+                  spec.sealed_archives, spec.results_owned):
+        decl = group.get(key)
+        if decl is not None:
+            return decl
+    raise KeyError(f"unknown artifact {key!r}; declared: {_declared_names(spec)}")
 
 
 def results_owned_components(spec: ArtifactSpec | None = None) -> frozenset[str]:
@@ -492,9 +519,7 @@ class Artifacts(BaseModel):
 
     def declared_names(self) -> list[str]:
         """Every declared artifact key (the spec's whole surface)."""
-        spec = self.spec
-        return sorted({*spec.track_artifacts, *spec.run_artifacts,
-                       *spec.sealed_archives, *spec.results_owned})
+        return _declared_names(self.spec)
 
     def declared_tracks(self) -> tuple[str, ...]:
         """The tracks the declaration covers, in suite order."""
@@ -538,26 +563,41 @@ class Artifacts(BaseModel):
                 for role in self.spec.sealed_archives}
 
     # ------------------------------------------------------------- resolution
-    def resolve(self, key: str, *, track: str | None = None,
-                root: Path | str | None = None, **fields: object) -> Path:
+    @classmethod
+    def resolve(cls, key: str, *, track: str | None = None,
+                root: Path | str | None = None, spec: ArtifactSpec | None = None,
+                **fields: object) -> Path:
         """Resolve one declared artifact key to a path (config SSOT, no literals).
 
+        A classmethod because resolution is a pure function of the declaration,
+        not of a collected run: a producer/consumer that names exactly ONE
+        member asks here instead of spelling the literal, and needs no tree walk.
         ``root`` anchors a name-based declaration (the run root, or the parent of
         a track root); a phone-book declaration (``layouts``/``files``) resolves
         absolutely and ignores it. ``fields`` fill the declaration's placeholders
         (``run_tag``, ``fmt``, and any BundleSpec field name).
         """
-        spec = self.spec
-        for group, under_track in ((spec.track_artifacts, True),
-                                   (spec.run_artifacts, False),
-                                   (spec.sealed_archives, False),
-                                   (spec.results_owned, False)):
-            decl = group.get(key)
-            if decl is not None:
-                return _resolve_decl(decl, key=key, track=track, root=root,
-                                     fields=fields, under_track=under_track)
-        raise KeyError(
-            f"unknown artifact {key!r}; declared: {self.declared_names()}")
+        spec = artifacts_spec() if spec is None else spec
+        return _resolve_decl(_decl_for(spec, key), key=key, track=track, root=root,
+                             fields=fields, under_track=key in spec.track_artifacts)
+
+    @classmethod
+    def member_name(cls, key: str, *, track: str | None = None,
+                    spec: ArtifactSpec | None = None) -> str:
+        """The declared member FILENAME of one artifact key (config SSOT).
+
+        A caller that holds a track root — or any tree this class does not
+        address — asks for the declared filename here and places it itself. An
+        address-only declaration (``via: layouts``/``files``, or a ``config``
+        template needing fields) has no fixed literal filename and fails loud
+        instead of returning a guess.
+        """
+        spec = artifacts_spec() if spec is None else spec
+        name = _declared_name(_decl_for(spec, key), track=track)
+        if name is None:
+            raise ValueError(
+                f"artifact {key!r} is address-only; it declares no member filename")
+        return name
 
     # --------------------------------------------------------------- identity
     def identity(self) -> dict[str, Any]:

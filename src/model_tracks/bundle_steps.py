@@ -32,7 +32,9 @@ import argparse
 import json
 from pathlib import Path
 
+from core.artifacts import Artifacts
 from core.bundle import Bundle, BundlePipeline, BundleRole, bundle_spec
+from core.results import Results
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 
 #: The stage name this module owns in the ONE consolidated pipeline trace.
@@ -244,7 +246,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
                 reason='the saved GPU ablation exports are consumed and each track is marked complete',
                 detail={'destination': str(destination), 'recorded_skip': False,
                         'tracks': list(TRACKS)},
-                source=str(destination / 'post_training_ablation.json'),
+                source=str(Results.for_root(destination, run_tag).receipt()),
             )
 
     location = pipeline.postprocess_location or spec.postprocess_location_bundle
@@ -503,7 +505,6 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
     (``track__best_checkpoint.json`` recorded path, located under the track),
     never through a per-surface re-derivation.
     """
-    from graph_tracks.artifacts import name
     from graph_tracks.config import GraphConfig, load_config as load_graph_config
     from graph_tracks.preflight import preflight
     from graph_tracks.report import complete as graph_complete
@@ -519,9 +520,10 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
     checkpoint = tree.checkpoint(track)
     if checkpoint is None or not checkpoint.is_file():
         raise ValueError(f"selected checkpoint unavailable: {track}")
-    _park_interrupted(output, f"{track}__local_completion")
-    report = output / f"{track}__local_completion"
+    report = output / Artifacts.member_name("local_completion", track=track)
+    _park_interrupted(output, report.name)
     report.mkdir()
+    saved_inference = output / Artifacts.member_name("inference", track=track)
     from model_tracks.ablation import file_size as _file_size
     trace().add(
         "checkpoint_select", "selected",
@@ -534,18 +536,18 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
                 'bytes': checkpoint.stat().st_size,
                 'report': str(report), 'report_test': bool(settings.report_test),
                 'device': 'cpu'},
-        source=str(output / f"{track}__best_checkpoint.json"),
+        source=str(output / Artifacts.member_name("best_checkpoint", track=track)),
     )
     graph_complete(checkpoint, Path(config["listings"]), Path(config["pairs"]),
                    report, GraphConfig.model_validate(config),
                    text_cache=Path(config["text_cache"]) if config.get("text_cache") else None,
-                   saved_inference=output / name(track, "inference"))
+                   saved_inference=saved_inference)
     trace().add(
         "postprocess", "graph_track",
         scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
         reason='the saved inference is re-run on CPU from the selected checkpoint and reported',
         detail={'track': track, 'report': str(report), 'device': 'cpu',
-                'saved_inference': str(output / name(track, "inference"))},
+                'saved_inference': str(saved_inference)},
         source=str(report),
     )
 
@@ -566,7 +568,6 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
     from graph_tracks.data import load_records
     from graph_tracks.report import report_cascade
     from graph_tracks.train import load_pairs
-    from graph_tracks.artifacts import name
     from model_tracks import worker
 
     lane = load_graph_config(setup / "cascade.yaml", expected_track="cascade")
@@ -606,8 +607,10 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
         # A UNIT row: one composed cascade report, whatever the query count.
         scope=SCOPE_ENTITY, key="cascade", in_count=None, out_count=1,
         reason='the cascade report and its calibrated manifest are composed from the trained lanes',
-        detail={'cascade_report': str(output / name("cascade", "cascade_report.json")),
-                'report_manifest': str(output / name("cascade", "report_manifest.json")),
+        detail={'cascade_report': str(output / Artifacts.member_name(
+                        "cascade_report", track="cascade")),
+                'report_manifest': str(output / Artifacts.member_name(
+                        "report_manifest", track="cascade")),
                 'queries': queries},
         source=str(output),
     )

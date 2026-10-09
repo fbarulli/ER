@@ -4,7 +4,8 @@ import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from core.bundle import bundle_spec
+from core.artifacts import Artifacts
+from core.results import Results
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
@@ -17,7 +18,6 @@ from model_tracks.config import SuiteConfig
 from model_tracks.resume import Track, TRAINING_TRACKS
 from pathlib import Path
 from core.common import TRAIN_ROOT
-from graph_tracks.artifacts import name
 from model_tracks.ablation import report, checkpoint_identity, source_name, write, resolve, frozen_threshold, verify_threshold_binding
 
 _LOG = RunLogger(__name__)
@@ -120,8 +120,9 @@ def publish_saved(destination: Path, suite: SuiteConfig, *, archive: Path,
             source=source_name(archive),
         )
     with _LOG.section('ablation.publish.tracks'):
+        run = Results.for_root(destination)
         for track in _LOG.progress(ABLATION_TRACKS, desc='publish_saved', unit='track'):
-            _publish_track(destination, track, archived, publisher)
+            _publish_track(run, track, archived, publisher)
     flush_trace()
 
 
@@ -133,21 +134,27 @@ def _sealed_archive(archive, suite, *, bundle=None):
     return archived, git_publisher(suite)
 
 
-def _sealed_track(archived, destination, request, vectors, saved, binding):
-    """Raise unless every exported artifact matches the sealed archive bytes."""
+def _sealed_track(archived, run, track):
+    """Raise unless every exported artifact matches the sealed archive bytes.
+
+    The exported set IS the declared saved-ablation set (``results.yaml``
+    ``sets.saved_ablation``) plus the report's writer-stamped ``.size`` sidecar,
+    so no caller re-lists the members.
+    """
     from graph_tracks.data import file_size
-    folder = request.parent
+    saved = run.report(track)
+    members = [*run.saved(track).values(), saved.with_suffix('.size')]
     # ``archived`` is a verified Bundle handle or the plain verified manifest.
     manifest = getattr(archived, 'manifest', archived)
-    for path in (request, vectors, saved, binding, folder / 'prepared_inputs.npz', saved.with_suffix('.size')):
-        relative = path.relative_to(destination).as_posix()
+    for path in members:
+        relative = path.relative_to(run.root).as_posix()
         if manifest['files'].get(relative) != file_size(path):
             trace().add(
                 "publish_saved", "track_identity_rejected",
-                scope=SCOPE_ENTITY, key=request.parent.parent.name,
+                scope=SCOPE_ENTITY, key=track,
                 reason='the on-disk ablation artifact differs from the sealed archive byte-for-byte; '
                        'the track is quarantined, never republished',
-                detail={'track': request.parent.parent.name, 'relative': relative,
+                detail={'track': track, 'relative': relative,
                         'sealed_size': manifest['files'].get(relative),
                         'on_disk_size': file_size(path)},
                 source=source_name(path),
@@ -202,13 +209,12 @@ def _restored_dashboard(saved, document):
     )
 
 
-def _publish_track(destination, track, archived, publisher):
+def _publish_track(run, track, archived, publisher):
     """Publish one track's frozen report bytes after archive identity checks."""
-    folder = destination / track / 'ablation'
-    request, vectors = folder / bundle_spec().ablation_request_file, folder / 'vectors.npz'
-    saved, binding = folder / 'report.json', folder / 'baseline_threshold.json'
+    request, vectors = run.request(track), run.vectors(track)
+    saved, binding = run.report(track), run.baseline_threshold(track)
     with _LOG.section('ablation.publish.track_identity'):
-        _sealed_track(archived, destination, request, vectors, saved, binding)
+        _sealed_track(archived, run, track)
         validated, document, calibration = _published_identity(track, request, saved, binding, vectors)
         trace().add(
             "publish_saved", "track_identity",
@@ -229,16 +235,26 @@ def _publish_track(destination, track, archived, publisher):
         publisher(request, vectors, json.loads(saved.read_text()), str(binding))
 
 
+def _completion_contract_name(track: str, root: Path) -> str:
+    """The declared per-track completion-contract filename (config SSOT).
+
+    The text lane keeps its legacy completion-manifest stem; every other track
+    ships the shared report manifest. Both stems are declared in artifacts.yaml.
+    """
+    key = 'completion_manifest' if track == 'text' else 'report_manifest'
+    return Artifacts.resolve(key, track=track, root=root).name
+
+
 @timed
-def _calibration_source(destination, track):
+def _calibration_source(run, track):
     """The one non-interrupted calibration manifest for a track, or nothing."""
     import json
     from graph_tracks.report_manifest import TrackReportManifest
-    request = destination/track/'ablation'/bundle_spec().ablation_request_file
-    result = request.parent/'vectors.npz'
+    request, result = run.request(track), run.vectors(track)
+    track_root = run.root / track
     if not request.is_file() or not result.is_file():
         raise ValueError('suite lacks prepared GPU ablation export: '+track)
-    sources = list((destination/track).rglob('text__completion_manifest.json' if track == 'text' else name(track,'report_manifest.json')))
+    sources = list(track_root.rglob(_completion_contract_name(track, run.root)))
     sources = [path for path in sources if not any(part.startswith('interrupted-') or '.interrupted-' in part for part in path.parts)]
     if len(sources) != 1:
         trace().add(
@@ -250,7 +266,7 @@ def _calibration_source(destination, track):
                     'the track is quarantined rather than guessed'),
             detail={'track': track, 'candidates': [source_name(path) for path in sources],
                     'request': source_name(request), 'result': source_name(result)},
-            source=source_name(destination/track),
+            source=source_name(track_root),
         )
         flush_trace()
         raise ValueError('ambiguous baseline calibration manifest: '+track)
@@ -280,15 +296,16 @@ def _calibration_source(destination, track):
         source=source_name(sources[0]),
     )
     _LOG.info(f'[ablation] calibration source track={track} manifest={sources[0].name}')
-    return request, result, sources[0], calibration
+    return result, sources[0], calibration
 
 
 @timed
-def _wrote_binding(request, track, calibration, source):
+def _wrote_binding(run, track, calibration, source):
     """Seal the selected checkpoint identity and frozen threshold into binding."""
     from graph_tracks.data import file_size
     from model_tracks.ablation import request_context
-    binding = request.parent/'baseline_threshold.json'
+    request = run.request(track)
+    binding = run.baseline_threshold(track)
     document = json.loads(request.read_text())
     threshold = calibration.threshold
     with request_context(request):
@@ -332,7 +349,7 @@ def _wrote_binding(request, track, calibration, source):
 
 
 @timed
-def _trusted_saved_report(result, threshold, binding, previous, validated, document):
+def _trusted_saved_report(run, track, result, threshold, binding, previous, validated, document):
     """True when a prior saved report bytes-identically covers this result.
 
     Callers then only re-verify the vectors behind the cached report instead
@@ -340,7 +357,7 @@ def _trusted_saved_report(result, threshold, binding, previous, validated, docum
     """
     from graph_tracks.data import file_size
     from model_tracks.ablation import request_context, validate_vectors
-    request = previous.parent/bundle_spec().ablation_request_file
+    request = run.request(track)
     trusted = (validated and previous.with_suffix('.size').is_file()
                and previous.with_suffix('.size').read_text().strip() == file_size(previous)
                and validated.get('result_size') == file_size(result)
@@ -359,20 +376,21 @@ def _trusted_saved_report(result, threshold, binding, previous, validated, docum
 @timed
 def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> Path:
     """Consume suite GPU exports after shutdown; no provisioning or forwards."""
-    from graph_tracks.data import file_size
     outputs = {}
+    run = Results.for_root(destination)
     _LOG.info(f'[ablation] complete_saved destination={destination}')
     for track in _LOG.progress(ABLATION_TRACKS, desc='complete_saved', unit='track'):
         _LOG.info(f'[ablation] complete track={track}')
         with _LOG.section('ablation.complete.calibration'):
-            request, result, source, calibration = _calibration_source(destination, track)
-            binding, threshold, document = _wrote_binding(request, track, calibration, source)
+            result, source, calibration = _calibration_source(run, track)
+            binding, threshold, document = _wrote_binding(run, track, calibration, source)
         with _LOG.section('ablation.complete.report'):
-            validated = _saved_track_report(request, result, threshold, binding, document, suite)
+            validated = _saved_track_report(run, track, result, threshold, binding, document, suite)
         with _LOG.section('ablation.complete.persist'):
-            _published_track_outputs(outputs, track, request, result, validated, binding, publisher)
+            _published_track_outputs(outputs, track, run.request(track), result,
+                                     validated, binding, publisher)
     with _LOG.section('ablation.complete.receipt'):
-        receipt = destination/'post_training_ablation.json'
+        receipt = run.receipt()
         write(receipt,{'tracks':outputs,'retraining':False,'gpu_reopened':False})
         trace().add(
             "complete_saved", "receipt",
@@ -388,7 +406,7 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
 
 
 @timed
-def _sealed_track_report(request, validated, config):
+def _sealed_track_report(run, track, validated, config):
     """Persist the validated report exactly once per round when it changed.
 
     Byte-identity short-circuit: the round's documents must be serialized
@@ -408,32 +426,33 @@ def _sealed_track_report(request, validated, config):
         # request persistence; a sealed ablation report is ~0.5-1% of that.
         with path.open('w', encoding='utf-8') as handle:
             handle.write(document)
-    saved = request.parent/'report.json'
+    saved = run.report(track)
     if saved != path and (not saved.is_file() or saved.read_text() != document):
         write(saved, validated)
     return path
 
 
-def _saved_track_report(request, result, threshold, binding, document, suite):
+def _saved_track_report(run, track, result, threshold, binding, document, suite):
     """Restore the cached report when trusted, otherwise recompute and seal it."""
     from graph_tracks.data import file_size
-    previous = request.parent/'report.json'
+    request, previous = run.request(track), run.report(track)
     validated = json.loads(previous.read_text()) if previous.exists() else None
-    trusted, cached = _trusted_saved_report(result, threshold, binding, previous, validated, document)
+    trusted, cached = _trusted_saved_report(run, track, result, threshold, binding,
+                                            previous, validated, document)
     from model_tracks.ablation import save_report
     if trusted:
         validated = cached
     else:
         validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
-    _sealed_track_report(request,validated,resolve(suite.ablation_config))
+    _sealed_track_report(run, track, validated, resolve(suite.ablation_config))
     previous.with_suffix('.size').write_text(str(file_size(previous))+'\n')
     trace().add(
         "complete_saved", "report",
-        scope=SCOPE_ENTITY, key=request.parent.parent.name,
+        scope=SCOPE_ENTITY, key=track,
         reason=('the cached report already covers this exact request/result/threshold, so it was '
                 're-verified instead of recomputed' if trusted else
                 'no trusted cached report existed, so the comparison was recomputed'),
-        detail={'track': request.parent.parent.name, 'trusted_cache': bool(trusted),
+        detail={'track': track, 'trusted_cache': bool(trusted),
                 'rows': len(validated.get('rows', [])),
                 'threshold': validated.get('threshold'),
                 'report': source_name(previous),
@@ -491,6 +510,7 @@ def run(archive, run_tag, suite, *, launcher=None, bundle=None):
     archive_metadata = (Bundle.load(archive, BundleRole.result)
                         if bundle is None else bundle)
     destination = archive.parent/run_tag
-    if any((destination/track/'ablation'/bundle_spec().ablation_request_file).exists() for track in ABLATION_TRACKS):
+    run = Results.for_root(destination, run_tag)
+    if any(run.request(track).exists() for track in ABLATION_TRACKS):
         return complete_saved(destination,suite,publisher=git_publisher(suite))
     raise ValueError('suite lacks staged GPU ablation exports; rebuild prepared inputs before training')

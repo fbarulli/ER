@@ -4,6 +4,7 @@ import json
 import time
 import numpy as np
 import pandas as pd
+from core.artifacts import Artifacts
 from graph_tracks.config import load_text_config, RetrievalReportContext
 
 
@@ -11,6 +12,19 @@ def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
     from core.common import prepared_setup_layout
     return prepared_setup_layout()
+
+
+def _text_artifact(key: str, output: Path) -> Path:
+    """A declared text-track artifact under the track root (config SSOT).
+
+    ``output`` is the text track's own root; the declaration owns the filename.
+    """
+    return output / Artifacts.member_name(key, track='text')
+
+
+def _reports_leaf(key: str) -> str:
+    """The declared filename of a member the ``<track>__reports`` tree carries."""
+    return Artifacts.member_name(key, track='text')
 
 
 def build_index(output: Path, setup: Path) -> Path | None:
@@ -34,20 +48,21 @@ def build_index(output: Path, setup: Path) -> Path | None:
         print('[text-phase] index_build skipped reason=build_index_false', flush=True)
         return None
     checkpoint, _ = resolve_best_checkpoint(output)
-    vectors, _ = validate_export(output / 'text__vectors.npz', checkpoint, setup)
+    vectors_path, index_path = _text_artifact('vectors', output), _text_artifact('index', output)
+    vectors, _ = validate_export(vectors_path, checkpoint, setup)
     listings = setup / layout.prepared_dir / layout.listings
     records = load_records(listings)
     catalog_indices = retrieval_indices(records)
     index_started = time.monotonic()
-    print(f"[text-phase] index_build start path={output / 'text__index'} vectors={len(vectors)} "
+    print(f"[text-phase] index_build start path={index_path} vectors={len(vectors)} "
           f"M={cfg.hnsw_m} ef_construction={cfg.hnsw_ef_construction} ef_search={cfg.hnsw_ef_search}", flush=True)
-    index = PersistentHnswIndex(output / 'text__index', ef_construction=cfg.hnsw_ef_construction,
+    index = PersistentHnswIndex(index_path, ef_construction=cfg.hnsw_ef_construction,
                                M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
     index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
                 model_name='text', preprocessing_fingerprint=file_size(listings))
-    print(f"[text-phase] index_build complete path={output / 'text__index'} "
+    print(f"[text-phase] index_build complete path={index_path} "
           f"seconds={time.monotonic() - index_started:.3f}", flush=True)
-    return output / 'text__index'
+    return index_path
 
 
 def complete(output: Path, setup: Path, *, device: str, report_test: bool):
@@ -70,7 +85,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     print(f"[text-selection] checkpoint={checkpoint} reason=trainer_recorded_best "
           f"best_metric={selection.get('best_metric')} recorded_step={selection.get('global_step')}", flush=True)
     perf = PerformanceRecorder('text')
-    reports = output / 'text__reports'
+    reports = _text_artifact('reports', output)
     reports.mkdir(exist_ok=True)
     listings = setup / layout.prepared_dir / layout.listings
     print(f"[text-phase] inputs start listings={listings} pairs={setup / 'prepared/pairs.csv'}", flush=True)
@@ -79,9 +94,10 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     print(f"[text-phase] inputs complete listings={len(records)} split_pairs="
           f"{ {split: {'positive': int(labels.sum()), 'negative': int((labels == 0).sum())} for split, (_, labels) in pairs.items()} }", flush=True)
     cache_started = time.monotonic()
+    cache = _text_artifact('vectors', output)
+    report_path = _text_artifact('training_report', output)
     print(f"[text-phase] vector_export start catalog={setup / layout.catalog} checkpoint={checkpoint} "
-          f"output={output / 'text__vectors.npz'}", flush=True)
-    cache = output / 'text__vectors.npz'
+          f"output={cache}", flush=True)
     vectors, metadata = validate_export(cache, checkpoint, setup)
     perf.record('cache_validation', time.monotonic() - cache_started)
     perf.adopt('encode', metadata.get('performance', {}).get('sections', {}).get('encode', {}))
@@ -91,17 +107,18 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_size(listings))
     if cfg.build_index:
         index_started = time.monotonic()
-        print(f"[text-phase] index_build start path={output / 'text__index'} vectors={len(vectors)} "
+        index_path = _text_artifact('index', output)
+        print(f"[text-phase] index_build start path={index_path} vectors={len(vectors)} "
               f"M={cfg.hnsw_m} ef_construction={cfg.hnsw_ef_construction} ef_search={cfg.hnsw_ef_search}", flush=True)
         from training.hnsw_index import PersistentHnswIndex
-        index = PersistentHnswIndex(output / 'text__index', ef_construction=cfg.hnsw_ef_construction,
+        index = PersistentHnswIndex(index_path, ef_construction=cfg.hnsw_ef_construction,
                                    M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
         from model_tracks.training_data import retrieval_indices
         catalog_indices = retrieval_indices(records)
         index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
                     model_name='text', preprocessing_fingerprint=file_size(listings))
         perf.record('index_build', time.monotonic() - index_started)
-        print(f"[text-phase] index_build complete path={output / 'text__index'} seconds={time.monotonic() - index_started:.3f}", flush=True)
+        print(f"[text-phase] index_build complete path={index_path} seconds={time.monotonic() - index_started:.3f}", flush=True)
     else:
         print('[text-phase] index_build skipped reason=build_index_false', flush=True)
     scores = {}
@@ -132,9 +149,9 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
                            'true_label':int(label), 'split':split, 'score':float(score),
                            'prediction':int(score >= threshold)})
     print(f"[text-phase] reports start directory={reports} kinds=summary,scored_pairs,plots,attributes,slices,retrieval", flush=True)
-    pd.DataFrame(summary).to_csv(reports / 'text__model_evaluation_summary.csv', index=False)
+    pd.DataFrame(summary).to_csv(reports / _reports_leaf('model_evaluation'), index=False)
     scored_frame = pd.DataFrame(scored)
-    scored_frame.to_csv(reports / 'text__scored_pairs.csv', index=False)
+    scored_frame.to_csv(reports / _reports_leaf('scored_pairs'), index=False)
     from graph_tracks.report import _plots
     _plots(scored_frame, reports, 'text', threshold)
     from graph_tracks.report_attributes import write_reports as write_attribute_reports
@@ -149,8 +166,8 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     perf.adopt('refresh', summarize_refresh_timings(output / 'logs').get('refresh', {}))
     performance = perf.summary()
     performance.update(summarize_profiler_tree(output / 'profiles'))
-    perf.write_payload(reports / 'text__performance.json', performance)
-    (output / 'text__training_report.md').write_text(
+    perf.write_payload(reports / _reports_leaf('performance'), performance)
+    report_path.write_text(
         '# Text track\n\nSelected checkpoint: ' + str(checkpoint) + '\n\n'
         'Held-out listing pairs use the shared split. Threshold fitted on dev only.\n'
         'Scores are model-only; known-positive retrieval truth is incomplete.\n\n'
@@ -166,7 +183,8 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     # The text lane used to hand-write a manifest missing every honesty field
     # the graph lanes emit (test_used_for_selection, metrics_scope,
     # retrieval_protocol, ...). Both lanes now share one contract.
-    write_manifest(output / 'text__completion_manifest.json', build_manifest(
+    manifest_path = _text_artifact('completion_manifest', output)
+    write_manifest(manifest_path, build_manifest(
         track='text', checkpoint=checkpoint,
         checkpoint_size=file_size(checkpoint),
         listings_size=file_size(listings),
@@ -181,5 +199,5 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
                'best_metric': selection.get('best_metric'),
                'recorded_step': selection.get('global_step')}))
     print(f"[text-phase] reports complete artifacts={[str(path) for path in sorted(reports.rglob('*')) if path.is_file()]}", flush=True)
-    print(f"[text-postprocess] complete checkpoint={checkpoint} manifest={output / 'text__completion_manifest.json'} "
-          f"report={output / 'text__training_report.md'} seconds={time.monotonic() - started:.3f}", flush=True)
+    print(f"[text-postprocess] complete checkpoint={checkpoint} manifest={manifest_path} "
+          f"report={report_path} seconds={time.monotonic() - started:.3f}", flush=True)

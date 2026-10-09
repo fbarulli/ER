@@ -10,7 +10,9 @@ import traceback
 import shlex
 import yaml
 
+from core.artifacts import Artifacts
 from core.bundle import bundle_spec
+from core.results import Results
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from model_tracks.config import load_config
@@ -85,15 +87,15 @@ def _catalog_vectors(track_root: Path, track: str) -> tuple[Path, bool]:
     path even when nothing matched keeps the caller's failure message naming a
     real location.
     """
-    from graph_tracks.artifacts import name
-    direct = track_root / name(track, 'vectors.npz')
+    direct = track_root / Artifacts.member_name('vectors', track=track)
     if direct.is_file():
         return direct, True
-    for manifest in sorted(track_root.rglob(name(track, 'export_manifest.json'))):
-        vectors = manifest.parent / name(track, 'vectors.npz')
+    export_manifest = Artifacts.member_name('export_manifest', track=track)
+    for manifest in sorted(track_root.rglob(export_manifest)):
+        vectors = manifest.parent / direct.name
         if vectors.is_file():
             return vectors, True
-    remaining = sorted(track_root.rglob(name(track, 'vectors.npz')))
+    remaining = sorted(track_root.rglob(direct.name))
     if remaining:
         return remaining[0], True
     return direct, False
@@ -107,10 +109,10 @@ def _cascade_artifacts(results: Path, lane) -> dict:
     checkpoint/embedding export. A missing artifact fails here, before any
     ranking work, and the retired fused text cache is never consulted.
     """
-    from graph_tracks.artifacts import name
     text_root = results / 'text'
     gnn_root = results / 'gnn_only'
-    text_index = Path(lane.text_index) if lane.text_index else text_root / name('text', 'index')
+    text_index = Path(lane.text_index) if lane.text_index else (
+        text_root / Artifacts.member_name('index', track='text'))
     text_vectors, text_vectors_found = _catalog_vectors(text_root, 'text')
     gnn_vectors, gnn_vectors_found = _catalog_vectors(gnn_root, 'gnn_only')
     gnn_checkpoint = Path(lane.gnn_checkpoint) if lane.gnn_checkpoint else None
@@ -236,7 +238,6 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
     role metrics are passed explicitly from the cascade report that
     ``graph_tracks.report.report_cascade`` just wrote.
     """
-    from graph_tracks.artifacts import name
     from graph_tracks.data import file_size
     from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
     from core.common import TRAIN_ROOT
@@ -245,7 +246,7 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
     if not pairs.is_absolute():
         pairs = (TRAIN_ROOT / pairs).resolve()
     roles = None
-    report_path = output / name('cascade', 'cascade_report.json')
+    report_path = output / Artifacts.member_name('cascade_report', track='cascade')
     if report_path.is_file():
         roles = json.loads(report_path.read_text(encoding='utf-8')).get('roles')
     manifest = build_manifest(
@@ -254,7 +255,8 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
         listings_size=file_size(listings), pairs_size=file_size(pairs),
         threshold=0.5, threshold_source='dev_youden', test_reported=bool(lane.report_test),
         model_selection='dev_pr_auc', retrieval_ks=list(lane.retrieval_ks), roles=roles)
-    write_manifest(output / name('cascade', 'report_manifest.json'), manifest)
+    write_manifest(output / Artifacts.member_name('report_manifest', track='cascade'),
+                   manifest)
 
 
 def _run_cascade(cfg, setup: Path, output: Path, events):
@@ -446,8 +448,9 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                     raise ValueError('selected graph checkpoint unavailable')
                 settings['device'] = cfg.device
                 settings.update(cfg.graph_execution_overrides())
+                saved_inference = output / Artifacts.member_name('inference', track=track)
                 _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
-                    output/(track+'__inference'),GraphConfig.model_validate(settings),
+                    saved_inference,GraphConfig.model_validate(settings),
                     return_encoder=True)
             events.emit('inference_export','completed',device=cfg.device)
             trace().add(
@@ -460,7 +463,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                         'selected_by': ('trainer best-metric marker' if track == 'text'
                                         else 'bundle role contract'),
                         'post_training_ablation': bool(cfg.post_training_ablation)},
-                source=str(output / f'{track}__inference'),
+                source=str(output / Artifacts.member_name('inference', track=track)),
             )
             if cfg.post_training_ablation:
                 from model_tracks.staged_ablation import forward as forward_ablation
@@ -488,6 +491,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                     forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
                         graph_encoder=selected_graph_encoder if track != 'text' else None)
                     events.emit('attribute_ablation_export','completed',device=cfg.device)
+                    request_path = Results.for_root(output.parent).request(track)
                     trace().add(
                         "attribute_ablation_export", "completed",
                         scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
@@ -495,8 +499,8 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                                'vectors are encoded for the saved ablation',
                         detail={'track': track, 'device': cfg.device,
                                 'checkpoint': str(checkpoint),
-                                'request': str(output/'ablation'/spec.ablation_request_file)},
-                        source=str(output/'ablation'/spec.ablation_request_file),
+                                'request': str(request_path)},
+                        source=str(request_path),
                     )
             if track == 'text':
                 del selected_text_model

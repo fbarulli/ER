@@ -9,7 +9,9 @@ import sys
 import tempfile
 
 from core.archive_reader import archive_sidecar
+from core.artifacts import Artifacts
 from core.bundle import bundle_spec
+from core.results import Results
 from core.run_log import RunLogger
 from core.tracing import (
     SCOPE_ENTITY,
@@ -76,7 +78,8 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
         events = WorkerEvents(output, 'suite', run_tag, filename=spec.suite_events_file)
         events.emit('suite', 'starting', resume=resume, config=str(config), output=str(output))
         from model_tracks.resource_profile import ResourceProfile
-        profile = ResourceProfile(output / 'resource_profile', load_config(config).profiling).start()
+        profile = ResourceProfile(Artifacts.resolve('resource_profile', root=output),
+                                  load_config(config).profiling).start()
         events.resource_profile = profile
         sealed = False
         try:
@@ -376,7 +379,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             detail={'baseline': str(output / 'baseline'),
                     'ablation_config': str(TRAIN_ROOT / cfg.ablation_config),
                     'tracks': list(TRACKS)},
-            source=str(output / 'post_training_ablation.json'),
+            source=str(Results.for_root(output, run_tag).receipt()),
         )
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     if getattr(events, 'resource_profile', None):
