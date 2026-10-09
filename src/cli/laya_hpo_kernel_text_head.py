@@ -56,10 +56,10 @@ REVISION = "@REVISION@"
 # (defaults) and Colab (the entry driver sets ER_LAYA_HPO_WORKING/INPUT).
 WORKING = Path(os.environ.get("ER_LAYA_HPO_WORKING") or "/kaggle/working")
 INPUTS = Path(os.environ.get("ER_LAYA_HPO_INPUT") or "/kaggle/input")
-# Config-declared visible GPU set (options.session.cuda_visible_devices). Set it
-# BEFORE torch is imported by any injected patch or worker: "" keeps every
-# device the session exposes (one worker process per device); "0" pins the
-# session to one T4 so slots_per_gpu processes share it through MPS.
+# Optional GPU override (options.session.cuda_visible_devices), OFF by default.
+# Empty keeps EVERY device the session exposes (2xT4 -> one worker process per
+# GPU). Set it only to pin a subset; the assignment runs before torch is
+# imported by any injected patch or worker, so device_count() sees the subset.
 CUDA_VISIBLE_DEVICES = "@CUDA_VISIBLE_DEVICES@"
 if CUDA_VISIBLE_DEVICES:
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES

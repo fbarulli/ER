@@ -115,9 +115,10 @@ class SessionPolicy:
         self.load_if_exists = bool(config.get("load_if_exists", True))
         self.processes_only = bool(config.get("processes_only", True))
         self.offline = bool(config.get("offline", False))
-        # The session's visible GPU set, baked into the staged kernel (config
-        # SSOT). "" = every device the session exposes (one worker per device);
-        # "0" = pin GPU 0 so slots_per_gpu worker PROCESSES share that T4 (MPS).
+        # Optional GPU override baked into the staged kernel (config SSOT),
+        # OFF by default: "" = every device the session exposes (one worker per
+        # GPU). Set it only to pin a subset (e.g. "0" to pack slots_per_gpu>1
+        # on one T4 when more than one GPU is visible).
         self.cuda_visible_devices = str(
             config.get("cuda_visible_devices", "") or "")
         self.n_jobs_threads = 1  # never >1: trials run in their own processes
