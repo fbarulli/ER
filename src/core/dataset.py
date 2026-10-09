@@ -78,6 +78,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.bundle import BundleRole
 from core.schemas import DatasetCsvReadSpec
 
 #: The declared member spec lives beside the other config documents.
@@ -412,7 +413,7 @@ class Dataset(BaseModel):
         }
 
     # --------------------------------------------------------------- transport
-    def as_bundle(self, path: Any, role: Any = "inputs", *,
+    def as_bundle(self, path: Any, role: BundleRole | str = BundleRole.inputs, *,
                   manifest_name: str | None = None):
         """Hand the dataset off to its sealed transport form, ``Bundle``.
 

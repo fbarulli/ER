@@ -208,6 +208,22 @@ def test_as_bundle_hands_off_to_the_verified_bundle_boundary(monkeypatch, tmp_pa
                         "manifest_name": None}
 
 
+def test_as_bundle_defaults_to_the_inputs_bundle_role(monkeypatch, tmp_path):
+    """The transport default is ``BundleRole.inputs`` — the ``bundle.py`` SSOT, not a bare string."""
+    import core.bundle as bundle
+    from core.bundle import BundleRole
+
+    recorded = {}
+
+    def fake_load(path, role, *, manifest_name=None):
+        recorded.update(role=role)
+        return "trusted-handle"
+
+    monkeypatch.setattr(bundle.Bundle, "load", staticmethod(fake_load))
+    dataset().as_bundle(tmp_path / "inputs.tar.zst")
+    assert recorded["role"] == BundleRole.inputs
+
+
 # ── declaration validation ──────────────────────────────────────────────────
 
 def test_a_binding_the_phone_book_does_not_declare_is_refused():
