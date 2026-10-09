@@ -9,7 +9,6 @@ override: callers must apply it to the source SKU gtin before scoring.
 from __future__ import annotations
 
 import argparse
-from core.portable_archive import ByteCount
 from pathlib import Path
 
 import pandas as pd
@@ -22,13 +21,30 @@ from core.manifest import atomic_write_csv
 STATUSES = ("both_equal", "different", "one_missing")
 
 
-def _rank(seed: int, *parts: str) -> int:
+def _rank(seed: int, *parts: str) -> tuple[str, ...]:
     """A deterministic ordering key from the declared inputs (never a hash).
 
-    shortcut: the key is the payload's byte length, so distinct inputs of equal
-    length collide; upgrade to a wider hash-free key if collisions skew a cohort.
+    The key IS the declared parameter tuple -- the seed followed by the declared
+    parts, compared in order. A byte length cannot stand in for it: distinct
+    inputs of equal length would collide and rank as one (owner directive
+    2026-10-08).
     """
-    return ByteCount("\x1f".join((str(seed), *parts)).encode()).total
+    return (str(seed), *parts)
+
+
+def _mutation(body: str, seed: int, salt: int) -> tuple[int, int]:
+    """One (digit position, step) derived from the declared identifier itself.
+
+    Hiding a valid GTIN must be reproducible from declared values only -- the
+    identifier's own digits, the seed and the attempt number -- so the
+    derivation reads those values directly. A byte length cannot stand in: two
+    identifiers of equal length would mutate identically (owner directive
+    2026-10-08).
+    """
+    digits = [int(digit) for digit in body]
+    position = (digits[salt % len(digits)] + seed + salt) % len(digits)
+    step = (digits[(salt + 1) % len(digits)] + salt) % 9 + 1
+    return position, step
 
 
 def _absent_valid_gtin(item_id: str, canonical_ids: set[str], seed: int) -> str:
@@ -37,8 +53,7 @@ def _absent_valid_gtin(item_id: str, canonical_ids: set[str], seed: int) -> str:
         raise ValueError(f"cannot derive an override from invalid GTIN {item_id!r}")
     body = item_id[:-1]
     for salt in range(1, 100):
-        position = _rank(seed, "different", item_id, str(salt)) % len(body)
-        step = _rank(seed, "step", item_id, str(salt)) % 9 + 1
+        position, step = _mutation(body, seed, salt)
         digits = list(body)
         digits[position] = str((int(digits[position]) + step) % 10)
         mutated_body = "".join(digits)

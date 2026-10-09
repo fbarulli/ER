@@ -10,7 +10,6 @@ canonical-disjoint ``calibration_fold`` required by ``er-rand-match``.
 from __future__ import annotations
 
 import argparse
-from core.portable_archive import ByteCount
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -35,15 +34,15 @@ def _normalise(value: object) -> str:
     return text if text else "<missing>"
 
 
-def _stable_rank(seed: int, *parts: str) -> int:
+def _stable_rank(seed: int, *parts: str) -> tuple[str, ...]:
     """A deterministic ordering key from the declared inputs (never a hash).
 
-    shortcut: the key is the payload's byte length, so distinct inputs of equal
-    length collide and fall back to their input order; upgrade to a wider
-    hash-free key only if that ever skews a split.
+    The key IS the declared parameter tuple -- the seed followed by the declared
+    parts, compared in order. A byte length cannot stand in for it: distinct
+    inputs of equal length would collide and fall back to their input order, so
+    two different populations could rank as one (owner directive 2026-10-08).
     """
-    payload = "\x1f".join((str(seed), *parts)).encode("utf-8")
-    return ByteCount(payload).total
+    return (str(seed), *parts)
 
 
 def _truth_candidates() -> pd.DataFrame:

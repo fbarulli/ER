@@ -27,7 +27,6 @@ the explicit ``snapshot_unknown`` time stratum; dates are never invented.
 from __future__ import annotations
 
 import argparse
-from core.portable_archive import ByteCount
 import json
 import math
 from collections.abc import Iterable, Mapping
@@ -95,15 +94,15 @@ TIME_COLUMN_CANDIDATES = (
 )
 
 
-def _stable_rank(seed: int, *values: object) -> int:
+def _stable_rank(seed: int, *values: object) -> tuple[str, ...]:
     """A deterministic allocation tie-break from the declared inputs (no hash).
 
-    shortcut: the key is the payload's byte length, so distinct inputs of equal
-    length collide and fall back to the declared key; upgrade to a wider
-    hash-free key only if that ever skews an allocation.
+    The key IS the declared parameter tuple -- the seed followed by the declared
+    values, compared in order. A byte length cannot stand in for it: distinct
+    inputs of equal length would collide and fall through to the declared key,
+    so two different allocations could rank as one (owner directive 2026-10-08).
     """
-    payload = "\x1f".join([str(seed), *(str(value) for value in values)])
-    return ByteCount(payload.encode("utf-8")).total
+    return (str(seed), *(str(value) for value in values))
 
 
 def _normalise(value: object) -> str:
