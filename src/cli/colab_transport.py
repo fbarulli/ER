@@ -66,6 +66,16 @@ def _serialize_colab_control(function):
     return wrapped
 
 
+def _captured_streams(error: subprocess.CalledProcessError) -> str:
+    """Format a failed CLI call's captured streams for a durable traceback."""
+    parts = []
+    if error.stdout:
+        parts.append(f"stdout:\n{error.stdout.rstrip()}")
+    if error.stderr:
+        parts.append(f"stderr:\n{error.stderr.rstrip()}")
+    return "\n".join(parts)
+
+
 @_serialize_colab_control
 @timed_colab("event")
 def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
@@ -81,6 +91,12 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
             print(f"stdout:\n{e.stdout}", file=sys.stderr)
         if e.stderr:
             print(f"stderr:\n{e.stderr}", file=sys.stderr)
+        # CalledProcessError.__str__ names only the command and exit status, so
+        # without this note the captured streams never reach a durable
+        # [traceback] block. Keep them on the exception itself.
+        captured = _captured_streams(e)
+        if captured:
+            e.add_note(captured)
         traceback.print_exc()
         raise
 
@@ -126,6 +142,36 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
                 flush=True,
             )
             time.sleep(delay)
+
+
+class RemoteExecTranscript:
+    """Classify one ``colab exec`` transcript as completed or remote-failed.
+
+    The upstream CLI writes a notebook cell's ``output_type == "error"`` block
+    to the client's stderr while the process still exits 0, so a stage must scan
+    BOTH streams for a fatal traceback.  Two traceback blocks are not failures:
+    a recovered ``[traceback] ...`` block logged by ``core.step_trace``, and the
+    local CLI's own ``jupyter_kernel_client`` destructor diagnostics.
+    """
+
+    _TRACEBACK = "Traceback (most recent call last)"
+    _NONFATAL_MARKERS = ("[traceback] ", "jupyter_kernel_client")
+
+    def __init__(self, text: str) -> None:
+        self._lines = re.sub(r"\x1b\[[0-9;]*m", "", text).splitlines()
+
+    def failed(self) -> bool:
+        """True when the transcript carries a fatal (remote) traceback."""
+        return any(
+            not self._nonfatal(index)
+            for index, line in enumerate(self._lines)
+            if self._TRACEBACK in line
+        )
+
+    def _nonfatal(self, head: int) -> bool:
+        """A traceback is non-fatal when a nearby line marks it recovered/local."""
+        window = self._lines[max(0, head - 3):head]
+        return any(marker in line for line in window for marker in self._NONFATAL_MARKERS)
 
 
 @_serialize_colab_control
@@ -221,7 +267,7 @@ def run_colab_exec_stream(
         heartbeat = threading.Thread(target=emit_heartbeat, daemon=True)
         heartbeat.start()
         out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]", captured, remote_output))
-        err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured))
+        err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured, remote_output))
         out_thread.start()
         err_thread.start()
         assert process.stdin is not None
@@ -247,20 +293,10 @@ def run_colab_exec_stream(
         heartbeat_stop.set()
         heartbeat.join(timeout=1)
         output = "".join(captured)
-        # Some CLI versions report notebook execution errors with exit code 0.
-        # Preserve the fail-fast contract before provisioning the next stage.
-        # CLI destructor diagnostics are local stderr, not notebook failures.
-        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', ''.join(remote_output))
-        lines = clean_output.splitlines()
-        traceback_heads = [index for index, line in enumerate(lines)
-                           if 'Traceback (most recent call last)' in line]
-        remote_traceback = bool(traceback_heads)
-        recovered_traceback = remote_traceback and all(
-            any(lines[prior].lstrip().startswith('[traceback] ')
-                for prior in range(max(0, index - 3), index))
-            for index in traceback_heads
-        )
-        if process.returncode == 0 and (not remote_traceback or recovered_traceback):
+        # Some CLI versions report notebook execution errors on stderr with exit
+        # code 0. Preserve the fail-fast contract before provisioning the next
+        # stage by scanning BOTH streams for a fatal traceback.
+        if process.returncode == 0 and not RemoteExecTranscript("".join(remote_output)).failed():
             return
         transient = ControlChannelRecovery.classify(
             surface.SESSION, output) is ControlChannelLoss.TRANSIENT
@@ -550,6 +586,13 @@ def _local_file_size(path: Path) -> int:
         return 0
 
 
+def _error_detail(error: BaseException) -> str:
+    """Full one-record error text: the type, message, and any attached notes."""
+    detail = f"{type(error).__name__}: {error}"
+    notes = getattr(error, "__notes__", ())
+    return detail + "\n" + "\n".join(notes) if notes else detail
+
+
 def _download_file_with_visibility(
     *,
     remote: str,
@@ -616,12 +659,12 @@ def _download_file_with_visibility(
             index=index,
             total=total,
             received_bytes=received,
-            error=f"{type(exc).__name__}: {exc}",
+            error=_error_detail(exc),
         )
         print(
             surface._stamp(),
             f"[download] worker={worker_label} file={index}/{total} FAILED "
-            f"received={_format_bytes(received)} error={type(exc).__name__}: {exc}",
+            f"received={_format_bytes(received)} error={_error_detail(exc)}",
             flush=True,
         )
         raise
