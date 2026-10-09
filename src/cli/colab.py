@@ -2113,10 +2113,12 @@ def _suite_device_flip(suite_config: Path, suite) -> Path:
 def prepared_package_candidates() -> list[tuple[Path, dict]]:
     """Known prepared all_tracks_inputs archives with receipt metadata, newest first.
 
-    There are three legitimate homes for the same bundle -- the kaggle lane
-    install (``results/kaggle_lane/<cohort>/bundle``), a training_prep run dir,
-    and a published model_tracks ``__inputs`` archive -- so anything that helps
-    the operator point at "the" bundle must know them all.
+    Three declared homes hold the same bundle -- the kaggle lane's verified
+    install under its configured staging root, the preparation run tree
+    (``RESULTS/<preparation.run_dir_base>``), and a published model_tracks
+    ``__inputs`` archive. The Colab lane's downloaded delivery tarball is a
+    DIFFERENT root (``TRAINING_RESULTS/<ColabCPULane().delivery_root>``): it
+    carries the prep tree, it is not the tree.
     """
     found: list[tuple[Path, dict]] = []
 
@@ -2155,8 +2157,8 @@ def resolve_prepared_input_package(value: Path) -> Path:
     ``bundle.receipt.json`` (the archive it names) or the canonical
     ``all_tracks_inputs.tar.zst``. A path that resolves to nothing fails loud
     with every known bundle and its cohort/revision, so the operator never has
-    to guess which of ``results/kaggle_lane``, ``results/training_prep`` or
-    ``results/model_tracks`` holds the right copy.
+    to guess which declared home holds the right copy (see
+    :func:`prepared_package_candidates`).
     """
     value = Path(value)
     if value.is_file():
@@ -2187,9 +2189,10 @@ def default_prepared_input_package() -> Path | None:
     """The canonical full-cohort bundle when the operator names none.
 
     Policy: every launch trains the full cohort on a GPU from the prebuilt full
-    bundle, so an unspecified --prepared-input-package resolves to
-    results/kaggle_lane/full/bundle instead of repackaging locally. Unknown
-    layout returns None and the lane falls back to on-VM packaging.
+    bundle, so an unspecified --prepared-input-package resolves to the full
+    cohort install under the kaggle lane's configured staging root instead of
+    repackaging locally. Unknown layout returns None and the lane falls back to
+    on-VM packaging.
     """
     bundle = RESULTS / 'kaggle_lane' / 'full' / 'bundle'
     return bundle if bundle.is_dir() else None
@@ -2207,8 +2210,8 @@ def main() -> None:
     ap.add_argument('--prepared-input-package', type=Path, default=None,
                     help='reuse a training.prepare_all all_tracks_inputs package '
                          '(.tar.zst) by verifying the archive digest only; may be the archive, '
-                         'a bundle directory (resolved via bundle.receipt.json), or a '
-                         'results/kaggle_lane/<cohort>/bundle dir')
+                         'a bundle directory (resolved via bundle.receipt.json), or the '
+                         "kaggle lane's <cohort>/bundle install dir")
     ap.add_argument('--dataset-csv', type=Path, default=None,
                     help="raw export to upload for --what bundle "
                          "(default: config/paths.yaml dataset = repo:dataset.csv; "

@@ -96,9 +96,11 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     when nothing landed, copies of the lane transcripts travel into the
     receipt folder so the failure stays inspectable after the VM is gone.
     """
+    from cli.colab_lane import ColabCPULane  # the delivery-root accessor
+
     found: list[str] = []
     for candidate in (hub().TRAINING_RESULTS / run_id,
-                      hub().TRAINING_RESULTS / f"colab_bundle_{run_id}"):
+                      ColabCPULane().delivery_root(run_id)):
         if candidate.is_dir():
             found.extend(
                 path.relative_to(hub().TRAINING_RESULTS).as_posix()

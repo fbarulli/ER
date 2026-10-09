@@ -12,10 +12,13 @@
 #   workaround.
 # - The VM already holds a fresh git checkout (standard session bootstrap);
 #   the lane runs `training.prepare_all` there end to end (CPU by default).
-# - Downloads one delivery archive: results/training_prep/<run>/ (manifest,
-#   handoff.json, timing_offenders.log, per-stage logs) + the regenerated
-#   data artifacts (canonical/gate/deduped/labeled/final_validation CSVs,
-#   track_setup/, prepared bundles).
+# - Downloads one delivery archive to the declared bundle delivery root
+#   (paths.training_results_dir -> TRAINING_RESULTS/colab_bundle_bundle_<run_id>/
+#   bundle_delivery.tar.zst, via ColabCPULane().delivery_root). The archive
+#   CONTAINS the VM's preparation run tree (results/training_prep/<run>/) --
+#   manifest.json, handoff.json, timing_offenders.log, per-stage logs -- plus
+#   the regenerated data artifacts (canonical/gate/deduped/labeled/
+#   final_validation CSVs, track_setup/, prepared bundles).
 # - The mounted export's cohort is detected structurally (a byte-size
 #   compare against the staged cohort CSVs, core.common.mounted_cohort) and
 #   tagged (ER_COHORT_TAG); there is no content-hash pin and no drift gate.
