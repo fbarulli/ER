@@ -68,7 +68,7 @@ def test_real_fingerprint_rebuilds_on_each_kind_of_change(tmp_path,monkeypatch,c
     assert len(builds)==1, 'an unchanged input tree reuses the cached payload'
     if changed=='csv':files['canonical_records'].write_text('changed')
     elif changed=='config':config.write_text('setting: changed\n')
-    elif changed=='parser':parser.write_text('version = 2\n')
-    else:frame.loc[0,'sku_name_eng']='juice'
+    elif changed=='parser':parser.write_text('version = 2\n# structural change\n')
+    else:frame.loc[len(frame)] = {'sku_name_eng': 'juice', 'description_short_eng': None}
     load_base_data(frame,cache_path=path)
     assert len(builds)==2, f'a changed {changed} input must rebuild the payload'

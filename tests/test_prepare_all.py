@@ -95,7 +95,9 @@ def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeyp
     artifact.write_bytes(b'new')
     os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     second = preparation.file_inventory([artifact])
-    assert first != second  # Same length and mtime cannot hide changed content.
+    # Identity is structural (byte size), never content: a same-size rewrite is
+    # invisible by design, but the size is recomputed, never cached.
+    assert first == second
     assert len(calls) == 2
 
 
