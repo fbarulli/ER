@@ -53,6 +53,8 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_controls.RDrop,
         laya_controls.DropPath,
         laya_controls.DynamicPadder,
+        laya_controls.PhaseTimings,
+        laya_controls.CalibrationTimingHook,
         laya_controls.ProfilerSession,
     )
 )

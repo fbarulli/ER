@@ -467,9 +467,12 @@ def session_env():
 
 def _finetune_session(distributed, session):
     if distributed:
+        import torch
         local_rank, rank, world_size = dist_env()
         device = "cuda"
-        log("rank %d/%d on cuda:%d (DDP)" % (rank, world_size, local_rank))
+        log("rank %d/%d on cuda:%d (DDP, %s)"
+            % (rank, world_size, local_rank,
+               torch.cuda.get_device_name(local_rank)))
     else:
         device = pick_device()
     train = resolve_input(TRAIN_JSONL)
@@ -477,6 +480,10 @@ def _finetune_session(distributed, session):
     test = resolve_input(TEST_JSONL)
     log("corpus: " + train.name + " + " + dev.name + " (+ " + test.name + ")")
     WORKING.mkdir(parents=True, exist_ok=True)
+    # Structured phase timings ride the result tar (the same [timing] lines
+    # also stream live); the kernel has no timing env of its own.
+    os.environ.setdefault("ER_TIMING_OUT", str(WORKING / "timings.json"))
+    os.environ.setdefault("ER_TIMING_LOG", str(WORKING / "timings.log"))
     archive = resolve_input(BASE_MODEL_ARCHIVE)
     log("base-model archive: " + str(archive))
     base_model = extract_base_model(archive)
