@@ -125,17 +125,13 @@ class LayaPublishFactory:
             lane._spec().kaggle_executable)
         current = KaggleDatasets._dataset_current_version(slug)
         version = current.get("dataset_version")
-        if version:
-            plan["action"] = "version"
-            # `-r` and `--dir-mode` are one argparse option: `-r --dir-mode
-            # zip` fails with "argument -r/--dir-mode: expected one
-            # argument" (fail-loud met live on the version path).
-            command = [executable, "datasets", "version", "-r", "zip",
-                       "-m", f"laya inputs {run_tag}",
-                       "-p", str(payload)]
-        else:
-            plan["action"] = "create"
-            command = [executable, "datasets", "create", "-p", str(payload)]
+        # ONE argv home: the canonical builder owns the create/version shape;
+        # the laya lane only names its ``-r zip`` directory mode.
+        commands = KaggleDatasets.dataset_publish_commands(
+            executable, payload, message=f"laya inputs {run_tag}",
+            dir_mode_args=["-r", "zip"])
+        plan["action"] = "version" if version else "create"
+        command = commands[plan["action"]]
         plan["command"] = command
         _, _ = lane._run_kaggle(command)
         plan["returncode"] = 0
