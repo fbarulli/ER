@@ -1,0 +1,6 @@
+outs:
+- md5: 19f09b5af24193aed8b57a440336e5bd.dir
+  size: 1251256
+  nfiles: 1
+  hash: md5
+  path: embedding_job
