@@ -218,7 +218,7 @@ def adopt_cohort_coverage(frame: pd.DataFrame, coverage: CohortCoverage,
 @timed
 def prepare_cohort(setup, bundle):
     from graph_tracks.data import load_records
-    from model_tracks.ablation import digest, source_name, write
+    from model_tracks.ablation import source_name, write
     from model_tracks.shared_graph_data import _canonical_identity, _record, _copy_record
     from core.sku_identity import row_identity
     from training.folds import normalize_gtin

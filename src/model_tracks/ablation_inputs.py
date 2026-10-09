@@ -23,7 +23,7 @@ from core.model_input import model_input_composition
 from training.prepare_all_trace import timed
 from graph_tracks.data import GraphBatch, RELATIONS, tensorize, file_size
 from graph_tracks.pooling import topology
-from model_tracks.ablation import checkpoint_identity, digest, resolve
+from model_tracks.ablation import checkpoint_identity, digest, occurring_graph_fields, resolve
 from model_tracks.text_export import prepare_tokens
 
 
@@ -150,23 +150,59 @@ def _graph_batch_prefixes(plan,arrays,graph_key,records,*,payload,vocabulary,bat
     plan['graph_batches'][graph_key] = prefixes
 
 
+def _text_identity(variant, baseline_text) -> str:
+    """The declared identity of one variant's text input.
+
+    A variant's text is the baseline's unless its channel applies text AND the
+    alteration actually changed the composed texts, so an intervention that
+    changes no text is named by the baseline it equals. The identity is the
+    declared parameters themselves -- never a byte length, which aliases two
+    different text sets of the same size (owner directive 2026-10-08).
+    """
+    if variant['channel'] not in {'text', 'both'} or variant['text_indices'] == baseline_text:
+        return 'baseline'
+    return 'altered/' + str(variant['attribute'])
+
+
+def _record_identity(variant, baseline_records, graph_fields) -> str:
+    """The declared identity of one variant's graph-record input.
+
+    The records are the baseline's unless the channel applies graph AND the
+    attribute's declared fields occur in them; ``occurring_graph_fields`` names
+    the exact removal, so no byte length is involved (owner directive
+    2026-10-08).
+    """
+    if variant['channel'] not in {'graph', 'both'}:
+        return 'baseline'
+    occurring = occurring_graph_fields(graph_fields.get(variant['attribute'], ()), baseline_records)
+    return 'baseline' if not occurring else 'removed/' + '+'.join(occurring)
+
+
 @timed
 def _variant_jobs(request, arrays, plan, *, payload, vocabulary, batch_size):
-    """Deduped inference jobs; graph batches saved once per record set."""
-    job_lookup = {}
-    record_keys = {}
+    """Deduped inference jobs; graph batches saved once per derived record set.
+
+    The identity is an upper bound on sharing, never a wrong one: two variants
+    that derive the same inputs share the one job -- and with it the one
+    text-index array and the one graph tensor set -- while two attributes that
+    merely HAPPEN to derive byte-identical inputs keep their own jobs: extra
+    forward passes, never a reused vector.
+    """
+    graph_fields = request['settings'].get('graph_fields') or {}
+    if not request['variants']:
+        raise ValueError('prepared inputs require at least the baseline variant')
+    baseline_text = request['variants'][0]['text_indices']
+    baseline_records = request['variants'][0]['records']
+    job_lookup: dict[tuple[str, str], int] = {}
     for variant in _LOG.progress(request['variants'],desc='ablation_variant_jobs',unit='variant',total=len(request['variants'])):
-        key = digest({'text':variant['text_indices'],'graph':variant['records']})
+        text_key = 'indices/'+_text_identity(variant,baseline_text)
+        graph_key = _record_identity(variant,baseline_records,graph_fields)
+        key = (text_key,graph_key)
         if key not in job_lookup:
             job_lookup[key] = len(plan['jobs'])
-            graph_key = record_keys.get(id(variant['records']))
-            if graph_key is None:
-                graph_key = digest(variant['records'])
-                record_keys[id(variant['records'])] = graph_key
             if payload and graph_key not in plan['graph_batches']:
                 _graph_batch_prefixes(plan,arrays,graph_key,variant['records'],
                     payload=payload,vocabulary=vocabulary,batch_size=batch_size)
-            text_key = 'indices/'+key
             arrays[text_key] = np.asarray(variant['text_indices'],dtype=np.int64)
             plan['jobs'].append({'text_indices_key':text_key,'graph_key':graph_key})
         plan['variant_jobs'].append(job_lookup[key])
