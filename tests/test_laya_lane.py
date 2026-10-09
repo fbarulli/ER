@@ -1390,6 +1390,7 @@ def test_laya_execute_retrieves_output_and_persists_handle(
     from cli import kaggle_lane as klane
     from cli.kaggle_monitor import KaggleMonitor
     from cli.kaggle_watcher import KernelWatcher
+    from core.wandb_ctx import WandbRunReader
 
     _spec(tmp_path, monkeypatch)
     # the session handle is lane-roof state under logs/kaggle: keep it in tmp.
@@ -1416,6 +1417,10 @@ def test_laya_execute_retrieves_output_and_persists_handle(
                         lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
     monkeypatch.setattr(laya_lane.KaggleKernels, "stop_kernel",
                         lambda *a, **kw: {"stopped": True})
+    # No W&B key in the pinned run: the canonical reader uses the kaggle-logs
+    # fallback (stubbed) instead of reaching the network.
+    monkeypatch.setattr(WandbRunReader, "available",
+                        classmethod(lambda cls: False))
     monkeypatch.setattr(KaggleMonitor, "kernel_logs", lambda *a, **kw: {})
     # the proxy never answers -> the session handle falls back to the kernel name
     import kagglesdk.kaggle_client

@@ -137,9 +137,15 @@ class LayaTrainingRun:
         return self._transport.push_kaggle_kernel(
             Path(stage_dir), execute=execute, activate=activate)
 
-    def watch(self, kind: LayaRunKind, *, slug: str) -> dict[str, Any]:
-        """Spawn the ONE detached terminal watcher for a pushed kernel."""
-        return self._transport.watcher(kind.value, slug=slug).spawn()
+    def watch(self, kind: LayaRunKind, *, slug: str,
+              run_tag: str | None = None) -> dict[str, Any]:
+        """Spawn the ONE detached terminal watcher for a pushed kernel.
+
+        ``run_tag`` binds the canonical live-log reader so the watcher streams
+        the run's real console into the deterministic local transcript.
+        """
+        return self._transport.watcher(
+            kind.value, slug=slug, run_tag=run_tag).spawn()
 
     def launch(self, kind: LayaRunKind, *, stage_dir: Path, run_tag: str,
                execute: bool = False) -> dict[str, Any]:
@@ -159,7 +165,7 @@ class LayaTrainingRun:
         kernel_id = json.loads(
             (Path(stage_dir) / "kernel-metadata.json").read_text(encoding="utf-8")
         )["id"]
-        result["watch"] = self.watch(kind, slug=kernel_id)
+        result["watch"] = self.watch(kind, slug=kernel_id, run_tag=run_tag)
         return result
 
     def track(self, *, run_tag: str | None = None, slug: str | None = None,

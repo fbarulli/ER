@@ -324,20 +324,26 @@ class LayaTransportFactory:
             plan["fail_closed"] = str(error)[-800:]
         return plan
 
-    def watcher(self, kind: str, *, slug: str | None = None) -> "KernelWatcher":
+    def watcher(self, kind: str, *, slug: str | None = None,
+                run_tag: str | None = None) -> "KernelWatcher":
         """The consolidated detached watcher bound to this lane's owners."""
         from cli.kaggle_watcher import KernelWatcher
 
-        return KernelWatcher(self.watcher_spec(kind, slug=slug))
+        return KernelWatcher(self.watcher_spec(kind, slug=slug, run_tag=run_tag))
 
-    def watcher_spec(self, kind: str, *, slug: str | None = None
-                     ) -> "KernelWatcherSpec":
+    def watcher_spec(self, kind: str, *, slug: str | None = None,
+                     run_tag: str | None = None) -> "KernelWatcherSpec":
         """Resolve this lane's watcher parameters into the shared spec.
 
         The receipt lives under ``results/laya_lane/fetch/<kind>/`` (the same
         roof the harvest downloads to) and the progress roof is the ONE shared
         kaggle transcript (``kaggle.logs_dir`` / ``kaggle.files.lane_log``); the
         detached entry re-derived the spec from the ``--watch`` op.
+
+        ``run_tag`` feeds the canonical live-log reader (W&B primary,
+        kaggle-logs fallback) so the launched run streams its real console into
+        the deterministic local transcript, continuously and tail-ably — not
+        only into W&B.
         """
         from cli.kaggle_monitor import KaggleMonitor
         from cli.kaggle_watcher import KernelWatcherSpec
@@ -354,6 +360,19 @@ class LayaTransportFactory:
         else:
             configured = self.kernel_slug(kind)
             resolved = configured
+
+        def stream_run_logs(slug: str, *, follow: bool,
+                            log_path: Path) -> dict[str, Any]:
+            """Stream the run's real console into ``log_path`` (W&B primary).
+
+            Delegates to the ONE canonical reader so the local transcript is
+            populated in real time from the W&B ``output.log`` when available,
+            else the kaggle-logs reader; a local-write failure raises out rather
+            than dropping a line silently.
+            """
+            return KaggleMonitor.track_run(
+                run_tag=run_tag, slug=slug, follow=follow, log_path=log_path)
+
         kaggle = training_cfg().kaggle
         stage = self._runtime.staging_dir() / "fetch" / kind
         return KernelWatcherSpec(
@@ -361,7 +380,7 @@ class LayaTransportFactory:
             fetch_output=self.collect_kaggle_result,
             fetch_failure=self.fetch_failed_result,
             stop=self.stop_kaggle_kernel,
-            stream_logs=KaggleMonitor.kernel_logs,
+            stream_logs=stream_run_logs,
             kernel_status=KaggleKernels.kernel_status,
             capture_session=KaggleMonitor.capture_kernel_session_id,
             log_lane=self._runtime.log_lane,
@@ -374,7 +393,8 @@ class LayaTransportFactory:
             stream_join_seconds=kaggle.limits.stream_join_seconds,
             append=True,
             entry_argv=(sys.executable, "-m", "cli.laya_lane", "--watch",
-                        "--decision", kind, "--slug", resolved, "--execute"),
+                        "--decision", kind, "--slug", resolved, "--execute",
+                        *(["--run-tag", run_tag] if run_tag else [])),
             cwd=self._runtime.train_root,
             source_dir=self._runtime.train_root / "src",
         )

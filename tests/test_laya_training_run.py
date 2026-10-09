@@ -53,3 +53,57 @@ def test_teardown_stops_then_deletes_in_dry_run(monkeypatch, tmp_path):
     assert plan["kernel"] == "owner/er-laya-finetune"
     assert plan["stop"]["mode"] == "dry-run"
     assert plan["delete"]["mode"] == "dry-run"
+
+
+def test_launch_streams_the_run_log_into_the_declared_transcript(
+        monkeypatch, tmp_path):
+    """The launch path writes the run's live console to the config-declared
+    local transcript (W&B primary), continuously — not only into W&B.
+
+    The path is the ONE ``kaggle.logs_dir`` / ``kaggle.files.lane_log`` SSOT, so
+    the owner can ``tail -f`` it while the remote run is live.
+    """
+    import json
+
+    from cli.kaggle_kernels import KaggleKernels
+    from cli.kaggle_monitor import KaggleMonitor
+    from cli.kaggle_watcher import KernelLifecycle, KernelWatcher
+    from core.wandb_ctx import WandbRunReader
+
+    _stub_lane_boundary(monkeypatch, tmp_path)
+    monkeypatch.setenv("ER_KAGGLE_LANE_APPEND", "1")
+    monkeypatch.setattr("cli.kaggle_lane.TRAIN_ROOT", tmp_path)
+    (tmp_path / "kernel-metadata.json").write_text(
+        json.dumps({"id": "owner/er-laya-hpo"}), encoding="utf-8")
+    run = LayaTrainingRunFactory.from_config(train_root=tmp_path)
+    monkeypatch.setattr(run, "publish", lambda *a, **k: {"mode": "executed"})
+    monkeypatch.setattr(run, "push", lambda *a, **k: {"pushed": True})
+
+    # No detached process: run the watcher inline.
+    monkeypatch.setattr(KernelWatcher, "spawn",
+                        lambda self: self.autowatch(
+                            execute=True, slug="owner/er-laya-hpo"))
+    # The canonical reader takes the W&B primary source and yields one update.
+    monkeypatch.setattr(WandbRunReader, "available",
+                        classmethod(lambda cls: True))
+    monkeypatch.setattr(
+        WandbRunReader, "stream",
+        lambda self, *, max_polls: iter([{
+            "run": self.path, "state": "running", "metrics": {"loss": 0.1},
+            "new_output": "epoch 1 loss=0.1\n", "console_error": None}]))
+    # Terminal poll + harvest/release/session-capture are network seams.
+    monkeypatch.setattr(KaggleKernels, "kernel_status",
+                        staticmethod(lambda *a, **k: {"status": "complete",
+                                                      "raw": "COMPLETE"}))
+    monkeypatch.setattr(KernelLifecycle, "harvest_and_stop",
+                        lambda **k: {"stop": {"stopped": True}})
+    monkeypatch.setattr(KaggleMonitor, "capture_kernel_session_id",
+                        staticmethod(lambda slug: {}))
+
+    plan = run.launch(LayaRunKind.HPO, stage_dir=tmp_path,
+                      run_tag="laya_hpo_1", execute=True)
+
+    assert plan["watch"]["kernel"] == "owner/er-laya-hpo"
+    transcript = tmp_path / "logs" / "kaggle" / "lane.log"
+    assert transcript.is_file(), "the launch must create the local run log"
+    assert "epoch 1 loss=0.1" in transcript.read_text(encoding="utf-8")

@@ -417,9 +417,15 @@ def collect_kaggle_result(kind: str, slug: str | None = None, *,
         kind, slug, execute=execute)
 
 
-def watcher(kind: str, *, slug: str | None = None):
-    """The consolidated detached watcher for a laya decision kind."""
-    return _transport_factory().watcher(kind, slug=slug)
+def watcher(kind: str, *, slug: str | None = None,
+            run_tag: str | None = None):
+    """The consolidated detached watcher for a laya decision kind.
+
+    ``run_tag`` binds the canonical live-log reader so the watched run streams
+    its real console into the deterministic local transcript (W&B primary,
+    kaggle-logs fallback).
+    """
+    return _transport_factory().watcher(kind, slug=slug, run_tag=run_tag)
 
 
 # ── local eval surface ─────────────────────────────────────────────────────
@@ -610,7 +616,8 @@ def main() -> None:
         # receipt under results/laya_lane/fetch/<kind>/.
         if args.kind != "kaggle":
             parser.error("--watch is a kaggle-lane operation")
-        plan = watcher(args.decision, slug=args.slug).autowatch(
+        plan = watcher(args.decision, slug=args.slug,
+                       run_tag=args.run_tag).autowatch(
             execute=args.execute, slug=args.slug)
         print(json.dumps(plan, indent=2, default=str), flush=True)
         return
@@ -638,7 +645,8 @@ def main() -> None:
         # runs AND retrieves.
         kernel_id = json.loads(
             (stage_dir / "kernel-metadata.json").read_text())["id"]
-        watch_plan = watcher(args.decision, slug=kernel_id).spawn()
+        watch_plan = watcher(args.decision, slug=kernel_id,
+                             run_tag=receipt["run_tag"]).spawn()
         print(json.dumps(watch_plan, indent=2), flush=True)
     elif args.execute:
         _log_local("colab payloads are a delivery contract only; nothing "
