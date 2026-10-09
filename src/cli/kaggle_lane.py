@@ -237,6 +237,7 @@ require_embed_objective = KaggleKernels.require_embed_objective
 push_kernel = KaggleKernels.push_kernel
 kernel_status = KaggleKernels.kernel_status
 stop_kernel = KaggleKernels.stop_kernel
+delete_kernel = KaggleKernels.delete_kernel
 fetch_kernel_output = KaggleOutputs.fetch_kernel_output
 fetch_failed_kernel_log = KaggleOutputs.fetch_failed_kernel_log
 _spawn_autowatch = KaggleMonitor._spawn_autowatch

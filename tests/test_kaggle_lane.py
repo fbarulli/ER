@@ -1247,6 +1247,20 @@ def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkey
         "the stub replace must still be pushed"
 
 
+# ── delete: first-class teardown of a kernel by slug ───────────────────────
+
+def test_delete_kernel_dry_run_plans_the_slug_without_network(monkeypatch):
+    """Dry run names the intended slug/action and never reaches the SDK."""
+    import kagglesdk.kaggle_client
+
+    monkeypatch.setattr(kagglesdk.kaggle_client, "KaggleClient",
+                        lambda env: (_ for _ in ()).throw(
+                            AssertionError("dry-run must not reach the SDK")))
+    plan = kaggle_lane.delete_kernel("owner/er-train-gpu")
+    assert plan == {"mode": "dry-run", "action": "delete_kernel",
+                    "kernel": "owner/er-train-gpu"}
+
+
 # ── session-id capture: launch path records the id, stop consumes it ────────
 
 def _fake_stream_client(monkeypatch, url: str, closed: list[str]):

@@ -379,6 +379,10 @@ def stop_kaggle_kernel(slug: str, *, execute: bool,
                                                    wait=wait)
 
 
+def delete_kaggle_kernel(slug: str, *, execute: bool = False) -> dict[str, Any]:
+    return LayaTransportFactory.delete_kaggle_kernel(slug, execute=execute)
+
+
 def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
                        activate: bool = True) -> dict[str, Any]:
     return _transport_factory().push_kaggle_kernel(
@@ -479,6 +483,10 @@ def main() -> None:
                         help="tear down the running session for --decision's "
                              "kernel (kaggle only); the launch-recorded "
                              "session id feeds the SDK cancel")
+    parser.add_argument("--delete", action="store_true",
+                        help="delete --decision's kernel (kaggle only), "
+                             "releasing a live session first; dry-run unless "
+                             "--execute")
     parser.add_argument("--watch", action="store_true",
                         help="run the terminal watcher for a pushed kernel: "
                              "poll to terminal, download via `kaggle kernels "
@@ -543,6 +551,17 @@ def main() -> None:
             parser.error("--stop is a kaggle-lane operation")
         slug = args.slug or kernel_slug(args.decision)
         plan = stop_kaggle_kernel(slug, execute=args.execute)
+        print(json.dumps(plan, indent=2, default=str), flush=True)
+        return
+
+    if args.delete:
+        # First-class deletion: resolve the kernel the decision ran on (or an
+        # explicit --slug), release a live session, then delete. Dry-run by
+        # default.
+        if args.kind != "kaggle":
+            parser.error("--delete is a kaggle-lane operation")
+        slug = args.slug or kernel_slug(args.decision)
+        plan = delete_kaggle_kernel(slug, execute=args.execute)
         print(json.dumps(plan, indent=2, default=str), flush=True)
         return
 
