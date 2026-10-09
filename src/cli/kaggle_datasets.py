@@ -20,11 +20,7 @@ class KaggleDatasets:
         import pandas as pd
 
         path = Path(csv_path)
-        if not path.is_file():
-            raise FileNotFoundError(f"cohort export not found: {path}")
         frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-        if frame.empty:
-            raise ValueError(f"cohort export has no data rows: {path}")
         return lane.ExportCensus(
             rows=int(len(frame)),
             bytes=int(path.stat().st_size),

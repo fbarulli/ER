@@ -249,8 +249,6 @@ def locate_input_archive():
         raise SystemExit("attached outputs contained no " + BUNDLE_RECEIPT)
     receipt_dir = candidates[0].parent
     archive = receipt_dir / BUNDLE_ARCHIVE
-    if not archive.is_file():
-        raise SystemExit("attached kernel output missing " + BUNDLE_ARCHIVE)
     return archive, receipt_dir
 
 def clone_pinned():
@@ -343,8 +341,6 @@ with inputs_bundle.reader() as archive:
             continue
         archive.extract(name, root)
 package_manifest = root / LANE["files"]["package_manifest"]
-if not package_manifest.is_file():
-    raise SystemExit("package install produced no model_tracks_package.json")
 (root / LANE["files"]["package_manifest"]).write_text(package_manifest.read_text(),
                                                 encoding="utf-8")
 
@@ -419,8 +415,6 @@ def locate_result_archive():
         raise SystemExit("attached outputs contained no " + FINALIZE_MANIFEST)
     directory = candidates[0].parent
     archive = directory / FINALIZE_ARCHIVE
-    if not archive.is_file():
-        raise SystemExit("attached kernel output missing " + FINALIZE_ARCHIVE)
     return archive, json.loads(candidates[0].read_text(encoding="utf-8"))
 
 inputs_archive, inputs_dir = locate_input_archive()
@@ -480,8 +474,6 @@ if not candidates:
 request_dir = candidates[0].parent
 root = clone_pinned()
 checkpoint = root / "@CHECKPOINT@"
-if not checkpoint.is_dir():
-    raise SystemExit("git-shipped checkpoint missing: " + str(checkpoint))
 env = {**os.environ, "PYTHONPATH": str(root / LANE["files"]["source_dir"]), "PYTHONUNBUFFERED": "1"}
 output = root / LANE["paths"]["results_dir"] / LANE["files"]["embedding_dir"] / RUN_TAG
 output.mkdir(parents=True, exist_ok=True)

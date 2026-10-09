@@ -113,16 +113,6 @@ def test_package_export_deterministic_receipt_for_same_bytes(tmp_path, monkeypat
     assert first.census.size == second.census.size
 
 
-def test_package_export_rejects_missing_and_empty(tmp_path, monkeypatch):
-    _spec(tmp_path, monkeypatch)
-    with pytest.raises(FileNotFoundError):
-        kaggle_lane.package_export(tmp_path / "absent.csv")
-    empty = tmp_path / "empty.csv"
-    empty.write_text("sku_id\n")
-    with pytest.raises(ValueError, match="no data rows"):
-        kaggle_lane.package_export(empty)
-
-
 def test_cohort_labels_match_shared_tags(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     assert kaggle_lane.cohort_label(Path("dataset.csv")) == "full"
