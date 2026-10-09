@@ -294,12 +294,16 @@ class LayaTransportFactory:
         from core.common import training_cfg
         from core.manifest import atomic_write_json
 
-        configured = self.kernel_slug(kind)
-        resolved = slug or configured
-        if not resolved:
-            raise RuntimeError(
-                f"config names no {kind} kernel slug; name the target kernel "
-                "(owner/slug) before watching")
+        # An explicit slug needs no config; otherwise resolve the configured
+        # one (fails loud when unset). Leaving ``configured_slug`` None for an
+        # explicit slug makes the harvest pass the slug through instead of
+        # re-resolving a config that may be unset.
+        if slug:
+            configured: str | None = None
+            resolved = slug
+        else:
+            configured = self.kernel_slug(kind)
+            resolved = configured
         kaggle = training_cfg().kaggle
         stage = self._runtime.staging_dir() / "fetch" / kind
         return KernelWatcherSpec(

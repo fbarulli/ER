@@ -1434,3 +1434,54 @@ def test_main_execute_spawns_the_harvest_watcher_exactly_once(
         "laya", "--kind", "kaggle", "--decision", "finetune-smoke", "--execute"])
     laya_lane.main()
     assert spawns == [("finetune-smoke", "fbarulli/er-laya-finetune-smoke")]
+
+
+def test_watcher_autowatch_downloads_via_canonical_output_argv(
+        tmp_path, monkeypatch):
+    """The `--watch` op (spawned by `--execute`) downloads the terminal run via
+    the ONE owner `KaggleKernels.kernels_output_argv` (through the 429-aware
+    KernelOutputFetcher) into results/laya_lane/fetch/<kind>/ and writes its
+    per-kind receipt — the regression this branch pins."""
+    import io
+    import subprocess
+    import sys
+    import tarfile
+
+    from cli.kaggle_kernels import KaggleKernels
+    from cli.kaggle_monitor import KaggleMonitor
+
+    _spec(tmp_path, monkeypatch)
+    monkeypatch.setattr(laya_lane.KaggleKernels, "kernel_status",
+                        lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
+    monkeypatch.setattr(KaggleMonitor, "stream_kernel_logs",
+                        lambda *a, **kw: {})
+    monkeypatch.setattr(KaggleMonitor, "capture_kernel_session_id",
+                        lambda *a, **kw: {"session_id": None})
+    monkeypatch.setattr(laya_lane.KaggleKernels, "stop_kernel",
+                        lambda *a, **kw: {"stopped": True})
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        destination = Path(command[command.index("-p") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "laya_finetune-smoke.receipt.json").write_text(
+            json.dumps({"gpu_kind": "finetune-smoke"}), encoding="utf-8")
+        with tarfile.open(destination / "laya_finetune.tar.gz", "w:gz") as tar:
+            body = b"{}"
+            info = tarfile.TarInfo("train_report.json")
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    slug = "owner/er-laya-finetune-smoke"
+    plan = laya_lane.watcher("finetune-smoke", slug=slug).autowatch(
+        execute=True, slug=slug)
+    assert plan["status"] == "complete"
+    assert plan["fetch"]["kind"] == "finetune-smoke"
+    assert seen["command"] == KaggleKernels.kernels_output_argv(
+        [sys.executable, "-m", "kaggle"], slug,
+        laya_lane.staging_dir() / "fetch" / "finetune-smoke")
+    assert plan["receipt"].endswith(
+        "results/laya_lane/fetch/finetune-smoke/laya_finetune-smoke.receipt.json")
