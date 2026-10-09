@@ -42,8 +42,12 @@ GOLDEN_SHA256: dict[str, str] = {
     "identity": "e1ffd3e9b6d5ce3b241e77496b5d3939d899dd01fb34c4bf8a0d23c1099ebad8",
     "laya-cli-eval": "4193b9c3110394d1ce8dd962125812ed98153681bb70a978fca75b593bc5b0f7",
     "colab": "8de6069ff99110ba9ad165a5046bcb11ac3357f75694393461c15b1a8e6fc686",
-    "finetune": "2bcabfc34b28eb8a17921bcefb368ff825eaf58a8ff6383427ea89c9f68b453c",
-    "finetune-smoke": "9cf1b03bc3aab0ae88dbe4f420fcce075dd816e15ef297abbda3c2a8172d5120",
+    # re-pinned for the deterministic-DDP fix: find_unused_parameters is gone
+    # (the rank-specific used graph drove the reduction buckets and desynced
+    # the ranks), replaced by DeterministicDdp.wrap + the zero-weight loss
+    # guard, and the epoch stop broadcast is now unconditional.
+    "finetune": "081fb4f32dda1faca4700c301aa052a6bdca7ea6cb41971fb9d2aad3c794c3fc",
+    "finetune-smoke": "773ef1b7c8d0d822c5c9c924e32b09784b63246d02cd0fca79f53d24d7443110",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "0289337dae1805432907356f9f880e626152c6875777469ebaa085d16321b404",
 }

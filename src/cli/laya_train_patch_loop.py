@@ -522,17 +522,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     if is_distributed():
         local_rank, rank, world_size = dist_env()
         ddp_sampler = build_distributed_sampler(items, config.seed)
-        # find_unused_parameters=True: laya's model has parameters that do not
-        # contribute to every loss (frozen encoder / unused head paths), so the
-        # default reduction bucket never completes and DDP raises "Expected to
-        # have finished reduction in the prior iteration".
-        if device.type == "cuda":
-            model = torch.nn.parallel.DistributedDataParallel(
-                model, device_ids=[local_rank], output_device=local_rank,
-                find_unused_parameters=True)
-        else:
-            model = torch.nn.parallel.DistributedDataParallel(
-                model, find_unused_parameters=True)
+        model = DeterministicDdp.wrap(torch, model, device, local_rank)
         print("[perf-patch] ddp: rank %d/%d, %d local items"
               % (rank, world_size, len(ddp_sampler)), flush=True)
     elif control.get("compile_model"):
@@ -700,6 +690,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                     torch, laya_train, config, logits, target, mask, qtype,
                     sigma, epoch_w_sph, epoch_w_rps, class_weights,
                     epoch_margin)
+                if ddp_sampler is not None:
+                    loss = loss + DeterministicDdp.loss_guard(params)
                 if r_drop_on:
                     logits_two = Forwarder.run(
                         torch, laya_train, model, batch, device, amp,
@@ -832,6 +824,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                  "epoch_time_s": epoch_time}
         if grad_norm_mean is not None:
             extra["train/grad_norm"] = grad_norm_mean
+        stop_flag = False
         if dev is not None:
             extra.update(dev.to_wandb("dev"))
             metric_value = (dev.loss if lower_is_better else dev.accuracy)
@@ -847,12 +840,13 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                                   ControlCheckpointer.unwrap(model).state_dict().items()}
                     checkpointer.save_best(model, best, best_acc, epoch)
             stop_flag = step.stop and bool(control.get("early_stop"))
-            stop_flag = bool(DistributedBroadcast.values(
-                torch, [1.0 if stop_flag else 0.0], device)[0] >= 0.5)
             if plateau:
                 scheduler.step(metric_value)
-        else:
-            stop_flag = False
+        # EVERY rank broadcasts the stop decision every epoch (fixed shape),
+        # even when dev is disabled on every rank; skipping it on some ranks
+        # would desync the post-training staging barrier.
+        stop_flag = bool(DistributedBroadcast.values(
+            torch, [1.0 if stop_flag else 0.0], device)[0] >= 0.5)
         extra["select/best_dev_accuracy"] = best_acc
         extra["select/bad_epochs"] = bad_epochs
         wandb_log_epoch(epoch, mean, extra)
