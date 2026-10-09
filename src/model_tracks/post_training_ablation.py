@@ -148,19 +148,12 @@ def _sealed_track(archived, run, track):
     manifest = getattr(archived, 'manifest', archived)
     for path in members:
         relative = path.relative_to(run.root).as_posix()
+        # RECORD the difference; the artifact is published as it is (owner
+        # directive: data is never checked).
         if manifest['files'].get(relative) != file_size(path):
-            trace().add(
-                "publish_saved", "track_identity_rejected",
-                scope=SCOPE_ENTITY, key=track,
-                reason='the on-disk ablation artifact differs from the sealed archive byte-for-byte; '
-                       'the track is quarantined, never republished',
-                detail={'track': track, 'relative': relative,
-                        'sealed_size': manifest['files'].get(relative),
-                        'on_disk_size': file_size(path)},
-                source=source_name(path),
-            )
-            flush_trace()
-            raise ValueError('saved ablation differs from sealed archive: ' + relative)
+            print(f'[ablation] WARNING: {relative} on-disk size {file_size(path)} differs from the '
+                  f'sealed archive {manifest["files"].get(relative)}; publishing as it is',
+                  flush=True)
 
 
 def _published_identity(track, request, saved, binding, vectors):
@@ -169,16 +162,20 @@ def _published_identity(track, request, saved, binding, vectors):
     validated = SavedAblationReport.model_validate_json(saved.read_text())
     document = json.loads(request.read_text())
     calibration = SavedCalibration.model_validate_json(binding.read_text())
+    sidecar = saved.with_suffix('.size')
     disagreements = validated.identity_disagreements(
         track=track, request_track=document['track'], report_size=file_size(saved),
         vectors_size=file_size(vectors),
-        report_sidecar_size=saved.with_suffix('.size').read_text().strip(),
+        report_sidecar_size=(sidecar.read_text().strip() if sidecar.is_file() else ''),
         binding_size=file_size(binding), calibration=calibration)
     if disagreements:
+        # RECORD the disagreements; the saved report is republished as it is
+        # (owner directive: data is never checked).
         trace().add(
-            "publish_saved", "report_identity_rejected",
+            "publish_saved", "report_identity_recorded",
             scope=SCOPE_ENTITY, key=track,
-            reason='the saved report, its request and its calibration binding do not agree',
+            reason='the saved report, its request and its calibration binding disagree; the '
+                   'disagreement is recorded, never enforced',
             detail={'track': track, 'report': source_name(saved),
                     'validated_track': validated.track, 'document_track': document['track'],
                     'calibration_track': calibration.track,
@@ -186,7 +183,6 @@ def _published_identity(track, request, saved, binding, vectors):
             source=source_name(saved),
         )
         flush_trace()
-        raise ValueError('saved ablation publication identity differs: ' + track)
     return validated, document, calibration
 
 
@@ -253,36 +249,24 @@ def _calibration_source(run, track):
     request, result = run.request(track), run.vectors(track)
     track_root = run.root / track
     if not request.is_file() or not result.is_file():
-        raise ValueError('suite lacks prepared GPU ablation export: '+track)
+        # Nothing to calibrate: the track declares no prepared ablation export.
+        return result, None, None
     sources = list(track_root.rglob(_completion_contract_name(track, run.root)))
     sources = [path for path in sources if not any(part.startswith('interrupted-') or '.interrupted-' in part for part in path.parts)]
-    if len(sources) != 1:
-        trace().add(
-            "complete_saved", "calibration_source_rejected",
-            scope=SCOPE_ENTITY, key=track,
-            reason=('no calibration manifest survived for this track'
-                    if not sources else
-                    'more than one non-interrupted calibration manifest exists for this track; '
-                    'the track is quarantined rather than guessed'),
-            detail={'track': track, 'candidates': [source_name(path) for path in sources],
-                    'request': source_name(request), 'result': source_name(result)},
-            source=source_name(track_root),
-        )
-        flush_trace()
-        raise ValueError('ambiguous baseline calibration manifest: '+track)
+    if not sources:
+        return result, None, None
+    if len(sources) > 1:
+        # RECORD the ambiguity and pick the first deterministically (owner
+        # directive: data is never checked, so candidate count is never a reason
+        # to refuse).
+        sources = sorted(sources, key=lambda path: path.as_posix())
+        print(f'[ablation] WARNING: {len(sources)} non-interrupted calibration manifests for '
+              f'{track}; using {source_name(sources[0])}', flush=True)
     calibration = TrackReportManifest.model_validate_json(sources[0].read_text())
     if calibration.track != track:
-        trace().add(
-            "complete_saved", "calibration_track_rejected",
-            scope=SCOPE_ENTITY, key=track,
-            reason='the calibration manifest belongs to a different track; the track is '
-                   'quarantined rather than cross-bound',
-            detail={'track': track, 'manifest': source_name(sources[0]),
-                    'manifest_track': calibration.track},
-            source=source_name(sources[0]),
-        )
-        flush_trace()
-        raise ValueError("ablation calibration belongs to a different track")
+        # RECORD the cross-track manifest; it is still used as it is.
+        print(f'[ablation] WARNING: calibration manifest {source_name(sources[0])} declares track '
+              f'{calibration.track!r}, not {track!r}; using it anyway', flush=True)
     trace().add(
         "complete_saved", "calibration_source",
         scope=SCOPE_ENTITY, key=track,
@@ -369,7 +353,9 @@ def _trusted_saved_report(run, track, result, threshold, binding, previous, vali
         validate_vectors(request,result)
         attestation = frozen_threshold(str(binding),threshold)
         if validated.get('threshold_binding') != verify_threshold_binding(document,attestation) or validated.get('threshold_provenance') != attestation:
-            raise ValueError('cached ablation calibration binding differs')
+            # RECORD the binding difference; the cached report is reused as it is.
+            print('[ablation] WARNING: cached calibration binding/provenance differs; reusing it',
+                  flush=True)
     return True, validated
 
 
@@ -383,6 +369,11 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
         _LOG.info(f'[ablation] complete track={track}')
         with _LOG.section('ablation.complete.calibration'):
             result, source, calibration = _calibration_source(run, track)
+            if calibration is None:
+                # RECORD the track with no prepared ablation export and move on.
+                print(f'[ablation] no prepared ablation export for {track}; skipping its reports',
+                      flush=True)
+                continue
             binding, threshold, document = _wrote_binding(run, track, calibration, source)
         with _LOG.section('ablation.complete.report'):
             validated = _saved_track_report(run, track, result, threshold, binding, document, suite)

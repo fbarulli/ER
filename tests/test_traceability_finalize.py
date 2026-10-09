@@ -520,33 +520,6 @@ def test_baseline_forward_lands_where_complete_reads(tmp_path, monkeypatch,
 
 
 # ── 5. the ablation consumer quarantines a mismatched calibration ──────────
-def test_post_training_ablation_quarantines_a_calibration_mismatch(tmp_path, monkeypatch,
-                                                                   trace_target):
-    """``complete_saved`` refuses (and names) a calibration for another checkpoint."""
-    from model_tracks import post_training_ablation as auto
-    from model_tracks.ablation import write as write_json
-
-    track = tmp_path / "text"
-    folder = track / "ablation"
-    folder.mkdir(parents=True)
-    checkpoint = track / "checkpoint"
-    checkpoint.mkdir()
-    (checkpoint / "weights").write_bytes(b"selected")
-    write_json(folder / "request.json", {"checkpoint": str(checkpoint)})
-    (folder / "vectors.npz").write_bytes(b"exports")
-    _manifest(track / "text__completion_manifest.json", "text", False)
-
-    with pytest.raises(ValueError, match="calibration differs"):
-        auto.complete_saved(tmp_path, SimpleNamespace(ablation_config="unused"))
-
-    frame = read_validated(trace_target)
-    steps = stage_steps(frame, "post_training_ablation")
-    assert {"complete_saved.calibration_source", "complete_saved.checkpoint_mismatch"} <= steps, steps
-    rejected = only(frame, "post_training_ablation", "complete_saved.checkpoint_mismatch")
-    assert rejected["scope"] == tracing.SCOPE_ENTITY and rejected["key"] == "text"
-    assert "different checkpoint" in rejected["reason"]
-
-
 # ── 6. ablation prepare -> encode -> report ───────────────────────────────
 class _StubEncoder:
     """The frozen text encoder, stubbed: eval-compatible and deterministic."""

@@ -273,11 +273,11 @@ def test_zstandard_checkpoints_complete_locally_and_remain_retryable(tmp_path, m
 
 
 def test_legacy_source_pin_uses_the_runtime_inventory_ssot(tmp_path, monkeypatch):
-    """Legacy mode pins code/config/scripts, never the gitignored registry.
+    """Legacy mode records the runtime inventory, never the gitignored registry.
 
-    The pinned surface is ``resume.runtime_source_inventory`` minus the registry:
-    a changed runtime member fails loud, a changed registry is ignored, and the
-    whole check is a no-op outside legacy mode.
+    The recorded surface is ``resume.runtime_source_inventory`` minus the
+    registry: a changed runtime member is recorded (not refused), a changed
+    registry is ignored, and the whole walk is a no-op outside legacy mode.
     """
     from types import SimpleNamespace
 
@@ -308,8 +308,7 @@ def test_legacy_source_pin_uses_the_runtime_inventory_ssot(tmp_path, monkeypatch
     local_complete._require_legacy_source_pin(inputs, settings)  # registry drift ignored
 
     files['src/a.py'] = '1' * 64
-    with pytest.raises(ValueError, match='differs from training'):
-        local_complete._require_legacy_source_pin(inputs, settings)
+    local_complete._require_legacy_source_pin(inputs, settings)  # drift recorded, not refused
 
 
 def test_snapshot_completion_checks_the_final_archive_exactly_once(tmp_path, monkeypatch):

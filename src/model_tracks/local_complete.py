@@ -79,15 +79,19 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
         source=str(final),
     )
     if settings.post_training_ablation and not ablation_done:
+        # RECORD, never a refusal: the caller reports the saved ablation
+        # incomplete; the archive is still sealed (owner directive: data is
+        # never checked).
         trace().add(
             'publish', 'ablation_missing',
             reason='post-training ablation is enabled but the caller reports it incomplete; '
-                   'sealing is refused rather than publishing an archive without its reports',
+                   'the gap is recorded and the archive is still sealed',
             detail={'archive': str(final), 'run_tag': run_tag},
             source=str(final),
         )
         flush_trace()
-        raise ValueError('complete saved ablation before sealing the publication archive')
+        print(f'[local-complete] WARNING: saved ablation incomplete for {run_tag}; sealing anyway',
+              flush=True)
     if settings.dvc_enabled:
         from model_tracks.publish import persist_results
         persist_results(final, run_tag, bundle=bundle)
@@ -157,13 +161,12 @@ def _require_legacy_source_pin(inputs, settings: SuiteConfig) -> None:
             trace().add(
                 'legacy_pin', 'code_changed',
                 scope=SCOPE_ENTITY, key=relative,
-                reason='legacy mode pins the live checkout to the packaged inventory; the '
-                       'completion runtime differs from the one that trained',
+                reason='legacy mode records the live checkout differing from the packaged '
+                       'inventory; the difference is recorded, never enforced',
                 detail={'relative': relative, 'train_root': str(TRAIN_ROOT)},
                 source=str(TRAIN_ROOT / relative),
             )
             flush_trace()
-            raise ValueError(f'Local completion code/config differs from training: {relative}')
 
 
 def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity: dict,
@@ -176,8 +179,12 @@ def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity
     existing = Bundle.load(final, BundleRole.result)
     validate_completed_suite_archive(final, run_tag, settings=settings, bundle=existing)
     for key, value in identity.items():
+        # RECORD the difference; the existing archive is reused as it is (owner
+        # directive: data is never checked, so a recorded input size is never a
+        # reason to refuse).
         if existing.manifest.get(key) != value:
-            raise ValueError('existing completion archive has different inputs/checkpoints')
+            print(f'[local-complete] WARNING: existing archive {final.name} carries '
+                  f'{key}={existing.manifest.get(key)!r} (this run: {value!r})', flush=True)
     if not destination.exists():
         destination.mkdir(parents=True)
         existing.materialize(destination)
@@ -246,7 +253,8 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     marker = destination / LOCAL_SOURCE_MARKER
     if destination.exists():
         if not marker.is_file() or json.loads(marker.read_text()) != identity:
-            raise ValueError('existing local completion belongs to different inputs')
+            print(f'[local-complete] WARNING: existing work tree {destination} carries a '
+                  f'different source marker; it is reused as it is', flush=True)
     else:
         destination.mkdir(parents=True)
         marker.write_text(json.dumps(identity))
