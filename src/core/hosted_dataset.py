@@ -6,7 +6,7 @@ The Kaggle/Colab dataset slugs of this project used to live scattered as
 per-lane literals: ``core.laya_config.LayaSpec`` (``base_model_dataset``,
 ``dataset_slug``, ``export_dataset_slug``, ``finetune_dataset_slug``,
 ``finetune_ckpt_dataset``, ``holdout_dataset_slug``) and ``core.schemas``
-``KaggleSpec`` (``bundle_dataset_slug``, ``embedding_dataset_slug``). Nothing
+``KaggleSpec`` (its bundle/embedding dataset slugs). Nothing
 owned the answers to "what is this dataset FOR (role), which way does it
 travel (direction), which kernel attaches it, and where does it mount/stage?".
 

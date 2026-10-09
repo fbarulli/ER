@@ -70,7 +70,7 @@ er-kaggle --what bundle-kernel --execute
 er-kaggle --what kernel-status             # cpu (default)
 er-kaggle --what kernel-status --kernel gpu
 
-# 3. fetch the bundle back, sha-verified against the kernel's receipt
+# 3. fetch the bundle back, byte-size-verified against the kernel's receipt
 er-kaggle --what bundle-fetch --execute
 
 # 4. dataset transport + submission (unchanged)
@@ -105,21 +105,21 @@ completes), `--with-finalize` (chain: finish with the remote CPU finalize job),
 | operation | what it actually does | preconditions |
 |---|---|---|
 | `credentials` | writes `~/.kaggle/kaggle.json` (0600) from the env token named by `kaggle.api_key_env` (default `KAGGLE_API_KEY`); also writes the 2.x access-token file | `kaggle.username` set; token present in the env; never logged (kaggle_runtime.py:205) |
-| `package` | builds the Kaggle payload (packaged dataset.csv + metadata + `.receipt.json`) into the staging root; hashes census | `--dataset-csv` or the config dataset binding (kaggle_cli.py:23–25; kaggle_datasets.py:36) |
+| `package` | builds the Kaggle payload (packaged dataset.csv + metadata + `.receipt.json`) into the staging root; byte-size census | `--dataset-csv` or the config dataset binding (kaggle_cli.py:23–25; kaggle_datasets.py:36) |
 | `upload` / `download` | kaggle CLI dataset upload/fetch-back of the package | `kaggle.slug` configured (null stays fail-loud), executable present (config `kaggle_executable: kaggle`) |
 | `submission` | packages the external submission frame keeping only `submission_id_columns` (`sku_id`, `item_id`) | `--submission-input` and `--submission-output` required (kaggle_cli.py:204–205) |
 | `bundle-kernel --cohort <c>` | stage CPU kernel (metadata + script + `bundle_kernel.receipt.json`) under `results/kaggle_lane/bundle_kernel`; revision pinned at staging; `--execute` pushes it | `kaggle.cpu_kernel_slug`; the cohort export committed at the repo root and listed in `kaggle.export_csvs` (kaggle_kernels.py:221, 315) |
 | `bundle-fetch [--cohort <c>]` | download the CPU kernel output, locate `bundle.receipt.json`, size-verify the archive against the receipt/sidecar, install into `results/kaggle_lane/<cohort>/bundle/` with `manifest.json` + `timings.json` sidecars | kernel output available; cohort defaults to the receipt's own cohort, then the config dataset binding (kaggle_outputs.py:207) |
-| `train-kernel` / `embed-kernel` | stage GPU kernels (train attaches the CPU kernel as `kernel_sources` + `kaggle.bundle_dataset_slug`; embed attaches `kaggle.embedding_dataset_slug` + the git-shipped checkpoint); `--execute` pushes | `gpu_kernel_slug` / `embedding_kernel_slug`; embed also needs the request dataset uploaded first and `kaggle.checkpoint` in `checkout_paths` (`artifacts/models`) (kaggle_kernels.py:391) |
-| `finalize-kernel` | stage the remote CPU finalize job (`model_tracks.bundle_steps` role=result) on the bundling CPU slug: one `Bundle.load(..., "result")` boundary on the train kernel's sealed result Bundle, the published inputs bundle attached, `BundlePipeline.finalize` → the sealed `finalized_bundle.tar.zst` + receipt; `--execute` pushes | `cpu_kernel_slug` + `gpu_kernel_slug` + `kaggle.bundle_dataset_slug`; `--with-finalize` makes the chain do it (kaggle_kernels.py:503) |
+| `train-kernel` / `embed-kernel` | stage GPU kernels (train attaches the CPU kernel as `kernel_sources` + the registry's `bundle` dataset; embed attaches the registry's `embeddings` dataset + the git-shipped checkpoint); `--execute` pushes | `gpu_kernel_slug` / `embedding_kernel_slug`; embed also needs the request dataset uploaded first and `kaggle.checkpoint` in `checkout_paths` (`artifacts/models`) (kaggle_kernels.py:391) |
+| `finalize-kernel` | stage the remote CPU finalize job (`model_tracks.bundle_steps` role=result) on the bundling CPU slug: one `Bundle.load(..., "result")` boundary on the train kernel's sealed result Bundle, the published inputs bundle attached, `BundlePipeline.finalize` → the sealed `finalized_bundle.tar.zst` + receipt; `--execute` pushes | `cpu_kernel_slug` + `gpu_kernel_slug` + the registry's `bundle` dataset; `--with-finalize` makes the chain do it (kaggle_kernels.py:503) |
 | `kernel-status [--kernel]` | `kaggle kernels status`; normalizes 2.x `KernelWorkerStatus.` prefixes → `complete/cancelAcknowledged/cancelRequested/running/queued/error` | slug configured; executable present (kaggle_kernels.py:616) |
 | `kernel-logs [--kernel --slug --follow]` | poll status at `kaggle.logs_poll_seconds` (15 s); on a terminal state fetch the kernel's own output log into `logs/kaggle` | same as status (kaggle_monitor.py:476) |
 | `kernel-stream` | live SSE log follower (kagglesdk `GetKernelSessionLogsStream`); writes decoded payloads to `logs/kaggle/<slug>.stream.log` (UTF-8-safe): `/r`-separated tqdm frames are expanded to grep-able lines and the last bar tagged, by the shared formatter `cli.log_capture.progress_frames_to_lines`; reconnects ≤5 times, re-truncating because SSE replay restarts at the first line | kagglesdk package; returns the `kernel_session_id` the manual kill switch needs (kaggle_monitor.py:230) |
-| `fetch-results --kind <k>` | contract fetch + size verification: bundle→`bundle.receipt.json`/`all_tracks_inputs.tar.zst`; train→`result_bundle.manifest.json`/`result_bundle.tar.zst`; embed→`vectors.tar.zst`; finalize→`finalized_bundle.manifest.json`/`finalized_bundle.tar.zst`. A role kind (`bundle`, `train`, `finalize`) is named by ONE `Bundle.load` at the boundary, so the archive is hashed once; installs under `results/kaggle_lane/<cohort>/<kind>/` | the kernel reached output-producing state; `--kind` is singular (kaggle_outputs.py:19) |
+| `fetch-results --kind <k>` | contract fetch + size verification: bundle→`bundle.receipt.json`/`all_tracks_inputs.tar.zst`; train→`result_bundle.manifest.json`/`result_bundle.tar.zst`; embed→`vectors.tar.zst`; finalize→`finalized_bundle.manifest.json`/`finalized_bundle.tar.zst`. A role kind (`bundle`, `train`, `finalize`) is named by ONE `Bundle.load` at the boundary, so the archive is byte-size-checked once; installs under `results/kaggle_lane/<cohort>/<kind>/` | the kernel reached output-producing state; `--kind` is singular (kaggle_outputs.py:19) |
 | `stop --kernel <k>` | session-id-first teardown: the launch-recorded `kernel_session_id` (from every kernel's own self-report line, see below) feeds the SDK's in-place `cancel_kernel_session`; with no recorded id (or an SDK failure) the fallback is a `cancel_stub.py` version replace, where the platform tears the session down to run version N+1 and frees quota. Either path is verified by bounded status polls | slug configured (kaggle_kernels.py:671, staging `results/kaggle_lane/<which>_stop`); specimens in `results/kaggle_lane/cancel_stub`, `cpu_stop`, `gpu_stop` |
 | `supervise --kind <k>` | dependable harvest: one stream thread per kind + status polling to a terminal state; on `complete` fetch + verify; on any other terminal state download and verify partial artifacts plus the session log, and **auto-release the session via the stop-kernel stub replace**; receipt at `results/kaggle_lane/supervise.receipt.json` | slugs configured for every requested kind; polling holds neither session nor quota; idempotent on rerun (kaggle_monitor.py:132) |
-| `chain [--cohort <c>] [--with-embed] [--with-finalize]` | ONE command runs the whole kaggle loop supervised end-to-end: bundle-kernel push (cohort pinned at chain HEAD) → spawned watcher supervises + verifies the fetch + releases → publish default (fresh `fbarulli/er-10k-bundle` version) → train-kernel push via the standard path (single watcher, chain waits on the watcher receipt) → optionally embed-kernel after the train watcher completes → optionally the remote CPU finalize job (attaches the inputs bundle version the publish recorded + the trained result kernel output). Receipt `results/kaggle_lane/chain.receipt.json` with revision pins + fetch shas + dataset version + spawn confirmations | `cpu/gpu/embed` kernel slugs + `kaggle.bundle_dataset_slug` configured; `--execute` (dry-run prints the plan only); no other flags required |
-| (any verified fetch) → publishes automatically | after the sha verification of `fetch_kernel_output(kind='bundle'\|'train')` — autowatch, supervise, `bundle-fetch`, `fetch-results`, chain — `publish_bundle_dataset` publishes a fresh `kaggle.bundle_dataset_slug` version from `results/kaggle_lane/<cohort>_bundle_dataset` and records the version + mount pin | verified install present; slug set; cohort slug marker must agree with the fetch's cohort (fail loud otherwise); no hand-invoke |
+| `chain [--cohort <c>] [--with-embed] [--with-finalize]` | ONE command runs the whole kaggle loop supervised end-to-end: bundle-kernel push (cohort pinned at chain HEAD) → spawned watcher supervises + verifies the fetch + releases → publish default (fresh `fbarulli/er-10k-bundle` version) → train-kernel push via the standard path (single watcher, chain waits on the watcher receipt) → optionally embed-kernel after the train watcher completes → optionally the remote CPU finalize job (attaches the inputs bundle version the publish recorded + the trained result kernel output). Receipt `results/kaggle_lane/chain.receipt.json` with revision pins + fetch byte sizes + dataset version + spawn confirmations | `cpu/gpu/embed` kernel slugs + the registry's `bundle` dataset configured; `--execute` (dry-run prints the plan only); no other flags required |
+| (any verified fetch) → publishes automatically | after the byte-size verification of `fetch_kernel_output(kind='bundle'\|'train')` — autowatch, supervise, `bundle-fetch`, `fetch-results`, chain — `publish_bundle_dataset` publishes a fresh version of the registry's `bundle` dataset from `results/kaggle_lane/<cohort>_bundle_dataset` and records the version + mount pin | verified install present; registry `bundle` role resolvable; cohort slug marker must agree with the fetch's cohort (fail loud otherwise); no hand-invoke |
 
 ## Kernel session id (in-place stop)
 
@@ -145,7 +145,7 @@ The operator box is not a finalize surface: `model_tracks.bundle_steps`
 role=result runs as one remote CPU lane job.
 
 1. stage: `stage_finalize_kernel` (`kaggle_kernels.py:503`) attaches the
-   published prepared-inputs bundle (`kaggle.bundle_dataset_slug`, optionally
+   published prepared-inputs bundle (the registry's `bundle` dataset, optionally
    `/version`) plus the trained result kernel output (`gpu_kernel_slug`) and
    renders `TRAIN_KERNEL_SHARED + FINALIZE_KERNEL_BODY` under
    `finalize_kernel/finalize_cpu.py` (a second version of the bundling CPU
@@ -153,7 +153,7 @@ role=result runs as one remote CPU lane job.
 2. run: the kernel reloads the inputs at its `Bundle.load(..., "inputs")`
    boundary (`bundle_steps.finalize`) and the result at ONE
    `Bundle.load(..., "result", expected_size=…)` boundary pinned to the
-   manifest sha the train kernel recorded
+   manifest byte size the train kernel recorded
    (`kaggle_kernel_templates.py:386–396`), then seals
    `finalized_bundle.tar.zst` + its receipt and `.size` sidecar.
 3. fetch: `fetch-results --kind finalize` verifies that archive once more and
@@ -230,8 +230,6 @@ pins `HEAD == origin/<branch>` before it stages.
 `username`, `api_key_env`, `repository`, `branch`, `cpu_kernel_slug`
 (`fbarulli/er-bundle-cpu`), `gpu_kernel_slug` (`fbarulli/er-train-gpu`),
 `embedding_kernel_slug` (`fbarulli/er-embed-gpu`),
-`embedding_dataset_slug` (`fbarulli/er-embed-requests`),
-`bundle_dataset_slug` (`fbarulli/er-10k-bundle`),
 `checkout_paths`, `bundle_requirements` (`requirements/graph_tracks.txt`),
 `train_suite_config` (`data/model_tracks/suite.yaml`), `checkpoint`
 (`artifacts/models`), `logs_poll_seconds` (15.0), `logs_dir` (`logs/kaggle`),
@@ -260,12 +258,12 @@ er-kaggle --what chain --cohort 10k --execute            # supervised end-to-end
 er-kaggle --what chain --cohort 10k --with-embed --execute
 ```
 
-Steps (every step fails loud with named revision/sha mismatches — the
+Steps (every step fails loud with named revision/byte-size mismatches — the
 stale-src standard):
 
 1. **bundle-kernel** — staged + pushed with the cohort pinned at the
    chain's HEAD revision; `push_bundle_kernel`'s own detached autowatch
-   supervises the session, sha-verifies the fetch against the kernel
+   supervises the session, byte-size-verifies the fetch against the kernel
    receipt, releases the session, and drops
    `results/kaggle_lane/autowatch_bundle.receipt.json`.
 2. **publish (default, inside the verified fetch)** — see below.
@@ -294,8 +292,8 @@ receipt + `manifest.json`/`timings.json`), runs `kaggle datasets version`
 via `_run_kaggle`, then `kaggle datasets status <slug> --format
 json(current_version_number)` records the fresh version number plus the
 pin-able `owner/slug/<version>` mount form in the plan and the stage's
-`publish.receipt.json`. Fail loud on: unset `kaggle.bundle_dataset_slug`,
-a cohort marker in the slug that disagrees with the fetched bundle's
+`publish.receipt.json`. Fail loud on: the registry `bundle` role being
+unresolvable, a cohort marker in the slug that disagrees with the fetched bundle's
 cohort (named cohort mismatch), or an install whose archive no longer
 matches its own kernel receipt. Train/embed fetch outputs have no bundle
 dataset in the SSOT — the plan records a skip note, never a silent
@@ -319,9 +317,9 @@ publish to the wrong target.
 | `results/kaggle_lane/<cohort>/<kind>/` | VERIFIED installs (archive + manifest + `.size`; bundle also `manifest.json`, `timings.json`) |
 | `logs/kaggle/` | fetched kernel output logs, `<slug>.stream.log` SSE captures (one roof: owner order 2026-10-07) |
 | `results/kaggle_lane/supervise.receipt.json` | last supervise plan + history |
-| `results/kaggle_lane/autowatch_<bundle\|train\|embed>.receipt.json` | each pushed kernel's own watcher terminal-handler receipt (status, verified fetch with sha + publish plan, stop) |
+| `results/kaggle_lane/autowatch_<bundle\|train\|embed>.receipt.json` | each pushed kernel's own watcher terminal-handler receipt (status, verified fetch with size + publish plan, stop) |
 | `results/kaggle_lane/<cohort>_bundle_dataset/` + `publish.receipt.json` | the publish-default stage dir (dataset-metadata.json + verified archive + receipt) and its dataset version pin record |
-| `results/kaggle_lane/chain.receipt.json` | the chain op's plan: per-step revision pins, fetched shas, published dataset version, watcher spawn confirmations |
+| `results/kaggle_lane/chain.receipt.json` | the chain op's plan: per-step revision pins, fetched byte sizes, published dataset version, watcher spawn confirmations |
 
 ## Env / edge rules worth pinning
 

@@ -19,7 +19,13 @@ import yaml
 from pydantic import ValidationError
 
 from core import common
+from core.hosted_dataset import hosted_registry
 from cli import kaggle_lane
+
+#: The hosted-dataset slugs the lane resolves by ROLE (registry SSOT) — the
+#: test names no ``owner/handle`` literal either; item 1 pins the CLI to these.
+BUNDLE_DATASET_SLUG = hosted_registry().by_role("bundle").slug
+EMBED_REQUEST_DATASET_SLUG = hosted_registry().by_role("embeddings").slug
 
 
 def _write_export(path: Path, rows: int = 3) -> str:
@@ -433,6 +439,9 @@ def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
     archive_bytes = b"fake archive bytes"
 
     def fake_run(command, **kwargs):
+        if "datasets" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout='{"current_version_number": 3}\n')
         stage = Path(command[command.index("-p") + 1])
         bundle = stage / "bundle"
         bundle.mkdir(parents=True)
@@ -448,6 +457,8 @@ def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     plan = kaggle_lane.fetch_bundle_output(execute=True)
     assert plan["verified"] is True and plan["cohort"] == "full"
+    assert plan["publish"]["published"] is True
+    assert plan["publish"]["slug"] == BUNDLE_DATASET_SLUG
     installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
     assert installed.read_bytes() == archive_bytes
 
@@ -916,8 +927,7 @@ def _hermetic_staging(monkeypatch):
 
 def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch):
     spec = _kernel_spec(tmp_path, monkeypatch,
-                        gpu_kernel_slug="owner/er-train-gpu",
-                        bundle_dataset_slug="owner/er-3k-bundle")
+                        gpu_kernel_slug="owner/er-train-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     install = _verified_bundle_install(tmp_path)
@@ -937,7 +947,7 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
     # the stage dir mirrors the previous manual flow (3k_bundle_dataset)
     stage = tmp_path / "kaggle_stage" / "3k_bundle_dataset"
     metadata = json.loads((stage / "dataset_metadata.json").read_text())
-    assert metadata["id"] == "owner/er-3k-bundle"
+    assert metadata["id"] == BUNDLE_DATASET_SLUG
     assert metadata["title"] == "ER 3k bundle"
     assert metadata["licenses"] == [{"name": "other"}]
     assert (stage / "all_tracks_inputs.tar.zst").read_bytes() == archive_bytes
@@ -947,9 +957,9 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
     assert receipt["dataset_version"] == 12
     # the train mount pin rides the plan; `datasets version` ran via the CLI
     assert plan["train_stage_mount"]["dataset_sources_pinned"] == [
-        "owner/er-3k-bundle/12"]
+        f"{BUNDLE_DATASET_SLUG}/12"]
     assert plan["train_stage_mount"]["dataset_sources_default"] == [
-        "owner/er-3k-bundle"]
+        BUNDLE_DATASET_SLUG]
     assert commands[0][:3] == ["/usr/bin/kaggle", "datasets", "version"]
     assert commands[1][:3] == ["/usr/bin/kaggle", "datasets", "status"]
     # train/embed outputs have no SSOT dataset to publish — recorded skip
@@ -962,13 +972,33 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
         kaggle_lane.publish_bundle_dataset("bundle", execute=True)
 
 
+def test_cli_dataset_slug_resolves_from_the_hosted_registry(tmp_path, monkeypatch):
+    """Item 1: the lane names a ROLE; HostedRegistry owns the slug.
+
+    Both kernel attachments read the registry — train mounts the ``bundle``
+    dataset, embed attaches the ``embeddings`` request dataset — so each slug
+    is spelled in exactly one place (``config/hosted_datasets.yaml``).
+    """
+    from core.hosted_dataset import hosted_registry
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                 embedding_kernel_slug="owner/er-embed-gpu")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    train = kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
+    embed = kaggle_lane.stage_gpu_kernel(kind="embed", revision="abc123def")
+    train_meta = json.loads((Path(train["staged"]) / "kernel-metadata.json").read_text())
+    embed_meta = json.loads((Path(embed["staged"]) / "kernel-metadata.json").read_text())
+    assert train_meta["dataset_sources"] == [hosted_registry().by_role("bundle").slug]
+    assert embed_meta["dataset_sources"] == [
+        hosted_registry().by_role("embeddings").slug]
+
+
 def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
     spec = _kernel_spec(tmp_path, monkeypatch,
                         cpu_kernel_slug="owner/er-bundle-cpu",
                         gpu_kernel_slug="owner/er-train-gpu",
-                        embedding_kernel_slug="owner/er-embed-gpu",
-                        embedding_dataset_slug="owner/er-embed-requests",
-                        bundle_dataset_slug="owner/er-3k-bundle")
+                        embedding_kernel_slug="owner/er-embed-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
@@ -994,7 +1024,7 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
             "status": "complete", "polls": 2,
             "fetch": {"verified": True, "archive_size": "d" * 64,
                       "cohort": "3k",
-                      "publish": {"published": True, "slug": "owner/er-3k-bundle",
+                      "publish": {"published": True, "slug": BUNDLE_DATASET_SLUG,
                                   "dataset_version": 12}},
             "stop": {"stopped": True},
         }))
@@ -1005,7 +1035,7 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
     dry = kaggle_lane.run_chain(cohort="3k", with_embed=True, execute=False)
     assert dry["mode"] == "dry-run" and set(dry["steps"]) == {"bundle", "train", "embed"}
     assert dry["revision"] == "abc123def"
-    assert dry["steps"]["bundle"]["publish"]["slug"] == "owner/er-3k-bundle"
+    assert dry["steps"]["bundle"]["publish"]["slug"] == BUNDLE_DATASET_SLUG
     # a dry-run chain never stages a kernel or writes a receipt
     assert not list(tmp_path.rglob("kernel-metadata.json"))
     assert not (tmp_path / "kaggle_stage" / "chain.receipt.json").exists()
@@ -1020,7 +1050,7 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
     assert plan["published_tip"] == "abc123def"
     train_metadata = json.loads((tmp_path / "kaggle_stage" / "train_kernel"
                                  / "kernel-metadata.json").read_text())
-    assert train_metadata["dataset_sources"] == ["owner/er-3k-bundle/12"], \
+    assert train_metadata["dataset_sources"] == [f"{BUNDLE_DATASET_SLUG}/12"], \
         "the train stage must attach the fresh published version"
     assert json.loads((tmp_path / "kaggle_stage" / "chain.receipt.json")
                       .read_text())["steps"]["train"]["stage"]["revision"] == "abc123def"
@@ -1029,8 +1059,7 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
 def test_chain_refuses_executed_run_on_stale_tip(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch,
                  gpu_kernel_slug="owner/er-train-gpu",
-                 embedding_kernel_slug="owner/er-embed",
-                 bundle_dataset_slug="owner/er-3k-bundle")
+                 embedding_kernel_slug="owner/er-embed")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
@@ -1267,9 +1296,7 @@ def test_staged_kernels_self_report_the_session_id(tmp_path, monkeypatch, kind):
         _finalize_spec(tmp_path, monkeypatch)
     else:
         _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                     embedding_kernel_slug="owner/er-embed-gpu",
-                     embedding_dataset_slug="owner/er-embed-requests",
-                     bundle_dataset_slug="owner/er-3k-bundle")
+                     embedding_kernel_slug="owner/er-embed-gpu")
     _hermetic_staging(monkeypatch)
     _fake_published_tip(monkeypatch, "abc123def")
     if kind == "bundle":
@@ -1410,8 +1437,7 @@ def test_stop_kernel_wait_true_version_replace_fails_loud(tmp_path, monkeypatch)
 # ── finalize lane job (bundle_steps role=result, remote CPU) ────────────────
 
 def _finalize_spec(tmp_path, monkeypatch, **updates):
-    values = {"gpu_kernel_slug": "owner/er-train-gpu",
-              "bundle_dataset_slug": "owner/er-3k-bundle"}
+    values = {"gpu_kernel_slug": "owner/er-train-gpu"}
     values.update(updates)
     return _kernel_spec(tmp_path, monkeypatch, **values)
 
@@ -1429,7 +1455,7 @@ def test_stage_finalize_kernel_pins_revision_and_attaches_both_bundles(tmp_path,
     assert metadata["code_file"] == "finalize_cpu.py"
     assert metadata["enable_gpu"] is False and metadata["enable_internet"] is True
     # both verified inputs attach: the published inputs bundle + the trained result
-    assert metadata["dataset_sources"] == ["owner/er-3k-bundle"]
+    assert metadata["dataset_sources"] == [BUNDLE_DATASET_SLUG]
     assert metadata["kernel_sources"] == ["owner/er-train-gpu"]
     script = (stage / "finalize_cpu.py").read_text()
     assert 'REVISION = "abc123def"' in script
@@ -1440,7 +1466,7 @@ def test_stage_finalize_kernel_pins_revision_and_attaches_both_bundles(tmp_path,
     assert receipt["kind"] == "finalize" and receipt["role"] == "result"
     assert receipt["gpu"] is False and receipt["revision"] == "abc123def"
     assert receipt["published_tip"] == "abc123def"
-    assert receipt["bundle_dataset"] == "owner/er-3k-bundle"
+    assert receipt["bundle_dataset"] == BUNDLE_DATASET_SLUG
     assert receipt["result_kernel"] == "owner/er-train-gpu"
 
 
@@ -1510,7 +1536,7 @@ def test_chain_plan_places_the_finalize_step_after_train(tmp_path, monkeypatch):
     assert finalize["stage"]["kernel"] == "owner/er-bundle-cpu"
     assert finalize["role"] == "result"
     assert finalize["mount"] == {
-        "dataset_sources": ["owner/er-3k-bundle/<fresh version>"],
+        "dataset_sources": [f"{BUNDLE_DATASET_SLUG}/<fresh version>"],
         "kernel_sources": ["owner/er-train-gpu"],
     }
     assert not list(tmp_path.rglob("kernel-metadata.json")), \
@@ -1519,8 +1545,7 @@ def test_chain_plan_places_the_finalize_step_after_train(tmp_path, monkeypatch):
 
 def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch):
     _finalize_spec(tmp_path, monkeypatch,
-                   embedding_kernel_slug="owner/er-embed-gpu",
-                   embedding_dataset_slug="owner/er-embed-requests")
+                   embedding_kernel_slug="owner/er-embed-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
@@ -1543,7 +1568,7 @@ def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch)
         receipt.write_text(json.dumps({
             "status": "complete", "polls": 2,
             "fetch": {"verified": True, "archive_size": "d" * 64, "cohort": "3k",
-                      "publish": ({"published": True, "slug": "owner/er-3k-bundle",
+                      "publish": ({"published": True, "slug": BUNDLE_DATASET_SLUG,
                                    "dataset_version": 12} if kind == "bundle" else {})},
             "stop": {"stopped": True},
         }))
@@ -1560,7 +1585,7 @@ def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch)
     assert finalize["push"]["kernel"] == "finalize"
     metadata = json.loads((tmp_path / "kaggle_stage" / "finalize_kernel"
                            / "kernel-metadata.json").read_text())
-    assert metadata["dataset_sources"] == ["owner/er-3k-bundle/12"], \
+    assert metadata["dataset_sources"] == [f"{BUNDLE_DATASET_SLUG}/12"], \
         "the finalize job attaches the version this chain published"
     assert metadata["kernel_sources"] == ["owner/er-train-gpu"]
     staged = (tmp_path / "kaggle_stage" / "finalize_kernel" / "finalize_cpu.py").read_text()
@@ -1571,8 +1596,7 @@ def test_train_kernel_verifies_the_attached_bundle_exactly_once(tmp_path, monkey
     """Item 1a (Kaggle): the GPU kernel's install does ONE integrity check of
     the attached inputs Bundle at its boundary — no second whole-archive hash,
     no per-member re-verification."""
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                 bundle_dataset_slug="owner/er-3k-bundle")
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     _hermetic_staging(monkeypatch)
     _fake_published_tip(monkeypatch, "abc123def")
     kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
@@ -1711,8 +1735,7 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
 
     from core.bundle import Bundle
 
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                 bundle_dataset_slug="owner/er-3k-bundle")
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     assert kaggle_lane.kernel_identity("train").bundle_role == "result"
     member = tmp_path / "member.txt"
     member.write_text("sealed", encoding="utf-8")
@@ -1747,7 +1770,7 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
 
 def test_embed_objective_absent_is_explicit_and_never_silent(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch, cpu_kernel_slug="owner/er-bundle-cpu",
-                 embedding_kernel_slug=None, embedding_dataset_slug=None)
+                 embedding_kernel_slug=None)
     verdict = kaggle_lane.embed_objective(execute=False)
     assert verdict["configured"] is False and verdict["available"] is False
     assert "embedding_kernel_slug" in verdict["reason"]
@@ -1762,8 +1785,7 @@ def test_embed_objective_configured_but_missing_on_the_account(tmp_path, monkeyp
     """The phantom-kernel case: config names fbarulli/er-embed-gpu, the account
     has no such kernel, and the step must fail loud (not disappear)."""
     _kernel_spec(tmp_path, monkeypatch,
-                 embedding_kernel_slug="owner/er-embed-gpu",
-                 embedding_dataset_slug="owner/er-embed-requests")
+                 embedding_kernel_slug="owner/er-embed-gpu")
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
 
     def fail(command):
@@ -1780,13 +1802,12 @@ def test_embed_objective_configured_but_missing_on_the_account(tmp_path, monkeyp
 
 
 def test_chain_with_embed_refuses_an_unconfigured_objective(tmp_path, monkeypatch):
-    """`--with-embed` with a half-configured objective (kernel named, request
-    dataset missing) fails loud naming the objective, never skipping the step."""
-    _finalize_spec(tmp_path, monkeypatch,
-                   embedding_kernel_slug="owner/er-embed-gpu",
-                   embedding_dataset_slug=None)
+    """`--with-embed` with no embed kernel named fails loud naming the
+    objective (the request dataset always resolves from the registry's
+    `embeddings` role), never skipping the step."""
+    _finalize_spec(tmp_path, monkeypatch, embedding_kernel_slug=None)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
-    with pytest.raises(RuntimeError, match="embed objective"):
+    with pytest.raises(RuntimeError, match="embedding_kernel_slug"):
         kaggle_lane.run_chain(cohort="3k", with_embed=True, execute=False)
 
 
@@ -1880,8 +1901,7 @@ def test_train_kernel_refuses_a_bundle_without_ablation_templates(
     import ast
     import yaml
 
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                 bundle_dataset_slug="owner/er-3k-bundle")
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     _hermetic_staging(monkeypatch)
     _fake_published_tip(monkeypatch, "abc123def")
     kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")

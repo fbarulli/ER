@@ -92,6 +92,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from core.execution_policy import OptimizerBackend
+from core.hosted_dataset import HostedRegistry, hosted_registry
 
 from pydantic import (
     BaseModel,
@@ -3341,6 +3342,13 @@ class KaggleLimitsSpec(BaseModel):
     stop_verify_polls: int = Field(default=20, ge=1)
 
 
+#: The hosted-dataset ROLES this lane consumes (the ``roles`` vocabulary of
+#: ``config/hosted_datasets.yaml``). Naming them here declares WHICH hosted
+#: datasets the lane uses; the registry owns what each one resolves to, so no
+#: ``owner/handle`` slug is re-spelled in this module.
+KaggleHostedRole = Literal["bundle", "embeddings"]
+
+
 class KaggleSpec(BaseModel):
     """training.kaggle — the Kaggle dataset/export transport lane's SSOT.
 
@@ -3399,13 +3407,24 @@ class KaggleSpec(BaseModel):
     gpu_kernel_slug: str | None = None
     # The GPU embedding kernel (hybrid embedding forwards, second objective).
     embedding_kernel_slug: str | None = None
-    # Dataset ("owner/slug") carrying the embedding request payload
-    # (request.json + prepared_text.npz) the embed kernel attaches.
-    embedding_dataset_slug: str | None = None
-    # Dataset ("owner/slug") carrying the verified CPU bundle the train
-    # kernel attaches (kernel-output mounts go stale on stop-stub versions;
-    # a dataset is immutable at fetch time). Cohort implied by the bundle.
-    bundle_dataset_slug: str | None = None
+    # ── the hosted-dataset reference (config/hosted_datasets.yaml) ─────────
+    # The datasets this lane attaches are NOT declared here: the registry owns
+    # every slug. The lane names the ROLE it wants (``bundle`` = the verified
+    # CPU inputs bundle the train kernel attaches; ``embeddings`` = the embed
+    # request payload).
+    @property
+    def hosted(self) -> HostedRegistry:
+        """The hosted-dataset registry — the ONE owner of the lane's slugs."""
+        return hosted_registry()
+
+    def hosted_slug(self, role: KaggleHostedRole) -> str:
+        """The ``owner/handle`` slug of the hosted dataset playing ``role``.
+
+        Fails loud (``KeyError``) on a role the registry does not declare:
+        a missing precondition can never stage a payload.
+        """
+        return self.hosted.by_role(role).slug
+
     # Publish default (owner order 2026-10-07): after a verified fetch the
     # lane builds the dataset stage dir results/kaggle_lane/<cohort> with
     # this suffix (the ER 10k bundle precedent: dataset-metadata.json +

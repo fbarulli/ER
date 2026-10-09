@@ -195,10 +195,10 @@ class KaggleKernels:
         Owner context: ``kaggle.embedding_kernel_slug`` names
         ``fbarulli/er-embed-gpu`` and no embed kernel exists on the account.
         Configuration alone cannot see that, so the verdict is two-stage:
-        ``configured`` is the config contract (both the kernel and its request
-        dataset slug are named), and — only with ``execute`` — ``available``
-        probes the account through ``kaggle kernels status``. A dry run never
-        contacts Kaggle and reports ``available: None``.
+        ``configured`` is the config contract (the kernel is named; its request
+        dataset is the registry's ``embeddings`` role), and — only with
+        ``execute`` — ``available`` probes the account through ``kaggle kernels
+        status``. A dry run never contacts Kaggle and reports ``available: None``.
         """
         from cli import kaggle_lane as lane
 
@@ -206,17 +206,17 @@ class KaggleKernels:
         verdict: dict[str, Any] = {
             "objective": "embed",
             "kernel": spec.embedding_kernel_slug,
-            "request_dataset": spec.embedding_dataset_slug,
-            "configured": bool(spec.embedding_kernel_slug
-                               and spec.embedding_dataset_slug),
+            "request_dataset": spec.hosted_slug("embeddings"),
+            "configured": bool(spec.embedding_kernel_slug),
         }
         if not verdict["configured"]:
             verdict.update(
                 available=False,
                 reason=("the embed objective is absent: config "
-                        "kaggle.embedding_kernel_slug and "
-                        "kaggle.embedding_dataset_slug must both name owner/slug "
-                        "targets before any embed step can run"),
+                        "kaggle.embedding_kernel_slug must name the owner/slug "
+                        "kernel before any embed step can run; its request "
+                        "dataset is the registry's `embeddings` role "
+                        "(config/hosted_datasets.yaml)"),
             )
             return verdict
         if not execute:
@@ -403,8 +403,8 @@ class KaggleKernels:
         Dry-safe: metadata + generated script + receipt under the staging area;
         `--execute` makes push_kernel() perform the network call. The train
         kernel attaches the CPU bundle kernel via kernel_sources (Kaggle mounts
-        its output under /kaggle/input); the embed kernel additionally needs an
-        embedding request dataset slug (kaggle.embedding_dataset_slug).
+        its output under /kaggle/input); the embed kernel additionally attaches
+        the registry's ``embeddings`` request dataset.
         `bundle_dataset_version` optionally pins the attached bundle dataset to
         `owner/slug/version` (the form kaggle's kernel metadata accepts);
         unpinned, the newest published version mounts automatically — the chain
@@ -439,24 +439,16 @@ class KaggleKernels:
         stage.mkdir(parents=True, exist_ok=True)
         metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
             resolved_slug, code_file, enable_gpu=True)
+        bundle_dataset = spec.hosted_slug("bundle")
         if kind == "embed":
-            request_dataset = spec.embedding_dataset_slug
-            if not request_dataset:
-                raise RuntimeError(
-                    "config kaggle.embedding_dataset_slug is unset; package + "
-                    "upload the embedding request dataset first (--what package "
-                    "--dataset-csv ... ; then set the slug)")
-            metadata["dataset_sources"] = [request_dataset]
+            metadata["dataset_sources"] = [spec.hosted_slug("embeddings")]
         else:
             metadata["kernel_sources"] = [bundle_slug]
-            bundle_dataset = spec.bundle_dataset_slug
-            if bundle_dataset:
-                # Unpinned mount = newest published version (the publish default
-                # keeps it fresh); a known version pins explicitly.
-                bundle_dataset_entry = bundle_dataset
-                if bundle_dataset_version:
-                    bundle_dataset_entry = f"{bundle_dataset}/{bundle_dataset_version}"
-                metadata["dataset_sources"] = [bundle_dataset_entry]
+            # Unpinned mount = newest published version (the publish default
+            # keeps it fresh); a known version pins explicitly.
+            bundle_dataset_entry = (f"{bundle_dataset}/{bundle_dataset_version}"
+                                    if bundle_dataset_version else bundle_dataset)
+            metadata["dataset_sources"] = [bundle_dataset_entry]
         # The train kernel ships the suite's own sealed result Bundle, so the
         # finalize job's `Bundle.load(..., "result")` boundary accepts it (the
         # proven role handoff fix). The embed kernel keeps the shared tree-tar
@@ -471,7 +463,7 @@ class KaggleKernels:
                   .replace("@CHECKOUT_PATHS@",
                            json.dumps(lane.checkout_members(checkout_paths or spec.checkout_paths, lane="training")))
                   .replace("@BUNDLE_DATASET_NAME@",
-                           (spec.bundle_dataset_slug or "").rsplit("/", 1)[-1])
+                           bundle_dataset.rsplit("/", 1)[-1])
                   .replace("@RUNTIME_PREFLIGHT@", "\n".join(
                       "    " + line for line in lane.checkout_preflight_script(
                           lane.checkout_inventory(checkout_paths or spec.checkout_paths, lane="training")).splitlines()))
@@ -521,7 +513,7 @@ class KaggleKernels:
         version replace); ``slug`` overrides it for a dedicated kernel.
 
         It attaches BOTH verified inputs: the published prepared-inputs bundle
-        dataset (``kaggle.bundle_dataset_slug``, immutable) and the trained
+        dataset (the registry's ``bundle`` role, immutable) and the trained
         result kernel output (``kaggle.gpu_kernel_slug``). The revision is
         pinned at staging time and must be the published origin tip, so the
         finalize job runs exactly the source the staged receipt names.
@@ -546,12 +538,7 @@ class KaggleKernels:
                 f"config kaggle.{train_identity.slug_attr} is unset; the finalize kernel "
                 "attaches the trained result kernel output and cannot run "
                 "without it")
-        bundle_dataset = spec.bundle_dataset_slug
-        if not bundle_dataset:
-            raise RuntimeError(
-                "config kaggle.bundle_dataset_slug is unset; the finalize "
-                "kernel attaches the published prepared-inputs bundle and "
-                "cannot run without it")
+        bundle_dataset = spec.hosted_slug("bundle")
         code_file = identity.code_file
         pinned = revision or lane._git_revision()
         from core import runtime_inputs

@@ -52,8 +52,8 @@ class KaggleChain:
     def _verify_chain_step(*, kind: str, watch: dict[str, Any],
                            plan_entry: dict[str, Any],
                            expect_publish: bool = False) -> None:
-        """Chain gate: terminal-complete status, sha-verified fetch, and (for
-        the bundle step) the publish default actually published."""
+        """Chain gate: terminal-complete status, byte-size-verified fetch, and
+        (for the bundle step) the publish default actually published."""
         from cli import kaggle_lane as lane
 
         if watch.get("status") != "complete":
@@ -79,7 +79,7 @@ class KaggleChain:
         Steps and their fail-loud gates, in order:
         1. bundle-kernel: staged + pushed (cohort pinned at the chain's HEAD
            revision); push_bundle_kernel's own watcher supervises → verifies the
-           fetch (sha vs kernel receipt) → releases the session; the publish
+           fetch (byte size vs kernel receipt) → releases the session; the publish
            default inside the verified fetch publishes a fresh bundle-dataset
            version and records its number.
         2. train-kernel: staged (SAME revision — any drift fails loud with both
@@ -97,7 +97,7 @@ class KaggleChain:
            operator box is no longer a finalize surface. It reuses the bundling
            CPU kernel slug and attaches the published inputs bundle plus the
            trained result kernel output; the sealed result bundle is fetched
-           and digest-verified like every other step.
+           and byte-size-verified like every other step.
         Dry-run prints the entire plan (no staging writes, no subprocesses).
         """
         from cli import kaggle_lane as lane
@@ -110,7 +110,7 @@ class KaggleChain:
         # config field it came from — no per-surface kind->slug table here.
         identities = lane.kernel_identities(spec)
         slugs = {kind: identity.slug(spec) for kind, identity in identities.items()}
-        publish_slug = spec.bundle_dataset_slug
+        publish_slug = spec.hosted_slug("bundle")
         plan: dict[str, Any] = {
             "what": "chain", "mode": "executed" if execute else "dry-run",
             "cohort": cohort, "with_embed": with_embed,
@@ -124,10 +124,6 @@ class KaggleChain:
                 raise RuntimeError(
                     f"chain requires config kaggle.{identities[step_kind].slug_attr}; "
                     "name the kernel (owner/slug) before chaining")
-        if not publish_slug:
-            raise RuntimeError(
-                "chain requires config kaggle.bundle_dataset_slug; the publish "
-                "step and the train stage's bundle mount depend on it")
         if not execute:
             for step_kind in kinds:
                 plan["steps"][step_kind] = {

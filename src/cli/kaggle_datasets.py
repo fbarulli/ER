@@ -242,7 +242,7 @@ class KaggleDatasets:
     @staticmethod
     def _newest_bundle_install() -> Path | None:
         """Newest verified bundle install: staging_dir/<cohort>/bundle with the
-        archive + kernel receipt contract, hash-consistent against its own
+        archive + kernel receipt contract, size-consistent against its own
         receipt. Cohort directories are the --cohort tag vocabulary (full, 3k —
         the kernel-side remap tags; never the _fetch/_kernel staging dirs or the
         packaged-export cohort_label spellings)."""
@@ -321,10 +321,11 @@ class KaggleDatasets:
         """Publish-default building block: build the bundle dataset stage dir
         from a VERIFIED install and run `kaggle datasets version` via _run_kaggle.
 
-        kind='bundle' resolves the SSOT target `kaggle.bundle_dataset_slug`; any
-        other kind (train/embed fetch output) has no bundle dataset in the SSOT
-        and records a skip note instead of publishing something unintended.
-        Fail loud on: unset slug, cohort-marker conflict, install-vs-receipt sha
+        kind='bundle' resolves the registry's ``bundle`` role as the publish
+        target (config/hosted_datasets.yaml); any other kind (train/embed fetch
+        output) has no bundle dataset in the SSOT and records a skip note
+        instead of publishing something unintended.
+        Fail loud on: cohort-marker conflict, install-vs-receipt byte-size
         mismatch, missing verified install. Without --execute the plan is
         described and nothing is written or run.
         """
@@ -339,19 +340,15 @@ class KaggleDatasets:
                             f"fetched {kind!r} output; the publish default "
                             "applies to bundle payloads")
             return plan
-        slug = spec.bundle_dataset_slug
+        slug = spec.hosted_slug("bundle")
         plan["slug"] = slug
-        if not slug:
-            raise RuntimeError(
-                "config kaggle.bundle_dataset_slug is unset; name the target "
-                "dataset (owner/slug) before a publish")
         install = lane._newest_bundle_install()
         if install is None:
             raise RuntimeError(
                 "publish found no verified bundle install "
                 f"({lane.staging_dir()}/<cohort>/bundle with a matching "
-                "bundle.receipt.json sha); a publish always builds its stage "
-                "from a verified fetch")
+                "bundle.receipt.json archive size); a publish always builds its "
+                "stage from a verified fetch")
         receipt_path = install / lane._spec().files.bundle_receipt
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         archive = install / lane._spec().files.bundle_archive
@@ -365,10 +362,10 @@ class KaggleDatasets:
         conflict = lane._cohort_marker_conflict(slug, cohort)
         if conflict:
             raise RuntimeError(
-                f"kaggle.bundle_dataset_slug {slug!r} declares cohort "
-                f"{conflict!r}; refusing to publish a {cohort!r} bundle into it "
-                "(named cohort mismatch — set the cohort's own dataset slug "
-                "first)")
+                f"the bundle dataset {slug!r} (registry role `bundle`) declares "
+                f"cohort {conflict!r}; refusing to publish a {cohort!r} bundle "
+                "into it (named cohort mismatch — set the cohort's own dataset "
+                "slug first)")
         stage = lane._bundle_dataset_stage(cohort)
         plan.update({
             "cohort": cohort,

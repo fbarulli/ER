@@ -46,7 +46,8 @@ registry, and has **no** notion of hosted/remote datasets.
    `core/laya_config.py` (`LayaSpec`) and `core/schemas.py` (`KaggleSpec`):
    - `LayaSpec`: `base_model_dataset`, `dataset_slug`, `export_dataset_slug`,
      `finetune_dataset_slug`, `finetune_ckpt_dataset`, `holdout_dataset_slug`
-   - `KaggleSpec`: `bundle_dataset_slug`, `embedding_dataset_slug`
+   - `KaggleSpec`: its bundle/embedding dataset slugs (now referenced from the
+     registry via `KaggleSpec.hosted_slug(role)`)
    A fresh SSOT split; no single home.
 2. **No role model.** base / corpus / requests / decisions / holdout / ckpt /
    bundle / embeddings are not expressed.

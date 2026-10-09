@@ -214,9 +214,7 @@ def _stage_train_and_embed(tmp_path, monkeypatch):
     spec = KaggleSpec(staging_dir="kaggle_stage", username="owner",
                       cpu_kernel_slug="owner/er-bundle-cpu",
                       gpu_kernel_slug="owner/er-train-gpu",
-                      embedding_kernel_slug="owner/er-embed-gpu",
-                      embedding_dataset_slug="owner/er-embed-requests",
-                      bundle_dataset_slug="owner/er-10k-bundle")
+                      embedding_kernel_slug="owner/er-embed-gpu")
     monkeypatch.setattr(kaggle_lane, "_spec", lambda: spec)
     monkeypatch.setattr(kaggle_lane, "TRAIN_ROOT", tmp_path)
     monkeypatch.setattr(kaggle_lane, "staging_dir",

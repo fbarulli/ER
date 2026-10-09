@@ -299,13 +299,13 @@ kaggle:
   gpu_kernel_slug: "fbarulli/er-train-gpu"
   # GPU embedding kernel — second GPU objective: hybrid embedding forwards
   # (encode_prepared_embeddings against the git-shipped checkpoint). Its
-  # request payload (request.json + prepared_text.npz) rides a Kaggle
-  # dataset; the request dataset must be uploaded (--what package/upload
-  # with the embedding request csv) before the embed kernel can push.
+  # request payload (request.json + prepared_text.npz) rides the hosted
+  # dataset the registry declares for role `embeddings`
+  # (config/hosted_datasets.yaml); the request dataset must be uploaded
+  # (--what package/upload with the embedding request csv) before the embed
+  # kernel can push. The attached train dataset is the registry's `bundle`
+  # role; no slug is re-declared here.
   embedding_kernel_slug: "fbarulli/er-embed-gpu"
-  embedding_dataset_slug: "fbarulli/er-embed-requests"
-  # Dataset the train kernel attaches (fresh bundle versions upload here).
-  bundle_dataset_slug: "fbarulli/er-10k-bundle"
   checkout_paths: ["src", "scripts", "config", "requirements", "artifacts/models"]
   bundle_requirements: "requirements/graph_tracks.txt"
   # Suite config the train kernel runs (members of the prepared package

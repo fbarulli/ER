@@ -19,7 +19,7 @@ class KaggleOutputs:
     def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
                             cohort: str | None = None,
                             slug: str | None = None) -> dict[str, Any]:
-        """Download a kernel's output and hash-verify its manifest archive.
+        """Download a kernel's output and byte-size-verify its manifest archive.
 
         bundle — bundle.receipt.json contract (all_tracks_inputs.tar.zst)
         train  — result_manifest.json contract (result_bundle.tar.zst)
@@ -32,8 +32,8 @@ class KaggleOutputs:
         the kernel receipt's own cohort tag when it declares one.
         Publish default (owner order 2026-10-07): after the verification a
         fresh dataset version publishes automatically (`plan["publish"]`,
-        publish_bundle_dataset) — for bundles the `kaggle.bundle_dataset_slug`
-        SSOT target; train/embed outputs record a skip note (no SSOT dataset).
+        publish_bundle_dataset) — for bundles the registry's `bundle` role
+        target; train/embed outputs record a skip note (no SSOT dataset).
         """
         from cli import kaggle_lane as lane
         from cli.kaggle_kernels import KaggleKernels
