@@ -3,9 +3,9 @@
 One decisive assertion per invariant. The audit's claims and what each test
 enforces:
 
-1. ``verify EXACTLY ONCE`` per VM crossing — a completion job that seals a
-   bundle must not re-verify those bytes, and each transported archive is
-   verified exactly once. Verified by counting ``verify_archive`` passes in a
+1. ``read once`` per VM crossing — a completion job that seals a bundle must not
+   re-read those bytes, and each transported archive's manifest is read exactly
+   once. Verified by counting ``core.bundle.read_archive_manifest`` calls in a
    real local-completion job.
 2. Bundle ROLE contracts are enforced at the boundary, not only by the writer —
    an ``inputs`` bundle carrying weights, or a ``result`` bundle carrying every
@@ -40,7 +40,7 @@ import yaml
 
 from core.bundle import Bundle, BundleRole, _bundle_spec, manifest_name
 from core.bundle import _bundle_spec as _spec
-from core.portable_archive import verify_archive, write_archive
+from core.portable_archive import read_archive_manifest, write_archive
 
 
 def _write(path: Path, content: str) -> Path:
@@ -49,32 +49,32 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
-# ── 1. one integrity check per archive per VM crossing ─────────────────────
+# ── 1. one manifest read per archive per VM crossing ───────────────────────
 
-def test_local_completion_verifies_each_archive_exactly_once(tmp_path, monkeypatch):
-    """A completion job verifies each transported archive once — and never the
-    archive it just sealed (the writer's digest is the transport token).
+def test_local_completion_reads_each_archive_once(tmp_path, monkeypatch):
+    """A completion job reads each transported archive once — and never the
+    archive it just sealed (the writer's handle is the trusted one).
 
-    Counts ``core.portable_archive.verify_archive`` passes through a real
+    Counts ``core.bundle.read_archive_manifest`` calls through a real
     ``local_complete.complete`` call whose heavy collaborators are stubbed; the
     two transported archives and the freshly sealed output all go through the
     REAL ``Bundle.load`` boundary.
     """
-    import core.portable_archive as portable_archive
+    import core.bundle as bundle_module
     from model_tracks import bundle_steps, local_complete
     from model_tracks import resume as resume_module
     from model_tracks.package import package_member
 
     spec = _spec()
     run_tag = "r-tag"
-    passes: dict[str, int] = {}
-    real_verify = portable_archive.verify_archive
+    reads: dict[str, int] = {}
+    real_read = bundle_module.read_archive_manifest
 
-    def counting_verify(path, manifest_name_, **kwargs):
-        passes[str(path)] = passes.get(str(path), 0) + 1
-        return real_verify(path, manifest_name_, **kwargs)
+    def counting_read(path, manifest_name_, **kwargs):
+        reads[str(path)] = reads.get(str(path), 0) + 1
+        return real_read(path, manifest_name_, **kwargs)
 
-    monkeypatch.setattr(portable_archive, "verify_archive", counting_verify)
+    monkeypatch.setattr(bundle_module, "read_archive_manifest", counting_read)
 
     # The two archives that crossed the wire: a result archive (GPU output) and
     # an inputs archive (the prepared data bundle), each well formed.
@@ -133,17 +133,16 @@ def test_local_completion_verifies_each_archive_exactly_once(tmp_path, monkeypat
 
     published = local_complete.complete(training_archive, input_archive, run_tag)
 
-    assert passes.get(str(training_archive), 0) == 1, \
-        "each transported archive is integrity-checked exactly once at its boundary"
-    assert passes.get(str(input_archive), 0) == 1
+    assert reads.get(str(training_archive), 0) == 1, \
+        "each transported archive's manifest is read exactly once at its boundary"
+    assert reads.get(str(input_archive), 0) == 1
     # The just-sealed result archive crossed NO wire in this process: the writer
-    # already hashed it while writing and returned its digest, so a second
-    # boundary load is a redundant integrity pass (one per crossing). Asserted,
-    # not recorded: the fix is in model_tracks/local_complete.py (the finalize
-    # handle is reused) and a regression must fail here.
-    assert passes.get(str(published), 0) == 0, (
-        "the completion job re-verified the archive it just sealed "
-        f"({passes[str(published)]} extra pass over {Path(published).name}); the handle "
+    # already holds the trusted handle, so a second boundary load is a redundant
+    # read. Asserted, not recorded: the fix is in model_tracks/local_complete.py
+    # (the finalize handle is reused) and a regression must fail here.
+    assert reads.get(str(published), 0) == 0, (
+        "the completion job re-read the archive it just sealed "
+        f"({reads[str(published)]} extra read of {Path(published).name}); the handle "
         "returned by model_tracks.bundle_steps.finalize must be the handle every later "
         "step shares instead of re-loading the bytes")
 
@@ -155,7 +154,7 @@ def test_bundle_role_contracts_are_enforced_on_load(tmp_path):
 
     An ``inputs`` bundle must carry no weights, and a ``result`` bundle must
     carry only the selected checkpoint. Both archives below are well formed
-    (``verify_archive`` accepts them); the only remaining refusal reason
+    (``read_archive_manifest`` reads them); the only remaining refusal reason
     is the role contract.
     """
     spec = _spec()
@@ -186,7 +185,7 @@ def test_bundle_role_contracts_are_enforced_on_load(tmp_path):
     for role, archive, label in (
             (BundleRole.inputs, inputs_archive, "an inputs bundle carrying weights"),
             (BundleRole.result, result_archive, "a result bundle carrying every epoch")):
-        verify_archive(archive, manifest_name(role))  # fixture is well formed
+        read_archive_manifest(archive, manifest_name(role))  # fixture is well formed
         try:
             Bundle.load(archive, role)
         except ValueError:

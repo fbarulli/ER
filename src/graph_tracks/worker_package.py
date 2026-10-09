@@ -57,13 +57,11 @@ def _package_base(track: str) -> Path:
 def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
     """The historical ``files_size`` inventory (same shape as ``files``).
 
-    ``Bundle.seal_archive`` recomputes the authoritative ``bundle.files_key``
-    inventory through the ONE builder (``core.portable_archive
-    .source_inventory``) while it writes and verifies it against the written
-    bytes, so the boundary check owns integrity; this mirror exists only for
-    the legacy key. Forwarding to that same builder means both keys carry the
-    identical map and the sources are hashed once per process (the digest
-    cache), never by a second loop.
+    ``Bundle.seal_archive`` records the authoritative ``bundle.files_key``
+    inventory through the ONE builder (``core.portable_archive.source_inventory``)
+    while it writes; this mirror exists only for the legacy key. Forwarding to
+    that same builder means both keys carry the identical map. It is a RECORD:
+    no byte size is ever compared (owner directive: data is never checked).
     """
     from core.portable_archive import source_inventory
     return source_inventory(files, inline)
@@ -127,7 +125,7 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
                 'run_tag': run_tag or revision}
     readme = (
         f'Check out ER revision {revision}, then extract this ZIP into that checkout.\n'
-        'The ZIP includes the shared runtime source/config overlay, hashed in package_manifest.json.\n'
+        'The ZIP includes the shared runtime source/config overlay, recorded in package_manifest.json.\n'
         'Install PyTorch for the target runtime and requirements/graph_tracks.txt.\n'
         'Verify files before use:\n'
         f'PYTHONPATH=src python -m graph_tracks.worker_package --verify {base}/package_manifest.json\n'
@@ -147,11 +145,12 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
 
 
 def verify(manifest_path: Path) -> None:
-    """Re-verify an extracted worker package against its own manifest.
+    """Check an extracted worker package's manifest and member paths.
 
-    Prefers the Bundle-facing inventory (``training_cfg().bundle.files_key``,
-    the key ``Bundle.load`` checks) and falls back to the historical
-    ``files_size`` mirror so already-written packages still verify.
+    The manifest schema and the pinned checkout revision are contracts; every
+    declared member path must resolve inside the checkout (a path-safety check).
+    No member size or content is compared: a package is immutable, so its
+    identity is the package itself (owner directive: data is never checked).
     """
     from core.common import TRAIN_ROOT, training_cfg
     manifest = json.loads(manifest_path.read_text())
@@ -165,16 +164,10 @@ def verify(manifest_path: Path) -> None:
                  or manifest.get(_legacy_inventory_key()))
     if not isinstance(inventory, dict) or not inventory:
         raise ValueError('worker package manifest carries no member inventory')
-    # The tree is already unpacked, so member names resolve against the
-    # checkout; the ONE inventory comparison owns the digest check.
-    from core.portable_archive import compare_inventory
-    actual = {}
     for target in inventory:
         path = (TRAIN_ROOT / target).resolve()
         if not path.is_relative_to(TRAIN_ROOT.resolve()):
-            raise ValueError(f'worker package file mismatch: {target}')
-        actual[target] = file_size(path)
-    compare_inventory(inventory, actual, mismatch='worker package file mismatch')
+            raise ValueError(f'unsafe worker package member: {target}')
 
 
 def main():

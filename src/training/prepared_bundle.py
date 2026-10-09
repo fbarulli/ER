@@ -706,15 +706,7 @@ def write_prepared_bundle(
 # --- load path -------------------------------------------------------------
 
 class BundleReader:
-    """One load's verification lane: bytes, counts, identity contracts."""
-
-    @staticmethod
-    def resolve_verify_inputs(verify_inputs) -> bool:
-        """The suite data gate's decision unless the caller forced one."""
-        if verify_inputs is not None:
-            return bool(verify_inputs)
-        from model_tracks.data_gate import _owner_trusted
-        return not _owner_trusted('text bundle')
+    """One load's contract lane: manifest, counts, identity contracts."""
 
     @staticmethod
     @timed
@@ -731,44 +723,15 @@ class BundleReader:
 
     @staticmethod
     @timed
-    def verify_bytes(path: Path, manifest: PreparedBundleManifest) -> None:
-        """The whole-file byte size must match the manifest's recorded size."""
-        actual_size = _size_of(path)
-        if actual_size != manifest.size:
-            raise ValueError(
-                f"prepared bundle size mismatch: {path} "
-                f"{actual_size} != {manifest.size}"
-            )
-
-    @staticmethod
-    @timed
     def validate_manifest_counts(path: Path, manifest: PreparedBundleManifest,
                                  data: dict[str, Any]) -> None:
-        """Every manifest count must still match the payload it describes."""
+        """Every manifest row/pair count must match the payload it describes."""
         if len(data["df"]) != manifest.n_df or len(data["payload"]) != manifest.n_payload:
             raise ValueError("prepared bundle manifest/data row counts disagree")
         if len(data["pos"]) != manifest.n_pos or len(data["neg"]) != manifest.n_neg:
             raise ValueError("prepared bundle manifest/pair counts disagree")
         if len(data["train_neg"]) != manifest.n_train_neg:
             raise ValueError("prepared bundle manifest/training-negative counts disagree")
-        BundleReader.validate_embedded_csv_bytes(path, manifest, data)
-
-    @staticmethod
-    @timed
-    def validate_embedded_csv_bytes(path: Path, manifest: PreparedBundleManifest,
-                                    data: dict[str, Any]) -> None:
-        """The embedded raw CSVs are byte-count contracted per manifest."""
-        if (
-            not isinstance(data["labeled_pairs_csv"], bytes)
-            or len(data["labeled_pairs_csv"]) != manifest.n_labeled_pairs_bytes
-        ):
-            raise ValueError("prepared bundle labeled-pairs bytes disagree with manifest")
-        for field, expected in (
-            ("canonical_records_csv", manifest.n_canonical_records_bytes),
-            ("gate_results_csv", manifest.n_gate_results_bytes),
-        ):
-            if not isinstance(data[field], bytes) or len(data[field]) != expected:
-                raise ValueError(f"prepared bundle {field} bytes disagree with manifest")
 
     @staticmethod
     @timed
@@ -818,25 +781,21 @@ def _timed_lineage_validations(data) -> None:
 
 
 @timed
-def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBundleManifest, dict[str, Any]]:
+def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
     """Load and validate a bundle before it crosses into the training lane.
 
-    `verify_inputs` defaults to the suite data gate's decision.  The bundle is
-    always decompressed and unpickled -- training consumes it -- but when the
-    supervisor already attested these exact bytes the whole-file size check and
-    the manifest/provenance comparisons are skipped, since a changed bundle
-    changes its size and leaves enforcement active.  Pass True to force them.
+    The bundle is decompressed and unpickled -- training consumes it. No size,
+    hash or existence value is compared: a bundle is immutable, so its identity
+    IS the bundle (owner directive: data is never checked). The schema and shape
+    contracts still apply: the manifest parses, every required field exists, the
+    arrays align, and the frozen lineage replays.
     """
     cached = PreparationStore.cached(path)
     if cached is not None:
         return cached
-    verify = BundleReader.resolve_verify_inputs(verify_inputs)
     manifest = BundleReader.load_manifest(path)
-    if verify:
-        BundleReader.verify_bytes(path, manifest)
     data = BundleCodec.read_payload(path)
-    if verify:
-        PayloadContract.validate_arrays(data)
+    PayloadContract.validate_arrays(data)
     PayloadContract.assert_required_fields(data)
     _timed_lineage_validations(data)
     BundleReader.validate_manifest_counts(path, manifest, data)

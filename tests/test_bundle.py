@@ -1,10 +1,10 @@
 """Bundle boundary + role enforcement.
 
 The ``Bundle`` is the one sealed artifact that travels generation -> training ->
-post-training. These tests pin its public contract: a single boundary integrity
-check (``Bundle.load``) that fails loud on a corrupt archive, role enforcement
-(result = selected checkpoint only; recovery = all epochs + optimizer; inputs =
-none), and a result seal that ships the selected-only member set.
+post-training. These tests pin its public contract: one manifest read at the
+boundary (``Bundle.load``), role enforcement (result = selected checkpoint only;
+recovery = all epochs + optimizer; inputs = none), and a result seal that ships
+the selected-only member set. No byte size or content is ever compared.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from core.bundle import Bundle, BundlePipeline, BundleRole, manifest_name
-from core.portable_archive import verify_archive, write_archive
+from core.portable_archive import read_archive_manifest, write_archive
 
 
 def _spec():
@@ -167,15 +167,15 @@ def test_load_rejects_truncated_archive(tmp_path: Path) -> None:
     assert Bundle.load(archive, BundleRole.result).role is BundleRole.result
 
 
-def test_load_verifies_the_sealed_member_inventory(tmp_path: Path) -> None:
+def test_sealed_member_inventory_is_available_on_load(tmp_path: Path) -> None:
     tree = tmp_path / "result"
     _result_tree(tree)
     archive = _seal(tree, tmp_path / "result.tar.zst")
-    manifest = verify_archive(archive, manifest_name(BundleRole.result))
+    manifest = read_archive_manifest(archive, manifest_name(BundleRole.result))
 
     assert manifest["files"]
     handle = Bundle.load(archive, BundleRole.result)
-    # Every declared inventory member is present in the verified member list.
+    # Every declared inventory member is present in the member list.
     assert set(manifest["files"]).issubset(set(handle.members()))
 
 
@@ -302,12 +302,11 @@ def test_pipeline_steps_are_wired() -> None:
             pipeline.output or Path("/nonexistent"), BundleRole.inputs))
 
 
-def test_seal_archive_captures_the_transport_digest_and_members(tmp_path: Path) -> None:
-    """Sealing yields the whole-file digest without reading the archive back.
+def test_seal_archive_captures_members_without_re_reading(tmp_path: Path) -> None:
+    """Sealing yields the member inventory without reading the archive back.
 
-    The digest is the transport token (the ``.size`` sidecar), and the member
-    list is captured by the same boundary pass that verifies the archive, so a
-    later stage neither re-reads nor re-parses it.
+    The manifest records each source's byte size, and the member list is the set
+    the writer froze, so a later stage neither re-reads nor re-parses it.
     """
     tree = tmp_path / "inputs"
     _write(tree / "data/model_tracks/shared/listings.json", "{}")
@@ -316,14 +315,14 @@ def test_seal_archive_captures_the_transport_digest_and_members(tmp_path: Path) 
 
     sealed = Bundle.seal_archive(archive, files, role=BundleRole.inputs,
                                  metadata={_spec().run_tag_key: "r-tag"})
-    observed = verify_archive(archive, manifest_name(BundleRole.inputs))
+    observed = read_archive_manifest(archive, manifest_name(BundleRole.inputs))
     assert sealed.manifest[_spec().files_key] == observed[_spec().files_key]
     assert sealed.role is BundleRole.inputs
 
     handle = Bundle.load(archive, BundleRole.inputs)
     assert set(observed[_spec().files_key]).issubset(set(handle.members()))
     assert handle.members() == sorted(handle.member_names)
-    # The member list came from the boundary pass: it still answers after the
+    # The member list came from the boundary read: it still answers after the
     # archive path is gone, which is exactly "no stage re-parses".
     moved = archive.with_name("moved.tar.zst")
     archive.rename(moved)

@@ -18,8 +18,10 @@ def test_automatic_suite_ablation_refuses_to_reopen_gpu_without_saved_exports(tm
     with pytest.raises(ValueError,match='staged GPU ablation exports'):
         auto.run(tmp_path/'completed.zip','run',suite,launcher=forbidden)
     assert opened == [(tmp_path/'completed.zip', BundleRole.result)]
-    # the stray verify_archive spelling is gone: one boundary load, by role
+    # no stray archive-verify helper lives on this module: the boundary load by
+    # role is the only archive read.
     assert not hasattr(auto, 'verify_archive')
+    assert not hasattr(auto, 'read_archive_manifest')
 
 
 def test_run_reuses_a_supplied_boundary_handle_without_reopening(tmp_path,monkeypatch):

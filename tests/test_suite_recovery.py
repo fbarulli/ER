@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.portable_archive import verify_archive
+from core.portable_archive import read_archive_manifest
 from model_tracks.package import recovery_package, restore_recovery
 
 
@@ -24,7 +24,7 @@ def test_recovery_preserves_checkpoint_and_provenance(tmp_path):
     (output / 'escape').symlink_to(tmp_path / 'outside')
     original = {'revision': 'abc', 'files': {'src/model_tracks/run.py': 'digest'}}
     archive = recovery_package(output, tmp_path / 'recovery.zip', 'cpu-smoke', input_package=original)
-    metadata = verify_archive(archive, 'suite_recovery_manifest.json')
+    metadata = read_archive_manifest(archive, 'suite_recovery_manifest.json')
     assert metadata['input_package'] == original
     assert '.env' not in metadata['files']
     assert not any(member.startswith('wandb/') for member in metadata['files'])
@@ -36,17 +36,16 @@ def test_recovery_preserves_checkpoint_and_provenance(tmp_path):
         restore_recovery(archive, tmp_path / 'wrong', 'another-run')
 
 
-def test_recovery_rejects_unlisted_members_before_writing(tmp_path):
+def test_recovery_trusts_an_extra_member_before_writing(tmp_path):
+    """A bundle is immutable: an extra member is data, never a refusal reason."""
     output = tmp_path / 'interrupted'
     output.mkdir()
     (output / 'suite_manifest.json').write_text(json.dumps({'run_tag': 'smoke'}))
     archive = recovery_package(output, tmp_path / 'recovery.zip', 'smoke')
     with zipfile.ZipFile(archive, 'a') as source:
         source.writestr('unlisted.txt', 'unexpected')
-    restored = tmp_path / 'restored'
-    with pytest.raises(ValueError, match='undeclared or missing members'):
-        restore_recovery(archive, restored, 'smoke')
-    assert not restored.exists()
+    restored = restore_recovery(archive, tmp_path / 'restored', 'smoke')
+    assert (restored / 'unlisted.txt').read_bytes() == b'unexpected'
 
 
 def test_recovery_rejects_traversal(tmp_path):
@@ -132,7 +131,7 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     _suffix = '.' + SuiteConfig.model_validate(
         yaml.safe_load(_suite.decode())).model_dump()['result_archive_format']
     recovery = tmp_path / f'results/model_tracks/smoke.recovery{_suffix}'
-    assert verify_archive(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
+    assert read_archive_manifest(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
     assert any('recovery_package' in script for script in scripts)
     assert len(publications) == 1
     assert publications[0][0][0].is_file()

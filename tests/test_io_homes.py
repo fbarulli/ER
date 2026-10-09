@@ -4,8 +4,7 @@ Each concept has exactly ONE implementation outside ``core``:
 
 * the file size -> ``core.portable_archive.file_size`` (``core.manifest
   .file_size`` and ``graph_tracks.data.file_size`` forward there);
-* the source inventory -> ``core.portable_archive.source_inventory`` and its
-  comparison -> ``core.portable_archive.compare_inventory``;
+* the source inventory -> ``core.portable_archive.source_inventory``;
 * the atomic publish -> ``core.manifest.atomic_write* / atomic_write_stream /
   publish_replacing``;
 * the only copies outside ``core`` are the pinned standalone ones: the NER
@@ -124,22 +123,6 @@ def test_source_inventory_is_the_one_inventory_builder(tmp_path: Path) -> None:
         source_inventory({'link.csv': link}, {})
 
 
-def test_compare_inventory_is_the_one_comparator() -> None:
-    from core.portable_archive import compare_inventory
-
-    inventory = {'a.txt': '0' * 64, 'b.txt': '1' * 64}
-    compare_inventory(inventory, dict(inventory))
-
-    with pytest.raises(ValueError, match='undeclared or missing members'):
-        compare_inventory(inventory, {'a.txt': '0' * 64})
-    with pytest.raises(ValueError, match='b.txt'):
-        compare_inventory(inventory, {'a.txt': '0' * 64, 'b.txt': '2' * 64})
-    # a caller with its own surface name keeps its own message
-    with pytest.raises(ValueError, match='worker package file mismatch: b.txt'):
-        compare_inventory(inventory, {'a.txt': '0' * 64, 'b.txt': '2' * 64},
-                          mismatch='worker package file mismatch')
-
-
 def test_atomic_write_stream_matches_atomic_write_and_cleans_residue(tmp_path: Path) -> None:
     from core.manifest import atomic_write_stream, atomic_write_text
 
@@ -204,9 +187,13 @@ def test_kaggle_kernels_inject_the_one_pinned_digest(tmp_path: Path) -> None:
         assert source.count('@SIZE_HELPER@') == 1, name
 
 
-def test_worker_package_verify_uses_the_shared_comparator(tmp_path: Path,
-                                                          monkeypatch) -> None:
-    """``--verify`` on an extracted worker package keeps its message + guard."""
+def test_worker_package_verify_checks_manifest_and_paths(tmp_path: Path,
+                                                         monkeypatch) -> None:
+    """``--verify`` checks the manifest/schema/revision and member path safety.
+
+    It does NOT compare data bytes: a package is immutable and trusted (owner
+    directive: data is never checked), so a tampered member is not a refusal.
+    """
     from core import common
     from graph_tracks import worker_package
 
@@ -227,8 +214,7 @@ def test_worker_package_verify_uses_the_shared_comparator(tmp_path: Path,
     worker_package.verify(manifest)
 
     payload.write_text('tampered: cascade\n')
-    with pytest.raises(ValueError, match='worker package file mismatch'):
-        worker_package.verify(manifest)
+    worker_package.verify(manifest)  # data is trusted: no byte comparison
 
 
 def test_worker_package_verify_rejects_a_traversal_member(tmp_path: Path,
@@ -245,7 +231,7 @@ def test_worker_package_verify_rejects_a_traversal_member(tmp_path: Path,
         worker_package.subprocess, 'run',
         lambda *a, **k: types.SimpleNamespace(stdout='rev\n'))
 
-    with pytest.raises(ValueError, match='worker package file mismatch'):
+    with pytest.raises(ValueError, match='unsafe worker package member'):
         worker_package.verify(manifest)
 
 

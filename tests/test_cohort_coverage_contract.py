@@ -37,7 +37,7 @@ def _run_real_cohort(work: Path) -> Path:
     shutil.copytree(REPO / 'data/prepared' / SETUP_NAME, setup)
     from training.prepared_bundle import load_prepared_bundle
 
-    _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz', verify_inputs=False)
+    _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz')
     return ablation_cohort.prepare_cohort(setup, bundle)
 
 

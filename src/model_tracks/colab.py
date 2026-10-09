@@ -1,11 +1,10 @@
 """All-track adapter; provisioning, locks, polling and teardown stay in cli.colab.
 
 Every archive this boundary touches is opened through its ONE ``Bundle`` load
-(``core.bundle.Bundle.load``): the legacy ``verify_archive``/``verified_archive``
-helpers are gone from here, so the inputs package, the recovery archive and the
-result archive are each integrity-checked by the boundary that owns their role
-(a resume run loads its recovery archive once and hands the manifest on), and
-then trusted.
+(``core.bundle.Bundle.load``): the retired archive-verification helpers are gone
+from here, so the inputs package, the recovery archive and the result archive are
+each read once by the boundary that owns their role (a resume run loads its
+recovery archive once and hands the manifest on), and then trusted.
 """
 import json
 from pathlib import Path

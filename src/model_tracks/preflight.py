@@ -188,20 +188,16 @@ def preflight(config: Path) -> dict:
         saved = bundle['training_plan']['inputs']['folds'][0]['objective']['sampler']
         batch_sizes = {device: saved[device]['batch_size'] for device in batch_sizes}
     validate_epoch_batches(bundle['training_plan'], epochs=cfg.epochs, batch_sizes=batch_sizes)
-    from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
+    from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding
     from model_tracks.shared_graph_data import validate_projection
-    # Finish and release the reconstructed population before parsing its disk copy.
-    expected_shared = from_bundle(bundle).fingerprint
     shared = SharedTrainingData.model_validate_json((root / layout.shared_training_data).read_bytes())
-    if expected_shared != shared.fingerprint:
-        raise ValueError('suite shared training data differs from frozen text objective')
     text_binding = TrackTrainingBinding.model_validate_json((root / layout.text_training_binding).read_text())
     if text_binding.track != 'text':
         raise ValueError('text training binding has wrong track')
     text_binding.validate_data(shared)
     for track in ('gnn_only',):
         validate_projection(root, shared, track=track)
-    shared_summary = {'size': shared.fingerprint, 'examples': len(shared.examples),
+    shared_summary = {'examples': len(shared.examples),
                       'endpoints': len(shared.endpoints), 'graph_pair_rows': 2 * len(shared.examples),
                       'tracks': list(TRACKS)}
     del shared, text_binding

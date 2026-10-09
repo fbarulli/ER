@@ -2,9 +2,9 @@
 
 ``Bundle`` is the one sealed artifact that travels generation -> training ->
 post-training across Colab and Kaggle, GPU and CPU. It is a pydantic value type
-over an on-disk archive plus the contract its role implies; integrity is checked
-EXACTLY ONCE at the boundary (``Bundle.load``), then the object is trusted, so no
-stage re-reads or re-parses members.
+over an on-disk archive plus the contract its role implies. A bundle is
+IMMUTABLE and trusted: no stage computes or compares a content hash, byte size,
+or existence value (owner directive: data is never checked).
 
 ``BundlePipeline`` is the only code allowed to perform bundling: generation
 (prepare inputs) and finalize (select checkpoint + post-process + ablation). It
@@ -25,7 +25,7 @@ from typing import Any, Iterable
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.archive_reader import open_archive
-from core.portable_archive import source_inventory, verify_archive
+from core.portable_archive import read_archive_manifest, source_inventory
 
 #: The epoch-checkpoint directory name prefix (``checkpoint-281``); the role
 #: contract, the best-checkpoint resolver, and the layout walks share this one
@@ -152,8 +152,8 @@ def _role_member_violations(role: BundleRole, names) -> list[str]:
 
     Role membership is a LOAD contract, not a writer-only convention, so the
     boundary refuses a role-violating set instead of trusting the caller. The
-    contract is decidable from the sealed inventory alone -- no member bytes are
-    read -- so the boundary's single integrity pass stays the single pass:
+    contract is decidable from the sealed member NAMES alone -- no member bytes
+    are read -- so the boundary never touches data.
 
     * ``inputs``  -- prepared inputs drive training; they carry no weights.
     * ``result``  -- the SELECTED checkpoint per training run: several epochs
@@ -227,10 +227,10 @@ class _DirectoryReader:
 
 
 class Bundle(BaseModel):
-    """A verified handle over one sealed archive (+ its role contract).
+    """A trusted handle over one sealed archive (+ its role contract).
 
     Constructed only through :meth:`load` (or :meth:`from_directory` for a tree
-    that is already unpacked), so the boundary integrity check cannot be skipped.
+    that is already unpacked).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -248,22 +248,21 @@ class Bundle(BaseModel):
     @classmethod
     def load(cls, path: Path | str, role: BundleRole | str, *,
              manifest_name: str | None = None) -> "Bundle":
-        """Verify ``path`` once at the boundary, then return a trusted handle.
+        """Read ``path``'s sealed manifest once, then return a trusted handle.
 
-        The boundary checks the sealed manifest's member name set and every
-        member's byte size (no content identity is computed anywhere). A failure is
-        the corruption guard: fail loud, keep the partial, never install.
-
-        The boundary also enforces the role's membership contract (see
-        :func:`_role_member_violations`), so a role-violating set never loads as
-        a trusted handle. Only a canonical-manifest archive is role-checked: a
-        caller naming its own manifest has declared another contract.
+        No content identity, byte size or member byte is computed or compared:
+        a bundle is immutable, so its identity is the archive itself (owner
+        directive: data is never checked). The boundary does enforce the role's
+        membership contract (see :func:`_role_member_violations`) from the member
+        NAMES alone, so a role-violating set never loads as a trusted handle.
+        Only a canonical-manifest archive is role-checked: a caller naming its own
+        manifest has declared another contract.
         """
         role = BundleRole(role)
         path = Path(path)
         name = manifest_name or globals()["manifest_name"](role)
         names: list[str] = []
-        manifest = verify_archive(path, name, names=names)
+        manifest = read_archive_manifest(path, name, names=names)
         spec = _bundle_spec()
         if role is BundleRole.result and spec.run_tag_key not in manifest:
             raise ValueError(f"bundle manifest {name} carries no {spec.run_tag_key}: {path}")
@@ -276,7 +275,7 @@ class Bundle(BaseModel):
     @classmethod
     def from_directory(cls, directory: Path | str, role: BundleRole | str, *,
                        manifest_name: str | None = None) -> "Bundle":
-        """Wrap an already-unpacked tree (no archive to verify).
+        """Wrap an already-unpacked tree (there is no archive to read).
 
         A tree that carries the role's own canonical manifest declares itself a
         sealed bundle boundary, so it is role-checked exactly like :meth:`load`
@@ -582,17 +581,14 @@ class Bundle(BaseModel):
                      manifest_name: str | None = None) -> "Bundle":
         """Write ``files`` as one sealed archive for ``role`` — the only writer.
 
-        Every bundling step seals through here: the writer sizes each source
-        exactly once while writing and verifies the written byte counts, so the
-        sealed archive is confirmed against its frozen inventory with no re-read
-        and no second integrity pass.
-
-        The returned handle is the writer's own: its manifest mirrors the
-        archive's (caller metadata plus the member inventory the writer froze),
-        and its member list is the set that was written — so a caller that needs
-        the completion contract's inventory or member names reuses this handle
-        instead of loading the bytes back. A role-violating member set is
-        refused before the bytes land.
+        Every bundling step seals through here: the writer sizes each source once
+        while it writes and records those byte counts in the sealed manifest
+        (a record, never compared). The returned handle is the writer's own: its
+        manifest mirrors the archive's (caller metadata plus the member inventory
+        the writer froze), and its member list is the set that was written — so a
+        caller that needs the completion contract's inventory or member names
+        reuses this handle instead of loading the bytes back. A role-violating
+        member set is refused before the bytes land.
         """
         from core.portable_archive import write_archive
         role = BundleRole(role)

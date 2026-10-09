@@ -186,7 +186,7 @@ def _prepare_shared_population(setup, bundle):
         shared = from_bundle(bundle)
     with trace_step('package.write_shared_files'):
         _dump_model_json(shared, setup / _setup_layout().shared_training_data)
-        text_binding = TrackTrainingBinding(track='text', shared_data_size=shared.fingerprint,
+        text_binding = TrackTrainingBinding(track='text',
             example_ids=[row.example_id for row in shared.examples],
             endpoint_indices=[row.payload_index for row in shared.endpoints])
         _dump_model_json(text_binding, setup / _setup_layout().text_training_binding)
@@ -630,9 +630,9 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
     """Seal stopped workers' portable state as one recovery bundle.
 
     The recovery role is the ``all epochs + optimizer`` contract: nothing is
-    selected away, and the sealed archive is written and verified once by its
-    writer (:meth:`core.bundle.Bundle.seal_archive` sizes every member as it
-    writes), so no caller re-reads the sealed bytes for a transport token.
+    selected away, and the sealed archive is written once by its writer
+    (:meth:`core.bundle.Bundle.seal_archive` records every member's byte size as
+    it writes), so no caller re-reads the sealed bytes for a transport token.
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()
@@ -663,11 +663,12 @@ def _publish_recovery(staging: Path, output: Path) -> None:
 
 @timed
 def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
-    """Restore ZIP or tar.zst once through the verified recovery Bundle.
+    """Restore ZIP or tar.zst once through the recovery Bundle.
 
-    The archive is verified exactly once at the :meth:`core.bundle.Bundle.load`
-    boundary (member sizes, traversal and symlink safety), and the verified
-    tree is then materialized and published only after every size check passed.
+    The archive is read once at the :meth:`core.bundle.Bundle.load` boundary
+    (member names, traversal and symlink safety) and then trusted: no member byte
+    is compared (owner directive: data is never checked). The tree is
+    materialized and published only after the read succeeds.
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()

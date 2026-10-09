@@ -17,7 +17,7 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from core.timing import Timing, emit_timing
+from core.timing import emit_timing
 
 SCHEMA: Final = 'er-training-attestation-v1'
 
@@ -75,17 +75,6 @@ def record_provenance_verification(attestation: TrainingAttestation) -> str:
     return status
 
 
-def _stream_size(path: Path) -> int:
-    started = time.monotonic()
-    digest = ByteCount()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    emit_timing(f"[timing] training.attestation size {path.name}: "
-                f"{time.monotonic() - started:.3f}s")
-    return digest.total
-
-
 def _read_json(path: Path, *, what: str) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"{what} missing: {path}")
@@ -115,25 +104,18 @@ def load_attestation(path: Path) -> TrainingAttestation:
 
 
 def verify_attestation(attestation: TrainingAttestation, *, bundle_path: Path) -> None:
-    """Re-check the one thing an attestation must prove: the bundle bytes.
+    """Check that an attestation passed and names a bundle that is present.
 
-    The handoff boundary already validated the plan, tokens, CSVs and
-    provenance; here only the bundle identity is re-proven with a single
-    streaming SHA-256 over the file the trainer is about to unpickle.
+    Nothing about the bundle bytes is re-proven: a bundle is immutable, so its
+    identity IS the bundle (owner directive: data is never checked). The
+    boundary's structural contracts (loss / sampling) are checked by
+    :func:`verify_plan_identity`.
     """
     if attestation.status != "pass":
         raise ValueError(f"training attestation does not pass: status={attestation.status!r}")
     path = Path(bundle_path)
     if not path.is_file():
         raise ValueError(f"attested prepared bundle missing: {path}")
-    timing = Timing("training.attestation")
-    with timing.section("bundle_size"):
-        digest = _stream_size(path)
-    if digest != attestation.bundle_size:
-        raise ValueError(
-            f"attested bundle size mismatch for {path}: "
-            f"computed {digest} != attested {attestation.bundle_size}"
-        )
 
 
 def verify_plan_identity(attestation: TrainingAttestation, *, loss: str,

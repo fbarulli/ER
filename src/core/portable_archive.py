@@ -11,7 +11,6 @@ import zipfile
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from core.archive_reader import zstd_module, archive_sidecar, archive_settings, tar_archive
-from core.perf_switches import perf_enabled
 from core.progress import tracked
 from core.step_trace import timed, trace_step
 
@@ -152,47 +151,11 @@ def _write_zip(candidate, files, inline, manifest_name, manifest):
         archive.writestr(manifest_name, manifest)
 
 
-class _CountingReader:
-    """File-like tee that counts exactly the bytes read."""
-
-    def __init__(self, handle, counter):
-        self._handle = handle
-        self._counter = counter
-
-    def read(self, size=-1):
-        data = self._handle.read(size)
-        if data:
-            self._counter['bytes'] += len(data)
-        return data
-
-    def close(self):
-        self._handle.close()
-
-
-def _count_member_bytes(handle, chunk_bytes: int) -> int:
-    """Bytes actually readable from one archive member (no content identity)."""
-    total = 0
-    while chunk := handle.read(chunk_bytes):
-        total += len(chunk)
-    return total
-
-
-def _write_tar(candidate, files, inline, manifest_name, manifest, *,
-               sizes: dict[str, int] | None = None, counter=None):
-    """Stream a zstd tar. When ``sizes`` is given, record each member's byte count
-    from the bytes handed to the writer, so the caller need not re-read the
-    archive to prove it matches its frozen inventory. ``counter`` records the
-    whole-file byte count of the compressed archive as it is written."""
-    with tar_archive(candidate, 'x', counter=counter) as archive:
+def _write_tar(candidate, files, inline, manifest_name, manifest):
+    """Stream a zstd tar; nothing is read back or compared after the write."""
+    with tar_archive(candidate, 'x') as archive:
         for target, source in tracked(files.items(), desc='archive.tar_files'):
-            if sizes is None:
-                archive.add(source, arcname=target, recursive=False)
-                continue
-            info = archive.gettarinfo(str(source), arcname=target)
-            written = {'bytes': 0}
-            with source.open('rb') as handle:
-                archive.addfile(info, _CountingReader(handle, written))
-            sizes[target] = written['bytes']
+            archive.add(source, arcname=target, recursive=False)
         for target, value in inline.items():
             _add_tar_text(archive, target, value)
         _add_tar_text(archive, manifest_name, manifest)
@@ -253,10 +216,13 @@ def _profile_sidecar(output: Path, timings: dict[str, float],
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
                   inventory_key: str | None = None, profile: bool = False) -> Path:
-    """Publish one size-inventoried archive (staging → verify → atomic link).
+    """Publish one size-inventoried archive (staging → atomic link).
 
-    ``inventory_key`` defaults to the ONE config home (``bundle.files_key``, see
-    :func:`inventory_key_home`).
+    The sealed manifest records each member's source byte size (a record, never
+    compared). The written bytes are never read back: the archive is immutable
+    and its identity is the archive itself (owner directive: data is never
+    checked). ``inventory_key`` defaults to the ONE config home
+    (``bundle.files_key``, see :func:`inventory_key_home`).
     """
     if output.exists():
         raise FileExistsError(output)
@@ -271,7 +237,7 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         _check_member(target)
     _check_member(manifest_name)
     started = time.monotonic()
-    # Reject malformed inventories before expensive source sizing.
+    # The source inventory the manifest carries; malformed sources fail here.
     inventory = source_inventory(files, inline)
     timings["inventory_seconds"] = time.monotonic() - started
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -279,34 +245,15 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     try:
         started = time.monotonic()
         manifest = json.dumps({**metadata, inventory_key: inventory}, indent=2) + '\n'
-        stream_sizes: dict[str, int] | None = (
-            {} if perf_enabled('archive.write_size') else None)
         if output.name.endswith('.tar.zst'):
             with trace_step('archive.zstandard', files=len(files),
                             compression_level=archive_settings().compression_level):
-                _write_tar(candidate, files, inline, manifest_name, manifest,
-                           sizes=stream_sizes)
+                _write_tar(candidate, files, inline, manifest_name, manifest)
         else:
             # Explicit ZIP outputs remain available for historical callers.
-            stream_sizes = None
             with trace_step('archive.zip', files=len(files)):
                 _write_zip(candidate, files, inline, manifest_name, manifest)
-        # Sources can change while being archived (e.g. checkpoint rotation).
-        # Never publish an archive whose bytes disagree with its frozen inventory.
         timings["compression_seconds"] = time.monotonic() - started
-        started = time.monotonic()
-        if stream_sizes is not None:
-            # The writer counted every member payload as it wrote it; comparing
-            # those byte counts to the frozen inventory is the whole integrity
-            # check, so the archive is not read and inflated a second time.
-            with trace_step('archive.verify_written'):
-                for target in files:
-                    if stream_sizes.get(target) != inventory[target]:
-                        raise ValueError(f'archive integrity mismatch: {target}')
-        else:
-            with trace_step('archive.verify'):
-                verify_archive(candidate, manifest_name, inventory_key=inventory_key)
-        timings["verification_seconds"] = time.monotonic() - started
         _publish_atomically(candidate, output)
     finally:
         candidate.unlink(missing_ok=True)
@@ -323,109 +270,55 @@ def _check_member(name: str, *, regular: bool = True) -> None:
         raise ValueError('archive member must be a regular file (no symbolic links)')
 
 
-def compare_inventory(inventory: dict[str, int], actual: dict[str, int], *,
-                      mismatch: str = 'archive integrity mismatch') -> None:
-    """The ONE inventory comparison: exact member set, then per-member byte size.
-
-    ``mismatch`` names the surface in the size-mismatch error so callers that
-    verify a different shape (the graph worker package's installed tree) keep
-    their own message while sharing this comparison.
-    """
-    if set(actual) != set(inventory):
-        raise ValueError('archive has undeclared or missing members')
-    for target, expected in inventory.items():
-        if actual[target] != expected:
-            raise ValueError(f'{mismatch}: {target}')
-
-
-def _validated_inventory(raw) -> dict[str, int]:
-    """The declared member inventory: every value a non-negative byte size."""
-    if not isinstance(raw, dict):
-        raise ValueError('archive inventory must be a member -> size mapping')
-    inventory: dict[str, int] = {}
-    for name, size in raw.items():
-        if (not isinstance(name, str) or isinstance(size, bool)
-                or not isinstance(size, int) or size < 0):
-            raise ValueError(f'archive inventory entry is not name+size: {name!r}')
-        inventory[name] = size
-    return inventory
-
-
-def _check_inventory(metadata, actual, manifest_name, inventory_key):
-    inventory = _validated_inventory(metadata[inventory_key])
-    compare_inventory(inventory, actual)
-    return metadata
-
-
-def _count_members(archive, names, manifest_name, chunk_bytes) -> dict[str, int]:
-    """Read every declared member once and record its byte count."""
-    sizes: dict[str, int] = {}
-    for name in tracked(names, desc='archive.verify_members'):
-        if name == manifest_name:
-            continue
-        with archive.open(name) as handle:
-            sizes[name] = _count_member_bytes(handle, chunk_bytes)
-    return sizes
-
-
-def verify_open_archive(archive, manifest_name: str, *, inventory_key: str | None = None) -> dict[str, Any]:
-    """Verify a caller-owned reader so subsequent reads need no second inflation."""
-    inventory_key = inventory_key or inventory_key_home()
-    names = archive.namelist()
+def _check_archive_members(names) -> None:
+    """A duplicated member makes extraction ambiguous, so it is refused."""
     if len(set(names)) != len(names):
         raise ValueError('duplicate archive members')
-    for member in archive.infolist():
-        _check_member(member.filename, regular=not member.is_dir() and
-                      (member.external_attr >> 16) & 0o170000 != 0o120000)
-    with archive.open(manifest_name) as handle:
-        metadata = json.load(handle)
-    actual = _count_members(archive, names, manifest_name,
-                            archive_settings().copy_buffer_bytes)
-    return _check_inventory(metadata, actual, manifest_name, inventory_key)
 
 
-def verify_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None,
-                   names: list[str] | None = None) -> dict[str, Any]:
-    """Verify an archive's manifest and member byte sizes.
+def read_archive_manifest(path: Path, manifest_name: str, *,
+                          names: list[str] | None = None) -> dict[str, Any]:
+    """Read an archive's sealed manifest; no member byte is read back or compared.
 
-    When ``names`` is given, the verified member names are appended to it in one
-    pass, so a boundary can hand a trusted member list to later stages instead
-    of re-parsing (and for a tar, re-inflating) the archive.
+    When ``names`` is given, the member names are appended to it in one pass, so
+    a boundary can hand a trusted member list to later stages instead of
+    re-parsing the archive. Nothing is verified: a bundle is immutable, its
+    identity is the archive itself (owner directive: data is never checked).
     """
-    inventory_key = inventory_key or inventory_key_home()
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            metadata = verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+            members = archive.namelist()
+            _check_archive_members(members)
+            for member in archive.infolist():
+                _check_member(member.filename, regular=not member.is_dir() and
+                              (member.external_attr >> 16) & 0o170000 != 0o120000)
+            metadata = json.load(archive.open(manifest_name))
             if names is not None:
-                names.extend(archive.namelist())
+                names.extend(members)
         return metadata
-    # Verification is sequential: do not inflate a multi-GB tar to a temporary
-    # disk file just to read it once. Count members directly from the zstd stream.
-    actual, seen, metadata = {}, set(), None
+    # Read the manifest straight from the zstd stream: the multi-GB payload is
+    # never inflated to a temporary file just to read one member.
+    metadata, seen = None, []
     zstd = zstd_module()
     try:
         with Path(path).open('rb') as raw:
             with zstd.open(raw, 'rb') as compressed:
                 with tarfile.open(fileobj=compressed, mode='r|',
                                   bufsize=archive_settings().copy_buffer_bytes) as archive:
-                    for member in tracked(archive, desc='archive.verify_stream'):
+                    for member in tracked(archive, desc='archive.read_stream'):
                         _check_member(member.name, regular=member.isfile())
-                        if member.name in seen:
-                            raise ValueError('duplicate archive members')
-                        seen.add(member.name)
+                        seen.append(member.name)
                         if names is not None:
                             names.append(member.name)
-                        with archive.extractfile(member) as handle:
-                            if member.name == manifest_name:
+                        if member.name == manifest_name:
+                            with archive.extractfile(member) as handle:
                                 metadata = json.load(handle)
-                            else:
-                                actual[member.name] = _count_member_bytes(
-                                    handle, archive_settings().copy_buffer_bytes)
                 # Consume the frame trailer as well; truncated zstd streams must fail.
                 while compressed.read(archive_settings().copy_buffer_bytes):
                     pass
     except (zstd.ZstdError, EOFError) as error:
         raise ValueError(f'invalid Zstandard archive: {path}') from error
+    _check_archive_members(seen)
     if metadata is None:
         raise ValueError('archive manifest missing')
-    return _check_inventory(metadata, actual, manifest_name, inventory_key)
+    return metadata

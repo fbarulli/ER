@@ -42,7 +42,6 @@ from model_tracks.resume import GNN_ONLY_TRACKS as TRACKS
 class SharedGraphProjection(BaseModel):
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     schema_version: Literal['er-shared-graph-training-v1'] = Field(default='er-shared-graph-training-v1', alias='schema')
-    shared_data_size: int = Field(ge=0)
     example_ids: list[int]
     endpoint_indices: list[int]
     node_map: dict[str, str]
@@ -117,21 +116,21 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     from graph_tracks.setup import write_setup_frames
     from graph_tracks.train import load_pairs, write_json
     from core.sku_identity import row_identity
-    shared_size = shared.fingerprint
     layout = _setup_layout()
     setup = Path(setup)
     prepared = setup / layout.prepared_dir
     manifest_path = prepared / layout.input_manifest
-    old_manifest = json.loads(manifest_path.read_text())
-    if old_manifest.get('shared_training_data_size') == shared_size:
-        try:
-            # Every track binding, not just one: the cached projection is
-            # returned as the contract for the whole suite.
-            for track in TRACKS:
-                validate_projection(setup, shared, track=track)
-            return validate_projection(setup, shared, track='gnn_only').model_dump(mode='json', by_alias=True)
-        except (ValueError, FileNotFoundError):
-            pass
+    # Reuse an existing projection when its structural contract still holds;
+    # otherwise rebuild it. Nothing about the data is compared (owner directive:
+    # data is never checked); the projection is a derived cache of the bundle.
+    try:
+        # Every track binding, not just one: the cached projection is
+        # returned as the contract for the whole suite.
+        for track in TRACKS:
+            validate_projection(setup, shared, track=track)
+        return validate_projection(setup, shared, track='gnn_only').model_dump(mode='json', by_alias=True)
+    except (ValueError, FileNotFoundError):
+        pass
     # The canonical setup tree IS the clean-inputs baseline (owner directive
     # 2026-10-08): the setup build writes the unprojected catalog/listings/
     # pairs, this projection is the only later writer, and a rebuild therefore
@@ -263,11 +262,11 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     write_json(prepared / layout.listings, {'schema': 'er-graph-listings-v1', 'listings': records})
     write_inputs(prepared, report_rows)
     load_pairs(prepared / 'pairs.csv', load_records(prepared / layout.listings))
-    bindings = {track: TrackTrainingBinding(track=track, shared_data_size=shared_size,
+    bindings = {track: TrackTrainingBinding(track=track,
                     example_ids=[row.example_id for row in shared.examples],
                     endpoint_indices=[row.payload_index for row in shared.endpoints])
                 for track in TRACKS}
-    projection = SharedGraphProjection(shared_data_size=shared_size,
+    projection = SharedGraphProjection(
         example_ids=[row.example_id for row in shared.examples],
         endpoint_indices=[row.payload_index for row in shared.endpoints], node_map=node_map,
         track_bindings=bindings, train_pair_rows=len(projected), train_pair_order_size=_rows_size(projected),
@@ -279,8 +278,6 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     manifest.update(catalog_size=file_size(setup / layout.catalog),
         splits_size=file_size(setup / layout.splits), pairs_size=projection.pairs_size,
         listings_size=projection.listings_size, report_attributes_size=file_size(prepared / FILENAME),
-        shared_training_data_size=shared_size,
-        shared_training_projection_size=file_size(setup / layout.shared_training_projection),
         augmentation='shared frozen text objective; masked, swapped and counterfactual endpoints retained')
     lineage_path = prepared / layout.pair_lineage
     lineage = (json.loads(lineage_path.read_text()) if lineage_path.exists()
@@ -290,8 +287,8 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     # pairs. The stale-input guard that refused a short lineage is removed for
     # now (owner order) so packaging proceeds; data is unchanged.
     lineage['pairs'] = retained_lineage + [
-        {**row, 'origins': [{'kind': 'shared_frozen_objective', 'example_id': row['example_id'],
-                           'shared_training_data_size': shared_size}]} for row in projected]
+        {**row, 'origins': [{'kind': 'shared_frozen_objective', 'example_id': row['example_id']}]}
+        for row in projected]
     lineage.update(listing_pairs_size=file_size(setup / layout.pairs),
                    augmentation=manifest['augmentation'])
     write_json(lineage_path, lineage)
@@ -299,7 +296,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     write_json(manifest_path, manifest)
     setup_manifest_path = setup / layout.manifest
     setup_manifest = json.loads(setup_manifest_path.read_text())
-    setup_manifest.update(shared_training_data_size=shared_size,
+    setup_manifest.update(
         pair_protocol='shared frozen training objective; clean listing-only dev/test evaluation',
         negative_policy='exact shared training negatives; unchanged clean evaluation negatives',
         augmentation=manifest['augmentation'],
@@ -332,11 +329,9 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
     """Check exact supervised rows and their multiplicity before graph loading."""
     from graph_tracks.data import file_size
     layout = _setup_layout()
-    shared_size = shared.fingerprint
     projection = SharedGraphProjection.model_validate_json((setup / layout.shared_training_projection).read_text())
     projection.track_bindings[track].validate_data(shared)
-    if (projection.shared_data_size != shared_size
-            or projection.example_ids != [row.example_id for row in shared.examples]
+    if (projection.example_ids != [row.example_id for row in shared.examples]
             or projection.endpoint_indices != [row.payload_index for row in shared.endpoints]
             or set(projection.track_bindings) != set(TRACKS)
             or set(projection.node_map) != {str(row.payload_index) for row in shared.endpoints}

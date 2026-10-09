@@ -143,14 +143,6 @@ class SharedTrainingData(BaseModel):
                 raise ValueError('augmentation parent must be an original listing or canonical')
         return self
 
-    @property
-    def fingerprint(self) -> int:
-        size = ByteCount()
-        encoder = TrainingJSONEncoder(sort_keys=True, ensure_ascii=False)
-        for chunk in encoder.iterencode(self):
-            size.update(chunk.encode())
-        return size.total
-
     def iter_pair_rows(self):
         """Yield graph relationships in frozen order without a second population."""
         for row in self.examples:
@@ -226,13 +218,12 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
 class TrackTrainingBinding(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     track: Literal['text', 'gnn_only']
-    shared_data_size: int = Field(ge=0)
     example_ids: list[int]
     endpoint_indices: list[int]
 
     def validate_data(self, shared: SharedTrainingData):
-        if (self.shared_data_size != shared.fingerprint or
-                self.example_ids != [row.example_id for row in shared.examples] or
+        """The track's projection must name the shared population's frozen rows."""
+        if (self.example_ids != [row.example_id for row in shared.examples] or
                 self.endpoint_indices != [row.payload_index for row in shared.endpoints]):
             raise ValueError(f'{self.track} training population differs from shared data')
 

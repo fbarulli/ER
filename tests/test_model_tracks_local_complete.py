@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from core.portable_archive import write_archive, verify_archive
+from core.portable_archive import write_archive, read_archive_manifest
 from model_tracks.local_complete import complete
 from model_tracks.resume import record_completion
 
@@ -169,7 +169,7 @@ def test_downloaded_checkpoints_complete_locally_without_retraining(tmp_path, mo
     training_zip, input_zip, calls, _ = suite(tmp_path, monkeypatch)
     final = complete(training_zip, input_zip, 'run')
     assert calls == ['text', 'gnn_only', 'cascade']
-    metadata = verify_archive(final, 'suite_bundle_manifest.json')
+    metadata = read_archive_manifest(final, 'suite_bundle_manifest.json')
     assert metadata['postprocess_location'] == 'local CPU'
     assert all(json.loads((tmp_path / 'run' / track / 'track_complete.json').read_text())['postprocess_complete']
                for track in ('text', 'gnn_only', 'cascade'))
@@ -266,7 +266,7 @@ def test_zstandard_checkpoints_complete_locally_and_remain_retryable(tmp_path, m
     training, inputs, calls, _ = suite(tmp_path, monkeypatch, archive_format='tar.zst')
     final = complete(training, inputs, 'run')
     assert final.name == 'run.tar.zst'
-    assert verify_archive(final, 'suite_bundle_manifest.json')['postprocess_location'] == 'local CPU'
+    assert read_archive_manifest(final, 'suite_bundle_manifest.json')['postprocess_location'] == 'local CPU'
     assert calls == ['text', 'gnn_only', 'cascade']
     assert complete(training, inputs, 'run') == final
     assert len(calls) == 3

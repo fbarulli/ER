@@ -84,14 +84,12 @@ def test_read_attestation_rejects_unknown_schema(tmp_path):
         read_attestation(path, bundle_path=path)
 
 
-def test_verify_attestation_binds_bundle_bytes(tmp_path):
+def test_verify_attestation_checks_status_and_presence(tmp_path):
     bundle = tmp_path / "bundle.pkl.gz"
     bundle.write_bytes(b"frozen-bytes")
-    good = _attestation({"loss": "mnrl"})
-    good = good.model_copy(update={"bundle_size": ByteCount(b"frozen-bytes").total})
-    verify_attestation(good, bundle_path=bundle)
-    with pytest.raises(ValueError, match="size mismatch"):
-        verify_attestation(_attestation({"loss": "mnrl"}), bundle_path=bundle)
+    verify_attestation(_attestation({"loss": "mnrl"}), bundle_path=bundle)
+    with pytest.raises(ValueError, match="bundle missing"):
+        verify_attestation(_attestation({"loss": "mnrl"}), bundle_path=tmp_path / "absent.pkl.gz")
 
 
 def _sampler_dataset():

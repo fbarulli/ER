@@ -263,13 +263,13 @@ def _check_provenance(root, suite_config_path, checkpoint, provenance) -> dict:
     return preparation_provenance(Path(root), Path(suite_config_path), Path(checkpoint))
 
 
-def _load_bundle_verified(full_bundle, meter: _LoadMeter):
-    """The one verified bundle load of the run (cache-hit after full_bundle)."""
+def _load_bundle(full_bundle, meter: _LoadMeter):
+    """The one bundle load of the run (cache-hit after full_bundle)."""
     from training.prepared_bundle import load_prepared_bundle
     bundle_path = Path(full_bundle)
     sidecar = bundle_path.with_suffix(bundle_path.suffix + '.json')
     started = time.monotonic()
-    header, prepared = load_prepared_bundle(bundle_path, verify_inputs=True)
+    header, prepared = load_prepared_bundle(bundle_path)
     meter.record('text_bundle', bundle_path, seconds=time.monotonic() - started,
                  size=getattr(header, 'size', None))
     meter.record('bundle_header', sidecar)
@@ -465,11 +465,11 @@ def verify_training_loads(*, root, suite, suite_config_path, checkpoint,
                           plan_identity_revalidate: bool = False) -> HandoffReport:
     """Load every declared training input through its consumer path.
 
-    Producer-side checks (provenance, frozen CSV agreement, graph source
-    hashes) run first; consumer-side checks (worker settings, the frozen
-    objective's batch contract, the package archive) follow.  The bundle is
-    loaded with ``verify_inputs=True`` exactly once -- after the first full
-    load the run's cache serves it, so the payload is unpickled once per run.
+    Producer-side checks (provenance, frozen CSV agreement) run first;
+    consumer-side checks (worker settings, the frozen objective's batch
+    contract, the package archive) follow.  The bundle is loaded exactly once
+    -- after the first load the run's cache serves it, so the payload is
+    unpickled once per run.
 
     Every check, every metered load and the report itself also land in the ONE
     consolidated trace (core.tracing, stage ``verify_handoff``): a passing
@@ -515,14 +515,14 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
                 'provenance_keys': sorted(current)},
         source='training.prepare_all.preparation_provenance')
     with timing.section('bundle_load'):
-        header, prepared, sidecar = _load_bundle_verified(full_bundle, meter)
+        header, prepared, sidecar = _load_bundle(full_bundle, meter)
     trace.check(
         'bundle_load',
         detail={'payload_variant': getattr(header, 'payload_variant', None),
                 'masking_profile': getattr(header, 'masking_profile', None),
                 'size': getattr(header, 'size', None),
-                'verify_inputs': True, 'bundle_members': len(prepared)},
-        source='training.prepared_bundle.load_prepared_bundle(verify_inputs=True)')
+                'bundle_members': len(prepared)},
+        source='training.prepared_bundle.load_prepared_bundle')
     with timing.section('graph_manifest'):
         graph = _read_graph_manifest(setup_dir, layout, meter)
     trace.check(
@@ -572,8 +572,7 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
     checks: dict[str, Any] = {
         'provenance': 'recorded (src/scripts/config/raw inputs/checkpoint read back)',
         'text_bundle': {'payload_variant': getattr(header, 'payload_variant', None),
-                        'masking_profile': getattr(header, 'masking_profile', None),
-                        'verify_inputs': True},
+                        'masking_profile': getattr(header, 'masking_profile', None)},
         'graph_setup': {'source_catalog_size': graph.get('source_catalog_size'),
                         'labeled_pairs_size': graph.get('labeled_pairs_size'),
                         'smoke': bool(graph.get('smoke', False))},

@@ -283,7 +283,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None) -> DataGateResul
     for track in ('gnn_only',):
         settings = GraphConfig.model_validate(
             graph_worker_settings(setup, cfg, track, gpu_only=True))
-        _, records, pairs, vectors, _ = load_inputs(settings, verify_inputs=True)
+        _, records, pairs, vectors, _ = load_inputs(settings)
         tracks[track] = TrackInputCensus(
             listings=len(records),
             pairs={split: SplitPairCounts(positive=int(labels.sum()),

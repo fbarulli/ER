@@ -97,7 +97,7 @@ def _handoff_env(tmp_path, monkeypatch, plan):
     header = SimpleNamespace(size=1234, payload_variant='full',
                             masking_profile='base', model_dump=lambda **kwargs: {'size': 1234})
     monkeypatch.setattr('training.prepared_bundle.load_prepared_bundle',
-                        lambda path, *, verify_inputs: (header, prepared))
+                        lambda path: (header, prepared))
     monkeypatch.setattr('model_tracks.package.verify',
                         lambda path: {'preflight': {'shared_training_data': {'size': 's' * 64}}})
     suite = SuiteConfig(setup_dir='setup', text_bundle='setup/text.pkl.gz')

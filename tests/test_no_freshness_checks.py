@@ -1,17 +1,17 @@
-"""Owner directive 2026-10-08: ZERO freshness/staleness checks repo-wide.
+"""Owner directive 2026-10-08 + escalation 2026-10-09: ZERO freshness/staleness checks repo-wide.
 
-Data stays naked. The ONE permitted integrity check on a bundle is its DIGEST at
-the boundary (``core.bundle.Bundle.load`` / ``verify_archive_digest``): that
-answers identity, never freshness. Everything else that compared a recorded
-value against a freshly derived one to decide whether cached data still "applies"
-is removed, and this guard fails if any of it reappears in ``src/`` or
-``scripts/``.
+Data is never checked by anyone. No content hash, byte-size, existence or
+staleness gate exists anywhere in the pipeline; a bundle's identity IS the
+bundle, so a change in data yields a NEW artifact. Everything that compared a
+recorded value against a freshly derived one to decide whether cached data still
+"applies" is removed, and this guard fails if any of it reappears in ``src/`` or
+``scripts/``. Config/schema validation (pydantic on YAML/config) is not a data
+check and is out of scope.
 
 Design rule applied here: the policy is baked into one owner,
-:class:`NoFreshnessPolicy`, which owns the forbidden patterns, the boundary
-allowlist and the scan; the tests only call it. ``test_policy_flags_a_synthetic
-_offender`` pins that the policy actually flags enforcement, so a silently
-neutered pattern set fails loudly.
+:class:`NoFreshnessPolicy`, which owns the forbidden patterns and the scan; the
+tests only call it. ``test_policy_flags_a_synthetic_offender`` pins that the
+policy actually flags enforcement, so a silently neutered pattern set fails loudly.
 """
 from __future__ import annotations
 
@@ -68,15 +68,17 @@ class NoFreshnessPolicy:
     )
 
     #: Paths where a pattern is permitted, each with the reason it is allowed.
-    #: The digest boundary and the ratified ruling pin may legitimately name the
-    #: concept; the parallel ColabSpec change retains its own files untouched.
+    #: The owner-ratified ruling pin may legitimately name the concept; the
+    #: parallel ColabSpec change retains its own files untouched.
     ALLOWED: dict[str, str] = {
         "src/core/schemas.py": (
             "owner-ratified ruling pin: freshness_checks is Literal[False] and "
             "verifies_freshness() returns False, so no consumer can turn one on"
         ),
-        "src/core/bundle.py": "the permitted digest boundary (Bundle.load)",
-        "src/core/portable_archive.py": "the permitted digest primitives",
+        "src/model_tracks/shared_graph_data.py": (
+            "derived-cache invalidation: a stale embedding/plan/array cache is "
+            "deleted and rebuilt, never compared to refuse (owner directive 2026-10-08)"
+        ),
         "src/cli/colab.py": "retained by the parallel ColabSpec change",
         "src/cli/colab_lane.py": "retained by the parallel ColabSpec change",
         "src/cli/colab_launch.py": "retained by the parallel ColabSpec change",
@@ -129,8 +131,8 @@ class NoFreshnessCheckTest(unittest.TestCase):
         self.assertEqual(
             {},
             offenders,
-            "freshness/staleness enforcement reappeared (data must stay naked; "
-            "the only permitted check is the bundle digest at the boundary): "
+            "freshness/staleness enforcement reappeared (data is never checked; "
+            "no hash/size/existence/staleness gate may exist): "
             f"{offenders}",
         )
 
@@ -158,12 +160,10 @@ class NoFreshnessCheckTest(unittest.TestCase):
                 f"policy flagged an integrity-only sample: {clean!r}",
             )
 
-    def test_only_the_boundary_and_the_pin_are_allowed(self) -> None:
+    def test_only_the_documented_exceptions_are_allowed(self) -> None:
         policy = NoFreshnessPolicy()
         self.assertTrue(policy.is_allowed("src/core/schemas.py"))
-        self.assertTrue(policy.is_allowed("src/core/bundle.py"))
-        self.assertTrue(policy.is_allowed("src/core/portable_archive.py"))
-        # The digest boundary is real and is where integrity lives.
+        # The boundary load is real, and it performs no data check.
         from core.bundle import Bundle
         self.assertTrue(hasattr(Bundle, "load"))
         # No allowlisted path may hide an unbounded region of the tree.

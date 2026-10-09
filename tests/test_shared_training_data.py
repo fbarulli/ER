@@ -19,11 +19,11 @@ def shared():
 
 def test_projection_retains_canonical_copy_and_repeated_positive_relationship():
     data = shared()
-    assert SharedTrainingData.model_validate_json(data.model_dump_json()).fingerprint == data.fingerprint
+    assert SharedTrainingData.model_validate_json(data.model_dump_json()) == data
     rows = data.pair_rows()
     assert len(rows) == 4
     assert [(row['payload_index2'], row['label']) for row in rows] == [(2, 1), (3, 0), (2, 1), (3, 0)]
-    binding = TrackTrainingBinding(track='gnn_only', shared_data_size=data.fingerprint,
+    binding = TrackTrainingBinding(track='gnn_only',
                                   example_ids=[0, 1], endpoint_indices=[0, 2, 3])
     binding.validate_data(data)
     assert retrieval_indices([{'sku_id': value} for value in
