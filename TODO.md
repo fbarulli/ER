@@ -154,3 +154,38 @@ train/dev/test is intentional (data_surface_map.md §8.6).
 - [x] Landed work committed (`5bc48c9`, `46811e9`) — **not pushed** (2 commits ahead of `origin/main`).
 - [ ] `graph_tracks/train.py` hardcodes checkpoint-layout literals (`_checkpoints`, `trainer_state.json`); writer/reader agree via spec-owned globs today, left alone (higher-risk writer contract).
 - [ ] `run.py` still completes ablation inline for the local non-GPU path (a parallel of `bundle_steps.finalize`); merging changes lane behavior — kept behavior-preserving.
+
+## Held / queued (2026-10-09 orchestrator session)
+
+### Tracks training (priority)
+- [~] Scored-validation support: sample REAL gate `hard_no` negatives per split into the graph
+  scored pairs (`ScoredNegativeSampler`, `src/graph_tracks/setup.py`), global floor
+  `min_test_negatives: 100` (`config/training.yaml:819`). No cross-split leak (verified: 0 shared
+  SKUs, 0 duplicate pairs; same-split filter is by construction). **Rebundle ONLY on Colab CPU** —
+  never locally.
+- [ ] Remaining blocker: `data/track_setup/text_export_request.json` missing →
+  `src/model_tracks/preflight.py:177`. Produce via the canonical prepare path (Colab CPU).
+- [ ] Retire the stale pre-DVC `tracks` branch (schema-incompatible: its `GraphConfig` rejects
+  `text_checkpoint_size`); `main` is the authoritative track code.
+
+### Loss-function comparison arena (held)
+- [ ] Standalone `src/training` lane (path A): wire multi-loss into `--what train`
+  (`src/cli/colab.py:2691-2704` never passes `worker_losses`; only `dual-train` `:2666` does, hardcoded).
+- [ ] Per-loss plan per arm (`prepare_run_plan(bundle, loss=...)`; plan identity is frozen per loss).
+- [ ] SSOT `training.loss_comparison` config + pydantic spec + `LossComparison.from_config`
+  Factory/Strategy; rank by dev `rand_index_proxy`.
+- [ ] Two parallel stages: Stage 1 `{mnrl + other losses}`; Stage 2 `{loss + cascade}`.
+- [ ] Hybrid (graph-included) arm — define against `cascade`/`graph_tracks` (cascade is `POSTPROCESS_TRACKS`).
+
+### Laya investigations (held)
+- [ ] `RuntimeError: basic_ios::clear: iostream error` — root cause (native stream / detached
+  watcher / redirected fd); not in local logs → likely the Kaggle kernel.
+- [ ] W&B out-of-order warning ("tried to log step 1 < current step 7") — find the `wandb.log(step=)`
+  call and whether a metric series is dropped.
+
+### Infra / hygiene (held)
+- [ ] Colab capacity: vCPU is the ceiling for parallel arms (not GPU); quantify available worker slots.
+- [ ] Move `.dvc/config.local` plaintext dagshub credential into the config-driven credential class
+  (`/home/opc/ONE/.env`), never commit/print it.
+- [ ] Relocate the live laya worktree out of `/tmp` to `.worktrees/laya` once PID 3058288 exits;
+  then remove `/tmp/opc` entirely (`ls -A /tmp/opc` empty).
