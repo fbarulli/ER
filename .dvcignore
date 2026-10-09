@@ -13,3 +13,6 @@ node_modules/
 graphify-out/
 archify/
 matplotlib/
+# DVC's OWN operation scratch (an ad-hoc `dvc add/push/gc ... > logs/dvc_*.log`):
+# never a payload of any tracked root, so it must not disturb a root's snapshot.
+logs/dvc_*.log
