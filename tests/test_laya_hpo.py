@@ -1033,8 +1033,8 @@ def test_receipt_worker_cap_is_the_gpu_capped_plan(monkeypatch, tmp_path):
     """#8: max_workers is the GPU-capped worker plan (no shared-data cache)."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert "shared_data" not in receipt["options"]
-    # slots mode: 2 GPUs (n_jobs) x 1 slot each, capped at max_concurrent_trials.
-    assert receipt["budget"]["max_workers"] == 2
+    # slots mode: 2 GPUs (n_jobs) x 2 slots each, capped at max_concurrent=4.
+    assert receipt["budget"]["max_workers"] == 4
 
 
 def _hpo_space_from_script(script: str) -> dict:
@@ -1060,10 +1060,14 @@ def test_staging_seeds_the_ssot_baseline_once(monkeypatch, tmp_path):
     spec = laya_lane.training_cfg().laya
     recipe = {**laya_lane.finetune_config(spec),
               **laya_lane.finetune_control(spec)}
-    for name in ("encoder_lr", "head_lr", "micro_batch", "grad_accum",
-                 "weight_decay", "early_stop_patience", "lr_scheduler",
-                 "loss_schedule", "ema"):
+    for name in ("encoder_lr", "head_lr", "weight_decay",
+                 "early_stop_patience", "lr_scheduler", "loss_schedule", "ema"):
         assert seed[name] == recipe[name], name
+    # The seeded baseline halves the activation footprint at the same effective
+    # batch / optimizer-step count (config warm_start.baseline_dials).
+    assert seed["micro_batch"] == 4 and seed["grad_accum"] == 16
+    assert seed["micro_batch"] * seed["grad_accum"] == 64
+    assert recipe["micro_batch"] * recipe["grad_accum"] == 64
     assert receipt["budget"]["max_workers"] >= 2
 
 

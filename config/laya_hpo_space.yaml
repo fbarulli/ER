@@ -58,15 +58,19 @@ profiler:
 # See training/laya_hpo_options.py: one class per responsibility, a name->
 # builder registry per family, assembled by `build_option_set`.
 options:
-  # A) trial parallelism — TRUE multi-PROCESS, one worker per visible GPU
+  # A) trial parallelism — multi-PROCESS slots per GPU
+  # Tradeoff (2xT4): 2 workers per card = 4 processes, but only 2 GPUs, so
+  # across the session there are 2 truly-parallel (one per card) + 2 sharing a
+  # card through MPS. Sharing requires MPS and a per-process VRAM cap, and it
+  # carries OOM risk (the full mb=8 recipe peaks ~8.07 GB/proc, above the
+  # ~7.7 GB/0.5 cap). The seeded baseline is the first probe: run it (a short
+  # 1-epoch probe first via warm_start.baseline_dials.epochs: 1 if validating a
+  # new card) BEFORE spending the full budget; an OOM fails the trial LOUD, it
+  # is never silently shrunk.
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 1            # one worker PROCESS per GPU (all GPUs used in
-                              # parallel). Keep at 1: packing >1 process onto a
-                              # GPU is time-sharing, not parallelism.
-  max_concurrent_trials: 2    # = the visible GPU count: 2 on a 2xT4 instance
-                              # (2 parallel workers), 1 on a single T4
-  mps: false                  # CUDA Multi-Process Service is single-GPU
-                              # sharing; not used by the parallel-per-GPU mode
+  slots_per_gpu: 2            # 2 worker PROCESSES per GPU (MPS-shared card)
+  max_concurrent_trials: 4    # = slots_per_gpu * visible GPUs: 4 on 2xT4
+  mps: true                   # required to run 2 processes on one GPU
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
     backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
@@ -108,6 +112,14 @@ options:
     baseline: true            # enqueue the SSOT FinetuneSpec recipe as ONE
                               # trial, so the baseline runs in parallel with
                               # the sweep (derived host-side, no code literal)
+    # In-space overrides applied to the seeded SSOT recipe (empty = the exact
+    # FinetuneSpec recipe). mb=4 * ga=16 keeps the effective batch and the
+    # optimizer-step count at 64 like the mb=8 * ga=8 recipe, while halving the
+    # activation footprint so two slots fit a T4. Add `epochs: 1` for the short
+    # 1-epoch memory probe before the full budget.
+    baseline_dials:
+      micro_batch: 4
+      grad_accum: 16
     enqueue: []               # known-good param dicts -> study.enqueue_trial
   ensemble:
     enabled: false            # average the top-k trials (data is fixed)

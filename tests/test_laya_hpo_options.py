@@ -106,14 +106,17 @@ def test_worker_pool_plan_caps_total_and_pins_devices():
     assert all(s.env["OMP_NUM_THREADS"] == "1" for s in specs)
 
 
-def test_default_plan_uses_every_visible_gpu_one_process_each():
-    """Default space: one worker PROCESS per visible GPU (true parallelism)."""
+def test_default_plan_runs_two_workers_per_gpu_under_the_vram_cap():
+    """Default space: 2 worker PROCESSES per GPU, MPS-shared, 0.5 cap each."""
     options = opt.build_option_set(laya_hpo.load_space())
     two = options.scheduler.workers(2)
-    assert len(two) == 2 and {s.device_index for s in two} == {0, 1}
-    assert all("CUDA_MPS_PIPE_DIRECTORY" not in s.env for s in two)
+    assert len(two) == 4
+    assert [s.device_index for s in two] == [0, 1, 0, 1]  # 2 per GPU
+    assert all(s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] == "0.5"
+               for s in two)
+    assert all(s.env["CUDA_MPS_PIPE_DIRECTORY"] for s in two)
     one = options.scheduler.workers(1)
-    assert len(one) == 1 and one[0].device_index == 0
+    assert len(one) == 2 and {s.device_index for s in one} == {0}
 
 
 def test_trial_scheduler_registry_selects_slots_and_ddp():

@@ -19,6 +19,11 @@ sample, and each has an in-space equivalent:
 
 Any OTHER out-of-range default is real recipe/space drift and fails loud at
 staging rather than silently sampling a value the recipe never had.
+
+``warm_start.baseline_dials`` (config) lays in-space overrides over the recipe,
+so an owner can split the optimizer-step budget (micro_batch 4 + grad_accum 16
+keeps the effective batch while halving activations) or shorten the seed into a
+1-epoch probe, with no code literal.
 """
 from __future__ import annotations
 
@@ -42,8 +47,14 @@ class BaselineSeedFactory:
         return values
 
     def seed(self, space: dict[str, Any]) -> dict[str, Any]:
-        """One valid in-space dial value per declared dial (an Optuna sample)."""
+        """One valid in-space dial value per declared dial (an Optuna sample).
+
+        ``warm_start.baseline_dials`` overrides are in-space values laid over
+        the recipe (e.g. mb=4/ga=16 to halve activation memory while keeping the
+        effective batch); every value is still validated against its dial.
+        """
         values = self.recipe_values()
+        values.update(self._overrides(space))
         return {name: self._dial_value(name, dial, values)
                 for name, dial in space["dials"].items()}
 
@@ -60,6 +71,11 @@ class BaselineSeedFactory:
             enqueue.append(seed)
         warm["enqueue"] = enqueue
         return space
+
+    @staticmethod
+    def _overrides(space: dict[str, Any]) -> dict[str, Any]:
+        return dict(((space.get("options") or {}).get("warm_start") or {})
+                    .get("baseline_dials") or {})
 
     @staticmethod
     def _enabled(space: dict[str, Any]) -> bool:
