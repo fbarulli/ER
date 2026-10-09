@@ -32,9 +32,6 @@
 #             class says so rather than inventing one. The owner directive
 #             (2026-10-08) names exactly three sets: laya (train/dev/validation),
 #             full (full + validation only), smoke (no splits).
-# ``validation_size``  the validation split's SIZE, FLEX by construction: a
-#             fraction of the population in (0, 1) OR an absolute row count
-#             (>= 1). Read from here, never a hardcoded count in code.
 # ``binned_sets``  the DECLARED bin list: sets the owner has removed from the
 #             official surface. NAMES ONLY — this file never resolves, reads or
 #             deletes them; the modules that still bind them are fixed
@@ -84,10 +81,6 @@ sets:
   smoke:
     binding: {via: layouts, key: dataset_smoke_200}
     splits: {}
-
-# The validation split's SIZE: FLEX (a fraction in (0, 1) or an absolute row
-# count >= 1), declared once here. Never a hardcoded count in code.
-validation_size: 0.5
 
 # ── DECLARED BIN LIST (names only; nothing here is resolved or deleted) ────
 binned_sets:

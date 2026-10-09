@@ -4,7 +4,7 @@ identity, transport.
 Every baked-in behavior of ``core.dataset.Dataset`` is pinned here by ONE test:
 member resolution equals the current SSOT accessors, the declared read spec
 drives ``load``, the declared SETS report their SPLITS (a set with none says
-so), the flex ``validation_size`` and the bin list are declared, ``as_bundle``
+so), the bin list is declared, ``as_bundle``
 hands off to ``Bundle.load``, and the class carries no validity gate.
 """
 import inspect
@@ -352,19 +352,6 @@ def test_an_undeclared_set_names_the_declared_ones():
 
 def test_the_3k_set_resolves_through_the_declared_binding():
     assert dataset().member("dataset_3k") == common.artifact("dataset_3k")
-
-
-def test_the_validation_size_is_flex_and_never_a_fixed_literal():
-    store, spec = dataset(), dataset_spec()
-    assert store.validation_size == spec.validation_size
-    size = store.validation_size
-    assert (isinstance(size, float) and 0.0 < size < 1.0) or (
-        isinstance(size, int) and size >= 1)
-    assert _bare_spec(validation_size=500).validation_size == 500  # absolute row count
-    assert _bare_spec(validation_size=0.25).validation_size == 0.25  # fraction of population
-    for bad in (0, 0.0, 1.0, 1.5):
-        with pytest.raises(ValueError, match="validation_size"):
-            _bare_spec(validation_size=bad)
 
 
 def test_the_bin_list_is_declared_names_only():

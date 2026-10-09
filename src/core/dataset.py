@@ -65,10 +65,12 @@ The member list is declared in ``config/dataset.yaml`` (a spec, validated by
 ``core.common.artifact``, so the class can never drift from the phone book:
 resolution is the same accessor call the rest of the tree makes.
 
-The same document declares the SETS with their SPLITS, the FLEX
-``validation_size`` (a fraction in (0, 1) or a row count — never a hardcoded
-count in code), and the ``binned_sets`` list (names only) of sets the owner
-has removed from the official surface.
+The same document declares the SETS with their SPLITS and the ``binned_sets``
+list (names only) of sets the owner has removed from the official surface. It
+declares NO validation-size knob: the scored validation population is the
+dev+test half DERIVED from the component-fold deal
+(``split.holdout_component_folds``), so a separate size declaration would be a
+second, unconsumed source of truth.
 """
 from __future__ import annotations
 
@@ -76,7 +78,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.bundle import BundleRole
 from core.schemas import DatasetCsvReadSpec
@@ -146,28 +148,8 @@ class DatasetSpec(BaseModel):
     layout: dict[str, DatasetMemberSpec] = Field(default_factory=dict)
     #: The declared sets; each carries its own split map (empty ⇒ no splits).
     sets: dict[str, DatasetSetSpec] = Field(default_factory=dict)
-    #: The FLEX validation size: a fraction in (0, 1) or a row count >= 1.
-    validation_size: float | int | None = None
     #: The declared bin list (names only): sets removed from the official surface.
     binned_sets: list[str] = Field(default_factory=list)
-
-    @field_validator("validation_size")
-    @classmethod
-    def _validation_size_is_flex(
-        cls,
-        value: float | int | None,  # noqa: PYI041 (int must stay int: a row count)
-    ) -> float | int | None:
-        """A validation size is a fraction in (0, 1) or a row count >= 1 — never a fixed literal."""
-        if value is None:
-            return value
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
-            return value
-        if isinstance(value, float) and 0.0 < value < 1.0:
-            return value
-        raise ValueError(
-            "validation_size must be a fraction in (0, 1) or a row count >= 1, "
-            f"got {value!r}"
-        )
 
     @model_validator(mode="after")
     def _names_are_disjoint(self) -> DatasetSpec:
@@ -268,8 +250,6 @@ class Dataset(BaseModel):
     set_paths: dict[str, Path] = Field(default_factory=dict)
     #: Declared set splits: set name -> split name -> resolved Path ({} ⇒ none).
     set_splits: dict[str, dict[str, Path]] = Field(default_factory=dict)
-    #: The FLEX validation size (fraction in (0, 1) or row count >= 1).
-    validation_size: float | int | None = None
     #: The declared bin list (names only).
     binned_sets: tuple[str, ...] = ()
 
@@ -300,7 +280,6 @@ class Dataset(BaseModel):
             set_splits={name: {split: _binding_path(binding, data)
                                for split, binding in entry.splits.items()}
                         for name, entry in spec.sets.items()},
-            validation_size=spec.validation_size,
             binned_sets=tuple(spec.binned_sets),
         )
 
