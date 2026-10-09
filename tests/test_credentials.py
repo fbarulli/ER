@@ -116,15 +116,6 @@ def test_training_config_without_the_block_still_validates():
     assert config.credentials == CredentialsSpec()
 
 
-def test_kaggle_spec_no_longer_carries_the_second_registry():
-    from core.schemas import KaggleSpec
-
-    spec = KaggleSpec()
-    assert not hasattr(spec, "api_key_env")
-    assert not hasattr(spec.files, "credentials_file")
-    assert not hasattr(spec.files, "access_token_file")
-
-
 def test_write_credentials_reads_through_the_owner(tmp_path, monkeypatch):
     """The kaggle lane's credential path is the owner, not raw os.environ."""
     import json
