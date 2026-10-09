@@ -1541,6 +1541,7 @@ packaging:
   snapshot_pinned_configs:
     - paths.yaml
     - training.yaml
+    - hosted_datasets.yaml
     - identity_dimensions.yaml
     - identity_reviews.json
     - vocabulary.json
