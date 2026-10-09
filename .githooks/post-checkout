@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# post-checkout — keep every ER worktree attached to the shared venv.
+#
+# Git runs this on `git checkout`, `git switch`, `git clone`, and
+# `git worktree add` (git >= 2.31). Linking the worktree's .venv to the main
+# worktree's venv is idempotent and cheap, and this hook NEVER fails a checkout:
+# a missing/broken env is reported by `er_env.sh` itself, not by blocking git.
+#
+# A linked worktree on another branch usually has no scripts/er_env.sh of its
+# own, so we always invoke the MAIN worktree's copy (derived from the shared git
+# dir) and pass the current worktree as the explicit target.
+set -u
+
+worktree_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[[ -n "$worktree_root" ]] || exit 0
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
+main_root="$(dirname "$common_dir")"
+[[ -x "$main_root/scripts/er_env.sh" ]] || exit 0
+
+"$main_root/scripts/er_env.sh" link "$worktree_root" >/dev/null 2>&1 || true
+exit 0

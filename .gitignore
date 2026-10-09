@@ -10,7 +10,6 @@ artifacts/embeddings/
 artifacts/data/
 .venv/
 .venv
-.venv-link
 .env
 .dvc-site-cache/
 results/*
