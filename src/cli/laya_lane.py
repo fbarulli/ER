@@ -209,7 +209,7 @@ FINETUNE_CONTROL_FIELDS = (
     # Phase 4 (default-OFF except log_grad_norm)
     "compile_model", "amp_dtype", "tf32", "log_grad_norm",
     "write_error_artifacts", "deterministic",
-    # torch.profiler (default-ON; auto-OFF without CUDA)
+    # torch.profiler (default-OFF; opt in per run)
     "profile", "profile_dir", "profile_schedule",
     # Extended knobs (all default-OFF; HPO-searchable)
     "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",

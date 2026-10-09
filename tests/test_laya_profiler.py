@@ -81,14 +81,14 @@ def _profiling_control():
     return {**laya_lane.finetune_control(), "profile": True}
 
 
-def test_profile_default_on_and_schedule_knobs():
+def test_profile_default_off_and_schedule_knobs():
     ft = FinetuneSpec()
-    assert ft.profile is True
+    assert ft.profile is False
     assert ft.profile_dir == "profiler"
     assert ft.profile_schedule == {"wait": 1, "warmup": 1, "active": 1,
                                    "repeat": 1}
     control = laya_lane.finetune_control()
-    assert control["profile"] is True
+    assert control["profile"] is False
     assert control["profile_schedule"]["active"] == 1
 
 

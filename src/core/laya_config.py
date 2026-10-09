@@ -123,10 +123,10 @@ class FinetuneSpec(BaseModel):
     log_grad_norm: bool = True
     write_error_artifacts: bool = False
     deterministic: bool = False
-    # ── torch.profiler (default-ON per owner; auto-OFF without CUDA) ────────
+    # ── torch.profiler (default-OFF; opt in per run) ────────────────────────
     # A bounded schedule profiles only a slice of an epoch; the chrome trace
     # lands under `<output_dir>/<profile_dir>/epoch_<n>.json` (rank 0 only).
-    profile: bool = True
+    profile: bool = False
     profile_dir: str = "profiler"
     profile_schedule: dict[str, int] = Field(
         default_factory=lambda: {"wait": 1, "warmup": 1, "active": 1,

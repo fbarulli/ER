@@ -42,8 +42,8 @@ GOLDEN_SHA256: dict[str, str] = {
     "identity": "e1ffd3e9b6d5ce3b241e77496b5d3939d899dd01fb34c4bf8a0d23c1099ebad8",
     "laya-cli-eval": "4193b9c3110394d1ce8dd962125812ed98153681bb70a978fca75b593bc5b0f7",
     "colab": "8de6069ff99110ba9ad165a5046bcb11ac3357f75694393461c15b1a8e6fc686",
-    "finetune": "36a1b8de1834c2807301f0c6e5ae2f807e62cd53f2654eb178b9ae7f20687e4a",
-    "finetune-smoke": "bf781bd4eb596f0296e9ca443a29c7a95eebafd224c335d599779df5426e0c52",
+    "finetune": "2bcabfc34b28eb8a17921bcefb368ff825eaf58a8ff6383427ea89c9f68b453c",
+    "finetune-smoke": "9cf1b03bc3aab0ae88dbe4f420fcce075dd816e15ef297abbda3c2a8172d5120",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "0289337dae1805432907356f9f880e626152c6875777469ebaa085d16321b404",
 }

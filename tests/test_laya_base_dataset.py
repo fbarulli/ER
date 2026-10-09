@@ -211,7 +211,7 @@ def test_recipe_defaults_reproduced_from_config(tmp_path, monkeypatch):
     # the SEPARATE control block (never a TrainConfig kwarg) rides the
     # receipt and the staged kernel: every declared dial is baked.
     assert set(receipt["control"]) == set(laya_lane.FINETUNE_CONTROL_FIELDS)
-    assert receipt["control"]["profile"] is True
+    assert receipt["control"]["profile"] is False
     assert "FINETUNE_CONTROL = {" in script
     assert not __import__("re").search(r"@[A-Z][A-Z0-9_]*@", script)
     # the patch is a faithful copy: the recipe-critical schedule lines stay
