@@ -119,8 +119,6 @@ __all__ = [
     "Path",
     "PreparedBundle",
     "SplitAllocator",
-    "_allocate",
-    "_assign_splits",
     "_attr_from_payload",
     "_corpus_config",
     "_difficulty_slice",
@@ -143,7 +141,6 @@ __all__ = [
     "_sha256",
     "_side_from_payload",
     "_single_meta",
-    "_split_ratios",
     "_stratified_sample",
     "better_match_records",
     "build",
@@ -191,9 +188,6 @@ corpus_config_is_default = CorpusConfig.is_default
 
 # ── split allocation ───────────────────────────────────────────────────────
 _rebalance_identity_negatives = SplitAllocator._rebalance_identity_negatives
-_allocate = SplitAllocator._allocate
-_split_ratios = SplitAllocator._split_ratios
-_assign_splits = SplitAllocator._assign_splits
 _stratified_sample = SplitAllocator._stratified_sample
 
 # ── case rendering ─────────────────────────────────────────────────────────

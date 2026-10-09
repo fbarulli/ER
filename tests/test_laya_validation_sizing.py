@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from core.smart_split import SmartSplit
+
 ROOT = Path(__file__).resolve().parents[1]
 RECEIPT = ROOT / "data/laya/receipt.json"
 
@@ -23,6 +25,9 @@ def test_laya_carve_is_reachable_and_covers_every_meaningful_stratum() -> None:
     plan = receipt["sample_plan"]
     targets = plan["targets"]
     sizes = receipt["split_sizes"]
+
+    # The carve is the ONE SmartSplit owner: its role map is the receipt's.
+    assert receipt["split_roles"] == SmartSplit.from_config().roles
 
     # The full corpus can deliver the declared MDE (the reachable plan), and
     # dev/validation each carry at least the per-subgroup sample floor.

@@ -218,6 +218,11 @@
       "mask_state": 275
     }
   },
+  "listing_split_counts": {
+    "test": 132,
+    "train": 304,
+    "dev": 140
+  },
   "split_roles": {
     "train": "train",
     "select": "dev",
