@@ -547,7 +547,7 @@ def test_stage_kernel_without_remote_url_bakes_the_local_study(monkeypatch,
     assert "postgresql://" not in json.dumps(receipt)
     script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
         encoding="utf-8")
-    assert laya_hpo._STUDY_OWNER.local_file in script
+    assert laya_lane.training_cfg().credentials.study.local_file in script
     assert str(tmp_path) not in script  # no host-absolute study path leaks
     assert "OPTUNA_STORAGE_URL'] =" not in script  # no URL line baked at all
     compile(script, str(Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE), "exec")
