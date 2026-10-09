@@ -553,6 +553,45 @@ def test_stage_kernel_without_remote_url_bakes_the_local_study(monkeypatch,
     compile(script, str(Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE), "exec")
 
 
+def _exec_kernel(monkeypatch, script_path, root):
+    """Execute the staged kernel module with its input/working roots."""
+    import sys
+    import types
+
+    work = root / "work"
+    inputs = root / "input"
+    work.mkdir(parents=True, exist_ok=True)
+    inputs.mkdir(parents=True, exist_ok=True)
+    for name in laya_lane.FINETUNE_CORPUS_FILES:
+        (inputs / name).write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("ER_LAYA_HPO_WORKING", str(work))
+    monkeypatch.setenv("ER_LAYA_HPO_INPUT", str(inputs))
+    module = types.ModuleType("staged_laya_hpo_probe")
+    module.__file__ = str(script_path)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    exec(compile(script_path.read_text(encoding="utf-8"), str(script_path),
+                 "exec"), module.__dict__)
+    return module.__dict__
+
+
+def test_staged_ddp_rank_runs_without_a_remote_url(monkeypatch, tmp_path):
+    """No OPTUNA_STORAGE_URL: the DDP rank does not hard-stop on the remote URL.
+
+    The rank trains one trial and writes its metric; the controller owns the
+    study, so a missing remote URL must never abort the rank.
+    """
+    receipt = _stage(monkeypatch, tmp_path, None)
+    monkeypatch.delenv(laya_hpo.OPTUNA_URL_ENV, raising=False)
+    namespace = _exec_kernel(
+        monkeypatch, Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE, tmp_path)
+    failure = ""
+    try:
+        namespace["run_ddp_trial"](0)
+    except BaseException as error:  # noqa: BLE001 - the failure is the assertion
+        failure = f"{type(error).__name__}: {error}"
+    assert "OPTUNA_STORAGE_URL is missing" not in failure
+
+
 def _stage_colab(monkeypatch, tmp_path, url):
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-colab-1")
     # Reuse of cli.colab_runtime._optuna_env_script reads os.environ too.

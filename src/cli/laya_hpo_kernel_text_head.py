@@ -219,9 +219,14 @@ def local_study_path():
     """The config-declared shared SQLite study file under WORKING.
 
     One declaration so the resolver and the archive never drift; a single VM's
-    parallel worker processes all open THIS file.
+    parallel worker processes all open THIS file. Fails loud when no local
+    study was configured, so a missing backend can never become an empty study.
     """
-    return WORKING / (LOCAL_STUDY_FILE or "hpo_study.db")
+    if not LOCAL_STUDY_FILE.strip():
+        raise RuntimeError(
+            "[laya-hpo] no study storage configured: set " + OPTUNA_URL_ENV
+            + " or credentials.study.local_file before staging")
+    return WORKING / LOCAL_STUDY_FILE
 
 
 class StorageResolver:
@@ -688,7 +693,8 @@ def ddp_metric_sink(trial_number):
 
 def run_ddp_trial(trial_number):
     """One DDP trial on THIS rank (launched by torchrun via DdpTrialRunner)."""
-    ensure_optuna_url()
+    # A rank trains ONE trial and writes its metric; the controller owns the
+    # study, so a rank must never resolve storage or require the remote URL.
     payload = json.loads(os.environ.get("ER_LAYA_HPO_DDP_PAYLOAD", "{}"))
     import torch
     from laya import train as laya_train
