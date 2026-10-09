@@ -756,8 +756,8 @@ class KaggleKernels:
         while time.monotonic() < deadline:
             state = lane.kernel_status(resolved)["status"]
             if state != last_state:
-                print(f"[stop] {resolved} state={state} (method="
-                      f"{plan['cancel_method']})", flush=True)
+                lane._log_lane(f"[stop] {resolved} state={state} (method="
+                               f"{plan['cancel_method']})")
                 last_state = state
             if state in ("complete", "error"):
                 verdict = "stopped"

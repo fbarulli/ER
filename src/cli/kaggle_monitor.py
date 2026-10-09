@@ -246,6 +246,12 @@ class KaggleMonitor:
                     if "fetch" in handled:
                         plan.setdefault("fetch", {})[kind] = handled["fetch"]
                     plan.setdefault("stop", {})[kind] = handled["stop"]
+                    fetched = handled.get("fetch") or {}
+                    stopped = handled.get("stop") or {}
+                    lane._log_lane(
+                        f"[{slugs[kind]}] harvest: status={status['status']} "
+                        f"fetch_verified={bool(fetched.get('verified'))} "
+                        f"stop={stopped.get('verdict') or stopped.get('stopped')}")
                     if status["status"] != "complete" or "fetch_error" in handled:
                         plan.setdefault("failures", {})[kind] = {
                             "status": status["status"], "raw": status.get("raw", ""),

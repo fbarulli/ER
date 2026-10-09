@@ -822,12 +822,13 @@ def test_stamp_matches_paris_local_format():
 
 
 def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
-    """ER and laya share ONE transcript: staging, watcher status, stream, 429.
+    """Kaggle surface invariant: every Kaggle-run writer lands in ONE log.
 
-    A laya staging line, an ER watcher status line, the live stream's decoded
-    output, and the stream's OWN rate-limit diagnostic all land in the single
-    declared transcript; the retired second roof (logs/laya/lane.log) is never
-    written.
+    A laya Kaggle-run staging line, an ER watcher status line, the live
+    stream's decoded output, and the stream's OWN rate-limit diagnostic all
+    land in the single declared Kaggle transcript; no Kaggle writer creates a
+    second log roof (logs/laya, logs/colab), and the follower lock stays a
+    separate state file.
     """
     import types
     import kagglesdk.kaggle_client
@@ -839,7 +840,7 @@ def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
     monkeypatch.setattr(LaneTranscript, "_started", False)
     monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
 
-    # Staging (laya writer) + watcher status (ER writer): two writers, one roof.
+    # Staging (laya Kaggle writer) + watcher status (ER writer): one roof.
     laya_lane._log_lane("staged laya decision payload")
     kaggle_lane._log_lane("[owner/er-train-gpu] status=running")
 
@@ -868,12 +869,19 @@ def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
 
     kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
 
-    body = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    transcript = tmp_path / "logs" / "kaggle" / "lane.log"
+    body = transcript.read_text()
     assert "staged laya decision payload" in body
     assert "status=running" in body
     assert "hello from the kernel" in body
     assert "rate-limited (429)" in body
-    assert not (tmp_path / "logs" / "laya" / "lane.log").exists()
+    # No Kaggle writer created another log roof; the only .log is the transcript.
+    assert [path for path in (tmp_path / "logs").rglob("*.log")] == [transcript]
+    assert not (tmp_path / "logs" / "laya").exists()
+    assert not (tmp_path / "logs" / "colab").exists()
+    # The follower lock is state, not the transcript.
+    lock = tmp_path / "logs" / "kaggle" / "er-train-gpu.follower.pid"
+    assert lock.is_file() and lock != transcript
 
 
 # ── train-kernel bundle install: pinned checkout stays authoritative ─────────
