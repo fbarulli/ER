@@ -88,8 +88,8 @@ Everything is **dry-run by default**; `--execute` is the only network path.
 `--what` choices (kaggle_cli.py:17–22, default `package`):
 `package | upload | download | submission | credentials | bundle-kernel |
 bundle-fetch | kernel-status | train-kernel | embed-kernel | embed-objective |
-finalize-kernel | kernel-logs | fetch-results | stop | supervise | autowatch |
-kernel-stream | chain`
+finalize-kernel | kernel-logs | fetch-results | stop | delete | supervise |
+autowatch | kernel-stream | chain`
 
 Flags (kaggle_cli.py:23–73): `--dataset-csv`, `--config-json`,
 `--submission-input`, `--submission-output`, `--execute`, `--no-wait`,
@@ -116,6 +116,7 @@ completes), `--with-finalize` (chain: finish with the remote CPU finalize job),
 | `kernel-stream` | live follower on the ONE kaggle-logs path (`KaggleApi.kernels_logs_stream`); appends decoded payloads to the ONE transcript `logs/kaggle/lane.log` (UTF-8-safe, `/r` tqdm frames expanded by `cli.log_capture.progress_frames_to_lines`); bounded reconnects; returns the `kernel_session_id` the manual kill switch needs | installed `kaggle` package (kaggle_monitor.py `kernel_logs`) |
 | `fetch-results --kind <k>` | contract fetch + sha256 verification: bundle→`bundle.receipt.json`/`all_tracks_inputs.tar.zst`; train→`result_bundle.manifest.json`/`result_bundle.tar.zst`; embed→`vectors.tar.zst`; installs under `results/kaggle_lane/<cohort>/<kind>/` | the kernel reached output-producing state; `--kind` is singular (kaggle_outputs.py:17) |
 | `stop --kernel <k>` | release the running session: the recorded session id feeds the SDK in-place `cancel_kernel_session`; with no recorded id (or when the SDK cancel raises) it falls back to a version-replace stub push that tears the running session down to run version N+1. Verified by bounded status polls, `wait=False` returns `requested` | slug configured (kaggle_kernels.py:677; fallback staging `results/kaggle_lane/<which>_stop`) |
+| `delete --kernel <k>` | delete the kernel entirely (not just release its session): a live session is released FIRST through the canonical `stop_kernel` owner (Kaggle refuses deletion while a session runs), then the SDK `delete_kernel` endpoint removes it; dry-run by default, a refusal fails loud with the full traceback | slug configured (kaggle_kernels.py:785) |
 | `supervise --kind <k>` | dependable harvest: one stream thread per kind + status polling to a terminal state; on `complete` fetch + verify; on any other terminal state download and verify partial artifacts plus the session log, and **auto-release the session through the canonical `stop_kernel` owner**; receipt at `results/kaggle_lane/supervise.receipt.json` | slugs configured for every requested kind; polling holds neither session nor quota; idempotent on rerun (kaggle_monitor.py:132) |
 | `chain [--cohort <c>] [--with-embed]` | ONE command runs the whole kaggle loop supervised end-to-end: bundle-kernel push (cohort pinned at chain HEAD) → spawned watcher supervises + verifies the fetch + releases → publish default (fresh `fbarulli/er-10k-bundle` version) → train-kernel push via the standard path (single watcher, chain waits on the watcher receipt) → optionally embed-kernel after the train watcher completes; receipt `results/kaggle_lane/chain.receipt.json` with revision pins + fetch shas + dataset version + spawn confirmations | `cpu/gpu/embed` kernel slugs + `kaggle.bundle_dataset_slug` configured; `--execute` (dry-run prints the plan only); no other flags required |
 | (any verified fetch) → publishes automatically | after the sha verification of `fetch_kernel_output(kind='bundle'\|'train')` — autowatch, supervise, `bundle-fetch`, `fetch-results`, chain — `publish_bundle_dataset` publishes a fresh `kaggle.bundle_dataset_slug` version from `results/kaggle_lane/<cohort>_bundle_dataset` and records the version + mount pin | verified install present; slug set; cohort slug marker must agree with the fetch's cohort (fail loud otherwise); no hand-invoke |
@@ -280,6 +281,9 @@ publish to the wrong target.
 - Stop prefers the SDK in-place `cancel_kernel_session` (the recorded session
   id); the version-replace stub push is only the fallback when no id is
   recorded or the SDK cancel fails (kaggle_kernels.py:677).
+- Delete is first-class (`delete_kernel`): a live session is released through
+  the same `stop_kernel` owner first, then the SDK delete endpoint removes the
+  kernel; dry-run by default (kaggle_kernels.py:785).
 
 ## What does X run now? (intent → command → remote surface → artifacts → teardown)
 
@@ -290,6 +294,7 @@ publish to the wrong target.
 | kaggle status | `er-kaggle --what kernel-status --kernel cpu\|gpu\|embed` | status API only | console JSON | none |
 | kaggle logs | `er-kaggle --what kernel-logs --kernel <k> [--follow] [--run-tag <tag>]` or `--what kernel-stream --kernel <k>` | W&B run (primary) / installed `kaggle` logs path (fallback) | `logs/kaggle/*` | run terminal state |
 | kaggle stop | `er-kaggle --what stop --kernel cpu\|gpu\|embed --execute` | SDK in-place `cancel_kernel_session` (else version-replace stub) | `results/kaggle_lane/<which>_stop/` (fallback only) | session released |
+| kaggle delete | `er-kaggle --what delete --kernel cpu\|gpu\|embed --execute` | stop-first via `stop_kernel`, then SDK `delete_kernel` | none (kernel removed) | kernel deleted |
 | dataset transport | `er-kaggle --what package --dataset-csv <csv>` / `--what upload --execute` / `--what download --execute` / `--what submission --submission-input ... --submission-output ...` | kaggle datasets CLI | staging payloads + receipts | none |
 
 ## References
