@@ -670,6 +670,16 @@ def test_decision_kind_registry_contract():
         assert entry["description"]
 
 
+def test_holdout_report_name_is_the_declared_results_leaf():
+    """The holdout report name is owned by Results, never re-spelled here."""
+    from core.results import Results
+
+    assert laya_lane.HOLDOUT_EVAL_REPORT_FILE == Results.leaf("holdout_report")
+    # The generated kernel carries the same leaf, not a copy of the literal.
+    assert 'Results.leaf("holdout_report")' in laya_lane.HOLDOUT_EVAL_KERNEL_SCRIPT
+    assert "holdout_report.json" not in laya_lane.HOLDOUT_EVAL_KERNEL_SCRIPT
+
+
 # ── lane logging convention ───────────────────────────────────────────────
 def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)

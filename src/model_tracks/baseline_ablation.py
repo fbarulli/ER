@@ -184,9 +184,10 @@ def _frozen_report(request_path, calibration, *, saved=None):
 
 @timed
 def _frozen_calibration(request_path, calibration):
-    """Seal the calibration document into baseline_threshold.json, or refuse drift."""
+    """Seal the calibration document into the declared baseline-threshold leaf, or refuse drift."""
+    from core.results import Results
     with _LOG.section('ablation.baseline.seal'):
-        binding = request_path.parent/'baseline_threshold.json'
+        binding = request_path.parent/Results.leaf('baseline_threshold')
         document = calibration.model_dump(mode='json')
         if binding.exists() and json.loads(binding.read_text()) != document:
             from core.tracing import SCOPE_ENTITY

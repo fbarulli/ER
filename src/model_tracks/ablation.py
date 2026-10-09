@@ -28,6 +28,7 @@ from core.eval_trace import AttributeAttributionRow, decision_flip
 from core.model_input import build_sku_text, model_input_info
 from core.portable_archive import file_size
 from core.run_log import RunLogger
+from core.results import Results
 from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
@@ -601,7 +602,7 @@ def _persist_prepared(request, cfg, token_cache):
     out_dir = resolve(cfg.output_dir)
     out_dir.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out_dir) as tmp:
-        prepared = Path(tmp)/'prepared_inputs.npz'
+        prepared = Path(tmp)/Results.leaf('prepared_inputs')
         request['prepared_inputs'] = prepare_inputs(request,prepared,token_cache=token_cache)
         validate_sources(request)
         # One digest, two uses: the content-addressed staging dir AND the trace
@@ -672,7 +673,7 @@ def load_prepared(request_path, request):
     plan = request.get('prepared_inputs')
     if request.get('schema') != 'er-attribute-ablation-v2' or not plan:
         raise ValueError('locally prepared model inputs required; prepare again')
-    path = request_path.parent/'prepared_inputs.npz'
+    path = request_path.parent/Results.leaf('prepared_inputs')
     if file_size(path) != plan['size']:
         trace().add(
             "prepared_inputs", "checksum_mismatch",

@@ -63,6 +63,7 @@ from core.eval_trace import (
 )
 from core.laya_config import LayaHostedRole, LayaSpec
 from core.manifest import atomic_write_json, file_size
+from core.results import Results
 
 # One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
 KINDS = ("kaggle", "colab")
@@ -122,7 +123,7 @@ FINETUNE_EVAL_RECEIPT_FILE = "laya_finetune-eval.receipt.json"
 # the checkpoint rides the hosted `ckpt` dataset.
 HOLDOUT_EVAL_DECISION = "holdout-eval"
 HOLDOUT_EVAL_CODE_FILE = "laya_holdout_eval.py"
-HOLDOUT_EVAL_REPORT_FILE = "holdout_report.json"
+HOLDOUT_EVAL_REPORT_FILE = Results.leaf("holdout_report")
 HOLDOUT_EVAL_RECEIPT_FILE = "laya_holdout-eval.receipt.json"
 HOLDOUT_JSONL = "holdout.jsonl"
 HOLDOUT_CATALOG_FILE = "holdout_catalog.csv"
@@ -3029,13 +3030,14 @@ HOLDOUT_EVAL_KERNEL_SCRIPT = '''\
 Single T4: installs laya over pip, attaches the staged component-disjoint
 holdout (JSONL of composed identity states + labels + strata) and the fine-tuned
 checkpoint dataset, scores each pair's identity_claim with the checkpoint, and
-writes holdout_report.json: overall + per-stratum precision/recall/F1/PR-AUC at
+writes the declared holdout report: overall + per-stratum precision/recall/F1/PR-AUC at
 the configured threshold, each with a COMPONENT-clustered bootstrap CI (real
 held-out verification, never the in-sample training eval). NO training, NO Hub.
 """
 from __future__ import annotations
 
 from core.portable_archive import ByteCount
+from core.results import Results
 import json
 import os
 import subprocess
@@ -3046,6 +3048,7 @@ from pathlib import Path
 
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
+HOLDOUT_REPORT_FILE = Results.leaf("holdout_report")
 HOLDOUT_JSONL = "@HOLDOUT_JSONL@"
 CKPT_DIR_HINT = "@CKPT_DIR@"
 BATCH_SIZE = @BATCH_SIZE@
@@ -3204,7 +3207,7 @@ def main():
         "by_stratum": by_stratum,
     }
     WORKING.mkdir(parents=True, exist_ok=True)
-    out = WORKING / "holdout_report.json"
+    out = WORKING / HOLDOUT_REPORT_FILE
     out.write_text(json.dumps(report, indent=2) + "\\n", encoding="utf-8")
     receipt = {
         "gpu_kind": "holdout-eval",
