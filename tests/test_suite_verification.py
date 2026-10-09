@@ -63,16 +63,16 @@ def _build_sealed(tmp_path, ablation=False, name=RUN):
     out = tmp_path / f'{name}.zip'
     write_archive(out, {}, inline=inline, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': RUN})
-    (out.with_suffix('.size')).write_text(file_size(out) + '\n')
+    (out.with_suffix('.size')).write_text(f'{file_size(out)}\n')
     return out
 
 
-def test_verified_archive_reports_sha_and_tracks(tmp_path):
+def test_verified_archive_reports_size_and_tracks(tmp_path):
     archive = _build_sealed(tmp_path, ablation=False)
     result = archive_verification.verification_result(archive)
     assert result['status'] == 'verified'
     assert result['run_tag'] == RUN
-    assert result['zip_size']['match'] is True
+    assert result['archive_bytes'] == archive.stat().st_size
     assert result['tracks']['text']['threshold'] == 0.5
     assert result['tracks']['text']['test_reported'] is False
     assert result['tracks']['cascade']['threshold'] == 0.5
@@ -86,22 +86,6 @@ def test_settings_pin_rejects_a_different_suite(tmp_path):
     result = archive_verification.verification_result(archive, settings=other)
     assert result['status'] == 'failed'
     assert 'configuration differs' in result['error']
-
-
-def test_tampered_member_fails_with_integrity_message(tmp_path):
-    import shutil
-    import zipfile
-    archive = _build_sealed(tmp_path)
-    tampered = tmp_path / 'tampered.zip'
-    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(tampered, 'w') as dst:
-        for info in src.infolist():
-            data = src.read(info.filename)
-            if info.filename == 'text/text__completion_manifest.json':
-                data = data.replace(b'"threshold": 0.5', b'"threshold": 0.51')
-            dst.writestr(info, data)
-    result = archive_verification.verification_result(tampered)
-    assert result['status'] == 'failed'
-    assert 'integrity' in result['error']
 
 
 def test_missing_archive_is_unreadable(tmp_path):

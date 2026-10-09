@@ -56,11 +56,11 @@ def test_verify_manifest_rejects_tampered_output(tmp_path):
         verify_manifest("dedupe", manifest_dir=manifest_dir)
 
 
-def test_verify_manifest_rejects_edited_recorded_hash(tmp_path):
+def test_verify_manifest_rejects_edited_recorded_size(tmp_path):
     manifest_dir, _ = _write_manifest(tmp_path / "manifests")
     path = manifest_dir / "dedupe.json"
     document = json.loads(path.read_text())
-    document["outputs"][0]["size"] = "f" * 64
+    document["outputs"][0]["size"] = document["outputs"][0]["size"] + 1
     path.write_text(json.dumps(document))
     with pytest.raises(RuntimeError, match="size mismatch"):
         verify_manifest("dedupe", manifest_dir=manifest_dir)
