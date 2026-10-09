@@ -77,10 +77,38 @@ compatibility-aware selection. A same-brand neighbor is not necessarily the
 same product. Preserve enough diverse evidence to avoid producing isolated
 nodes or excluding difficult true matches.
 
-Start with a weighted version of the existing aggregation. Edge-aware
-attention is a later experiment: PyG's `GATv2Conv` supports edge features via
-`edge_dim`, but adopting it does not by itself establish a quality gain.
+Compare a weighted version of the existing aggregation with a two-layer
+GraphSAGE baseline and edge-aware GATv2. PyG's `GATv2Conv` supports edge features
+via `edge_dim`, but adopting it does not by itself establish a quality gain.
 [GATv2Conv documentation](https://pytorch-geometric.readthedocs.io/en/latest/generated/torch_geometric.nn.conv.GATv2Conv.html)
+
+### Concrete encoder candidates
+
+Use two message-passing layers with a residual path, normalization, activation,
+and feature dropout. A candidate block is
+`h_next = LayerNorm(P(h) + Dropout(activation(message)))`, where `P` is an
+identity or learned projection matching the output dimension. Tune dropout on
+dev rather than assuming that more regularization improves identity matching.
+
+- **SAGEConv:** mean aggregation with a learned root contribution gives a
+  useful baseline. Standard SAGEConv does not consume arbitrary `edge_attr`;
+  pair features can still go into the decoder. Account for its existing root
+  contribution when comparing an additional residual connection.
+  [SAGEConv documentation](https://pytorch-geometric.readthedocs.io/en/latest/generated/torch_geometric.nn.conv.SAGEConv.html)
+- **GATv2Conv with edge_dim:** use membership confidence/source features to
+  condition attention on the actual message-passing edges. Tune attention
+  dropout separately from feature dropout. Match residual dimensions when
+  concatenating multiple attention heads.
+- **Typed graph:** retain separate relation semantics. On the existing
+  bipartite topology, two hops mean listing -> attribute -> listing, not two
+  rounds of listing-to-listing propagation. Use source/target node-type
+  features and relation-specific operators. Disable automatic same-index
+  self-loops for cross-type edges; retain the target node's own representation
+  through its root/residual path instead.
+
+Preserve training-only support when computing query embeddings. Applying a
+generic convolution to the combined train/dev/test graph would change the
+current inductive evaluation protocol.
 
 ### 4. A more expressive pair decision
 
@@ -88,6 +116,27 @@ Compare the current calibrated cosine with a small symmetric pair scorer
 using cosine, absolute embedding differences, elementwise products, and
 explicit agreement/contradiction features. Swapping the pair endpoints should
 leave the prediction unchanged.
+
+The concrete candidate is
+`logit(u,v) = MLP(concat(h_u * h_v, abs(h_u - h_v), symmetric_pair_features))`.
+Feed logits directly to binary cross entropy with logits. Apply sigmoid only
+when probabilities are needed. The product and absolute difference are
+invariant to endpoint order, and the pair features must be invariant too:
+use absolute numeric differences, agreement/contradiction indicators, or
+order-invariant combinations of endpoint evidence. A signed difference,
+ordered retailer pair, or one-way neighbor rank would break this property.
+For directional retrieval features, combine both directions symmetrically.
+
+Message-passing `edge_attr` has one row per graph edge. Decoder pair features
+have one row per scored pair. They are different tensors and can have different
+feature schemas. A scored pair need not be a message-passing edge.
+
+Symmetry is exact for fixed embeddings and deterministic inference. Independent
+dropout draws or independently sampled neighborhoods can change scores across
+training calls; assess endpoint-swap equality in eval mode using the same
+neighborhood context. Keep ranking supervision on embeddings if cosine ANN
+retrieval remains required: decoder improvement alone does not guarantee a
+better retrieval space.
 
 Keep the retrieval embedding and final pair decision separately evaluated.
 A stronger pair scorer can improve decisions without improving nearest-neighbor
