@@ -11,7 +11,7 @@ Every worker claims trials from the SAME shared PostgreSQL Optuna study (the
 URL arrives through the injected OPTUNA_STORAGE_URL environment variable),
 issues a fencing lease per trial, and promotes the best DEV accuracy through
 the transactional champion registry. Rank-free: no DDP, two independent
-trials run concurrently, one per T4.
+trials run in parallel, one per T4.
 """
 from __future__ import annotations
 

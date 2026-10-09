@@ -60,15 +60,13 @@ profiler:
 options:
   # A) trial parallelism — TRUE multi-PROCESS, one worker per visible GPU
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 1            # worker PROCESSES per GPU; 1 = one per GPU
-                              # (all GPUs used). >1 packs extra processes on a
-                              # GPU (needs mps: true, and cuda_visible_devices
-                              # to pin, when more than one GPU is visible).
-  max_concurrent_trials: 2    # ceiling across all GPUs/slots; on 2xT4 this is
-                              # the 2 visible GPUs (on 1xT4 the plan caps to 1)
-  mps: false                  # CUDA Multi-Process Service; OFF for the default
-                              # one-process-per-GPU plan, set true to pack
-                              # slots_per_gpu>1 on one device
+  slots_per_gpu: 1            # one worker PROCESS per GPU (all GPUs used in
+                              # parallel). Keep at 1: packing >1 process onto a
+                              # GPU is time-sharing, not parallelism.
+  max_concurrent_trials: 2    # = the visible GPU count: 2 on a 2xT4 instance
+                              # (2 parallel workers), 1 on a single T4
+  mps: false                  # CUDA Multi-Process Service is single-GPU
+                              # sharing; not used by the parallel-per-GPU mode
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
     backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
@@ -108,7 +106,7 @@ options:
   warm_start:
     mode: base                # scratch | base | champion
     baseline: true            # enqueue the SSOT FinetuneSpec recipe as ONE
-                              # trial, so the baseline runs concurrently with
+                              # trial, so the baseline runs in parallel with
                               # the sweep (derived host-side, no code literal)
     enqueue: []               # known-good param dicts -> study.enqueue_trial
   ensemble:
@@ -123,9 +121,8 @@ options:
     offline: false            # true = single-process SQLite + offline ledger
     # EXPLICIT OVERRIDE, OFF by default. "" uses EVERY device the session
     # exposes (2xT4 -> one worker process per GPU = true parallelism). Only set
-    # it to pin a subset, e.g. "0" to force all slots onto GPU 0 (needed to
-    # pack slots_per_gpu>1 on one T4 when more than one GPU is visible). This is
-    # never the default: it must not restrict a multi-GPU session.
+    # it to pin a subset, e.g. "0" to see a single T4. This is never the
+    # default: it must not restrict a multi-GPU session.
     cuda_visible_devices: ""
 
 

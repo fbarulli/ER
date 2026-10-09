@@ -2,7 +2,7 @@
 
 The staged kernel enqueues ONE warm-start trial built from the SAME
 ``FinetuneSpec`` recipe the trainer reads, so the current best-known fine-tune
-runs as one worker PROCESS concurrently with the TPE sweep. The seed is never a
+runs as one worker PROCESS in parallel with the TPE sweep. The seed is never a
 second recipe registry: it is projected from ``LayaRecipeFactory`` and filtered
 to the search-space ``dials``, so it cannot drift from the spec.
 

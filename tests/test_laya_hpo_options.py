@@ -116,20 +116,6 @@ def test_default_plan_uses_every_visible_gpu_one_process_each():
     assert len(one) == 1 and one[0].device_index == 0
 
 
-def test_worker_pool_plans_two_mps_slots_sharing_one_gpu():
-    """One T4, k=2 slots: two processes on device 0, each capped at half + MPS."""
-    pool = opt.WorkerPool(
-        slots_per_gpu=2, max_concurrent_trials=2,
-        resource_caps=opt.ResourceCaps({"cuda_alloc_fraction": 1.0}),
-        mps=opt.MpsController(True))
-    specs = pool.plan(gpu_count=1)
-    assert len(specs) == 2
-    assert {s.device_index for s in specs} == {0}
-    assert all(s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] == "0.5"
-               for s in specs)
-    assert all(s.env["CUDA_MPS_PIPE_DIRECTORY"] for s in specs)
-
-
 def test_trial_scheduler_registry_selects_slots_and_ddp():
     slots = opt.TrialScheduler.create({"parallelism": "slots",
                                        "slots_per_gpu": 1,

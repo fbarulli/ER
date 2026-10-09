@@ -117,8 +117,7 @@ class SessionPolicy:
         self.offline = bool(config.get("offline", False))
         # Optional GPU override baked into the staged kernel (config SSOT),
         # OFF by default: "" = every device the session exposes (one worker per
-        # GPU). Set it only to pin a subset (e.g. "0" to pack slots_per_gpu>1
-        # on one T4 when more than one GPU is visible).
+        # GPU). Set it only to pin a subset (e.g. "0" to see a single T4).
         self.cuda_visible_devices = str(
             config.get("cuda_visible_devices", "") or "")
         self.n_jobs_threads = 1  # never >1: trials run in their own processes

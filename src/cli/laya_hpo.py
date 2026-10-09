@@ -2,7 +2,7 @@
 
 A remote Kaggle lane that runs Optuna/TPE HPO for the laya fine-tune against a
 SHARED PostgreSQL study. One Kaggle session exposes 2xT4; the staged kernel
-spawns one worker PER visible device, and every worker (and every concurrent
+spawns one worker PER visible device, and every worker (and every other
 Kaggle session) claims trials from the SAME study through Optuna's RDBStorage
 while ``training.hpo_fencing`` lease epochs fence zombie workers and
 ``training.hpo_champions`` keeps the best trial transactionally.
@@ -554,8 +554,8 @@ class HpoReceipt:
         receipt = self.common()
         plan = self.plan
         receipt["kernel"] = plan.kernel
-        receipt["gpu"] = ("T4 (2x when the session exposes it; "
-                          "slots_per_gpu worker processes per device)")
+        receipt["gpu"] = ("T4 (2x when the session exposes it; one worker "
+                          "process per device, run in parallel)")
         receipt["dataset"] = {"slug": plan.dataset_slug,
                               "payload": plan.dataset_receipt["payload"],
                               "files": plan.dataset_receipt["files"]}
@@ -686,7 +686,7 @@ class LayaHpoStager:
         space = load_space(self.space_config)
         # Seed the SSOT baseline recipe as one enqueued trial (when enabled)
         # BEFORE repr(space) is baked, so the remote worker runs the baseline as
-        # one process concurrent with the sweep.
+        # one process in parallel with the sweep.
         space = BaselineSeedFactory(spec).apply(space)
         options = self._options(space)
         offline = bool(options.session.offline)
