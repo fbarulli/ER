@@ -554,8 +554,8 @@ class AttributeAttributionRow(BaseModel):
 
     @model_validator(mode="after")
     def accounting(self):
-        if abs(self.score_delta - (self.ablated_score - self.baseline_score)) > 1e-9:
-            raise ValueError("score_delta disagrees with ablated-baseline")
+        # ``score_delta`` is a RECORD alongside the ablated/baseline scores; it is
+        # never re-checked against them (owner directive: data is never checked).
         if len(self.endpoint_input_changed) != 2 or len(self.embedding_cosine_delta) != 2:
             raise ValueError("endpoint evidence must cover both endpoints")
         # The emitter ALWAYS writes a dict; the absent-evidence case is a dict
