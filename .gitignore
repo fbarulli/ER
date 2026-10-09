@@ -100,6 +100,9 @@ submission/SKU_ITEM_submission*.csv
 # Smoke prepare provenance metadata; the committed smoke set is the
 # nine bundle/yaml/manifest files.
 data/prepared/smoke_*/embedding_inputs.json
+# The full-bundle prepared input is DERIVED by training.prepare_all's
+# full_bundle stage; the only tracked prepared tree is the smoke fixture above.
+data/prepared/full/
 submission/calibration_diagnostics.csv
 submission/holdout_diagnostics.csv
 submission/holdout_metrics.csv
@@ -127,19 +130,16 @@ package.json
 # Do not commit it; do not delete it.
 AGENTS.local.md
 
-# CSVs are generated or local-only by default. The versioned runtime inputs
-# under data/ are the deliberate exception: they are required on a fresh
-# Colab checkout for preparation, training, and inference.
+# CSVs are generated or local-only by default.
 *.csv
-# ...EXCEPT the inputs a clone must have to run the pipeline at all. These five
-# are the raw export and the frozen artifacts the lanes consume directly:
-# dataset.csv is the irreplaceable source, dataset_deduped.csv is the frozen
-# training input train.py reads, canonical_records/gate_results are the shared
-# frozen inputs, and number_tokens_reference.csv backs build_reference.
+# ...EXCEPT the irreducible raw inputs a clone must have to run the pipeline at
+# all: dataset.csv is the irreplaceable raw export and dataset_3k.csv is the
+# official 3k cohort. Every data/*.csv artifact (dataset_deduped, sku_to_rep,
+# canonical_records, gate_results, number_tokens_reference, labeled_pairs,
+# final_validation) is DERIVED by training.prepare_all and regenerated in place,
+# so it is not tracked.
 !dataset.csv
 !dataset_3k.csv
-!data/
-!data/*.csv
 
 # LAYA corpus/output payloads live in DVC (data/laya.dvc), not Git. The
 # jsonl splits are the large binaries; the small receipt.json declarations
