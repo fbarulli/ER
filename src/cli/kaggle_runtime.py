@@ -186,25 +186,16 @@ class KaggleRuntime:
     def _env_dot_value(name: str, root: Path | None = None) -> str | None:
         """Read a simple KEY=VALUE from <root>/.env or its parent .env.
 
-        Same semantics as cli.colab._env_value: no printing (secrets stay out of
-        every log), env-var override first, never cloned into the repo. ``root``
-        defaults to the lane's TRAIN_ROOT (the staging knob tests and alternate
-        checkouts re-point); a caller passes the repository root explicitly for
-        a value whose lookup must survive that redirection.
+        One reader for every ``.env`` lookup in the repo (``core.env_file``): no
+        printing (secrets stay out of every log), never cloned into the repo.
+        ``root`` defaults to the lane's TRAIN_ROOT (the staging knob tests and
+        alternate checkouts re-point); a caller passes the repository root
+        explicitly for a value whose lookup must survive that redirection.
         """
         from cli import kaggle_lane as lane
+        from core.env_file import EnvFile
 
-        search_root = lane.TRAIN_ROOT if root is None else Path(root)
-        for env_path in (search_root / ".env", search_root.parent / ".env"):
-            if not env_path.is_file():
-                continue
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                key, separator, value = line.partition("=")
-                if separator and key.strip() == name:
-                    value = value.strip().strip('"').strip("'")
-                    if value:
-                        return value
-        return None
+        return EnvFile.value(name, root=lane.TRAIN_ROOT if root is None else Path(root))
 
     @staticmethod
     def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str, Any]:

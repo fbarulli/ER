@@ -62,13 +62,15 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     # Input publication occurs before worker execution regardless of the
     # suite's result-publication settings. Exercise the real transport builder
-    # under a temporary root and replace its external Git publisher.
-    from model_tracks import publish
+    # under a temporary root; the lane's publisher collaborator (DVC archive +
+    # the branch push) is replaced, since it reaches a remote and a token.
+    from model_tracks.colab import TracksLane
     publications = []
     def record_publication(paths, message):
         assert all(path.resolve().is_relative_to(tmp_path.resolve()) for path in paths)
+        assert all(path.is_file() for path in paths)
         publications.append((paths, message))
-    monkeypatch.setattr(publish, 'push_artifacts', record_publication)
+    monkeypatch.setattr(TracksLane, '_publish_git_inputs', staticmethod(record_publication))
     inputs = tmp_path / 'inputs.zip'
     # A REAL verified package: colab.run opens it through verified_archive()
     # and re-checks every member against the manifest inventory, so a zip

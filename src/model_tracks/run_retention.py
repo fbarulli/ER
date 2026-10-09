@@ -37,7 +37,6 @@ Verified layout facts (independent check 2026-10-05):
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import time
@@ -135,9 +134,10 @@ def _authenticate() -> str:
     tracked.
     """
     from core.common import TRAIN_ROOT
+    from core.env_file import EnvFile
     from training import dvc_store
 
-    token = os.environ.get("DVC_API_KEY")
+    token = EnvFile.value("DVC_API_KEY")
     if not token:
         raise RuntimeError("DVC_API_KEY is required to publish run results through DVC")
     return dvc_store.configure_repo_remote(TRAIN_ROOT, token)

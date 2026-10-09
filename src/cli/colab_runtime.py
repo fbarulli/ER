@@ -443,17 +443,9 @@ os.environ["{_COLAB.lane_env_spec.python_path_env}"] = "{_REMOTE_ROOT}/{_COLAB.l
 
 def _env_value(name: str) -> str | None:
     """Read a simple KEY=VALUE entry without printing or cloning secrets."""
-    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env"):
-        if not env_path.is_file():
-            continue
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == name:
-                value = value.strip().strip('"').strip("'")
-                if value:
-                    return value
-    return os.environ.get(name) or None
-    return None
+    from core.env_file import EnvFile
+
+    return EnvFile.value(name)
 
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk.
