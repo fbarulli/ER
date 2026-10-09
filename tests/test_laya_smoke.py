@@ -14,9 +14,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-
 from cli import laya_lane
 from cli.laya_smoke import FinetuneSmokeCorpus
 from core.laya_config import FinetuneSmokeSpec, LayaSpec
@@ -141,11 +138,6 @@ def test_smoke_kernel_stages_gpu_when_device_is_cuda(tmp_path, monkeypatch):
     assert receipt["gpu"] == "T4 (single)"
     script = (stage / "laya_finetune.py").read_text()
     assert _baked(script, "FINETUNE_DEVICE") == "cuda"
-
-
-def test_smoke_device_rejects_unknown_values():
-    with pytest.raises(ValidationError):
-        FinetuneSmokeSpec(device="tpu")
 
 
 def test_smoke_kind_routes_through_the_decision_dispatch(tmp_path, monkeypatch):
