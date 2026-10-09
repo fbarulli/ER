@@ -16,8 +16,8 @@ from __future__ import annotations
 import logging
 import os
 import traceback
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
@@ -62,7 +62,7 @@ class CredentialsSpec(BaseModel):
     keys: CredentialKeysSpec = Field(default_factory=CredentialKeysSpec)
 
     @model_validator(mode="after")
-    def _paths_are_home_relative_fragments(self) -> "CredentialsSpec":
+    def _paths_are_home_relative_fragments(self) -> CredentialsSpec:
         if not self.env_file.strip():
             raise ValueError("credentials.env_file must be non-empty")
         for name in ("kaggle_credentials_file", "kaggle_access_token_file"):
@@ -92,7 +92,7 @@ class CredentialStore:
 
     @classmethod
     def from_config(cls, spec: CredentialsSpec | None = None, *,
-                    root: Path | None = None) -> "CredentialStore":
+                    root: Path | None = None) -> CredentialStore:
         """Build from the config SSOT, reading the declared env file once.
 
         ``root`` is the repository root the declared ``env_file`` resolves
@@ -109,7 +109,7 @@ class CredentialStore:
 
     @classmethod
     def from_mapping(cls, spec: CredentialsSpec,
-                     values: Mapping[str, str]) -> "CredentialStore":
+                     values: Mapping[str, str]) -> CredentialStore:
         """Build over an in-memory env mapping (tests, embedded callers)."""
         return cls(spec, file_values=values)
 

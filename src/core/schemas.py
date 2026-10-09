@@ -3048,14 +3048,14 @@ class KaggleSpec(BaseModel):
         return self
 
 
+# Credential source SSOT lives with its owner (core.credentials); re-exported
+# here so the training-config contract is validated as a whole at load.
+from core.credentials import CredentialsSpec
+
 # LayaSpec relocated 2026-10-07 to core.laya_config (one lane one file;
 # schemas.py stays the megafile's shared core) — re-exported verbatim so
 # every existing import surface stays byte-identical.
-from core.laya_config import LayaSpec  # noqa: E402
-
-# Credential source SSOT lives with its owner (core.credentials); re-exported
-# here so the training-config contract is validated as a whole at load.
-from core.credentials import CredentialsSpec  # noqa: E402
+from core.laya_config import LayaSpec
 
 
 class PreparationGraphSetupSpec(BaseModel):
