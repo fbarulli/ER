@@ -143,6 +143,8 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -186,6 +188,51 @@ FINETUNE_CHECKPOINT_DIR = None
 FINETUNE_RUN_TAG = None
 
 
+class WandbLogSink:
+    """Batch notable log lines into the live W&B text channel `log/line`.
+
+    W&B exposes `output.log` only on flush/end, so `log/line` is the sole
+    surface visible while the run is live. Lines are buffered and flushed on N
+    lines or the bounded interval; the capped pre-init buffer holds the kernel
+    boot lines until `wandb_init` succeeds. Fail-soft: a write error is recorded
+    in full, never fatal.
+    """
+
+    KEY = "log/line"
+    MAX_LINES = 20
+    MAX_BUFFER = 400
+    FLUSH_SECONDS = 15.0
+
+    def __init__(self):
+        self._pending = []
+        self._flushed_at = time.monotonic()
+
+    def add(self, line):
+        self._pending.append(str(line))
+        if len(self._pending) > self.MAX_BUFFER:
+            del self._pending[:-self.MAX_BUFFER]
+        if WANDB_RUN is not None and (
+                len(self._pending) >= self.MAX_LINES
+                or time.monotonic() - self._flushed_at >= self.FLUSH_SECONDS):
+            self.flush()
+
+    def flush(self):
+        if WANDB_RUN is None or not self._pending:
+            return
+        text = "\\n".join(self._pending)
+        self._pending = []
+        self._flushed_at = time.monotonic()
+        try:
+            WANDB_RUN.log({self.KEY: text})
+        except Exception as error:
+            print("[wandb] log sink skipped: " + type(error).__name__ + ": "
+                  + str(error)[:200] + "\\n" + traceback.format_exc(),
+                  flush=True)
+
+
+LOG_SINK = WandbLogSink()
+
+
 def wandb_init():
     """Start the optional wandb mirror (project `tracking.wandb.project`).
 
@@ -207,6 +254,7 @@ def wandb_init():
         print("[wandb] init skipped: " + type(error).__name__ + ": "
               + str(error)[:200], flush=True)
         WANDB_RUN = None
+    LOG_SINK.flush()
     return WANDB_RUN
 
 
@@ -219,6 +267,7 @@ def wandb_log_epoch(epoch, mean, extra=None):
             if value is not None:
                 payload[key] = value
     WANDB_RUN.log(payload, step=epoch)
+    LOG_SINK.add("epoch %d loss=%.4f" % (epoch + 1, mean))
 
 
 def wandb_log_control_summary(result):
@@ -252,6 +301,7 @@ def wandb_log_metrics(report):
 
 
 def wandb_finish():
+    LOG_SINK.flush()
     if WANDB_RUN is not None:
         try:
             WANDB_RUN.finish()
@@ -269,7 +319,9 @@ INPUTS = Path("/kaggle/input")
 
 def log(line):
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print("[laya-lane " + stamp + "] " + line, flush=True)
+    text = "[laya-lane " + stamp + "] " + line
+    print(text, flush=True)
+    LOG_SINK.add(text)
 
 
 def pip_install_laya():
@@ -564,7 +616,6 @@ def _finetune_session(distributed, session):
             wandb_log_metrics(receipt["train_report"])
         if isinstance(receipt.get("held_out"), dict):
             wandb_log_metrics({"after": receipt["held_out"].get("metrics", {})})
-        wandb_finish()
         (WORKING / RECEIPT_NAME).write_text(
             json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
         with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
@@ -573,6 +624,7 @@ def _finetune_session(distributed, session):
                 if item.name not in ("laya_finetune.tar.gz", "base_model"):
                     tar.add(item, arcname=item.name)
         log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+        wandb_finish()
 
     # Barrier + rank-0-only gate: only rank 0 evaluates the held-out split,
     # writes the receipt and tars /kaggle/working; every rank then tears the

@@ -52,9 +52,12 @@ GOLDEN_SHA256: dict[str, str] = {
     # fix: OptimizerStateCaster now reconciles state to the parameter dtype
     # (native AdamW requires state.dtype == param.dtype on single/foreach/fused)
     # instead of casting it to bf16, which left fused AdamW with mismatched
-    # tensors. Only those two surfaces carry the perf-patch control logic.
-    "finetune": "70b83e3a190d25f738b0660ac718570a844448ae41267f82176d314e2b600fd8",
-    "finetune-smoke": "130f64273ada8b5f0af8da14f062b28e179bcf3629084b633bc01e1580e1d156",
+    # tensors. Only those two surfaces carry the perf-patch control logic. Re-
+    # pinned once more for the live `log/line` text channel (WandbLogSink): the
+    # kernel boot/trial/epoch lines stream through `wandb.log` while the run is
+    # live, since W&B exposes `output.log` only on flush/end.
+    "finetune": "012c911801134fc77bfd7a654541098859aeec7e183f2a724f20c67976982abf",
+    "finetune-smoke": "f58d2908ef9297d78e577859fc6a101704129541b9eb9451912ffcf11c94ca38",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
 }

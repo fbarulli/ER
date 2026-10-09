@@ -1184,6 +1184,47 @@ def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
     assert updates[1]["new_output"] == "epoch 1 loss=0.5\n"
 
 
+def test_track_run_streams_the_live_log_channel_into_the_lane_transcript(
+        tmp_path, monkeypatch):
+    """The live ``log/line`` channel (the only W&B surface exposed while a run
+    is live) is read by the canonical reader and appended to the launched run's
+    transcript; ``output.log`` (404 while live) stays the fallback."""
+    from cli.kaggle_monitor import KaggleMonitor
+    from core.wandb_ctx import WandbRunReader
+
+    _kernel_spec(tmp_path, monkeypatch)
+
+    class FakeRun:
+        state = "finished"
+        summary = {"accuracy": 0.9}
+
+        def scan_history(self, keys=None):
+            assert keys == ["log/line"]
+            return [{"log/line": "kernel_boot role=worker"},
+                    {"log/line": "trial 0 start"},
+                    {"log/line": "trial 0 done dev_accuracy=0.8"}]
+
+        def file(self, name):
+            raise FileNotFoundError("output.log is 404 while the run is live")
+
+    class FakeApi:
+        def run(self, path):
+            assert path.endswith("/laya_live")
+            return FakeRun()
+
+    monkeypatch.setattr(WandbRunReader, "available",
+                        classmethod(lambda cls: True))
+    monkeypatch.setattr(WandbRunReader, "_client", lambda self: FakeApi())
+
+    destination = tmp_path / "logs" / "laya" / "lane.log"
+    plan = KaggleMonitor.track_run(run_tag="laya_live", slug="owner/er",
+                                   log_path=destination, max_polls=1)
+    assert plan["source"] == "wandb"
+    text = destination.read_text(encoding="utf-8")
+    assert "kernel_boot role=worker" in text
+    assert "trial 0 done dev_accuracy=0.8" in text
+
+
 # ── session-id capture: launch path records the id, stop consumes it ────────
 
 def _fake_stream_client(monkeypatch, url: str, closed: list[str]):

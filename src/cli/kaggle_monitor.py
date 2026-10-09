@@ -396,8 +396,10 @@ class KaggleMonitor:
 
         W&B is the primary live source (Kaggle's log stream is throttled); when
         no ``run_tag``/``WANDB_API_KEY`` is available it degrades to the ONE
-        kaggle-logs path for ``slug``. The wandb console is appended to the
-        transcript and the latest metrics/state are logged each poll.
+        kaggle-logs path for ``slug``. The live ``log/line`` channel (the only
+        W&B surface exposed while a run is live) is appended to the transcript,
+        falling back to ``output.log`` (404 until flush/end); the latest
+        metrics/state are logged each poll.
         """
         from cli import kaggle_lane as lane
         from core.wandb_ctx import WandbRunReader
@@ -421,6 +423,8 @@ class KaggleMonitor:
                 plan["metrics"] = update["metrics"]
                 if update.get("console_error"):
                     plan["console_error"] = update["console_error"]
+                if update.get("live_error"):
+                    plan["live_error"] = update["live_error"]
             return plan
         if not slug:
             raise RuntimeError(
