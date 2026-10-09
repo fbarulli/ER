@@ -54,10 +54,6 @@ class DownloadResult:
     resumed: bool = False
     archive: Path | None = None
 
-    @property
-    def empty(self) -> bool:
-        return not self.files
-
 
 class DownloadError(RuntimeError):
     """A download failed; ``traceback_text`` carries the FULL traceback."""
