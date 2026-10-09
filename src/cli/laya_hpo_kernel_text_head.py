@@ -56,6 +56,12 @@ REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
 REVISION = "@REVISION@"
 
+# The HPO registry SSOT, resolved at stage time (cli.laya_hpo): the kernel has
+# no repo and no config, so the model keys and the full registry description
+# ride as baked literals read by the injected training.hpo_registry.
+SSOT_MODEL_KEYS = @SSOT_MODEL_KEYS@
+SSOT_MODEL_REGISTRY = @SSOT_MODEL_REGISTRY@
+
 # Output/input roots are overridable so the SAME kernel runs on Kaggle
 # (defaults) and Colab (the entry driver sets ER_LAYA_HPO_WORKING/INPUT).
 WORKING = Path(os.environ.get("ER_LAYA_HPO_WORKING") or "/kaggle/working")

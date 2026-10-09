@@ -55,7 +55,15 @@ def project_root() -> Path:
 
 
 def ssot_model_keys() -> list[str]:
-    """The canonical model keys from ``config/paths.yaml models:`` (SSOT)."""
+    """The canonical model keys from ``config/paths.yaml models:`` (SSOT).
+
+    The staged kernel carries no repo and no config, so the keys are baked at
+    stage time into the ``SSOT_MODEL_KEYS`` global (cli.laya_hpo); the host
+    reads them live from the config SSOT.
+    """
+    baked = globals().get("SSOT_MODEL_KEYS")
+    if baked is not None:
+        return list(baked)
     from core.common import load_config
     return list(load_config()["models"])
 
@@ -255,6 +263,22 @@ class HpoModelRegistry:
         for spec in specs:
             self.register(spec)
 
+    @classmethod
+    def from_description(cls, description):
+        """Rebuild the registry from a baked ``describe()`` snapshot.
+
+        The staged kernel cannot read the config SSOT, so the host bakes the
+        resolved description (cli.laya_hpo); this restores a registry that serves
+        the SAME description back (only the session receipt consumes it).
+        """
+        registry = cls()
+        for key, entry in description.items():
+            registry.register(ModelHpoSpec(
+                model_key=key, space=list(entry["dials"]),
+                metric=entry["metric"], direction=entry["direction"],
+                runner=entry["runner"]))
+        return registry
+
     def register(self, spec: ModelHpoSpec):
         if not spec.model_key:
             raise ValueError("model spec needs a model_key")
@@ -304,7 +328,14 @@ def model_keys(*, root: Path | None = None) -> list[str]:
 
 
 def default_registry(*, root: Path | None = None) -> HpoModelRegistry:
-    """The SSOT-sourced registry (no parallel key list, no re-declared bounds)."""
+    """The SSOT-sourced registry (no parallel key list, no re-declared bounds).
+
+    The staged kernel cannot import the repo or read config, so the host bakes
+    the resolved description (cli.laya_hpo); the kernel restores it verbatim.
+    """
+    baked = globals().get("SSOT_MODEL_REGISTRY")
+    if baked is not None:
+        return HpoModelRegistry.from_description(baked)
     registry = HpoModelRegistry()
     # Every project model backbone shares the training HPO space/objective. The
     # backbone objective adapter fails loud at construction (run_hpo is a sweep

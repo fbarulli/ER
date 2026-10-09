@@ -307,6 +307,15 @@ def resolve_study_config(*, space: dict[str, Any] | None = None,
 
 
 # ── remote-kernel composition (read-only reuse, injected verbatim) ─────────
+#: A host-only repo import inside an injected module. In the staged kernel the
+#: modules share ONE namespace and the SSOT inputs ride baked globals, so these
+#: fallbacks never run; they are stripped from the injected text (the kernel must
+#: NOT contain repo imports).
+_HOST_ONLY_IMPORT = re.compile(
+    r"\s*(?:from|import)\s+(?:core|cli|training|graph_tracks|model_tracks)"
+    r"(?:[.\s]|$)")
+
+
 def hpo_runtime_source() -> str:
     """The shared HPO primitives, injected verbatim into the staged script.
 
@@ -314,7 +323,9 @@ def hpo_runtime_source() -> str:
     NOT clone the repo, so it cannot ``import training.hpo_*``. Concatenating
     the real module sources keeps ONE implementation (the
     ``FINETUNE_CONTROL_LOGIC_SOURCE`` precedent). ``from __future__`` lines are
-    stripped because the script has exactly one, at the top.
+    stripped because the script has exactly one, at the top, and every host-only
+    repo import is stripped (the kernel resolves those symbols from the shared
+    injected namespace or the baked SSOT globals).
     """
     chunks: list[str] = []
     for module in (hpo_control_plane, hpo_fencing, hpo_budget, hpo_champions,
@@ -323,7 +334,8 @@ def hpo_runtime_source() -> str:
         text = inspect.getsource(module)
         cleaned = "\n".join(
             line for line in text.splitlines()
-            if not line.lstrip().startswith("from __future__ import"))
+            if not line.lstrip().startswith("from __future__ import")
+            and not _HOST_ONLY_IMPORT.match(line))
         chunks.append(cleaned.strip("\n"))
     return "\n\n".join(chunks)
 
@@ -425,6 +437,8 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "SEED": str(int(space["seed"])),
         "GENERATION_ID": generation,
         "MODEL_KEY": key,
+        "SSOT_MODEL_KEYS": repr(list(hpo_registry.ssot_model_keys())),
+        "SSOT_MODEL_REGISTRY": repr(hpo_registry.default_registry().describe()),
         "OPTUNA_URL_ENV": OPTUNA_URL_ENV,
         "LOCAL_STUDY_FILE": local_study_file or "",
         "WANDB_API_KEY": laya_lane._env_value("WANDB_API_KEY") or "",
