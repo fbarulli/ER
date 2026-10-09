@@ -3918,7 +3918,23 @@ def collect_kaggle_result(decision_kind: str, slug: str, *,
     _log_lane(f"fetched kernel output for {slug}: "
               f"archive={archives[0].name} members={len(members)} "
               f"reports={sorted(reports)} rows={len(decision_rows)}")
+    # DVC-managed outputs (owner mandate 2026-10-09): the fetched kernel payloads
+    # and the lane transcript are pushed to the dagshub remote, git keeps only
+    # the *.dvc pointers, and the local bytes are freed (dvc pull restores them).
+    plan["dvc"] = publish_lane_outputs()
     return plan
+
+
+def publish_lane_outputs() -> dict[str, list[str]]:
+    """DVC-publish the laya lane's completed fetch payloads and transcripts."""
+    from model_tracks.run_retention import publish_output_tree
+
+    published: dict[str, list[str]] = {}
+    for root in (staging_dir() / "fetch", lane_logs_dir()):
+        if root.is_dir():
+            published[root.relative_to(TRAIN_ROOT).as_posix()] = (
+                publish_output_tree(root, drop_local=True).pointers)
+    return published
 
 
 def local_eval_checkpoint(checkpoint_dir: Path, *,

@@ -63,7 +63,6 @@ def persist_results(archive: Path, run_tag: str, *, bundle=None) -> Path:
     receipt = archive_sidecar(archive, bundle_spec().publication_receipt_suffix)
     receipt.write_text(json.dumps({
         'run_tag': run_tag, 'archive_size': handle.path.stat().st_size,
-        'verified_download': True,
         'references': {p.relative_to(common.TRAIN_ROOT).as_posix(): p.read_text() for p in refs},
     }, indent=2) + '\n')
     return receipt

@@ -111,7 +111,7 @@ def test_embedding_save_reuses_existing_git_artifact_flow(tmp_path):
         captured.append(archive)
         return archive
     with patch.object(module, 'TRAIN_ROOT', tmp_path), \
-         patch('model_tracks.publish.push_artifacts', side_effect=existing_publisher):
+         patch.object(module, 'publish_results', side_effect=existing_publisher):
         module.persist_embeddings(setup / 'shared_minilm__embeddings.npz', handoff)
     assert len(captured) == 1
 

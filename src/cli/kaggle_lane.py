@@ -240,7 +240,41 @@ require_embed_objective = KaggleKernels.require_embed_objective
 push_kernel = KaggleKernels.push_kernel
 kernel_status = KaggleKernels.kernel_status
 stop_kernel = KaggleKernels.stop_kernel
-fetch_kernel_output = KaggleOutputs.fetch_kernel_output
+_fetch_kernel_output = KaggleOutputs.fetch_kernel_output
+
+
+def publish_fetched_outputs(plan: dict[str, Any]) -> dict[str, Any]:
+    """DVC-publish one completed fetch's payloads (owner mandate 2026-10-09).
+
+    The raw kernel-output ``stage`` is scratch once its archive is installed and
+    is freed after the push; the installed run tree is tracked and pushed but
+    kept for this lane's own publish step (a later ``dvc pull`` restores either).
+    Git receives only the ``*.dvc`` pointers.
+    """
+    installed = plan.get("installed")
+    if not installed:
+        # A dry-run or failed fetch delivered nothing to publish.
+        return {}
+    from model_tracks.run_retention import publish_result_paths
+
+    stage = Path(plan["stage"])
+    destination = Path(next(iter(installed.values()))).parent
+    return {
+        "stage": publish_result_paths([stage], drop_local=True).pointers,
+        "installed": publish_result_paths([destination], drop_local=False).pointers,
+    }
+
+
+def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
+                        cohort: str | None = None,
+                        slug: str | None = None) -> dict[str, Any]:
+    """Fetch one kernel output, then DVC-publish everything it delivered."""
+    plan = _fetch_kernel_output(kind=kind, execute=execute, cohort=cohort, slug=slug)
+    if execute:
+        plan["dvc"] = publish_fetched_outputs(plan)
+    return plan
+
+
 fetch_failed_kernel_log = KaggleOutputs.fetch_failed_kernel_log
 fetch_bundle_output = KaggleOutputs.fetch_bundle_output
 _spawn_autowatch = KaggleMonitor._spawn_autowatch

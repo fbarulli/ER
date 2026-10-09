@@ -911,9 +911,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 project = snapshot(output, cfg.track, remote=cfg.dvc.remote, push=cfg.dvc.push,
                                    generation=f"epoch-{completed_epochs}")
                 write_json(output / name(cfg.track, "dvc_result.json"), {
-                    "track": cfg.track, "project": str(project), "verified_restore": True, "pushed": cfg.dvc.push})
-                logger.info("[graph-dvc] verified clean restore project=%s", project)
-                wandb.set_summary({"dvc_verified_restore": True, "dvc_pushed": cfg.dvc.push,
+                    "track": cfg.track, "project": str(project), "pushed": cfg.dvc.push})
+                logger.info("[graph-dvc] pushed project=%s", project)
+                wandb.set_summary({"dvc_pushed": cfg.dvc.push,
                                    "dvc_project": project.name})
                 wandb.log_artifacts([project / name(cfg.track, "dvc_manifest.json"),
                                      project / (name(cfg.track, "payload") + ".dvc")], "dvc-metadata")

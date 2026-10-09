@@ -20,6 +20,12 @@ from core.schemas import LayaSpec
 from cli import laya_lane
 
 
+@pytest.fixture(autouse=True)
+def _dvc_publication_is_not_the_unit_under_test(monkeypatch):
+    """Fetch tests pin the fetch contract; the network DVC push is stubbed."""
+    monkeypatch.setattr(laya_lane, "publish_lane_outputs", lambda: {})
+
+
 def _hosted_slug(role: str) -> str:
     """The hosted-dataset slug the lane must use for ``role`` (registry SSOT)."""
     from core.hosted_dataset import hosted_registry
