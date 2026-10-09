@@ -10,7 +10,7 @@ precedent) never imports or edits those packages.
 | layer | file |
 |---|---|
 | lane | `src/cli/laya_lane.py` |
-| SSOT spec | `src/core/schemas.py` -> `LayaSpec` (additive; mounted in `TrainingConfig` as `laya:`) |
+| SSOT spec | `src/core/laya_config.py` -> `LayaSpec` (relocated out of `schemas.py` 2026-10-07; still mounted in `TrainingConfig` as `laya:`) |
 | question schema | `config/laya.question.json` |
 | repo-root shim | `laya_backend.py` (the `er-laya` entry, colab_backend.py pattern) |
 | offline pins | `tests/test_laya_lane.py` (offline, no network) |
@@ -106,6 +106,9 @@ python laya_backend.py --kind kaggle --decision finetune --stop
 
 # cancel (SDK in-place cancel when an id is recorded, else version-replace stub)
 python laya_backend.py --kind kaggle --decision finetune --stop --execute
+
+# delete the kernel entirely (releases a live session first; dry-run unless --execute)
+python laya_backend.py --kind kaggle --decision finetune --delete --execute
 ```
 
 **Where the session id comes from.** Kaggle injects **no**
@@ -145,10 +148,11 @@ dirty working tree does not block it — only the tip gate (the commit) matters.
 The base model and corpus travel as attached datasets, never the git checkout.
 
 **Running from a feature branch.** The tip gate compares `HEAD` to
-`origin/<kaggle.branch>` (default `main`). To stage from a feature branch,
-pin `kaggle.branch` to that pushed branch (`config/training.yaml` →
-`kaggle.branch: <branch>`) — a local, uncommitted edit is fine since the kernel
-ships datasets, not the checkout. Revert the pin when back on `main`.
+`origin/<kaggle.branch>`; the committed pin is the integration branch
+(`config/training.yaml` → `kaggle.branch: laya-candidate`), and ultimately
+`main`. To stage from a different branch, pin `kaggle.branch` to that pushed
+branch — a local, uncommitted edit is fine since the kernel ships datasets, not
+the checkout. Revert the pin when back on the integration branch.
 
 ```bash
 # full-corpus fine-tune (single T4): version the corpus dataset, push, follow logs
@@ -256,10 +260,12 @@ Fine-tune surface: `finetune_kernel_slug` (`fbarulli/er-laya-finetune`),
 kind), and the `finetune:` recipe block (epochs 8, micro_batch 8, grad_accum 8,
 seed 1729, loss `soft-ce`).
 
-The committed config/training.yaml does NOT carry a `laya:` block yet —
-the schema default factory (`src/core/laya_config.py`) supplies the slugs and
-recipe above and keeps the load byte-identical (additive contract; the same one
-`kaggle:` rode at its landing). Add the block only to override a default.
+The committed `config/training.yaml` carries only the laya route's NON-default
+selections — the `finetune_smoke` block (dedicated smoke kernel/dataset slugs +
+dials). Every other value above is the schema default factory
+(`src/core/laya_config.py`), which keeps the load byte-identical (additive
+contract; the same one `kaggle:` rode at its landing). Add a key only to
+override a default.
 
 ## Logging convention + artifact paths
 
