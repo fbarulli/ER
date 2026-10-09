@@ -362,12 +362,21 @@ def _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role):
 
 
 @timed
-def _bound_folder(run,track,template,request):
-    """Materialize the bound request and local tensors into the output folder."""
-    folder = run.track_dir(track);folder.mkdir(parents=True,exist_ok=True)
+def _bound_folder(run,output,template,request):
+    """Materialize the bound request and local tensors into the LANE's folder.
+
+    ``output`` is the lane's OWN result root: ``<run>/<track>`` for a trained
+    track, ``<run>/baseline`` for the untrained baseline. The declared
+    ``ablation_dir`` is resolved BENEATH it, never through
+    ``Results.track_dir(track)``: the baseline lane is not a declared results
+    track, so re-rooting it under ``track='text'`` would land its request where
+    ``baseline_ablation.complete`` (which reads ``output/<ablation_dir>``) never
+    looks.
+    """
+    folder = output/run.ablation_dir;folder.mkdir(parents=True,exist_ok=True)
     tensors = Results.leaf('prepared_inputs')
     shutil.copy2(template/tensors,folder/tensors)
-    path = run.request(track)
+    path = folder/_request_name()
     write(path,request)
     return path,folder
 
@@ -392,9 +401,12 @@ def _encode_vectors(path,vectors,*,device,saved_text,text_model,graph_encoder):
 
 
 @timed
-def _reuse_or_encode(path,run,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
+def _reuse_or_encode(path,run,folder,request,*,output,setup,track,saved_text,text_model,graph_encoder,device):
     """Validated existing vectors win; otherwise the device owner encodes."""
-    vectors = run.vectors(track)
+    # The declared vectors LEAF under the lane's own folder: taking it from
+    # ``run.vectors().name`` keeps the SSOT filename while the folder stays the
+    # caller's (baseline's folder is not a results-track folder).
+    vectors = folder/run.vectors(track).name
     existed = vectors.exists()
     if existed:
         validate_vectors(path,vectors)
@@ -445,9 +457,9 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
         _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role)
     _LOG.info('ablation forward bound track=' + track + ' role=' + checkpoint_role)
     with _LOG.section('ablation_forward.write_bound_request'):
-        path,folder = _bound_folder(run,track,template,request)
+        path,folder = _bound_folder(run,output,template,request)
     with _LOG.section('ablation_forward.vectors'):
-        _reuse_or_encode(path,run,request,output=output,setup=setup,track=track,
+        _reuse_or_encode(path,run,folder,request,output=output,setup=setup,track=track,
             saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder,device=device)
     trace().add(
         "forward", "completed",

@@ -472,6 +472,54 @@ def test_baseline_forward_records_the_frozen_text_template(tmp_path, monkeypatch
     assert row["key"] == "text"
 
 
+def test_baseline_forward_lands_where_complete_reads(tmp_path, monkeypatch,
+                                                     trace_target):
+    """Baseline forward writes the SAME request path ``baseline_ablation.complete`` reads.
+
+    Regression guard: routing baseline forward through ``Results.track_dir``
+    wrote ``<run>/text/ablation/request.json`` while complete read
+    ``<run>/baseline/ablation/request.json``. The path derivation is NOT stubbed
+    here (only the device encoder is), so the two halves must agree.
+    """
+    import json
+
+    from core import common
+    from core.bundle import bundle_spec
+    from model_tracks import ablation, baseline_ablation, staged_ablation
+
+    monkeypatch.setattr(common, "TRAIN_ROOT", tmp_path)
+    run = tmp_path / "run"
+    output = run / "baseline"
+    setup = tmp_path / "setup"
+    template = setup / bundle_spec().ablation_templates_dir / "text"
+    template.mkdir(parents=True)
+    (template / "prepared_inputs.npz").write_bytes(b"frozen local topology")
+    (setup / "shared_minilm__embeddings.npz").write_bytes(b"saved vectors")
+
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "weights").write_bytes(b"frozen baseline")
+    identity = ablation.checkpoint_identity(checkpoint)
+    (template / bundle_spec().ablation_request_file).write_text(json.dumps({
+        "track": "text",
+        "checkpoint": str(checkpoint),
+        "sources": {str(checkpoint): identity},
+        "settings": {"retrieval_catalog": "full", "coverage": "sampled"},
+        "variants": [], "cohort_size": 2,
+    }))
+    # The device encode is the only stub; the folder/request derivation is real.
+    monkeypatch.setattr(staged_ablation, "encode", lambda *a, **k: None)
+
+    path = baseline_ablation.forward(output, setup, checkpoint, device="cpu")
+
+    request_name = bundle_spec().ablation_request_file
+    assert path == baseline_ablation._request_path(output)
+    assert path == output / "ablation" / request_name
+    assert path.is_file()
+    # The regression's divergent location must never be produced.
+    assert not (run / "text" / "ablation" / request_name).exists()
+
+
 # ── 5. the ablation consumer quarantines a mismatched calibration ──────────
 def test_post_training_ablation_quarantines_a_calibration_mismatch(tmp_path, monkeypatch,
                                                                    trace_target):

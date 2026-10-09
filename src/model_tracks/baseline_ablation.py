@@ -25,6 +25,17 @@ def _setup_layout():
     return prepared_setup_layout()
 
 
+def _request_path(output: Path) -> Path:
+    """The baseline lane's request: forward writes it, complete reads it HERE.
+
+    ``output`` is the baseline lane root (``<run>/baseline``), NOT a results
+    track. Both halves resolve the declared ablation dir beneath it, so a
+    baseline request can never be re-rooted under another track's folder.
+    """
+    from core.results import results_spec
+    return output/results_spec().ablation_dir/bundle_spec().ablation_request_file
+
+
 #: The stage name this module owns in the ONE consolidated pipeline trace.
 STAGE = "baseline_ablation"
 
@@ -235,7 +246,7 @@ def _persist_baseline(request_path, result):
 def complete(output: Path, setup: Path, *, config: Path | None = None):
     """Fit the untrained baseline threshold on dev; consume saved ablation only."""
     with _LOG.section('ablation.baseline.load'):
-        request_path = output/'ablation'/bundle_spec().ablation_request_file
+        request_path = _request_path(output)
         request = json.loads(request_path.read_text())
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
             raise ValueError('baseline report requires the frozen baseline ablation')
