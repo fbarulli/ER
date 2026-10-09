@@ -147,19 +147,19 @@ def test_rerank_tuner_validates_and_fits():
         tuner.fit(ce, [], [])
 
 
-# ── config wiring (all restored knobs default OFF, with dated keep-notes) ────
+# ── config wiring (restored knobs enabled for the GPU run, shared homes) ────
 
-def test_restored_knobs_default_off_and_shared_homes():
+def test_restored_knobs_enabled_and_shared_homes():
     from core.common import training_cfg
 
     advanced = training_cfg().advanced
-    assert advanced.ema.enabled is False
-    assert advanced.adversarial.enabled is False
-    assert advanced.curriculum.enabled is False
-    assert advanced.distillation.enabled is False
-    assert advanced.swa.enabled is False
-    assert advanced.rerank.enabled is False
-    assert advanced.embedding_ensemble.enabled is False
+    assert advanced.ema.enabled is True
+    assert advanced.adversarial.enabled is True
+    assert advanced.curriculum.enabled is True
+    assert advanced.distillation.enabled is True
+    assert advanced.swa.enabled is True
+    assert advanced.rerank.enabled is True
+    assert advanced.embedding_ensemble.enabled is True
     # ONE home each: ema/swa live only at the top level, not under graph.
     assert "ema" not in advanced.graph.model_fields
     assert "swa" not in advanced.graph.model_fields

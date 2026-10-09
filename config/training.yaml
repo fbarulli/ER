@@ -306,7 +306,10 @@ kaggle:
   # Environment variable holding the API token — never the token itself.
   api_key_env: "KAGGLE_API_KEY"
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "main"
+  # Pin the lane to the branch that carries the improved advanced GNN (TASK
+  # A+B). The lane clones/publishes from this branch; `main` is the bundle
+  # branch only, so `main` here silently ran the old code.
+  branch: "tracks"
   cpu_kernel_slug: "fbarulli/er-bundle-cpu"
   # GPU training kernel — the second half of the same ruling: it attaches
   # the CPU kernel output as a kernel_source, restores the package into the
@@ -361,7 +364,10 @@ cpu_bundle_prep:
 # local working tree or data snapshot.
 colab:
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "main"
+  # Pin the lane to the branch that carries the improved advanced GNN (TASK
+  # A+B). The VM clones/publishes from this branch; `main` is the bundle
+  # branch only, so `main` here silently ran the old code.
+  branch: "tracks"
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   # Sparse-checkout contract for every prepared Colab runtime: the ONE home the
@@ -1077,9 +1083,8 @@ training:
     seed: 42
   # Effective-batch warmup ramp. The frozen sampler owns the micro batch, so
   # this scales GRADIENT ACCUMULATION only (never the frozen composition).
-  # Default OFF -> constant accumulation.
   batch_size_ramp:
-    enabled: false
+    enabled: true
     start_frac: 0.25
     ramp_epochs: 3
 
@@ -1181,71 +1186,70 @@ rerank:
 #   embedding_ensemble -> text publish-time fold/seed averaging
 advanced:
   ema:                       # weight EMA (shared text + GNN); eval/select/ckpt
-    enabled: false
+    enabled: true
     decay: 0.999
-    warmup_updates: 0
+    warmup_updates: 100
   calibration:               # post-hoc temperature scaling + ECE/Brier/reliability
-    enabled: false
-    temperature_scaling: false
+    enabled: true
+    temperature_scaling: true
     n_bins: 15
     min_temperature: 0.05
     max_temperature: 50.0
   accel:                     # TF32 + text torch.compile
-    tf32: false
-    compile: false
+    tf32: true
+    compile: true
     compile_mode: "default"
   telemetry:                 # nvidia-smi util/power/clocks into telemetry
-    nvml: false
+    nvml: true
   # Micro-batch accumulation for the text lane; 1 keeps today's behavior.
   # NOTE: with the FrozenBatchSampler a step boundary is per optimizer step,
   # so accumulation must divide the per-epoch batch count evenly.
   gradient_accumulation_steps: 1
   adversarial:               # FGM on embeddings (train-only; GNN step)
-    enabled: false
+    enabled: true
     epsilon: 1.0e-3
     norm: "l2"
   curriculum:                # epoch-wise easy->hard on measured pair difficulty
-    enabled: false
+    enabled: true
     schedule: "easy_to_hard"
     warmup_fraction: 0.0
   swa:                       # average last-k checkpoints post-train (text+GNN)
-    enabled: false
+    enabled: true
     k: 3
-    use_best_k: false
   rerank:                    # cross-encoder stage-2 tuning
-    enabled: false
+    enabled: true
     model: null
     learning_rate: 2.0e-5
     epochs: 3
     batch_size: 16
   distillation:              # larger teacher encoder -> student (train split only)
-    enabled: false
+    enabled: true
     teacher_model: null
     temperature: 2.0
     alpha: 0.5
   embedding_ensemble:        # average embeddings across folds/seeds at publish
-    enabled: false
+    enabled: true
     normalize: true
-  graph:                     # GNN-lane overrides (all default OFF)
+  graph:                     # GNN-lane overrides
     calibration:
-      enabled: false
-      temperature_scaling: false
+      enabled: true
+      temperature_scaling: true
       n_bins: 15
       min_temperature: 0.05
       max_temperature: 50.0
     focal:
-      enabled: false
+      enabled: true
       gamma: 2.0
       pos_weight: null
       alpha: null
     arch:
-      dropout: 0.0
-      edge_dropout: 0.0
-      residual: false
-      two_hop: false
-      gated_pool: false
+      dropout: 0.1
+      edge_dropout: 0.1
+      residual: true
+      two_hop: true
+      gated_pool: true
     telemetry:
-      nvml: false
+      nvml: true
 
 # ── optimizer knobs (config/training.yaml optimizer:) ──────────────────────
 # Additive to training.optimizer_backend (which selects the fused/foreach
@@ -1254,8 +1258,11 @@ advanced:
 optimizer:
   # Exclude bias / LayerNorm / norm params from weight decay; training.
   # weight_decay still applies to every other param. OFF -> one decay.
-  no_decay_bias_norm: false
+  no_decay_bias_norm: true
   # Adam moment precision: fp32 (baseline) or bf16 (memory). Composes with AMP.
+  # bf16 is NOT enabled: stock AdamW's foreach/fused step lerps the fp32 grad
+  # against the moment, so a bf16 moment raises a dtype mismatch before the
+  # first update. Keep fp32 until the step is wrapped to upcast the moment.
   state_dtype: "fp32"
   # Scale the reference peak LR (training.lr / GraphConfig.learning_rate) by
   # the effective-batch ratio (micro*grad_accum*world_size / base_batch).
@@ -1266,17 +1273,17 @@ optimizer:
 # ── regularization knobs (config/training.yaml regularization:) ────────────
 regularization:
   r_drop:              # two dropout-mask forwards + alpha*KL (GNN-lane wired)
-    enabled: false
-    alpha: 0.0
+    enabled: true
+    alpha: 0.5
   drop_path:           # stochastic depth on residual branches (text encoder)
-    enabled: false
-    rate: 0.0
-    schedule: "constant"   # linear | constant
+    enabled: true
+    rate: 0.1
+    schedule: "linear"   # linear | constant
 
 # ── data knobs (config/training.yaml data:) ────────────────────────────────
 data:
   dynamic_padding:     # prepared-token path already pads to longest-in-batch;
-    enabled: false     # this rounds that width up to a multiple (kernel align)
+    enabled: true      # this rounds that width up to a multiple (kernel align)
     pad_to_multiple: 8
 
 # ── loss-term weight schedules (config/training.yaml loss_schedules:) ──────
@@ -1284,12 +1291,12 @@ data:
 # home): uniformity -> training.uniformity_regularization.weight,
 # margin -> training.contrastive_margin, auxiliary -> GNN metric_weight.
 loss_schedules:
-  enabled: false
+  enabled: true
   warmup_epochs: 2
   schedule: "linear"    # linear | cosine | constant
-  uniformity: false
-  margin: false
-  auxiliary: false
+  uniformity: true
+  margin: true
+  auxiliary: true
 
 # ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
 # second07's fixed grid, verbatim (epochs x lr x warmup%), + the TPE

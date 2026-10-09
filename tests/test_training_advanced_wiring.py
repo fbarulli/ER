@@ -1,8 +1,9 @@
-"""TASK B config wiring: gates default OFF, dials map to real consumers.
+"""TASK B config wiring: dials map to real consumers, are enabled for the
+GPU run, and the schema validates nonsense.
 
-These pin the SSOT contract — the shipped config must NOT silently turn any
-TASK B feature on, no unread dial may ship, and the new schema keys must
-reject nonsense at load.
+These pin the SSOT contract — the shipped config enables the improved advanced
+GNN for the GPU run, no unread dial may ship, and the schema keys reject
+nonsense at load.
 """
 
 from __future__ import annotations
@@ -14,22 +15,22 @@ from core.common import training_cfg
 from core.schemas import AdvancedSpec, HpoSpaceSpec, LR_SCHEDULERS, TrainingSpec
 
 
-def test_all_advanced_features_default_off():
+def test_advanced_features_are_enabled_for_the_gpu_run():
     advanced = training_cfg().advanced
-    assert advanced.calibration.enabled is False
-    assert advanced.accel.tf32 is False
-    assert advanced.accel.compile is False
-    assert advanced.telemetry.nvml is False
-    assert advanced.ema.enabled is False  # ONE ema home (text + GNN)
-    assert advanced.swa.enabled is False  # ONE swa home (text + GNN)
-    assert advanced.adversarial.enabled is False
-    assert advanced.curriculum.enabled is False
-    assert advanced.distillation.enabled is False
-    assert advanced.rerank.enabled is False
-    assert advanced.embedding_ensemble.enabled is False
-    assert advanced.graph.calibration.enabled is False
-    assert advanced.graph.focal.enabled is False
-    assert advanced.graph.arch.two_hop is False
+    assert advanced.calibration.enabled is True
+    assert advanced.accel.tf32 is True
+    assert advanced.accel.compile is True
+    assert advanced.telemetry.nvml is True
+    assert advanced.ema.enabled is True  # ONE ema home (text + GNN)
+    assert advanced.swa.enabled is True  # ONE swa home (text + GNN)
+    assert advanced.adversarial.enabled is True
+    assert advanced.curriculum.enabled is True
+    assert advanced.distillation.enabled is True
+    assert advanced.rerank.enabled is True
+    assert advanced.embedding_ensemble.enabled is True
+    assert advanced.graph.calibration.enabled is True
+    assert advanced.graph.focal.enabled is True
+    assert advanced.graph.arch.two_hop is True
 
 
 def test_all_advanced_fields_have_a_live_consumer():

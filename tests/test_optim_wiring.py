@@ -1,8 +1,8 @@
 """Config-SSOT wiring for the optimizer/regularization/data/schedule knobs.
 
-Pins: every knob defaults OFF, the schema validates nonsense, the new keys do
-NOT duplicate the existing margin/uniformity homes, and the dynamic-padding
-helper is the one used by the prepared-token path.
+Pins: the shipped GPU-run config enables the knobs, the schema validates
+nonsense, the new keys do NOT duplicate the existing margin/uniformity homes,
+and the dynamic-padding helper is the one used by the prepared-token path.
 """
 
 from __future__ import annotations
@@ -23,23 +23,24 @@ from core.schemas import (
 from training.optim_components import dynamic_pad_width
 
 
-def test_optimizer_knobs_default_off():
+def test_optimizer_knobs_enabled_for_the_gpu_run():
     opt = training_cfg().optimizer
-    assert opt.no_decay_bias_norm is False
+    assert opt.no_decay_bias_norm is True
+    # bf16 state is not enabled: stock AdamW cannot lerp a bf16 moment with an
+    # fp32 grad (dtype mismatch), so the shipped GPU run keeps fp32 moments.
     assert opt.state_dtype == "fp32"
     assert opt.lr_scaling == "none"
-    assert opt.base_batch is None
 
 
-def test_regularization_data_and_schedule_defaults_off():
+def test_regularization_data_and_schedule_enabled_for_the_gpu_run():
     reg = training_cfg().regularization
-    assert reg.r_drop.enabled is False
-    assert reg.drop_path.enabled is False
+    assert reg.r_drop.enabled is True
+    assert reg.drop_path.enabled is True
     data = training_cfg().data
-    assert data.dynamic_padding.enabled is False
+    assert data.dynamic_padding.enabled is True
     loss_schedules = training_cfg().loss_schedules
-    assert loss_schedules.enabled is False
-    assert training_cfg().training.batch_size_ramp.enabled is False
+    assert loss_schedules.enabled is True
+    assert training_cfg().training.batch_size_ramp.enabled is True
 
 
 def test_lr_scaling_requires_base_batch():

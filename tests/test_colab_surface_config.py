@@ -94,3 +94,10 @@ def test_report_operating_columns_do_not_confuse_ranking_or_recall_targets():
     assert _metric_column(columns[:2], 'precision_at_') is None
     with pytest.raises(ValueError, match='ambiguous'):
         _metric_column(columns + ['precision_at_0.55'], 'precision_at_')
+
+
+def test_gpu_lanes_clone_the_branch_that_carries_the_advanced_gnn():
+    """The lane must run the branch whose code it was built for, not main."""
+    cfg = common.training_cfg()
+    assert cfg.colab.branch == 'tracks'
+    assert cfg.kaggle.branch == 'tracks'
