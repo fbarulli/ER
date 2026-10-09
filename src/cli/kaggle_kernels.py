@@ -827,3 +827,20 @@ class KaggleKernels:
         plan["delete_method"] = "sdk_delete_kernel"
         return plan
 
+    @staticmethod
+    def kernel_logs(slug: str, *, follow: bool = False) -> dict[str, Any]:
+        """Read a kernel's REAL execution log (stdout/stderr), not status/files.
+
+        ONE-call delegate to the canonical SDK owner
+        (``KaggleMonitor.stream_kernel_logs``): the midtier
+        ``GetKernelSessionLogsStream`` SSE endpoint, which replays the latest
+        session and can tail a live one. ``follow=False`` (the tracking read)
+        uses bounded 429-aware reconnects and fails loud; ``follow=True`` tails
+        the whole session (the detached watcher's mode).
+        """
+        from cli import kaggle_lane as lane
+
+        if not slug or "/" not in slug:
+            raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
+        return lane.stream_kernel_logs(slug, follow=follow)
+

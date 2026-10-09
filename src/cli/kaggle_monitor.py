@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+import traceback
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -275,7 +276,8 @@ class KaggleMonitor:
         return plan
 
     @staticmethod
-    def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any]:
+    def stream_kernel_logs(slug: str, log_path: Path | None = None, *,
+                           follow: bool = True) -> dict[str, Any]:
         """Follow a session's live log stream (max visibility, owner default).
 
         kaggle's CLI only shows status until teardown; the midtier's SSE log
@@ -292,7 +294,13 @@ class KaggleMonitor:
         lines it already persisted and skips the replayed prefix instead of
         truncating the shared transcript. The stream's OWN diagnostics
         (reconnect/rate-limit) are written through this same handle, so no 429
-        line can land in a second file."""
+        line can land in a second file.
+
+        ``follow=True`` (the detached watcher's mode) reconnects for the whole
+        session. ``follow=False`` (the tracking read) bounds those reconnects to
+        ``kaggle.limits.stream_retries`` and then fails loud with the full
+        traceback recorded, so a one-shot log read never hangs forever.
+        """
         from cli import kaggle_lane as lane
 
         from kagglesdk.kaggle_client import KaggleClient
@@ -459,6 +467,14 @@ class KaggleMonitor:
                         log_diagnostic(
                             f"[stream {kernel}] rate-limited (429); backing off "
                             f"{delay:.0f}s before reconnect {attempts + 1}")
+                    if not follow and attempts >= lane._spec().limits.stream_retries:
+                        # One-shot tracking read: bounded 429-aware retries then
+                        # fail LOUD with the full traceback, never a silent hang.
+                        lane._log_lane(traceback.format_exc())
+                        raise RuntimeError(
+                            f"log stream for {slug} failed after {attempts} "
+                            f"attempts: {type(error).__name__}: {error}"
+                        ) from error
                     time.sleep(delay)
         plan["session_id"] = session_id
         return plan
@@ -602,64 +618,5 @@ class KaggleMonitor:
         session_file = KaggleMonitor.record_kernel_handle(slug, None)
         plan["handle"] = kernel
         plan["session_id_file"] = str(session_file)
-        return plan
-
-    @staticmethod
-    def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
-                    execute: bool) -> dict[str, Any]:
-        """Poll kernel status; on terminal states pull output logs locally.
-
-        Colab streams VM stdout into local transcripts; Kaggle exposes no live
-        stream, so this is the honest equivalent: status polling with the
-        configured executable (cadence from config kaggle.logs_poll_seconds)
-        and, on terminal states, `kernels output` fetch of the kernel's own log
-        file into the lane logs dir (logs/kaggle/, TRAIN_ROOT-relative SSOT).
-        """
-        from cli import kaggle_lane as lane
-
-        spec = lane._spec()
-        resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
-        log_dir = lane.lane_logs_dir()
-        plan: dict[str, Any] = {
-            "kernel": slug,
-            "poll_seconds": resolved_poll,
-            "follow": follow,
-            "log_dir": str(log_dir),
-            "mode": "executed" if execute else "dry-run",
-        }
-        if not execute:
-            return plan
-        executable = lane._require_kaggle_executable(spec.kaggle_executable)
-        history: list[dict[str, Any]] = []
-        while True:
-            status = lane.kernel_status(slug)
-            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            lane._log_lane(f"[{slug}] status={status['status']}")
-            history.append({"at": stamp, "status": status["status"]})
-            if status["status"] in {"complete", "error", "cancelAcknowledged"} or not follow:
-                break
-            time.sleep(resolved_poll)
-        log_dir.mkdir(parents=True, exist_ok=True)
-        # Fail LOUD: `kaggle kernels output` exits 0 with zero files, so rc
-        # alone is not success. The fetcher verifies files landed (and paces
-        # 429s) before this method reports `log_fetched`.
-        from cli.kaggle_download import DownloadError, KernelOutputFetcher
-
-        try:
-            download = KernelOutputFetcher(
-                argv_prefix=(executable,), cwd=lane.TRAIN_ROOT).fetch(
-                slug, log_dir / slug.replace("/", "__"), require_globs=())
-        except DownloadError as error:
-            plan["log_fetched"] = False
-            plan["log_error"] = f"{error}\n{error.traceback_text}"
-            plan["history"] = history
-            raise DownloadError(
-                f"kernel output for {slug} was empty or failed: {error}",
-                traceback_text=error.traceback_text,
-                stdout=error.stdout) from error
-        plan["log_fetched"] = True
-        plan["files"] = [str(path) for path in download.files]
-        plan["download_attempts"] = download.attempts
-        plan["history"] = history
         return plan
 
