@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.smart_split import SmartSplitRoles
+
 
 class FinetuneSpec(BaseModel):
     """laya.finetune — the fine-tune recipe SSOT (additive).
@@ -202,8 +204,9 @@ class LayaSpec(BaseModel):
     # a fallback when the hint misses.
     finetune_ckpt_dir: str = "checkpoint"
     # The corpus split the eval-only kernel scores. Held out by construction:
-    # the fine-tune trains on train and evaluates/calibrates on dev.
-    finetune_eval_split: Literal["train", "dev", "test"] = "test"
+    # the fine-tune trains on train and evaluates/calibrates on dev. The name
+    # comes from the ONE role map, never re-spelled.
+    finetune_eval_split: Literal["train", "dev", "test"] = SmartSplitRoles.VALIDATE
     finetune_eval_batch_size: int = Field(default=16, ge=1, le=256)
     # ── holdout-eval path (component-disjoint verification ON Kaggle) ──────
     # Scores a fine-tuned checkpoint on the component-disjoint holdout (real

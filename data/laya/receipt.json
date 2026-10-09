@@ -180,8 +180,8 @@
   },
   "split_sizes": {
     "train": 7551,
-    "dev": 3477,
-    "test": 3280
+    "dev": 3478,
+    "test": 3279
   },
   "split_counts": {
     "train": {
@@ -200,7 +200,7 @@
       "listing_negative": 1,
       "gate_negative": 134,
       "gate_proceed": 5,
-      "aug_pair_positive": 0,
+      "aug_pair_positive": 1,
       "aug_pair_negative": 1920,
       "better_match": 1,
       "state": 985,
@@ -211,19 +211,124 @@
       "listing_negative": 2,
       "gate_negative": 127,
       "gate_proceed": 5,
-      "aug_pair_positive": 2,
+      "aug_pair_positive": 1,
       "aug_pair_negative": 1809,
       "better_match": 1,
       "state": 929,
       "mask_state": 275
     }
   },
-  "question_schema_sha256": "549c782a32265cc363f06fdb1ee89d15402d42c994860df2ee47d1595cab064b",
+  "listing_split_counts": {
+    "test": 132,
+    "train": 304,
+    "dev": 140
+  },
+  "split_roles": {
+    "train": "train",
+    "select": "dev",
+    "validate": "test"
+  },
+  "strata_coverage": {
+    "train": {
+      "difficulty_slice": {
+        "all_same": 278,
+        "insufficient": 1,
+        "multi_diff": 150,
+        "one_diff": 4348,
+        "pairwise": 1,
+        "single_state": 2773
+      },
+      "attribute": {
+        "carbonation": 258,
+        "flavor": 1523,
+        "none": 7,
+        "package_type": 830,
+        "sweetener": 1231,
+        "volume": 3702
+      }
+    },
+    "dev": {
+      "difficulty_slice": {
+        "all_same": 124,
+        "multi_diff": 77,
+        "one_diff": 1999,
+        "pairwise": 1,
+        "single_state": 1277
+      },
+      "attribute": {
+        "carbonation": 131,
+        "flavor": 725,
+        "none": 5,
+        "package_type": 398,
+        "sweetener": 540,
+        "volume": 1679
+      }
+    },
+    "test": {
+      "difficulty_slice": {
+        "all_same": 130,
+        "multi_diff": 71,
+        "one_diff": 1873,
+        "pairwise": 1,
+        "single_state": 1204
+      },
+      "attribute": {
+        "carbonation": 118,
+        "flavor": 655,
+        "none": 3,
+        "package_type": 381,
+        "sweetener": 513,
+        "volume": 1609
+      }
+    }
+  },
+  "sample_plan": {
+    "per_subgroup_n": 196,
+    "binding": {
+      "slice": "difficulty_slice",
+      "value": "multi_diff",
+      "support": 298,
+      "share": 0.02082750908582611,
+      "required_n": 9411
+    },
+    "recommended_n": 9411,
+    "recommended_validation_size": 0.75,
+    "validation_size_unit": "fraction",
+    "reachable": true,
+    "mde_paired": {
+      "dev": 0.0022551926898511923,
+      "validation": 0.0023919601806292297,
+      "at_per_subgroup_n": 0.03956596689556029
+    },
+    "targets": {
+      "confidence": 0.95,
+      "ci_half_width": 0.07,
+      "alpha": 0.05,
+      "power": 0.8,
+      "target_effect": 0.04,
+      "min_subgroup_support": 30
+    },
+    "slices": [
+      {
+        "slice": "difficulty_slice",
+        "population": 14308,
+        "populated": 14308,
+        "values": 6
+      },
+      {
+        "slice": "attribute",
+        "population": 14308,
+        "populated": 14308,
+        "values": 6
+      }
+    ]
+  },
+  "question_schema_sha256": "db8c6a4bd498d3df3771354545605ea5e01675ce7707102e1e6176d57b6d14ca",
   "sha256": {
-    "train.jsonl": "ec29ea9d8268acbf35bf80b5933098bb175b7b893e139c5cc8fa06a522a15ce4",
-    "dev.jsonl": "ecde03ed2012c4e8371ccdd7588ce55de2d26f48a51b94304efbbf3b664c1177",
-    "test.jsonl": "12a38db4885dc0662f0696600675676be748eedda8565fd0148db54e8997d02e",
+    "train.jsonl": "840ab5dd7d6757e8dfbe92b48012428c3fd92b8e65a02ce0e60db83ca317a35c",
+    "dev.jsonl": "b1847ffe66baf69b6cc905d30393a7e660cc08e145a913746ec1ffaf956bc8ec",
+    "test.jsonl": "85b91b3765ccc88c5a68b9d6e7511ff46dcd41fc209120491a75b67fb5c3a634",
     "unknown_pairs.csv": "ff1e77d84c8679a7b15c357f73cff2177ec696624b39b48c4a82e6db4ebdf300"
   },
-  "corpus_sha256": "288b0de8665ed955250aeaf1ac3d0c51282d979b55102a1e55a06d3cc921a60d"
+  "corpus_sha256": "0cf6a0cf5995e5be67cc5954627c7925ed0baa7a61a88cc5b819f07b054499ae"
 }
