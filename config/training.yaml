@@ -1541,12 +1541,19 @@ packaging:
   snapshot_pinned_configs:
     - paths.yaml
     - training.yaml
+    - artifacts.yaml
+    - results.yaml
+    - dataset.yaml
     - hosted_datasets.yaml
+    - model_tracks.yaml
     - identity_dimensions.yaml
     - identity_reviews.json
     - vocabulary.json
     - text_track.yaml
     - attribute_ablation.yaml
+    - graph_tracks_gnn.yaml
+    - graph_tracks_cascade.yaml
+    - training_ANN.yaml
 bundle:
   # One sealed Bundle travels generation -> training -> post-training (Colab and
   # Kaggle); every name lives here so no surface re-hardcodes a literal.
