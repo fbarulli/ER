@@ -10,6 +10,9 @@ artifacts/embeddings/
 artifacts/data/
 .venv/
 .venv
+# Machine-specific alias for the shared venv; symlink points at an absolute
+# MAIN-worktree path, so it must never be tracked.
+.venv-link
 .env
 .dvc-site-cache/
 results/*
