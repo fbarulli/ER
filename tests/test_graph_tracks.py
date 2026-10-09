@@ -239,7 +239,8 @@ def test_dvc_no_remote_restore_and_credential_url_guard(tmp_path):
         DvcSpec(remote='https://username:password@example.com/store', push=True)
 
 
-def test_prepared_manifest_hash_drift_fails(tmp_path, monkeypatch):
+def test_prepared_manifest_size_drift_is_ignored(tmp_path, monkeypatch):
+    """A recorded input size is a record, never a refusal (data is never checked)."""
     disable_tracking(monkeypatch)
     _, _, _, config = inputs(tmp_path)
     cfg = yaml.safe_load(config.read_text())
@@ -247,8 +248,8 @@ def test_prepared_manifest_hash_drift_fails(tmp_path, monkeypatch):
     manifest.write_text(json.dumps({'listings_size': 'wrong'}))
     cfg['input_manifest'] = str(manifest)
     config.write_text(yaml.safe_dump(cfg))
-    with pytest.raises(ValueError, match='prepared input mismatch'):
-        train(config, run_tag='stale-input')
+    # The mismatching recorded size no longer refuses: the run proceeds.
+    assert train(config, run_tag='stale-input') is not None
 
 
 def test_same_run_resume_preserves_history_and_new_completion(tmp_path, monkeypatch):

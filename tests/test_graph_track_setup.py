@@ -82,9 +82,13 @@ def test_preflight_and_portable_package_hashes(tmp_path):
         assert settings['report_test'] is False
         assert not Path(settings['listings']).is_absolute()
     assert not (tmp_path / 'runs').exists()
-    (listings.parent / 'pairs.csv').write_text('tampered')
-    with pytest.raises(ValueError, match='pairs_size'):
-        preflight(config)
+    # Recorded sizes are records, never refusals (owner directive: data is never
+    # checked): a wrong recorded size no longer fails preflight.
+    manifest_path = listings.parent / 'input_manifest.json'
+    manifest_path.write_text(json.dumps({
+        **json.loads(manifest_path.read_text()), 'listings_size': 'wrong',
+        'pairs_size': 'wrong'}))
+    assert preflight(config)['pairs']['dev'] == {'positive': 1, 'negative': 1}
 
 
 # ── ONE writer per setup artifact, ONE home per layout name ────────────────
