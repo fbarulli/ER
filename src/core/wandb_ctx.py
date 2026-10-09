@@ -182,11 +182,32 @@ class WandbRunReader:
         }
 
     @staticmethod
-    def _console(run) -> tuple[str, str | None]:
-        """Read ``output.log``; a run without console capture is empty, recorded."""
+    def _absent_log(error: BaseException) -> bool:
+        """True when the failure means ``output.log`` simply does not exist.
+
+        W&B raises ``FileNotFoundError`` for a missing file and wraps the empty
+        file list (``IndexError``) from ``Run.file`` in a ``CommError``; both
+        mean "this run captured no console", not a transport failure.
+        """
+        if isinstance(error, (FileNotFoundError, IndexError)):
+            return True
+        cause = getattr(error, "exc", None) or error.__cause__
+        return isinstance(cause, IndexError)
+
+    @classmethod
+    def _console(cls, run) -> tuple[str, str | None]:
+        """Read ``output.log``; only an ABSENT log is a recorded soft case.
+
+        A run that captured no console has no ``output.log`` — that is expected
+        and recorded as the console reason. Any other failure is a real
+        transport/API error and propagates (fail-loud) instead of being
+        collapsed into the same recorded reason as an absent file.
+        """
         try:
             handle = run.file("output.log").download(replace=True)
-        except Exception as error:  # noqa: BLE001 - an absent log is not fatal
+        except Exception as error:  # noqa: BLE001 - classify, then re-raise
+            if not cls._absent_log(error):
+                raise
             return "", f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
         try:
             return handle.read(), None

@@ -1184,6 +1184,32 @@ def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
     assert updates[1]["new_output"] == "epoch 1 loss=0.5\n"
 
 
+def test_wandb_run_reader_console_fails_loud_on_a_real_error(monkeypatch):
+    """A genuine transport/API error reading ``output.log`` propagates: only an
+    ABSENT log (``FileNotFoundError``/empty file list) is the recorded soft
+    case, never collapsed into the same reason as a real failure."""
+    from core.wandb_ctx import WandbRunReader
+
+    class TransportError(Exception):
+        pass
+
+    class FakeRun:
+        state = "running"
+        summary = {}
+
+        def file(self, name):
+            raise TransportError("HTTP 500: upstream unavailable")
+
+    class FakeApi:
+        def run(self, path):
+            return FakeRun()
+
+    reader = WandbRunReader(run_tag="laya_123", project="e-r",
+                            poll_seconds=0.0, api=FakeApi())
+    with pytest.raises(TransportError):
+        reader.read_once()
+
+
 def test_track_run_streams_the_live_log_channel_into_the_lane_transcript(
         tmp_path, monkeypatch):
     """The live ``log/line`` channel (the only W&B surface exposed while a run
