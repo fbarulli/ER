@@ -298,10 +298,10 @@ kaggle:
   # Environment variable holding the API token — never the token itself.
   api_key_env: "KAGGLE_API_KEY"
   repository: "https://github.com/fbarulli/ER.git"
-  # The kaggle lane publishes from the branch it runs on. This worktree is the
-  # `laya` feature branch: the published-tip invariant (origin/<branch> == HEAD)
-  # can only hold against origin/laya here, never origin/main.
-  branch: "laya"
+  # The kaggle lane publishes from the branch it runs on: this integration
+  # branch is `laya-lanes`, so the published-tip invariant (origin/<branch> ==
+  # HEAD) can only hold against origin/laya-lanes here.
+  branch: "laya-lanes"
   cpu_kernel_slug: "fbarulli/er-bundle-cpu"
   # GPU training kernel — the second half of the same ruling: it attaches
   # the CPU kernel output as a kernel_source, restores the package into the

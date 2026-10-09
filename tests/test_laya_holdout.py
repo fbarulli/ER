@@ -26,6 +26,8 @@ def _fixtures(root: Path) -> dict[str, Path]:
                      ["sku_id1", "sku_id2", "label", "split"], [
                          ["s1", "s2", "1", "test"],   # links s1+s2 -> one component
                          ["s1", "s3", "0", "test"],
+                         ["s1", "s2", "1", "train"],  # leaky: trained on
+                         ["s1", "s3", "0", "dev"],    # leaky: calibrated on
                      ])
     p0 = _write(root / "p0.csv",
                 ["gtin1", "gtin2", "true_label", "endpoint_in_train",
@@ -47,14 +49,21 @@ def _fixtures(root: Path) -> dict[str, Path]:
 def test_holdout_is_component_disjoint_and_difficulty_tagged(tmp_path):
     rows, receipt = build_holdout(**_fixtures(tmp_path))
     by_source = receipt["by_source"]
+    # train/dev listing rows and the P0 overlap row are CERTIFIED leaky: the
+    # fine-tune trained/calibrated on them, so they never enter the holdout.
     assert by_source["listing_pairs"] == 2
-    assert by_source["final_validation"] == 2
+    assert by_source["final_validation"] == 1
     # hard_no is the easy pipeline-verified mass -> never in the truth holdout
     assert by_source["gate_results"] == 2
 
     strata = receipt["by_stratum"]
     assert strata["gate_proceed"] == 1 and strata["gate_fallback"] == 1
-    assert strata["p0_disjoint"] == 1 and strata["p0_overlap"] == 1
+    assert strata["p0_disjoint"] == 1 and "p0_overlap" not in strata
+
+    # the disjointness is auditable in the receipt, never implicit
+    assert receipt["held_out_split"] == "test"
+    assert receipt["excluded"] == {"listing_train": 1, "listing_dev": 1,
+                                   "p0_overlap": 1}
 
     # the positive listing pair links its two endpoints into ONE component
     listing_rows = [r for r in rows if r["source"] == "listing_pairs"]

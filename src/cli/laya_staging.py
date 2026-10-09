@@ -24,6 +24,7 @@ from cli.laya_kernel_text_edge import (
     DECISION_KERNEL_SCRIPT,
     EVAL_KERNEL_SCRIPT,
     HOLDOUT_EVAL_KERNEL_SCRIPT,
+    HOLDOUT_RUNTIME_PREFLIGHT,
     NOTEBOOK_SCRIPT,
 )
 from cli.laya_kernel_text_finetune import (
@@ -44,6 +45,7 @@ from cli.laya_recipe import (
     FINETUNE_CODE_FILE,
     FINETUNE_CORPUS_FILES,
     FINETUNE_CORPUS_RECEIPT,
+    FINETUNE_CKPT_DECISION,
     FINETUNE_DECISION,
     FINETUNE_EVAL_CODE_FILE,
     FINETUNE_EVAL_DECISION,
@@ -399,6 +401,61 @@ class LayaStagingFactory:
             f"files={files} -> {stage}")
         return receipt
 
+    def stage_finetune_ckpt_dataset_payload(self, *, dataset_slug: str,
+                                            checkpoint_dir: Path,
+                                            member: str = "checkpoint"
+                                            ) -> dict[str, Any]:
+        """Stage a RECOVERED fine-tuned checkpoint as a kaggle dataset payload.
+
+        The fine-tune kernel strands its checkpoint inside `/kaggle/working`; the
+        recovery surface copies a locally recovered checkpoint dir (the ONE
+        `model.safetensors` + `encoder/` + `tokenizer/` + `rl_agent_config.json`)
+        under `dataset_payload/<member>/`, so the eval/holdout kernels' `rglob`
+        finds it where `finetune_ckpt_dir` expects. Fail-loud: an empty/unreadable
+        source or a missing `rl_agent_config.json` never stages a silent stub.
+        """
+        if not dataset_slug:
+            raise RuntimeError(
+                "config laya.finetune_ckpt_dataset is unset; name the checkpoint "
+                "dataset (owner/slug) before staging")
+        checkpoint_dir = Path(checkpoint_dir)
+        if not (checkpoint_dir / "rl_agent_config.json").is_file():
+            raise FileNotFoundError(
+                f"checkpoint source {checkpoint_dir} carries no "
+                "rl_agent_config.json (recover the checkpoint dir first)")
+        stage = (self._runtime.staging_dir() / "kaggle"
+                 / FINETUNE_CKPT_DECISION / DATASET_PAYLOAD_DIR)
+        if stage.exists():
+            shutil.rmtree(stage)
+        target = stage / member
+        target.mkdir(parents=True)
+        files = sorted(path for path in checkpoint_dir.rglob("*")
+                       if path.is_file())
+        if not files:
+            raise FileNotFoundError(
+                f"checkpoint source {checkpoint_dir} carries no files")
+        for source in files:
+            destination = target / source.relative_to(checkpoint_dir)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        metadata = {"title": "er laya finetune ckpt", "id": dataset_slug,
+                    "licenses": [{"name": "other"}]}
+        atomic_write_json(metadata, stage / DATASET_METADATA_FILE)
+        receipt = {
+            "dataset": dataset_slug,
+            "payload": str(stage),
+            "member": member,
+            "source": str(checkpoint_dir),
+            "metadata": metadata,
+            "files": {str(path.relative_to(stage)): sha256_file(path)
+                      for path in sorted(target.rglob("*")) if path.is_file()},
+        }
+        atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
+        self._runtime.log_lane(
+            f"staged finetune checkpoint payload {dataset_slug} "
+            f"member={member} files={len(files)} -> {stage}")
+        return receipt
+
     def _pairs_composer(self):
         """The corpus pair composer (scripts/laya_metrics_pairs.py; reused)."""
         import importlib.util
@@ -528,9 +585,7 @@ class LayaStagingFactory:
             "BRANCH": branch,
             "REVISION": revision,
         }
-        preflight = self.template(self._decision_preflight, {
-            **values, "DECISION_CSV": HOLDOUT_JSONL,
-            "QUESTION_SCHEMA_FILE": repr(QUESTION_SCHEMA_FILE)})
+        preflight = self.template(HOLDOUT_RUNTIME_PREFLIGHT, values)
         script = self.template(HOLDOUT_EVAL_KERNEL_SCRIPT,
                                {**values, "RUNTIME_PREFLIGHT": preflight})
         self.kernel_script_gate(script)

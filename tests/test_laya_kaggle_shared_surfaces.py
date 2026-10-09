@@ -139,7 +139,7 @@ def test_dataset_publish_argv_tokens_are_byte_identical_for_both_lanes():
                                "-r", "zip", "-m", "laya inputs laya_1",
                                "-p", "payload"]
     assert laya["create"] == ["/usr/bin/kaggle", "datasets", "create",
-                              "-p", "payload"]
+                              "-r", "zip", "-p", "payload"]
 
 
 def test_kernel_metadata_reproduces_the_legacy_document_bytes():
