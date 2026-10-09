@@ -158,7 +158,7 @@ class LayaLocalEvalRunner:
             "report": str(out_dir / FINETUNE_EVAL_REPORT_FILE),
         }
         atomic_write_json(receipt, out_dir / FINETUNE_EVAL_RECEIPT_FILE)
-        self._runtime.log_lane(
+        self._runtime.log_local(
             f"local cpu eval [{split}] items={len(items)} "
             f"accuracy={after['accuracy']} -> {out_dir}")
         return report

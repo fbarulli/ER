@@ -631,7 +631,8 @@ def test_decision_kind_registry_contract():
 def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     laya_lane._log_lane("staged decision payload (offline)")
-    log_path = tmp_path / "logs/laya/lane.log"
+    # The laya lane shares the ER kaggle lane's ONE transcript roof.
+    log_path = tmp_path / "logs/kaggle/lane.log"
     body = log_path.read_text(encoding="utf-8")
     # kaggle-lane / colab-lane stamp convention: Europe/Paris CET|CEST zone
     assert ("CET" in body or "CEST" in body)

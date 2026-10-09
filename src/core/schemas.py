@@ -2837,11 +2837,10 @@ class KaggleFilesSpec(BaseModel):
     prep_dir: str = 'training_prep'
     training_dir: str = 'model_tracks'
     embedding_dir: str = 'embedding_job'
+    # ONE run transcript (owner order 2026-10-07 / consolidation): the ER lane,
+    # the laya lane, the watcher and the live stream all append to this single
+    # file under kaggle.logs_dir — no per-watcher or per-stream sidecar logs.
     lane_log: str = 'lane.log'
-    # One roof (owner order 2026-10-07): all lane transcript variants append to
-    # the single lane.log — no per-watcher or per-stream sidecar logs.
-    autowatch_log: str = 'lane.log'
-    stream_log: str = 'lane.log'
     # The kernel_session_id capture follows the stream: the SSE proxy embeds
     # it in the stream URL, the follower records it here, and the verified
     # stop (cancel_kernel_session -> status poll) consumes it.

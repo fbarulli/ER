@@ -8,7 +8,10 @@ end of the chunk so a training tqdm strip is visible in any log tail.
 """
 from __future__ import annotations
 
+import os
+import traceback
 from pathlib import Path
+from typing import Callable
 
 from core.common import TRAIN_ROOT
 
@@ -27,6 +30,67 @@ def logs_root() -> Path:
 def lane_log(lane: str, name: str) -> Path:
     """One log file under the canonical root: logs/<lane>/<name>."""
     return (logs_root() / lane / name).resolve()
+
+
+class LaneTranscript:
+    """The ONE run transcript every kaggle-family lane appends to.
+
+    The path is declared once in config (``kaggle.logs_dir`` +
+    ``kaggle.files.lane_log``); both the ER lane and the laya lane write their
+    whole run — staging, watcher status, streamed kernel output, reconnect
+    diagnostics, fetch/stop results — into that single file. The first write of
+    a process truncates it (one transcript per run); later writes append, and a
+    detached child (``ER_KAGGLE_LANE_APPEND=1``) always appends so it never
+    wipes its parent's transcript.
+    """
+
+    #: Process-wide gate: the first write opens with "w", the rest with "a".
+    _started = False
+
+    def __init__(self, path: Path, *, lane: str, stamp: Callable[[], str]):
+        self._path = path
+        self._lane = lane
+        self._stamp = stamp
+
+    @staticmethod
+    def _kaggle():
+        from core.common import training_cfg
+
+        return training_cfg().kaggle
+
+    @classmethod
+    def roof_for(cls, train_root: Path) -> Path:
+        """The declared transcript directory (``kaggle.logs_dir``)."""
+        return (Path(train_root) / cls._kaggle().logs_dir).resolve()
+
+    @classmethod
+    def path_for(cls, train_root: Path) -> Path:
+        """The declared single transcript path (``kaggle.files.lane_log``)."""
+        return (cls.roof_for(train_root) / cls._kaggle().files.lane_log).resolve()
+
+    @classmethod
+    def from_config(cls, train_root: Path, *, lane: str,
+                    stamp: Callable[[], str]) -> "LaneTranscript":
+        return cls(cls.path_for(train_root), lane=lane, stamp=stamp)
+
+    def write(self, line: str) -> None:
+        """Timestamped console echo plus the one shared transcript write.
+
+        A log-write failure never masks the operation's own outcome, but it is
+        recorded with its FULL traceback (no swallowed logging error).
+        """
+        stamp = self._stamp()
+        print(f"[{self._lane} {stamp}] {line}", flush=True)
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
+            mode = "a" if (LaneTranscript._started or append) else "w"
+            with self._path.open(mode, encoding="utf-8") as handle:
+                handle.write(f"{stamp} {line}\n")
+            LaneTranscript._started = True
+        except OSError as error:
+            print(f"[{self._lane}] lane.log write failed ({error}); continuing\n"
+                  f"{traceback.format_exc()}", flush=True)
 
 
 def progress_frames_to_lines(text: str) -> str:

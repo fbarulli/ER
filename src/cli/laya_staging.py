@@ -132,6 +132,18 @@ class LayaStagingFactory:
         Europe/Paris per the landed kaggle_lane convention)."""
         return datetime.now(ZoneInfo("UTC")).strftime("%m%dT%H%M%SZ")
 
+    def _log_stage(self, kind: str, line: str) -> None:
+        """Route a staged-surface line to its roof.
+
+        A ``kaggle`` stage is part of a Kaggle run and lands on the ONE shared
+        transcript; the ``colab`` delivery surface runs on this box and stays
+        console-only — it must never cross into the Kaggle transcript.
+        """
+        if kind == "kaggle":
+            self._runtime.log_lane(line)
+        else:
+            self._runtime.log_local(line)
+
     def _finetune_smoke_recipe(self) -> dict[str, Any]:
         """The smoke's ``TrainConfig`` kwargs: the landed recipe with the smoke
         dials overlaid from ``laya.finetune_smoke`` (SSOT), never a literal."""
@@ -167,8 +179,8 @@ class LayaStagingFactory:
             **census["expectation"],
         }
         atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
-        self._runtime.log_lane(
-            f"staged decision input [{kind}/{decision_kind}] "
+        self._log_stage(
+            kind, f"staged decision input [{kind}/{decision_kind}] "
             f"{source.name} rows={census['rows']} "
             f"sha256={census['sha256'][:12]} -> {destination}")
         return receipt
@@ -197,8 +209,8 @@ class LayaStagingFactory:
             "sha256": sha256_file(source),
         }
         atomic_write_json(receipt, stage / "question.receipt.json")
-        self._runtime.log_lane(
-            f"staged question schema [{kind}] {source.name} "
+        self._log_stage(
+            kind, f"staged question schema [{kind}] {source.name} "
             f"({len(questions)} questions) -> {destination}")
         return receipt
 
@@ -841,7 +853,7 @@ class LayaStagingFactory:
             "note": "the colab CLI surface is unchanged; delivery contract only",
         }
         atomic_write_json(receipt, stage / f"{decision_kind}.receipt.json")
-        self._runtime.log_lane(
+        self._runtime.log_local(
             f"staged colab notebook payload [{decision_kind}] "
             f"run_tag={tag} -> {notebook}")
         return receipt

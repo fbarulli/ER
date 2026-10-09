@@ -113,7 +113,7 @@ completes), `--with-finalize` (chain: finish with the remote CPU finalize job),
 | `train-kernel` / `embed-kernel` | stage GPU kernels (train attaches the CPU kernel as `kernel_sources` + `kaggle.bundle_dataset_slug`; embed attaches `kaggle.embedding_dataset_slug` + the git-shipped checkpoint); `--execute` pushes | `gpu_kernel_slug` / `embedding_kernel_slug`; embed also needs the request dataset uploaded first and `kaggle.checkpoint` in `checkout_paths` (`artifacts/models`) (kaggle_kernels.py:340) |
 | `kernel-status [--kernel]` | `kaggle kernels status`; normalizes 2.x `KernelWorkerStatus.` prefixes → `complete/cancelAcknowledged/cancelRequested/running/queued/error` | slug configured; executable present (kaggle_kernels.py:616) |
 | `kernel-logs [--kernel --slug --follow]` | poll status at `kaggle.logs_poll_seconds` (15 s); on a terminal state fetch the kernel's own output log into `logs/kaggle` | same as status (kaggle_monitor.py:476) |
-| `kernel-stream` | live SSE log follower (kagglesdk `GetKernelSessionLogsStream`); writes decoded payloads to `logs/kaggle/<slug>.stream.log` (UTF-8-safe): `/r`-separated tqdm frames are expanded to grep-able lines and the last bar tagged, by the shared formatter `cli.log_capture.progress_frames_to_lines`; reconnects ≤5 times, re-truncating because SSE replay restarts at the first line | kagglesdk package; returns the `kernel_session_id` the manual kill switch needs (kaggle_monitor.py:230) |
+| `kernel-stream` | live SSE log follower (kagglesdk `GetKernelSessionLogsStream`); appends decoded payloads to the ONE transcript `logs/kaggle/lane.log` (UTF-8-safe): `/r`-separated tqdm frames are expanded to grep-able lines and the last bar tagged, by the shared formatter `cli.log_capture.progress_frames_to_lines`; reconnects for the WHOLE session, re-truncating its own section because SSE replay restarts at the first line; its reconnect/429 diagnostics ride the same handle | kagglesdk package; returns the `kernel_session_id` the manual kill switch needs (kaggle_monitor.py:230) |
 | `fetch-results --kind <k>` | contract fetch + sha256 verification: bundle→`bundle.receipt.json`/`all_tracks_inputs.tar.zst`; train→`result_bundle.manifest.json`/`result_bundle.tar.zst`; embed→`vectors.tar.zst`; installs under `results/kaggle_lane/<cohort>/<kind>/` | the kernel reached output-producing state; `--kind` is singular (kaggle_outputs.py:17) |
 | `stop --kernel <k>` | no cancel verb exists on the public CLI: pushes a `cancel_stub.py` version replace — the platform tears the session down to run version N+1 and frees quota | slug configured (kaggle_kernels.py:640, staging `results/kaggle_lane/<which>_stop`); specimens in `results/kaggle_lane/cancel_stub`, `cpu_stop`, `gpu_stop` |
 | `supervise --kind <k>` | dependable harvest: one stream thread per kind + status polling to a terminal state; on `complete` fetch + verify; on any other terminal state download and verify partial artifacts plus the session log, and **auto-release the session via the stop-kernel stub replace**; receipt at `results/kaggle_lane/supervise.receipt.json` | slugs configured for every requested kind; polling holds neither session nor quota; idempotent on rerun (kaggle_monitor.py:132) |
@@ -247,7 +247,9 @@ publish to the wrong target.
 - Every lane status line carries a Europe/Paris local stamp (CET/CEST):
   `[kaggle-lane <YYYY-MM-DDTHH:MM:SS CET|CEST>]`;
   every kaggle CLI invocation is echoed and its rc logged (`_run_kaggle`,
-  kaggle_runtime.py:154). Console + append-only `logs/kaggle/lane.log` (canonical logs root).
+  kaggle_runtime.py:154). Console plus the ONE run transcript
+  `logs/kaggle/lane.log` (canonical logs root): ER, the laya lane, the watcher
+  and the live stream all append to it, truncated once per run.
 - Poll cadences: `kaggle.logs_poll_seconds` (15 s) for logs/supervise.
 
 | path | content |
@@ -257,7 +259,8 @@ publish to the wrong target.
 | `results/kaggle_lane/<which>_stop/`, `cancel_stub/` | stop-stub staging |
 | `results/kaggle_lane/bundle_fetch/`, `train_fetch/`, `embed_fetch/` | raw CLI-download area before verification |
 | `results/kaggle_lane/<cohort>/<kind>/` | VERIFIED installs (archive + manifest + `.sha256`; bundle also `manifest.json`, `timings.json`) |
-| `logs/kaggle/` | fetched kernel output logs, `<slug>.stream.log` SSE captures (one roof: owner order 2026-10-07) |
+| `logs/kaggle/lane.log` | the ONE run transcript (ER + laya + watcher + stream) |
+| `logs/kaggle/` | separate non-log state/artifacts on the same roof: fetched kernel output logs, `<kernel>.session_id` handles, `*.follower.pid` locks |
 | `results/kaggle_lane/supervise.receipt.json` | last supervise plan + history |
 | `results/kaggle_lane/autowatch_<bundle\|train\|embed>.receipt.json` | each pushed kernel's own watcher terminal-handler receipt (status, verified fetch with sha + publish plan, stop) |
 | `results/kaggle_lane/<cohort>_bundle_dataset/` + `publish.receipt.json` | the publish-default stage dir (dataset-metadata.json + verified archive + receipt) and its dataset version pin record |

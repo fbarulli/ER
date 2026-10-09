@@ -266,15 +266,18 @@ recipe above and keeps the load byte-identical (additive contract; the same one
 - Lane status lines carry the same Europe/Paris stamp (CET/CEST) as
   kaggle/colab lanes: `[laya-lane <YYYY-MM-DDTHH:MM:SS CET|CEST>]`
   (kaggle_lane._stamp mirror; the earlier UTC-stamp phrasing predates the
-  CET convention that landed there). Console + append-only
-  `logs/laya/lane.log` (canonical one-roof TRAIN_ROOT/logs convention).
+  CET convention that landed there).
+- ONE transcript per run: the laya lane appends into the ER kaggle lane's
+  declared `logs/kaggle/lane.log` (`kaggle.logs_dir` + `kaggle.files.lane_log`)
+  along with staging, watcher status, the live stream and its 429 diagnostics
+  — no `logs/laya/lane.log` sidecar is written.
 - Inside a KERNEL (remote, timezone-less) the timestamp is UTC — the
-  remote session may not share this box's zone; logs/laya/lane.log stays
+  remote session may not share this box's zone; the local transcript stays
   Europe/Paris.
 
 | path | content |
 |---|---|
-| `logs/laya/lane.log` | append-only lane log, Europe/Paris-stamped |
+| `logs/kaggle/lane.log` | the ONE append-only lane transcript, Europe/Paris-stamped |
 | `results/laya_lane/kaggle/<decision>/` | staged payload: kernel-metadata.json + laya_decision.py (or laya_evals.py) + laya.question.json + decision csv + `<decision>.receipt.json` |
 | `results/laya_lane/colab/<decision>/` | colab delivery payload: laya_decision_colab.py + receipt (no session call) |
 | `results/laya_lane/fetch/<decision>/` | fetched-back `kaggle kernels output` payload (verified) |

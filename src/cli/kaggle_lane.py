@@ -55,10 +55,6 @@ from cli.kaggle_kernel_templates import (
     EMBED_KERNEL_BODY,
 )
 
-KAGGLE_LANE_LOGS_SUBDIR = Path(training_cfg().kaggle.logs_dir).name
-
-LANE_LOG_NAME = training_cfg().kaggle.files.lane_log
-
 class ExportCensus(BaseModel):
     """Measured cohort-export census recorded at package time."""
 
@@ -210,6 +206,7 @@ from cli.kaggle_chain import KaggleChain
 _spec = KaggleRuntime._spec
 staging_dir = KaggleRuntime.staging_dir
 lane_logs_dir = KaggleRuntime.lane_logs_dir
+lane_log_path = KaggleRuntime.lane_log_path
 cohort_label = KaggleRuntime.cohort_label
 cohort_export_csv = KaggleRuntime.cohort_export_csv
 _git_revision = KaggleRuntime._git_revision

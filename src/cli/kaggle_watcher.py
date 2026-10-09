@@ -140,6 +140,14 @@ class KernelWatcher:
             status=status["status"], fetch_output=spec.fetch_output,
             fetch_failure=spec.fetch_failure, stop=spec.stop,
             configured_slug=spec.configured_slug))
+        # The harvest outcome is a first-class Kaggle-run result: record it on
+        # the ONE transcript, not only in the receipt.
+        fetched = plan.get("fetch") or {}
+        stopped = plan.get("stop") or {}
+        spec.log_lane(
+            f"[{slug}] harvest: status={status['status']} "
+            f"fetch_verified={bool(fetched.get('verified'))} "
+            f"stop={stopped.get('verdict') or stopped.get('stopped')}")
         follower.join(timeout=spec.stream_join_seconds)
         try:
             spec.write_json(plan, spec.receipt_path)
