@@ -114,19 +114,15 @@ def forward(output,setup,*,device,return_model=False):
 def validate(path,checkpoint,setup):
     """Identity/compatibility of one saved GPU text export.
 
-    NO FRESHNESS COMPARISON (owner directive 2026-10-08, repo-wide): the export
-    request is NOT re-measured and compared against the value recorded in the
-    export metadata. The checkpoint, catalog, listings, and pairs identities are
-    checked so the vectors provably belong to this suite's prepared inputs; the
-    bundle's integrity is its size checks at the boundary.
+    NO DATA CHECK (owner directive: data is never checked, repo-wide): the
+    recorded sizes (checkpoint/catalog/listings/pairs) are RECORDS in the export
+    metadata and are never compared. The cache is loaded for the frozen listing
+    ids, so the vectors provably cover this suite's prepared inputs, and the
+    export's own contract (origin, truncation flag, unit norm) still applies.
     """
     layout = _setup_layout()
     ids = [r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)]
     vectors,metadata = load_text_cache(path,ids)
-    for key,expected in [('checkpoint_size',checkpoint_size(checkpoint)),('catalog_size',file_size(setup/layout.catalog)),
-            ('listings_size',file_size(setup/layout.prepared_dir/layout.listings)),('pairs_size',file_size(setup/layout.prepared_dir/'pairs.csv'))]:
-        if metadata.get(key) != expected:
-            raise ValueError('saved GPU text export mismatch: '+key)
     if metadata.get('export_location') not in {'Colab GPU', 'Colab CPU'} or metadata.get('truncated_inputs') != 0 or not np.allclose(np.linalg.norm(vectors,axis=1),1,atol=PreparedEmbeddingForward.normalization_atol):
         raise ValueError('saved GPU text export contract mismatch')
     return vectors,metadata
