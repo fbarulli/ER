@@ -1,4 +1,4 @@
-"""Verified output downloads and failed-run artifact recovery."""
+"""Output downloads and failed-run artifact recovery."""
 from __future__ import annotations
 
 import json
@@ -13,25 +13,25 @@ from core.archive_reader import archive_sidecar
 
 
 class KaggleOutputs:
-    """Verified output downloads and failed-run artifact recovery."""
+    """Output downloads and failed-run artifact recovery."""
 
     @staticmethod
     def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
                             cohort: str | None = None,
                             slug: str | None = None) -> dict[str, Any]:
-        """Download a kernel's output and byte-size-verify its manifest archive.
+        """Download a kernel's output and install its manifest archive.
 
         bundle — bundle.receipt.json contract (all_tracks_inputs.tar.zst)
         train  — result_manifest.json contract (result_bundle.tar.zst)
         embed  — result_manifest.json contract (vectors.tar.zst)
         finalize — result_manifest.json contract (finalized_bundle.tar.zst, the
         sealed result bundle the remote CPU finalize job wrote)
-        Verified artifacts install under staging_dir/<cohort>/<kind>/; the
-        destination cohort tag comes from the explicit override (for the bundle
-        lane's per-cohort fetch) or from the config dataset binding, matching
-        the kernel receipt's own cohort tag when it declares one.
-        Publish default (owner order 2026-10-07): after the verification a
-        fresh dataset version publishes automatically (`plan["publish"]`,
+        Artifacts install under staging_dir/<cohort>/<kind>/; the destination
+        cohort tag comes from the explicit override (for the bundle lane's
+        per-cohort fetch) or from the config dataset binding, matching the
+        kernel receipt's own cohort tag when it declares one.
+        Publish default (owner order 2026-10-07): after the fetch a fresh
+        dataset version publishes automatically (`plan["publish"]`,
         publish_bundle_dataset) — for bundles the registry's `bundle` role
         target; train/embed outputs record a skip note (no SSOT dataset).
         """
@@ -88,27 +88,14 @@ class KaggleOutputs:
         manifest_dir = manifests[0].parent
         manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
         archive = manifest_dir / archive_name
-        if not archive.is_file():
-            raise FileNotFoundError(
-                f"kernel output manifest names {archive_name} but it is missing "
-                f"under {manifest_dir}")
-        expected = manifest.get("archive_size")
-        if not expected:
-            raise RuntimeError(
-                f"fetched {kind} output records no size for {archive_name} "
-                "(the kernel-manifest does not carry one)")
         # ONE read of the archive. A bundle role is named by its boundary load,
-        # which verifies the whole-archive size against the recorded receipt
-        # AND the archive's own member inventory in that same pass — so a role
-        # archive is never hashed twice. Kinds with no bundle role (train,
-        # embed) get the plain whole-archive digest. Either way this crossing
-        # performs exactly one integrity hash of the fetched archive.
-        bundle = KaggleOutputs.identify_bundle(kind, archive, expected)
+        # which returns the observed whole-archive size and member inventory in
+        # that same pass; kinds with no bundle role (train, embed) get the plain
+        # whole-archive size. Either way the fetched archive is read exactly
+        # once and its size is recorded, never compared to refuse (owner
+        # directive: data is never checked).
+        bundle = KaggleOutputs.identify_bundle(kind, archive)
         observed = bundle.get("size") or lane.file_size(archive)
-        if observed != expected:
-            raise RuntimeError(
-                f"fetched {kind} size mismatch: expected {expected} observed "
-                f"{observed}")
         from core.common import F
 
         receipt_cohort = (manifest if kind == "bundle"
@@ -134,29 +121,26 @@ class KaggleOutputs:
             "cohort": resolved_cohort,
             "installed": installed,
         })
-        # ``bundle`` above IS this crossing's single integrity check: the role
-        # load verified the whole-archive size against the receipt and, in the
-        # same pass, the archive's own member inventory. A non-role kind was
-        # named and hashed once; either way the artifact is reported for what it
-        # is and nothing downstream re-reads the archive to re-verify it.
+        # ``bundle`` above IS this crossing's single read of the archive: the
+        # role load returned the whole-archive size and member inventory, or a
+        # non-role kind was measured once. Nothing downstream re-reads it.
         plan["bundle"] = bundle
-        # Publish default (owner order 2026-10-07): every successful verified
-        # fetch ends with the publish step — no operator hand-invoke. The plan
-        # entry records what was published (or why it was skipped/failed).
+        # Publish default (owner order 2026-10-07): every successful fetch ends
+        # with the publish step — no operator hand-invoke. The plan entry records
+        # what was published (or why it was skipped/failed).
         plan["publish"] = lane._publish_after_verified_fetch(kind)
         return plan
 
     @staticmethod
-    def identify_bundle(kind: str, archive: Path, expected_size: int) -> dict[str, Any]:
+    def identify_bundle(kind: str, archive: Path) -> dict[str, Any]:
         """Name the fetched archive's ``core.bundle`` role (and load ONE handle).
 
         The role comes from the lane identity registry (``bundle`` fetches the
         prepared-inputs Bundle, ``finalize`` the sealed result Bundle); a role
         archive is loaded exactly once through :meth:`core.bundle.Bundle.load`,
-        whose single pass verifies the archive's own member inventory by name
-        and byte size — so the caller gets the observed size and never re-reads
-        the archive. ``expected_size`` is the manifest's recorded token, which
-        the caller compares. Any other kind is not a Bundle role. An archive whose role manifest is
+        whose single pass returns the archive's member inventory and run tag —
+        so the caller gets the observed size and never re-reads the archive.
+        Any other kind is not a Bundle role. An archive whose role manifest is
         absent is reported as unidentified — never silently treated as a bundle
         (the enforcing stage fails loud on its own load instead).
         """

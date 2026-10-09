@@ -52,7 +52,7 @@ class KaggleChain:
     def _verify_chain_step(*, kind: str, watch: dict[str, Any],
                            plan_entry: dict[str, Any],
                            expect_publish: bool = False) -> None:
-        """Chain gate: terminal-complete status, byte-size-verified fetch, and
+        """Chain gate: terminal-complete status, a successful fetch, and
         (for the bundle step) the publish default actually published."""
         from cli import kaggle_lane as lane
 
@@ -78,10 +78,9 @@ class KaggleChain:
 
         Steps and their fail-loud gates, in order:
         1. bundle-kernel: staged + pushed (cohort pinned at the chain's HEAD
-           revision); push_bundle_kernel's own watcher supervises → verifies the
-           fetch (byte size vs kernel receipt) → releases the session; the publish
-           default inside the verified fetch publishes a fresh bundle-dataset
-           version and records its number.
+           revision); push_bundle_kernel's own watcher supervises → fetches the
+           output → releases the session; the publish default inside the fetch
+           publishes a fresh bundle-dataset version and records its number.
         2. train-kernel: staged (SAME revision — any drift fails loud with both
            named) + pushed via the standard push path; its single spawned
            watcher runs the terminal-handler loop; the chain waits on the
@@ -97,7 +96,7 @@ class KaggleChain:
            operator box is no longer a finalize surface. It reuses the bundling
            CPU kernel slug and attaches the published inputs bundle plus the
            trained result kernel output; the sealed result bundle is fetched
-           and byte-size-verified like every other step.
+           like every other step.
         Dry-run prints the entire plan (no staging writes, no subprocesses).
         """
         from cli import kaggle_lane as lane

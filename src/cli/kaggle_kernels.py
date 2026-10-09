@@ -16,21 +16,20 @@ from typing import Any
 #: selected checkpoint only) and the run-tag manifest the finalize boundary
 #: checks. That archive IS the role bundle the finalize job's boundary load
 #: accepts. The shared template helper re-tarred the output TREE instead — no
-#: role manifest, no transport digest in the manifest the fetch reads — and the
-#: finalize boundary rejected it with "archive manifest missing" (the proven
-#: broken train->finalize role handoff). Splice this override into the TRAIN
-#: kernel only: it copies the sealed archive and records its whole-file size
-#: as the manifest transport token, so ``kaggle_outputs.fetch_kernel_output``
-#: and the finalize job both verify the one archive that crossed. The embed
-#: kernel keeps the tree tarball (its vectors output is not a Bundle role).
+#: role manifest — and the finalize boundary rejected it with "archive manifest
+#: missing" (the proven broken train->finalize role handoff). Splice this
+#: override into the TRAIN kernel only: it copies the sealed archive and records
+#: its whole-file size as the manifest record, so ``kaggle_outputs`` reads the
+#: size the kernel reported. The embed kernel keeps the tree tarball (its
+#: vectors output is not a Bundle role).
 TRAIN_RESULT_BUNDLE_SHIP = '''
 def stage_result_archive(output, *, kind, extra):
     """Ship ``model_tracks.run``'s sealed result Bundle, never a tree tarball.
 
     Redefines the shared tree-tar helper for the train kernel so the fetched
-    artifact carries the role manifest the finalize boundary verifies, and the
-    manifest records the archive's whole-file size (the transport token the
-    fetch and the finalize boundary pin). The companion lands on the ONE
+    artifact carries the role manifest the finalize boundary reads, and the
+    manifest records the archive's whole-file size (a record, never compared).
+    The companion lands on the ONE
     sidecar rule (``core.archive_reader.archive_sidecar``).
     """
     import yaml as _yaml
@@ -46,14 +45,14 @@ def stage_result_archive(output, *, kind, extra):
             "model_tracks.run sealed no result bundle at " + str(sealed_archive))
     result_archive = WORKING / LANE["files"]["result_archive"].format(kind=kind)
     shutil.copy2(sealed_archive, result_archive)
-    digest = file_size(result_archive)
+    archive_size = file_size(result_archive)
     (WORKING / LANE["files"]["result_manifest"].format(kind=kind)).write_text(
         json.dumps({"kind": kind, "run_tag": RUN_TAG, "revision": REVISION,
-                    "archive": result_archive.name, "archive_size": digest,
+                    "archive": result_archive.name, "archive_size": archive_size,
                     **extra}, indent=2), encoding="utf-8")
     print("[%s] shipped sealed result bundle %s size=%s"
-          % (kind, result_archive.name, digest), flush=True)
-    return digest
+          % (kind, result_archive.name, archive_size), flush=True)
+    return archive_size
 '''
 
 
@@ -223,7 +222,7 @@ class KaggleKernels:
             verdict.update(
                 available=None,
                 reason="dry-run: account presence is not probed; pass --execute "
-                       "to verify the configured embed kernel exists",
+                       "to probe the configured embed kernel on the account",
             )
             return verdict
         try:

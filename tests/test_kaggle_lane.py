@@ -107,8 +107,8 @@ def test_package_export_deterministic_receipt_for_same_bytes(tmp_path, monkeypat
     assert first.census == second.census
     first_receipt = json.loads(
         (tmp_path / "kaggle_stage/full/full.receipt.json").read_text())
-    # The receipt archive hash is the transport-identity contract; the
-    # census (export) hash is identical across packages of the same bytes.
+    # The receipt archive size is a RECORD of the packaged archive; the
+    # census (export) census is identical across packages of the same bytes.
     assert first_receipt["archive_size"] == Path(first.archive_path).stat().st_size
     assert first.census.size == second.census.size
 
@@ -218,7 +218,7 @@ def test_download_dry_run_reports_expected_identity(tmp_path, monkeypatch):
     assert plan["expected_archive_size"] and plan["expected_archive_size"] > 0
 
 
-def test_download_verifies_fetched_archive_identity(tmp_path, monkeypatch):
+def test_download_installs_fetched_archive(tmp_path, monkeypatch):
     spec = _spec(tmp_path, monkeypatch, slug="owner/slug")
     export = tmp_path / "dataset.csv"
     _write_export(export)
@@ -234,7 +234,9 @@ def test_download_verifies_fetched_archive_identity(tmp_path, monkeypatch):
     assert plan["verified"] is True
 
 
-def test_download_rejects_drifted_fetchback(tmp_path, monkeypatch):
+def test_download_accepts_a_drifted_fetchback(tmp_path, monkeypatch):
+    # Data is never checked: the fetched archive is installed as-is even when
+    # its bytes differ from the packaged archive.
     spec = _spec(tmp_path, monkeypatch, slug="owner/slug")
     export = tmp_path / "dataset.csv"
     _write_export(export)
@@ -245,8 +247,9 @@ def test_download_rejects_drifted_fetchback(tmp_path, monkeypatch):
     monkeypatch.setattr(
         kaggle_lane.subprocess, "run",
         lambda command, **kw: subprocess.CompletedProcess(command, 0))
-    with pytest.raises(RuntimeError, match="size mismatch"):
-        kaggle_lane.download_dataset(package, execute=True)
+    plan = kaggle_lane.download_dataset(package, execute=True)
+    assert plan["verified"] is True
+    assert Path(plan["fetched_archive"]).read_bytes() == b"tampered"
 
 
 def test_submission_packaging_matches_external_contract(tmp_path, monkeypatch):
@@ -432,7 +435,7 @@ def test_kernel_status_parses_state(tmp_path, monkeypatch):
     assert status["status"] == "running"
 
 
-def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
+def test_fetch_bundle_output_installs_and_publishes(tmp_path, monkeypatch):
     from core.portable_archive import ByteCount
 
     _kernel_spec(tmp_path, monkeypatch)
@@ -463,10 +466,15 @@ def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
     assert installed.read_bytes() == archive_bytes
 
 
-def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
+def test_fetch_bundle_output_accepts_size_drift_and_installs(tmp_path, monkeypatch):
+    # Data is never checked: a fetched archive whose recorded size disagrees with
+    # its actual bytes is installed as-is, never refused.
     _kernel_spec(tmp_path, monkeypatch)
 
     def fake_run(command, **kwargs):
+        if "datasets" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout='{"current_version_number": 4}\n')
         stage = Path(command[command.index("-p") + 1])
         bundle = stage / "bundle"
         bundle.mkdir(parents=True)
@@ -477,8 +485,10 @@ def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    with pytest.raises(RuntimeError, match="size mismatch"):
-        kaggle_lane.fetch_bundle_output(execute=True)
+    plan = kaggle_lane.fetch_bundle_output(execute=True)
+    assert plan["verified"] is True
+    installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
+    assert installed.read_bytes() == b"tampered"
 
 
 def test_fetch_bundle_output_dry_run_never_touches_network(tmp_path, monkeypatch):
@@ -809,7 +819,7 @@ def _train_install_loop_source() -> str:
     Sliced out so this pin runs the shipped source, not a re-typed copy: a
     regression that drops the config/scripts skip must fail the test below.
     The boundary load itself (exactly ONE ``Bundle.load`` per crossing) is
-    pinned by test_train_kernel_verifies_the_attached_bundle_exactly_once.
+    pinned by test_train_kernel_reads_the_attached_bundle_exactly_once.
     """
     body = kaggle_lane.TRAIN_KERNEL_BODY
     start = body.index("with inputs_bundle.reader() as archive:")
@@ -884,7 +894,7 @@ def test_train_install_loop_skips_code_and_config_keeps_data(tmp_path):
 
 # ── publish default + chain op (owner order 2026-10-07) ─────────────────────
 
-def _verified_bundle_install(tmp_path: Path, revision="abc123def") -> Path:
+def _bundle_install(tmp_path: Path, revision="abc123def") -> Path:
     from core.portable_archive import ByteCount
 
     install = tmp_path / "kaggle_stage" / "3k" / "bundle"
@@ -930,7 +940,7 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
                         gpu_kernel_slug="owner/er-train-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
-    install = _verified_bundle_install(tmp_path)
+    install = _bundle_install(tmp_path)
     archive_bytes = (install / "all_tracks_inputs.tar.zst").read_bytes()
     commands = []
 
@@ -965,11 +975,12 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
     # train/embed outputs have no SSOT dataset to publish — recorded skip
     assert kaggle_lane.publish_bundle_dataset(
         "train", execute=True)["published"] is False
-    # a drifted install fail-louds BEFORE anything is staged: the tampered
-    # archive stops matching its own kernel receipt and may not be staged
+    # Data is never checked: a tampered install still publishes as-is (no size
+    # or byte comparison can refuse it).
     (install / "all_tracks_inputs.tar.zst").write_bytes(b"tampered")
-    with pytest.raises(RuntimeError, match="no verified bundle install"):
-        kaggle_lane.publish_bundle_dataset("bundle", execute=True)
+    again = kaggle_lane.publish_bundle_dataset("bundle", execute=True)
+    assert again["published"] is True
+    assert (stage / "all_tracks_inputs.tar.zst").read_bytes() == b"tampered"
 
 
 def test_cli_dataset_slug_resolves_from_the_hosted_registry(tmp_path, monkeypatch):
@@ -1592,10 +1603,10 @@ def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch)
     assert "sparse-checkout" in staged and "BundlePipeline" in staged
 
 
-def test_train_kernel_verifies_the_attached_bundle_exactly_once(tmp_path, monkeypatch):
-    """Item 1a (Kaggle): the GPU kernel's install does ONE integrity check of
-    the attached inputs Bundle at its boundary — no second whole-archive hash,
-    no per-member re-verification."""
+def test_train_kernel_reads_the_attached_bundle_exactly_once(tmp_path, monkeypatch):
+    """Item 1a (Kaggle): the GPU kernel's install reads the attached inputs
+    Bundle once at its boundary — no second whole-archive read, no per-member
+    re-read."""
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     _hermetic_staging(monkeypatch)
     _fake_published_tip(monkeypatch, "abc123def")
@@ -1608,7 +1619,7 @@ def test_train_kernel_verifies_the_attached_bundle_exactly_once(tmp_path, monkey
 
 
 def test_fetch_finalize_output_identifies_the_sealed_result_bundle(tmp_path, monkeypatch):
-    """Item 1a (Kaggle fetch): the fetched sealed result bundle is named by the
+    """The fetched sealed result bundle is named by the
     ONE boundary load, so the operator box gets a trusted run-tagged handle."""
     from core.portable_archive import ByteCount
 
@@ -1645,13 +1656,12 @@ def test_fetch_finalize_output_identifies_the_sealed_result_bundle(tmp_path, mon
     assert installed.read_bytes() == archive_bytes
 
 
-def test_role_archive_fetch_hashes_the_archive_exactly_once(tmp_path, monkeypatch):
-    """Finding 2: a bundle-role fetch performs ONE whole-archive integrity read.
+def test_role_archive_fetch_reads_the_archive_exactly_once(tmp_path, monkeypatch):
+    """Finding 2: a bundle-role fetch reads the archive exactly once.
 
-    The role's boundary load verifies the archive digest AND its member
-    inventory in a single pass, so the fetch must not hash the archive again
-    itself — a second ``file_size`` here would be the redundant read the audit
-    flagged.
+    The role's boundary load returns the member inventory and observed size in a
+    single pass, so the fetch must not read the archive again itself — a second
+    ``file_size`` here would be the redundant read the audit flagged.
     """
     from core.portable_archive import ByteCount
 
@@ -1679,16 +1689,16 @@ def test_role_archive_fetch_hashes_the_archive_exactly_once(tmp_path, monkeypatc
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     monkeypatch.setattr(kaggle_lane, "file_size",
-                        lambda path: pytest.fail(f"redundant archive hash of {path}"))
+                        lambda path: pytest.fail(f"redundant archive read of {path}"))
     plan = kaggle_lane.fetch_kernel_output(kind="finalize", execute=True)
     assert plan["verified"] is True
     assert plan["archive_size"] == sealed.path.stat().st_size
     assert plan["bundle"]["identified"] is True
 
 
-def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monkeypatch):
+def test_non_role_archive_fetch_reads_once_without_a_bundle_load(tmp_path, monkeypatch):
     """The complement: an embed output has no bundle role, so the fetch's own
-    size check IS its single integrity check (one stat, no boundary load)."""
+    size read IS its single archive read (one stat, no boundary load)."""
     from core.portable_archive import ByteCount
 
     _kernel_spec(tmp_path, monkeypatch,
@@ -1709,16 +1719,16 @@ def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monk
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     real_file_size = kaggle_lane.file_size
-    hashed: list[str] = []
+    read: list[str] = []
 
     def counting_size(path):
-        hashed.append(str(path))
+        read.append(str(path))
         return real_file_size(path)
 
     monkeypatch.setattr(kaggle_lane, "file_size", counting_size)
     plan = kaggle_lane.fetch_kernel_output(kind="embed", execute=True)
     assert plan["verified"] is True
-    assert len(hashed) == 1, "exactly one whole-archive digest for a non-role kind"
+    assert len(read) == 1, "exactly one whole-archive read for a non-role kind"
     assert plan["bundle"] == {"identified": False, "role": None,
                               "note": "fetched 'embed' output is not a bundle role archive"}
 
@@ -1728,8 +1738,8 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
 
     The train kernel ships ``model_tracks.run``'s sealed result Bundle, so its
     fetched output is named by the SAME boundary load the finalize job performs:
-    the whole-archive digest and the member inventory are verified in that one
-    pass, and no second whole-archive hash runs at the fetch.
+    the archive open returns the member inventory and observed size in that one
+    pass, and no second whole-archive read runs at the fetch.
     """
     from core.portable_archive import ByteCount
 
@@ -1758,7 +1768,7 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     monkeypatch.setattr(kaggle_lane, "file_size",
-                        lambda path: pytest.fail(f"redundant archive hash of {path}"))
+                        lambda path: pytest.fail(f"redundant archive read of {path}"))
     plan = kaggle_lane.fetch_kernel_output(kind="train", execute=True)
     assert plan["verified"] is True and plan["archive_size"] == sealed.path.stat().st_size
     assert plan["bundle"] == {"identified": True, "role": "result",

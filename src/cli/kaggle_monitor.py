@@ -78,7 +78,7 @@ class KaggleMonitor:
 
         Replaces interactive supervision as the launch standard. One process:
         poll the kernel status until ANY terminal state, then (a) `complete`
-        fetches + hash-verifies the result archive, (b) `error` fetches partial
+        fetches the result archive, (b) `error` fetches partial
         artifacts and the session log; (c) always pushes the stub replace that releases the
         session — the failed-kernel-solves case included. The release runs even
         when the watcher starts against an already-terminal kernel, so no
@@ -147,7 +147,7 @@ class KaggleMonitor:
 
         One process per launch: each requested kernel's status is polled at the
         configured cadence until it reaches a terminal state, then
-        fetch_kernel_output downloads + hash-verifies + installs it (idempotent
+        fetch_kernel_output downloads + installs it (idempotent
         and fail-closed; re-running after an interruption simply completes the
         job). Polling holds neither a session nor a quota. On a non-complete
         terminal state partial artifacts and logs are downloaded, the failure

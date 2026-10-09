@@ -116,7 +116,7 @@ Owner ruling 2026-10-06: bundle generation is CPU-only and runs here, not
 locally; the GPU session only trains. Clones the pinned revision (partial +
 sparse checkout), installs the worker requirements, runs
 training.prepare_all end-to-end, and stages the launch package plus its
-receipt into /kaggle/working for hash-verified fetch-back.
+receipt into /kaggle/working for fetch-back.
 """
 from core.portable_archive import ByteCount
 import json
@@ -301,9 +301,9 @@ def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
     }
     (WORKING / LANE["files"]["result_manifest"].format(kind=kind)).write_text(
         json.dumps(result_manifest, indent=2), encoding="utf-8")
-    digest = file_size(result_archive)
-    print(f"[{kind}] staged: {result_archive} size={digest}", flush=True)
-    return digest
+    archive_size = file_size(result_archive)
+    print(f"[{kind}] staged: {result_archive} size={archive_size}", flush=True)
+    return archive_size
 '''
 
 
@@ -325,10 +325,10 @@ env = {**os.environ, "PYTHONPATH": str(root / LANE["files"]["source_dir"]), "PYT
 sys.path.insert(0, str(root / LANE["files"]["source_dir"]))
 from core.bundle import Bundle
 
-# ONE integrity check for this VM crossing: the attached archive is verified
-# once at its Bundle boundary (manifest + every member, by name and byte
-# size), and the trusted handle it returns is what the install reads — no
-# member is read or re-parsed again.
+# ONE read for this VM crossing: the attached archive is opened once at its
+# Bundle boundary (manifest + member names), and the trusted handle it returns
+# is what the install reads — no member is read or re-parsed again, and no byte
+# is compared (owner directive: data is never checked).
 inputs_bundle = Bundle.load(archive_path, "inputs")
 with inputs_bundle.reader() as archive:
     # Code/config neighborhoods are authoritative from the pinned checkout:
@@ -399,14 +399,13 @@ stage_result_archive(output, kind=LANE["files"]["result_names"]["train"], extra=
 # ── finalize role: ONE remote CPU lane job, run from this sparse checkout ──
 # The operator box is no longer a finalize surface (owner ruling): this kernel
 # is the only place CPU post-processing, post-training ablation and sealing run.
-# Two verified bundles arrive attached and each is integrity-checked exactly
-# once, at its Bundle boundary:
+# Two bundles arrive attached and each is opened exactly once, at its Bundle
+# boundary:
 #   * the prepared-inputs bundle (the published bundle dataset / CPU kernel
 #     output) — role `inputs`; bundle_steps.finalize opens its own SSOT boundary
-#     on it, so this kernel neither re-hashes nor re-parses its members;
+#     on it, so this kernel neither re-reads nor re-parses its members;
 #   * the trained result bundle (the train kernel output) — role `result`, whose
-#     transport digest is pinned here by the one Bundle.load that hands the
-#     step its trusted handle.
+#     run-tagged handle is what the step consumes.
 FINALIZE_MANIFEST = LANE["files"]["result_manifest"].format(
     kind=LANE["files"]["result_names"]["train"])
 FINALIZE_ARCHIVE = LANE["files"]["result_archive"].format(
@@ -433,9 +432,8 @@ sys.path.insert(0, str(root / LANE["files"]["source_dir"]))
 from core.bundle import Bundle, BundlePipeline
 from core.archive_reader import archive_sidecar
 
-# The single boundary check for the result bundle: one load by name and byte
-# size, and the handle it returns is what the step consumes (no member is
-# re-read afterwards).
+# The single boundary read for the result bundle: one load by name, and the
+# handle it returns is what the step consumes (no member is re-read afterwards).
 result_bundle = Bundle.load(result_archive, "result")
 output = (WORKING / LANE["files"]["bundle_dir"]
           / LANE["files"]["result_archive"].format(kind=FINALIZE_RESULT))

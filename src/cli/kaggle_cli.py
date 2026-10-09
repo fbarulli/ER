@@ -42,7 +42,7 @@ class KaggleCLI:
                                  "resolves (default: cpu)")
         parser.add_argument("--kind", choices=["bundle", "train", "embed", "finalize"], default=None,
                             help="fetch-results/supervise: which kernel output to "
-                                 "fetch and verify (default: bundle)")
+                                 "fetch (default: bundle)")
         parser.add_argument("--slug", default=None,
                             help="kernel-logs: explicit owner/slug (default: "
                                  "resolved from --kernel)")
@@ -164,8 +164,8 @@ class KaggleCLI:
             print(json.dumps(lane.fetch_kernel_output(kind=kind, execute=args.execute, slug=args.slug),
                              indent=2), flush=True)
             if not args.execute:
-                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to download and "
-                      "verify the result archive", flush=True)
+                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to download "
+                      "the result archive", flush=True)
             return
         if args.what == "autowatch":
             plan = lane.autowatch_kernel(which=args.kernel, execute=args.execute, slug=args.slug)

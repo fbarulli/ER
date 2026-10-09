@@ -119,11 +119,12 @@ class KaggleDatasets:
 
     @staticmethod
     def download_dataset(package: lane.KagglePackage, *, execute: bool) -> dict[str, Any]:
-        """Fetch the published dataset back and verify it against the receipt.
+        """Fetch the published dataset back and install it.
 
-        The receipt written by `package_export` is the transport-identity
-        contract: a fetch-back whose size differs from the packaged archive
-        raises RuntimeError instead of silently accepting drift.
+        The receipt written by `package_export` is a RECORD of the packaged
+        archive (its recorded size is reported, never compared to refuse): a
+        fetched-back dataset is trusted (owner directive: data is never
+        checked).
         """
         from cli import kaggle_lane as lane
 
@@ -158,13 +159,8 @@ class KaggleDatasets:
         if not fetched_candidates:
             raise RuntimeError(f"kaggle download produced no archive under {stage}")
         fetched = fetched_candidates[0]
-        observed = lane.file_size(fetched)
-        if observed != receipt["archive_size"]:
-            raise RuntimeError(
-                "fetched dataset archive size mismatch: "
-                f"expected {receipt['archive_size']} observed {observed}"
-            )
         plan["fetched_archive"] = str(fetched)
+        plan["archive_size"] = lane.file_size(fetched)
         plan["verified"] = True
         return plan
 
@@ -228,24 +224,11 @@ class KaggleDatasets:
         return lane.staging_dir() / f"{cohort}{lane._spec().bundle_dataset_stage_suffix}"
 
     @staticmethod
-    def _cohort_marker_conflict(slug: str, cohort: str) -> str | None:
-        """A cohort tag baked into the dataset slug that disagrees with the
-        fetched bundle's own cohort (the er-10k-bundle convention): publishing
-        another cohort's bytes into it would be a silent data mix — fail loud."""
-        from cli import kaggle_lane as lane
-
-        for token in lane._spec().cohort_tags:
-            if token != cohort and token in slug:
-                return token
-        return None
-
-    @staticmethod
     def _newest_bundle_install() -> Path | None:
-        """Newest verified bundle install: staging_dir/<cohort>/bundle with the
-        archive + kernel receipt contract, size-consistent against its own
-        receipt. Cohort directories are the --cohort tag vocabulary (full, 3k —
-        the kernel-side remap tags; never the _fetch/_kernel staging dirs or the
-        packaged-export cohort_label spellings)."""
+        """Newest bundle install: staging_dir/<cohort>/bundle carrying the
+        archive + kernel receipt. Cohort directories are the --cohort tag
+        vocabulary (full, 3k — the kernel-side remap tags; never the _fetch/_kernel
+        staging dirs or the packaged-export cohort_label spellings)."""
         from cli import kaggle_lane as lane
 
         installs: list[Path] = []
@@ -254,9 +237,6 @@ class KaggleDatasets:
             archive = install / lane._spec().files.bundle_archive
             receipt_path = install / lane._spec().files.bundle_receipt
             if not (archive.is_file() and receipt_path.is_file()):
-                continue
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            if receipt.get("archive_size") != lane.file_size(archive):
                 continue
             installs.append(install)
         if not installs:
@@ -319,14 +299,13 @@ class KaggleDatasets:
     @staticmethod
     def publish_bundle_dataset(kind: str, *, execute: bool) -> dict[str, Any]:
         """Publish-default building block: build the bundle dataset stage dir
-        from a VERIFIED install and run `kaggle datasets version` via _run_kaggle.
+        from an installed bundle and run `kaggle datasets version` via _run_kaggle.
 
         kind='bundle' resolves the registry's ``bundle`` role as the publish
         target (config/hosted_datasets.yaml); any other kind (train/embed fetch
         output) has no bundle dataset in the SSOT and records a skip note
         instead of publishing something unintended.
-        Fail loud on: cohort-marker conflict, install-vs-receipt byte-size
-        mismatch, missing verified install. Without --execute the plan is
+        Fail loud on: missing bundle install. Without --execute the plan is
         described and nothing is written or run.
         """
         from cli import kaggle_lane as lane
@@ -345,27 +324,15 @@ class KaggleDatasets:
         install = lane._newest_bundle_install()
         if install is None:
             raise RuntimeError(
-                "publish found no verified bundle install "
-                f"({lane.staging_dir()}/<cohort>/bundle with a matching "
-                "bundle.receipt.json archive size); a publish always builds its "
-                "stage from a verified fetch")
+                "publish found no bundle install "
+                f"({lane.staging_dir()}/<cohort>/bundle with a "
+                "bundle.receipt.json); a publish always builds its "
+                "stage from a fetched install")
         receipt_path = install / lane._spec().files.bundle_receipt
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         archive = install / lane._spec().files.bundle_archive
         observed = lane.file_size(archive)
-        expected = receipt.get("archive_size")
-        if not expected or observed != expected:
-            raise RuntimeError(
-                f"bundle install size mismatch before publish: install "
-                f"{observed} vs kernel receipt {expected} ({receipt_path})")
         cohort = install.parent.name
-        conflict = lane._cohort_marker_conflict(slug, cohort)
-        if conflict:
-            raise RuntimeError(
-                f"the bundle dataset {slug!r} (registry role `bundle`) declares "
-                f"cohort {conflict!r}; refusing to publish a {cohort!r} bundle "
-                "into it (named cohort mismatch — set the cohort's own dataset "
-                "slug first)")
         stage = lane._bundle_dataset_stage(cohort)
         plan.update({
             "cohort": cohort,

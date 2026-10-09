@@ -15,9 +15,9 @@ What it owns (SSOT: config/training.yaml `kaggle:` block):
 * upload     — `kaggle datasets create`/`version` driven through the
   configured executable; fail-loud (RuntimeError) on missing credentials,
   missing executable, or unset `kaggle.slug` — never a silent skip.
-* download   — `kaggle datasets download` fetch-back that verifies the
-  archive size against the receipt written at package time (the
-  transport-identity contract the suite recovery machinery uses).
+* download   — `kaggle datasets download` fetch-back that installs the
+  fetched archive and records its size (the package receipt is a record,
+  never a refusal: data is never checked).
 * submission — validate/format a finished SKU_ITEM frame through the
   EXISTING `scripts.format_submission.format_submission` (imported, never
   duplicated) into the external two-column contract.
@@ -225,7 +225,6 @@ upload_dataset = KaggleDatasets.upload_dataset
 download_dataset = KaggleDatasets.download_dataset
 package_submission = KaggleDatasets.package_submission
 _bundle_dataset_stage = KaggleDatasets._bundle_dataset_stage
-_cohort_marker_conflict = KaggleDatasets._cohort_marker_conflict
 _newest_bundle_install = KaggleDatasets._newest_bundle_install
 _dataset_current_version = KaggleDatasets._dataset_current_version
 publish_bundle_dataset = KaggleDatasets.publish_bundle_dataset
