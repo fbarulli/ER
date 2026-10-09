@@ -107,6 +107,30 @@ class AttributeGNN(nn.Module):
         self.norm = nn.LayerNorm(hidden)
         self.dropout = nn.Dropout(float(dropout)) if dropout > 0.0 else None
 
+    @classmethod
+    def from_arch(cls, vocabulary: dict[str, list[str]], hidden: int, output: int,
+                  text_dim: int, graph_enabled: bool,
+                  aggregation_backend: AggregationBackend,
+                  arch: dict[str, object] | None = None) -> "AttributeGNN":
+        """Build with the recorded ``advanced.graph.arch`` switches (ONE home).
+
+        ``train`` records the switches in the checkpoint manifest and every
+        inferential consumer restores them through this factory, so a trained
+        checkpoint can always be rebuilt even if the ambient config moved on.
+        An absent mapping means the all-OFF architecture, so older checkpoints
+        (which never recorded the switches) still load.
+        """
+        arch = arch or {}
+        return cls(
+            vocabulary, hidden, output, text_dim, graph_enabled,
+            aggregation_backend,
+            dropout=float(arch.get("dropout", 0.0)),
+            edge_dropout=float(arch.get("edge_dropout", 0.0)),
+            residual=bool(arch.get("residual", False)),
+            two_hop=bool(arch.get("two_hop", False)),
+            gated_pool=bool(arch.get("gated_pool", False)),
+        )
+
     def _apply_dropout(self, value: torch.Tensor) -> torch.Tensor:
         return value if self.dropout is None else self.dropout(value)
 

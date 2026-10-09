@@ -3476,7 +3476,6 @@ class SwaSpec(BaseModel):
 
     enabled: bool = False
     k: int = Field(default=3, ge=1)
-    use_best_k: bool = False  # False = last-k, True = best-k by dev AP
 
 
 class AccelSpec(BaseModel):

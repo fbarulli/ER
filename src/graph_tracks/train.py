@@ -376,14 +376,13 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         # Unified (owner-requested 2026-10-09): EMA and SWA have ONE home
         # shared by both lanes (advanced.ema / advanced.swa).
         _adv_root = _training_cfg().advanced
-        model = AttributeGNN(
+        # The arch switches are RECORDED in the checkpoint (below) and restored
+        # by every inferential consumer through this ONE factory, so train and
+        # inference cannot disagree on the architecture.
+        _arch = _adv.arch.model_dump()
+        model = AttributeGNN.from_arch(
             vocabulary, cfg.hidden_dim, cfg.output_dim,
-            text_dim, cfg.graph_enabled, cfg.aggregation_backend,
-            dropout=float(_adv.arch.dropout),
-            edge_dropout=float(_adv.arch.edge_dropout),
-            residual=bool(_adv.arch.residual),
-            two_hop=bool(_adv.arch.two_hop),
-            gated_pool=bool(_adv.arch.gated_pool),
+            text_dim, cfg.graph_enabled, cfg.aggregation_backend, _arch,
         ).to(cfg.device)
         if any((_adv.arch.dropout, _adv.arch.edge_dropout, _adv.arch.residual,
                 _adv.arch.two_hop, _adv.arch.gated_pool)):
@@ -508,7 +507,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=TRAIN_ROOT,
                                   capture_output=True, text=True, check=True).stdout.strip()
         manifest = {"schema": "er-graph-run-v1", "track": cfg.track, "run_tag": run_tag,
-                    "config": cfg.model_dump(), "git_revision": revision,
+                    "config": cfg.model_dump(), "arch": _arch, "git_revision": revision,
                     "input_manifest": input_manifest,
                     "input_manifest_sha256": file_hash(resolve(cfg.input_manifest)) if cfg.input_manifest else None,
                     "listings_sha256": file_hash(resolve(cfg.listings)),
@@ -543,6 +542,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError("resume track mismatch")
             restored = torch.load(resume, map_location=cfg.device, weights_only=False)
             prior = restored["manifest"]
+            if prior.get("arch") != manifest["arch"]:
+                raise ValueError("resume architecture mismatch")
             if prior['config'].get('aggregation_backend', 'index_add') != cfg.aggregation_backend:
                 raise ValueError('resume aggregation backend mismatch')
             if prior['config'].get('optimizer_backend', 'auto') != cfg.optimizer_backend:
@@ -733,8 +734,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                             classification, embeddings, retain_graph=True,
                             create_graph=False, allow_unused=True,
                         )[0]
-                        _adv = _fgm.perturb(embeddings, _grad)
-                        _adv_logits = scorer.score(_adv, train_pairs).logits
+                        _adv_embeddings = _fgm.perturb(embeddings, _grad)
+                        _adv_logits = scorer.score(_adv_embeddings, train_pairs).logits
                         loss = loss + _classify(_adv_logits)
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
