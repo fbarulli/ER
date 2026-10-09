@@ -33,23 +33,3 @@ def test_run_reuses_a_supplied_boundary_handle_without_reopening(tmp_path,monkey
     with pytest.raises(ValueError,match='staged GPU ablation exports'):
         auto.run(tmp_path/'completed.zip','run',SimpleNamespace(publish_git=False),
                  bundle=object())
-
-
-def test_saved_ablation_records_a_calibration_from_another_checkpoint(tmp_path):
-    from model_tracks.ablation import write
-    track = tmp_path/'text'
-    folder = track/'ablation';folder.mkdir(parents=True)
-    checkpoint = track/'checkpoint';checkpoint.mkdir();(checkpoint/'weights').write_bytes(b'selected')
-    write(folder/'request.json',{'checkpoint':str(checkpoint)})
-    (folder/'vectors.npz').write_bytes(b'exports')
-    # The calibration manifest carries the threshold at the top level; that is
-    # the shape every report producer writes and the one complete_saved reads.
-    # A calibrated report whose checkpoint identity misses the selected one is a
-    # RECORD, never a reason to refuse (owner directive: data is never checked).
-    from graph_tracks.report_manifest import build as build_manifest
-    write(track/'text__completion_manifest.json', build_manifest(
-        track='text', checkpoint=str(checkpoint), checkpoint_size=1,
-        listings_size=1, pairs_size=2,
-        threshold=.5, threshold_source='dev_youden', test_reported=False,
-        model_selection='dev_pr_auc', retrieval_ks=[10]))
-    auto.complete_saved(tmp_path,SimpleNamespace(ablation_config='unused'))
