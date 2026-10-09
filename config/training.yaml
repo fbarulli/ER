@@ -323,9 +323,9 @@ kaggle:
   # block above (credentials.keys.kaggle_api_key) — never the token itself.
   repository: "https://github.com/fbarulli/ER.git"
   # The kaggle lane publishes from the branch it runs on: this integration
-  # branch is `laya-final`, so the published-tip invariant (origin/<branch> ==
-  # HEAD) can only hold against origin/laya-final here.
-  branch: "laya-final"
+  # branch is `laya-candidate`, so the published-tip invariant (origin/<branch>
+  # == HEAD) can only hold against origin/laya-candidate here.
+  branch: "laya-candidate"
   cpu_kernel_slug: "fbarulli/er-bundle-cpu"
   # GPU training kernel — the second half of the same ruling: it attaches
   # the CPU kernel output as a kernel_source, restores the package into the
