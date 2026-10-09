@@ -140,6 +140,23 @@ AGENTS.local.md
 !dataset_3k.csv
 !data/
 !data/*.csv
+# The committed smoke_200 prepared fixture is tracked whole: its versioned
+# graph_plan.json / input_manifest.json / setup.yaml name these companions and
+# size them, so a clone without them cannot resolve the lane configs. They are
+# the deliberate exception to the *.csv/*.npz/*.pt rules above.
+!data/prepared/smoke_200/eligible_catalog.csv
+!data/prepared/smoke_200/listing_pairs.csv
+!data/prepared/smoke_200/listing_splits.csv
+!data/prepared/smoke_200/pairs.csv
+!data/prepared/smoke_200/embedding_inputs.json
+!data/prepared/smoke_200/gnn_only__ablation_template.pt
+!data/prepared/smoke_200/prepared_text.npz
+!data/prepared/smoke_200/prepared/pairs.csv
+!data/prepared/smoke_200/prepared/graph_inputs.npz
+!data/prepared/smoke_200/ablation_cohort/pairs.csv
+!data/prepared/smoke_200/ablation_cohort/catalog.csv
+!data/prepared/smoke_200/ablation_templates/text/prepared_inputs.npz
+!data/prepared/smoke_200/ablation_templates/gnn_only/prepared_inputs.npz
 
 # LAYA corpus/output payloads live in DVC (data/laya.dvc), not Git. The
 # jsonl splits are the large binaries; the small receipt.json declarations
