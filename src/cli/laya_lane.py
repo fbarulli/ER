@@ -487,9 +487,17 @@ class LayaLane:
 
 # ── main ───────────────────────────────────────────────────────────────────
 def main() -> None:
+    # Register external lane kinds (the HPO lane's descriptor) BEFORE the
+    # parser is built: the launch spawns `cli.laya_lane --watch --decision
+    # laya-hpo`, so the external kind must be a valid choice or the detached
+    # watcher dies at argparse and the run log never grows.
+    _register_external_lanes()
+    decision_kinds = tuple(dict.fromkeys(
+        (*GPU_KINDS, *LayaTransportFactory.EXTERNAL_KIND_SLUGS)))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kind", choices=KINDS, default="kaggle")
-    parser.add_argument("--decision", choices=GPU_KINDS, default="attribute",
+    parser.add_argument("--decision", choices=decision_kinds,
+                        default="attribute",
                         help="which typed decision run to stage "
                              "(default: attribute)")
     parser.add_argument("--execute", action="store_true",

@@ -184,15 +184,36 @@ class WandbRunReader:
         finally:
             handle.close()
 
+    @staticmethod
+    def _not_ready(error: BaseException) -> bool:
+        """True for the transient "run not visible yet" fetch error.
+
+        The remote run is created by the kernel *after* the push returns, so the
+        first poll(s) can beat ``wandb.init``; that is a startup lag, not a
+        failure of the run.
+        """
+        return type(error).__name__ in {"RunNotFoundError", "CommError"}
+
     def stream(self, *, max_polls: int) -> Iterator[dict[str, Any]]:
         """Yield bounded-cadence updates, stopping at a terminal run state.
 
         Each update carries only the console lines produced since the previous
         poll (``new_output``) so a caller appends without duplicating the log.
+        A run the kernel has not registered yet yields a ``pending`` update
+        (recorded, never fatal) and is retried at the same cadence.
         """
         emitted = 0
         for _ in range(max(1, int(max_polls))):
-            update = self.read_once()
+            try:
+                update = self.read_once()
+            except Exception as error:  # noqa: BLE001 - re-raised unless transient
+                if not self._not_ready(error):
+                    raise
+                yield {"run": self.path, "state": "pending", "metrics": {},
+                       "output": "", "new_output": "",
+                       "console_error": f"{type(error).__name__}: {error}"}
+                time.sleep(self.poll_seconds)
+                continue
             lines = (update["output"] or "").splitlines(keepends=True)
             update["new_output"] = "".join(lines[emitted:])
             emitted = len(lines)

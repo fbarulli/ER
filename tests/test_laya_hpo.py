@@ -713,6 +713,33 @@ def test_kernel_slug_dispatch_resolves_the_hpo_kind():
     assert laya_lane.kernel_slug("laya-hpo") == slug
 
 
+def test_watch_entry_accepts_the_external_hpo_decision(monkeypatch):
+    """The detached ``--watch`` entry accepts ``--decision laya-hpo``.
+
+    Falsified: the launch spawns ``cli.laya_lane --watch --decision laya-hpo``,
+    but the argparse choices were the in-repo GPU kinds only, so the watcher
+    died at startup (exit 2) and ``logs/laya/lane.log`` never grew.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    laya_hpo.register_dispatch()
+    captured: dict = {}
+    fake = SimpleNamespace(autowatch=lambda **kwargs: {"ok": True})
+
+    def _watcher(kind, *, slug=None, run_tag=None):
+        captured.update(kind=kind, slug=slug, run_tag=run_tag)
+        return fake
+
+    monkeypatch.setattr(laya_lane, "watcher", _watcher)
+    monkeypatch.setattr(sys, "argv", [
+        "laya", "--kind", "kaggle", "--watch", "--decision", "laya-hpo",
+        "--slug", "owner/er-laya-hpo", "--execute", "--run-tag", "laya_hpo_1"])
+    laya_lane.main()  # must not SystemExit(2) from argparse
+    assert captured == {"kind": "laya-hpo", "slug": "owner/er-laya-hpo",
+                        "run_tag": "laya_hpo_1"}
+
+
 def test_space_is_bound_in_the_paths_ssot():
     from core.common import F
 

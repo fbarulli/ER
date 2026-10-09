@@ -1144,6 +1144,46 @@ def test_wandb_run_reader_reads_live_metrics_and_console(monkeypatch):
     assert update["console_error"] is None
 
 
+def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
+    """The run is created by the kernel AFTER the push, so the first poll can
+    beat ``wandb.init``; the stream must yield a pending update and retry, not
+    die (or the launched run's local log would never grow)."""
+    import io
+
+    from core.wandb_ctx import WandbRunReader
+
+    class RunNotFoundError(Exception):
+        pass
+
+    class FakeFile:
+        def download(self, replace=True):
+            return io.StringIO("epoch 1 loss=0.5\n")
+
+    class FakeRun:
+        state = "running"
+        summary = {"loss": 0.5}
+
+        def file(self, name):
+            return FakeFile()
+
+    class FakeApi:
+        def __init__(self):
+            self.calls = 0
+
+        def run(self, path):
+            self.calls += 1
+            if self.calls == 1:
+                raise RunNotFoundError("not registered yet")
+            return FakeRun()
+
+    reader = WandbRunReader(run_tag="laya_123", project="e-r",
+                            poll_seconds=0.0, api=FakeApi())
+    updates = list(reader.stream(max_polls=2))
+    assert [update["state"] for update in updates] == ["pending", "running"]
+    assert updates[0]["console_error"].startswith("RunNotFoundError")
+    assert updates[1]["new_output"] == "epoch 1 loss=0.5\n"
+
+
 # ── session-id capture: launch path records the id, stop consumes it ────────
 
 def _fake_stream_client(monkeypatch, url: str, closed: list[str]):
