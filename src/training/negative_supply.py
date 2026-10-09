@@ -1845,7 +1845,7 @@ class SupplyTrace:
                 "populations": populations,
                 "pairs": int(sum(populations.values())),
                 "run_tag": str(manifest.get("run_tag", "")),
-                "pairs_size": str(manifest.get("pairs_size", "")),
+                "pairs_size": int(manifest.get("pairs_size", 0)),
             },
             source="results/negative_supply/<run_tag>/pairs.csv",
         )
