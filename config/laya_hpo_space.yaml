@@ -28,8 +28,9 @@ model_key: laya
 # TPE budget/sampler. `n_trials` is the CLUSTER budget for the generation
 # (shared across every worker and Kaggle session on this study name); each
 # worker splits the remaining budget so sessions do not multiply it. The budget
-# INCLUDES the seeded baseline trial: 1 baseline + 23 TPE sweep.
-n_trials: 24
+# INCLUDES the seeded baseline trial: 1 baseline + 2 TPE sweep. Override per
+# launch with `--n-trials` (the CLI bake is validated by the lane tests).
+n_trials: 3
 n_jobs: 2          # one GPU worker per visible T4 (2xT4 in a Kaggle session)
 seed: 1729
 

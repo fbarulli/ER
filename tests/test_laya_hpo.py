@@ -960,7 +960,7 @@ def _write_space(tmp_path, mutate):
 
 
 def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
-                kernel_slug=None):
+                kernel_slug=None, n_trials=None):
     """Stage the Kaggle payload with the network/git/tip deps stubbed."""
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-obs")
     monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
@@ -977,7 +977,8 @@ def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
     monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
                         lambda rev, repo, branch: rev)
     return laya_hpo.stage_laya_hpo_kernel(space_config=space_config,
-                                          kernel_slug=kernel_slug)
+                                          kernel_slug=kernel_slug,
+                                          n_trials=n_trials)
 
 
 def test_offline_staging_needs_no_url(monkeypatch, tmp_path):
@@ -1124,6 +1125,81 @@ def test_staged_kernel_observes_once_after_commit_and_falls_back(monkeypatch,
     resolver = resolver.split("\nclass ", 1)[0]
     assert resolver.index("if self.offline:") < resolver.index(
         "ensure_optuna_url()")
+
+
+def test_workers_backfill_the_budget_across_two_workers():
+    """No worker idles: after any trial (including the enqueued baseline) the
+    same worker claims the next queued trial until the shared budget is spent."""
+    import threading
+
+    from training import hpo_budget
+
+    budget = 3  # 1 seeded baseline + 2 sweep
+
+    class _SharedLedger:
+        def __init__(self):
+            self.counter = hpo_budget.BudgetCounter(budget)
+            self._lock = threading.Lock()
+
+        def reserve(self, amount=1):
+            with self._lock:
+                return self.counter.reserve(amount)
+
+        def complete(self, amount=1):
+            with self._lock:
+                return self.counter.complete(amount)
+
+        def release(self, amount=1):
+            with self._lock:
+                return self.counter.release(amount)
+
+    class _SharedStudy:
+        def __init__(self):
+            self.trials = []
+            self.workers = set()
+            self._lock = threading.Lock()
+            self._gate = threading.Barrier(2)
+            self._claiming = 0
+
+        def optimize(self, objective, n_trials=1, **kwargs):
+            # Gate the first two claims so the baseline and the next trial
+            # provably land on two different workers before either finishes.
+            with self._lock:
+                gate = self._claiming < 2
+                self._claiming += 1
+            if gate:
+                self._gate.wait(timeout=10)
+            with self._lock:
+                self.trials.append(SimpleNamespace(
+                    number=len(self.trials),
+                    state=SimpleNamespace(name="COMPLETE"), system_attrs={}))
+                self.workers.add(threading.get_ident())
+
+    ledger = _SharedLedger()
+    study = _SharedStudy()
+    loops = [laya_hpo_runtime.ReservedTrialLoop(
+        study, object(), ledger, generation_id="g", model_key="laya")
+        for _ in range(2)]
+    threads = [threading.Thread(target=loop.run) for loop in loops]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert not any(thread.is_alive() for thread in threads)
+    assert ledger.counter.completed == budget          # no worker idled
+    assert sorted(t.number for t in study.trials) == list(range(budget))
+    assert len(study.workers) == 2                     # both workers kept busy
+
+
+def test_launch_accepts_the_n_trials_override(monkeypatch, tmp_path):
+    """The launch path bakes the CLI/resolved n_trials into the kernel (3 for
+    the owner's round: 1 baseline + 2 sweep)."""
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db",
+                          n_trials=3)
+    assert receipt["budget"]["n_trials"] == 3
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    assert "N_TRIALS = 3" in script
 
 
 if __name__ == "__main__":
