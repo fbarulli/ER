@@ -12,7 +12,8 @@ duplicated literals**, covering **both**:
 - the **hosted datasets** (Kaggle datasets the lanes mount / publish).
 
 Data is **naked**: no freshness/validity/hash/existence gates anywhere. The only
-integrity surface is an **on-demand content digest** — never a verdict.
+integrity surface is an **on-demand structural census** (member names + byte
+sizes) — never a verdict.
 
 ## 2. What already exists (confirmed)
 
@@ -21,7 +22,7 @@ integrity surface is an **on-demand content digest** — never a verdict.
 data surface:
 
 - `source` — the raw export (`{via: files, key: dataset}`).
-- `members` (line-item, the digest surface via `dataset_csv_read`):
+- `members` (line-item, the census surface via `dataset_csv_read`):
   `dataset_deduped`, `sku_to_rep`, `canonical_records`, `gate_results`,
   `labeled_pairs`, `final_validation`, `number_tokens_reference`.
 - `layout` (tree roots, addressing only): `prepared`, `track_setup`.
@@ -29,7 +30,7 @@ data surface:
   `load_canonical_records()`, `identity()`, `as_bundle(path, role)`.
 - Frozen, `lru_cache`'d, resolves through `core.common.F` / `artifact`
   (no address duplication), delegates sealing to `core.bundle.Bundle`.
-- **No validity gate** (naked data); missing member = absence in the digest,
+- **No validity gate** (naked data); missing member = absence in the census,
   never a raise.
 
 **Division of labor with `Bundle`:** `Dataset` owns the data and never seals;
@@ -102,7 +103,7 @@ class-based, SRP:
 - **SSOT.** Every slug/path/role declared once; consumers reference, never
   re-spell. No second registry, no second role enum.
 - **Naked data.** No freshness/staleness/hash/version/exists checks. On-demand
-  `identity()` digest is allowed; never a validity verdict or a "verify before
+  `identity()` census is allowed; never a validity verdict or a "verify before
   use" gate. (Removed: snapshot verification, membership validation gates,
   etc.)
 - **Transport.** Sealing/transport stays `Bundle` / `BundlePipeline` /

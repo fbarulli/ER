@@ -127,7 +127,7 @@ def test_load_canonical_records_delegates_to_the_validated_reader(monkeypatch):
     assert recorded == [1]
 
 
-# ── identity: a content digest, and only that ───────────────────────────────
+# ── identity: a byte-size census, and only that ─────────────────────────────
 
 def _store_at(root: Path, body: bytes) -> Dataset:
     root.mkdir(parents=True, exist_ok=True)
@@ -145,14 +145,14 @@ def _store_at(root: Path, body: bytes) -> Dataset:
 def test_identity_is_stable_portable_and_follows_content(tmp_path):
     first = _store_at(tmp_path / "a", b"source")
     second = _store_at(tmp_path / "b", b"source")
-    # the digest is the bytes' identity, never the checkout root's: same bytes
-    # at two paths share one digest.
+    # the census is the bytes' identity, never the checkout root's: same bytes
+    # at two paths share one census.
     assert first.identity() == second.identity()
     assert first.identity() == _store_at(tmp_path / "c", b"source").identity()
-    # a changed member byte changes the digest.
+    # a member's byte size change moves the census.
     (tmp_path / "b" / "deduped.csv").write_bytes(b"deduped-changed")
     assert first.identity() != second.identity()
-    # a changed source byte changes the digest too.
+    # a source byte-size change moves the census too.
     assert first.identity() != _store_at(tmp_path / "d", b"OTHER").identity()
 
 
@@ -174,14 +174,14 @@ def test_identity_records_an_absent_member_without_raising(tmp_path):
 
 
 def test_identity_ignores_tree_roots(tmp_path):
-    """Tree roots are addressing, not line items: they stay out of the digest."""
+    """Tree roots are addressing, not line items: they stay out of the census."""
     store = _store_at(tmp_path / "e", b"source")
     with_tree = store.model_copy(update={"layout": {"prepared": tmp_path / "e"}})
     assert with_tree.identity() == store.identity()
 
 
 def test_the_class_carries_no_validity_gate():
-    """No age/validity verdict lives here; the digest is the whole surface."""
+    """No age/validity verdict lives here; the census is the whole surface."""
     import core.dataset as module
 
     source = inspect.getsource(module).lower()

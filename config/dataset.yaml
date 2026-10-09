@@ -12,7 +12,8 @@
 #
 # It is deliberately NOT a registry or a versioning tool: there are no hashes,
 # no revisions and no freshness verdicts here. The only integrity surface the
-# class offers is a content DIGEST computed on demand (Dataset.identity()).
+# class offers is a structural census computed on demand (Dataset.identity()):
+# the declared members' names plus byte sizes, nothing hashed.
 #
 # Validated by DatasetSpec (src/core/dataset.py) through
 # core.common.load_validated_yaml at first use; a malformed or unknown member
