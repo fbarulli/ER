@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import time
+import types
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -578,21 +579,24 @@ def _wrapped_optimizer_factory(fn, record_function, name, on_call=None):
 
     Optimizer subclasses override `step`, so patching a base class would miss
     them; patching the bound instance (AdamW/LAMB/Adafactor all allow it) is the
-    only reliable seam.
+    only reliable seam. The replacement is a BOUND method (``types.MethodType``),
+    never a plain function: torch's LR schedulers read ``optimizer.step.__func__``
+    while patching the step, so a plain function makes every scheduler
+    construction (CosineAnnealingLR, OneCycleLR, ...) raise AttributeError.
     """
     def factory(*args, **kwargs):
         optimizer = fn(*args, **kwargs)
         try:
             original_step = optimizer.step
 
-            def profiled_step(*step_args, **step_kwargs):
+            def profiled_step(_self, *step_args, **step_kwargs):
                 with record_function(name):
                     result = original_step(*step_args, **step_kwargs)
                 if on_call is not None:
                     on_call()
                 return result
 
-            optimizer.step = profiled_step
+            optimizer.step = types.MethodType(profiled_step, optimizer)
         except Exception:  # noqa: BLE001 - annotation is optional, never fatal
             return optimizer
         return optimizer

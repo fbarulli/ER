@@ -13,10 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import torch
 from pydantic import SecretStr
 
 from cli import laya_hpo, laya_lane
 from cli.laya_transport import LayaTransportFactory
+from core import laya_controls
 from training import laya_hpo_runtime
 from training.hpo_study import StudyBackend
 
@@ -936,6 +938,37 @@ def test_profiler_annotates_every_phase_without_gpu(tmp_path):
     # Hooks are restored after the trial (no global leakage).
     assert torch_module.Tensor.backward is original_backward
     assert namespace["DevEvaluator"].metrics is original_metrics
+
+
+def test_profiled_optimizer_step_keeps_torch_schedulers_constructible():
+    """Public pin: while the optimizer-step profiling seam is installed, torch's
+    LR schedulers must still construct (torch reads ``optimizer.step.__func__``,
+    which a plain-function replacement lacks)."""
+    def new_optimizer():
+        return torch.optim.AdamW([torch.nn.Parameter(torch.zeros(1))], lr=1e-3)
+
+    def build(**overrides):
+        optimizer = namespace["TrainingOptimizer"].make()
+        assert optimizer.step.__func__ is not None
+        kwargs = dict(optimizer=optimizer, kind="cosine", total_updates=10,
+                      min_lr=1e-6, warmup=0, plateau_mode="max",
+                      plateau_factor=0.1, plateau_patience=1,
+                      onecycle_pct_start=0.3)
+        return laya_controls.LrSchedulerFactory(**(kwargs | overrides)).build()
+
+    namespace = {"TrainingOptimizer": SimpleNamespace(make=new_optimizer)}
+    uninstall = laya_hpo_runtime.install_phase_hooks(
+        torch_module=torch, record_function=torch.profiler.record_function,
+        laya_train=_FakeLayaTrain(), namespace=namespace,
+        on_optimizer_step=lambda: None)
+    try:
+        schedule = torch.optim.lr_scheduler
+        assert isinstance(build(), schedule.CosineAnnealingLR)
+        assert isinstance(build(kind="plateau"), schedule.ReduceLROnPlateau)
+        assert isinstance(build(kind="onecycle"), schedule.OneCycleLR)
+        assert isinstance(build(warmup=2), schedule.SequentialLR)
+    finally:
+        uninstall()
 
 
 def test_profiler_fail_soft_when_setup_raises(tmp_path):
