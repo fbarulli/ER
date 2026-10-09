@@ -60,7 +60,8 @@ class KaggleCLI:
                                  "dataset.csv (default: full)")
         parser.add_argument("--key-env", default=None,
                             help="environment variable holding the Kaggle API "
-                                 "token (default: the configured kaggle.api_key_env)")
+                                 "token (default: the configured "
+                                 "credentials.keys.kaggle_api_key)")
         parser.add_argument("--revision", default=None,
                             help="pin the bundle kernel to this git revision "
                                  "(default: the current HEAD)")

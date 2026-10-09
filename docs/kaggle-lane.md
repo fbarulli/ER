@@ -104,7 +104,7 @@ completes), `--with-finalize` (chain: finish with the remote CPU finalize job),
 
 | operation | what it actually does | preconditions |
 |---|---|---|
-| `credentials` | writes `~/.kaggle/kaggle.json` (0600) from the env token named by `kaggle.api_key_env` (default `KAGGLE_API_KEY`); also writes the 2.x access-token file | `kaggle.username` set; token present in the env; never logged (kaggle_runtime.py:205) |
+| `credentials` | writes `~/.kaggle/kaggle.json` (0600) from the env token named by `credentials.keys.kaggle_api_key` (default `KAGGLE_API_KEY`), resolved by `core.credentials.CredentialStore` (process env wins, declared env file second) | `kaggle.username` set; token present; never logged (kaggle_runtime.py) |
 | `package` | builds the Kaggle payload (packaged dataset.csv + metadata + `.receipt.json`) into the staging root; hashes census | `--dataset-csv` or the config dataset binding (kaggle_cli.py:23–25; kaggle_datasets.py:36) |
 | `upload` / `download` | kaggle CLI dataset upload/fetch-back of the package | `kaggle.slug` configured (null stays fail-loud), executable present (config `kaggle_executable: kaggle`) |
 | `submission` | packages the external submission frame keeping only `submission_id_columns` (`sku_id`, `item_id`) | `--submission-input` and `--submission-output` required (kaggle_cli.py:204–205) |
@@ -168,7 +168,7 @@ pins `HEAD == origin/<branch>` before it stages.
 
 ## Config (SSOT: `config/training.yaml` → `kaggle:`)
 
-`username`, `api_key_env`, `repository`, `branch`, `cpu_kernel_slug`
+`username`, `repository`, `branch`, `cpu_kernel_slug`
 (`fbarulli/er-bundle-cpu`), `gpu_kernel_slug` (`fbarulli/er-train-gpu`),
 `embedding_kernel_slug` (`fbarulli/er-embed-gpu`),
 `embedding_dataset_slug` (`fbarulli/er-embed-requests`),

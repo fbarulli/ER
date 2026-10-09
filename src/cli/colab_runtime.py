@@ -434,25 +434,17 @@ os.environ["PYTHONPATH"] = "{_REMOTE_ROOT}/src" + os.pathsep + os.environ.get("P
 """
 
 def _env_value(name: str) -> str | None:
-    """Read a simple KEY=VALUE entry without printing or cloning secrets.
+    """Read one declared secret without printing or cloning it.
 
-    ONE implementation shared by the Colab and laya lanes: the checkout's
-    .env, its parent's, the box's project .env ($HOME/ONE/.env, the path
-    .bashrc sources), then the process environment.
+    The ONE .env implementation shared by the Colab and laya lanes: the
+    canonical owner core.credentials.CredentialStore resolves by raw env-var
+    name — the process environment first, the config-declared env file second.
+    Kept as the shared seam both lanes bind (the laya lane delegates here).
     """
-    from pathlib import Path
+    from core.credentials import CredentialStore
 
-    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env",
-                     Path.home() / "ONE" / ".env"):
-        if not env_path.is_file():
-            continue
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == name:
-                value = value.strip().strip('"').strip("'")
-                if value:
-                    return value
-    return os.environ.get(name) or None
+    value = CredentialStore.from_config(root=TRAIN_ROOT).resolve_env_optional(name)
+    return value.get_secret_value() if value else None
 
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk."""
