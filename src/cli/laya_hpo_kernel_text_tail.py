@@ -75,7 +75,9 @@ class WorkerSession:
         enqueue_warm_start(study, self.options.warm_start.enqueued_trials())
 
     def _stores(self):
-        if self.resolver.offline:
+        # The fencing/champion stores are PostgreSQL-only; a local SQLite study
+        # (single VM, shared file) runs without them.
+        if not self.resolver.remote:
             return None, None
         config = self.resolver.config
         return (TrialLeaseStore(config.url,
@@ -169,10 +171,12 @@ class WorkerSession:
             log("wandb init failed: " + str(error)[:200])
         objective = self._objective(lease_store, champion_store, train_path,
                                     dev_path, base_model)
-        if self.resolver.offline:
-            self._optimize_offline(study, objective)
-        else:
+        if self.resolver.remote:
             self._optimize_shared(study, objective, champion_store)
+        else:
+            # Local SQLite (no remote URL) or an offline session: no shared
+            # ledger, but parallel workers still share the SAME study file.
+            self._optimize_offline(study, objective)
         # Observe the committed study ONCE (idempotent across workers/sessions)
         # and flush every worker's mirror so an exiting worker never loses it.
         _sync_observations(study)
@@ -380,7 +384,9 @@ class SessionOrchestrator:
         options = build_option_set(HPO_SPACE)
         globals()["OPTION_SET"] = options
         options.resource_caps.apply_torch(torch)
-        if not bool(options.session.offline):
+        # A remote URL is validated when present; absent, the workers share the
+        # config-declared local SQLite study (no hard stop).
+        if remote_configured():
             ensure_optuna_url()
         self.options = options
         return torch
@@ -437,7 +443,7 @@ class SessionOrchestrator:
 
     def run(self):
         torch = self._prepare()
-        if not self.options.session.offline:
+        if remote_configured() and not self.options.session.offline:
             self._reap_stale()
         if self.options.scheduler.mode == "slots":
             self.options.mps.start()

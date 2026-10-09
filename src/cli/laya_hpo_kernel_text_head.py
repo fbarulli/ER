@@ -45,6 +45,10 @@ SEED = @SEED@
 GENERATION_ID = "@GENERATION_ID@"
 MODEL_KEY = "@MODEL_KEY@"
 OPTUNA_URL_ENV = "@OPTUNA_URL_ENV@"
+# The config-declared local SQLite study fragment (TRAIN_ROOT-relative on the
+# host; joined to WORKING here so a single VM's parallel workers share ONE
+# study file when no remote URL is configured). Never a secret.
+LOCAL_STUDY_FILE = "@LOCAL_STUDY_FILE@"
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
 
@@ -181,6 +185,11 @@ def ensure_optuna_url():
     return url
 
 
+def remote_configured():
+    """True when a remote PostgreSQL URL is present in the process env."""
+    return bool(os.environ.get(OPTUNA_URL_ENV, "").strip())
+
+
 def offline_marker_path():
     """The sentinel a fallback worker writes so the session end knows to read
     the SQLite study and write the offline ledger."""
@@ -207,11 +216,13 @@ def offline_active(options):
 
 
 class StorageResolver:
-    """Open the session's Optuna study on the right storage backend.
+    """Open the session's Optuna study on the config-selected storage backend.
 
-    One job: prefer the shared Postgres RDB, fall back to the single-process
-    SQLite study (writing the offline marker) when it is missing/unreachable.
-    ``offline``/``config`` expose the outcome to the caller.
+    Selection rule: a remote PostgreSQL URL (when configured) wins; otherwise
+    the config-declared local SQLite study is used, so a single VM's parallel
+    worker processes share ONE study file. ``offline``/``remote``/``config``
+    expose the outcome to the caller. A remote outage falls back to the local
+    study (writing the offline marker); the fallback is never an empty study.
     """
 
     def __init__(self, optuna, options, study_name, *, offline=None):
@@ -220,12 +231,20 @@ class StorageResolver:
         self.study_name = study_name
         self.offline = (bool(options.session.offline) if offline is None
                         else bool(offline))
+        # True only when the shared PostgreSQL RDB was actually opened; the
+        # Postgres-only fencing/champion/ledger stores key off it.
+        self.remote = False
         self.config = None
 
+    def local_path(self):
+        """The config-declared shared SQLite study file under WORKING."""
+        return WORKING / (LOCAL_STUDY_FILE or "hpo_study.db")
+
     def sqlite(self):
-        WORKING.mkdir(parents=True, exist_ok=True)
+        path = self.local_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         return self.optuna.storages.RDBStorage(
-            "sqlite:///" + str(WORKING / "hpo_offline.db"))
+            "sqlite:///" + str(path))
 
     def _create(self, storage, sampler, pruner, study_kwargs):
         return self.optuna.create_study(
@@ -234,18 +253,21 @@ class StorageResolver:
             **study_kwargs)
 
     def open(self, sampler, pruner, study_kwargs):
-        """Create or resume the study, degrading to SQLite on an RDB outage."""
+        """Create or resume the study, degrading to local SQLite on a miss."""
         if self.offline:
             return self._create(self.sqlite(), sampler, pruner, study_kwargs)
         try:
             ensure_optuna_url()
             self.config = storage_from_environment()
-            return self._create(create_storage(self.config), sampler, pruner,
-                                study_kwargs)
+            study = self._create(create_storage(self.config), sampler, pruner,
+                                 study_kwargs)
+            self.remote = True
+            return study
         except Exception as error:
             log("shared Postgres unavailable (%s); falling back to the offline "
                 "SQLite study + hpo_trials ledger" % str(error)[:160])
             self.offline = True
+            self.remote = False
             self.config = None
             mark_offline(str(error)[:200])
             return self._create(self.sqlite(), sampler, pruner, study_kwargs)
@@ -257,10 +279,12 @@ class StorageResolver:
                                           storage=self.sqlite())
         try:
             storage = create_storage(storage_from_environment())
+            self.remote = True
         except Exception as error:
             log("shared Postgres unavailable at session end (%s); reading "
                 "the offline SQLite study" % str(error)[:160])
             self.offline = True
+            self.remote = False
             storage = self.sqlite()
         return self.optuna.load_study(study_name=self.study_name,
                                       storage=storage)

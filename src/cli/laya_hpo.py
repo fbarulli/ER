@@ -18,11 +18,13 @@ Design boundaries:
   byte-for-byte, exactly like ``cli.laya_lane`` injects ``core.laya_controls``.
 * The search space is YAML/config SSOT (``config/laya_hpo_space.yaml``); no
   bound, type, choice or target is a code literal.
-* ``OPTUNA_STORAGE_URL`` is a runtime secret. Staging fails LOUD when it is
-  absent, and the URL is baked ONLY into the (gitignored) staged kernel script
-  so the remote process can reach the DB. It is NEVER written to the receipt,
-  the kernel metadata, the search-space YAML or any other stored manifest
-  (``assert_secret_absent`` guards the receipt).
+* Storage is resolved by ``training.hpo_study.StudyOwner`` from the config
+  SSOT: a configured remote ``OPTUNA_STORAGE_URL`` wins; otherwise the
+  config-declared local SQLite study is shared by the session's parallel
+  worker processes. The URL is baked ONLY into the (gitignored) staged kernel
+  script so the remote process can reach the DB. It is NEVER written to the
+  receipt, the kernel metadata, the search-space YAML or any other stored
+  manifest (``assert_secret_absent`` guards the receipt).
 
 The objective maximizes DEV accuracy and records dev loss as a secondary
 ``trial.set_user_attr``. The held-out/test split is never an HPO signal.
@@ -33,10 +35,8 @@ import argparse
 import hashlib
 import inspect
 import json
-import os
 import re
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -63,10 +63,11 @@ from training import (
     laya_hpo_runtime,
 )
 from training.hpo_control_plane import (
+    HpoStorage,
     create_storage,
     generation_study_name,
-    storage_from_environment,
 )
+from training.hpo_study import ResolvedStudy, StudyOwner
 from training.laya_hpo_runtime import (
     finished_trial_count,
     objective_value,
@@ -90,9 +91,11 @@ TYPES = ("int", "float", "categorical")
 COLAB_WORKING = "/content/laya_hpo/working"
 COLAB_INPUT_ROOT = "/content/laya_hpo/input"
 
-# The optuna env var the shared control plane reads. One name, one place.
-OPTUNA_URL_ENV = "OPTUNA_STORAGE_URL"
-GENERATION_ID_ENV = "EUROMONITOR_HPO_GENERATION_ID"
+# The study-storage owner resolves the remote-URL / generation-id env-var
+# NAMES and the local SQLite path from the config SSOT (never a literal here).
+_STUDY_OWNER = StudyOwner.from_config()
+OPTUNA_URL_ENV = _STUDY_OWNER.url_env
+GENERATION_ID_ENV = _STUDY_OWNER.generation_env
 
 _TOKEN_PATTERN = re.compile(r"@[A-Z][A-Z0-9_]*@")
 
@@ -257,7 +260,7 @@ def study_identity(*, space: dict[str, Any] | None = None,
     recipe generation changes); the model key is space/config SSOT.
     """
     resolved_space = space if space is not None else load_space()
-    generation = (generation_id or os.environ.get(GENERATION_ID_ENV, "")).strip()
+    generation = _STUDY_OWNER.generation_id(override=generation_id)
     if not generation:
         raise RuntimeError(
             f"[laya-hpo] {GENERATION_ID_ENV} is required: the shared study "
@@ -275,43 +278,32 @@ def study_identity(*, space: dict[str, Any] | None = None,
         generation_id=generation, model_key=key)
 
 
-def require_optuna_url(read_env: Callable[[str], str | None] | None = None) -> str:
-    """Return the shared PostgreSQL Optuna URL or fail LOUD.
+def resolve_study_storage(*, space: dict[str, Any] | None = None,
+                          generation_id: str | None = None,
+                          model_key: str | None = None) -> ResolvedStudy:
+    """The ONE study storage from the config-driven study owner.
 
-    The URL is read through the lane's ``_env_value`` (repo ``.env`` then the
-    process env) like ``cli.colab_runtime._optuna_env_script``; a missing or
-    non-PostgreSQL URL is a hard error — the lane must never silently run an
-    HPO sweep no one can coordinate.
+    Remote PostgreSQL when a URL is configured; otherwise the config-declared
+    local SQLite study (shared by a single VM's parallel workers). Fails LOUD
+    (with the full traceback) only when neither is configured.
     """
-    reader = read_env if read_env is not None else laya_lane._env_value
-    url = (reader(OPTUNA_URL_ENV) or "").strip()
-    if not url:
-        raise RuntimeError(
-            f"[laya-hpo] {OPTUNA_URL_ENV} is missing. Concurrent HPO requires "
-            "a shared hosted PostgreSQL (Neon/Supabase/RDS) reachable from "
-            "Kaggle over the public internet; add the URL to the runtime "
-            "secret store / .env and re-stage. It is never written to YAML, "
-            "receipts or manifests.")
-    if not url.startswith(("postgresql://", "postgresql+psycopg://")):
-        raise RuntimeError(
-            f"[laya-hpo] {OPTUNA_URL_ENV} must be a PostgreSQL URL "
-            "(postgresql:// or postgresql+psycopg://); SQLite is not supported "
-            "for concurrent HPO.")
-    return url
+    generation, key, name = study_identity(
+        space=space, generation_id=generation_id, model_key=model_key)
+    return _STUDY_OWNER.resolve(generation_id=generation, model_key=key)
 
 
 def resolve_study_config(*, space: dict[str, Any] | None = None,
                          generation_id: str | None = None,
                          model_key: str | None = None):
-    """``(storage, study_name, storage_config)`` from the shared control plane.
+    """``(storage, study_name, storage_config)`` for the resolved study.
 
-    ``create_storage`` / ``storage_from_environment`` import Optuna lazily, so
-    importing this module stays GPU/DB-free.
+    ``create_storage`` imports Optuna lazily, so importing this module stays
+    GPU/DB-free.
     """
-    storage_config = storage_from_environment()
-    _, _, name = study_identity(space=space, generation_id=generation_id,
-                                model_key=model_key)
-    return create_storage(storage_config), name, storage_config
+    resolved = resolve_study_storage(space=space, generation_id=generation_id,
+                                     model_key=model_key)
+    storage_config = HpoStorage(url=resolved.storage_url())
+    return create_storage(storage_config), resolved.study_name, storage_config
 
 
 # ── remote-kernel composition (read-only reuse, injected verbatim) ─────────
@@ -395,15 +387,21 @@ laya_runtime_preflight()
 
 
 def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
-                        budget_trials: int, budget_jobs: int, url: str,
+                        budget_trials: int, budget_jobs: int,
+                        storage: ResolvedStudy | None,
+                        local_study_file: str | None,
                         repository: str, branch: str,
-                        revision: str, cuda_visible_devices: str,
-                        optuna_env_script: str | None = None) -> str:
+                        revision: str, cuda_visible_devices: str) -> str:
     """Render the ONE HPO kernel script (shared by the Kaggle and Colab lanes).
 
     Output/input roots are runtime env (ER_LAYA_HPO_WORKING/INPUT) so the same
     text runs on Kaggle (defaults) and Colab (the entry driver overrides them).
+    A remote URL (when configured) is baked into the token; otherwise the
+    config-declared local SQLite fragment is baked and the kernel shares that
+    file across its parallel worker processes — no secret, no hardcoded URL.
     """
+    url = storage.storage_url() if storage is not None else ""
+    optuna_env_script = _optuna_env_script(url) if url else ""
     preflight = laya_lane._template(_HPO_RUNTIME_PREFLIGHT, {
         "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],
         "DEV_JSONL": laya_lane.FINETUNE_CORPUS_FILES[1],
@@ -426,6 +424,7 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "GENERATION_ID": generation,
         "MODEL_KEY": key,
         "OPTUNA_URL_ENV": OPTUNA_URL_ENV,
+        "LOCAL_STUDY_FILE": local_study_file or "",
         "WANDB_API_KEY": laya_lane._env_value("WANDB_API_KEY") or "",
         "WANDB_PROJECT": laya_lane._wandb_project(),
         "REPOSITORY": repository,
@@ -435,9 +434,7 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
         "HPO_RUNTIME_SOURCE": hpo_runtime_source(),
-        "OPTUNA_ENV_SCRIPT": (optuna_env_script
-                              if optuna_env_script is not None
-                              else _optuna_env_script(url)),
+        "OPTUNA_ENV_SCRIPT": optuna_env_script,
         "RUNTIME_PREFLIGHT": preflight,
     }
     script = laya_lane._template(_HPO_KERNEL_TEMPLATE, values)
@@ -472,10 +469,10 @@ class HpoStagePlan:
         "space",
         "spec",
         "stage_dir",
+        "storage",
         "study_name",
         "tag",
         "tip",
-        "url",
         "working",
     )
 
@@ -515,8 +512,12 @@ class HpoReceipt:
             offline=self._offline()).as_dict()
 
     def storage(self) -> dict[str, Any]:
-        return {"required_env": OPTUNA_URL_ENV,
-                "injected_into_kernel": True,
+        storage = self.plan.storage
+        return {"backend": (storage.backend.value if storage is not None
+                            else "offline"),
+                "required_env": OPTUNA_URL_ENV,
+                "local_file": _STUDY_OWNER.local_file,
+                "injected_into_kernel": bool(storage and storage.is_remote),
                 "offline": self._offline(),
                 "url_persisted_to_manifest": False}
 
@@ -621,9 +622,12 @@ class LayaHpoStager:
         """Build the option set from the search-space config block."""
         return laya_hpo_options.build_option_set(space)
 
-    def _url(self, offline: bool) -> str:
-        """The shared PostgreSQL URL, or ``""`` for an offline study."""
-        return "" if offline else require_optuna_url()
+    def _storage(self, offline: bool, generation: str, key: str
+                 ) -> ResolvedStudy | None:
+        """The resolved storage, or ``None`` for an explicitly offline study."""
+        if offline:
+            return None
+        return _STUDY_OWNER.resolve(generation_id=generation, model_key=key)
 
     def _kernel(self, space) -> str | None:
         """The Kaggle kernel slug (override wins over the space SSOT)."""
@@ -667,20 +671,6 @@ class LayaHpoStager:
         jobs = int(self.n_jobs if self.n_jobs is not None else space["n_jobs"])
         return trials, jobs
 
-    def _optuna_env_script(self, offline: bool) -> str | None:
-        """The lane's URL line, or ``""`` when the study runs offline.
-
-        Colab reuses ``colab_runtime`` to resolve/validate the URL; Kaggle lets
-        the shared composer bake ``require_optuna_url``'s value. An offline
-        study needs no URL at all: the token is replaced with the empty string
-        so the staged kernel never carries a secret it will not use.
-        """
-        if offline:
-            return ""
-        if self.lane == "colab":
-            return _colab_optuna_env_line()
-        return None
-
     def plan(self) -> HpoStagePlan:
         spec = training_cfg().laya
         space = load_space(self.space_config)
@@ -690,9 +680,9 @@ class LayaHpoStager:
         space = BaselineSeedFactory(spec).apply(space)
         options = self._options(space)
         offline = bool(options.session.offline)
-        url = self._url(offline)
         generation, key, study_name = study_identity(
             space=space, generation_id=self.generation_id)
+        storage = self._storage(offline, generation, key)
         dataset_slug, base_dataset = self._dataset_slugs(spec)
         dataset_receipt = self._dataset_receipt(spec, dataset_slug)
         kernel = self._kernel(space)
@@ -702,12 +692,13 @@ class LayaHpoStager:
         budget_trials, budget_jobs = self._budget(space)
         script = _compose_hpo_script(
             spec=spec, space=space, generation=generation, key=key, tag=tag,
-            budget_trials=budget_trials, budget_jobs=budget_jobs, url=url,
+            budget_trials=budget_trials, budget_jobs=budget_jobs,
+            storage=storage, local_study_file=_STUDY_OWNER.local_file,
             repository=repository, branch=branch, revision=revision,
-            cuda_visible_devices=options.session.cuda_visible_devices,
-            optuna_env_script=self._optuna_env_script(offline))
+            cuda_visible_devices=options.session.cuda_visible_devices)
         return HpoStagePlan(
-            lane=self.lane, spec=spec, space=space, options=options, url=url,
+            lane=self.lane, spec=spec, space=space, options=options,
+            storage=storage,
             generation=generation, key=key, study_name=study_name,
             dataset_slug=dataset_slug, base_dataset=base_dataset, kernel=kernel,
             repository=repository, branch=branch, revision=revision, tip=tip,
@@ -762,7 +753,9 @@ class LayaHpoStager:
         if plan.lane == "kaggle" and plan.kernel:
             register_dispatch(plan.kernel)
         # The one hard guarantee: the URL is not in the stored receipt.
-        assert_secret_absent(receipt, plan.url)
+        secret = (plan.storage.storage_url()
+                  if plan.storage is not None and plan.storage.is_remote else "")
+        assert_secret_absent(receipt, secret)
         atomic_write_json(receipt, plan.stage_dir / HPO_RECEIPT_FILE)
         laya_lane._log_lane(
             f"staged {plan.lane} laya-hpo run_tag={plan.tag} "
@@ -782,32 +775,17 @@ def stage_laya_hpo_kernel(*, revision: str | None = None,
     Writes under results/laya_lane/kaggle/laya-hpo/:
       kernel-metadata.json + laya_hpo.py + laya-hpo.receipt.json
       (+ the staged corpus dataset payload, which carries no secret).
-    Fail-loud preconditions: ``OPTUNA_STORAGE_URL`` present and PostgreSQL;
-    ``EUROMONITOR_HPO_GENERATION_ID`` set; the corpus + base-model dataset
-    slugs; the published-tip invariant. The URL is baked ONLY into the staged
-    ``laya_hpo.py`` (gitignored); it is asserted absent from the receipt.
+    Fail-loud preconditions: ``EUROMONITOR_HPO_GENERATION_ID`` set (or
+    ``--generation-id``); the corpus + base-model dataset slugs; the
+    published-tip invariant. Storage is config-driven: a configured remote
+    ``OPTUNA_STORAGE_URL`` wins, else the declared local SQLite study. A remote
+    URL is baked ONLY into the staged ``laya_hpo.py`` (gitignored); it is
+    asserted absent from the receipt.
     """
     return LayaHpoStager(
         "kaggle", revision=revision, run_tag=run_tag,
         generation_id=generation_id, n_trials=n_trials, n_jobs=n_jobs,
         space_config=space_config, kernel_slug=kernel_slug).stage()
-
-
-def _colab_optuna_env_line() -> str:
-    """The Colab lane reuses the canonical `cli.colab_runtime._optuna_env_script`.
-
-    It reads OPTUNA_STORAGE_URL exactly like the Colab lane and returns the
-    `os.environ[...] = ...` line (or '' when absent); absent is a hard error
-    here, matching the lane's fail-loud rule.
-    """
-    from cli import colab_runtime
-
-    line = colab_runtime._optuna_env_script()
-    if not line.strip():
-        raise RuntimeError(
-            f"[laya-hpo] {OPTUNA_URL_ENV} is missing; the Colab lane needs it "
-            "in the runtime secret store / .env before staging")
-    return line
 
 
 def _compose_colab_entry(script_name: str, working: str,
@@ -972,7 +950,7 @@ __all__ = [
     "load_space",
     "objective_value",
     "register_dispatch",
-    "require_optuna_url",
+    "resolve_study_storage",
     "resolve_study_config",
     "route_dials",
     "sample_dials",

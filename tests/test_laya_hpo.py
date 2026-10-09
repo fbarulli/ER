@@ -13,10 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import SecretStr
 
 from cli import laya_hpo, laya_lane
 from cli.laya_transport import LayaTransportFactory
 from training import laya_hpo_runtime
+from training.hpo_study import StudyBackend
 
 
 # ── fakes ──────────────────────────────────────────────────────────────────
@@ -289,30 +291,17 @@ def test_study_identity_builds_generation_scoped_name(monkeypatch):
     assert name == "euromonitor::gen-2026::laya"
 
 
-def test_require_optuna_url_missing_is_loud():
-    with pytest.raises(RuntimeError, match="OPTUNA_STORAGE_URL"):
-        laya_hpo.require_optuna_url(read_env=lambda name: None)
-
-
-def test_require_optuna_url_rejects_sqlite():
-    with pytest.raises(RuntimeError, match="PostgreSQL"):
-        laya_hpo.require_optuna_url(read_env=lambda name: "sqlite:///x.db")
-
-
-def test_require_optuna_url_accepts_postgres():
-    url = "postgresql://user:secret@db.example.com:5432/optuna"
-    assert laya_hpo.require_optuna_url(read_env=lambda name: url) == url
-
-
-def test_resolve_study_config_uses_shared_control_plane(monkeypatch):
+def test_resolve_study_config_uses_the_resolved_storage(monkeypatch):
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-1")
-    sentinel_cfg = SimpleNamespace(url="postgresql://h/db")
+    resolved = laya_hpo.ResolvedStudy(
+        backend=StudyBackend.REMOTE,
+        url=SecretStr("postgresql://h/db"),
+        study_name="euromonitor::gen-1::laya")
     sentinel_storage = object()
-    monkeypatch.setattr(laya_hpo, "storage_from_environment",
-                        lambda: sentinel_cfg)
+    monkeypatch.setattr(laya_hpo, "resolve_study_storage", lambda **kwargs: resolved)
     monkeypatch.setattr(laya_hpo, "create_storage", lambda cfg: sentinel_storage)
     storage, name, cfg = laya_hpo.resolve_study_config(space=laya_hpo.load_space())
-    assert storage is sentinel_storage and cfg is sentinel_cfg
+    assert storage is sentinel_storage and cfg.url == "postgresql://h/db"
     assert name == "euromonitor::gen-1::laya"
 
 
@@ -532,11 +521,12 @@ def test_assert_secret_absent_raises_on_leak():
 def _stage(monkeypatch, tmp_path, url):
     """Stage with the network/git/tip dependencies stubbed."""
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-1")
+    if url:
+        monkeypatch.setenv(laya_hpo.OPTUNA_URL_ENV, url)
+    else:
+        monkeypatch.delenv(laya_hpo.OPTUNA_URL_ENV, raising=False)
     monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
     monkeypatch.setattr(laya_lane, "_git_revision", lambda: "a" * 40)
-    monkeypatch.setattr(laya_lane, "_env_value",
-                        lambda name: url if name == laya_hpo.OPTUNA_URL_ENV
-                        else None)
     monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": str(tmp_path / "ds"),
@@ -548,11 +538,17 @@ def _stage(monkeypatch, tmp_path, url):
     return laya_hpo.stage_laya_hpo_kernel()
 
 
-def test_stage_kernel_requires_optuna_url(monkeypatch, tmp_path):
-    monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-2")
-    monkeypatch.setattr(laya_lane, "_env_value", lambda name: None)
-    with pytest.raises(RuntimeError, match="OPTUNA_STORAGE_URL"):
-        laya_hpo.stage_laya_hpo_kernel()
+def test_stage_kernel_without_remote_url_bakes_the_local_study(monkeypatch,
+                                                               tmp_path):
+    """No OPTUNA_STORAGE_URL: stage succeeds on the config-declared SQLite study."""
+    receipt = _stage(monkeypatch, tmp_path, None)
+    assert receipt["optuna_storage"]["backend"] == "local"
+    assert receipt["optuna_storage"]["injected_into_kernel"] is False
+    assert "postgresql://" not in json.dumps(receipt)
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    assert laya_hpo._STUDY_OWNER.local_file in script
+    compile(script, str(Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE), "exec")
 
 
 def _stage_colab(monkeypatch, tmp_path, url):
@@ -963,11 +959,12 @@ def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
                 kernel_slug=None, n_trials=None):
     """Stage the Kaggle payload with the network/git/tip deps stubbed."""
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-obs")
+    if url:
+        monkeypatch.setenv(laya_hpo.OPTUNA_URL_ENV, url)
+    else:
+        monkeypatch.delenv(laya_hpo.OPTUNA_URL_ENV, raising=False)
     monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
     monkeypatch.setattr(laya_lane, "_git_revision", lambda: "a" * 40)
-    monkeypatch.setattr(laya_lane, "_env_value",
-                        lambda name: url if name == laya_hpo.OPTUNA_URL_ENV
-                        else None)
     monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": str(tmp_path / "ds"),
