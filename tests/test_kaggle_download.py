@@ -56,6 +56,24 @@ def test_kernel_fetch_verifies_the_landed_archive(tmp_path):
     assert result.command[:2] == ("kaggle", "kernels")
 
 
+def test_kernel_fetch_uses_the_canonical_output_argv(tmp_path):
+    """The command is built by ONE owner (KaggleKernels.kernels_output_argv)."""
+    from cli.kaggle_kernels import KaggleKernels
+
+    seen: dict[str, list[str]] = {}
+
+    def runner(command):
+        seen["command"] = command
+        return _fw(command, "laya_finetune.tar.gz")
+
+    dest = tmp_path / "out"
+    KernelOutputFetcher(
+        argv_prefix=("kaggle",), runner=runner, sleep=lambda _: None,
+        backoff=_backoff()).fetch("owner/slug", dest)
+    assert seen["command"] == KaggleKernels.kernels_output_argv(
+        ["kaggle"], "owner/slug", dest)
+
+
 def test_kernel_fetch_retries_429_then_succeeds(tmp_path):
     calls = {"n": 0}
     delays: list[float] = []

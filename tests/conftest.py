@@ -9,12 +9,34 @@ run aborts collection instead of passing against stale code.
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 _SRC = _ROOT / "src"
 
 # ``src`` FIRST so it beats the shared editable install on every import.
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_SRC))
+
+
+@pytest.fixture(autouse=True)
+def _forbid_detached_watcher(monkeypatch):
+    """Fail a test that spawns a REAL detached watcher (the 429-storm leak).
+
+    The watcher spawn is a process boundary; a test that reaches it without a
+    fake leaks a live ``--what autowatch`` process which polls Kaggle, self-
+    inflicts 429s, and outlives the suite. A test that exercises the spawn seam
+    must monkeypatch ``KernelWatcher.spawn`` (or the lane's ``_spawn_autowatch``
+    seam) itself, which overrides this guard.
+    """
+    from cli import kaggle_watcher
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError(
+            "test attempted to spawn a real detached watcher; patch "
+            "KernelWatcher.spawn or the lane _spawn_autowatch seam")
+
+    monkeypatch.setattr(kaggle_watcher.KernelWatcher, "spawn", _forbidden)
 
 
 def _assert_worktree_modules():

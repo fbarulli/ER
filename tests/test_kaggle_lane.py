@@ -440,6 +440,10 @@ def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    # The push spawns a detached watcher; pin the spawn seam so this test never
+    # leaks a real `--what autowatch` process (the 429-storm regression).
+    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch",
+                        lambda *a, **kw: {"autowatch": "spawned"})
     import importlib
     monkeypatch.setattr(importlib.import_module("core.runtime_inputs"),
                         "staged_kernel_preflight", lambda stage_dir: None)
@@ -1238,8 +1242,11 @@ def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
     plan = kaggle_lane.capture_kernel_session_id("owner/er-bundle-cpu", attempts=2)
     assert plan["session_id"] is None
-    assert not (tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id").exists(), \
-        "no id in the URL -> no file, no fabricated session"
+    # No id could be read (proxy down / stream 429): the kernel NAME is the
+    # persisted fallback handle, so stop/status/output never dead-end.
+    session_file = tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id"
+    assert session_file.read_text() == "er-bundle-cpu\n"
+    assert plan["handle"] == "er-bundle-cpu"
     assert len(closed) == 2, "each bounded attempt still closes its response"
 
 
@@ -1811,3 +1818,51 @@ def test_stream_follower_survives_more_than_stream_retries(tmp_path, monkeypatch
     assert calls["n"] == 8, "the follower must keep reconnecting past stream_retries"
     assert "attempt 8" in content, "the final frame must be captured"
     assert "follower exhausted" not in content
+
+
+# ── guaranteed session-id-or-name handle (no `session_id=None` dead-end) ─────
+
+def test_capture_persists_kernel_name_when_the_proxy_never_answers(
+        tmp_path, monkeypatch):
+    """No id can be read -> the kernel NAME is the persisted handle, and stop
+    resolves it through the version-replace stub (the smoke case)."""
+    _kernel_spec(tmp_path, monkeypatch,
+                 gpu_kernel_slug="owner/er-laya-finetune-smoke")
+    import kagglesdk.kaggle_client
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: (_ for _ in ()).throw(RuntimeError("proxy down")))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    plan = kaggle_lane.capture_kernel_session_id(
+        "owner/er-laya-finetune-smoke", attempts=2)
+    assert plan["session_id"] is None
+    assert plan["handle"] == "er-laya-finetune-smoke"
+    session_file = (tmp_path / "logs" / "kaggle"
+                    / "er-laya-finetune-smoke.session_id")
+    assert session_file.read_text() == "er-laya-finetune-smoke\n"
+
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
+    pushes: list[list[str]] = []
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle",
+                        lambda command: pushes.append(list(command)) or (0, ""))
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda name: "/usr/bin/kaggle")
+    stopped = kaggle_lane.stop_kernel("owner/er-laya-finetune-smoke",
+                                      which="laya", execute=True)
+    assert stopped["handle"] == "er-laya-finetune-smoke"
+    assert stopped["cancel_method"] == "version_replace"
+    assert stopped["stopped"] is True
+    assert any("kernels" in parts and "push" in parts for parts in pushes)
+
+
+def test_detached_watcher_spawn_is_forbidden_in_tests(tmp_path, monkeypatch):
+    """The autouse guard fails any test that reaches the real spawn (the
+    429-storm leak); a test must patch the spawn seam instead."""
+    from cli.kaggle_watcher import KernelWatcher
+
+    _kernel_spec(tmp_path, monkeypatch)
+    spec = kaggle_lane.KaggleMonitor._watcher_spec("bundle")
+    with pytest.raises(AssertionError, match="real detached watcher"):
+        KernelWatcher(spec).spawn()
