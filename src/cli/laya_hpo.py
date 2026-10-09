@@ -451,11 +451,31 @@ class HpoStagePlan:
     single SSOT (config, the search-space YAML or the runtime environment).
     """
 
-    __slots__ = ("lane", "spec", "space", "options", "url", "generation",
-                 "key", "study_name", "dataset_slug", "base_dataset", "kernel",
-                 "repository", "branch", "revision", "tip", "dataset_receipt",
-                 "stage_dir", "tag", "budget_trials", "budget_jobs", "script",
-                 "working", "input_root")
+    __slots__ = (
+        "base_dataset",
+        "branch",
+        "budget_jobs",
+        "budget_trials",
+        "dataset_receipt",
+        "dataset_slug",
+        "generation",
+        "input_root",
+        "kernel",
+        "key",
+        "lane",
+        "options",
+        "repository",
+        "revision",
+        "script",
+        "space",
+        "spec",
+        "stage_dir",
+        "study_name",
+        "tag",
+        "tip",
+        "url",
+        "working",
+    )
 
     def __init__(self, **kwargs):
         for name in self.__slots__:

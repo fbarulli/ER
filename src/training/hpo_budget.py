@@ -31,7 +31,7 @@ the single source of truth for the arithmetic and is unit-tested offline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _shared(name: str):
@@ -123,7 +123,13 @@ class WorkLedger:
     def __init__(self, url: str, *, generation_id: str, model_key: str,
                  budget: int, max_trials: int = 0) -> None:
         from sqlalchemy import (
-            Column, DateTime, Integer, MetaData, String, Table, create_engine,
+            Column,
+            DateTime,
+            Integer,
+            MetaData,
+            String,
+            Table,
+            create_engine,
         )
 
         self._generation_id = generation_id
@@ -150,7 +156,7 @@ class WorkLedger:
         from sqlalchemy import update
         from sqlalchemy.dialects.postgresql import insert
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._engine.begin() as conn:
             conn.execute(insert(self._table).values(
                 generation_id=self._generation_id, model_key=self._model_key,
@@ -190,7 +196,7 @@ class WorkLedger:
                  attempted=int(counter.attempted),
                  budget=int(counter.budget),
                  max_trials=int(counter.max_trials),
-                 updated_at=datetime.now(timezone.utc)))
+                 updated_at=datetime.now(UTC)))
 
     def reserve(self, amount: int = 1) -> int:
         with self._engine.begin() as conn:
