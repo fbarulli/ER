@@ -162,6 +162,8 @@ class WorkerSession:
         train_path, dev_path, base_model = self._inputs()
         try:
             wandb_init()
+            wandb_log_event("kernel_boot", model_key=MODEL_KEY,
+                            generation_id=GENERATION_ID, role="worker")
         except Exception as error:
             log("wandb init failed: " + str(error)[:200])
         objective = self._objective(lease_store, champion_store, train_path,
@@ -297,6 +299,8 @@ class SessionReceiptWriter:
         path.write_text(json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
         log("wrote " + str(path) + " best="
             + (str(best.value) if best is not None else "none"))
+        wandb_log_event("harvest_written", receipt=str(path),
+                        best=(best.value if best is not None else None))
         return receipt
 
     def run(self):
@@ -456,6 +460,9 @@ class SessionOrchestrator:
 
     def run(self):
         torch = self._prepare()
+        wandb_init()
+        wandb_log_event("kernel_boot", model_key=MODEL_KEY,
+                        generation_id=GENERATION_ID, role="controller")
         self._prime_study()
         if remote_configured() and not self.options.session.offline:
             self._reap_stale()
@@ -467,6 +474,7 @@ class SessionOrchestrator:
         log("workers exited: " + str(codes))
         receipt = write_session_receipt()
         SessionArchive(self.options).run(receipt)
+        wandb_finish()
         if any(code != 0 for code in codes):
             raise SystemExit("laya HPO worker failure: exit codes " + str(codes))
 

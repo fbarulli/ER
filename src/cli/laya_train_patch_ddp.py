@@ -68,10 +68,15 @@ DDP_PATCH_TEMPLATE = '''\
 try:
     wandb_log_epoch
 except NameError:
+    WANDB_RUN = None
+
     def wandb_log_epoch(epoch, mean, extra=None):
         return None
 
     def wandb_log_control_summary(result):
+        return None
+
+    def wandb_log_event(name, **fields):
         return None
 
 PERF_PATCH_ENV = "ER_LAYA_PERF_PATCH"

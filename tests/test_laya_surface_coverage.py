@@ -16,13 +16,12 @@ One test per staged surface, all offline (no network, no GPU, no kaggle):
 from __future__ import annotations
 
 import ast
-import json
 import re
 from pathlib import Path
 
 import pytest
 
-from core.laya_config import FinetuneSpec, LayaSpec
+from core.laya_config import LayaSpec
 from cli import laya_lane
 
 
@@ -164,6 +163,19 @@ def test_finetune_kernel_wires_wandb_and_profiler_surfaces():
         assert surface in script, surface
     assert "checkpoint/checkpoints" not in script  # dir built from the global
     assert "os.path.join(str(self._checkpoint_dir), \"checkpoints\")" in script
+
+
+def test_finetune_kernel_pushes_realtime_wandb_telemetry():
+    """The staged kernel carries the live telemetry: the 1 Hz sampler mirrors
+    gpu/util_pct + gpu/mem_used_mb, transitions log run/event, and stdout is
+    line-buffered for a live output.log."""
+    script = render_finetune()
+    for needle in ('"gpu/util_pct"', '"gpu/mem_used_mb"', '"run/event"',
+                   '"kernel_boot"', '"pretrain_eval_done"', '"training_done"',
+                   '"held_out_eval_done"', '"harvest_written"',
+                   "reconfigure(line_buffering=True)",
+                   'PYTHONUNBUFFERED", "1"'):
+        assert needle in script, needle
 
 
 def test_finetune_kernel_wires_extended_knobs():
