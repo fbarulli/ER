@@ -105,3 +105,83 @@ a file crossing 1k lines, ad-hoc conditionals bolted onto busy flows, feature ch
 through shared code, thin wrappers/casts/optionality churn, and logic living in the wrong layer.
 Approval requires: **no structural regression, and no visible, untaken path to a dramatic
 simplification.**
+
+## 7. Lane ops & consequential actions (every agent)
+
+- **Read BOTH roles** — `.opencode/agent/build.md` (implement) and `.opencode/agent/investigate.md`
+  (read-only). Every agent gets both, whichever phase it runs.
+- **Regression-first for lane behavior** (Kaggle/Colab/finetune ops). Missing behavior that
+  already exists elsewhere is a REGRESSION, not a feature request. Find it in history
+  (`git log`/`gh`), name the commit that dropped or never wired the canonical call, and route
+  the caller to the existing implementation. No ad-hoc patch; bake it into the owning class
+  (factory/DI), delete the duplicate, and pin it with a test.
+- **Consequential-action gate.** Before deleting files, force-pushing, writing shared state, or
+  constraining hardware/parallelism/options: (a) verify the real artifact — `git ls-files` (a
+  tracked file is NEVER deleted), open fds / `swapon` / mounts / live processes (in use ⇒ never
+  delete), and whether it is reversible; (b) state the tradeoff in one line; (c) prefer
+  reversible (move aside) over `rm -rf`; (d) get owner confirmation when it removes a capability
+  or is irreversible. "Cleanup" and "take your pick" are not exceptions.
+- **Red-team capability reductions** — forcing one GPU, splitting an owner, dropping a symbol —
+  before building (name the cost).
+- **Verify, never trust a self-report.** Claims come from the real artifact (`git show`, fetched
+  files, `ps`, the test run) — never from an agent's summary.
+- **The fixing agent owns the merge.** A fix is NOT done when its branch is pushed — it is done
+  when it is **merged into the integration branch** (and `main` kept current). Branch from the
+  latest integration head and merge back in the same task: resolve conflicts, re-pin goldens,
+  run the guardrail, then land it. Never leave a fix on an isolated branch, and never ship
+  sibling branches that silently exclude each other's fix (branch A missing branch B's fix is a
+  regression, not a merge conflict to defer). Reporting "pushed to a feature branch" is an
+  incomplete deliverable.
+- **Replace-before-remove.** Never delete a working mechanism/capability until its replacement is
+  proven equivalent (and that equivalence is pinned by a test). Deleting the live log streamer
+  and substituting a non-real-time path silently removed real-time visibility — a regression.
+  Capability changes must be verified against the real artifact, not assumed.
+- **No leftover temp/scratch.** Every temporary or scratch artifact (worktree,
+  lane scratch, probe) is either promoted into proper code/artifacts or deleted
+  in the same task — never left behind. Worktrees and lane scratch are created
+  under the ONE configured root (`config/paths.yaml` `paths.worktrees_dir`, a
+  project-local `.worktrees/`), never `/tmp`; no caller hand-types a path.
+- **Environment / credentials.** API keys are NOT in the repo. They live in `.env` one directory
+  above the project root — `/home/opc/ONE/.env` (i.e. `../.env`). Resolution is a *class*
+  responsibility driven by the config SSOT (the config names the env-file path and each key's env
+  var / token file; a pydantic credential owner reads it, validates, and fails loud). Never
+  hardcode, commit, print, or symlink a key; never fall back to a silent empty credential. A
+  shell may source the file only as the documented temporary measure:
+  `set -a; . /home/opc/ONE/.env; set +a`
+
+## 8. Role files & pattern vocabulary (verbatim — every agent gets both roles)
+
+### build role (`.opencode/agent/build.md`)
+You are the ER build agent. Read AGENTS.md + patterns.md + BOTH roles in full.
+- Regression-first for lane behavior: missing behavior that exists elsewhere is a REGRESSION, not
+  a feature. Find it in history (`git log`/`gh`), route the caller to the existing implementation,
+  bake it into the owning class (factory/DI), delete the duplicate, pin it with a test. No ad-hoc
+  patch.
+- Testing bar — public behavior only, LIMITED: at most ONE focused test per public behavior; never
+  test class internals/private helpers/integration glue/implementation details; trivial changes
+  need no test.
+- Consequential-action gate, red-team capability reductions, verify-never-trust (see §7).
+- Two phases: investigate (read-only) then build; don't edit before the investigation.
+- Environment/credentials: keys live in `/home/opc/ONE/.env` (`../.env`), resolved by a
+  config-driven credential class (pydantic, SecretStr, fail-loud); never hardcode/symlink/shell
+  except the documented temporary `set -a; . /home/opc/ONE/.env; set +a`.
+
+### investigate role (`.opencode/agent/investigate.md`)
+You are the ER investigate agent. Read AGENTS.md + patterns.md + BOTH roles in full.
+- READ-ONLY: no edits, no state changes. Search before you conclude; trace the real flow.
+- Report findings, not fixes: `file:line` evidence, root cause, blast radius (callers, tests,
+  fixtures, config, exports, contracts), and a plan for the build agent.
+- Regression-first: name the commit that dropped/never wired the canonical call and the existing
+  implementation to route to; name the owner class and the duplicate to delete.
+- Testing bar (public behavior only, limited), consequential-action gate, red-team capability
+  reductions, verify-never-trust (see §7).
+- Name the structure with the patterns.md vocabulary so the build agent places the change
+  correctly.
+
+### Pattern vocabulary (`patterns.md`)
+Creational: Singleton; Factory Method; Abstract Factory; Builder; Prototype.
+Structural: Adapter; Facade; Decorator; Proxy; Composite.
+Behavioral: Observer; Strategy; State; Iterator; Command.
+Architectural: MVC (Model-View-Controller); Repository (abstracts persistence behind a
+collection-like interface); Dependency Injection (pass dependencies in, don't instantiate them
+inside)..

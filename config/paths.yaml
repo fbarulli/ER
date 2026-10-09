@@ -68,6 +68,12 @@ paths:
   # Training inputs share the versioned root-level data directory with the
   # reference data. Results remain separate and are never inputs by default.
   training_data_dir: "data"
+  # The ONE root for disposable git worktrees and local lane scratch. Owner
+  # mandate 2026-10-09: NEVER /tmp — a worktree/scratch tree is either promoted
+  # into a proper artifact or deleted, never left behind. Resolved by
+  # core.workspace.Workspace; DataPathsSpec rejects a root under /tmp at load,
+  # so the policy is structural rather than prose.
+  worktrees_dir: ".worktrees"
 
 # ── orchestration stage inventory (the trace-stage join SSOT) ───────────────
 # The preparation orchestrator names its stages one way and each child writes

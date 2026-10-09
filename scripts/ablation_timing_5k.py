@@ -331,7 +331,7 @@ def wait_for_idle(limit: float = 2.0, timeout_s: int = 300, log_every_s: int = 3
     log nothing, and increment an unused counter — so on a box saturated by
     sibling lanes it slept forever with no output and looked like a hang
     (observed: 0.2% CPU in clock_nanosleep for 18+ minutes while holding the
-    shared /tmp/opc/.abl_timing.lock, blocking every other lane).
+    shared lane lock, blocking every other lane).
 
     Now: progress is logged every iteration, `timeout_s` is honoured, and on
     timeout the round PROCEEDS under load rather than blocking indefinitely.

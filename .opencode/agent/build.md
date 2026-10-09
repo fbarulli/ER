@@ -16,6 +16,12 @@ already exists elsewhere is a REGRESSION, not a feature request. Find it in hist
 caller to the existing implementation. Do NOT write a new ad-hoc patch. Then bake the behavior
 into the owning class (factory/DI), delete the duplicate path, and pin it with a test.
 
+**The fixing agent owns the merge.** A fix is not done when its branch is pushed — it is done
+when it is **merged into the integration branch** (and `main` kept current) in the same task.
+Branch from the latest integration head, merge back, resolve conflicts, re-pin goldens, run the
+guardrail. Never leave a fix on an isolated branch, and never ship sibling branches that
+silently exclude each other's fix. "Pushed to a feature branch" is an incomplete deliverable.
+
 **Testing bar — public behavior only, LIMITED.** At most ONE focused test per public behavior.
 Do NOT test class internals, private helpers, integration glue, or implementation details, and
 do not test that an internal gate/flag "exists" or "was removed". Trivial changes need no

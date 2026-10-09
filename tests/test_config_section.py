@@ -205,3 +205,23 @@ def test_no_digest_sidecar_suffix_is_declared_anywhere():
     assert not hasattr(cfg.bundle, digest_key)
     assert not hasattr(cfg.kaggle.files, 'hash' + '_suffix')
     assert cfg.bundle.events_sidecar_suffix == '.events.jsonl'
+
+
+# ── worktree/scratch root is project-local and declared once ────────────────
+# Owner mandate 2026-10-09: worktrees and lane scratch resolve under the ONE
+# configured root (paths.yaml paths.worktrees_dir), never /tmp. The model
+# refuses a /tmp root at load, so the policy is structural, not prose.
+
+def test_worktrees_root_is_project_local_never_tmp():
+    from core.schemas import DataConfig
+    from core.workspace import Workspace
+
+    raw = yaml.safe_load(common.CONFIG_PATH.read_text())
+    assert raw['paths']['worktrees_dir'] == '.worktrees'
+    workspace = Workspace.from_config()
+    assert workspace.root == (common.TRAIN_ROOT / '.worktrees').resolve()
+    assert workspace.slot('er-lane') == workspace.root / 'er-lane'
+
+    raw['paths']['worktrees_dir'] = '/tmp/er-lane'
+    with pytest.raises(ValidationError, match='must not live under /tmp'):
+        DataConfig.model_validate(raw)

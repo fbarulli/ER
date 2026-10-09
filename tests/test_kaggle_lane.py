@@ -606,11 +606,11 @@ def test_supervise_records_kernel_log_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(
         kaggle_lane, "fetch_failed_kernel_log",
         lambda kind: {"kind": kind, "mode": "executed",
-                      "error_log": "/tmp/opc/diag.log"})
+                      "error_log": "/var/log/diag.log"})
     plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
     failure = plan["failures"]["train"]
     assert failure["status"] == "error"
-    assert failure["error_log"] == "/tmp/opc/diag.log"
+    assert failure["error_log"] == "/var/log/diag.log"
 
 
 def test_supervise_releases_session_on_error(tmp_path, monkeypatch):

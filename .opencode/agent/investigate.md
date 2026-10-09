@@ -19,6 +19,11 @@ already exists elsewhere is a REGRESSION, not a feature request. Find it in hist
 the existing implementation the caller should route to. Do NOT propose a new ad-hoc patch;
 name the owner class the behavior must be baked into and the duplicate to delete.
 
+**Flag merge responsibility.** A fix is not done until it is **merged into the integration
+branch** (and `main` kept current), not merely pushed to a feature branch. Flag any sibling
+branches that would silently exclude each other's fix; the build agent must branch from the
+latest integration head and land the merge in the same task.
+
 **Testing bar — public behavior only, LIMITED.** Propose at most ONE focused test per public
 behavior. Do NOT test class internals, private helpers, integration glue, or implementation
 details, and do not test that an internal gate/flag "exists" or was removed. Trivial changes

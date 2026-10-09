@@ -163,7 +163,14 @@ dashboard/diagrams/
 
 # Local scratch space for temporary work (never committed)
 scratch/
+# Disposable git worktrees and lane scratch: the root is declared once in
+# config/paths.yaml (paths.worktrees_dir), project-local and never /tmp.
+.worktrees/
 data/track_setup.pre_rename_stale/
 
 # Local profiling artifacts (generated; rebuild with scripts/training_profile.py)
 training_profile/
+
+# Harness-local prompt overlay and stray run logs (never committed)
+.jcode/
+output.log

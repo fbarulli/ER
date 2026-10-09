@@ -220,6 +220,33 @@ class DataPathsSpec(BaseModel):
     # three of them read each other's JSON, so the literals were a
     # cross-script contract nobody could see or change in one place.
     audit_findings_dir: str
+    # The ONE root for disposable git worktrees and local lane scratch (owner
+    # mandate 2026-10-09). Never /tmp: a worktree/scratch tree is promoted into
+    # a proper artifact or deleted, so its root must be project-local. The
+    # validator below makes that structural instead of a prose rule.
+    worktrees_dir: str
+
+    @field_validator("worktrees_dir")
+    @classmethod
+    def _worktrees_dir_is_persistent(cls, value: str) -> str:
+        """Refuse a disposable-work root anywhere under ``/tmp``.
+
+        A relative value is checked against the filesystem root, so ``tmp/x``
+        is rejected exactly like ``/tmp/x``. Raising here fails the config load
+        with this field named (never mid-run).
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("paths.worktrees_dir must be a non-empty path")
+        candidate = Path(stripped)
+        resolved = (candidate if candidate.is_absolute()
+                    else Path("/") / candidate).resolve()
+        tmp = Path("/tmp")
+        if resolved == tmp or tmp in resolved.parents:
+            raise ValueError(
+                f"paths.worktrees_dir must not live under /tmp: {value!r}"
+            )
+        return stripped
 
 
 class LayoutSpec(BaseModel):
