@@ -467,6 +467,12 @@ class HoldoutContract:
     mis-configured 50/25/25 contract (the schema pins
     ``holdout_component_folds`` at 4 = 0.25/0.25); it raises here instead of
     silently producing 60/20/20 under a "50/25/25" label.
+
+    ``validation_size`` (FLEX, ``config/training.yaml`` ``split.validation_size``)
+    overrides that deal when set: the trailing ``k`` quarters whose combined
+    size covers the requested share/count are reserved as validation, and
+    their components are re-dealt seed-deterministically into the dev/test
+    halves. ``None`` keeps the quarters[-2]/quarters[-1] cut byte-for-byte.
     """
 
     def __init__(
@@ -478,10 +484,12 @@ class HoldoutContract:
         seed: int,
         dev_fraction: float,
         test_fraction: float,
+        validation_size: float | int | None = None,  # noqa: PYI041 (int must stay int: a row count)
     ):
         self.pos, self.row_bc = pos, row_bc
         self.seed, self.n_folds = seed, n_folds
         self.dev_fraction, self.test_fraction = dev_fraction, test_fraction
+        self.validation_size = validation_size
         self._check()
 
     def _check(self) -> None:
@@ -490,6 +498,10 @@ class HoldoutContract:
                 "holdout split needs at least 3 component folds so train, "
                 f"dev, and test are all represented, got {self.n_folds}"
             )
+        if self.validation_size is not None:
+            # The knob drives the realized cut; the declared dev/test quarters
+            # are the DEFAULT contract, enforced only when the knob is null.
+            return
         quarter = 1.0 / self.n_folds
         if (
             abs(self.dev_fraction - quarter) > 1e-9
@@ -507,13 +519,92 @@ class HoldoutContract:
         quarters = component_folds(
             self.pos, self.row_bc, self.n_folds, self.seed
         )
-        train = set().union(*quarters[:-2])
+        if self.validation_size is None:
+            return self._default_cut(quarters)
+        return self._flex_cut(quarters)
+
+    def _default_cut(
+        self, quarters: list[set[str]]
+    ) -> tuple[set[str], set[str], set[str]]:
+        """The fold-derived deal: test = quarters[-1], dev = quarters[-2]."""
+        train = self._require_train(
+            set().union(*quarters[:-2]),
+            f"n_folds={self.n_folds} has insufficient component coverage",
+        )
+        return train, quarters[-2], quarters[-1]
+
+    def _flex_cut(
+        self, quarters: list[set[str]]
+    ) -> tuple[set[str], set[str], set[str]]:
+        """Reserve ``k`` trailing quarters, then re-deal them into dev/test."""
+        reserved_quarters = self._reserved_quarter_count(quarters)
+        train = self._require_train(
+            set().union(*quarters[:-reserved_quarters]),
+            f"validation_size={self.validation_size!r} reserved all "
+            f"{self.n_folds} quarters",
+        )
+        dev, test = self._deal_validation_halves(
+            set().union(*quarters[-reserved_quarters:])
+        )
+        if not dev or not test:
+            raise ValueError(
+                f"validation_size={self.validation_size!r} left an empty "
+                f"dev/test half after re-dealing {reserved_quarters} reserved "
+                "quarters; the component graph is too small to split"
+            )
+        return train, dev, test
+
+    def _require_train(
+        self, train: set[str], reason: str
+    ) -> set[str]:
         if not train:
             raise ValueError(
-                "holdout split produced an empty train gtin set; "
-                f"n_folds={self.n_folds} has insufficient component coverage"
+                "holdout split produced an empty train gtin set; " + reason
             )
-        return train, quarters[-2], quarters[-1]
+        return train
+
+    def _reserved_quarter_count(self, quarters: list[set[str]]) -> int:
+        """Trailing quarters to reserve as validation (1 .. n_folds - 1).
+
+        A fraction reserves ``round(fraction * n_folds)`` quarters (the schema
+        already rejected rounds outside 1..n_folds-1). A row count reserves the
+        fewest trailing quarters whose combined entity count reaches it, capped
+        at ``n_folds - 1`` (a target, not an exact promise).
+        """
+        cap = self.n_folds - 1
+        size = self.validation_size
+        if isinstance(size, float):
+            return min(max(round(size * self.n_folds), 1), cap)
+        total = 0
+        for reserved, quarter in enumerate(reversed(quarters), start=1):
+            total += len(quarter)
+            if total >= size:
+                return min(reserved, cap)
+        return cap
+
+    def _deal_validation_halves(
+        self, reserved: set[str]
+    ) -> tuple[set[str], set[str]]:
+        """Re-deal the reserved region's components into (dev, test) halves.
+
+        Components stay whole (a subgraph union-find), so the leak guarantee
+        holds inside the validation region exactly as it does across quarters.
+        """
+        ordered = sorted(reserved)
+        index = {bc: i for i, bc in enumerate(ordered)}
+        edges = [
+            (index[a_bc], index[b_bc])
+            for a, b in self.pos
+            for a_bc, b_bc in ((str(self.row_bc[a]), str(self.row_bc[b])),)
+            if a_bc in index and b_bc in index
+        ]
+        halves = component_folds(
+            np.array(edges, dtype=np.int64).reshape(-1, 2),
+            np.array(ordered, dtype=object),
+            2,
+            self.seed,
+        )
+        return halves[0], halves[1]
 
 
 def holdout_split(
@@ -524,6 +615,7 @@ def holdout_split(
     seed: int,
     dev_fraction: float,
     test_fraction: float,
+    validation_size: float | int | None = None,  # noqa: PYI041 (int must stay int: a row count)
 ) -> tuple[set[str], set[str], set[str]]:
     """The SINGLE derivation of the holdout split: (train, dev, test) gtins.
 
@@ -536,10 +628,14 @@ def holdout_split(
     mis-configured 50/25/25 contract (the schema pins
     ``holdout_component_folds`` at 4 = 0.25/0.25); it raises here instead of
     silently producing 60/20/20 under a "50/25/25" label.
+
+    ``validation_size`` (when not None) overrides the deal: see
+    :class:`HoldoutContract`.
     """
     return HoldoutContract(
         pos, row_bc, n_folds=n_folds, seed=seed,
         dev_fraction=dev_fraction, test_fraction=test_fraction,
+        validation_size=validation_size,
     ).cut()
 
 
@@ -599,6 +695,7 @@ def derive_holdout(
         seed=seed,
         dev_fraction=float(split_cfg["dev_fraction"]),
         test_fraction=float(split_cfg["test_fraction"]),
+        validation_size=split_cfg.get("validation_size"),
     ).cut()
 
 

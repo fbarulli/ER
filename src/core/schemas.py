@@ -780,6 +780,11 @@ class SplitSpec(BaseModel):
     folds.derive_holdout for holdout runs, which remains the runtime backstop.
     Callers must not call ``holdout_split`` directly -- that bypasses the one
     place the 50/25/25 contract is checked.
+
+    ``validation_size`` overrides that fold-derived deal when set (FLEX):
+    the trailing quarters covering the requested share/count become the
+    validation region and are re-dealt into the dev/test halves. Left null
+    (the committed default) the deal above is honored byte-for-byte.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -793,6 +798,22 @@ class SplitSpec(BaseModel):
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)
+    # DECIDED 2026-10-09: the FLEX validation size. The scored validation
+    # population (dev + test) used to be pinned at the two trailing component
+    # quarters (holdout_component_folds=4 -> 0.25 + 0.25). This knob makes it
+    # configurable WITHOUT touching that arity:
+    #   * a fraction in (0, 1): share of the graph reserved as validation; the
+    #     trailing round(fraction * holdout_component_folds) quarters are
+    #     reserved (so it must round to >= 1 and <= n_folds - 1),
+    #   * an int >= 1: reserve the fewest trailing quarters covering that many
+    #     graph entities,
+    #   * None (the committed default): the fold-derived deal exactly as today
+    #     (dev = quarters[-2], test = quarters[-1]).
+    # When set, the reserved region's components are re-dealt seed-deterministically
+    # into the dev/test halves, so dev_fraction/test_fraction below describe the
+    # DEFAULT contract only (validation_size=None enforces them). Illegal values
+    # fail at load, not mid-lane.
+    validation_size: float | int | None = None
     # DECIDED (2026-10-01, RE-DECIDED 2026-10-08 from measured evidence — see
     # the DECISION block in src/training/build_final_validation.py): the scored
     # half's negative fold-assignment policy. The winner is pinned in
@@ -818,6 +839,38 @@ class SplitSpec(BaseModel):
                 f"{self.test_fraction})"
             )
         return self
+
+    @field_validator("validation_size")
+    @classmethod
+    def _validation_size_is_flex(
+        cls,
+        value: float | int | None,  # noqa: PYI041 (int must stay int: a row count)
+    ) -> float | int | None:
+        """FLEX: a fraction in (0, 1) or an entity count >= 1, never a fixed literal.
+
+        ``None`` (the committed default) keeps the fold-derived cut. The
+        bool exclusion matters because ``bool`` is an ``int`` subclass and
+        ``validation_size: true`` must not silently mean one row.
+        """
+        if value is None:
+            return value
+        if isinstance(value, bool):
+            raise ValueError(
+                f"validation_size must be a fraction in (0, 1), a row count "
+                f">= 1, or null, got {value!r}"
+            )
+        if isinstance(value, int):
+            if value < 1:
+                raise ValueError(
+                    f"validation_size row count must be >= 1, got {value!r}"
+                )
+            return value
+        if isinstance(value, float) and 0.0 < value < 1.0:
+            return value
+        raise ValueError(
+            "validation_size must be a fraction in (0, 1), a row count >= 1, "
+            f"or null, got {value!r}"
+        )
 
     @model_validator(mode="after")
     def _mode_matches_fraction_contract(self) -> SplitSpec:
@@ -848,11 +901,22 @@ class SplitSpec(BaseModel):
                     "train_fraction=1.0, dev_fraction=0.0, "
                     "test_fraction=0.0"
                 )
+            if self.validation_size is not None:
+                raise ValueError(
+                    "validation_size is a holdout-only knob: mode=cv derives "
+                    "its folds from component_folds(cv_folds) and carves DEV "
+                    "with training.dev_fraction, so a validation_size here "
+                    "would be consumed by nothing. Declare null or switch "
+                    "mode to holdout."
+                )
             return self
 
         # Literal[4] is the only arity the 50/25/25 contract supports, but the
         # check is written for any n_folds (the runtime helper accepts them).
         n_folds = int(self.holdout_component_folds)
+        if self.validation_size is not None:
+            self._check_flex_validation_size(n_folds)
+            return self
         quarter = 1.0 / n_folds
         if (
             abs(self.dev_fraction - quarter) > 1e-9
@@ -867,6 +931,27 @@ class SplitSpec(BaseModel):
                 f"test_fraction == 1.0/holdout_component_folds = {quarter})"
             )
         return self
+
+    def _check_flex_validation_size(self, n_folds: int) -> None:
+        """Fail loud when a fractional validation_size cannot be honored.
+
+        The fold deal reserves WHOLE trailing quarters, so a fraction f
+        reserves ``round(f * n_folds)`` of them. That must land in
+        ``[1, n_folds - 1]``: 0 reserves nothing and n_folds leaves no train
+        population. A row count is clamped by the derivation (it is a target,
+        and the graph's size is not known at load), so it is not checked here.
+        """
+        if not isinstance(self.validation_size, float):
+            return
+        reserved = round(self.validation_size * n_folds)
+        if not 1 <= reserved <= n_folds - 1:
+            raise ValueError(
+                f"validation_size={self.validation_size} rounds to "
+                f"{reserved} of {n_folds} component quarters, but a holdout "
+                f"cut needs 1..{n_folds - 1} reserved (0 reserves nothing, "
+                f"{n_folds} leaves no train population); a usable fraction is "
+                f"in [{1 / n_folds:.6g}, {(n_folds - 1) / n_folds:.6g}]"
+            )
 
 
 class UniformitySpec(BaseModel):

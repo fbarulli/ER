@@ -689,6 +689,17 @@ split:
                                   # folds.holdout_split derives the roles from it and
                                   # requires dev_fraction == test_fraction == 1/4
   test_fraction: 0.25   # holdout q3 component quarter; CV must declare 0.0
+  # FLEX validation size (2026-10-09): the scored validation population
+  # (dev + test) used to be pinned at the trailing two component quarters by
+  # holdout_component_folds. This knob makes its SIZE configurable WITHOUT
+  # touching that arity: a fraction in (0, 1) reserves the trailing
+  # round(fraction * holdout_component_folds) quarters; an int >= 1 reserves
+  # the fewest trailing quarters covering that many graph entities; those
+  # reserved components are re-dealt (seeded) into the dev/test halves.
+  # null (the committed default) keeps the fold-derived deal EXACTLY as today:
+  # dev = quarters[-2], test = quarters[-1]. Overridden values change the
+  # emitted validation row count; mode=cv must declare null (holdout-only).
+  validation_size: null
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only
   # DECIDED 2026-10-01 (was TODO "STILL OPEN — the scored halves are thin").
