@@ -1,7 +1,7 @@
 """Build the laya play dataset: data/laya/play_500.csv.
 
-Reads the repo-root export `dataset.csv` (the 10k cohort, 13 columns)
-and writes a DETERMINISTIC 500-row play sample (seed 1729):
+Reads the repo-root export `dataset.csv` (13 columns) and writes a
+DETERMINISTIC 500-row play sample (seed 1729):
   * stratified by `category`, approximately proportional to the cohort;
   * the FIRST 40 sampled rows carry `attribute == ""` (the blank filter
     locates them; the laya decision lane's empty-state inputs);
@@ -19,7 +19,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import random
-from pathlib import Path
 
 from core.common import TRAIN_ROOT
 

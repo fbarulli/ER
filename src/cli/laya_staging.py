@@ -60,6 +60,7 @@ from cli.laya_recipe import (
 from cli.laya_runtime import _METRIC_EXPECTATION_KEYS, LayaRuntimeFactory
 from cli.laya_train_patch_loop import FINETUNE_PERF_PATCH_SOURCE
 from core.laya_config import LayaSpec
+from core.laya_datasets import LayaCorpora
 from core.manifest import atomic_write_json, sha256_file
 
 
@@ -645,14 +646,10 @@ class LayaStagingFactory:
             raise RuntimeError(
                 f"config {which} is unset; name the target kernel (owner/slug) "
                 "before staging")
-        dataset_slug = (smoke_spec.dataset_slug if smoke
-                        else spec.finetune_dataset_slug)
-        if not dataset_slug:
-            which = "laya.finetune_smoke.dataset_slug" if smoke \
-                else "laya.finetune_dataset_slug"
-            raise RuntimeError(
-                f"config {which} is unset; the corpus travels as that dataset "
-                "(owner/slug) — name it before staging")
+        # The lane selects EXACTLY one of two corpora (LayaCorpora.select fails
+        # loud on any other kind): full is the carved production corpus, smoke
+        # is its tiny subset. The slug is the registry SSOT, never a literal.
+        dataset_slug = LayaCorpora.select("smoke" if smoke else "full").slug
         base_dataset = spec.base_model_dataset
         if not base_dataset:
             raise RuntimeError(

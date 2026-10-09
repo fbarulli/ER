@@ -207,6 +207,10 @@ credentials:
 kaggle:
   cohort_tags: ["full", "50pct", "10k"]
   default_cohort: "full"
+  # The tracks lane's verified CPU-bundle dataset (immutable at fetch time);
+  # owned HERE, not in the laya dataset registry (a laya directive retired the
+  # er-10k-bundle entry from core.laya_datasets).
+  bundle_dataset_slug: "fbarulli/er-10k-bundle"
   # Worker/local layout and lifecycle policy; rendered into each kernel.
   files:
     source_dir: src
@@ -343,8 +347,8 @@ kaggle:
   embedding_kernel_slug: "fbarulli/er-embed-gpu"
   embedding_dataset_slug: "fbarulli/er-embed-requests"
   # Dataset the train kernel attaches (fresh bundle versions upload here).
-  # Slug is declared once in core.laya_datasets.LayaDatasets.BUNDLE (SSOT);
-  # this block inherits it as the default and never re-spells the literal.
+  # Declared once at the top of this block (kaggle.bundle_dataset_slug, SSOT);
+  # the loader reads that one binding, never a second literal.
   checkout_paths: ["src", "scripts", "config", "requirements", "artifacts/models"]
   bundle_requirements: "requirements/graph_tracks.txt"
   # Suite config the train kernel runs (members of the prepared package
@@ -371,7 +375,8 @@ laya:
   lane_log: "lane.log"
   finetune_smoke:
     kernel_slug: "fbarulli/er-laya-finetune-smoke"
-    dataset_slug: "fbarulli/er-laya-train-smoke"
+    # The smoke corpus slug is owned by core.laya_datasets.LayaCorpora.SMOKE
+    # (SSOT); only the kernel slug is overridden here.
     corpus_dir: "results/laya_lane/smoke_corpus"
     train_rows: 200
     dev_rows: 100
@@ -379,9 +384,9 @@ laya:
     epochs: 1
     micro_batch: 1
     grad_accum: 1
-    # GPU smoke: prove the single-T4 code path end-to-end before 3k training.
-    # Schema default stays "cpu" (no default flips); this block opts the
-    # dedicated finetune-smoke kind onto the GPU.
+    # GPU smoke: prove the single-T4 code path end-to-end. Schema default stays
+    # "cpu" (no default flips); this block opts the dedicated finetune-smoke
+    # kind onto the GPU.
     device: "cuda"
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
