@@ -47,7 +47,8 @@ class KaggleCLI:
                             help="kernel-logs: explicit owner/slug (default: "
                                  "resolved from --kernel)")
         parser.add_argument("--follow", action="store_true",
-                            help="kernel-logs: poll until a terminal status")
+                            help="kernel-logs: tail the live execution log "
+                                 "stream until the session ends")
         parser.add_argument("--checkpoint", default=None,
                             help="embed-kernel: git-shipped checkpoint path "
                                  "(default: config kaggle.checkpoint)")
@@ -157,8 +158,8 @@ class KaggleCLI:
             spec = lane._spec()
             identity = lane.kernel_identity(args.kernel, spec)
             resolved = args.slug or identity.slug(spec)
-            print(json.dumps(lane.kernel_logs(slug=resolved, follow=args.follow,
-                                         execute=args.execute), indent=2), flush=True)
+            print(json.dumps(lane.kernel_logs(resolved, follow=args.follow),
+                             indent=2), flush=True)
             return
         if args.what == "fetch-results":
             kind = args.kind or "train"

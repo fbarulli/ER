@@ -1261,6 +1261,23 @@ def test_delete_kernel_dry_run_plans_the_slug_without_network(monkeypatch):
                     "kernel": "owner/er-train-gpu"}
 
 
+# ── kernel_logs: the tracking op reads the TRUE execution-log stream ────────
+
+def test_kernel_logs_dispatches_to_the_true_log_stream(monkeypatch):
+    """Progress is read from the SDK execution-log reader, not status/files."""
+    seen: dict = {}
+
+    def fake_stream(slug, *, follow=True):
+        seen["slug"] = slug
+        seen["follow"] = follow
+        return {"kernel": slug, "stream_log": "logs/kaggle/lane.log"}
+
+    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs", fake_stream)
+    plan = kaggle_lane.kernel_logs("owner/er-train-gpu", follow=True)
+    assert seen == {"slug": "owner/er-train-gpu", "follow": True}
+    assert plan["kernel"] == "owner/er-train-gpu"
+
+
 # ── session-id capture: launch path records the id, stop consumes it ────────
 
 def _fake_stream_client(monkeypatch, url: str, closed: list[str]):
