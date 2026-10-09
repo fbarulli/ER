@@ -1517,7 +1517,7 @@ def _bundle_delivery_local(run_id: str) -> Path:
     return ColabCPULane().delivery_root(run_id)
 
 @timed
-def run_bundle(dataset_csv: Path | None = None) -> None:
+def run_bundle(dataset_csv: Path | None = None, *, diagnostic: bool = False) -> None:
     """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
 
     Fresh-checkout flow: the VM reuses the checkout prepare_remote_layout
@@ -1561,8 +1561,14 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
     _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
     script = _BOOTSTRAP + f"""
 import glob, os, subprocess, sys
+prepare_cmd = [sys.executable, "-m", "training.prepare_all"]
+if {diagnostic!r}:
+    # Diagnostic/sample emit: the remote prepare skips the pinned-evidence
+    # guard so a subsampled run reaches the delivery archive (production keeps
+    # the guard; this flag defaults off).
+    prepare_cmd.append("--diagnostic")
 rc = subprocess.run(
-    [sys.executable, "-m", "training.prepare_all"],
+    prepare_cmd,
     cwd={REMOTE_ROOT!r},
     env={{**os.environ, "WANDB_MODE": "disabled"}},
 ).returncode
@@ -2208,6 +2214,9 @@ def main() -> None:
                          "(default: config/paths.yaml dataset = repo:dataset.csv; "
                          "the VM holds it at dataset.csv so the committed audit "
                          "pins still enforce which export is consumed)")
+    ap.add_argument("--diagnostic", action="store_true",
+                    help="bundle only: diagnostic/sample emit — run prepare_all "
+                         "with the pinned-evidence guard skipped (production keeps it)")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
                     f"{_TRAIN_FRAC_DEFAULT:g})")
@@ -2615,9 +2624,11 @@ def main() -> None:
                 # lane's config flag off, the original direct call runs and
                 # behavior is byte-identical.
                 from cli.colab_data_bundle_prep import run_bundle_prep
-                run_bundle_prep(dataset_csv=args.dataset_csv)
+                run_bundle_prep(dataset_csv=args.dataset_csv,
+                                diagnostic=args.diagnostic)
             else:
-                run_bundle(dataset_csv=args.dataset_csv)
+                run_bundle(dataset_csv=args.dataset_csv,
+                           diagnostic=args.diagnostic)
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,

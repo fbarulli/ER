@@ -943,6 +943,8 @@ class LeakGuards:
         policy_name: str,
         evidence: dict[str, dict[str, object]],
         min_test_negatives: int,
+        *,
+        diagnostic: bool = False,
     ) -> None:
         """The DECISION's re-measured-at-every-emit fail-loud guard.
 
@@ -951,7 +953,20 @@ class LeakGuards:
         forces the decision to be REMADE, never silently invalidated while
         the stale default keeps switching the artifact's negative
         assignment.
+
+        ``diagnostic`` is the explicit diagnostic/sample emit: a run whose
+        scored halves are too thin to confirm ANY policy (a subsampled export)
+        emits its artifact for inspection, and the measured-but-unconfirmed
+        evidence is recorded in the manifest under
+        ``pinned_evidence_guard: "skipped_diagnostic"``. Production emits keep
+        the guard (the default); this is never inferred from the data.
         """
+        if diagnostic:
+            _LOG.info(
+                "[final_validation] diagnostic emit: pinned-evidence guard "
+                f"skipped for policy {policy_name!r}; the recorded evidence is "
+                "measured but unconfirmed")
+            return
         if policy_name == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
             assert_pinned_evidence_train_side(policy_name, evidence, min_test_negatives)
         elif policy_name == NEGATIVE_FOLD_POLICY_WITHHOLD:
@@ -1160,6 +1175,7 @@ def write_manifest(
             training_cfg().split.negative_fold_policy
         ),
         "negative_policy_evidence": stats.get("negative_policy_evidence", {}),
+        "pinned_evidence_guard": stats.get("pinned_evidence_guard", "enforced"),
         "slice_coverage": coverage,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1228,12 +1244,18 @@ def build(
     seed: int = SEED,
     n_folds: int | None = None,
     trace: TraceRun | None = None,
+    diagnostic: bool = False,
 ) -> pd.DataFrame:
     """Derive the merged graph, cut the split, and return the validation rows.
 
     ``trace`` is this stage's ONE consolidated-trace writer; with none supplied a
     standalone ``build()`` still traces, since the rows are the stage's evidence
     and a caller running it directly deserves them.
+
+    ``diagnostic`` skips ONLY the pinned-evidence emit guard, for a
+    subsampled/diagnostic run whose scored halves are too thin to confirm a
+    policy; the measured evidence is still recorded and the manifest marks the
+    emit ``skipped_diagnostic``. The default keeps the guard (production).
     """
     own = trace is None
     if own:
@@ -1286,10 +1308,13 @@ def build(
     )
     with _LOG.section("final_validation.policy_evidence"):
         evidence = negative_policy_evidence(out, min_test_negatives, n_folds)
-    LeakGuards.assert_pinned_evidence(policy_name, evidence, min_test_negatives)
+    LeakGuards.assert_pinned_evidence(policy_name, evidence, min_test_negatives,
+                                      diagnostic=diagnostic)
     _record_policy(trace, out, evidence, policy_name)
     stats["negative_fold_policy"] = policy_name
     stats["negative_policy_evidence"] = evidence
+    stats["pinned_evidence_guard"] = (
+        "skipped_diagnostic" if diagnostic else "enforced")
     with _LOG.section("final_validation.apply_policy"):
         _apply_negative_fold_policy(out, policy_name, n_folds)
     with _LOG.section("final_validation.write"):
@@ -1471,12 +1496,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--output", default=None)
     ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--diagnostic", action="store_true",
+                    help="diagnostic/sample emit: skip the pinned-evidence guard "
+                         "and record the measured-but-unconfirmed evidence")
     args = ap.parse_args()
     # ONE writer for the stage: graph, folds, census, policy and publication are
     # one flow in the consolidated trace, committed once.
     trace = TraceRun(STAGE)
     frame = build(Path(args.output) if args.output else None, seed=args.seed,
-                  trace=trace)
+                  trace=trace, diagnostic=args.diagnostic)
     trace.write()
     pos = frame[frame.true_label == 1]
     neg = frame[frame.true_label == 0]

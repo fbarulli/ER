@@ -230,7 +230,8 @@ def test_lane_dispatch_forwards_to_the_separate_file(monkeypatch, tmp_path):
     lane = mock.Mock(name="run_bundle_prep")
     fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)
     fake("enable")
-    assert lane.call_count == 1 and lane.call_args.kwargs == {"dataset_csv": dataset}
+    assert lane.call_count == 1 and lane.call_args.kwargs == {
+        "dataset_csv": dataset, "diagnostic": False}
     assert direct.call_count == 0
 
 

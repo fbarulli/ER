@@ -76,10 +76,16 @@ def cohort_label(dataset_csv: Path) -> str:
     return _canonical_cohort_label(dataset_csv)
 
 
-def run_bundle_prep(dataset_csv: Path | None = None) -> None:
+def run_bundle_prep(dataset_csv: Path | None = None, *,
+                    diagnostic: bool = False) -> None:
     """One CPU prep run with the parity capabilities layered on top of
-    cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle)."""
-    lane().run_cpu_prep(dataset_csv)
+    cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle).
+
+    ``diagnostic`` marks a subsampled/diagnostic run whose scored halves are
+    too thin to confirm the pinned policy: the remote prepare emits its
+    artifact without the pinned-evidence guard. Production runs leave it off.
+    """
+    lane().run_cpu_prep(dataset_csv, diagnostic=diagnostic)
 
 
 def _stamp() -> str:
@@ -94,12 +100,15 @@ def main() -> None:
     parser.add_argument("--dataset-csv", type=Path, default=None,
                         help="raw export to prepare (default: config/paths.yaml "
                              "dataset binding, the same default cli.colab uses)")
+    parser.add_argument("--diagnostic", action="store_true",
+                        help="diagnostic/sample run: emit the validation artifact "
+                             "without the pinned-evidence guard (production keeps it)")
     args = parser.parse_args()
     colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
     colab.start_live_log()
     try:
-        run_bundle_prep(dataset_csv=args.dataset_csv)
+        run_bundle_prep(dataset_csv=args.dataset_csv, diagnostic=args.diagnostic)
         print(_stamp(), "\n[done] cpu prep lane completed and artifacts downloaded locally",
               flush=True)
     except BaseException:

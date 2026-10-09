@@ -159,9 +159,15 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
             transport.run_colab_exec_stream = original
 
     @timed
-    def run_cpu_prep(self, dataset_csv: Path | None = None) -> None:
+    def run_cpu_prep(self, dataset_csv: Path | None = None, *,
+                     diagnostic: bool = False) -> None:
         """One CPU prep run with the parity capabilities layered on top of
-        cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle)."""
+        cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle).
+
+        ``diagnostic`` is forwarded to the remote prepare so a subsampled run
+        emits its artifact without the pinned-evidence guard; production keeps
+        the guard (the default).
+        """
         from core.common import DATA_PATH
 
         surface = self.surface
@@ -170,11 +176,12 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
             _stamp(),
             f"[cpu-prep] cohort={self.cohort_label(source)} dataset={source.name} "
             f"size={self.export_digest(source)} "
-            f"max_parallel_sessions={MAX_PARALLEL_PREP_SESSIONS}",
+            f"max_parallel_sessions={MAX_PARALLEL_PREP_SESSIONS} "
+            f"diagnostic={diagnostic}",
             flush=True,
         )
         with self.dual_transcript_streaming(surface), _LOG.section("colab_lane.cpu_prep.run_bundle"):
-            surface.run_bundle(dataset_csv=source)
+            surface.run_bundle(dataset_csv=source, diagnostic=diagnostic)
 
 
 class ColabGPULane(ColabLaneBase):

@@ -540,9 +540,10 @@ class PrepareRun:
     """
 
     def __init__(self, *, run_dir=None, resume_from='dedupe', tracks_config=None,
-                 negative_supply_run_tag=None):
+                 negative_supply_run_tag=None, diagnostic=False):
         self.resume_from = resume_from
         self.requested_tag = negative_supply_run_tag
+        self.diagnostic = bool(diagnostic)
         self.context = _load_run_context(tracks_config)
         self.run_dir, self.run_tag = self._resolve_layout(run_dir)
         self.suite_archive = self.run_dir / (
@@ -691,6 +692,8 @@ class PrepareRun:
 
     def _stage_command(self, name: str) -> list[str]:
         """The child command for a module-backed stage (config-owned paths)."""
+        if name == 'validation' and self.diagnostic:
+            return ['-m', 'training.build_final_validation', '--diagnostic']
         if name in _STAGE_MODULES:
             return ['-m', *_STAGE_MODULES[name]]
         if name == 'negative_supply':
@@ -1023,6 +1026,7 @@ class PrepareRun:
             config_path=self.context.config_path, lane=self.context.lane,
             run_tag=self.run_tag, shared_base_payload=self.shared_base_payload,
             provenance=provenance, smoke_before=self.smoke_before)
+        self.manifest['diagnostic'] = self.diagnostic
         with _acquire_prepare_lock(Path(RESULTS) / prep.lock_file):
             if not _verify_resume_prerequisites(self.resume_from):
                 _LOG.info('[prepare] resume prerequisites are no longer intact; rebuilding from the first stage')
@@ -1055,11 +1059,12 @@ def _resolve_run_tag(lane, requested: str | None) -> str | None:
 
 
 def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
-                 negative_supply_run_tag=None):
+                 negative_supply_run_tag=None, diagnostic=False):
     """Orchestrate one preparation through the PrepareRun owner."""
     return PrepareRun(run_dir=run_dir, resume_from=resume_from,
                       tracks_config=tracks_config,
-                      negative_supply_run_tag=negative_supply_run_tag).execute()
+                      negative_supply_run_tag=negative_supply_run_tag,
+                      diagnostic=diagnostic).execute()
 
 
 @timed
@@ -1080,9 +1085,13 @@ def main():
                         help='generate and audit the real-first lane; gate mode keeps this diagnostic-only')
     parser.add_argument('--resume-from', choices=['dedupe', 'validation', 'full_bundle', 'suite_inputs'], default='dedupe',
                         help='validation verifies CSV manifests; suite_inputs reuses the completed graph/text bundle')
+    parser.add_argument('--diagnostic', action='store_true',
+                        help='diagnostic/sample run: emit the validation artifact '
+                             'without the pinned-evidence guard (production keeps it)')
     args = parser.parse_args()
     prepare_all(run_dir=args.run_dir, resume_from=args.resume_from,
-                tracks_config=args.tracks_config, negative_supply_run_tag=args.negative_supply_run_tag)
+                tracks_config=args.tracks_config, negative_supply_run_tag=args.negative_supply_run_tag,
+                diagnostic=args.diagnostic)
 
 
 if __name__ == '__main__':

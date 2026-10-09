@@ -224,6 +224,40 @@ def test_emit_guard_refuses_a_policy_that_scores_a_trained_on_endpoint() -> None
         )
 
 
+def test_diagnostic_emit_skips_the_pinned_evidence_guard() -> None:
+    """A diagnostic/sample emit bypasses the refusal; production keeps it.
+
+    A subsampled export has scored halves too thin to confirm ANY policy (the
+    1k diagnostic bundle run: every evidence count is 0). The default guard
+    refuses that emit; the explicit ``diagnostic`` flag — set by the owning
+    lane for a sampled/diagnostic run — lets the artifact ship for inspection.
+    """
+    evidence = {
+        NEGATIVE_FOLD_POLICY_WITHHOLD: {
+            "scored_dev_negatives": 0,
+            "scored_test_negatives": 0,
+            "scored_negatives_with_trained_on_endpoint": 0,
+            "thin_cells": None,
+            "populated_cells": None,
+        },
+        NEGATIVE_FOLD_POLICY_TRAIN_SIDE: {
+            "scored_dev_negatives": 0,
+            "scored_test_negatives": 1,
+            "scored_negatives_with_trained_on_endpoint": 0,
+            "thin_cells": None,
+            "populated_cells": None,
+        },
+    }
+    with pytest.raises(SystemExit, match="does not score MORE negatives"):
+        LeakGuards.assert_pinned_evidence(
+            NEGATIVE_FOLD_POLICY_TRAIN_SIDE, evidence, min_test_negatives=5
+        )
+    LeakGuards.assert_pinned_evidence(
+        NEGATIVE_FOLD_POLICY_TRAIN_SIDE, evidence, min_test_negatives=5,
+        diagnostic=True,
+    )
+
+
 def test_evidence_records_the_balance_of_each_scored_half() -> None:
     """The TODO's imbalance (dev 1286/9) is MEASURED per policy.
 
