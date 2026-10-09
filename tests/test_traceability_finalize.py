@@ -419,7 +419,6 @@ def test_staged_forward_records_template_checkpoint_and_vectors(tmp_path, monkey
     tensors = template / "prepared_inputs.npz"
     tensors.write_bytes(b"frozen local topology")
     request = {"checkpoint": "@setup/template.pt",
-               "graph_binding": ablation.digest({"vocabulary": {}, "support_records": []}),
                "sources": {"@setup/template.pt": "placeholder"},
                "settings": {"retrieval_catalog": "full"},
                "prepared_inputs": {"size": ablation.file_size(tensors)}}

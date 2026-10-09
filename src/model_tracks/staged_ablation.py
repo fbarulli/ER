@@ -14,7 +14,8 @@ Single-responsibility phases (behaviour pinned, statements split verbatim):
   - :func:`_track_template`    — the per-track phase orchestrator
   - :func:`_bind_template`     — the staged setup bound onto a track request
   - :func:`_read_template` / :func:`_bind_staged_setup` — request read + staged root
-  - :func:`_check_graph_binding` — selected checkpoint vs frozen support/vocabulary
+  - :class:`FrozenGraphSupport` — the ONE owner of the frozen train support
+    and vocabulary a template checkpoint carries
   - :func:`_rebind_checkpoint` — selected/baseline checkpoint role resolution
   - :func:`_bound_folder`      — the bound request and local tensors materialized
   - :func:`_saved_text_default` — saved-vector default for the full local catalog
@@ -23,8 +24,10 @@ Single-responsibility phases (behaviour pinned, statements split verbatim):
   - :func:`forward`            — the forward orchestrator (timed)
 """
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import shutil
+from typing import Any
 import torch
 import yaml
 from core.artifacts import Artifacts
@@ -38,14 +41,12 @@ from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
 from graph_tracks.text_cache import checkpoint_size
-from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context, validate_vectors, file_size, source_name
+from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context, validate_vectors, file_size, source_name
 from model_tracks.ablation_cohort import prepare_cohort
 from model_tracks.package import package_member
 from model_tracks.resume import TRAINING_TRACKS
 
 _LOG = RunLogger(__name__)
-
-_BINDING_UNSET = object()
 
 
 def _templates_dir(setup: Path) -> Path:
@@ -131,38 +132,56 @@ def _freeze_config(setup,cfg):
     return frozen_config
 
 
-@timed
-def _frozen_support(setup):
-    """The training-population support records and prepared vocabulary."""
-    with _LOG.section('ablation_support.load'):
-        layout = _setup_layout()
-        records = load_records(setup/layout.prepared_dir/layout.listings)
-        graph_plan,graph_arrays = load_plan(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv')
-        graph_arrays.close()
-        support = [records[n] for n in graph_plan['populations']['train']]
-        vocabulary = graph_plan['vocabulary']
-    trace().add(
-        "prepare_suite", "support_vocabulary",
-        in_count=len(records), out_count=len(support),
-        reason='the frozen templates carry the TRAIN-population support and its vocabulary, fixed '
-               'before any model is trained',
-        detail={'listing_records': len(records), 'train_support': len(support),
-                'vocabulary': len(vocabulary)},
-        source=source_name(setup / layout.prepared_dir / layout.listings),
-    )
-    return support,vocabulary
+@dataclass(frozen=True)
+class FrozenGraphSupport:
+    """The frozen local graph template: train-population support + vocabulary.
+
+    ONE owner for the pair. The SAME instance is written into every graph
+    track's template checkpoint and is what the frozen templates were built
+    from, so a checkpoint's vocabulary/support cannot diverge from the template
+    that owns it by construction. Nothing compares them at runtime (owner
+    directive: data is never checked).
+    """
+
+    vocabulary: Any
+    support_records: list
+
+    @classmethod
+    def from_setup(cls, setup) -> "FrozenGraphSupport":
+        """Load the TRAIN-population support records and prepared vocabulary."""
+        with _LOG.section('ablation_support.load'):
+            layout = _setup_layout()
+            records = load_records(setup/layout.prepared_dir/layout.listings)
+            graph_plan,graph_arrays = load_plan(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv')
+            graph_arrays.close()
+            support = [records[n] for n in graph_plan['populations']['train']]
+            vocabulary = graph_plan['vocabulary']
+            frozen = cls(vocabulary=vocabulary,support_records=support)
+        trace().add(
+            "prepare_suite", "support_vocabulary",
+            in_count=len(records), out_count=len(support),
+            reason='the frozen templates carry the TRAIN-population support and its vocabulary, fixed '
+                   'before any model is trained',
+            detail={'listing_records': len(records), 'train_support': len(support),
+                    'vocabulary': len(vocabulary)},
+            source=source_name(setup / layout.prepared_dir / layout.listings),
+        )
+        return frozen
+
+    def checkpoint_payload(self, *, track, baseline) -> dict:
+        """The template checkpoint payload: this support plus the track manifest."""
+        return {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
+            'text_metadata':{'checkpoint_size':checkpoint_size(baseline),'composition':model_input_composition().model_dump(mode='json')}},
+            'vocabulary':self.vocabulary,'support_records':self.support_records}
 
 
 @timed
-def _template_checkpoint(setup,baseline,track,vocabulary,support):
+def _template_checkpoint(setup,baseline,track,template):
     """The text baseline checkpoint, or the other tracks' template tensor file."""
     checkpoint = baseline
     if track != 'text':
         checkpoint = setup/(track+'__ablation_template.pt')
-        payload = {'schema':'er-graph-checkpoint-v1','manifest':{'track':track,
-            'text_metadata':{'checkpoint_size':checkpoint_size(baseline),'composition':model_input_composition().model_dump(mode='json')}},
-            'vocabulary':vocabulary,'support_records':support}
-        torch.save(payload,checkpoint)
+        torch.save(template.checkpoint_payload(track=track,baseline=baseline),checkpoint)
     return checkpoint
 
 
@@ -218,19 +237,15 @@ def _copy_template(setup,track,path,request):
 
 
 @timed
-def _track_template(setup,baseline,track,*,cohort,frozen_config,vocabulary,support,common_cohort,timing,composer=None,token_cache=None,graph_binding=_BINDING_UNSET):
+def _track_template(setup,baseline,track,*,cohort,frozen_config,template,common_cohort,timing,composer=None,token_cache=None):
     """One track's template: checkpoint, prepared request, anchors, folder copy."""
     with _LOG.section('ablation_template.checkpoint'):
-        checkpoint = _template_checkpoint(setup,baseline,track,vocabulary,support)
+        checkpoint = _template_checkpoint(setup,baseline,track,template)
     with _LOG.section('ablation_template.prepared_request'):
         path,request = _track_request(setup,checkpoint,track,cohort=cohort,
             frozen_config=frozen_config,baseline=baseline,composer=composer,token_cache=token_cache)
     with _LOG.section('ablation_template.cohort_validate'):
         common_cohort = _track_cohort(track,request,common_cohort)
-    with _LOG.section('ablation_template.graph_binding'):
-        if graph_binding is _BINDING_UNSET and track != 'text':
-            graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
-        request['graph_binding'] = graph_binding if track != 'text' else None
     with _LOG.section('ablation_template.anchor_and_copy'):
         _anchor_request(setup,request)
         _copy_template(setup,track,path,request)
@@ -272,18 +287,17 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
     with _LOG.section('ablation_suite.freeze'):
         cohort,frozen_config = _freeze_suite(setup,config,bundle)
     with _LOG.section('ablation_suite.support_vocabulary'):
-        support,vocabulary = _frozen_support(setup)
+        template_support = FrozenGraphSupport.from_setup(setup)
     timing.mark('load_support_and_vocabulary')
     with _LOG.section('ablation_suite.track_templates'):
         common_cohort = None
         tracks = TRAINING_TRACKS
-        graph_binding = digest({'vocabulary':vocabulary,'support_records':support})
         for track in _LOG.progress(tracks,desc='ablation_templates',unit='track',total=len(tracks)):
             _LOG.info('ablation template building track=' + track)
             common_cohort = _track_template(setup,baseline,track,cohort=cohort,
-                frozen_config=frozen_config,vocabulary=vocabulary,
-                support=support,common_cohort=common_cohort,timing=timing,
-                composer=composer,token_cache=token_cache,graph_binding=graph_binding)
+                frozen_config=frozen_config,template=template_support,
+                common_cohort=common_cohort,timing=timing,
+                composer=composer,token_cache=token_cache)
     with _LOG.section('ablation_suite.cleanup_staging'):
         _drop_staging(setup)
     timing.mark('cleanup_staging')
@@ -319,15 +333,6 @@ def _bind_template(setup,track):
     template,request = _read_template(setup,track)
     _bind_staged_setup(setup,request)
     return template,request
-
-
-@timed
-def _check_graph_binding(checkpoint,track,request):
-    """Reject a selected graph checkpoint that differs from frozen support."""
-    payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
-    actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})
-    if actual != request['graph_binding'] or payload['manifest']['track'] != track:
-        raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
 
 
 @timed
@@ -450,9 +455,6 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
                 'variants': len(request.get('variants', []))},
         source=source_name(template / _request_name()),
     )
-    if track != 'text':
-        with _LOG.section('ablation_forward.graph_binding'):
-            _check_graph_binding(checkpoint,track,request)
     with _LOG.section('ablation_forward.rebind_checkpoint'):
         _rebind_checkpoint(request,output,track,checkpoint,checkpoint_role)
     _LOG.info('ablation forward bound track=' + track + ' role=' + checkpoint_role)
