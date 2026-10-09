@@ -125,34 +125,6 @@ def test_load_enforces_the_role_membership_contract(tmp_path: Path) -> None:
         Bundle.load(recovery, BundleRole.recovery)
 
 
-def test_assert_recovery_retains_refuses_pruned_epoch(tmp_path: Path) -> None:
-    """The positive recovery assertion lives on ``Bundle``.
-
-    ``_recovery_sources`` is an exclusion walk, so on its own it would seal a
-    pruned suite. The contract is owned by ``Bundle.assert_recovery_retains``:
-    every member the RESULT role drops but a resume needs must be retained.
-    """
-    spec = _spec()
-    tree = tmp_path / "recovery"
-    epochs = {"checkpoint-1", "checkpoint-2"}
-    for epoch in epochs:
-        root = tree / spec.checkpoint_dir / f"m/r_f0/{epoch}"
-        _write(root / "model.safetensors", epoch)
-        _write(root / spec.trainer_state_file,
-               '{"best_model_checkpoint": "checkpoint-1"}')
-        _write(root / spec.resume_only_filenames[0], "optimizer")
-    retained = {p.relative_to(tree).as_posix() for p in tree.rglob("*") if p.is_file()}
-
-    # Nothing pruned: the full member set conforms.
-    Bundle.assert_recovery_retains(tree, retained)
-
-    # Dropping the non-selected epoch's resume state is refused.
-    pruned = {name for name in retained
-              if f"/{spec.checkpoint_dir}/m/r_f0/checkpoint-2/" not in "/" + name}
-    with pytest.raises(ValueError, match="pruned resume state"):
-        Bundle.assert_recovery_retains(tree, pruned)
-
-
 def test_load_rejects_truncated_archive(tmp_path: Path) -> None:
     tree = tmp_path / "result"
     _result_tree(tree)
@@ -355,12 +327,6 @@ def test_recovery_seal_keeps_every_epoch_and_optimizer(tmp_path: Path) -> None:
     tree = tmp_path / "result"
     _result_tree(tree)
     files = {p.relative_to(tree).as_posix(): p for p in tree.rglob("*") if p.is_file()}
-    # The role contract is asserted positively before the write: a recovery
-    # bundle that pruned the resume-only epoch state is refused, not sealed.
-    Bundle.assert_recovery_retains(tree, files)
-    with pytest.raises(ValueError, match="pruned resume state"):
-        Bundle.assert_recovery_retains(tree, {
-            name: path for name, path in files.items() if "checkpoint-562" not in name})
     sealed = Bundle.seal_archive(tmp_path / "recovery.tar.zst", files,
                                  role=BundleRole.recovery,
                                  metadata={_spec().run_tag_key: "r-tag"})

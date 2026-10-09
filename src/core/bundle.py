@@ -20,7 +20,7 @@ import json
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -497,26 +497,6 @@ class Bundle(BaseModel):
             if (spec.checkpoint_dir in Path(relative).parts
                 or Path(relative).name in spec.resume_only_filenames)
             and not self.is_result_member(relative, selected_checkpoints=selected))
-
-    @classmethod
-    def assert_recovery_retains(cls, directory: Path | str,
-                                retained: Iterable[str], *,
-                                where: str = "recovery bundle") -> None:
-        """Refuse a recovery member set that pruned this tree's resume state.
-
-        ``directory`` is the source tree; ``retained`` the member names the
-        recovery bundle will ship. The contract: every member the RESULT role
-        drops but a resume needs (:meth:`recovery_state_members`) must be
-        ``retained``. One home for the assertion, so a walk that only *excludes*
-        (and would happily seal a pruned suite) cannot masquerade as the role
-        contract.
-        """
-        tree = cls.from_directory(directory, BundleRole.result)
-        present = set(retained)
-        missing = sorted(member for member in tree.recovery_state_members()
-                         if member not in present)
-        if missing:
-            raise ValueError(f"{where} pruned resume state: " + ", ".join(missing[:5]))
 
     @staticmethod
     def is_result_member(relative: str, *,

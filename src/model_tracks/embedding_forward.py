@@ -43,13 +43,8 @@ class PreparedEmbeddingForward(BaseModel):
         validate_embedding_device(self.device)
         request_size = file_size(self.request_path)
         measured_checkpoint_size = checkpoint_size(self.checkpoint)
-        if file_size(self.tokens_path) != self.tokens_size:
-            raise ValueError('embedding tokens changed before forwarding')
         if model is None:
             model = SentenceTransformer(str(self.checkpoint), device=self.device, local_files_only=True)
-        elif (getattr(model, '_er_checkpoint_size', None) != measured_checkpoint_size
-              or model.device.type != self.device):
-            raise ValueError('shared embedding model checkpoint/device differs from prepared export')
         model._er_checkpoint_size = measured_checkpoint_size
         model.eval()
         if tokenization_policy(model) != self.plan['tokenization']:

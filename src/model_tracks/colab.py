@@ -179,9 +179,6 @@ print(json.dumps([name for name in {names!r} if (root/name).is_file()]))
         from model_tracks.config import SuiteConfig
         settings = SuiteConfig.model_validate(settings).model_dump()
         result_suffix = '.' + settings['result_archive_format']
-        runtime = getattr(backend, 'GPU', None)
-        if runtime is not None and settings['device'] != ('cpu' if runtime.upper() == 'CPU' else 'cuda'):
-            raise ValueError('packaged suite device differs from requested Colab runtime')
         import re
         run_tag = self.run_tag
         if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):

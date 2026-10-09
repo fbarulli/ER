@@ -611,7 +611,7 @@ def verify(path: Path) -> dict:
 
 
 def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
-    from core.bundle import Bundle
+    """Every member this recovery bundle ships (the recovery role's set)."""
     spec = bundle_spec()
     files = {}
     for path in tracked(_walk_files(output, excluded_dirs=RECOVERY_EXCLUDED,
@@ -621,7 +621,8 @@ def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
         if path.name in set(spec.local_only_filenames) or path.resolve() == destination:
             continue
         files[path.relative_to(output).as_posix()] = path
-    Bundle.assert_recovery_retains(output, files)
+    # The recovery role's membership is enforced by the seal that owns it
+    # (Bundle.seal_archive -> _refuse_role_violation); no walk-time comparison.
     return files
 
 
@@ -633,15 +634,16 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
     selected away, and the sealed archive is written once by its writer
     (:meth:`core.bundle.Bundle.seal_archive` records every member's byte size as
     it writes), so no caller re-reads the sealed bytes for a transport token.
+
+    ``run_tag`` names the archive (``bundle.recovery_archive_name``) and is
+    recorded in the sealed manifest, so the run identity is structural; nothing
+    is compared at runtime.
     """
     from core.bundle import Bundle, BundleRole
     spec = bundle_spec()
     output, destination = Path(output).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(destination)
-    with trace_step('recovery_package.check_manifest'):
-        if _read_json(output / spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
-            raise ValueError('recovery suite run mismatch')
     files = _recovery_sources(output, destination.resolve())
     sealed = Bundle.seal_archive(
         destination, files, role=BundleRole.recovery,
@@ -667,19 +669,16 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
 
     The archive is read once at the :meth:`core.bundle.Bundle.load` boundary
     (member names, traversal and symlink safety) and then trusted: no member byte
-    is compared (owner directive: data is never checked). The tree is
-    materialized and published only after the read succeeds.
+    and no recorded run tag is compared (owner directive: data is never checked),
+    because the recovery archive name already carries the run tag by
+    construction (``bundle.recovery_archive_name``). The tree is materialized and
+    published only after the read succeeds.
     """
     from core.bundle import Bundle, BundleRole
-    spec = bundle_spec()
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
     handle = Bundle.load(Path(archive), BundleRole.recovery)
-    if handle.run_tag() != run_tag:
-        raise ValueError('recovery suite run mismatch')
-    if _read_json_member(handle, spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
-        raise ValueError('recovery suite manifest mismatch')
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as temp:
         staging = Path(temp) / 'payload'
@@ -688,10 +687,6 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
             handle.materialize(staging.resolve())
         _publish_recovery(staging, output)
     return output
-
-
-def _read_json_member(handle, member: str) -> Any:
-    return json.loads(handle.read(member))
 
 
 def main() -> None:

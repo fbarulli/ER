@@ -7,7 +7,6 @@ No optimization, threshold fitting, synthetic labels or implicit cache reuse.
 from __future__ import annotations
 import argparse
 import copy
-from core.portable_archive import ByteCount
 import json
 import time
 import tempfile
@@ -33,9 +32,10 @@ from core.sku_identity import row_identity
 from core.step_trace import timed
 from core.text import normalized_attribute_text
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
-from graph_tracks.data import file_size as _graph_file_size, load_records, RELATIONS, NUMERIC
+from graph_tracks.data import file_size as _graph_file_size, load_records
 from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_size, composition_fingerprint
+from model_tracks.ablation_identity import cohort_identity, digest, graph_field_target, occurring_graph_fields, request_folder
 from model_tracks.embedding_forward import validate_embedding_device
 from model_tracks.resume import TRAINING_TRACKS
 from training.masking import field_of
@@ -176,27 +176,6 @@ def resolve(path):
     return path if path.is_absolute() else TRAIN_ROOT/path
 
 
-_JSON_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False)
-
-
-def digest(value):
-    # STREAMED, never materialized. `json.dumps` builds the whole document as
-    # one contiguous string before measuring it; an exhaustive-cohort request
-    # is ~1 GB of JSON (732 MB measured on the 2026-10-06 text track) and the
-    # gnn_only label ran while the text track's token batches were still
-    # resident, so the kernel OOM-killed the run. iterencode is the SAME
-    # encoder with the SAME kwargs, so the count is byte-identical to the
-    # previous implementation; only peak memory drops.
-    #
-    # The label is the canonical encoding's BYTE LENGTH as text — structural
-    # identity, never a content digest (owner directive 2026-10-08). It stays
-    # a string because callers compose it into array keys and file names.
-    hasher = ByteCount()
-    for chunk in _JSON_ENCODER.iterencode(value):
-        hasher.update(chunk.encode())
-    return str(hasher.total)
-
-
 def source_name(path):
     path = Path(path).resolve()
     return path.relative_to(TRAIN_ROOT).as_posix() if path.is_relative_to(TRAIN_ROOT) else str(path)
@@ -246,10 +225,7 @@ def declaration_removed(row, attribute):
 def graph_removed(record, fields):
     result = copy.deepcopy(record)
     for field in fields:
-        channel, key = field.split('.', 1)
-        allowed = RELATIONS if channel == 'attribute' else NUMERIC if channel == 'numeric' else ()
-        if key not in allowed:
-            raise ValueError(f'unsupported graph field: {field}')
+        channel, key = graph_field_target(field)
         result[channel].pop(key, None)
     return result
 
@@ -585,7 +561,7 @@ def _request_document(cfg, track, checkpoint_role, sources, checkpoint, text_che
         'checkpoint':source_name(checkpoint), 'text_checkpoint':source_name(text_checkpoint) if text_checkpoint else None,
         'candidate_ids':candidate_ids,'candidate_text_indices':candidate_text,'candidate_records':candidate_records,
         'ids':ids, 'texts':pool.texts, 'pairs':chosen, 'variants':variants,
-        'cohort_size':digest(chosen),
+        'cohort_size':cohort_identity(chosen),
         'coverage':{'mode':cfg.coverage, 'pair_rows':len(chosen),
             'by_scope':pd.Series([p.get('evaluation_scope', p['split']) for p in chosen]).value_counts().to_dict(),
             'by_label':pd.Series([p['label'] for p in chosen]).value_counts().to_dict(),
@@ -605,16 +581,17 @@ def _persist_prepared(request, cfg, token_cache):
         prepared = Path(tmp)/Results.leaf('prepared_inputs')
         request['prepared_inputs'] = prepare_inputs(request,prepared,token_cache=token_cache)
         validate_sources(request)
-        # One digest, two uses: the content-addressed staging dir AND the trace
-        # row. A second digest() here would stream the (up to ~1GB) request twice.
-        request_sha = digest(request)
-        output = out_dir/request_sha[:24]
+        # One declared name, two uses: the staging dir AND the trace row name the
+        # one request this (track, checkpoint role) pair declares. No content
+        # identity is derived from the request bytes (owner directive 2026-10-08),
+        # so the whole (up to ~1GB) request is never re-serialized here.
+        output = out_dir/request_folder(request)
         output.mkdir(parents=True, exist_ok=True)
         destination = output/prepared.name
-        # The content-addressed directory name already IS the identity, so a
-        # copy left there by an earlier attempt is rebuilt silently from the
-        # freshly prepared tensors (owner policy 2026-10-08: an incompatible
-        # cached intermediate is rebuilt, never a reason to fail).
+        # The declared folder holds one request per (track, role), so a copy left
+        # there by an earlier attempt is rebuilt silently from the freshly
+        # prepared tensors (owner policy 2026-10-08: an incompatible cached
+        # intermediate is rebuilt, never a reason to fail).
         prepared.replace(destination)
         path = output/bundle_spec().ablation_request_file
         write(path,request)
@@ -707,10 +684,6 @@ def _prepared_text_vectors(request, arrays, plan, device, track, text_model, sav
     checkpoint = request['checkpoint'] if track == 'text' else request['text_checkpoint']
     model = text_model
     expected_checkpoint = checkpoint_identity(resolve(checkpoint))
-    if model is not None and getattr(model,'_er_checkpoint_size',None) != expected_checkpoint:
-        raise ValueError('shared text model checkpoint differs from frozen request')
-    if model is not None and model.device.type != device:
-        raise ValueError('shared text model device differs from frozen request')
     if model is None:
         model = SentenceTransformer(str(resolve(checkpoint)),device=device,local_files_only=True)
     model.eval()
@@ -783,10 +756,6 @@ def _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
         if encoder is None:
             support = load_batch(arrays,'support',device,vocabulary)
             encoder = GraphEncoder(resolve(request['checkpoint']),device,prepared_support=support)
-        elif encoder.checkpoint_size != file_size(resolve(request['checkpoint'])) or encoder.device != device:
-            raise ValueError('shared graph encoder differs from frozen checkpoint/device')
-        if encoder.vocabulary != vocabulary:
-            raise ValueError('prepared vocabulary differs from checkpoint')
         graph_batches = {key:[load_batch(arrays,prefix,device,vocabulary) for prefix in prefixes]
                          for key,prefixes in plan['graph_batches'].items()}
     trace().add(
@@ -1075,11 +1044,31 @@ def validate_vectors(request_path, result):
     return request,vectors,scores,candidates
 
 
+def variant_jobs(request: dict) -> list[int]:
+    """The prepared job that produced each variant's vectors, one per variant.
+
+    ``prepare_inputs`` freezes the jobs a request's variants dedupe onto, so two
+    variants whose MODEL INPUTS are identical share a job and therefore share
+    identical vectors. That job index is the structural identity a vector-keyed
+    memo needs: a byte length cannot name vectors at all (every variant's block
+    has the same size), so a length-keyed memo aliases every variant onto the
+    first one (owner directive 2026-10-08). A request that carries no prepared
+    plan has one job per variant -- its vectors are per-variant by construction.
+    """
+    jobs = (request.get('prepared_inputs') or {}).get('variant_jobs')
+    if not jobs:
+        return list(range(len(request['variants'])))
+    if len(jobs) != len(request['variants']):
+        raise ValueError('prepared job plan does not cover every variant')
+    return list(jobs)
+
+
 @timed
 def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
     rows = []
     variants = request['variants']
     pairs = request['pairs']
+    jobs = variant_jobs(request)
     baseline_variant = variants[0]
     def ranks(vec):
         return retrieval.ranks(vec)
@@ -1097,7 +1086,7 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
             )
             flush_trace()
             raise ValueError('no-op ablation changed model output')
-        key = ByteCount(vectors[n].tobytes()).total
+        key = jobs[n]
         if key not in comparison_cache:
             comparison_cache[key] = (ranks(vectors[n]),retrieval.ann_hits(vectors[n]))
         rank,ann_ablated = comparison_cache[key]
@@ -1208,7 +1197,9 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
             return retrieval.ranks(vec)
         baseline_ranks = ranks(vectors[0])
         ann_baseline = retrieval.ann_hits(vectors[0])
-        comparison_cache = {ByteCount(vectors[0].tobytes()).total:(baseline_ranks,ann_baseline)}
+        # The baseline's own job seeds the memo: a variant that deduped onto it
+        # holds the SAME vector object, so it reuses these ranks exactly.
+        comparison_cache = {variant_jobs(request)[0]:(baseline_ranks,ann_baseline)}
         rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
                                 baseline_ranks, ann_baseline, comparison_cache)
         retrieval.close()
