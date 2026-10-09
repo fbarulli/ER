@@ -79,9 +79,9 @@ class KagglePackage(BaseModel):
     metadata_path: str
     census: ExportCensus
 
-CREDENTIALS_PATH = Path.home() / training_cfg().kaggle.files.credentials_file
+CREDENTIALS_PATH = Path.home() / training_cfg().credentials.kaggle_credentials_file
 
-ACCESS_TOKEN_PATH = Path.home() / training_cfg().kaggle.files.access_token_file
+ACCESS_TOKEN_PATH = Path.home() / training_cfg().credentials.kaggle_access_token_file
 
 #: The finalize job is the second bundle_steps role and runs as a second version
 #: of the SAME bundling CPU kernel slug (one Kaggle kernel; Kaggle mounts one
@@ -217,7 +217,6 @@ _stamp = KaggleRuntime._stamp
 _log_lane = KaggleRuntime._log_lane
 _require_kaggle_executable = KaggleRuntime._require_kaggle_executable
 _run_kaggle = KaggleRuntime._run_kaggle
-_env_dot_value = KaggleRuntime._env_dot_value
 write_credentials = KaggleRuntime.write_credentials
 _measure_export = KaggleDatasets._measure_export
 package_export = KaggleDatasets.package_export
