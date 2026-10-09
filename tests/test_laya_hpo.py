@@ -553,6 +553,30 @@ def test_stage_kernel_without_remote_url_bakes_the_local_study(monkeypatch,
     compile(script, str(Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE), "exec")
 
 
+def test_staged_kernel_is_self_contained_with_the_baked_registry(monkeypatch,
+                                                                tmp_path):
+    """The kernel imports NO repo module; the SSOT registry keys are baked in.
+
+    The kernel runs where ``core``/``cli``/``training`` do not exist, so a
+    runtime repo import is a crash (the reported ``No module named 'core'``).
+    Staging must replace every one with a baked value while the receipt's
+    registry description stays the live SSOT one.
+    """
+    import re
+
+    from training import hpo_registry
+
+    receipt = _stage(monkeypatch, tmp_path, None)
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    repo_import = re.compile(
+        r"^[ \t]*(?:from|import)\s+"
+        r"(?:core|cli|training|graph_tracks|model_tracks)(?:[.\s]|$)",
+        re.MULTILINE)
+    assert not repo_import.search(script)
+    assert repr(list(hpo_registry.ssot_model_keys())) in script
+
+
 def _exec_kernel(monkeypatch, script_path, root):
     """Execute the staged kernel module with its input/working roots."""
     import sys
