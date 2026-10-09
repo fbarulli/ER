@@ -8,6 +8,28 @@ artifacts/results/
 artifacts/models/
 artifacts/embeddings/
 artifacts/data/
+# The other DVC-managed output roots (owner mandate 2026-10-09): their payloads
+# live in the dagshub remote, so only the *.dvc pointers are re-included.
+artifacts/embeddings/**
+!artifacts/embeddings/**/
+!artifacts/embeddings/**/*.dvc
+training_profile/**
+!training_profile/**/
+!training_profile/**/*.dvc
+logs/**
+!logs/**/
+!logs/**/*.dvc
+wandb/**
+!wandb/**/
+!wandb/**/*.dvc
+# Laya corpus payloads are DVC-managed; the small receipts stay in Git.
+data/laya/*.jsonl
+data/laya/*.csv
+!data/laya/*.dvc
+# Ablation outputs are DVC-managed run artifacts (git keeps the pointers).
+artifacts/abl_opt/**
+!artifacts/abl_opt/**/
+!artifacts/abl_opt/**/*.dvc
 .venv/
 .venv
 # Machine-specific alias for the shared venv; symlink points at an absolute
@@ -15,13 +37,20 @@ artifacts/data/
 .venv-link
 .env
 .dvc-site-cache/
-results/*
-!results/
-results/*
-results/dvc_refs/
+# results/ is DVC-MANAGED (owner goal 2026-10-09): run payloads — the suite
+# result archives, the frozen input transports and the per-run trees — live in
+# the dagshub DVC remote, never in Git. Only the *.dvc pointers DVC writes
+# beside each tracked path are committed (the negations below); everything else
+# stays ignored and is retrievable with `dvc pull`.
+results/**
+!results/**/
+!results/**/*.dvc
 # Generated refs stay ignored by default. Suite publication explicitly stages
 # verified per-run recovery pointers; payloads remain in remote DVC storage.
+results/dvc_refs/
 /dvc_refs/
+# DVC event log written beside a repository-level push.
+/dvc_events.jsonl
 
 # Reproducible training input: keep the raw export in Git.
 !dataset.csv

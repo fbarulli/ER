@@ -1,3 +1,12 @@
-# Add patterns of files dvc should ignore, which could improve
-# the performance. Learn more at
-# https://dvc.org/doc/user-guide/dvcignore
+# Patterns DVC skips. Run results and transports under results/ and
+# training_results/ MUST stay visible: they are what DVC tracks. This file only
+# keeps DVC's walks away from trees it will never track.
+.venv/
+.dvc-cache/
+.dvc-site-cache/
+node_modules/
+graphify-out/
+archify/
+logs/
+matplotlib/
+wandb/

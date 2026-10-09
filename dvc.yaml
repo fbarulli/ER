@@ -1,0 +1,13 @@
+# DVC declares no pipeline stages of its own.
+#
+# The former `train` stage (cmd: python colab_backend.py --what train, outs:
+# results) declared the WHOLE results/ tree as one output. Nothing in the repo
+# referenced it, and the declaration made every per-path `dvc add` under
+# results/ fail with an output-overlap error, which blocked DVC-tracking
+# individual run payloads.
+#
+# Run results are tracked IMPERATIVELY instead (owner mandate 2026-10-09):
+# model_tracks.run_retention publishes each run/artifact path with `dvc add` +
+# `dvc push` and commits only the *.dvc pointers. This file therefore stays
+# empty by design; it is NOT a second source of the DVC output inventory.
+stages: {}

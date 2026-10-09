@@ -1,3 +1,0 @@
-rows identical text vs gnn_only? True
-sizes {'text': 274597, 'gnn_only': 274625, 'hybrid': 274611}
-largest report keys (text): [('rows', 271092), ('sources', 1034), ('coverage', 832), ('threshold_provenance', 329), ('threshold_binding', 124), ('retrieval_scope', 79)]
