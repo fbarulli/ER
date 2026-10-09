@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import math
 from datetime import datetime, timezone
 import json
@@ -85,7 +85,7 @@ def main() -> None:
             row = {**s, "noul": score, "status": "ok", "adapter": args.adapter,
                    "model": ADAPTERS[args.adapter]["model"],
                    "completed_utc": datetime.now(timezone.utc).isoformat(),
-                   "request_sha256": hashlib.sha256(json.dumps(request).encode()).hexdigest(),
+                   "request_size": ByteCount(json.dumps(request).encode()).total,
                    "raw_response": client.last_raw}
         except Exception as e:
             row = {**s, "status": f"error:{str(e)[:160]}"}

@@ -61,13 +61,13 @@ state_column='attribute_pairs', wanted_columns=('gtin1', 'gtin2',
 Fail loud: any sku lookup missing exits BEFORE writing; the
 final_validation header drifting from the emitted shape exits too; the
 emitted file is then re-measured through the lane's own staging
-measurement (cli.laya_lane stage shape: header + rows + sha256) and must
+measurement (cli.laya_lane stage shape: header + rows + size) and must
 satisfy the `identity` binding's wanted columns + state column.
 """
 from __future__ import annotations
 
 import csv
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from collections import Counter
 from pathlib import Path
@@ -204,7 +204,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
           output: Path = OUTPUT) -> dict:
     """Resolve + compose EVERY ground-truth pair, in pairs-file row order.
 
-    Returns the census dict (rows, label distribution, sha256, missing).
+    Returns the census dict (rows, label distribution, size, missing).
     """
     pairs_header, pairs = _read_csv(pairs_path)
     if pairs_header != ["sku_id1", "sku_id2", "label", "split"]:
@@ -297,7 +297,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
                                for label in sorted(labels)},
         "split_counts": dict(Counter(pair["split"] for pair in pairs)),
         "missing_sku_lookups": len(missing),
-        "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+        "size": ByteCount(output.read_bytes()).total,
         "output": str(output),
         "columns": columns,
     }
@@ -379,7 +379,7 @@ def main() -> None:
         f"label_distribution=" + json.dumps(
             {label: labels[label] for label in sorted(labels)}) +
         f" missing_sku_lookups={census['missing_sku_lookups']} "
-        f"sha256={census['sha256']} -> {OUTPUT}"
+        f"size={census['size']} -> {OUTPUT}"
     )
 
 

@@ -1,7 +1,7 @@
 import json
 import zipfile
 import pytest
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 
 
 @pytest.mark.parametrize('publishing,released,corrupt', [(True, True, False), (False, True, False), (True, False, False), (True, True, True)])
@@ -15,13 +15,12 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
                     publish_dvc=publishing, publish_git=False)
     inputs = tmp_path / 'inputs.zip'
     # A REAL verified package: `colab.run` opens it through the ONE inputs
-    # `Bundle.load` boundary (manifest + every member hashed once), so a zip
+    # `Bundle.load` boundary (manifest + every member checked once), so a zip
     # holding only the suite config no longer passes. `revision` is the
     # package's own revision, which the checkout script fetches separately.
-    import hashlib as _hashlib
     from model_tracks.package import package_member as _member
     _members = {_member('suite_package_config'): json.dumps(settings).encode()}
-    _inventory = {name: _hashlib.sha256(blob).hexdigest()
+    _inventory = {name: len(blob)
                   for name, blob in _members.items()}
     with zipfile.ZipFile(inputs, 'w') as archive:
         for name, blob in _members.items():
@@ -40,11 +39,11 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     monkeypatch.setattr(common, 'RESULTS', tmp_path)
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(colab, 'verify', lambda _: dict(revision='revision', files={}))
-    # The result download trusts one named single-pass verify seam. Stub it so
-    # a tiny fixture archive is never parsed as a real tar.zst; the returned
-    # whole-file digest still drives the corruption check.
-    monkeypatch.setattr(colab, 'verify_result_archive',
-                        lambda path: (dict(run_tag='run', files={}), file_hash(path)))
+    # The result download trusts the lane class's single-pass boundary read.
+    # Stub the class seam so a tiny fixture archive is never parsed as a real
+    # tar.zst; the returned size still drives the local reuse.
+    monkeypatch.setattr(colab.TracksLane, 'verify_result_archive',
+                        staticmethod(lambda path: (dict(run_tag='run', files={}), file_size(path))))
     monkeypatch.setattr(backend, 'GPU', 'CPU')
     monkeypatch.setattr(backend, '_env_value', lambda _: None)
     monkeypatch.setattr(backend, '_wandb_env_script', lambda: '')
@@ -53,20 +52,26 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         compile(command[-1], '<remote-stage>', 'exec')
         events.append('train')
     monkeypatch.setattr(backend, 'run_detached_stage', stage)
-    monkeypatch.setattr(backend, '_read_remote_text', lambda _: file_hash(payload))
+    monkeypatch.setattr(backend, '_read_remote_text', lambda _: file_size(payload))
     monkeypatch.setattr(backend, 'run_colab_exec_capture', lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     def download(remote, target):
         events.append('download')
         target.write_bytes(b'corrupt' if corrupt else payload.read_bytes())
     monkeypatch.setattr(backend, '_download_one_remote_file', download)
+    monkeypatch.setattr(backend, '_upload_with_retries',
+                        lambda *a, **k: events.append('upload'))
+    monkeypatch.setattr('model_tracks.run_retention.publish_result_paths',
+                        lambda *a, **k: events.append('retain'))
     monkeypatch.setattr(backend, 'stop', lambda: events.append('stop') or released)
     monkeypatch.setattr(time, 'sleep', lambda _: None)
     monkeypatch.setattr(resume, 'validate_archived_track', lambda *a, **kw: events.append('validate'))
     monkeypatch.setattr(snapshot_completion, 'complete', lambda *a, **kw: events.append(('complete', kw)) or 'final.zip')
     if corrupt:
-        with pytest.raises(ValueError, match='download mismatch'):
+        # A corrupt archive is no longer detected by a size token; it fails
+        # loudly when the boundary reads it (data is never pre-checked).
+        with pytest.raises(ValueError):
             colab.run(inputs, 'run', git_inputs=transport)
-        assert events == ['train', 'download']
+        assert events[:3] == ['upload', 'train', 'download']
         return
     if not released:
         with pytest.raises(RuntimeError, match='termination could not be verified'):
@@ -74,7 +79,8 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         assert 'pull' not in events and 'complete' not in events
         return
     assert colab.run(inputs, 'run', git_inputs=transport) == 'final.zip'
-    assert events == ['train', 'download', 'stop'] + ['validate'] * 3 + [('complete', {'publish': False})]
+    assert events == ['upload', 'train', 'download', 'stop'] + ['validate'] * 3 + [
+        ('complete', {'publish': False}), 'retain']
 
 
 def test_suite_runtime_does_not_require_dvc_distribution(monkeypatch):

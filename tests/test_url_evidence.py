@@ -175,14 +175,10 @@ def test_no_double_spaces_or_trailing_space() -> None:
 
 def test_yield_on_the_real_export() -> None:
     """The claim this module rests on, measured rather than asserted."""
-    from core.common import DATA_PATH, dataset_is_partial_cohort
+    from core.common import DATA_PATH
 
     if not DATA_PATH.exists():
         pytest.skip("raw export not present in this environment")
-    if dataset_is_partial_cohort():
-        # Owner directive 2026-10-06: only the full dataset is tested; the
-        # measured floor is cohort-specific (35,561 measured 78.8% < 0.80).
-        pytest.skip("partial cohort mounted (dataset.csv == dataset_50pct.csv)")
     df = pd.read_csv(DATA_PATH, dtype=str, low_memory=False)
     sample = df["sku_url"].dropna().sample(2000, random_state=0)
     texts = [url_text(u) for u in sample]

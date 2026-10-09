@@ -7,7 +7,9 @@ import pandas as pd
 from core.gtin import normalize_and_validate_gtin
 from core.product_dimensions import row_dimensions
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 frame = pd.read_csv(ROOT / 'dataset.csv', dtype=str, keep_default_na=False)
 facts = normalize_and_validate_gtin(frame.gtin)
 pattern = re.compile(r'\bgln\s*[:#-]?\s*(\d{13})\b', re.I)

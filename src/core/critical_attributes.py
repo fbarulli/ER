@@ -359,20 +359,6 @@ SUGAR_CLAIM_RE = re.compile(
 _SODA_DRY_PRODUCT_RE = re.compile(
     r"\b(?:syrup|concentrate|cordial|drink mix|powder)\b"
 )
-_EFFERVESCENT_RE = re.compile(r"\beffervescent\b")
-_EFFERVESCENT_TABLET_RE = re.compile(
-    r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b"
-)
-_NO_PULP_RE = re.compile(r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b")
-_WITH_PULP_RE = re.compile(
-    r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
-    r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b"
-)
-_JUICE_RE = re.compile(r"\bjuice\b")
-_WITH_BITS_RE = re.compile(r"\bwith bits\b")
-_NO_BITS_RE = re.compile(r"\b(?:no bits|without bits)\b")
-_SMOOTH_JUICE_RE = re.compile(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b")
-_ORGANIC_RE = re.compile(r"\b(?:organic|luomu)\b")
 
 
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:

@@ -3,12 +3,21 @@ from pathlib import Path
 
 
 def evidence_members() -> tuple[str, ...]:
+    """The repo-relative measured-evidence members both transport surfaces ship.
+
+    Addresses are bound once in config/paths.yaml (``layouts.*``); this module
+    no longer spells any leaf. Both members are static repository inputs, so a
+    layout that is not repo-rooted or that declares placeholder fields is a
+    config bug and crashes here.
+    """
     from core.common import LAYOUTS
 
-    registry = LAYOUTS['semantic_family_registry']
-    if registry.root != 'repo' or registry.fields:
-        raise ValueError('semantic family registry must be a static repository input')
-    return ('artifacts/evidence/attribute_universe_census.json', registry.template)
+    specs = {name: LAYOUTS[name] for name in (
+        'attribute_universe_census', 'semantic_family_registry')}
+    for name, spec in specs.items():
+        if spec.root != 'repo' or spec.fields:
+            raise ValueError(f'{name} must be a static repository input')
+    return tuple(spec.template for spec in specs.values())
 
 
 def evidence_files(root: Path) -> dict[str, Path]:
@@ -34,6 +43,14 @@ def checkout_members(extra=(), *, lane="bundle") -> tuple[str, ...]:
     # Bundle starts from the raw export and regenerates derived inputs.
     # Training consumes the committed prepared data (or its verified overlay).
     lane_members = ('dataset.csv',) if lane == 'bundle' else ('data', 'dataset.csv')
+    # This member list deliberately OVERLAPS but is NOT the same as
+    # ``training_cfg().colab.checkout_paths``: that block is the Colab sparse-
+    # checkout cone (trailing-slash directory entries plus files such as
+    # ``model_tracks_package.json``), while this surface names every tree/file
+    # ``git ls-files`` must stage for BOTH the bundle and training lanes
+    # (``requirements/``, the models dir, the smoke dir, the evidence members,
+    # and the lane's ``dataset.csv``/``data``). Deriving from one would drop the
+    # other's members, so the two stay separate SSOT lists by design.
     members = ('src', 'scripts', 'config', 'requirements', 'artifacts/wheels',
                'artifacts/evidence', load_config()['paths']['models_dir'],
                training_cfg().preparation.smoke_dir,

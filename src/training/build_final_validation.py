@@ -95,14 +95,17 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
 from core.common import F, RESULTS, SEED, load_dataset_deduped, training_cfg
 from core.manifest import atomic_write_csv
+from core.pair_identity import PairIdentity
 from core.run_log import RunLogger
 from core.schemas import check_canonical_records_frame, upgrade_canonical_records_frame
-from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun
+from core.tracing import (ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON,
+                          TRACE_BATCH_ROWS, TRACE_MAX_BATCH_ROWS, TraceRun)
 from training.folds import (
     component_ids,
     derive_holdout,
@@ -120,8 +123,8 @@ STAGE = "final_validation"
 # The assembler walks one labeled pair at a time; 4,096 pairs per BATCH row keeps
 # a real census to a handful of rows, and 16 traced batches bound the file while
 # the remainder is announced in ``labeled_census.batch_census``.
-_BATCH_PAIRS = 4096
-_MAX_BATCH_ROWS = 16
+_BATCH_PAIRS = TRACE_BATCH_ROWS
+_MAX_BATCH_ROWS = TRACE_MAX_BATCH_ROWS
 
 #: The three outcomes a labeled pair can have in the assembler. These strings are
 #: the trace's reason labels, so a reader greps outcomes, not prose.
@@ -373,7 +376,7 @@ class SliceFieldGrid:
         canon = pd.read_csv(
             F["canonical_records"], dtype=str, keep_default_na=False, low_memory=False
         )
-        # Same read contract as the pipeline lanes: migrate a stale artifact
+        # Same read contract as the pipeline lanes: migrate an outdated artifact
         # and validate before slicing — the freeze step's column access makes
         # the old "first column might be the key" fallback unreachable.
         canon = upgrade_canonical_records_frame(canon)
@@ -509,8 +512,6 @@ class NegativeFoldPolicy:
         if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
             return fold_a
         if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
-            import numpy as np
-
             train_endpoints = (fold_a < n_folds - 2) | (fold_b < n_folds - 2)
             return pd.Series(
                 np.where(train_endpoints, np.minimum(fold_a, fold_b), fold_a),
@@ -624,8 +625,6 @@ class NegativeFoldPolicy:
         # it is MEASURED per policy (on the raw endpoint folds the masks were
         # built from) instead of asserted in prose — the 2026-10-01 rejection
         # of ``train_side`` rested on this claim, so it has to be checkable.
-        import numpy as np
-
         trained_on_endpoint = (
             np.minimum(raw_first, raw_second) < n_folds - 2
         )
@@ -821,6 +820,9 @@ class ValidationRowAssembler:
         for name, _col in SLICE_FIELDS:
             row[f"v1_{name}"] = c1.get(name, "")
             row[f"v2_{name}"] = c2.get(name, "")
+        # THE pair key (core.pair_identity SSOT), appended last so every
+        # pre-existing column keeps its position in the CSV read contract.
+        row["pair_id"] = PairIdentity.of(k1, k2)
         return row, OUTCOME_SCORED
 
     def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
@@ -850,9 +852,9 @@ class ValidationRowAssembler:
             triples_list, desc="final_validation_rows", unit="pair"
         ):
             if pairs_in_batch == 0:
-                first_pair = f"{g1}|{g2}"
+                first_pair = PairIdentity.of(g1, g2)
                 rows_in_batch = 0
-            last_pair = f"{g1}|{g2}"
+            last_pair = PairIdentity.of(g1, g2)
             pairs_in_batch += 1
             row, reason = self.assemble_with_reason(g1, g2, label)
             folded = {

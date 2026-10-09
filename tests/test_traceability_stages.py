@@ -28,6 +28,7 @@ import pandas as pd
 import pytest
 
 import core.tracing as tracing
+from core.pair_identity import PairIdentity
 from core.schemas import TraceRow
 from core.gtin import is_valid_gtin_checksum
 
@@ -319,7 +320,7 @@ def test_labeled_pairs_partition_census_joins_the_manifest_buckets(trace_target)
     # the fallback pair is NAMED, with its decision and similarity
     named = entity_rows(trace)
     fallback = named[named["reason"] == lp.BUCKET_FALLBACK]
-    assert list(fallback["key"]) == [f"{VALID_GTIN}|4"]
+    assert list(fallback["key"]) == [PairIdentity.of(VALID_GTIN, "4")]
     evidence = detail_of(fallback.iloc[0])
     assert evidence["gate_decision"] == "fallback"
     assert evidence["similarity"] == 0.9
@@ -1022,7 +1023,7 @@ def test_negative_supply_traces_its_funnels_and_names_every_rejection(
     """The lane's attrition had NO trace row: block -> mine -> mint is a named
     funnel, every rejected candidate and skipped anchor keeps its exact reason,
     and the censuses carry the lane's OWN funnel counts (never the sample's)."""
-    import hashlib
+    from core.portable_archive import ByteCount
 
     import core.common as common
     from training.negative_supply import NegativeSupply, NegativeSupplySpec
@@ -1103,12 +1104,12 @@ def test_negative_supply_traces_its_funnels_and_names_every_rejection(
     assert detail_of(same_entity.iloc[0])["entity_level"] == "gtin"
 
     # the emitted table and the coverage funnel agree with the lane's manifest,
-    # and the trace pins the sha256 of the bytes actually published
+    # and the trace pins the size of the bytes actually published
     emitted = detail_of(one(frame, "pairs.emitted"))
     assert emitted["populations"] == manifest["populations"]
     assert emitted["pairs"] == sum(manifest["populations"].values())
     pairs_csv = tmp_path / "results" / "negative_supply" / "trace-test" / "pairs.csv"
-    assert emitted["pairs_sha256"] == hashlib.sha256(pairs_csv.read_bytes()).hexdigest()
+    assert emitted["pairs_size"] == ByteCount(pairs_csv.read_bytes()).total
     covered = one(frame, "coverage.anchors_covered")
     assert int(covered["in_count"]) == manifest["coverage"]["anchors_total"]
     assert int(covered["out_count"]) == manifest["coverage"]["anchors_with_real_partner"]

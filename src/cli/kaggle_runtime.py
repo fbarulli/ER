@@ -51,9 +51,10 @@ class KaggleRuntime:
     def cohort_label(dataset_csv: Path) -> str:
         """Cohort tag mirroring cli.colab_data_bundle_prep.cohort_label values.
 
-        `full` for the SSOT default export, `50pct` for the half-cohort, else a
-        sanitized stem. The SAME tags keep the two lanes' transcripts mutually
-        attributable without importing the colab module.
+        `full` for the SSOT default export, the export's declared tag for any
+        other committed export, else a sanitized stem. The SAME tags keep the
+        two lanes' transcripts mutually attributable without importing the colab
+        module.
         """
         from cli import kaggle_lane as lane
 
@@ -71,7 +72,7 @@ class KaggleRuntime:
         """Root-relative export filename for a cohort tag (inverse cohort_label).
 
         `full` = the SSOT default export; any other tag must name an export_csvs
-        entry whose filename carries the tag (50pct). Fail-loud on unknown.
+        entry (a root-relative, self-describing filename). Fail-loud on unknown.
         """
         from cli import kaggle_lane as lane
 
@@ -98,8 +99,12 @@ class KaggleRuntime:
     def _stamp() -> str:
         """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
         from cli import kaggle_lane as lane
+        from cli.colab_lane_contracts import _stamp as _lane_stamp
 
-        return (f"[kaggle-lane {lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}]")
+        return _lane_stamp(
+            "kaggle-lane",
+            now=lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)),
+        )
 
     @staticmethod
     def _log_lane(line: str) -> None:
@@ -181,25 +186,16 @@ class KaggleRuntime:
     def _env_dot_value(name: str, root: Path | None = None) -> str | None:
         """Read a simple KEY=VALUE from <root>/.env or its parent .env.
 
-        Same semantics as cli.colab._env_value: no printing (secrets stay out of
-        every log), env-var override first, never cloned into the repo. ``root``
-        defaults to the lane's TRAIN_ROOT (the staging knob tests and alternate
-        checkouts re-point); a caller passes the repository root explicitly for
-        a value whose lookup must survive that redirection.
+        One reader for every ``.env`` lookup in the repo (``core.env_file``): no
+        printing (secrets stay out of every log), never cloned into the repo.
+        ``root`` defaults to the lane's TRAIN_ROOT (the staging knob tests and
+        alternate checkouts re-point); a caller passes the repository root
+        explicitly for a value whose lookup must survive that redirection.
         """
         from cli import kaggle_lane as lane
+        from core.env_file import EnvFile
 
-        search_root = lane.TRAIN_ROOT if root is None else Path(root)
-        for env_path in (search_root / ".env", search_root.parent / ".env"):
-            if not env_path.is_file():
-                continue
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                key, separator, value = line.partition("=")
-                if separator and key.strip() == name:
-                    value = value.strip().strip('"').strip("'")
-                    if value:
-                        return value
-        return None
+        return EnvFile.value(name, root=lane.TRAIN_ROOT if root is None else Path(root))
 
     @staticmethod
     def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str, Any]:

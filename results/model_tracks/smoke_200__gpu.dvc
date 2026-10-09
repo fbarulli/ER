@@ -1,0 +1,6 @@
+outs:
+- md5: 28512ed37997a1f775b25ccdec9cac83.dir
+  size: 3080
+  nfiles: 4
+  hash: md5
+  path: smoke_200__gpu

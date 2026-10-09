@@ -282,8 +282,8 @@ def test_profiler_directory_is_folded_into_the_written_performance(tmp_path):
 
 def _manifest_kwargs():
     return dict(
-        track="gnn_only", checkpoint="best.pt", checkpoint_sha256="a" * 64,
-        listings_sha256="b" * 64, pairs_sha256="c" * 64, threshold=0.5,
+        track="gnn_only", checkpoint="best.pt", checkpoint_size="a" * 64,
+        listings_size="b" * 64, pairs_size="c" * 64, threshold=0.5,
         threshold_source="dev_youden", test_reported=False,
         model_selection="dev_pr_auc", retrieval_ks=(1, 5, 10))
 

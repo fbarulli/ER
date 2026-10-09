@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from core.common import DATA_PATH, SEED, F, CONFIG_PATH, VOCABULARY_CONFIG_PATH, load_raw_export
+from core.common import SEED, CONFIG_PATH, VOCABULARY_CONFIG_PATH, load_raw_export
+from core.dataset import dataset
 from core.manifest import begin_manifest, finish_manifest
 from core.run_log import RunLogger
 from core.step_trace import timed
@@ -47,6 +48,14 @@ from core.tracing import ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON, TraceRun, tra
 from pipeline import run_within_brand_pipeline
 
 log = RunLogger(__name__)
+
+#: The consolidation-trace stage this module OWNS (core.tracing ``stage``
+#: column). Declared here, not spelled at each call site, so the orchestration
+#: join ``config/paths.yaml`` ``canonical_and_gates: [data_prep]`` can be pinned
+#: to this producer constant exactly like every sibling stage's (dedupe,
+#: labeled_pairs, final_validation, ...). ``pipeline._PipelineSteering`` hands
+#: its stage-1 writer to this module, which is the ONE production writer.
+STAGE = "data_prep"
 
 
 def _load_raw() -> pd.DataFrame:
@@ -167,11 +176,12 @@ def _stage_outputs() -> tuple[list, list[str]]:
 
     The trace used to be listed here by its OLD per-stage name
     (results/logs/gate_visibility.csv), whose writer this directive deleted —
-    finish_manifest hashes every listed output, so a stale name made the
+    finish_manifest sizes every listed output, so a stale name made the
     stage die with FileNotFoundError after all the work was done. The name
     now comes from the layout that owns it (core.tracing → training_trace).
     """
-    outputs = [F["canonical_records"], F["gate_results"], trace_path()]
+    outputs = [dataset().member("canonical_records"),
+               dataset().member("gate_results"), trace_path()]
     return outputs, [path.name for path in outputs]
 
 
@@ -179,12 +189,17 @@ def _stage_outputs() -> tuple[list, list[str]]:
 def main() -> None:
     from core.timing import Timing
 
-    timing = Timing("data_prep")
+    timing = Timing(STAGE)
     # Stage manifest (SILENT_DROPS task 6) — begin BEFORE the work: the
-    # raw export is hashed now (53MB, chunked) so the record pins exactly
+    # raw export is sized now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed; the pipeline is
     # deterministic, no RNG is consumed.
-    manifest = begin_manifest("data_prep", inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
+    manifest = begin_manifest(
+        STAGE,
+        inputs=[dataset().member("source"), CONFIG_PATH, VOCABULARY_CONFIG_PATH,
+                dataset().member("number_tokens_reference")],
+        seed=SEED,
+    )
     timing.mark("manifest_begin")
     with log.section("data_prep.pipeline"):
         df = _load_raw()
@@ -192,7 +207,7 @@ def main() -> None:
         log.info(f"[data_prep] loaded {len(df):,} raw rows")
         # ONE writer for the stage: the pipeline adds its step rows to THIS run and
         # leaves the commit to us, so the manifest's accounting joins them.
-        trace = TraceRun("data_prep")
+        trace = TraceRun(STAGE)
         pairs, canon = run_within_brand_pipeline(df, trace)
         timing.mark("run_within_brand_pipeline")
     log.info(f"[data_prep] pairs: {len(pairs):,} | canonical records: {len(canon):,}")
@@ -208,7 +223,7 @@ def _close_manifest(manifest, timing, df: pd.DataFrame, pairs, canon, trace) -> 
     manifest publication and the closing closure line — the one
     responsibility the stage owes AFTER the pipeline ran. The consolidated-trace
     rows are added to the stage's single writer and committed BEFORE the manifest
-    hashes it, so the shipped manifest pins the trace it describes.
+    sizes it, so the shipped manifest pins the trace it describes.
     """
     # ---- row accounting (SILENT_DROPS task 6; capture-only) ────────────────
     # The pipeline's gtin-guard drops rows for two loud reasons (both

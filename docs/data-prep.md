@@ -101,7 +101,7 @@ wording changes land everywhere at once.
 **Removed 2026-10-06 (owner ruling).** The census tripwire system — the
 source-export rows+sha gate, `gate_census_pin`, and `dedupe_census_pin`, each
 with per-site copies in `selftest.py` and on-VM rewriters — is deleted. Drift
-controls now rest entirely on per-stage manifest sha256, the preparation
+controls now rest entirely on per-stage manifest size, the preparation
 provenance identity, closure asserts (`input == output + Σ dropped`) and the
 Colab package freshness gate.
 

@@ -30,6 +30,9 @@ Row = Mapping[str, object]
 
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_BOOTSTRAP = 2000
+# Deliberate per-experiment bootstrap seed (NOT core.common.SED): this module
+# is hermetic (no config import) and the CI draws are a reporting concern,
+# not the training determinism seed.
 DEFAULT_SEED = 1729
 DEFAULT_ALPHA = 0.05
 
@@ -39,7 +42,8 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, *,
     """Thresholded binary metrics + PR-AUC for one slice.
 
     A slice with a single observed class scores ``precision``/``recall``/``f1``
-    as 0.0 (never a fabricated 1.0) and ``pr_auc`` as ``None`` — a metric that
+    per the sklearn ``zero_division=0`` convention (1.0 only when every
+    prediction is a true positive) and ``pr_auc`` as ``None`` — a metric that
     cannot be estimated is reported as missing, never as perfect.
     """
     y_true = np.asarray(y_true, dtype=int)

@@ -53,11 +53,12 @@ class SuiteConfig(BaseModel):
 
     @model_validator(mode='after')
     def check_memory(self):
-        if set(self.memory_reservations_gb) - {'text', 'gnn_only', 'cascade'}:
+        from model_tracks.resume import TRACKS
+        if set(self.memory_reservations_gb) - set(TRACKS):
             raise ValueError('unknown track memory reservation')
         if any(v <= 0 for v in self.memory_reservations_gb.values()):
             raise ValueError('memory reservations must be positive measured peaks')
-        if self.memory_reservations_gb and set(self.memory_reservations_gb) != {'text', 'gnn_only', 'cascade'}:
+        if self.memory_reservations_gb and set(self.memory_reservations_gb) != set(TRACKS):
             raise ValueError('provide measured memory peaks for all three tracks together')
         return self
 

@@ -17,8 +17,10 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
-import sys; sys.path.insert(0, str(ROOT/'src'))
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
+sys.path.insert(0, str(ROOT/'src'))
 from core.common import audit_finding
 sys.path.insert(0, str(ROOT / 'src'))
 from core.gtin import gtin_validity

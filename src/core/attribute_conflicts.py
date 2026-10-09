@@ -840,8 +840,9 @@ def veto_eligibility_ledger(
     """Per-dimension veto-eligibility ledger (evidence class + config delta).
 
     Reads ONLY evidence and CURRENT config state — never writes either:
-      * census  results/attribute_universe_census.json['census']['keys']
-        (conflict rates are the evidence class's measured origin);
+      * census  the attribute-universe census bound as
+        ``layouts.attribute_universe_census`` (conflict rates are the evidence
+        class's measured origin);
       * config  rand_matching.targeted_veto_gates.veto_dimensions and its
         schema allow-list (CRITICAL_ATTRIBUTE_DIMENSIONS + pack_material).
     The owner flips config; this ledger reports the exact delta needed.
@@ -855,9 +856,9 @@ def veto_eligibility_ledger(
     from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 
     if census is None:
-        from core.common import TRAIN_ROOT
+        from core.common import artifact
 
-        path = TRAIN_ROOT / "artifacts/evidence/attribute_universe_census.json"
+        path = artifact('attribute_universe_census')
         if not path.exists():
             raise FileNotFoundError(
                 f"veto_eligibility_ledger requires {path.as_posix()} (the "

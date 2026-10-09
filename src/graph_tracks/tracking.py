@@ -1,4 +1,4 @@
-"""W&B graph tracking with explicit offline support; no MLflow dependency."""
+"""W&B graph tracking with explicit offline support."""
 from __future__ import annotations
 import os
 from pathlib import Path

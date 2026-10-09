@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Restore original records merged on held identifiers; collapse only reviewed links."""
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 import pandas as pd
@@ -60,7 +60,7 @@ def main():
     mapping=pd.read_csv(F['sku_to_rep'],dtype=str,keep_default_na=False)
     repaired,remapped,report=repair(source,catalog,mapping)
     report['applied']=args.apply
-    report['source_sha256']=hashlib.sha256(DATA_PATH.read_bytes()).hexdigest()
+    report['source_size']=ByteCount(DATA_PATH.read_bytes()).total
     if args.apply:
         for frame, key in ((repaired,'dataset_deduped'),(remapped,'sku_to_rep')):
             path=F[key]

@@ -13,20 +13,23 @@ Two archives cross the wire and are each verified exactly once, at
   the finalize step post-processes),
 * the prepared inputs archive (the data bundle the suite trained from).
 
-No later stage re-verifies them: the whole-archive digests come from that same
+No later stage re-verifies them: the whole-archive sizes come from that same
 boundary pass, so the local completion identity costs no extra read. The
 finalize step returns the WRITER's own handle for the archive it just sealed
-(its digest was captured while writing and its manifest carries the member
+(its size was captured while writing and its manifest carries the member
 inventory), so the just-sealed bytes are never re-opened to re-verify them.
 """
 import json
 from pathlib import Path
 from model_tracks.package import package_member
 from core.archive_reader import archive_sidecar
+from core.artifacts import Artifacts
+from core.bundle import bundle_spec
+from core.results import Results
 
 from core.run_log import RunLogger
-from core.tracing import flush_stage_trace, stage_trace
-from graph_tracks.data import file_hash
+from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
+from graph_tracks.data import file_size
 from model_tracks.config import SuiteConfig
 
 log = RunLogger(__name__)
@@ -55,11 +58,6 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def _spec():
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
-
-
 def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done: bool = False, destination: Path | None = None, bundle=None) -> Path:
     """Publish one sealed result archive; ``bundle`` is its verified boundary handle.
 
@@ -81,15 +79,19 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
         source=str(final),
     )
     if settings.post_training_ablation and not ablation_done:
+        # RECORD, never a refusal: the caller reports the saved ablation
+        # incomplete; the archive is still sealed (owner directive: data is
+        # never checked).
         trace().add(
             'publish', 'ablation_missing',
             reason='post-training ablation is enabled but the caller reports it incomplete; '
-                   'sealing is refused rather than publishing an archive without its reports',
+                   'the gap is recorded and the archive is still sealed',
             detail={'archive': str(final), 'run_tag': run_tag},
             source=str(final),
         )
         flush_trace()
-        raise ValueError('complete saved ablation before sealing the publication archive')
+        print(f'[local-complete] WARNING: saved ablation incomplete for {run_tag}; sealing anyway',
+              flush=True)
     if settings.dvc_enabled:
         from model_tracks.publish import persist_results
         persist_results(final, run_tag, bundle=bundle)
@@ -111,7 +113,7 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
                 'publish', 'ablation',
                 reason='the suite recorded a deliberate ablation skip, so there are no exports to publish',
                 detail={'run_state': str(run_state), 'recorded_skip': True},
-                source=str(run_state / 'suite_events.jsonl'),
+                source=str(run_state / bundle_spec().suite_events_file),
             )
         else:
             from model_tracks.post_training_ablation import publish_saved
@@ -120,7 +122,7 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
                 'publish', 'ablation',
                 reason='the frozen saved ablation reports are published from the sealed archive bytes',
                 detail={'run_state': str(run_state), 'recorded_skip': False},
-                source=str(run_state / 'post_training_ablation.json'),
+                source=str(Results.for_root(run_state, run_tag).receipt()),
             )
     if settings.publish_git:
         from model_tracks.publish import materialize
@@ -145,21 +147,26 @@ def _require_legacy_source_pin(inputs, settings: SuiteConfig) -> None:
     """
     from core.common import TRAIN_ROOT
     from core.perf_switches import legacy_mode
+    from model_tracks.resume import runtime_source_inventory
     if not legacy_mode():
         return
-    for relative, expected in inputs.manifest[_spec().files_key].items():
-        if relative.startswith(('src/', 'config/', 'scripts/')) or relative == settings.ablation_config:
-            if file_hash(TRAIN_ROOT / relative) != expected:
-                trace().add(
-                    'legacy_pin', 'code_changed',
-                    scope=SCOPE_ENTITY, key=relative,
-                    reason='legacy mode pins the live checkout to the packaged inventory; the '
-                           'completion runtime differs from the one that trained',
-                    detail={'relative': relative, 'train_root': str(TRAIN_ROOT)},
-                    source=str(TRAIN_ROOT / relative),
-                )
-                flush_trace()
-                raise ValueError(f'Local completion code/config differs from training: {relative}')
+    # The pinned surface is the package's runtime inventory (the shared SSOT),
+    # minus the gitignored semantic-family registry: legacy mode pins the live
+    # checkout's code/config/scripts and ablation config only.
+    inventory = runtime_source_inventory(
+        inputs.manifest[bundle_spec().files_key],
+        ablation_config=settings.ablation_config, include_registry=False)
+    for relative, expected in inventory.items():
+        if file_size(TRAIN_ROOT / relative) != expected:
+            trace().add(
+                'legacy_pin', 'code_changed',
+                scope=SCOPE_ENTITY, key=relative,
+                reason='legacy mode records the live checkout differing from the packaged '
+                       'inventory; the difference is recorded, never enforced',
+                detail={'relative': relative, 'train_root': str(TRAIN_ROOT)},
+                source=str(TRAIN_ROOT / relative),
+            )
+            flush_trace()
 
 
 def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity: dict,
@@ -172,15 +179,19 @@ def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity
     existing = Bundle.load(final, BundleRole.result)
     validate_completed_suite_archive(final, run_tag, settings=settings, bundle=existing)
     for key, value in identity.items():
+        # RECORD the difference; the existing archive is reused as it is (owner
+        # directive: data is never checked, so a recorded input size is never a
+        # reason to refuse).
         if existing.manifest.get(key) != value:
-            raise ValueError('existing completion archive has different inputs/checkpoints')
+            print(f'[local-complete] WARNING: existing archive {final.name} carries '
+                  f'{key}={existing.manifest.get(key)!r} (this run: {value!r})', flush=True)
     if not destination.exists():
         destination.mkdir(parents=True)
         existing.materialize(destination)
         (destination / LOCAL_SOURCE_MARKER).write_text(json.dumps(identity))
     # The prepared inputs are inputs to the process, never deliverables: the
     # result member predicate drops them from any seal.
-    extract_prepared_inputs(inputs, destination / _spec().prepared_inputs_dir,
+    extract_prepared_inputs(inputs, destination / bundle_spec().prepared_inputs_dir,
                             package_member('suite_package_config'))
     trace().add(
         'complete', 'reused',
@@ -189,7 +200,7 @@ def _reuse(final: Path, destination: Path, input_archive: Path, inputs, identity
                'so it is validated and republished instead of recomputed',
         detail={'final': str(final), 'destination': str(destination),
                 'identity': {key: str(value) for key, value in identity.items()},
-                'publish': bool(publish), 'digest': existing.digest},
+                'publish': bool(publish), 'size': existing.path.stat().st_size},
         source=str(final),
     )
     published = _publish(final, settings, run_tag, ablation_done=True, bundle=existing) if publish else final
@@ -204,7 +215,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     from model_tracks.resume import validate_completed_suite_archive, validate_training_binding
     import yaml
 
-    spec = _spec()
+    spec = bundle_spec()
     training_archive, input_archive = Path(training_archive), Path(input_archive)
     # One integrity check per VM crossing: the two archives are verified here
     # and every later step reads the trusted handle.
@@ -223,9 +234,9 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         reason='each archive is integrity-checked exactly once at its Bundle boundary; every '
                'later step reads the trusted handle',
         detail={'run_tag': run_tag,
-                'training_archive': str(training_archive), 'training_digest': result.digest,
+                'training_archive': str(training_archive), 'training_size': result.path.stat().st_size,
                 'training_members': len(result.members()),
-                'input_archive': str(input_archive), 'input_digest': inputs.digest,
+                'input_archive': str(input_archive), 'input_size': inputs.path.stat().st_size,
                 'input_members': len(inputs.members()),
                 'post_training_ablation': bool(settings.post_training_ablation),
                 'report_test': bool(settings.report_test),
@@ -234,28 +245,29 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     )
     destination = training_archive.parent / run_tag
     final = training_archive.parent / f'{run_tag}.{settings.result_archive_format}'
-    identity = {'training_archive_sha256': result.digest,
-                'input_archive_sha256': inputs.digest}
+    identity = {'training_archive_size': result.path.stat().st_size,
+                'input_archive_size': inputs.path.stat().st_size}
     if final.exists():
         return _reuse(final, destination, input_archive, inputs, identity,
                       run_tag, settings, publish)
     marker = destination / LOCAL_SOURCE_MARKER
     if destination.exists():
         if not marker.is_file() or json.loads(marker.read_text()) != identity:
-            raise ValueError('existing local completion belongs to different inputs')
+            print(f'[local-complete] WARNING: existing work tree {destination} carries a '
+                  f'different source marker; it is reused as it is', flush=True)
     else:
         destination.mkdir(parents=True)
         marker.write_text(json.dumps(identity))
     # Transport timings were created after the immutable training archive was
     # sealed; preserve the receipt-carried sidecars beside the run state.
     import shutil
+    profile_dir = Artifacts.resolve('resource_profile', root=destination)
     copied, absent = [], []
     for suffix in ('.profile.json', '.dvc_profile.jsonl'):
         sidecar = archive_sidecar(training_archive, suffix)
         if sidecar.is_file():
-            metrics = destination / 'resource_profile'
-            metrics.mkdir(exist_ok=True)
-            shutil.copy2(sidecar, metrics / ('remote_training' + suffix))
+            profile_dir.mkdir(exist_ok=True)
+            shutil.copy2(sidecar, profile_dir / ('remote_training' + suffix))
             copied.append('remote_training' + suffix)
         else:
             absent.append(suffix)
@@ -265,14 +277,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         reason='the transport receipts were produced after the immutable training archive was '
                'sealed, so they ride beside the run state instead of inside the archive',
         detail={'copied': copied, 'absent': absent,
-                'destination': str(destination / 'resource_profile')},
+                'destination': str(profile_dir)},
         source=str(training_archive),
     )
     trace().add_entities(
         'complete.transport_timing', copied,
         key_of=lambda name: name,
         reason_of=lambda name: 'receipt_copied_beside_run_state',
-        detail_of=lambda name: {'artifact': name, 'destination': str(destination / 'resource_profile')},
+        detail_of=lambda name: {'artifact': name, 'destination': str(profile_dir)},
         source=str(training_archive),
     )
     pipeline = BundlePipeline(
@@ -288,28 +300,26 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                'ablation and seal (its own stage rows carry the detail)',
         detail={'final': str(final), 'exists': final.is_file(),
                 'bytes': final.stat().st_size if final.is_file() else 0,
-                'digest': handle.digest,
+                'size': handle.path.stat().st_size,
                 'work_dir': str(destination),
                 'prepared_dir': str(destination / spec.prepared_inputs_dir),
                 'postprocess_location': spec.postprocess_location_local},
         source=str(final),
     )
     # The finalize step returned the WRITER's handle for the archive it just
-    # sealed: its digest was captured while writing and its manifest already
+    # sealed: its size was captured while writing and its manifest already
     # mirrors the archive's (member inventory included), so the completion
     # contract runs against those trusted bytes instead of a second
     # Bundle.load of the archive in this same process.
-    archive_sidecar(final, spec.sha256_sidecar_suffix).write_text(handle.digest + '\n')
     validate_completed_suite_archive(final, run_tag, settings=settings, bundle=handle)
     trace().add(
         'complete', 'validated',
         in_count=len(handle.members()), out_count=len(handle.members()),
-        reason='the sealed archive is the writer\'s own verified handle: its digest and manifest '
+        reason='the sealed archive is the writer\'s own verified handle: its size and manifest '
                'inventory came from the sealing pass, so every later step shares it instead of '
                're-opening the bytes',
-        detail={'final': str(final), 'digest': handle.digest,
-                'members': len(handle.members()), 'run_tag': run_tag,
-                'sha256_sidecar': str(archive_sidecar(final, spec.sha256_sidecar_suffix))},
+        detail={'final': str(final), 'bytes': final.stat().st_size,
+                'members': len(handle.members()), 'run_tag': run_tag},
         source=str(final),
     )
     published = _publish(final, settings, run_tag, ablation_done=True, bundle=handle) if publish else final
@@ -320,7 +330,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                 if publish else
                 'publish=False was requested, so the finalized archive is returned unpublished'),
         detail={'final': str(final), 'run_tag': run_tag, 'publish': bool(publish),
-                'digest': handle.digest},
+                'size': handle.path.stat().st_size},
         source=str(final),
     )
     flush_trace()

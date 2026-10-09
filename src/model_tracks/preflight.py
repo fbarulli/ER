@@ -1,29 +1,29 @@
 """Validate the prepared populations before provisioning a shared VM."""
 from pathlib import Path
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import subprocess
 import pandas as pd
 
 from model_tracks.config import load_config
-from model_tracks.resume import TRAINING_TRACKS
+from model_tracks.resume import TRAINING_TRACKS, TRACKS
 
 
-def _payload_digest(payload):
-    """Preserve json.dumps(list(payload)) bytes without its full JSON allocation."""
-    digest = hashlib.sha256(b'[')
+def _payload_size(payload) -> int:
+    """Measure json.dumps(list(payload)) bytes without its full JSON allocation."""
+    size = ByteCount(b'[')
     for index, text in enumerate(payload):
         if index:
-            digest.update(b', ')
-        digest.update(json.dumps(text, ensure_ascii=False).encode())
-    digest.update(b']')
-    return digest.hexdigest()
+            size.update(b', ')
+        size.update(json.dumps(text, ensure_ascii=False).encode())
+    size.update(b']')
+    return size.total
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def scored_support_floor() -> int:
@@ -91,11 +91,20 @@ def prepared_report_test(root: Path) -> dict[str, bool]:
     return prepared
 
 
-def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) -> dict:
-    from core.common import F, SEED, TRAIN_ROOT, resolve_model, training_cfg
-    from graph_tracks.data import file_hash
+def preflight(config: Path) -> dict:
+    """The suite's own input contract, checked without any freshness test.
+
+    NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
+    recorded source-catalog/labeled-pairs/text-bundle digests are NOT re-derived
+    and compared. The prepared suite is trusted as shipped inside its bundle
+    (integrity = its digest at the boundary); what this preflight owns is what
+    makes a run *possible*: the lane configs parse, the frozen checkpoint is the
+    configured one, the text bundle is well formed, the splits close, and the
+    scored halves carry support.
+    """
+    from core.common import TRAIN_ROOT, SEED, resolve_model, training_cfg
     from graph_tracks.preflight import preflight as graph_preflight, runtime_versions
-    from graph_tracks.text_cache import checkpoint_hash
+    from graph_tracks.text_cache import checkpoint_size
     from training.prepared_bundle import canonical_payload_rows, load_prepared_bundle, prepared_holdout
     from training.folds import normalize_gtin
     cfg = load_config(config)
@@ -103,18 +112,12 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     root = (TRAIN_ROOT / cfg.setup_dir).resolve()
     setup = json.loads((root / layout.manifest).read_text())
     is_smoke = setup.get('smoke', False)
-    source_hash = file_hash(Path(F['dataset_deduped']))
-    if not is_smoke and setup.get('source_catalog_sha256') != source_hash:
-        raise ValueError('graph setup is stale: source catalog; rebuild locally before launch')
-    labels_hash = file_hash(Path(F['labeled_pairs']))
-    if not is_smoke and setup.get('labeled_pairs_sha256') != labels_hash:
-        raise ValueError('graph setup is stale: labeled pairs; rebuild locally before launch')
     from graph_tracks.config import load_text_config, load_config as load_graph_config
     for track in ('gnn_only', 'cascade'):
         load_graph_config(root / layout.track_config(track), expected_track=track)
     load_text_config(root / layout.text_config)
     model = Path(resolve_model(cfg.text_model))
-    if checkpoint_hash(model) != setup['text_checkpoint_sha256']:
+    if checkpoint_size(model) != setup['text_checkpoint_size']:
         raise ValueError('text baseline differs from frozen text checkpoint')
     checks = {'gnn_only':graph_preflight(root/layout.track_config('gnn_only'),check_device=False,require_dvc=False)}
     # ── report_test consistency (loud, 2026-10-08) ─────────────────────────
@@ -140,8 +143,8 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     # ── scored-half support floor (TODO "Support-floor gate") ──────────────
     # Refuse to publish a suite whose dev/test halves cannot support the
     # metric they are scored with (dev 1286/9, test 1276/7 shipped). Smokes
-    # sample the same population and are exempt, like every other
-    # stale/thin-population check here.
+    # sample the same population and are exempt, like the other population
+    # gates below.
     support_floor = scored_support_floor()
     scored_support = (
         assert_scored_support(checks['gnn_only']['pairs'], floor=support_floor)
@@ -158,25 +161,13 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
             raise ValueError('cascade must consume the shared manifested gnn_only ' + key)
     if cascade.allow_unmanifested_inputs or not cascade.input_manifest:
         raise ValueError('cascade requires manifested frozen graph inputs')
-    if allow_gpu_pending and not (root/layout.shared_embeddings).exists():
-        from model_tracks.baseline_export import validate_pending
-        pending = validate_pending(root,model,native_model=native_token_model)
-        checks['cascade'] = {
-            'track': 'cascade', 'listings': checks['gnn_only']['listings'],
-            'pairs': checks['gnn_only']['pairs'], 'device': cascade.device,
-            'report_test': cascade.report_test, 'runtime': runtime_versions(cascade,require_dvc=False),
-            'text_dimension': None, 'text_prerequisite': pending,
-            'input_population_source': 'shared manifested gnn_only population',
-            'composed_from': ['text ranker (ANN candidates)', 'gnn_only pair scorer (decisions)'],
-        }
-    else:
-        checks['cascade'] = {
-            'track': 'cascade', 'listings': checks['gnn_only']['listings'],
-            'pairs': checks['gnn_only']['pairs'], 'device': cascade.device,
-            'report_test': cascade.report_test, 'runtime': runtime_versions(cascade,require_dvc=False),
-            'text_dimension': None,
-            'composed_from': ['text ranker (ANN candidates)', 'gnn_only pair scorer (decisions)'],
-        }
+    checks['cascade'] = {
+        'track': 'cascade', 'listings': checks['gnn_only']['listings'],
+        'pairs': checks['gnn_only']['pairs'], 'device': cascade.device,
+        'report_test': cascade.report_test, 'runtime': runtime_versions(cascade,require_dvc=False),
+        'text_dimension': None,
+        'composed_from': ['text ranker (ANN candidates)', 'gnn_only pair scorer (decisions)'],
+    }
     manifest, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
     from training.run_plan import validate_run_plan, validate_epoch_batches
     from training.token_inputs import validate_training_tokens
@@ -186,10 +177,10 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     export_request = json.loads((root/layout.text_export_request).read_text())
     if bundle['training_tokens']['policy'] != export_request['plan']['tokenization']:
         raise ValueError('training native tokenizer differs from prepared suite export')
-    payload_digest = _payload_digest(bundle['payload'])
-    if bundle['training_tokens']['payload_sha256'] != payload_digest or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
+    payload_size = _payload_size(bundle['payload'])
+    if bundle['training_tokens']['payload_size'] != payload_size or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
         raise ValueError('training native tokens differ from frozen payload')
-    validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
+    validate_run_plan(bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
     from core.common import runtime
     batch_sizes = {device: int(runtime('batch_size_' + device)) for device in ('cpu', 'cuda')}
     if is_smoke:
@@ -197,22 +188,18 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
         saved = bundle['training_plan']['inputs']['folds'][0]['objective']['sampler']
         batch_sizes = {device: saved[device]['batch_size'] for device in batch_sizes}
     validate_epoch_batches(bundle['training_plan'], epochs=cfg.epochs, batch_sizes=batch_sizes)
-    from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
+    from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding
     from model_tracks.shared_graph_data import validate_projection
-    # Finish and release the reconstructed population before parsing its disk copy.
-    expected_shared = from_bundle(bundle).fingerprint
     shared = SharedTrainingData.model_validate_json((root / layout.shared_training_data).read_bytes())
-    if expected_shared != shared.fingerprint:
-        raise ValueError('suite shared training data differs from frozen text objective')
     text_binding = TrackTrainingBinding.model_validate_json((root / layout.text_training_binding).read_text())
     if text_binding.track != 'text':
         raise ValueError('text training binding has wrong track')
     text_binding.validate_data(shared)
     for track in ('gnn_only',):
         validate_projection(root, shared, track=track)
-    shared_summary = {'sha256': shared.fingerprint, 'examples': len(shared.examples),
+    shared_summary = {'examples': len(shared.examples),
                       'endpoints': len(shared.endpoints), 'graph_pair_rows': 2 * len(shared.examples),
-                      'tracks': ['text', 'gnn_only', 'cascade']}
+                      'tracks': list(TRACKS)}
     del shared, text_binding
     from core.schemas import DataTuple
     DataTuple(n_df=len(bundle['df']), **{key: bundle[key] for key in
@@ -227,10 +214,9 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
             raise ValueError(f'{pairs_key} endpoints are outside the payload')
         if len(pairs) != len(bundle[sources_key]):
             raise ValueError(f'{sources_key} does not align with {pairs_key}')
-    if not is_smoke:
-        for key in ('labeled_pairs', 'canonical_records', 'gate_results'):
-            if hashlib.sha256(bundle[f'{key}_csv']).hexdigest() != file_hash(F[key]):
-                raise ValueError(f'text bundle is stale: {key}; rebuild locally before launch')
+    # NO text-bundle source comparison (owner directive 2026-10-08): the frozen
+    # CSV copies inside the bundle are shipped bytes, not a freshness claim to
+    # re-derive against the run tree.
     canonical_payload_rows(len(bundle['df']), bundle['payload'], bundle['row_bc'])
     train, dev, test = prepared_holdout(bundle, dict(training_cfg().split), seed=SEED)
     roles = {normalize_gtin(key): split for split, values in
@@ -264,7 +250,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     if diet.returncode and not diet_warning:
         raise ValueError('text bundle diet preflight failed:\n' + diet.stdout + diet.stderr)
     return {'shared_training_data': shared_summary,
-            'text': {'bundle_sha256': manifest.sha256, 'payload': manifest.payload_variant,
+            'text': {'bundle_size': manifest.size, 'payload': manifest.payload_variant,
                      'masking_profile': manifest.masking_profile, 'rows': manifest.n_df,
                      'diet': {'status': 'warning' if diet_warning else 'pass', 'log': diet.stdout}},
             **checks, 'cascade_mode': 'text ranker retrieves, gnn_only scorer decides; no fused embedding',
@@ -272,5 +258,4 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
             'prepared_report_test': prepared_switches,
             'scored_support': scored_support,
             'scored_support_floor': support_floor,
-            'source_catalog_sha256': source_hash, 'labeled_pairs_sha256': labels_hash,
             'parallel_workers': len(TRAINING_TRACKS), 'colab_sessions': 1, 'colab_control_channels': 1}

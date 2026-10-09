@@ -24,6 +24,11 @@ def reports(tmp_path, monkeypatch):
     paths = {k:tmp_path / (k + '.json') for k in module.F}
     monkeypatch.setattr(module, 'F', paths)
     monkeypatch.setattr(module, 'TRAIN_ROOT', tmp_path)
+    # controlled_influence/_bundle_header discover artifacts under
+    # core.common.RESULTS (config-owned, EUROMONITOR_RESULTS_DIR-aware); the
+    # dashboard binds it at import, so isolate it to this tmp tree or real
+    # results/model_tracks artifacts leak into these assertions.
+    monkeypatch.setattr(module, 'RESULTS', tmp_path / 'results')
     monkeypatch.setattr(module, 'runs', lambda: {})
     paths['decision_suite_config'].write_text('setup_dir: setup\ntext_bundle: unused\n')
     paths['decision_ledger'].parent.mkdir(exist_ok=True)
@@ -54,7 +59,7 @@ def stage_audits(module):
     (root / 'results.jsonl').write_text('\n'.join(json.dumps({**x,'status':'ok','noul':score,'gate':'proceed'})
         for x,score in zip(cases,[.8,.2])) + '\n' + json.dumps({'gtin1':'1','gtin2':'2','input_scope':'unrelated','status':'ok','noul':1}))
     module.F['decision_ledger'].write_text(json.dumps([{'round':7,'sample':'jev/sample.json','checkpoint':'jev/results.jsonl',
-                                                      'sample_sha256':module.file_hash(root / 'sample.json')}]))
+                                                      'sample_size':module.file_size(root / 'sample.json')}]))
 
 
 def test_trace_preserves_order_scope_old_gate_and_new_names(reports):
@@ -84,11 +89,11 @@ def test_stale_cache_disables_scores(reports, monkeypatch):
     (setup / 'shared_minilm__embeddings.npz').write_bytes(b'placeholder')
     monkeypatch.setattr(reports,'load_text_cache',lambda *args:(np.ones((3,2)),{}))
     def stale(*args):
-        raise ValueError('text cache provenance is stale: catalog_sha256')
+        raise ValueError('text cache provenance is stale: catalog_size')
     monkeypatch.setattr(reports,'validate_prepared_provenance',stale)
     result = reports.inspect()
     assert result['embedding']['status'] == 'unusable'
-    assert 'catalog_sha256' in result['embedding']['reason']
+    assert 'catalog_size' in result['embedding']['reason']
     assert result['traces'][0]['embedding_cosine'] is None
 
 
@@ -106,7 +111,7 @@ def test_extra_embedding_ids_cannot_be_used(reports, monkeypatch):
 
 def test_checksum_mismatch_and_file_updates_are_live(reports):
     stage_audits(reports)
-    reports.F['decision_rebuild_report'].write_text(json.dumps({'source_sha256':{
+    reports.F['decision_rebuild_report'].write_text(json.dumps({'source_size':{
         reports.F['canonical_records'].name:'old'}}))
     first = reports.inspect()
     assert first['rebuild_provenance'][0]['matches'] is False
@@ -152,7 +157,7 @@ def test_saved_scores_use_frozen_mapping_and_keep_threshold(reports, monkeypatch
         {'gtin':'2','source_rows':json.dumps([{'sku_id':'historical-b','gtin':'2'}])}])
     write_csv(root / 'hybrid/hybrid__scored_pairs.csv', [
         {'product_id1':'historical-a','product_id2':'historical-b','score':'.61','prediction':'1','split':'dev'}])
-    (root / 'hybrid/hybrid__report_manifest.json').write_text(json.dumps({'threshold':.6,'checkpoint_sha256':'saved'}))
+    (root / 'hybrid/hybrid__report_manifest.json').write_text(json.dumps({'threshold':.6,'checkpoint_size':'saved'}))
     monkeypatch.setattr(reports,'runs',lambda:{'run':root})
     trace = reports.inspect()['traces'][0]
     saved = trace['saved_model_evidence'][0]
@@ -217,23 +222,32 @@ def test_legacy_report_attribute_companion_is_explicitly_unusable(reports):
     assert all(not x for x in result['traces'][0]['report_attribute_classes'].values())
 
 
-def test_changed_loaded_config_is_rejected(reports, tmp_path, monkeypatch):
+def test_a_changed_config_no_longer_blocks_inspection(reports, tmp_path, monkeypatch):
+    """No freshness verdict: an edited config is read, never a 409.
+
+    The dashboard reads the config on every request (owner directive
+    2026-10-08: zero freshness checks), so a file that changed after import
+    neither blocks a trace nor demands a restart. The path stays in the watch
+    set purely for the while-assembling snapshot guard.
+    """
     config = tmp_path / 'changed.yaml'
     config.write_text('new configuration')
-    monkeypatch.setattr(reports,'_LOADED_CONFIG_HASHES',{config:'previous configuration checksum'})
-    with pytest.raises(HTTPException) as exc:
-        reports.inspect()
-    assert exc.value.status_code == 409
-    assert 'restart' in exc.value.detail
+    monkeypatch.setattr(reports, '_WATCHED_CONFIG_PATHS', (config,))
+    result = reports.inspect()
+    assert result['traces'] is not None
+    assert config.is_file()
 
 
-def test_stale_controlled_influence_is_withheld(reports):
+def test_unusable_controlled_influence_is_withheld(reports):
     path = reports.F['decision_ablation_report']
     path.write_text(json.dumps({'schema':'er-attribute-ablation-report-v1','request_path':'missing',
                                'rows':[{'attribute':'volume','score_delta':99}]}))
+    single = reports._controlled_report(path)
+    assert single['rows'] == []
+    assert single['status'].startswith('invalid controlled ablation')
     result = reports.controlled_influence('volume')
     assert result['rows'] == []
-    assert result['status'].startswith('invalid or stale')
+    assert result['status'] == 'no valid controlled ablation'
 
 
 def test_controlled_ablation_joins_pair_gate_jev_and_attribute(reports,monkeypatch):
@@ -248,3 +262,45 @@ def test_controlled_ablation_joins_pair_gate_jev_and_attribute(reports,monkeypat
     assert trace['gate']['gate_reason'] == 'review'
     assert trace['jev_history']
     assert result['attribute_tracking'][0]['cases'][0]['controlled_ablation_results'] == [row]
+
+
+# ── the decision surface reads declared names, never its own copies ─────────
+# ``saved_run_context`` used to spell ``suite_manifest.json``/``run_tag``, and
+# the prepared-setup reads spelled ``eligible_catalog.csv`` etc.; both classes
+# of name are declarations owned elsewhere (BundleSpec / preparation.graph_setup),
+# so re-pointing the declaration must move this reader.
+
+def test_saved_run_context_follows_the_bundle_spec(reports, tmp_path, monkeypatch):
+    from core import common
+
+    spec = common.training_cfg().bundle
+    monkeypatch.setattr(spec, 'suite_manifest_file', 'renamed_manifest.json')
+    monkeypatch.setattr(spec, 'run_tag_key', 'renamed_tag')
+    run = tmp_path / 'run'
+    run.mkdir()
+    (run / 'renamed_manifest.json').write_text(json.dumps({'renamed_tag': 'run-9'}))
+
+    assert reports.saved_run_context(run, []) is None
+    context = reports.saved_run_context(run, ['renamed_manifest.json'])
+    assert context['run_tag'] == 'run-9'
+    assert context['source'] == 'renamed_manifest.json'
+
+
+def test_prepared_setup_reads_follow_the_declared_layout(reports, tmp_path, monkeypatch):
+    from core import common
+
+    layout = common.prepared_setup_layout()
+    monkeypatch.setattr(layout, 'catalog', 'renamed_catalog.csv')
+    monkeypatch.setattr(layout, 'listings', 'renamed_listings.json')
+    monkeypatch.setattr(layout, 'embedding_request', 'renamed_request.json')
+    setup = tmp_path / 'setup'
+    (setup / layout.prepared_dir).mkdir(parents=True, exist_ok=True)
+    write_csv(setup / 'renamed_catalog.csv', [{'sku_id': 'a', 'gtin': '1'}])
+    (setup / layout.prepared_dir / 'renamed_listings.json').write_text(
+        json.dumps({'schema': 'er-graph-listings-v1', 'listings': []}))
+    (setup / 'renamed_request.json').write_text(json.dumps({'ids': ['a']}))
+
+    assert reports.embedding_state(setup, ['a'], 'missing-model')[0]['path'].endswith(
+        layout.shared_embeddings)
+    state, _ = reports.request_state(setup, 'missing-model', ['a'])
+    assert state.get('source', '').endswith('renamed_request.json')

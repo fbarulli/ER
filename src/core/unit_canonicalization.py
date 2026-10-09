@@ -41,12 +41,12 @@ def _ensure_volume_table() -> dict:
     return _VOLUME_TO_ML
 
 
-# Persisted ANN indexes include this value in their preprocessing fingerprint.
+# Persisted ANN indexes include this version in their preprocessing record.
 # Increment it whenever canonical numeric semantics change.
 # v2: the ml-per-unit table moved to config/paths.yaml `units` (one table
 # serving core.text's parse, the converter and the NER features), so the
 # converter now accepts the whole decilitre family and 'cc' where v1 raised
-# on / rejected them. Persisted preprocessing fingerprints must rebuild.
+# on / rejected them. Persisted preprocessing records must rebuild.
 UNIT_CANONICALIZATION_VERSION = "unit-canonical-v2"
 
 

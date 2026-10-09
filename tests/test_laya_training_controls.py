@@ -349,6 +349,8 @@ def _render_kernel():
         "REVISION": "deadbeef",
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
+        "SIZE_OF": laya_lane._file_bytes_of_source(),
+        "SESSION_REPORT": laya_lane._session_report_helper(),
     }
     preflight = laya_lane._template(laya_lane.FINETUNE_RUNTIME_PREFLIGHT, values)
     script = laya_lane._template(

@@ -225,6 +225,40 @@ def test_run_sequences_cascade_after_the_parallel_trained_lanes(tmp_path, monkey
     assert order == [('parallel', ('text', 'gnn_only')), ('postprocess', 'cascade')]
 
 
+def test_run_postprocess_track_delegates_to_the_parallel_ssot(tmp_path, monkeypatch):
+    """The supervisor's combinator lane spawns through ``parallel``.
+
+    The spawn mechanics (env, log, cwd, barrier exclusion) have exactly one home
+    (:func:`model_tracks.parallel.run_postprocess_track`); the supervisor only
+    builds the command and records the run's rows.
+    """
+    from types import SimpleNamespace as NS
+    from model_tracks import run as suite_run
+
+    seen = {}
+
+    def fake_spawn(command, root, env, track, *, resume=False):
+        seen.update(command=list(command), root=root, env=env, track=track, resume=resume)
+
+    monkeypatch.setattr(suite_run, 'run_postprocess_track', fake_spawn)
+    events = NS(emits=[], emit=lambda *a, **k: events.emits.append((a, k)))
+    config = tmp_path / 'suite.yaml'
+    config.write_text('setup_dir: setup\n')
+    output = tmp_path / 'run'
+    environment = {'PYTHONPATH': 'pins'}
+
+    result = suite_run._run_postprocess_track(config, output, 'run-tag', 'cascade',
+                                              environment, resume=True, events=events)
+
+    assert result == 'cascade'
+    assert seen['track'] == 'cascade' and seen['resume'] is True
+    assert seen['root'] == output and seen['env'] is environment
+    assert 'model_tracks.worker' in seen['command']
+    assert '--track' in seen['command'] and seen['command'][seen['command'].index('--track') + 1] == 'cascade'
+    assert '--resume' in seen['command']
+    assert events.emits[0][0] == ('worker_spawn', 'started')
+
+
 def test_cascade_worker_trains_nothing_and_skips_the_barrier(tmp_path, monkeypatch):
     """The cascade worker branch composes only: no barrier wait, no trainer."""
     from types import SimpleNamespace as NS

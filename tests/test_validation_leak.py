@@ -190,3 +190,89 @@ def test_validation_artifact_slices_frozen(validation: pd.DataFrame) -> None:
     for field in fields:
         assert (pos[f"v1_{field}"] != "").all(), f"{field}: v1 unpopulated"
         assert (pos[f"v2_{field}"] != "").all(), f"{field}: v2 unpopulated"
+
+
+def test_negative_free_census_keeps_the_evidence_contract_shape() -> None:
+    """A census with no negatives must still produce the full evidence shape.
+
+    The 2026-10-08 shape fix (policy -> half -> census) stops
+    ``_scored_contract`` raising KeyError on a negative-free census; this pins
+    that branch, which has no positives-only sibling elsewhere.
+    """
+    from training.build_final_validation import SLICE_FIELDS, negative_policy_evidence
+
+    columns: dict[str, list] = {
+        "true_label": [1, 1],
+        "fold": [2, 3],
+        "fold_2": [2, 3],
+    }
+    for name, _col in SLICE_FIELDS:
+        columns[f"v1_{name}"] = ["", ""]
+        columns[f"v2_{name}"] = ["", ""]
+    frame = pd.DataFrame(columns)
+
+    evidence = negative_policy_evidence(frame, min_test_negatives=1, n_folds=4)
+    zero_cells = {name: 0 for name, _col in SLICE_FIELDS}
+    for policy in ("withhold_straddle", "train_side"):
+        assert evidence[policy]["scored_dev_negatives"] == 0
+        assert evidence[policy]["scored_test_negatives"] == 0
+        assert evidence[policy]["scored_negatives_with_trained_on_endpoint"] == 0
+        for half in ("dev", "test"):
+            assert evidence[policy]["populated_cells"][half] == zero_cells
+            assert evidence[policy]["thin_cells"][half] == zero_cells
+
+
+# ── the consumer must not fork the split a second time ──────────────────────
+
+def test_evaluate_models_dev_test_selectors_are_the_p0_quarters() -> None:
+    """evaluate_models selects the P0 fold roles, never the legacy 2-fold knobs.
+
+    The scored half must name the same quarters ``build_final_validation``
+    wrote, or it silently contains gtins the model trained on -- the P0 leak's
+    shape, which raised nothing. So this pins the DERIVATION, not a comment:
+    ``split.holdout_component_folds`` (schema-pinned Literal[4]) gives
+    train=0 / dev=n-2 / test=n-1, and evaluate_models' own module-level
+    expressions must evaluate to exactly those roles.
+
+    ``evaluation.component_split_k/dev_fold/test_fold`` are the LEGACY 2-fold
+    protocol (committed 2/0/1) and are deliberately NOT the selectors; a
+    consumer that read them by subscript would score a trained-on quarter, so
+    no such subscript may reappear in the file.
+    """
+    import ast
+    from pathlib import Path
+
+    from core.common import training_cfg
+    from training.build_final_validation import _resolve_quarter_folds
+
+    cfg = training_cfg()
+    n_folds = int(cfg.split.holdout_component_folds)
+    roles = _resolve_quarter_folds({"train"}, {"dev"}, {"test"}, n_folds)
+    assert (roles["train"], roles["dev"], roles["test"]) == (0, 2, 3)
+    assert (n_folds - 2, n_folds - 1) == (roles["dev"], roles["test"])
+    # the legacy knobs still describe the retired 2-fold protocol
+    assert (cfg.evaluation.dev_fold, cfg.evaluation.test_fold) == (0, 1)
+
+    source = Path(__file__).parents[1] / "src" / "training" / "evaluate_models.py"
+    tree = ast.parse(source.read_text())
+    derived: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            derived[node.targets[0].id] = ast.unparse(node.value)
+    env: dict = {"int": int, "_split": cfg.split}
+    for name in ("_N_FOLDS", "_DEV_FOLD", "_TEST_FOLD"):
+        exec(f"{name} = {derived[name]}", env)  # noqa: S102 - pinned source
+    assert (env["_DEV_FOLD"], env["_TEST_FOLD"]) == (roles["dev"], roles["test"])
+    assert env["_N_FOLDS"] == n_folds
+
+    legacy = {"component_split_k", "dev_fold", "test_fold"}
+    re_inlined = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value in legacy
+    ]
+    assert not re_inlined, (
+        "evaluate_models subscripted a legacy evaluation fold knob: "
+        f"{[ast.unparse(n) for n in re_inlined]}"
+    )

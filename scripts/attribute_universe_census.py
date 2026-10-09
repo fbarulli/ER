@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Attribute universe census: measure the FULL 37-key raw-attribute registry
-on the live dataset, write results/attribute_universe_census.json (sorted
-keys, including the datagen budget), and verify the census against the
-pinned measured baseline (src/core/attribute_universe.MEASURED_BASELINE).
+on the live dataset, write the census bound as
+``layouts.attribute_universe_census`` (artifacts/evidence/, sorted keys,
+including the datagen budget), and verify the census against the pinned
+measured baseline (src/core/attribute_universe.MEASURED_BASELINE).
 
 Read-only over inputs. Fail-loud: a live census that drifts from the
 baseline outside the +/-1% tolerance exits non-zero BEFORE the artifact is
@@ -16,10 +17,9 @@ Live-data check only: unit tests pin census SEMANTICS on synthetic frames
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from core.attribute_universe import AttributeUniverse, MEASURED_BASELINE
-from core.common import TRAIN_ROOT, ensure_parent, load_dataset
+from core.common import artifact, ensure_parent, load_dataset
 from core.common import trace_artifact
 
 
@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     universe.verify_census(census)
     print(f"[verify] {len(MEASURED_BASELINE)} pinned keys reproduce within +/-1%")
 
-    artifact = Path(TRAIN_ROOT) / "artifacts/evidence/attribute_universe_census.json"
+    census_path = artifact("attribute_universe_census")
     payload = {
         "census": census,
         "datagen_budget": budget,
@@ -49,12 +49,12 @@ def main(argv: list[str] | None = None) -> int:
             for key, pinned in sorted(MEASURED_BASELINE.items())
         },
     }
-    ensure_parent(artifact)
-    artifact.write_text(
+    ensure_parent(census_path)
+    census_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    trace_artifact("attribute_universe_census", artifact, producer=__name__)
-    print(f"wrote {artifact}")
+    trace_artifact("attribute_universe_census", census_path, producer=__name__)
+    print(f"wrote {census_path}")
     return 0
 
 

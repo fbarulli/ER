@@ -1,4 +1,4 @@
-# Isolated graph worker profile; MLflow and torch-geometric are not required.
+# Isolated graph worker profile; torch-geometric is not required.
 # PyTorch must be installed for the target CPU/CUDA runtime first.
 numpy>=2.0,<3
 pandas>=2.2,<4

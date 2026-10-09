@@ -1,15 +1,27 @@
 """The laya lane's kaggle-facing stages, consolidated onto the kaggle owners.
 
-The laya lane used to re-implement five functions the kaggle lane already owns.
-Where behavior is identical the laya lane now calls the owner; where the lane
-deliberately differs (it attaches DATASETS instead of cloning the repo, and it
-addresses the CLI as ``python -m kaggle``), the SHARED part is pinned byte-for-
-byte here.
+The laya lane used to re-implement the kaggle lane's kernel metadata and argv
+shapes. Where behavior is identical it now calls the owner:
+
+* ``KaggleKernels.kernel_metadata`` — the four laya stage metadata documents
+  (decision, holdout-eval, finetune, finetune-eval) are built by the owner;
+* ``KaggleKernels.kernels_push_argv`` / ``kernels_output_argv`` — the push and
+  output argv (addressed as ``python -m kaggle``);
+* ``KaggleDatasets.dataset_publish_commands`` — the create/version argv;
+* ``KernelTemplates.substitute`` — the ``@TOKEN@`` loop the scripts render with;
+* ``KaggleKernels.push_with_session_capture`` — the clear/push/capture launch aid.
+
+The lane deliberately diverges in exactly three places, and each is pinned here
+(never silently unified): the dataset attach passes ``-r zip`` (its own
+``dir_mode_args``), the CLI is addressed as ``[sys.executable, "-m", "kaggle"]``,
+and the fetched result's integrity contract is the in-archive receipt (a plain
+tar.gz, not a Bundle role) in ``collect_kaggle_result``.
 
 The emitted bytes this file protects:
 
 * the ``kernels push`` / ``kernels output`` argv tokens,
-* the ``kernel-metadata.json`` document,
+* the ``kernel-metadata.json`` document (and that the laya stage emits it
+  through the owner, not a re-spelled copy),
 * the ``datasets create`` / ``datasets version`` argv,
 * the ``@TOKEN@`` substitution loop the staged kernel scripts are rendered with.
 """
@@ -50,6 +62,11 @@ def test_laya_templates_render_identically_through_the_shared_loop():
     the files the lane stages (two passed bakes included).
     """
     spec = laya_lane._spec()
+    from core.hosted_dataset import hosted_registry
+
+    # the ONE thing the lane's renderer adds to the shared loop: the session
+    # mount root, declared in the hosted registry (`config/hosted_datasets.yaml`)
+    mount_root = str(hosted_registry().mount_root)
     values = {
         "LAYA_PACKAGE": spec.laya_package,
         "CHECKPOINT_HUB": spec.checkpoint_hub,
@@ -63,6 +80,9 @@ def test_laya_templates_render_identically_through_the_shared_loop():
         "REPOSITORY": "https://example/repo.git",
         "BRANCH": "main",
         "REVISION": "0" * 40,
+        # the finetune kernel's session self-report helper (the ONE kernel-side
+        # home, shared with the kaggle lane's kernel templates)
+        "SESSION_REPORT": laya_lane._session_report_helper(),
     }
     templates = (laya_lane.LAYA_RUNTIME_PREFLIGHT,
                  laya_lane.DECISION_KERNEL_SCRIPT,
@@ -74,8 +94,13 @@ def test_laya_templates_render_identically_through_the_shared_loop():
                  laya_lane.NOTEBOOK_SCRIPT)
     for template in templates:
         assert laya_lane._template(template, values) == \
-            KernelTemplates.substitute(template, values)
-        assert laya_lane._template(template, {}) == template
+            KernelTemplates.substitute(template, {"MOUNT_ROOT": mount_root,
+                                                  **values})
+        # no mount-root token ever survives into a staged payload
+        assert "@MOUNT_ROOT@" not in laya_lane._template(template, values)
+    # a template carrying no token is not rewritten at all
+    assert laya_lane._template(laya_lane.NOTEBOOK_SCRIPT, {}) == \
+        laya_lane.NOTEBOOK_SCRIPT
     # the two-pass bake (preflight rendered FIRST, then dropped into the script)
     for preflight_name, script_name in (
             ("LAYA_RUNTIME_PREFLIGHT", "DECISION_KERNEL_SCRIPT"),
@@ -86,7 +111,8 @@ def test_laya_templates_render_identically_through_the_shared_loop():
         merged = {**values,
                   "RUNTIME_PREFLIGHT": laya_lane._template(preflight, values)}
         assert laya_lane._template(script, merged) == \
-            KernelTemplates.substitute(script, merged)
+            KernelTemplates.substitute(script, {"MOUNT_ROOT": mount_root,
+                                                **merged})
 
 
 def test_render_runtime_reproduces_the_legacy_chain_bytes():
@@ -94,14 +120,14 @@ def test_render_runtime_reproduces_the_legacy_chain_bytes():
     from cli import kaggle_lane as lane
 
     spec = lane._spec()
-    script = "@COMMAND_RUNNER@\n@SHA256_HELPER@\nLANE = json.loads(@LANE_JSON@)\n"
+    script = "@COMMAND_RUNNER@\n@SIZE_HELPER@\nLANE = json.loads(@LANE_JSON@)\n"
     from core.common import data_cfg, training_cfg
 
     payload = spec.model_dump(mode="json")
     payload["paths"] = data_cfg().paths.model_dump(mode="json")
     payload["archives"] = training_cfg().archives.model_dump(mode="json")
     legacy = (script.replace("@COMMAND_RUNNER@", KernelTemplates.REMOTE_COMMAND_RUNNER)
-              .replace("@SHA256_HELPER@", KernelTemplates.SHA256_HELPER)
+              .replace("@SIZE_HELPER@", KernelTemplates.SIZE_HELPER)
               .replace("@LANE_JSON@", repr(json.dumps(payload))))
     assert KernelTemplates.render_runtime(script, spec) == legacy
 
@@ -123,6 +149,43 @@ def test_laya_push_dry_run_emits_the_same_argv():
     assert plan["argv"] == [sys.executable, "-m", "kaggle", "kernels", "push",
                             "-p", "/some/stage"]
     assert plan["mode"] == "dry-run"
+
+
+def test_laya_push_routes_through_the_shared_launch_aid(tmp_path, monkeypatch):
+    """Executed laya push: the shared argv helper AND the shared
+    clear/push/capture launch-aid sequence (never re-spelled in this lane)."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "kernel-metadata.json").write_text(
+        json.dumps({"id": "owner/laya"}), encoding="utf-8")
+    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr(laya_lane, "_staged_laya_push_preflight",
+                        lambda path: None)
+    seen: dict = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        # The push contract is fail-loud: a zero exit code alone is not enough,
+        # the CLI's success line must be present (no "error" text).
+        return subprocess.CompletedProcess(argv, 0, stdout="Kernel successfully pushed", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+    calls: list = []
+
+    def fake_session_capture(slug, push):
+        calls.append(("capture", slug))
+        push()
+        calls.append(("captured", slug))
+        return {"session_id": "sess-9"}
+
+    monkeypatch.setattr(KaggleKernels, "push_with_session_capture",
+                        staticmethod(fake_session_capture))
+    plan = laya_lane.push_kaggle_kernel(stage, execute=True)
+    assert plan["returncode"] == 0 and plan["pushed"] is True
+    assert plan["session_id"] == "sess-9"
+    assert seen["argv"] == [sys.executable, "-m", "kaggle", "kernels", "push",
+                            "-p", str(stage)]
+    assert calls == [("capture", "owner/laya"), ("captured", "owner/laya")]
 
 
 def test_dataset_publish_argv_tokens_are_byte_identical_for_both_lanes():
@@ -179,6 +242,67 @@ def test_kernel_metadata_reproduces_the_legacy_document_bytes():
     cpu = KaggleKernels.kernel_metadata("owner/an-er-kernel", "er_stop.py",
                                         enable_gpu=False)
     assert json.dumps(cpu, indent=2) == json.dumps(legacy_cpu, indent=2)
+
+
+def test_laya_stage_emits_the_owners_metadata_document(tmp_path, monkeypatch):
+    """The four laya stage metadata dicts are gone: staging a decision kernel
+    must build ``kernel-metadata.json`` through ``KaggleKernels.kernel_metadata``
+    (the owner), never a re-spelled 11-key copy. A recorder wraps the owner and
+    the written document must equal the owner's output for the same inputs."""
+    from pathlib import Path
+
+    from core.schemas import LayaSpec
+
+    monkeypatch.setattr(laya_lane, "_spec", lambda: LayaSpec())
+    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    from core.common import training_cfg as _tcfg
+
+    base = _tcfg()
+    forced = base.model_copy(update={
+        "kaggle": base.kaggle.model_copy(update={"branch": "main"})})
+    monkeypatch.setattr(laya_lane, "training_cfg", lambda: forced)
+
+    schema = tmp_path / "config/laya.question.json"
+    schema.parent.mkdir(parents=True, exist_ok=True)
+    schema.write_text(json.dumps({"questions": {
+        "attribute_alignment": {"type": "choice", "instructions": "verdict?",
+                                "criteria": {"aligned": None}}}}))
+    import core.common as core_common
+
+    dataset = tmp_path / "dataset.csv"
+    dataset.write_text("sku_id,sku_name_eng,attribute\n"
+                       "SKU0,Name 0 500 ml,Volume: 500; Brand: A\n")
+    monkeypatch.setitem(core_common.F, "dataset", dataset)
+    monkeypatch.setitem(core_common.F, "final_validation", dataset)
+
+    monkeypatch.setattr(laya_lane, "_git_revision", lambda: "0" * 40)
+    import subprocess as sp
+
+    def fake_run(args, **kwargs):
+        if "rev-parse" in args:
+            return sp.CompletedProcess(args, 0, stdout="0" * 40, stderr="")
+        return sp.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+
+    calls: list = []
+    real = KaggleKernels.kernel_metadata
+
+    def recorder(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(KaggleKernels, "kernel_metadata", staticmethod(recorder))
+
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    stage = Path(receipt["staged"])
+    written = json.loads((stage / "kernel-metadata.json").read_text())
+    assert calls, "staging must build the metadata through the owner"
+    args, kwargs = calls[0]
+    assert written == real(*args, **kwargs)
+    assert list(written) == list(real(*args, **kwargs))
+    assert kwargs["dataset_sources"] == ["fbarulli/er-laya-requests"]
+    assert written["code_file"] == "laya_decision.py"
 
 
 def test_push_with_session_capture_clears_then_captures(monkeypatch):

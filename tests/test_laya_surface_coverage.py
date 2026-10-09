@@ -71,6 +71,8 @@ def render_finetune():
         "WANDB_PROJECT": "e-r",
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
+        "SIZE_OF": laya_lane._file_bytes_of_source(),
+        "SESSION_REPORT": laya_lane._session_report_helper(),
         **_repo_values(spec),
     }
     preflight = laya_lane._template(laya_lane.FINETUNE_RUNTIME_PREFLIGHT, values)
@@ -88,6 +90,7 @@ def render_finetune_eval():
         "CHECKPOINT_PATH": "",
         "BATCH_SIZE": str(spec.finetune_eval_batch_size),
         "EVAL_CALIBRATION": repr(laya_lane.eval_calibration_config(spec)),
+        "SIZE_OF": laya_lane._file_bytes_of_source(),
         **_repo_values(spec),
     }
     preflight = laya_lane._template(laya_lane.FINETUNE_EVAL_RUNTIME_PREFLIGHT,
@@ -106,6 +109,8 @@ def render_holdout_eval():
         "THRESHOLD": repr(spec.holdout_eval_threshold),
         "N_BOOT": str(spec.holdout_eval_bootstrap),
         "SEED": "1729",
+        "SIZE_OF": laya_lane._file_bytes_of_source(),
+        "HOLDOUT_EVAL_MODULE": repr(laya_lane._holdout_eval_module_source()),
         **_repo_values(spec),
     }
     preflight = laya_lane._template(laya_lane.LAYA_RUNTIME_PREFLIGHT, {

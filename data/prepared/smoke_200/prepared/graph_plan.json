@@ -1,5 +1,5 @@
 {
-  "arrays_sha256": "7563008f68f767cf2cf0d20826dfd6c94d598c61d82e7551269f87fad89ed6c7",
+  "arrays_size": 127686,
   "ids": [
     "1000100698",
     "1000226316",
@@ -212,12 +212,12 @@
     "augmentation:13298",
     "augmentation:13313"
   ],
-  "listings_sha256": "c8e0a97b3db2334ba40ae4c01b0e3a9fdc6718edb66534dd504b5879e5ea9996",
+  "listings_size": 127995,
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pairs_sha256": "42b9dd8acac820abd948b3b7264cd7ab40d1c7f9d7145323b31c399bbaf1e3ea",
+  "pairs_size": 1870,
   "populations": {
     "dev": [
       2,
@@ -451,7 +451,7 @@
     "package_material"
   ],
   "schema": "er-graph-prepared-v1",
-  "support_listings_sha256": "c8e0a97b3db2334ba40ae4c01b0e3a9fdc6718edb66534dd504b5879e5ea9996",
+  "support_listings_size": 127995,
   "vocabulary": {
     "brand": [
       "amlica",

@@ -9,7 +9,7 @@ from scripts.measure_gate_regex_fixes import compare
 
 def write_snapshot(path, records, *, digest="same-source"):
     with gzip.open(path, "wt") as stream:
-        stream.write(json.dumps({"raw_dataset_sha256": digest}) + "\n")
+        stream.write(json.dumps({"raw_dataset_size": digest}) + "\n")
         for record in records:
             stream.write(json.dumps(record) + "\n")
 

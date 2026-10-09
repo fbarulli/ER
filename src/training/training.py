@@ -180,7 +180,7 @@ TRACK_DATAPOINT_USAGE = bool(config_section("training", "track_datapoint_usage")
 _COLLECT_CONTRASTIVE_TELEMETRY = not (
     perf_enabled("text.contrastive_telemetry_gate") and not TRACK_DATAPOINT_USAGE
 )
-_SHARE_TEXT_HASHES = perf_enabled("text.share_sampler_hashes")
+_SHARE_TEXT_VALUES = perf_enabled("text.share_sampler_values")
 _UNIFORMITY_CFG = config_section("training", "uniformity_regularization")
 # ── DATAPOINT POPULATION REGISTRY (SSOT for the coverage audit) ────────────
 # DERIVED FROM THE PRODUCERS, not hand-kept beside them (audit A4-2). Every
@@ -673,6 +673,50 @@ def _write_checkpoint_manifest(
     )
 
 
+def _resume_component_filename(name: str) -> str:
+    """Resolve a native-HF resume component filename through the config SSOT.
+
+    The checkpoint layout owner is ``training_cfg().bundle.resume_only_filenames``;
+    every surface reads the name from there instead of re-spelling it. A
+    filename the config does not declare is reported, never invented.
+    """
+    bundle = training_cfg().bundle
+    for filename in bundle.resume_only_filenames:
+        if filename == name:
+            return filename
+    raise RuntimeError(
+        f"resume component filename {name!r} is not declared in "
+        f"bundle.resume_only_filenames={list(bundle.resume_only_filenames)}"
+    )
+
+
+def _trainer_state_filename() -> str:
+    """The native-HF trainer-state filename (config SSOT, not resume-only)."""
+    return training_cfg().bundle.trainer_state_file
+
+
+def _trainer_best_key() -> str:
+    """The trainer-state JSON key naming the selected checkpoint (config SSOT)."""
+    return training_cfg().bundle.trainer_best_key
+
+
+def _required_resume_filenames() -> tuple[str, ...]:
+    """The resume preflight set for ``on_save`` and the fold resume path.
+
+    Optimizer/scheduler/RNG are the native-HF resume state; the manifest and the
+    trainer-state file complete the set. ``scaler.pt`` and ``training_args.bin``
+    are deliberately NOT required here: they exist only under AMP / for arg
+    replay, so the preflight stays byte-identical to the historical check.
+    """
+    return (
+        _resume_component_filename("optimizer.pt"),
+        _resume_component_filename("scheduler.pt"),
+        _resume_component_filename("rng_state.pth"),
+        training_cfg().colab.checkpoint_manifest_name,
+        _trainer_state_filename(),
+    )
+
+
 class _CheckpointPublisher:
     """Small SR owner of checkpoint publication prerequisites.
 
@@ -840,25 +884,26 @@ class _CheckpointPublisher:
         """
         return {
             "model_state_dict": _CheckpointPublisher._model_files(checkpoint),
-            "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
-            "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
-            "scaler_state_dict": "scaler.pt" if scaler is not None else None,
-            "rng_state": "rng_state.pth",
-            "trainer_state": "trainer_state.json",
-            "training_args": "training_args.bin",
+            "optimizer_state_dict": _resume_component_filename("optimizer.pt") if optimizer is not None else None,
+            "scheduler_state_dict": _resume_component_filename("scheduler.pt") if scheduler is not None else None,
+            "scaler_state_dict": _resume_component_filename("scaler.pt") if scaler is not None else None,
+            "rng_state": _resume_component_filename("rng_state.pth"),
+            "trainer_state": _trainer_state_filename(),
+            "training_args": _resume_component_filename("training_args.bin"),
         }
 
     @staticmethod
     def _resume_block() -> dict:
         """The fixed native-HF resume component map manifest field."""
+        state_file = _trainer_state_filename()
         return {
             "native_hf_resume": {
-                "trainer_state": "trainer_state.json",
-                "trainer_control": "trainer_state.json:control",
-                "training_args": "training_args.bin",
-                "optimizer": "optimizer.pt",
-                "scheduler": "scheduler.pt",
-                "rng": "rng_state.pth",
+                "trainer_state": state_file,
+                "trainer_control": f"{state_file}:control",
+                "training_args": _resume_component_filename("training_args.bin"),
+                "optimizer": _resume_component_filename("optimizer.pt"),
+                "scheduler": _resume_component_filename("scheduler.pt"),
+                "rng": _resume_component_filename("rng_state.pth"),
             }
         }
 
@@ -3011,6 +3056,18 @@ def checkpoint_publication_deferred() -> bool:
     return _CheckpointPublisher._publication_deferred()
 
 
+def _staging_key(checkpoint: Path) -> str:
+    """A filesystem-safe staging key from the checkpoint's own output root.
+
+    Structural only (owner directive 2026-10-08): the resolved parent path with
+    non-alphanumerics collapsed. Two trials that share an output root share a
+    staging directory, which is the intent; nothing is fingerprinted.
+    """
+    import re
+    parent = str(Path(checkpoint).parent.resolve())
+    return re.sub(r'[^A-Za-z0-9.]+', '_', parent).strip('_') or 'root'
+
+
 class DvcCheckpointCallback(TrainerCallback):
     """Stage immutable checkpoints and publish them together at train end."""
 
@@ -3022,7 +3079,7 @@ class DvcCheckpointCallback(TrainerCallback):
     @staticmethod
     def _snapshot(checkpoint: Path) -> Path:
         """Hard-link an immutable checkpoint before Trainer rotation can delete it."""
-        import hashlib
+        from core.portable_archive import ByteCount
         import shutil
 
         staging = RESULTS / "_checkpoint_upload_staging"
@@ -3031,7 +3088,7 @@ class DvcCheckpointCallback(TrainerCallback):
         # inside one Trainer output directory, so two trials can both save
         # ``checkpoint-459``.  Preserve that output-root identity in staging
         # instead of flattening every checkpoint into one shared directory.
-        key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
+        key = _staging_key(checkpoint)
         snapshot = staging / key / checkpoint.name
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         if snapshot.exists():
@@ -3058,13 +3115,7 @@ class DvcCheckpointCallback(TrainerCallback):
         checkpoint_root = Path(args.output_dir)
         checkpoint = checkpoint_root / f"checkpoint-{state.global_step}"
         _make_checkpoint_tokenizer_portable(checkpoint)
-        required = (
-            "optimizer.pt",
-            "scheduler.pt",
-            "rng_state.pth",
-            training_cfg().colab.checkpoint_manifest_name,
-            "trainer_state.json",
-        )
+        required = _required_resume_filenames()
         missing = [name for name in required if not (checkpoint / name).is_file()]
         if missing:
             raise RuntimeError(
@@ -3088,12 +3139,12 @@ class DvcCheckpointCallback(TrainerCallback):
                 max_workers=1, thread_name_prefix="dvc-stage"
             )
         # Snapshot creation is synchronous so Trainer rotation cannot remove
-        # the checkpoint. Hashing/staging runs off the training thread.
+        # the checkpoint. Sizing/staging runs off the training thread.
         self._stage_futures.append(
             self._stage_executor.submit(stage_checkpoint, RESULTS, snapshot)
         )
-        import hashlib
-        key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
+        from core.portable_archive import ByteCount
+        key = _staging_key(checkpoint)
         self._pending.append((snapshot, f"{checkpoint.name}--{key}", checkpoint))
         print(f"    [checkpoint-dvc] added locally at step {state.global_step}; upload deferred", flush=True)
         return control
@@ -4791,7 +4842,7 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
     epochs = int(_timed_load_config(f"fold{fold_i}.epochs")["training"]["epochs"])
     packed = {}
     grouped_ds = None
-    shared_text_hashes = None
+    shared_text_values = None
     for device, batch_size in (("cpu", BATCH_SIZE_CPU), ("cuda", BATCH_SIZE_CUDA)):
         device_started = time.perf_counter()
         print(f"[plan-sampler] start device={device} batch_size={batch_size} rows={len(ds):,} epochs={epochs}", flush=True)
@@ -4800,16 +4851,16 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
             composition = resolve_composition(weights, sampler_populations, batch_size)
             if grouped_ds is None:
                 grouped_ds = ds.add_column("sampler_population", sampler_populations)
-            if _SHARE_TEXT_HASHES:
-                if shared_text_hashes is None:
-                    from training.sampler import _row_text_hashes
-                    shared_text_hashes = _row_text_hashes(grouped_ds)
-                text_hashes = shared_text_hashes
+            if _SHARE_TEXT_VALUES:
+                if shared_text_values is None:
+                    from training.sampler import _row_text_values
+                    shared_text_values = _row_text_values(grouped_ds)
+                text_values = shared_text_values
             else:
-                text_hashes = None
+                text_values = None
             sampler = ControlledBatchSampler(grouped_ds, batch_size, composition, seed=int(bs_cfg["seed"]),
                                               population_column="sampler_population",
-                                              text_hashes=text_hashes)
+                                              text_values=text_values)
         else:
             import torch
             from sentence_transformers.base.sampler import NoDuplicatesBatchSampler, DefaultBatchSampler
@@ -5545,12 +5596,6 @@ def train_one_config(
         country = fixed_inputs["shared"]['country']
         rows = list(fixed_inputs["skipped"])
         _canon_attrs: dict[str, dict] | None = None
-        if prepared_tokens is not None:
-            from training.token_inputs import payload_sha256
-
-            prepared_payload_digest = payload_sha256(payload)
-        else:
-            prepared_payload_digest = None
     # ── CONSOLIDATED TRACE: one config-level row + the per-grain accumulators
     # that are published once, after the fold loop, so the stage keeps ONE
     # commit (train.py) and the row volume stays inside core.tracing's caps.
@@ -5636,13 +5681,11 @@ def train_one_config(
                         "step": 0,
                     },
                 ).parent
-                if resume and not any(checkpoint_dir.glob("checkpoint-*/trainer_state.json")):
-                    if checkpoint_publication_deferred():
-                        raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
-                    from training.dvc_store import restore_checkpoint
-
-                    restore_checkpoint(RESULTS, checkpoint_dir)
-                    print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
+                if resume and not any(checkpoint_dir.glob(f"checkpoint-*/{_trainer_state_filename()}")):
+                    # DVC is WRITE-ONLY storage: resume loads the LOCAL
+                    # materialized checkpoints only, never a DVC pull. Absent
+                    # local state fails loud here instead of reaching the remote.
+                    raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
 
                 ensure_parent(checkpoint_dir)
                 # ── CONSOLIDATED TRACE: the fold's input populations ──────────
@@ -5721,7 +5764,7 @@ def train_one_config(
                 if prepared_tokens is not None:
                     from training.token_inputs import PreparedTokenLookup
                     token_lookup = PreparedTokenLookup(
-                        model, prepared_tokens, payload, payload_digest=prepared_payload_digest
+                        model, prepared_tokens, payload
                     )
 
                 # ── build the training dataset FIRST (steps derive from it) ──
@@ -6319,13 +6362,7 @@ def train_one_config(
                     )
                     if candidates:
                         latest = candidates[-1]
-                        required = (
-                            "optimizer.pt",
-                            "scheduler.pt",
-                            "rng_state.pth",
-                            training_cfg().colab.checkpoint_manifest_name,
-                            "trainer_state.json",
-                        )
+                        required = _required_resume_filenames()
                         missing = [name for name in required if not (latest / name).is_file()]
                         if missing:
                             raise RuntimeError(
@@ -6340,14 +6377,14 @@ def train_one_config(
                         # Trainer state contains absolute paths from the original
                         # VM. Rebase only to the selected sibling in this restored
                         # checkpoint tree, never to another run's checkpoint.
-                        state_path = latest / "trainer_state.json"
+                        state_path = latest / _trainer_state_filename()
                         restored_state = json.loads(state_path.read_text())
-                        selected = restored_state.get("best_model_checkpoint")
+                        selected = restored_state.get(_trainer_best_key())
                         if selected:
                             local_selected = checkpoint_dir / Path(selected).name
                             if not local_selected.is_dir():
                                 raise FileNotFoundError(f"resume selected checkpoint missing: {local_selected}")
-                            restored_state["best_model_checkpoint"] = str(local_selected.resolve())
+                            restored_state[_trainer_best_key()] = str(local_selected.resolve())
                             state_path.write_text(json.dumps(restored_state, indent=2) + "\n")
                         resume_checkpoint = str(latest)
                         print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
@@ -7800,18 +7837,14 @@ class _HpoStream:
 
     @staticmethod
     def _restore_study_db(args, study_db: Path) -> None:
-        """Resume precondition: a downloaded sqlite study, or restore from DVC."""
+        """Resume precondition: a locally downloaded sqlite study (never DVC)."""
         if not args.resume:
             return
-        if checkpoint_publication_deferred():
-            if not study_db.is_file():
-                raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
-            print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
-        else:
-            from training.dvc_store import restore_checkpoint
-
-            restore_checkpoint(RESULTS, study_db)
-            print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+        # DVC is WRITE-ONLY storage: resume loads the LOCAL materialized study
+        # only. Absent local state fails loud here instead of a DVC pull.
+        if not study_db.is_file():
+            raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
+        print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
 
     @staticmethod
     def _resolve_study(args):

@@ -44,23 +44,23 @@ import numpy as np
 
 from core.perf_switches import perf_enabled
 
-# Share one text-hash pass between the cpu and cuda plans packed for a fold.
-_SHARE_TEXT_HASHES = perf_enabled("text.share_sampler_hashes")
+# Share one text-value pass between the cpu and cuda plans packed for a fold.
+_SHARE_TEXT_VALUES = perf_enabled("text.share_sampler_values")
 
 
-def _text_hash_columns(dataset) -> list[str]:
+def _text_columns(dataset) -> list[str]:
     columns = {"sentence1", "sentence2", "anchor", "positive", "negative"}
     return [col for col in dataset.column_names if col in columns]
 
 
-def _row_text_hashes(dataset) -> list[frozenset[str]]:
+def _row_text_values(dataset) -> list[frozenset[str]]:
     """Native text values only; telemetry must not defeat deduplication.
 
     Column-wise materialization decodes each text column once instead of one
     arrow row per index; every per-row frozenset is identical to the row-wise
     formulation, so packing and RNG order are unchanged.
     """
-    names = _text_hash_columns(dataset)
+    names = _text_columns(dataset)
     columns = {name: list(dataset[name]) for name in names}
     return [
         frozenset(str(columns[name][index]) for name in names)
@@ -96,7 +96,7 @@ class ControlledBatchSampler:
         seed: int = 0,
         drop_last: bool = False,
         population_column: str = "pair_population",
-        text_hashes: list[frozenset[str]] | None = None,
+        text_values: list[frozenset[str]] | None = None,
     ):
         if not composition:
             raise ValueError("composition must be non-empty")
@@ -156,14 +156,14 @@ class ControlledBatchSampler:
         self._epoch = 0
         self._packed_epoch = None
         self._packed_batches = None
-        # Pre-compute text hashes for duplicate detection, or reuse a hash pass
+        # Pre-compute text values for duplicate detection, or reuse a pass
         # already computed for the same dataset by a sibling device plan.
-        if text_hashes is not None:
-            if len(text_hashes) != len(dataset):
-                raise ValueError("shared text hashes do not align with dataset rows")
-            self._text_hashes = text_hashes
+        if text_values is not None:
+            if len(text_values) != len(dataset):
+                raise ValueError("shared text values do not align with dataset rows")
+            self._row_text_values = text_values
         else:
-            self._text_hashes = _row_text_hashes(dataset)
+            self._row_text_values = _row_text_values(dataset)
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = epoch
@@ -182,11 +182,11 @@ class ControlledBatchSampler:
                 queue = queues[pop]
                 for _ in range(len(queue)):
                     index = queue.popleft()
-                    if self._text_hashes[index] & texts:
+                    if self._row_text_values[index] & texts:
                         queue.append(index)
                         continue
                     batch.append(index)
-                    texts.update(self._text_hashes[index])
+                    texts.update(self._row_text_values[index])
                     break
                 else:
                     # Texts only accumulate within this batch: a population

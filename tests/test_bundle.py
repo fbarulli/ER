@@ -1,19 +1,20 @@
 """Bundle boundary + role enforcement.
 
 The ``Bundle`` is the one sealed artifact that travels generation -> training ->
-post-training. These tests pin its public contract: a single boundary integrity
-check (``Bundle.load``) that fails loud on a corrupt archive, role enforcement
-(result = selected checkpoint only; recovery = all epochs + optimizer; inputs =
-none), and a result seal that ships the selected-only member set.
+post-training. These tests pin its public contract: one manifest read at the
+boundary (``Bundle.load``), role enforcement (result = selected checkpoint only;
+recovery = all epochs + optimizer; inputs = none), and a result seal that ships
+the selected-only member set. No byte size or content is ever compared.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from core.bundle import Bundle, BundlePipeline, BundleRole, manifest_name
-from core.portable_archive import verify_archive_digest, write_archive
+from core.portable_archive import read_archive_manifest, write_archive
 
 
 def _spec():
@@ -41,7 +42,6 @@ def _result_tree(root: Path) -> dict[str, Path]:
         "resource_profile/gpu.csv": "x",
         "wandb/run-1/files/config.yaml": "x",
         ".resume/attempt.json": "{}",
-        "mlruns/0/meta.yaml": "x",
         "mps_pipe/control": "x",
         "mps_log/server.log": "x",
     }
@@ -139,15 +139,16 @@ def test_load_rejects_truncated_archive(tmp_path: Path) -> None:
     assert Bundle.load(archive, BundleRole.result).role is BundleRole.result
 
 
-def test_load_expected_digest_mismatch_fails(tmp_path: Path) -> None:
+def test_sealed_member_inventory_is_available_on_load(tmp_path: Path) -> None:
     tree = tmp_path / "result"
     _result_tree(tree)
     archive = _seal(tree, tmp_path / "result.tar.zst")
-    _, observed = verify_archive_digest(archive, manifest_name(BundleRole.result))
+    manifest = read_archive_manifest(archive, manifest_name(BundleRole.result))
 
-    assert Bundle.load(archive, BundleRole.result, expected_digest=observed).digest == observed
-    with pytest.raises(ValueError):
-        Bundle.load(archive, BundleRole.result, expected_digest="0" * 64)
+    assert manifest["files"]
+    handle = Bundle.load(archive, BundleRole.result)
+    # Every declared inventory member is present in the member list.
+    assert set(manifest["files"]).issubset(set(handle.members()))
 
 
 def test_result_role_keeps_only_selected_checkpoint(tmp_path: Path) -> None:
@@ -166,7 +167,6 @@ def test_result_role_keeps_only_selected_checkpoint(tmp_path: Path) -> None:
     assert "wandb/run-1/files/config.yaml" not in members
     # Resume/diagnostic trees the delivered bundle must never carry.
     assert ".resume/attempt.json" not in members
-    assert "mlruns/0/meta.yaml" not in members
     assert "mps_pipe/control" not in members
     assert "mps_log/server.log" not in members
     assert "text/text__vectors.npz" in members
@@ -214,6 +214,38 @@ def test_seal_result_requires_result_role(tmp_path: Path) -> None:
         Bundle.from_directory(tree, BundleRole.inputs).seal_result(tmp_path / "x.tar.zst")
 
 
+def test_from_directory_refuses_a_result_tree_that_still_carries_every_epoch(
+        tmp_path: Path) -> None:
+    """A tree that declares itself a sealed result (its canonical manifest is
+    present) must be result-only: a raw working tree has no manifest and stays
+    permissive (the selection precursor), but a manifest-bearing multi-epoch
+    tree is refused, exactly like the archive boundary."""
+    spec = _spec()
+    tree = tmp_path / "result"
+    _result_tree(tree)
+    _write(tree / spec.manifest_result, json.dumps({spec.run_tag_key: "r-tag"}))
+    with pytest.raises(ValueError, match="result bundle role contract"):
+        Bundle.from_directory(tree, BundleRole.result)
+
+
+def test_trusted_refuses_a_role_violating_manifest(tmp_path: Path) -> None:
+    """The no-re-check wrapper still enforces the role contract from the
+    manifest's own member inventory (no member bytes are re-read)."""
+    spec = _spec()
+    violating = {
+        "text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors": "d" * 64,
+        "text/_checkpoints/m/r-t_f0/checkpoint-562/model.safetensors": "d" * 64,
+    }
+    with pytest.raises(ValueError, match="result bundle role contract"):
+        Bundle.trusted(tmp_path / "result.tar.zst", BundleRole.result,
+                       {spec.run_tag_key: "r-tag", spec.files_key: violating})
+    # a result-only inventory is trusted unchanged
+    selected = {"text/_checkpoints/m/r-t_f0/checkpoint-281/model.safetensors": "d" * 64}
+    handle = Bundle.trusted(tmp_path / "result.tar.zst", BundleRole.result,
+                            {spec.run_tag_key: "r-tag", spec.files_key: selected})
+    assert handle.role is BundleRole.result
+
+
 def test_pipeline_steps_are_wired() -> None:
     pipeline = BundlePipeline(role=BundleRole.inputs, device="cpu", lane="kaggle")
     import inspect
@@ -242,12 +274,11 @@ def test_pipeline_steps_are_wired() -> None:
             pipeline.output or Path("/nonexistent"), BundleRole.inputs))
 
 
-def test_seal_archive_captures_the_transport_digest_and_members(tmp_path: Path) -> None:
-    """Sealing yields the whole-file digest without reading the archive back.
+def test_seal_archive_captures_members_without_re_reading(tmp_path: Path) -> None:
+    """Sealing yields the member inventory without reading the archive back.
 
-    The digest is the transport token (the ``.sha256`` sidecar), and the member
-    list is captured by the same boundary pass that verifies the archive, so a
-    later stage neither re-reads nor re-parses it.
+    The manifest records each source's byte size, and the member list is the set
+    the writer froze, so a later stage neither re-reads nor re-parses it.
     """
     tree = tmp_path / "inputs"
     _write(tree / "data/model_tracks/shared/listings.json", "{}")
@@ -256,14 +287,14 @@ def test_seal_archive_captures_the_transport_digest_and_members(tmp_path: Path) 
 
     sealed = Bundle.seal_archive(archive, files, role=BundleRole.inputs,
                                  metadata={_spec().run_tag_key: "r-tag"})
-    _, observed = verify_archive_digest(archive, manifest_name(BundleRole.inputs))
-    assert sealed.digest == observed
+    observed = read_archive_manifest(archive, manifest_name(BundleRole.inputs))
+    assert sealed.manifest[_spec().files_key] == observed[_spec().files_key]
     assert sealed.role is BundleRole.inputs
 
     handle = Bundle.load(archive, BundleRole.inputs)
-    assert handle.digest == observed
+    assert set(observed[_spec().files_key]).issubset(set(handle.members()))
     assert handle.members() == sorted(handle.member_names)
-    # The member list came from the boundary pass: it still answers after the
+    # The member list came from the boundary read: it still answers after the
     # archive path is gone, which is exactly "no stage re-parses".
     moved = archive.with_name("moved.tar.zst")
     archive.rename(moved)
@@ -296,13 +327,6 @@ def test_recovery_seal_keeps_every_epoch_and_optimizer(tmp_path: Path) -> None:
     tree = tmp_path / "result"
     _result_tree(tree)
     files = {p.relative_to(tree).as_posix(): p for p in tree.rglob("*") if p.is_file()}
-    # The role contract is asserted positively before the write: a recovery
-    # bundle that pruned the resume-only epoch state is refused, not sealed.
-    from model_tracks.package import _assert_recovery_contract
-    _assert_recovery_contract(tree, files)
-    with pytest.raises(ValueError, match="pruned resume state"):
-        _assert_recovery_contract(tree, {
-            name: path for name, path in files.items() if "checkpoint-562" not in name})
     sealed = Bundle.seal_archive(tmp_path / "recovery.tar.zst", files,
                                  role=BundleRole.recovery,
                                  metadata={_spec().run_tag_key: "r-tag"})

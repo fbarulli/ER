@@ -20,7 +20,7 @@ def test_worker_events_are_durable_per_attempt_and_redact_secrets(tmp_path, monk
     assert 'api_key=foo' not in logs
 
 
-@pytest.mark.parametrize('track', ['text', 'gnn_only', 'hybrid'])
+@pytest.mark.parametrize('track', ['text', 'gnn_only', 'cascade'])
 def test_worker_failure_records_traceback_then_reraises(tmp_path, monkeypatch, track):
     from model_tracks import worker
     monkeypatch.setenv('EUROMONITOR_RESULTS_DIR', str(tmp_path))
@@ -58,15 +58,14 @@ def test_supervisor_preflight_failure_retains_final_event_log(tmp_path, monkeypa
 
 
 def test_failure_logs_collect_without_suite_manifest(tmp_path, monkeypatch):
-    import hashlib
     from types import SimpleNamespace
     import core.common
-    from model_tracks.colab import _collect_failure_logs
+    from model_tracks.colab import TracksLane
     monkeypatch.setattr(core.common, 'RESULTS', tmp_path)
     contents = b'{"phase":"preflight","status":"failed"}\n'
     backend = SimpleNamespace(SESSION='session',
-        run_colab_exec_capture=lambda *a, **k: json.dumps(
-            {'suite_events.jsonl': hashlib.sha256(contents).hexdigest()}),
+        run_colab_exec_capture=lambda *a, **k: json.dumps(['suite_events.jsonl']),
         _download_one_remote_file=lambda remote, target: target.write_bytes(contents))
-    _collect_failure_logs(backend, '/remote/suite', 'run')
+    TracksLane(archive=tmp_path / 'inputs.tar.zst', run_tag='run').collect_failure_logs(
+        backend, '/remote/suite')
     assert (tmp_path / 'model_tracks/run__logs/suite_events.jsonl').read_bytes() == contents

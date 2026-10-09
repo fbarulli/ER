@@ -21,7 +21,7 @@ from core.coverage_contracts import (
 )
 from core.ranking_metrics import POOLED_METRIC_PREFIX, ranking_at_k
 from graph_tracks.artifacts import name
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import file_size, load_records, load_text_cache
 
 #: The cascade is a combinator: text retrieves, gnn_only decides, and neither
 #: role owns an encoded listing catalog. It therefore scores no
@@ -150,11 +150,11 @@ def retrieval_report(records, vectors, pairs, output, track, cfg, *, perf=None):
             index_started = time.monotonic()
             index = PersistentHnswIndex(scratch_path / f'{split}_index',
                 ef_construction=cfg.hnsw_ef_construction, M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
-            # No encoder checkpoint claim: report provenance hashes are supplied separately.
+            # No encoder checkpoint claim: report provenance sizes are supplied separately.
             checkpoint = cfg.checkpoint
             index.build(vectors[targets], [records[i]['sku_id'] for i in targets],
                         checkpoint=checkpoint, model_name=track,
-                        preprocessing_fingerprint=cfg.listings_sha256)
+                        preprocessing_fingerprint=cfg.listings_size)
             build_seconds = time.monotonic() - index_started
             query_started = time.monotonic()
             query_ids = sorted(relevant)
@@ -225,10 +225,10 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         (inference / name(track, 'export_manifest.json')).read_text()).model_dump(by_alias=True)
     if manifest.get('track') != track or not manifest.get('forward_only'):
         raise ValueError('saved graph inference track/forward contract mismatch')
-    for key, path in [('checkpoint_sha256', checkpoint), ('listings_sha256', listings),
-                      ('pairs_sha256', pair_path), ('vectors_sha256', inference / name(track, 'vectors.npz')),
-                      ('split_scores_sha256', inference / name(track, 'split_scores.npz'))]:
-        if manifest.get(key) != file_hash(path):
+    for key, path in [('checkpoint_size', checkpoint), ('listings_size', listings),
+                      ('pairs_size', pair_path), ('vectors_size', inference / name(track, 'vectors.npz')),
+                      ('split_scores_size', inference / name(track, 'split_scores.npz'))]:
+        if manifest.get(key) != file_size(path):
             raise ValueError(f'saved graph inference mismatch: {key}')
     if cfg.report_test and not manifest['report_test']:
         raise ValueError('saved graph forward omitted requested test scores')
@@ -261,7 +261,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         from model_tracks.training_data import retrieval_indices
         catalog_indices = retrieval_indices(records)
         index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
-                    model_name=track, preprocessing_fingerprint=file_hash(listings))
+                    model_name=track, preprocessing_fingerprint=file_size(listings))
         perf.record('index_build', time.monotonic() - index_started)
     progress('saved_forward_validated', shape=list(vectors.shape), inference=str(inference))
     threshold = dev_threshold(pairs['dev'][1], scores['dev'])
@@ -297,7 +297,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     progress('slice_reports_complete', slices=[r['slice'] for r in slices])
     # Pass immutable provenance separately rather than adding undeclared config fields.
     from graph_tracks.config import RetrievalReportContext
-    retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_hash(listings))
+    retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_size(listings))
     progress('retrieval_started', ks=list(cfg.retrieval_ks), protocol='within-split, self excluded')
     retrieval = retrieval_report(records, vectors, pairs, report_dir, track, retrieval_cfg, perf=perf)
     progress('retrieval_complete', summary=retrieval)
@@ -316,8 +316,8 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     if profile is not None:
         performance.update(summarize_profiler_directory(profile))
     write_manifest(report_dir / name(track, 'report_manifest.json'), build_manifest(
-        track=track, checkpoint=checkpoint, checkpoint_sha256=file_hash(checkpoint),
-        listings_sha256=file_hash(listings), pairs_sha256=file_hash(pair_path),
+        track=track, checkpoint=checkpoint, checkpoint_size=file_size(checkpoint),
+        listings_size=file_size(listings), pairs_size=file_size(pair_path),
         threshold=threshold, threshold_source='dev_youden',
         test_reported='test' in scores, model_selection='dev_pr_auc',
         retrieval_ks=cfg.retrieval_ks, summary=summary, retrieval=retrieval,

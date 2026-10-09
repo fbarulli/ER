@@ -7,7 +7,7 @@ much smaller ``*__completion_manifest.json``. The text manifest omitted
 ``test_used_for_selection``, ``metrics_scope``, ``trained_endpoints_scored``,
 ``unlabeled_pairs_are_negatives``, ``identity_conflict_policy_applied``,
 ``retrieval_protocol``, ``test_reported``, ``model_selection``,
-``graph_context``, ``checkpoint_sha256``, ``threshold`` and
+``graph_context``, ``checkpoint_size``, ``threshold`` and
 ``threshold_source`` -- so the dashboard and any downstream reader had to
 special-case the text track, and the text track silently shipped with no
 statement of whether test labels were used for selection.
@@ -50,9 +50,9 @@ REQUIRED_KEYS = (
     "schema",
     "track",
     "checkpoint",
-    "checkpoint_sha256",
-    "listings_sha256",
-    "pairs_sha256",
+    "checkpoint_size",
+    "listings_size",
+    "pairs_size",
     "threshold",
     "threshold_source",
     "test_used_for_selection",
@@ -103,9 +103,9 @@ class TrackReportManifest(BaseModel):
     schema_id: Literal['er-track-report-manifest-v1'] = Field(alias='schema')
     track: Literal['text', 'gnn_only', 'cascade']
     checkpoint: str | None
-    checkpoint_sha256: str = Field(min_length=1)
-    listings_sha256: str = Field(min_length=1)
-    pairs_sha256: str = Field(min_length=1)
+    checkpoint_size: int = Field(ge=0)
+    listings_size: int = Field(ge=0)
+    pairs_size: int = Field(ge=0)
     threshold: float
     threshold_source: Literal['dev_youden']
     test_used_for_selection: Literal[False]
@@ -132,9 +132,9 @@ def build(
     *,
     track: str,
     checkpoint: str | Path | None,
-    checkpoint_sha256: str,
-    listings_sha256: str,
-    pairs_sha256: str,
+    checkpoint_size: int,
+    listings_size: int,
+    pairs_size: int,
     threshold: float,
     threshold_source: str,
     test_reported: bool,
@@ -173,9 +173,9 @@ def build(
         "schema": MANIFEST_SCHEMA,
         "track": track,
         "checkpoint": str(checkpoint) if checkpoint is not None else None,
-        "checkpoint_sha256": checkpoint_sha256,
-        "listings_sha256": listings_sha256,
-        "pairs_sha256": pairs_sha256,
+        "checkpoint_size": checkpoint_size,
+        "listings_size": listings_size,
+        "pairs_size": pairs_size,
         "threshold": float(threshold),
         "threshold_source": threshold_source,
         "test_used_for_selection": False,

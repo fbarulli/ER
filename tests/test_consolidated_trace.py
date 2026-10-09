@@ -501,3 +501,27 @@ def test_identity_rejects_a_trace_with_an_unaccounted_row(
 
     sabotaged = frame[frame["step"] != "labels.destiny_hard_no_below_similarity_floor"]
     assert sum(accounting(sabotaged)["label_destiny"].values()) != len(pairs)
+
+
+# ── the trace batch-grain budget has ONE home (core.tracing) ────────────────
+def test_batch_grain_caps_live_in_core_tracing_and_producers_match():
+    """A stage's BATCH grain is the trace's own contract, declared once.
+
+    ``TRACE_BATCH_ROWS`` (source rows per BATCH row) and ``TRACE_MAX_BATCH_ROWS``
+    (BATCH rows traced per stage) are read from ``core.tracing`` so the three
+    producers cannot drift. Until the producers import them, this pins their
+    local copies to the core values (getattr keeps the check valid across the
+    migration: a producer that re-exports the core name still passes).
+    """
+    from core.tracing import TRACE_BATCH_ROWS, TRACE_MAX_BATCH_ROWS
+    from graph_tracks import setup as graph_setup
+    from training import build_final_validation, build_second04_pairs
+
+    assert (TRACE_BATCH_ROWS, TRACE_MAX_BATCH_ROWS) == (4096, 16)
+    for module in (build_final_validation, build_second04_pairs, graph_setup):
+        assert getattr(module, "_MAX_BATCH_ROWS", TRACE_MAX_BATCH_ROWS) == \
+            TRACE_MAX_BATCH_ROWS, module.__name__
+    assert getattr(build_final_validation, "_BATCH_PAIRS", TRACE_BATCH_ROWS) == \
+        TRACE_BATCH_ROWS
+    assert getattr(build_second04_pairs, "_BATCH_GTINS", TRACE_BATCH_ROWS) == \
+        TRACE_BATCH_ROWS

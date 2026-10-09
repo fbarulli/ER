@@ -25,7 +25,7 @@ from graph_tracks.data import (
     GraphBatch,
     NUMERIC,
     RELATIONS,
-    file_hash,
+    file_size,
     fit_vocabulary,
     load_records,
     tensorize,
@@ -317,9 +317,9 @@ def prepare_training(listings: Path, pairs: Path, output: Path | None = None, *,
     ).run()
     with (output/ARRAYS).open('wb') as handle:
         np.savez_compressed(handle, **arrays)
-    plan = {'schema': 'er-graph-prepared-v1', 'listings_sha256': file_hash(listings),
-            'pairs_sha256': file_hash(pairs), 'arrays_sha256': file_hash(output/ARRAYS),
-            'support_listings_sha256': file_hash(listings),
+    plan = {'schema': 'er-graph-prepared-v1', 'listings_size': file_size(listings),
+            'pairs_size': file_size(pairs), 'arrays_size': file_size(output/ARRAYS),
+            'support_listings_size': file_size(listings),
             'relations': list(RELATIONS), 'numeric': list(NUMERIC), 'vocabulary': vocabulary,
             'ids': [r['sku_id'] for r in records], 'populations': populations,
             'query_batches': batches}
@@ -352,10 +352,10 @@ def prepare_inference(listings: Path, checkpoint: Path, output: Path | None = No
     ).run()
     with (output/ARRAYS).open('wb') as handle:
         np.savez_compressed(handle, **arrays)
-    plan = {'schema': 'er-graph-prepared-v1', 'listings_sha256': file_hash(listings),
-            'checkpoint_sha256': file_hash(checkpoint),
-            'support_listings_sha256': payload['manifest']['listings_sha256'],
-            'arrays_sha256': file_hash(output/ARRAYS), 'relations': list(RELATIONS),
+    plan = {'schema': 'er-graph-prepared-v1', 'listings_size': file_size(listings),
+            'checkpoint_size': file_size(checkpoint),
+            'support_listings_size': payload['manifest']['listings_size'],
+            'arrays_size': file_size(output/ARRAYS), 'relations': list(RELATIONS),
             'numeric': list(NUMERIC), 'vocabulary': vocabulary,
             'ids': [r['sku_id'] for r in records], 'query_batches': batches}
     write_json(output/PLAN, plan)
@@ -371,10 +371,10 @@ def load_plan(listings: Path, pairs: Path | None = None):
             or plan.get('relations') != list(RELATIONS)
             or plan.get('numeric') != list(NUMERIC)):
         raise ValueError('prepared graph schema mismatch')
-    for key, source in [('listings_sha256', listings), ('arrays_sha256', path.parent/ARRAYS)]:
-        if plan.get(key) != file_hash(source):
+    for key, source in [('listings_size', listings), ('arrays_size', path.parent/ARRAYS)]:
+        if plan.get(key) != file_size(source):
             raise ValueError(f'prepared graph mismatch: {key}')
-    if pairs is not None and plan.get('pairs_sha256') != file_hash(pairs):
+    if pairs is not None and plan.get('pairs_size') != file_size(pairs):
         raise ValueError('prepared graph pair mismatch')
     arrays = np.load(path.parent/ARRAYS, allow_pickle=False)
     try:

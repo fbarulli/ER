@@ -52,11 +52,12 @@ from core.tracing import (
     ENTITY_ROW_CAP,
     ENTITY_SAMPLE_PER_REASON,
     SCOPE_ENTITY,
+    TRACE_MAX_BATCH_ROWS,
     TraceRun,
 )
-from graph_tracks.data import census, file_hash, fit_vocabulary, load_records
+from graph_tracks.data import census, file_size, fit_vocabulary, load_records
 from graph_tracks.prepare import prepare
-from graph_tracks.text_cache import checkpoint_hash
+from graph_tracks.text_cache import checkpoint_size
 from graph_tracks.train import write_json
 
 _LOG = RunLogger(__name__)
@@ -72,8 +73,8 @@ def _setup_layout():
     lineage/manifest/census documents, the prepared dir and the rendered lane
     configs) is read from the ONE declared contract rather than spelled here.
     """
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def write_setup_frames(output: Path, *, catalog: pd.DataFrame,
@@ -117,7 +118,7 @@ def write_text_config(output: Path, settings: dict) -> Path:
 # the matching ``batch_census`` row rather than vanishing.
 _BATCH_ENTITIES = 512
 _BATCH_LABEL_ROWS = 2048
-_MAX_BATCH_ROWS = 16
+_MAX_BATCH_ROWS = TRACE_MAX_BATCH_ROWS
 
 
 class _PairLedger:
@@ -415,7 +416,7 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     if output.exists():
         raise FileExistsError(output)
     checkpoint = checkpoint.resolve()
-    baseline_hash = checkpoint_hash(checkpoint)
+    baseline_size = checkpoint_size(checkpoint)
     catalog = load_dataset_deduped().fillna('')
     data = load_base_data(catalog, payload_variant='full')
     timing.mark('checkpoint_catalog_and_base_data')
@@ -444,13 +445,13 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     records = load_records(listings, trace=trace)
     write_json(output / layout.census, census(records, fit_vocabulary(records, trace=trace)))
     timing.mark('graph_features_and_census')
-    _write_setup_manifest(output, accounting, baseline_hash, checkpoint, pairs,
+    _write_setup_manifest(output, accounting, baseline_size, checkpoint, pairs,
                           F, git_revision())
     templates = _load_setup_templates(Path(TRAIN_ROOT))
-    _write_track_configs(output, templates, listings, baseline_hash)
+    _write_track_configs(output, templates, listings, baseline_size)
     _write_text_config(output, templates)
     _record_artifacts(trace, output, frame, assignments, pairs, listings, records)
-    timing.mark('hashes_manifest_and_track_configs')
+    timing.mark('sizes_manifest_and_track_configs')
     trace.write()
     return output
 
@@ -591,7 +592,7 @@ def _record_artifacts(
             'listing_splits': int(len(assignments)),
             'supervised_pairs': int(len(pairs)),
             'prepared_listings': int(len(records)),
-            'listings_json': str(Path(listings).parent / 'listings.json'),
+            'listings_json': str(Path(listings).parent / layout.listings),
             'files': [
                 name for name in (
                     layout.catalog, layout.splits, layout.pairs,
@@ -625,27 +626,27 @@ def _config_layout() -> str:
 
 
 def _pair_lineage_document(accounting: dict, output: Path, F) -> dict:
-    """The pair-lineage document: lineage + the input hashes an auditor re-verifies."""
+    """The pair-lineage document: lineage + the input sizes an auditor re-verifies."""
     return {'schema': 'er-graph-pair-lineage-v1',
             'pairs': accounting.pop('pair_lineage'),
             'source_trace_columns': accounting['source_trace_columns'],
             'missing_axes': accounting['missing_axes'],
             'augmentation': accounting['augmentation'],
-            'listing_pairs_sha256': file_hash(output / _setup_layout().pairs),
-            'source_labels_sha256': file_hash(F['labeled_pairs'])}
+            'listing_pairs_size': file_size(output / _setup_layout().pairs),
+            'source_labels_size': file_size(F['labeled_pairs'])}
 
 
-def _write_setup_manifest(output: Path, accounting: dict, baseline_hash: str,
+def _write_setup_manifest(output: Path, accounting: dict, baseline_size: int,
                           checkpoint: Path, pairs: pd.DataFrame, F, revision: str) -> None:
     """The setup manifest: the run's identity + pairing policy + pair counts."""
     from core.common import SEED
     from core.identity_policy import POLICY_PATH
     write_json(output / _setup_layout().manifest, {
         'schema': 'er-track-setup-v1', 'git_revision': revision, 'seed': SEED,
-        'source_catalog_sha256': file_hash(F['dataset_deduped']),
-        'labeled_pairs_sha256': file_hash(F['labeled_pairs']),
-        'identity_policy_sha256': file_hash(POLICY_PATH),
-        'text_checkpoint': str(checkpoint), 'text_checkpoint_sha256': baseline_hash,
+        'source_catalog_size': file_size(F['dataset_deduped']),
+        'labeled_pairs_size': file_size(F['labeled_pairs']),
+        'identity_policy_size': file_size(POLICY_PATH),
+        'text_checkpoint': str(checkpoint), 'text_checkpoint_size': baseline_size,
         'text_checkpoint_status': 'local baseline; fine-tuning history not inferred',
         'split_protocol': 'training.folds.derive_holdout',
         'pair_protocol': 'first listing per labeled entity plus same-entity positive chains',
@@ -683,7 +684,7 @@ def _suite_report_test() -> bool | None:
 
 
 def _write_track_configs(output: Path, templates: dict, listings: Path,
-                         baseline_hash: str) -> None:
+                         baseline_size: int) -> None:
     """Render each graph track's runnable config against this setup tree."""
     from graph_tracks.artifacts import name
     from graph_tracks.config import GraphConfig
@@ -695,7 +696,7 @@ def _write_track_configs(output: Path, templates: dict, listings: Path,
         cfg = templates[track].copy()
         cfg.update(listings=str(listings),
                    pairs=str(listings.parent / 'pairs.csv'),
-                   input_manifest=str(listings.parent / 'input_manifest.json'))
+                   input_manifest=str(listings.parent / _setup_layout().input_manifest))
         if report_test is not None:
             cfg['report_test'] = report_test
         if track == 'cascade':
@@ -735,7 +736,7 @@ def _write_text_config(output: Path, templates: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, default=_default_setup_output())
+    parser.add_argument('--output', type=Path, default=default_setup_dir())
     parser.add_argument('--text-checkpoint', type=Path,
                         default=_default_text_checkpoint())
     parser.add_argument('--defer-training-tensors', action='store_true',
@@ -745,10 +746,32 @@ def main():
                 training_tensors=not args.defer_training_tensors))
 
 
-def _default_setup_output() -> Path:
-    """The declared setup output root (paths.yaml data_dir)."""
+def default_setup_dir() -> Path:
+    """The declared setup output root: the SUITE config's own ``setup_dir``.
+
+    The prepared-setup root is config-owned (``config/model_tracks.yaml``
+    ``setup_dir``): the orchestrator (``training.prepare_all``), ``model_tracks``
+    preflight/worker/finalize and the data gate all read it from there. The
+    standalone setup CLI used to default to a hand-spelled ``data_dir/track_setup``
+    copy, so retargeting the suite's ``setup_dir`` silently left this producer
+    writing a tree no consumer reads. Resolve the ONE home instead, falling back
+    to the historical literal only when the suite config is absent/unreadable (a
+    fallback for a missing file, not for a broken one).
+    """
     from core.common import _CFG
-    return Path(_CFG['paths']['data_dir']) / 'track_setup'
+
+    fallback = Path(_CFG['paths']['data_dir']) / 'track_setup'
+    from core.common import artifact
+
+    try:
+        path = Path(artifact('model_tracks_config'))
+    except KeyError:
+        return fallback
+    if not path.is_file():
+        return fallback
+    from core.common import TRAIN_ROOT
+    from model_tracks.config import load_config as load_suite_config
+    return Path(TRAIN_ROOT) / load_suite_config(path).setup_dir
 
 
 def _default_text_checkpoint() -> Path:

@@ -28,8 +28,6 @@ def _spec(tmp_path, monkeypatch, **updates):
                               dataset_slug=SMOKE_DATASET)
     cfg_spec = LayaSpec(**{
         "finetune_kernel_slug": "fbarulli/er-laya-finetune",
-        "finetune_dataset_slug": "fbarulli/er-laya-train",
-        "base_model_dataset": "fbarulli/er-laya-base",
         "finetune_smoke": smoke,
         **updates,
     })
@@ -86,10 +84,10 @@ def test_smoke_corpus_is_deterministic_and_receipted(tmp_path):
     assert receipt["seed"] == 1729
     assert [line for line in (dest / "train.jsonl").read_text().splitlines()] == [
         json.dumps({"state": f"train-{i}"}) for i in range(4)]
-    # the receipt records the source digests + its own files inventory
+    # the receipt records the source sizes + its own files inventory
     assert set(receipt["files"]) == {
         "train.jsonl", "dev.jsonl", "test.jsonl", "receipt.json"}
-    assert set(receipt["source_sha256"]) == {
+    assert set(receipt["source_size"]) == {
         "train.jsonl", "dev.jsonl", "test.jsonl"}
 
 

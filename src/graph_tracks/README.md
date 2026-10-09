@@ -2,7 +2,7 @@
 
 Two runnable experimental lanes live here: the trained `gnn_only` worker and
 its `cascade` retrieve-then-rerank combinator. Existing ANN, text training and
-Colab launcher code stays unchanged. MLflow is neither imported nor required.
+Colab launcher code stays unchanged.
 
 | Track | Inputs | Learned outputs |
 |---|---|---|
@@ -209,8 +209,7 @@ the shared identity conflict policy is not applied automatically.
 Shipped configs use W&B project `e-r`, mode `offline`. The real SDK records
 config, epochs, final metrics and track-specific artifacts without credentials.
 Use `mode: online` with `WANDB_API_KEY` for live tracking, or `disabled` for tests.
-Credentials are never configuration values or logged artifacts. MLflow has no
-role in these workers.
+Credentials are never configuration values or logged artifacts.
 
 DVC is enabled locally by default. Each completed epoch generation gets an
 isolated `--no-scm` DVC workspace, a result snapshot including **all checkpoints,

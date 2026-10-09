@@ -32,8 +32,9 @@ from sklearn.metrics import average_precision_score, precision_recall_curve
 from graph_tracks.config import load_config
 from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.tracking import GraphWandb
-from graph_tracks.data import census, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
+from graph_tracks.data import SPLITS, census, file_size, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
+from core.bundle import CHECKPOINT_PREFIX
 from core.perf_switches import perf_enabled
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, TraceRun
@@ -53,8 +54,20 @@ GRAPH_STAGE = "graph_train"
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
+
+
+def _bundle_spec():
+    """The bundle checkpoint layout (config SSOT); graph writes spell none."""
     from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    return training_cfg().bundle
+
+
+def _colab_spec():
+    """The colab checkpoint-marker name (config SSOT)."""
+    from core.common import training_cfg
+    return training_cfg().colab
 
 
 def flush_graph_trace(trace: TraceRun, logger: logging.Logger) -> None:
@@ -110,7 +123,6 @@ class SupervisedPairs:
     """
 
     COLUMNS = {"sku_id1", "sku_id2", "label", "split"}
-    SPLITS = ("train", "dev", "test")
 
     def __init__(self, path: Path, records: list[dict]):
         self._frame = pd.read_csv(path, dtype=str, keep_default_na=False)
@@ -119,7 +131,7 @@ class SupervisedPairs:
         self._ids = {r["sku_id"]: i for i, r in enumerate(records)}
         self._seen: dict[tuple[int, int], tuple[str, bool]] = {}
         self._example_ids: set[str] = set()
-        self._rows = {s: ([], []) for s in self.SPLITS}
+        self._rows = {s: ([], []) for s in SPLITS}
 
     @classmethod
     def from_csv(cls, path: Path, records: list[dict]) -> "SupervisedPairs":
@@ -417,23 +429,23 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         manifest = {"schema": "er-graph-run-v1", "track": cfg.track, "run_tag": run_tag,
                     "config": cfg.model_dump(), "git_revision": revision,
                     "input_manifest": input_manifest,
-                    "input_manifest_sha256": file_hash(resolve(cfg.input_manifest)) if cfg.input_manifest else None,
-                    "listings_sha256": file_hash(resolve(cfg.listings)),
-                    "pairs_sha256": file_hash(resolve(cfg.pairs)),
-                    "text_cache_sha256": file_hash(resolve(cfg.text_cache)) if cfg.text_cache else None,
+                    "input_manifest_size": file_size(resolve(cfg.input_manifest)) if cfg.input_manifest else None,
+                    "listings_size": file_size(resolve(cfg.listings)),
+                    "pairs_size": file_size(resolve(cfg.pairs)),
+                    "text_cache_size": file_size(resolve(cfg.text_cache)) if cfg.text_cache else None,
                     "text_metadata": text_metadata, "graph_context": "training-listings-only",
                     "augmentation": {"masking": False, "gendata": False},
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
                     "optimizer_backend": optimizer_policy.resolved_backend(cfg.device),
                     "aggregation_backend": resolve_aggregation(cfg.aggregation_backend, cfg.device),
-                    "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
-                        {"core/gpu_execution.py": file_hash(TRAIN_ROOT / "src/core/gpu_execution.py"),
-                         "core/execution_policy.py": file_hash(TRAIN_ROOT / "src/core/execution_policy.py")},
-                    "resume_checkpoint_sha256": file_hash(resume) if resume else None}
-        if input_manifest and input_manifest.get('shared_training_data_sha256'):
+                    "implementation_size": {p.name: file_size(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
+                        {"core/gpu_execution.py": file_size(TRAIN_ROOT / "src/core/gpu_execution.py"),
+                         "core/execution_policy.py": file_size(TRAIN_ROOT / "src/core/execution_policy.py")},
+                    "resume_checkpoint_size": file_size(resume) if resume else None}
+        if input_manifest and input_manifest.get('shared_training_data_size'):
             manifest['augmentation'] = {
                 'source': 'shared frozen training objective',
-                'shared_training_data_sha256': input_manifest['shared_training_data_sha256']}
+                'shared_training_data_size': input_manifest['shared_training_data_size']}
         best_metric, best_path, start_epoch = -1., None, 0
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
                     'resume' if resume else 'fresh', resume, cfg.epochs)
@@ -443,7 +455,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 current_manifest = json.loads(current_manifest_path.read_text())
                 if current_manifest.get("track") != cfg.track or current_manifest.get("run_tag") != run_tag:
                     raise ValueError("resume output belongs to a different run")
-                for key in ("listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256"):
+                for key in ("listings_size", "pairs_size", "text_cache_size", "input_manifest_size"):
                     if current_manifest.get(key) != manifest[key]:
                         raise ValueError(f"resume output mismatch: {key}")
             if checkpoint_track(resume) != cfg.track:
@@ -454,7 +466,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError('resume aggregation backend mismatch')
             if prior['config'].get('optimizer_backend', 'auto') != cfg.optimizer_backend:
                 raise ValueError('resume optimizer backend mismatch')
-            for key in ("track", "listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256"):
+            for key in ("track", "listings_size", "pairs_size", "text_cache_size", "input_manifest_size"):
                 if prior[key] != manifest[key]:
                     raise ValueError(f"resume mismatch: {key}")
             for key, value in prior["config"].items():
@@ -470,7 +482,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             if checkpoint_track(best_path) != cfg.track:
                 raise ValueError("selected resume checkpoint track mismatch")
             # Collect the selected model inside this run even if no new epoch wins.
-            selected_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / best_path.parent.name
+            selected_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / best_path.parent.name
             if selected_dir.resolve() != best_path.parent.resolve():
                 shutil.copytree(best_path.parent, selected_dir, dirs_exist_ok=True)
             best_path = selected_dir / name(cfg.track, "graph_model.pt")
@@ -496,8 +508,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             input_dir = output / name(cfg.track, "inputs")
             input_dir.mkdir(exist_ok=True)
             input_artifacts = {}
-            for key, stem in (("listings", "listings.json"), ("pairs", "pairs.csv"),
-                              ("text_cache", "text_embeddings.npz"), ("input_manifest", "input_manifest.json")):
+            for key, stem in (("listings", layout.listings), ("pairs", "pairs.csv"),
+                              ("text_cache", "text_embeddings.npz"), ("input_manifest", layout.input_manifest)):
                 if getattr(cfg, key):
                     target = input_dir / name(cfg.track, stem)
                     source = resolve(getattr(cfg, key))
@@ -508,8 +520,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         provenance.mkdir(exist_ok=True)
                         target = provenance / source.name
                         for relative in (layout.embedding_request, layout.catalog,
-                                         f'{layout.prepared_dir}/input_manifest.json',
-                                         f'{layout.prepared_dir}/listings.json'):
+                                         f'{layout.prepared_dir}/{layout.input_manifest}',
+                                         f'{layout.prepared_dir}/{layout.listings}'):
                             origin = source.parent / relative
                             copied = provenance / relative
                             copied.parent.mkdir(parents=True, exist_ok=True)
@@ -640,7 +652,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 metrics["early_stopping_bad_epochs"] = bad_epochs
                 previous_best = best_metric
                 improved = metrics["dev_pr_auc"] > best_metric
-                checkpoint_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / f"checkpoint-{epoch}"
+                checkpoint_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / f"{CHECKPOINT_PREFIX}{epoch}"
                 checkpoint_dir.mkdir(parents=True)
                 checkpoint = checkpoint_dir / name(cfg.track, "graph_model.pt")
                 if improved:
@@ -712,12 +724,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                             metrics['dev_pr_auc'], previous_best)
                 with _LOG.section("graph.checkpoint_write", epoch=epoch):
                     profiler.call('graph/checkpoint_write',torch.save,payload,checkpoint)
-                write_json(checkpoint_dir / name(cfg.track, "trainer_state.json"), {
+                write_json(checkpoint_dir / name(cfg.track, _bundle_spec().trainer_state_file), {
                     "global_step": epoch, "best_metric": best_metric,
-                    "best_model_checkpoint": str(best_path.parent)})
+                    _bundle_spec().trainer_best_key: str(best_path.parent)})
                 # Completion marker is written LAST, matching worker conventions.
-                write_json(checkpoint_dir / name(cfg.track, "checkpoint_manifest.json"), {
-                    "schema": "er-graph-checkpoint-v1", "files": {checkpoint.name: file_hash(checkpoint)},
+                write_json(checkpoint_dir / name(cfg.track, _colab_spec().checkpoint_manifest_name), {
+                    "schema": "er-graph-checkpoint-v1", "files": {checkpoint.name: file_size(checkpoint)},
                     "epoch": epoch, "track": cfg.track})
                 write_json(output / name(cfg.track, "best_checkpoint.json"), {"path": str(best_path), "metric": best_metric})
                 with (output / name(cfg.track, "epoch_metrics.jsonl")).open("a") as handle:
@@ -861,7 +873,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             artifacts = [output / name(cfg.track, stem) for stem in
                 ("run_manifest.json", layout.census, "epoch_metrics.jsonl", "best_checkpoint.json",
                  "listing_usage.csv", "gradient_metrics.jsonl")]
-            artifacts.append(output / "_checkpoints" / cfg.track)
+            artifacts.append(output / _bundle_spec().checkpoint_dir / cfg.track)
             if cfg.include_inputs:
                 artifacts.append(input_dir)
             if completion:
@@ -899,9 +911,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 project = snapshot(output, cfg.track, remote=cfg.dvc.remote, push=cfg.dvc.push,
                                    generation=f"epoch-{completed_epochs}")
                 write_json(output / name(cfg.track, "dvc_result.json"), {
-                    "track": cfg.track, "project": str(project), "verified_restore": True, "pushed": cfg.dvc.push})
-                logger.info("[graph-dvc] verified clean restore project=%s", project)
-                wandb.set_summary({"dvc_verified_restore": True, "dvc_pushed": cfg.dvc.push,
+                    "track": cfg.track, "project": str(project), "pushed": cfg.dvc.push})
+                logger.info("[graph-dvc] pushed project=%s", project)
+                wandb.set_summary({"dvc_pushed": cfg.dvc.push,
                                    "dvc_project": project.name})
                 wandb.log_artifacts([project / name(cfg.track, "dvc_manifest.json"),
                                      project / (name(cfg.track, "payload") + ".dvc")], "dvc-metadata")

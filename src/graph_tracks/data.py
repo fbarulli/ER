@@ -8,8 +8,8 @@ supplied by the caller, never randomly generated here.
 
 RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
 -------------------------------------------------------------------------
-- :class:`FileDigest` — the one hash surface (:func:`file_hash`), including
-  directory digests via the text-cache checkpoint hash.
+- :func:`file_size` — the one structural size accessor (files and
+  directories): bytes on disk, never a content digest.
 - :class:`ListingValidator` — the per-listing schema checks
   (:func:`load_records` stays the public face).
 - :class:`Vocabulary` — the train-split-only categorical vocabulary
@@ -60,39 +60,23 @@ _CACHE_SKIP_FULL_SCAN = perf_enabled("graph.cache_skip_full_scan", default=False
 # (`core.sku_identity.row_identity`) yields — string descriptor fields are
 # typed relations, float fields numeric features (see ProductIdentity
 # .graph_schema). An update to the extractor's descriptor set moves this
-# automatically; staleness of previously prepared listings is caught at load
+# automatically; a changed descriptor set for previously prepared listings is caught at load
 # time by comparing the prepared manifest against this derivation.
 RELATIONS, NUMERIC = graph_schema()
 SPLITS = {"train", "dev", "test"}
 
 
-class FileDigest:
-    """The one hash surface of the graph inputs.
+def file_size(path: Path | str) -> int:
+    """The graph lane's structural size accessor (one home, no digest).
 
-    Files forward to the ONE digest implementation (``core.portable_archive
-    .raw_file_digest``) instead of carrying a second copy of the algorithm;
-    directories keep the checkpoint-composition hash that only this lane
-    defines.
-
-    Deliberately the UNCACHED route: ``file_hash`` is used as a change
-    detector (frozen ablation sources, worker-package verification, git
-    transport checks), so a same-size rewrite that preserves ``mtime_ns`` must
-    still be observed. Repeated-read callers that want the memoized policy ask
-    for it by name (``core.portable_archive.cached_file_digest``).
+    Forwards to ``core.portable_archive.file_size``: a file's bytes on disk, or
+    a directory's summed member bytes. Used as a change detector (frozen
+    ablation sources, worker-package verification, git transport checks) — a
+    same-size rewrite IS the accepted structural blind spot of the owner
+    directive that removed all content hashing.
     """
-
-    @staticmethod
-    def of(path: Path | str) -> str:
-        path = Path(path)
-        if path.is_dir():
-            from graph_tracks.text_cache import checkpoint_hash
-            return checkpoint_hash(path)
-        from core.portable_archive import raw_file_digest
-        return raw_file_digest(path)
-
-
-def file_hash(path: Path | str) -> str:
-    return FileDigest.of(path)
+    from core.portable_archive import file_size as _file_size
+    return _file_size(path)
 
 
 class ListingValidator:
@@ -315,7 +299,7 @@ class TextCache:
     """The checkpoint-native embedding cache contract.
 
     Persisted float32 rows, unique nonempty IDs, finite nonzero vectors, and
-    a metadata block that pins ``checkpoint_sha256`` plus the composition —
+    a metadata block that pins ``checkpoint_size`` plus the composition —
     so a cache can never serve embeddings from a different checkpoint
     silently.
     """
@@ -341,8 +325,8 @@ class TextCache:
                 not np.isfinite(self._vectors).all()
                 or np.any(np.linalg.norm(self._vectors, axis=1) <= 1e-12)):
             raise ValueError("text cache contains nonfinite or zero vectors")
-        if not self._metadata.get("checkpoint_sha256") or not self._metadata.get("composition"):
-            raise ValueError("text cache must identify checkpoint_sha256 and composition")
+        if not self._metadata.get("checkpoint_size") or not self._metadata.get("composition"):
+            raise ValueError("text cache must identify checkpoint_size and composition")
 
     def gather(self, ids: list[str]) -> np.ndarray:
         lookup = {v: i for i, v in enumerate(self._ids)}

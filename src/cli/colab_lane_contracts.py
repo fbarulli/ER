@@ -11,7 +11,7 @@ facades and the test fakes keep driving every lane through one patch surface.
 """
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import file_size
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -42,9 +42,15 @@ RESUME_STATE_UPLOAD_TIMEOUT_SECONDS = 3600
 MAX_PARALLEL_PREP_SESSIONS = 2
 
 
-def _stamp() -> str:
-    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
-    return (f"[colab-lane {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+def _stamp(label: str = "colab-lane", *, now: datetime | None = None) -> str:
+    """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output.
+
+    The ONE stamp formatter every lane imports. ``label`` names the emitting
+    lane; ``now`` is an optional pre-computed wall-clock so a caller that keeps
+    its own ``datetime`` patched in tests passes it through.
+    """
+    now = now or datetime.now(ZoneInfo("Europe/Paris"))
+    return f"[{label} {now:%Y-%m-%dT%H:%M:%S %Z}]"
 
 
 class ColabLaneBase:
@@ -98,11 +104,16 @@ class ColabLaneBase:
         return self.surface._parse_remote_json(output)
 
     def transit_fatal(self, detail: str) -> bool:
-        lowered = str(detail).lower()
-        return (
-            "connection was lost" in lowered
-            or f"session '{self.session}' not found".lower() in lowered
-        )
+        """Whether a transport failure is any control-channel loss.
+
+        The markers live once, in cli.colab_reconnect: this contract only says
+        that both a transient drop and a vanished session are fatal to the
+        lane's poll, which is what its caller does with the answer.
+        """
+        from cli.colab_reconnect import ControlChannelLoss, ControlChannelRecovery
+
+        return ControlChannelRecovery.classify(
+            self.session, str(detail)) is not ControlChannelLoss.OTHER
 
     @staticmethod
     def checkout_relative_guard(value: str, *, message: str) -> None:
@@ -122,12 +133,9 @@ class ColabLaneBase:
         return self.training_results / ("colab_bundle_" + run_id)
 
     @timed
-    def export_digest(self, dataset_csv: Path) -> str:
-        digest = hashlib.sha256()
-        with Path(dataset_csv).open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+    def export_digest(self, dataset_csv: Path) -> int:
+        """The export's byte size (structural identity; content is never read)."""
+        return file_size(dataset_csv)
 
     def bundle_head(self) -> str:
         remote_root = self.remote_root

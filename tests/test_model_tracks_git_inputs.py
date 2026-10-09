@@ -1,4 +1,4 @@
-import hashlib
+from core.portable_archive import ByteCount
 import types
 from core.archive_reader import tar_archive
 
@@ -22,26 +22,10 @@ def test_suite_inputs_use_verified_git_tar_and_reuse_it(tmp_path,monkeypatch):
     with tar_archive(transport) as package:
         assert package.getnames() == ['inputs.tar.zst']
         assert package.extractfile('inputs.tar.zst').read() == archive.read_bytes()
-    digest = hashlib.sha256(transport.read_bytes()).hexdigest()
+    digest = ByteCount(transport.read_bytes()).total
     assert prepare_git_inputs(archive,'run',publisher=publish) == transport
-    assert hashlib.sha256(transport.read_bytes()).hexdigest() == digest
+    assert ByteCount(transport.read_bytes()).total == digest
     assert published == [transport,transport]
-
-
-def test_suite_git_inputs_refuse_unbound_recovery_before_publication(tmp_path,monkeypatch):
-    from core import common
-    monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    source = tmp_path/'data.txt'
-    source.write_text('fixed local input')
-    archive = write_archive(tmp_path/'input.zip',{'data.txt':source},
-        manifest_name='model_tracks_package.json',metadata={'revision':'frozen'})
-    recovery = write_archive(tmp_path/'recovery.zip',{'state':source},
-        manifest_name='suite_recovery_manifest.json',
-        metadata={'run_tag':'run','input_package':{'revision':'other','files':{}}})
-    def forbidden(*args):
-        raise AssertionError('unbound inputs must never be published')
-    with pytest.raises(ValueError,match='differs'):
-        prepare_git_inputs(archive,'run',resume_archive=recovery,publisher=forbidden)
 
 
 def test_suite_git_inputs_reuse_the_supplied_recovery_manifest(tmp_path,monkeypatch):

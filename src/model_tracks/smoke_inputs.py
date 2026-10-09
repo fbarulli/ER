@@ -42,8 +42,8 @@ _SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache',
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _repoint_smoke_paths(settings: dict, *, setup: Path, output: Path,
@@ -88,7 +88,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
                       for track in ('gnn_only', 'cascade')}
     text_settings = load_text_config(setup/layout.text_config).model_dump()
     from core.common import SEED, training_cfg
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from graph_tracks.prepare import prepare
     from graph_tracks.train import write_json
     from training.folds import normalize_gtin
@@ -227,11 +227,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         holdout_populations={s:sorted(values) for s,values in zip(('train','dev','test'),populations)})
     manifest=dict(parent_manifest)
     manifest.update(smoke=True,source_listing_count=sample,
-                    parent_setup_sha256=file_hash(setup/layout.manifest),
+                    parent_setup_size=file_size(setup/layout.manifest),
                     text_checkpoint=_portable_path(checkpoint, train_root=train_root))
     write_json(output/layout.manifest,manifest)
-    from graph_tracks.text_cache import checkpoint_hash
-    if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
+    from graph_tracks.text_cache import checkpoint_size
+    if checkpoint_size(checkpoint) != manifest['text_checkpoint_size']:
         raise ValueError('smoke baseline differs from the parent checkpoint')
     # Bind the CPU cache to the same prepared-token request used by the suite.
     from core.common import runtime
@@ -247,9 +247,13 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     text_settings.update(report_test=False)
     write_text_config(output, text_settings)
     cfg = parent.model_dump()
+    # A smoke is a lifecycle check, not a performance experiment: the suite
+    # config keeps resource profiling off (matching the committed S fixture),
+    # while post-training ablation stays inherited from the parent so the local
+    # finalize still fires from the downloaded result archive.
     cfg.update(setup_dir=_portable_path(output, train_root=train_root),
                text_bundle=_portable_path(output/'text_prepared.pkl.gz', train_root=train_root),
                epochs=1,device='cpu',report_test=False,publish_git=False,
-               publish_dvc=False,profiling=True)
+               publish_dvc=False,profiling=False)
     (output/'suite.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False))
     return output/'suite.yaml'

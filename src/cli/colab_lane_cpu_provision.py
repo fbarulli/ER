@@ -41,9 +41,9 @@ class ColabCPULaneProvision:
         """The committed config-listed export this lane checks out; fail loud otherwise."""
         chosen = dataset_csv if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
         export = chosen.name
-        if export not in training_cfg().cpu_bundle_prep.export_csvs:
+        if export not in training_cfg().bundle_prep.export_csvs:
             raise ValueError(
-                "bundle exports must be committed config cpu_bundle_prep.export_csvs "
+                "bundle exports must be committed config bundle_prep.export_csvs "
                 f"entries (no upload exists on this lane); got {export!r}")
         return export
 

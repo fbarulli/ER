@@ -153,7 +153,7 @@ def test_growth_fold_is_deterministic_byte_for_byte(tmp_path):
     second = tmp_path / "second"
     receipt_one = _build(builder, sources, first)
     receipt_two = _build(builder, sources, second)
-    assert receipt_one["corpus_sha256"] == receipt_two["corpus_sha256"]
+    assert receipt_one["corpus_size"] == receipt_two["corpus_size"]
     for name in ("train.jsonl", "dev.jsonl", "test.jsonl",
                  "unknown_pairs.csv", "receipt.json"):
         assert (first / name).read_bytes() == (second / name).read_bytes()
@@ -349,7 +349,7 @@ def test_all_null_corpus_block_reproduces_the_default_corpus(tmp_path):
             output_dir=out, seed=1729, bundle_path=sources["bundle"],
             labeled_pairs_path=sources["labeled"])
         for question, out in ((question_bare, bare), (question_null, nulled))]
-    assert receipts[0]["sha256"] == receipts[1]["sha256"]
+    assert receipts[0]["size"] == receipts[1]["size"]
     assert "identity_rebalance" not in receipts[1]
     assert "corpus_config" not in receipts[1]
     assert receipts[0]["counts"] == receipts[1]["counts"]
@@ -494,7 +494,7 @@ def test_identity_rebalance_is_deterministic_and_config_driven(tmp_path):
             output_dir=out, seed=1729, bundle_path=sources["bundle"],
             labeled_pairs_path=sources["labeled"])
         for out in (first, second)]
-    assert receipts[0]["corpus_sha256"] == receipts[1]["corpus_sha256"]
+    assert receipts[0]["corpus_size"] == receipts[1]["corpus_size"]
     # the resolved config rides the receipt when a knob is set
     assert receipts[0]["corpus_config"]["identity_negative_target_ratio"] == 1.0
     for name in ("train.jsonl", "dev.jsonl", "test.jsonl", "receipt.json"):

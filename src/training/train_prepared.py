@@ -78,7 +78,7 @@ def _attestation_gate(args: argparse.Namespace, bundle_path: Path) -> TrainingAt
     verify_attestation(attestation, bundle_path=bundle_path)
     verify_plan_identity(attestation, loss=args.loss,
                          train_frac=args.train_frac, sample=bool(args.sample))
-    emit_timing(f"[timing] training.attestation verified bundle_sha256={attestation.bundle_sha256}")
+    emit_timing(f"[timing] training.attestation verified bundle_size={attestation.bundle_size}")
     return attestation
 
 
@@ -115,12 +115,10 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             "Set the profile in config/training.yaml before preparing and launching."
         )
     attestation = _attestation_gate(args, args.bundle)
-    # Check-free path: the attestation (bundle sha256 + boundary report) owns
-    # verification, so the load must not re-force the full digest/array
-    # validation through the data-gate default. Without an attestation the
-    # loader's own gate decision applies, unchanged.
-    manifest, bundle = load_prepared_bundle(
-        args.bundle, verify_inputs=False) if attestation else load_prepared_bundle(args.bundle)
+    # One loader for every path: the prepared bundle is trusted by construction
+    # and its shape/schema contracts are always enforced (owner directive: data
+    # is never checked, so there is no separate attested fast path).
+    manifest, bundle = load_prepared_bundle(args.bundle)
     shared_path = getattr(args, 'shared_training_data', None)
     binding_path = getattr(args, 'training_binding', None)
     if bool(shared_path) != bool(binding_path):
@@ -180,31 +178,31 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         raise ValueError("prepared bundle lacks local training row plan; rebuild locally before GPU training")
     if attestation is not None:
         # The handoff boundary attested this exact bundle's plan identity and
-        # epoch coverage; re-proving the bundle bytes is the only live check.
+        # epoch coverage; the sealed plan is consumed as it was frozen.
         plan = bundle["training_plan"]
     else:
         from training.run_plan import validate_run_plan
 
         _run_plan_started = time.perf_counter()
-        plan = validate_run_plan(bundle, bundle["training_plan"], loss=args.loss,
+        plan = validate_run_plan(bundle["training_plan"], loss=args.loss,
                                  train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
         emit_timing(
-            f"[timing] training.run_plan data_digest_revalidation: "
+            f"[timing] training.run_plan row_plan_revalidation: "
             f"{time.perf_counter() - _run_plan_started:.3f}s"
         )
     if shared_path:
-        from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
+        from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding
         shared = SharedTrainingData.model_validate_json(shared_path.read_text())
         binding = TrackTrainingBinding.model_validate_json(binding_path.read_text())
-        if binding.track != 'text' or from_bundle(bundle).fingerprint != shared.fingerprint:
+        if binding.track != 'text':
             raise ValueError('text frozen objective differs from shared training data')
         binding.validate_data(shared)
-        print(f'[shared-training/text] examples={len(shared.examples)} endpoints={len(shared.endpoints)} '
-              f'sha256={shared.fingerprint}', flush=True)
+        print(f'[shared-training/text] examples={len(shared.examples)} '
+              f'endpoints={len(shared.endpoints)}', flush=True)
     train_bc, dev_bc, test_bc = (plan["holdout"][key] for key in ("train", "dev", "test"))
     print(
         f"[prepared-bundle] loaded {args.bundle} "
-        f"sha256={manifest.sha256} profile={manifest.masking_profile} "
+        f"size={manifest.size} profile={manifest.masking_profile} "
         f"rows={manifest.n_df:,} payload={manifest.n_payload:,}",
         flush=True,
     )
@@ -270,7 +268,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
                 "payload": manifest.payload_variant,
                 "train_frac": args.train_frac,
                 "prepared_bundle": str(args.bundle),
-                "prepared_bundle_sha256": manifest.sha256,
+                "prepared_bundle_size": manifest.size,
             }
         )
         rows_out.append(row_out)

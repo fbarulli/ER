@@ -71,7 +71,7 @@ def test_stage_holdout_dataset_payload_writes_jsonl_and_receipt(
     _hermetic(monkeypatch)
     question, catalog, holdout = _fixtures(tmp_path, spec)
     receipt = laya_lane.stage_holdout_dataset_payload(
-        dataset_slug=spec.holdout_dataset_slug, holdout_csv=holdout,
+        dataset_slug=spec.hosted_slug("holdout"), holdout_csv=holdout,
         catalog_path=catalog, question_path=question)
     payload = Path(receipt["payload"])
     jsonl = payload / laya_lane.HOLDOUT_JSONL
@@ -103,7 +103,7 @@ def test_stage_holdout_eval_kernel_renders_and_writes_receipt(
     assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
     # the checkpoint dataset rides alongside the holdout dataset
     metadata = json.loads((stage / "kernel-metadata.json").read_text())
-    assert spec.holdout_dataset_slug in metadata["dataset_sources"]
+    assert spec.hosted_slug("holdout") in metadata["dataset_sources"]
 
 
 def test_layalane_run_accepts_holdout_eval(tmp_path, monkeypatch):

@@ -15,6 +15,6 @@ gpu_headroom_gb: 2.0
 report_test: false
 publish_dvc: false
 publish_git: false
-profiling: true
+profiling: false
 post_training_ablation: true
 ablation_config: config/attribute_ablation.yaml

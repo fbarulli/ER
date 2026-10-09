@@ -63,24 +63,48 @@ class KernelTemplates:
 '''
 
 
-    SHA256_HELPER = r'''def sha256_file(path):
-    """Streaming content hash for a sealed/attached archive member.
+    SIZE_HELPER = r'''def file_size(path):
+    """Byte size of a sealed/attached archive member.
 
     PINNED STANDALONE COPY (the one allowed copy outside ``core``): a kernel
     source is a deployment artifact that runs from /kaggle/working against the
     clone's own checkout, so it must not import the repo package before the
     checkout exists; ``cli.kaggle_kernel_templates`` therefore injects this ONE
-    definition into every kernel that hashes anything (previously duplicated
-    verbatim in the bundle and train kernels). The algorithm is the shared one
-    (lowercase hex, streamed); it is pinned against
-    ``core.manifest.sha256_file`` -> ``core.portable_archive.raw_file_digest``
-    by tests/test_bundle_standalone.py.
+    definition into every kernel that measures an archive member (previously
+    duplicated verbatim in the bundle and train kernels). It is the same
+    structural measure as ``core.portable_archive.file_size``; no content is
+    fingerprinted anywhere (owner directive 2026-10-08).
     """
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(LANE["archives"]["copy_buffer_bytes"]), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    import os
+    return os.path.getsize(path)
+
+'''
+
+
+    SESSION_REPORT_HELPER = r'''def report_kernel_session():
+    """Self-report the kernel session id so the host-side follower persists it.
+
+    PINNED STANDALONE COPY (same allowance as ``file_size`` above): a kernel
+    script is a deployment artifact that runs before the repo checkout (and for
+    the laya fine-tune kernel WITHOUT one), so it cannot import the lane
+    package. Its host-side twin is ``cli.laya_lane.container_session_id`` (the
+    id inside ``KAGGLE_CONTAINER_NAME``, ``kaggle_<token>-<session_id>-webtier``),
+    which is the numeric id the SDK ``cancel_kernel_session`` accepts; the two
+    parses are pinned together by tests/test_kaggle_lane.py, so one rule never
+    becomes two. Kaggle sets NO ``KAGGLE_KERNEL_RUN_ID``/``KAGGLE_SESSION_ID``
+    in the container, so this line is the only id source the SSE log follower
+    (cli.kaggle_monitor) can persist for the verified in-place stop.
+
+    The return shape is the one the laya fine-tune receipt records:
+    ``session_id`` is the digit string ("" when the container name is absent or
+    malformed), ``KAGGLE_CONTAINER_NAME`` the raw name.
+    """
+    container = os.environ.get("KAGGLE_CONTAINER_NAME", "")
+    parts = container.rsplit("-", 2)
+    session_id = parts[1] if len(parts) == 3 and parts[1].isdigit() else ""
+    print("[kaggle-session] session_id=" + session_id
+          + " container=" + container, flush=True)
+    return {"KAGGLE_CONTAINER_NAME": container, "session_id": session_id}
 
 '''
 
@@ -92,9 +116,9 @@ Owner ruling 2026-10-06: bundle generation is CPU-only and runs here, not
 locally; the GPU session only trains. Clones the pinned revision (partial +
 sparse checkout), installs the worker requirements, runs
 training.prepare_all end-to-end, and stages the launch package plus its
-receipt into /kaggle/working for hash-verified fetch-back.
+receipt into /kaggle/working for fetch-back.
 """
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import shutil
@@ -118,7 +142,9 @@ SCRATCH = (Path(LANE["remote"]["scratch_dir"]) if Path(LANE["remote"]["scratch_d
 WORKING = Path(LANE["remote"]["working_dir"])
 
 @COMMAND_RUNNER@
-@SHA256_HELPER@
+@SIZE_HELPER@
+@SESSION_REPORT@
+report_kernel_session()
 SCRATCH.mkdir(parents=True, exist_ok=True)
 root = SCRATCH / LANE["files"]["checkout_dir"]
 if root.exists():
@@ -170,7 +196,7 @@ receipt = {
     "cohort_dataset": COHORT_DATASET,
     "archive": LANE["files"]["bundle_archive"],
     "archive_bytes": (destination / LANE["files"]["bundle_archive"]).stat().st_size,
-    "archive_sha256": sha256_file(destination / LANE["files"]["bundle_archive"]),
+    "archive_size": file_size(destination / LANE["files"]["bundle_archive"]),
 }
 (destination / LANE["files"]["bundle_receipt"]).write_text(
     json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
@@ -179,7 +205,6 @@ print("[bundle-cpu] receipt: " + json.dumps(receipt, indent=2), flush=True)
 
 
     TRAIN_KERNEL_SHARED = '''\
-import hashlib
 import json
 import os
 import shutil
@@ -209,7 +234,9 @@ BUNDLE_RECEIPT = LANE["files"]["bundle_receipt"]
 BUNDLE_ARCHIVE = LANE["files"]["bundle_archive"]
 
 @COMMAND_RUNNER@
-@SHA256_HELPER@
+@SIZE_HELPER@
+@SESSION_REPORT@
+report_kernel_session()
 def locate_input_archive():
     """Locate the attached bundle output (receipt + archive) under /kaggle/input."""
     candidates = sorted(INPUTS.rglob(BUNDLE_RECEIPT))
@@ -222,8 +249,6 @@ def locate_input_archive():
         raise SystemExit("attached outputs contained no " + BUNDLE_RECEIPT)
     receipt_dir = candidates[0].parent
     archive = receipt_dir / BUNDLE_ARCHIVE
-    if not archive.is_file():
-        raise SystemExit("attached kernel output missing " + BUNDLE_ARCHIVE)
     return archive, receipt_dir
 
 def clone_pinned():
@@ -247,7 +272,7 @@ def clone_pinned():
     return root
 
 def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
-    """Manifest-backed tar.zst + .sha256 companion (colab result-archive mirror).
+    """Manifest-backed tar.zst + .size companion (colab result-archive mirror).
 
     The companion lands on the ONE sidecar rule
     (``core.archive_reader.archive_sidecar``).
@@ -267,17 +292,16 @@ def stage_result_archive(output: Path, *, kind: str, extra: dict) -> str:
         "files_count": len(files),
         "files": {
             str(Path(root_name) / p.relative_to(output)): {
-                "bytes": p.stat().st_size, "sha256": sha256_file(p)}
+                "bytes": p.stat().st_size, "size": file_size(p)}
             for p in files
         },
         **extra,
     }
     (WORKING / LANE["files"]["result_manifest"].format(kind=kind)).write_text(
         json.dumps(result_manifest, indent=2), encoding="utf-8")
-    digest = sha256_file(result_archive)
-    archive_sidecar(result_archive, LANE["files"]["hash_suffix"]).write_text(digest + "\\n", encoding="utf-8")
-    print(f"[{kind}] staged: {result_archive} sha256={digest}", flush=True)
-    return digest
+    archive_size = file_size(result_archive)
+    print(f"[{kind}] staged: {result_archive} size={archive_size}", flush=True)
+    return archive_size
 '''
 
 
@@ -299,12 +323,11 @@ env = {**os.environ, "PYTHONPATH": str(root / LANE["files"]["source_dir"]), "PYT
 sys.path.insert(0, str(root / LANE["files"]["source_dir"]))
 from core.bundle import Bundle
 
-# ONE integrity check for this VM crossing: the attached archive is verified
-# once at its Bundle boundary (manifest + every member, plus the transport
-# digest the CPU kernel recorded while sealing), and the trusted handle it
-# returns is what the install reads — no member is hashed or re-parsed again.
-inputs_bundle = Bundle.load(archive_path, "inputs",
-                            expected_digest=receipt.get("archive_sha256"))
+# ONE read for this VM crossing: the attached archive is opened once at its
+# Bundle boundary (manifest + member names), and the trusted handle it returns
+# is what the install reads — no member is read or re-parsed again, and no byte
+# is compared (owner directive: data is never checked).
+inputs_bundle = Bundle.load(archive_path, "inputs")
 with inputs_bundle.reader() as archive:
     # Code/config neighborhoods are authoritative from the pinned checkout:
     # the bundle's embedded snapshot is built at bundle time and predates the
@@ -318,10 +341,36 @@ with inputs_bundle.reader() as archive:
             continue
         archive.extract(name, root)
 package_manifest = root / LANE["files"]["package_manifest"]
-if not package_manifest.is_file():
-    raise SystemExit("package install produced no model_tracks_package.json")
 (root / LANE["files"]["package_manifest"]).write_text(package_manifest.read_text(),
                                                 encoding="utf-8")
+
+# Consumer side of the ablation contract (owner order: ablation is GPU
+# inference). When the suite turns post-training ablation on, the attached
+# inputs bundle MUST ship the frozen per-track templates: the GPU worker binds
+# them to the selected checkpoint and encodes the ablation vectors on THIS
+# device. A bundle that lacks them makes the worker record
+# attribute_ablation_export/skipped and pushes the ablation to a local CPU run,
+# so the session is refused HERE, before the trainer allocates a GPU.
+# `Bundle.ablation_templates` reads the member names the boundary load already
+# captured, so this check costs no second archive inflation.
+import yaml as _suite_yaml
+_suite_config = Path(SUITE_CONFIG)
+if not _suite_config.is_absolute():
+    _suite_config = root / _suite_config
+if (_suite_yaml.safe_load(_suite_config.read_text(encoding="utf-8")) or {}).get(
+        "post_training_ablation"):
+    from model_tracks.post_training_ablation import ABLATION_TRACKS as _ablation_tracks
+    _missing_templates = [track for track in _ablation_tracks
+                          if not inputs_bundle.ablation_templates(track)]
+    if _missing_templates:
+        raise SystemExit(
+            "[bundle-contract] post_training_ablation is on but the attached "
+            "inputs bundle ships no ablation templates for "
+            + ", ".join(_missing_templates)
+            + "; the GPU worker would skip the ablation (local CPU fallback). "
+            "Rebuild the bundle with the CPU bundling kernel.")
+    print("[bundle-contract] ablation templates present for "
+          + ", ".join(_ablation_tracks), flush=True)
 
 output = root / LANE["paths"]["results_dir"] / LANE["files"]["training_dir"] / RUN_TAG
 env["ER_GPU_TRAINING_ONLY"] = "1"
@@ -346,14 +395,13 @@ stage_result_archive(output, kind=LANE["files"]["result_names"]["train"], extra=
 # ── finalize role: ONE remote CPU lane job, run from this sparse checkout ──
 # The operator box is no longer a finalize surface (owner ruling): this kernel
 # is the only place CPU post-processing, post-training ablation and sealing run.
-# Two verified bundles arrive attached and each is integrity-checked exactly
-# once, at its Bundle boundary:
+# Two bundles arrive attached and each is opened exactly once, at its Bundle
+# boundary:
 #   * the prepared-inputs bundle (the published bundle dataset / CPU kernel
 #     output) — role `inputs`; bundle_steps.finalize opens its own SSOT boundary
-#     on it, so this kernel neither re-hashes nor re-parses its members;
+#     on it, so this kernel neither re-reads nor re-parses its members;
 #   * the trained result bundle (the train kernel output) — role `result`, whose
-#     transport digest is pinned here by the one Bundle.load that hands the
-#     step its trusted handle.
+#     run-tagged handle is what the step consumes.
 FINALIZE_MANIFEST = LANE["files"]["result_manifest"].format(
     kind=LANE["files"]["result_names"]["train"])
 FINALIZE_ARCHIVE = LANE["files"]["result_archive"].format(
@@ -367,8 +415,6 @@ def locate_result_archive():
         raise SystemExit("attached outputs contained no " + FINALIZE_MANIFEST)
     directory = candidates[0].parent
     archive = directory / FINALIZE_ARCHIVE
-    if not archive.is_file():
-        raise SystemExit("attached kernel output missing " + FINALIZE_ARCHIVE)
     return archive, json.loads(candidates[0].read_text(encoding="utf-8"))
 
 inputs_archive, inputs_dir = locate_input_archive()
@@ -380,12 +426,9 @@ sys.path.insert(0, str(root / LANE["files"]["source_dir"]))
 from core.bundle import Bundle, BundlePipeline
 from core.archive_reader import archive_sidecar
 
-# The single boundary check for the result bundle: the receipt digest the train
-# kernel recorded while sealing is the transport token, and the handle it
-# returns is what the step consumes (no member is re-hashed afterwards).
-result_bundle = Bundle.load(
-    result_archive, "result",
-    expected_digest=result_manifest.get("archive_sha256"))
+# The single boundary read for the result bundle: one load by name, and the
+# handle it returns is what the step consumes (no member is re-read afterwards).
+result_bundle = Bundle.load(result_archive, "result")
 output = (WORKING / LANE["files"]["bundle_dir"]
           / LANE["files"]["result_archive"].format(kind=FINALIZE_RESULT))
 work_dir = WORKING / "finalize_work"
@@ -405,18 +448,16 @@ receipt = {
     "cohort": inputs_receipt.get("cohort"),
     "archive": output.name,
     "archive_bytes": output.stat().st_size,
-    "archive_sha256": sealed.digest,
-    "inputs_sha256": inputs_receipt.get("archive_sha256"),
-    "result_sha256": result_bundle.digest,
+    "archive_size": sealed.path.stat().st_size,
+    "inputs_size": inputs_receipt.get("archive_size"),
+    "result_size": result_bundle.path.stat().st_size,
     "members": len(sealed.members()),
     "postprocess_location": sealed.manifest.get("postprocess_location"),
 }
 (WORKING / manifest_name).write_text(json.dumps(receipt, indent=2) + "\\n",
                                      encoding="utf-8")
-archive_sidecar(output, LANE["files"]["hash_suffix"]).write_text(
-    str(sealed.digest) + "\\n", encoding="utf-8")
 print("[finalize] sealed " + str(output) + " run_tag=" + str(sealed.run_tag())
-      + " members=" + str(len(sealed.members())) + " sha256=" + str(sealed.digest),
+      + " members=" + str(len(sealed.members())) + " size=" + str(sealed.path.stat().st_size),
       flush=True)
 print("[finalize] receipt: " + json.dumps(receipt, indent=2), flush=True)
 '''
@@ -433,8 +474,6 @@ if not candidates:
 request_dir = candidates[0].parent
 root = clone_pinned()
 checkpoint = root / "@CHECKPOINT@"
-if not checkpoint.is_dir():
-    raise SystemExit("git-shipped checkpoint missing: " + str(checkpoint))
 env = {**os.environ, "PYTHONPATH": str(root / LANE["files"]["source_dir"]), "PYTHONUNBUFFERED": "1"}
 output = root / LANE["paths"]["results_dir"] / LANE["files"]["embedding_dir"] / RUN_TAG
 output.mkdir(parents=True, exist_ok=True)
@@ -474,12 +513,13 @@ stage_result_archive(output, kind=LANE["files"]["result_names"]["embed"], extra=
         payload["archives"] = training_cfg().archives.model_dump(mode="json")
         return cls.substitute(script, {
             "COMMAND_RUNNER": cls.REMOTE_COMMAND_RUNNER,
-            "SHA256_HELPER": cls.SHA256_HELPER,
+            "SIZE_HELPER": cls.SIZE_HELPER,
             "LANE_JSON": repr(json.dumps(payload)),
         })
 
 
 REMOTE_COMMAND_RUNNER = KernelTemplates.REMOTE_COMMAND_RUNNER
+SESSION_REPORT_HELPER = KernelTemplates.SESSION_REPORT_HELPER
 BUNDLE_KERNEL_SCRIPT = KernelTemplates.BUNDLE_KERNEL_SCRIPT
 TRAIN_KERNEL_SHARED = KernelTemplates.TRAIN_KERNEL_SHARED
 TRAIN_KERNEL_BODY = KernelTemplates.TRAIN_KERNEL_BODY

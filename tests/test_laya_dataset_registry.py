@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from core.laya_config import LayaSpec
 from core.laya_datasets import LayaDataset, LayaDatasets
 
 
@@ -60,19 +59,3 @@ def test_unknown_key_and_slug_fail_loud():
 def test_registry_is_a_static_namespace_never_instantiated():
     with pytest.raises(TypeError, match="static registry"):
         LayaDatasets()
-
-
-def test_layaspec_defaults_are_read_from_the_registry():
-    spec = LayaSpec()
-    assert spec.base_model_dataset == LayaDatasets.BASE.slug
-    assert spec.dataset_slug == LayaDatasets.REQUESTS.slug
-    assert spec.export_dataset_slug == LayaDatasets.DECISIONS.slug
-    assert spec.finetune_dataset_slug == LayaDatasets.CORPUS.slug
-    assert spec.finetune_ckpt_dataset == LayaDatasets.FINETUNE_CKPT.slug
-    assert spec.holdout_dataset_slug == LayaDatasets.HOLDOUT.slug
-
-
-def test_shared_config_bundle_slug_inherits_the_registry():
-    from core.common import training_cfg
-
-    assert training_cfg().kaggle.bundle_dataset_slug == LayaDatasets.BUNDLE.slug

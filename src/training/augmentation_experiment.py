@@ -192,7 +192,7 @@ def assert_label_quality(report: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from core.common import load_config
+    from core.common import masking_cfg
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, default=None,
                         help="prepared text bundle to audit (minted negatives)")
@@ -201,9 +201,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mask-frac", type=float, default=None,
                         help="configured masking.frac (default: config/training.yaml)")
     args = parser.parse_args(argv)
+    # masking.frac lives in the TOP-LEVEL masking block (not training.masking),
+    # so read it through the ONE masking accessor — the profile-aware view the
+    # training lane itself masks through.
     configured = (
         float(args.mask_frac) if args.mask_frac is not None
-        else float(load_config()["training"]["masking"]["frac"])
+        else float(masking_cfg()["frac"])
     )
     plan = experiment_plan(configured)
     print(f"[augmentation-experiment] plan={json.dumps(plan, sort_keys=True)}", flush=True)

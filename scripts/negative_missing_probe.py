@@ -14,8 +14,9 @@ from collections import Counter
 from pathlib import Path
 
 from core.common import audit_finding
+from core.project_root import find_project_root
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
 
@@ -125,8 +126,6 @@ def probe(dimension, row):
                            (' weight=' + ','.join(other) if other else '')
         elif dimension == 'pack':
             n, conf = extract_pack_from_title(text)
-            packed = [x for x in (str(day) for day in (n,)) if day != '1'] \
-                if n else []
             # n==1 is the extraction sentinel here; only report confident hits
             if n and n != 1 and conf > 0.0:
                 out[col] = f'pack={n} conf={conf}'

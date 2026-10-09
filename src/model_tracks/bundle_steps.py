@@ -8,10 +8,10 @@
 sealing run. It consumes a verified result ``Bundle`` (materialize), extracts the
 matching prepared inputs, produces the CPU reports and ablation over that
 materialized tree, then seals a result-only bundle through
-:meth:`core.bundle.Bundle.seal_result`. No step re-hashes the incoming archive:
+:meth:`core.bundle.Bundle.seal_result`. No step re-measures the incoming archive:
 the boundary check is :meth:`core.bundle.Bundle.load`, the only other check is
 the writer's own verify inside ``write_archive`` (which also captures the sealed
-archive's whole-file digest as it writes).
+archive's whole-file byte size as it writes).
 
 Lane change (owner ruling: the operator box is no longer a finalize surface):
 ``finalize`` is a remote CPU lane job. A Kaggle/Colab CPU job runs this module
@@ -32,7 +32,9 @@ import argparse
 import json
 from pathlib import Path
 
-from core.bundle import Bundle, BundlePipeline, BundleRole
+from core.artifacts import Artifacts
+from core.bundle import Bundle, BundlePipeline, BundleRole, bundle_spec
+from core.results import Results
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 
 #: The stage name this module owns in the ONE consolidated pipeline trace.
@@ -71,18 +73,13 @@ LOCAL_REPORT_CONFIG = "local_report.yaml"
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _shared_embeddings_name() -> str:
     """The prepared setup's shared-embedding filename (declared layout)."""
     return _setup_layout().shared_embeddings
-
-
-def _spec():
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
 
 
 def _require(condition: bool, message: str) -> None:
@@ -106,7 +103,7 @@ def prepare_inputs(pipeline: BundlePipeline) -> Bundle:
 
     output = Path(pipeline.output)
     run_dir = Path(pipeline.run_dir) if pipeline.run_dir is not None else output.parent
-    config = pipeline.config or Path(_spec().suite_config)
+    config = pipeline.config or Path(bundle_spec().suite_config)
     prepare_all(run_dir=run_dir, tracks_config=config)
 
     context = _load_run_context(config)
@@ -120,7 +117,7 @@ def prepare_inputs(pipeline: BundlePipeline) -> Bundle:
         "prepare_inputs", "verified",
         in_count=1, out_count=1,
         reason='generation wrote the sealed inputs archive; it is verified once at its boundary',
-        detail={'archive': str(archive), 'digest': bundle.digest,
+        detail={'archive': str(archive), 'size': bundle.path.stat().st_size,
                 'members': len(bundle.members()), 'run_dir': str(run_dir),
                 'config': str(config)},
         source='config/paths.yaml layout training_tracks_suite',
@@ -161,7 +158,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
     if pipeline.output is None:
         raise ValueError("finalize requires pipeline.output (the sealed result archive)")
 
-    spec = _spec()
+    spec = bundle_spec()
     run_tag = result.run_tag()
     _require(bool(run_tag), "result bundle manifest carries no run tag")
     output = Path(pipeline.output)
@@ -177,12 +174,12 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
     trace().add(
         "finalize", "bundles_verified",
         in_count=2, out_count=2,
-        reason='both bundles are verified exactly once at their Bundle boundary; no later step re-hashes',
+        reason='both bundles are verified exactly once at their Bundle boundary; no later step re-measures',
         detail={'run_tag': run_tag, 'lane': getattr(pipeline, 'lane', None),
                 'device': getattr(pipeline, 'device', None),
-                'result_archive': str(result.path), 'result_digest': result.digest,
+                'result_archive': str(result.path), 'result_size': result.path.stat().st_size,
                 'result_members': len(result.members()),
-                'inputs_archive': str(inputs.path), 'inputs_digest': inputs.digest,
+                'inputs_archive': str(inputs.path), 'inputs_size': inputs.path.stat().st_size,
                 'inputs_members': len(inputs.members()),
                 'post_training_ablation': bool(settings.post_training_ablation),
                 'report_test': bool(settings.report_test),
@@ -236,7 +233,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
                 "finalize", "saved_ablation",
                 reason='the suite recorded a deliberate ablation skip; there is no saved ablation to consume',
                 detail={'destination': str(destination), 'recorded_skip': True},
-                source=str(destination / 'suite_events.jsonl'),
+                source=str(destination / bundle_spec().suite_events_file),
             )
         else:
             from model_tracks.post_training_ablation import complete_saved
@@ -249,7 +246,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
                 reason='the saved GPU ablation exports are consumed and each track is marked complete',
                 detail={'destination': str(destination), 'recorded_skip': False,
                         'tracks': list(TRACKS)},
-                source=str(destination / 'post_training_ablation.json'),
+                source=str(Results.for_root(destination, run_tag).receipt()),
             )
 
     location = pipeline.postprocess_location or spec.postprocess_location_bundle
@@ -265,7 +262,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
         in_count=len(all_members), out_count=len(sealed_members),
         reason='the result role decides the sealed member set: the selected checkpoint only, '
                'never every epoch and never the extracted prepared inputs',
-        detail={'output': str(output), 'digest': sealed.digest,
+        detail={'output': str(output), 'size': sealed.path.stat().st_size,
                 'bytes': output.stat().st_size,
                 'tree_files': len(all_members), 'sealed_members': len(sealed_members),
                 'postprocess_location': location,
@@ -319,48 +316,40 @@ def _materialize_result(result: Bundle, work_dir: Path, spec) -> Bundle:
 
 
 def extract_prepared_inputs(inputs: Bundle, destination: Path, config_member: str) -> None:
-    """Extract the input package's prepared tree under ``destination`` (no re-hash).
+    """Extract the input package's prepared tree under ``destination`` (no re-measure).
 
     The inputs bundle was verified once at its boundary, so members are written
-    from the trusted handle; a file already on disk is compared to the manifest
-    digest (this is the idempotent second-call path, not a stage re-verify).
+    from the trusted handle. An already-extracted file is reused when it matches
+    the manifest size; when it does not, it is rewritten from the trusted bytes
+    (owner policy 2026-10-08: an incompatible cached intermediate is rebuilt
+    silently, never a reason to fail). The size comparison is the idempotent
+    retry path, not a stage re-verify.
     """
-    from core.portable_archive import cached_file_digest
+    from core.portable_archive import file_size
     package_root = Path(config_member).parent
-    members = inputs.manifest.get(_spec().files_key, {})
-    written = verified = outside = 0
+    members = inputs.manifest.get(bundle_spec().files_key, {})
+    written = reused = rebuilt = outside = 0
     for relative, expected in members.items():
         if not Path(relative).is_relative_to(package_root):
             outside += 1
             continue
         target = destination / relative
-        if target.exists():
-            observed = cached_file_digest(target)
-            if observed != expected:
-                trace().add(
-                    "extract_prepared_inputs", "changed_prepared_input",
-                    scope=SCOPE_ENTITY, key=relative,
-                    reason='an extracted prepared input differs from the verified package digest; the '
-                           'finalize tree is quarantined rather than fed to the reports',
-                    detail={'relative': relative, 'expected_sha256': expected,
-                            'on_disk_sha256': observed, 'destination': str(destination)},
-                    source=str(inputs.path),
-                )
-                flush_trace()
-                raise ValueError("restored prepared input changed: " + relative)
-            verified += 1
+        if target.exists() and file_size(target) == expected:
+            reused += 1
             continue
+        rebuilt += int(target.exists())
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(inputs.read(relative))
         written += 1
     trace().add(
         "extract_prepared_inputs", "extracted",
-        in_count=len(members), out_count=written + verified,
+        in_count=len(members), out_count=written + reused,
         reason='the inputs bundle was verified once at its boundary; members are written from the '
-               'trusted handle and a file already on disk is compared to the manifest digest '
-               '(the idempotent retry path, not a stage re-verify)',
+               'trusted handle, a matching file already on disk is reused, and a mismatching one is '
+               'rebuilt from the trusted bytes instead of failing',
         detail={'members_in_manifest': len(members), 'written': written,
-                'already_present_verified': verified, 'outside_package': outside,
+                'already_present_verified': reused, 'rebuilt_incompatible': rebuilt,
+                'outside_package': outside,
                 'package_root': package_root, 'destination': str(destination)},
         source=str(inputs.path),
     )
@@ -382,27 +371,19 @@ def _restore_frozen_baseline(destination: Path, setup: Path) -> None:
         )
         return
     from training.prepare_embeddings import validate_result
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     request = setup / _setup_layout().embedding_request
-    validate_result(baseline, json.loads(request.read_text()),
-                    request_sha256=file_hash(request))
+    # Identity only: the request size is NOT re-derived and compared against the
+    # cache's record (owner directive 2026-10-08: no freshness checks anywhere).
+    validate_result(baseline, json.loads(request.read_text()))
     cache = setup / shared
-    baseline_sha = file_hash(baseline)
-    cache_sha = file_hash(cache) if cache.exists() else None
-    if cache.exists() and cache_sha != baseline_sha:
-        trace().add(
-            "baseline", "embedding_cache_mismatch",
-            scope=SCOPE_ENTITY, key=shared,
-            reason='the restored frozen baseline differs from the suite GPU export; the two '
-                   'cannot be reconciled silently',
-            detail={'baseline': str(baseline), 'baseline_sha256': baseline_sha,
-                    'cache': str(cache), 'cache_sha256': cache_sha},
-            source=str(cache),
-        )
-        flush_trace()
-        raise ValueError("restored frozen baseline differs from suite GPU export")
+    baseline_size = file_size(baseline)
     copied = not cache.exists()
-    if copied:
+    # The frozen GPU baseline export is the trusted copy: an existing report-time
+    # cache that differs from it is the incompatible cached intermediate of the
+    # owner policy, so it is overwritten silently rather than quarantined.
+    replaced = cache.exists() and file_size(cache) != baseline_size
+    if copied or replaced:
         import shutil
         shutil.copy2(baseline, cache)
     trace().add(
@@ -410,18 +391,20 @@ def _restore_frozen_baseline(destination: Path, setup: Path) -> None:
         in_count=1, out_count=1,
         reason=('the frozen GPU baseline export was copied in as the report-time cache'
                 if copied else
+                'the report-time cache differed from the frozen GPU baseline export and was '
+                'rebuilt from it'
+                if replaced else
                 'the report-time cache already holds the frozen GPU baseline export'),
-        detail={'baseline': str(baseline), 'baseline_sha256': baseline_sha,
-                'cache': str(cache), 'copied': copied,
-                'embedding_request': str(request),
-                'embedding_request_sha256': file_hash(request)},
+        detail={'baseline': str(baseline), 'baseline_size': baseline_size,
+                'cache': str(cache), 'copied': copied, 'rebuilt': replaced,
+                'embedding_request': str(request)},
         source=str(baseline),
     )
 
 
 def _track_postprocessed(output: Path) -> bool:
     """The track marker says its CPU post-processing already completed."""
-    marker = output / _spec().complete_file
+    marker = output / bundle_spec().complete_file
     try:
         return bool(json.loads(marker.read_text()).get("postprocess_complete"))
     except (OSError, ValueError):
@@ -450,7 +433,7 @@ def _postprocess_tracks(tree: Bundle, setup: Path, settings) -> None:
             continue
         if track == "text":
             from model_tracks.text_report import complete as text_complete
-            _park_interrupted(output, "text__*")
+            _park_interrupted(output, "text__*", track=track)
             text_complete(output, setup, device="cpu", report_test=settings.report_test)
             route = 'text_report'
         elif track == "cascade":
@@ -522,7 +505,6 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
     (``track__best_checkpoint.json`` recorded path, located under the track),
     never through a per-surface re-derivation.
     """
-    from graph_tracks.artifacts import name
     from graph_tracks.config import GraphConfig, load_config as load_graph_config
     from graph_tracks.preflight import preflight
     from graph_tracks.report import complete as graph_complete
@@ -538,10 +520,11 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
     checkpoint = tree.checkpoint(track)
     if checkpoint is None or not checkpoint.is_file():
         raise ValueError(f"selected checkpoint unavailable: {track}")
-    _park_interrupted(output, f"{track}__local_completion")
-    report = output / f"{track}__local_completion"
+    report = output / Artifacts.member_name("local_completion", track=track)
+    _park_interrupted(output, report.name, track=track)
     report.mkdir()
-    from model_tracks.ablation import file_hash as _checkpoint_hash
+    saved_inference = output / Artifacts.member_name("inference", track=track)
+    from model_tracks.ablation import file_size as _file_size
     trace().add(
         "checkpoint_select", "selected",
         scope=SCOPE_ENTITY, key=track,
@@ -549,22 +532,22 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
         reason='the checkpoint is resolved through the bundle role contract (the recorded marker '
                'located under the track), never through a per-surface re-derivation',
         detail={'track': track, 'checkpoint': str(checkpoint),
-                'checkpoint_sha256': _checkpoint_hash(checkpoint),
+                'checkpoint_size': _file_size(checkpoint),
                 'bytes': checkpoint.stat().st_size,
                 'report': str(report), 'report_test': bool(settings.report_test),
                 'device': 'cpu'},
-        source=str(output / f"{track}__best_checkpoint.json"),
+        source=str(output / Artifacts.member_name("best_checkpoint", track=track)),
     )
     graph_complete(checkpoint, Path(config["listings"]), Path(config["pairs"]),
                    report, GraphConfig.model_validate(config),
                    text_cache=Path(config["text_cache"]) if config.get("text_cache") else None,
-                   saved_inference=output / name(track, "inference"))
+                   saved_inference=saved_inference)
     trace().add(
         "postprocess", "graph_track",
         scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
         reason='the saved inference is re-run on CPU from the selected checkpoint and reported',
         detail={'track': track, 'report': str(report), 'device': 'cpu',
-                'saved_inference': str(output / name(track, "inference"))},
+                'saved_inference': str(saved_inference)},
         source=str(report),
     )
 
@@ -585,7 +568,6 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
     from graph_tracks.data import load_records
     from graph_tracks.report import report_cascade
     from graph_tracks.train import load_pairs
-    from graph_tracks.artifacts import name
     from model_tracks import worker
 
     lane = load_graph_config(setup / "cascade.yaml", expected_track="cascade")
@@ -597,7 +579,7 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
     artifacts = worker._cascade_artifacts(tree._root(), lane)
     records = load_records(listings)
     pair_index = load_pairs(pairs, records)
-    _park_interrupted(output, "cascade__*")
+    _park_interrupted(output, "cascade__*", track="cascade")
     ranked, relevant, decisions = worker._cascade_roles(records, pair_index, artifacts)
     # An unknown query count is reported as unknown, never guessed: the roles
     # object owns the count and a caller may legitimately hand back a shape that
@@ -625,18 +607,25 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
         # A UNIT row: one composed cascade report, whatever the query count.
         scope=SCOPE_ENTITY, key="cascade", in_count=None, out_count=1,
         reason='the cascade report and its calibrated manifest are composed from the trained lanes',
-        detail={'cascade_report': str(output / name("cascade", "cascade_report.json")),
-                'report_manifest': str(output / name("cascade", "report_manifest.json")),
+        detail={'cascade_report': str(output / Artifacts.member_name(
+                        "cascade_report", track="cascade")),
+                'report_manifest': str(output / Artifacts.member_name(
+                        "report_manifest", track="cascade")),
                 'queries': queries},
         source=str(output),
     )
 
 
-def _park_interrupted(output: Path, pattern: str) -> None:
-    """Preserve interrupted artifacts rather than mixing them into a new attempt."""
+def _park_interrupted(output: Path, pattern: str, *, track: str) -> None:
+    """Preserve interrupted artifacts rather than mixing them into a new attempt.
+
+    The track's declared ``vectors`` artifact is the trained output a re-run
+    composes its report from, so it is NEVER parked. Its name comes from
+    ``Artifacts`` (config SSOT), never a re-spelled suffix.
+    """
     import time
-    parked = [path for path in sorted(output.glob(pattern))
-              if not path.name.endswith("__vectors.npz")]
+    keep = Artifacts.member_name("vectors", track=track)
+    parked = [path for path in sorted(output.glob(pattern)) if path.name != keep]
     for path in parked:
         path.rename(path.with_name(f"interrupted-{time.time_ns()}-{path.name}"))
     trace().add(

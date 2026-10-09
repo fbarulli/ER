@@ -2,9 +2,9 @@
 
 ``Bundle`` is the one sealed artifact that travels generation -> training ->
 post-training across Colab and Kaggle, GPU and CPU. It is a pydantic value type
-over an on-disk archive plus the contract its role implies; integrity is checked
-EXACTLY ONCE at the boundary (``Bundle.load``), then the object is trusted, so no
-stage re-hashes or re-parses members.
+over an on-disk archive plus the contract its role implies. A bundle is
+IMMUTABLE and trusted: no stage computes or compares a content hash, byte size,
+or existence value (owner directive: data is never checked).
 
 ``BundlePipeline`` is the only code allowed to perform bundling: generation
 (prepare inputs) and finalize (select checkpoint + post-process + ablation). It
@@ -16,7 +16,6 @@ module spells no literal.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from contextlib import contextmanager
 from enum import Enum
@@ -26,17 +25,89 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.archive_reader import open_archive
-from core.portable_archive import source_inventory, verify_archive_digest
+from core.portable_archive import read_archive_manifest, source_inventory
 
 #: The epoch-checkpoint directory name prefix (``checkpoint-281``); the role
-#: contract and the layout walks below share this one literal.
-_CHECKPOINT_PREFIX = "checkpoint-"
+#: contract, the best-checkpoint resolver, and the layout walks share this one
+#: literal. Public so lanes (cli.colab, graph_tracks.train) never re-spell it.
+CHECKPOINT_PREFIX = "checkpoint-"
 
 
 def _bundle_spec():
     """The bundle contract from config (lazy import: core.common owns config)."""
     from core.common import training_cfg
     return training_cfg().bundle
+
+
+def bundle_spec():
+    """Public accessor for the bundle contract (``training_cfg().bundle``).
+
+    THE name every lane reads bundle member names through; the private
+    ``_bundle_spec`` remains the module-internal alias so the many internal
+    call sites don't churn. Keeping one public entry point stops lanes from
+    importing a private helper across the package boundary.
+    """
+    return _bundle_spec()
+
+
+def resolve_best_checkpoint(
+    root: Path,
+    *,
+    under_checkpoint_root: bool = True,
+    raise_on_missing: bool = True,
+) -> tuple[Path, dict[str, Any]] | None:
+    """The ONE trainer-selected best-checkpoint resolver (config SSOT).
+
+    Scans every materialized ``trainer_state.json`` under ``root``, reads the
+    trainer-recorded best (``trainer_best_key``), re-locates it by name beside
+    the run that recorded it, and returns the best by
+    ``(trainer_metric_key, trainer_step_key, path)`` -- the exact ranking
+    ``training.validation_inference.resolve_best_checkpoint`` shipped before
+    this resolver existed, so every consumer stays byte-identical.
+
+    ``under_checkpoint_root`` anchors the walk at ``checkpoint_dir`` (the
+    ``_checkpoints/**/checkpoint-*/trainer_state.json`` shape); ``False`` walks
+    a root that already sits at a track/repo (``Bundle.checkpoint`` and
+    ``Bundle.selected_checkpoint_dirs``). ``raise_on_missing`` raises
+    ``FileNotFoundError`` (inference surfaces); ``False`` returns ``None`` so a
+    caller can apply its own fallback (markers, highest-surviving checkpoint).
+
+    Returns ``(checkpoint_dir, trainer_state)`` or ``None``.
+    """
+    spec = _bundle_spec()
+    if under_checkpoint_root:
+        state_paths = sorted(root.glob(
+            f"{spec.checkpoint_dir}/**/{CHECKPOINT_PREFIX}*/{spec.trainer_state_file}"))
+    else:
+        state_paths = sorted(root.rglob(
+            f"{CHECKPOINT_PREFIX}*/{spec.trainer_state_file}"))
+    best: tuple[tuple[float, int, str], Path, dict[str, Any]] | None = None
+    for state_path in state_paths:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        recorded = state.get(spec.trainer_best_key)
+        if not recorded:
+            continue
+        candidate = state_path.parent.parent / Path(str(recorded)).name
+        if not candidate.is_dir():
+            continue
+        rank = (
+            float(state.get(spec.trainer_metric_key, float("-inf"))),
+            int(state.get(spec.trainer_step_key, 0)),
+            candidate.as_posix(),
+        )
+        if best is None or rank > best[0]:
+            best = (rank, candidate, state)
+    if best is None:
+        if raise_on_missing:
+            raise FileNotFoundError(
+                f"no materialized trainer-recorded best checkpoint under "
+                f"{root / spec.checkpoint_dir}"
+            )
+        return None
+    return best[1], best[2]
 
 
 class BundleRole(str, Enum):
@@ -70,7 +141,7 @@ def _epoch_dirs(names) -> list[str]:
         for index, part in enumerate(parts):
             # A *directory* component (never the last, file-bearing part) named
             # ``checkpoint-N`` under the configured checkpoint root.
-            if (index < len(parts) - 1 and part.startswith(_CHECKPOINT_PREFIX)
+            if (index < len(parts) - 1 and part.startswith(CHECKPOINT_PREFIX)
                     and spec.checkpoint_dir in parts[:index]):
                 found.add(PurePosixPath(*parts[:index + 1]).as_posix())
     return sorted(found)
@@ -81,8 +152,8 @@ def _role_member_violations(role: BundleRole, names) -> list[str]:
 
     Role membership is a LOAD contract, not a writer-only convention, so the
     boundary refuses a role-violating set instead of trusting the caller. The
-    contract is decidable from the sealed inventory alone -- no member bytes are
-    read -- so the boundary's single integrity pass stays the single pass:
+    contract is decidable from the sealed member NAMES alone -- no member bytes
+    are read -- so the boundary never touches data.
 
     * ``inputs``  -- prepared inputs drive training; they carry no weights.
     * ``result``  -- the SELECTED checkpoint per training run: several epochs
@@ -156,10 +227,10 @@ class _DirectoryReader:
 
 
 class Bundle(BaseModel):
-    """A verified handle over one sealed archive (+ its role contract).
+    """A trusted handle over one sealed archive (+ its role contract).
 
     Constructed only through :meth:`load` (or :meth:`from_directory` for a tree
-    that is already unpacked), so the boundary integrity check cannot be skipped.
+    that is already unpacked).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -168,7 +239,6 @@ class Bundle(BaseModel):
     path: Path
     manifest_name: str
     manifest: dict[str, Any] = Field(default_factory=dict)
-    digest: str | None = None
     local: Path | None = None  # materialized working tree, set by materialize()
     #: Member names captured by the boundary verify; a path-backed handle then
     #: answers members()/has() without re-parsing (or re-inflating) the archive.
@@ -177,49 +247,54 @@ class Bundle(BaseModel):
     # ------------------------------------------------------------------ load
     @classmethod
     def load(cls, path: Path | str, role: BundleRole | str, *,
-             expected_digest: str | None = None,
              manifest_name: str | None = None) -> "Bundle":
-        """Verify ``path`` once at the boundary, then return a trusted handle.
+        """Read ``path``'s sealed manifest once, then return a trusted handle.
 
-        ``expected_digest`` is the transport's recorded sha256 (Colab ``.sha256``,
-        Kaggle receipt ``archive_sha256``, git transport inventory). A mismatch is
-        the corruption guard: fail loud, keep the partial, never install.
-
-        The boundary also enforces the role's membership contract (see
-        :func:`_role_member_violations`), so a role-violating set never loads as
-        a trusted handle. Only a canonical-manifest archive is role-checked: a
-        caller naming its own manifest has declared another contract.
+        No content identity, byte size or member byte is computed or compared:
+        a bundle is immutable, so its identity is the archive itself (owner
+        directive: data is never checked). The boundary does enforce the role's
+        membership contract (see :func:`_role_member_violations`) from the member
+        NAMES alone, so a role-violating set never loads as a trusted handle.
+        Only a canonical-manifest archive is role-checked: a caller naming its own
+        manifest has declared another contract.
         """
         role = BundleRole(role)
         path = Path(path)
         name = manifest_name or globals()["manifest_name"](role)
         names: list[str] = []
-        manifest, observed = verify_archive_digest(path, name, names=names)
-        if expected_digest is not None and observed != expected_digest:
-            raise ValueError(
-                f"bundle failed the boundary integrity check: {path}\n"
-                f"  observed sha256={observed}\n  expected sha256={expected_digest}")
+        manifest = read_archive_manifest(path, name, names=names)
         spec = _bundle_spec()
         if role is BundleRole.result and spec.run_tag_key not in manifest:
             raise ValueError(f"bundle manifest {name} carries no {spec.run_tag_key}: {path}")
         if name == globals()["manifest_name"](role):
             _refuse_role_violation(role, names, where=f"bundle {path}")
         return cls(role=role, path=path, manifest_name=name,
-                   manifest=manifest, digest=observed,
+                   manifest=manifest,
                    member_names=tuple(sorted(names)))
 
     @classmethod
     def from_directory(cls, directory: Path | str, role: BundleRole | str, *,
                        manifest_name: str | None = None) -> "Bundle":
-        """Wrap an already-unpacked tree (no archive to verify)."""
+        """Wrap an already-unpacked tree (there is no archive to read).
+
+        A tree that carries the role's own canonical manifest declares itself a
+        sealed bundle boundary, so it is role-checked exactly like :meth:`load`
+        (see :func:`_refuse_role_violation`): a result tree that still carries
+        every epoch is refused instead of trusted. A raw working tree (no
+        manifest member) is the selection precursor -- it is wrapped
+        permissively and the role contract is enforced when it is sealed.
+        """
         role = BundleRole(role)
         directory = Path(directory)
         name = manifest_name or globals()["manifest_name"](role)
         manifest_path = directory / name
         manifest = (json.loads(manifest_path.read_text(encoding="utf-8"))
                     if manifest_path.is_file() else {})
+        if name == globals()["manifest_name"](role) and manifest_path.is_file():
+            names = _DirectoryReader(directory).namelist()
+            _refuse_role_violation(role, names, where=f"bundle tree {directory}")
         return cls(role=role, path=directory, manifest_name=name,
-                   manifest=manifest, digest=None, local=directory)
+                   manifest=manifest, local=directory)
 
     # --------------------------------------------------------------- members
     @contextmanager
@@ -331,24 +406,10 @@ class Bundle(BaseModel):
         spec = _bundle_spec()
         root = self._root()
         track_root = self._track_root(root, track)
-        best: tuple[tuple[float, int], Path] | None = None
-        for state_path in sorted(track_root.rglob(_CHECKPOINT_PREFIX + "*/" + spec.trainer_state_file)):
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            recorded = state.get(spec.trainer_best_key)
-            if not recorded:
-                continue
-            candidate = state_path.parent.parent / Path(str(recorded)).name
-            if not candidate.is_dir():
-                continue
-            rank = (float(state.get(spec.trainer_metric_key, float("-inf"))),
-                    int(state.get(spec.trainer_step_key, 0)))
-            if best is None or rank > best[0]:
-                best = (rank, candidate)
-        if best is not None:
-            return best[1]
+        resolved = resolve_best_checkpoint(
+            track_root, under_checkpoint_root=False, raise_on_missing=False)
+        if resolved is not None:
+            return resolved[0]
         for marker in sorted(track_root.rglob(spec.best_checkpoint_glob)):
             try:
                 recorded = Path(str(json.loads(marker.read_text(encoding="utf-8"))
@@ -387,7 +448,7 @@ class Bundle(BaseModel):
         checkpoint_dir = self._track_root(self._root(), track) / spec.checkpoint_dir
         if not checkpoint_dir.is_dir():
             return []
-        return sorted(p for p in checkpoint_dir.rglob(_CHECKPOINT_PREFIX + "*") if p.is_dir())
+        return sorted(p for p in checkpoint_dir.rglob(CHECKPOINT_PREFIX + "*") if p.is_dir())
 
     def selected_checkpoint_dirs(self) -> frozenset[str]:
         """Posix dirs (relative to this bundle's root) of selected checkpoints.
@@ -403,24 +464,10 @@ class Bundle(BaseModel):
         spec = _bundle_spec()
         root = self._root()
         selected: set[str] = set()
-        best: tuple[tuple[float, int], Path] | None = None
-        for state_path in sorted(root.rglob(_CHECKPOINT_PREFIX + "*/" + spec.trainer_state_file)):
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            recorded = state.get(spec.trainer_best_key)
-            if not recorded:
-                continue
-            directory = state_path.parent.parent / Path(str(recorded)).name
-            if not directory.is_dir():
-                continue
-            rank = (float(state.get(spec.trainer_metric_key, float("-inf"))),
-                    int(state.get(spec.trainer_step_key, 0)))
-            if best is None or rank > best[0]:
-                best = (rank, directory)
-        if best is not None:
-            selected.add(best[1].relative_to(root).as_posix())
+        resolved = resolve_best_checkpoint(
+            root, under_checkpoint_root=False, raise_on_missing=False)
+        if resolved is not None:
+            selected.add(resolved[0].relative_to(root).as_posix())
         for marker in sorted(root.rglob(spec.best_checkpoint_glob)):
             try:
                 recorded = Path(str(json.loads(marker.read_text(encoding="utf-8"))
@@ -433,6 +480,23 @@ class Bundle(BaseModel):
                 selected.add(found.parent.relative_to(root).as_posix())
                 break
         return frozenset(selected)
+
+    def recovery_state_members(self) -> frozenset[str]:
+        """This tree's members that only the RECOVERY role retains.
+
+        The positive half of the role contract: every checkpoint member and
+        every resume-only file that the RESULT predicate drops. Derived from the
+        SAME :meth:`is_result_member` and :meth:`selected_checkpoint_dirs` the
+        seal uses, so a recovery walk and a result seal can never disagree about
+        what a resume needs.
+        """
+        spec = _bundle_spec()
+        selected = self.selected_checkpoint_dirs()
+        return frozenset(
+            relative for relative in self.members()
+            if (spec.checkpoint_dir in Path(relative).parts
+                or Path(relative).name in spec.resume_only_filenames)
+            and not self.is_result_member(relative, selected_checkpoints=selected))
 
     @staticmethod
     def is_result_member(relative: str, *,
@@ -454,14 +518,12 @@ class Bundle(BaseModel):
             return False
         if parts[-1] in spec.resume_only_filenames:
             return False
-        if parts[-1] in {".env", "config.local"}:
+        if parts[-1] in spec.local_only_filenames:
             return False
-        if any(part.endswith(".publication") or part.endswith("__payload")
-               for part in parts):
+        if any(part.endswith(spec.publication_sidecar_suffix)
+               or part.endswith(spec.payload_suffix) for part in parts):
             return False
-        if "_artifact_publications" in parts and not relative.endswith(".json"):
-            return False
-        if ".dvc" in parts and "cache" in parts:
+        if spec.artifact_publications_dir in parts and not relative.endswith(".json"):
             return False
         if spec.checkpoint_dir in parts:
             if not selected_checkpoints:
@@ -499,18 +561,14 @@ class Bundle(BaseModel):
                      manifest_name: str | None = None) -> "Bundle":
         """Write ``files`` as one sealed archive for ``role`` — the only writer.
 
-        Every bundling step seals through here: the writer hashes each source
-        exactly once while writing and verifies the written bytes, and the
-        sealed archive's whole-file SHA256 is captured during that same write,
-        so the returned handle's ``digest`` is the transport token with no
-        re-read and no second integrity pass.
-
-        The returned handle is the writer's own: its manifest mirrors the
-        archive's (caller metadata plus the member inventory the writer froze),
-        and its member list is the set that was written — so a caller that needs
-        the completion contract's inventory or member names reuses this handle
-        instead of loading the bytes back. A role-violating member set is
-        refused before the bytes land.
+        Every bundling step seals through here: the writer sizes each source once
+        while it writes and records those byte counts in the sealed manifest
+        (a record, never compared). The returned handle is the writer's own: its
+        manifest mirrors the archive's (caller metadata plus the member inventory
+        the writer froze), and its member list is the set that was written — so a
+        caller that needs the completion contract's inventory or member names
+        reuses this handle instead of loading the bytes back. A role-violating
+        member set is refused before the bytes land.
         """
         from core.portable_archive import write_archive
         role = BundleRole(role)
@@ -531,16 +589,14 @@ class Bundle(BaseModel):
         if name == globals()["manifest_name"](role):
             _refuse_role_violation(role, (*files, *inline),
                                    where=f"the bundle to seal at {output}")
-        # The inventory the sealed manifest carries, from the same memoized
-        # source-digest pass the writer uses: the handle below can then answer
-        # the completion contract's member inventory without re-reading bytes.
+        # The inventory the sealed manifest carries, from the same source-size
+        # pass the writer uses: the handle below can then answer the completion
+        # contract's member inventory without re-reading bytes.
         inventory = source_inventory(files, inline)
-        hasher = hashlib.sha256()
         write_archive(output, files, manifest_name=name, metadata=payload,
-                      inline=inline, profile=profile, digest=hasher)
+                      inline=inline, profile=profile)
         return cls(role=role, path=output, manifest_name=name,
                    manifest={**payload, spec.files_key: inventory},
-                   digest=hasher.hexdigest(),
                    member_names=tuple(sorted({*files, *inline, name})))
 
     def seal_result(self, output: Path | str, *,
@@ -565,11 +621,21 @@ class Bundle(BaseModel):
     @classmethod
     def trusted(cls, path: Path | str, role: BundleRole | str, manifest: dict[str, Any], *,
                 manifest_name: str | None = None) -> "Bundle":
-        """Wrap a boundary that was just verified by its writer (no re-check)."""
+        """Wrap a boundary that was just verified by its writer (no re-check).
+
+        The role membership contract is still enforced: the manifest's member
+        inventory is the same name set the verified boundary produced, so
+        checking it reads NO member bytes and costs nothing. A manifest that
+        names a role-violating member set is refused, never trusted.
+        """
         role = BundleRole(role)
-        return cls(role=role, path=Path(path),
-                   manifest_name=manifest_name or globals()["manifest_name"](role),
-                   manifest=manifest, digest=None)
+        name = manifest_name or globals()["manifest_name"](role)
+        if name == globals()["manifest_name"](role):
+            spec = _bundle_spec()
+            names = list(manifest.get(spec.files_key, {}))
+            _refuse_role_violation(role, names, where=f"bundle {path}")
+        return cls(role=role, path=Path(path), manifest_name=name,
+                   manifest=manifest)
 
     @staticmethod
     def _track_root(root: Path, track: str) -> Path:
@@ -635,7 +701,7 @@ class BundlePipeline(BaseModel):
     #: spec's non-local location; the local lane passes its own).
     postprocess_location: str | None = None
     #: Extra manifest entries the sealing step records (transport identity such
-    #: as the source archive digests); the step's own keys always win.
+    #: as the source archive names and sizes); the step's own keys always win.
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def prepare_inputs(self) -> "Bundle":

@@ -29,6 +29,22 @@ def lane_log(lane: str, name: str) -> Path:
     return (logs_root() / lane / name).resolve()
 
 
+def lane_log_at(relative_dir: str, name: str) -> Path:
+    """One lane transcript at a fully DECLARED repo-relative directory.
+
+    ``lane_log`` takes the lane subdirectory name; a lane whose transcript roof
+    is declared in the config SSOT (``ColabSpec.log_dir``, e.g. ``logs/colab``)
+    asks this instead, so the directory is never re-spelled beside the lane's
+    declared file name. The parent is created on demand like ``lane_log``.
+    """
+    directory = Path(relative_dir)
+    if directory.is_absolute() or ".." in directory.parts or not directory.parts:
+        raise ValueError(f"lane log dir must be repository-relative: {relative_dir!r}")
+    path = (TRAIN_ROOT / directory / name).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def progress_frames_to_lines(text: str) -> str:
     """Expand a capture chunk so carriage-return progress frames survive.
 

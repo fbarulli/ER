@@ -108,7 +108,6 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
             mock.patch.object(colab, "start_live_log"),
             mock.patch.object(colab, "close_live_log"),
             mock.patch.object(colab, "_legacy_validation_sources"),
-            mock.patch.object(colab, "_validate_legacy_bundle_partitions"),
             mock.patch.object(colab, "check_colab_cli"),
             mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None),
             mock.patch.object(colab, "release_colab_launch_lock"),

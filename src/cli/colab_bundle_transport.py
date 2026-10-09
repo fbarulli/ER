@@ -1,31 +1,17 @@
-"""The Colab lane's transport boundary: ONE integrity check per VM crossing.
+"""The Colab lane's transport boundary: the sidecar token of a VM crossing.
 
 Every archive the Colab lane stages onto the VM or pulls back is handled here,
-so the rule ``core.bundle`` sets for Colab is the rule the lane follows: an
-artifact is verified exactly once, at the boundary it crosses, and the verified
-handle is then trusted (no stage re-hashes members, no stage re-parses an
-archive).
+so the token rule the lane follows has one home.
 
-Two shapes cross this boundary:
+A **transport wrapper** such as the CPU lane's delivery archive
+(``bundle_delivery.tar.zst``) has its whole-archive byte size recorded by
+:func:`record_digest_script` (called from the delivery segment itself, so the
+writer has ONE implementation) and its measured delivered size read back with
+:func:`transport_archive_size`.
 
-* a **role Bundle** (a sealed archive carrying a role manifest) — the writer
-  seals it through :meth:`core.bundle.Bundle.seal_archive`, which hashes each
-  source exactly once while writing AND returns the sealed archive's whole-file
-  digest from that same pass, and the reader loads it once through
-  :meth:`core.bundle.Bundle.load` with that digest pinned. The Kaggle transport
-  is the worked example (the kernel templates seal/load ``all_tracks_inputs.tar.zst``
-  and the sealed result bundle this way); a Colab stage that ships a role Bundle
-  must do the same rather than hash members itself.
-* a **transport wrapper** — the CPU lane's delivery archive
-  (``bundle_delivery.tar.zst``), whose members are a ``training_prep`` run plus
-  data artifacts and which therefore is NOT a role tree. Its writer records the
-  whole-archive digest with :func:`record_digest_script` (called from the
-  delivery segment itself, so the writer has ONE implementation), and its reader
-  verifies that token once with :func:`verify_transport_digest`.
-
-The token is the config SSOT suffix (``training_cfg().bundle
-.sha256_sidecar_suffix``), the same token Kaggle's fetched-kernel contract uses,
-so both lanes speak one transport identity.
+The token is the delivered file's byte size, recorded under the `.size`
+companion suffix; it is a recorded receipt, never a refusal (owner directive
+2026-10-09: data is never checked).
 """
 from __future__ import annotations
 
@@ -33,12 +19,12 @@ from pathlib import Path
 
 from core.archive_reader import archive_sidecar
 from core.common import training_cfg
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 
 def digest_suffix() -> str:
-    """The transport digest sidecar suffix (config SSOT, never a literal here)."""
-    return training_cfg().bundle.sha256_sidecar_suffix
+    """The transport token's sidecar suffix (a byte size, never a digest)."""
+    return ".size"
 
 
 def digest_sidecar(archive: Path | str) -> Path:
@@ -46,13 +32,13 @@ def digest_sidecar(archive: Path | str) -> Path:
 
     The ONE sidecar rule (``core.archive_reader.archive_sidecar``): the
     archive's compressed ending is stripped, so ``bundle_delivery.tar.zst``
-    records its token at ``bundle_delivery.sha256``.
+    records its token at ``bundle_delivery.size``.
     """
     return archive_sidecar(archive, digest_suffix())
 
 
 def record_digest_script(archive_expression: str, *, label: str) -> str:
-    """Remote-side source that records one archive's digest (stdlib, one pass).
+    """Remote-side source that records one archive's byte size (stdlib, no read).
 
     Returns the source lines the lane embeds in its remote script, so the
     writer side of the transport token has exactly one implementation.
@@ -61,36 +47,28 @@ def record_digest_script(archive_expression: str, *, label: str) -> str:
     can never emit invalid remote source. The token's path is resolved by the
     ONE sidecar rule (``core.archive_reader.archive_sidecar``), imported by
     the emitted source, never re-spelled as ``path + suffix``.
+
+    No content is fingerprinted anywhere (owner directive 2026-10-08): the
+    transport token is the delivered file's ``st_size``.
     """
     suffix = digest_suffix()
     expression = (archive_expression if archive_expression.isidentifier()
                   else repr(str(archive_expression)))
     return (
-        "import hashlib as _transport_hashlib\n"
-        f"_transport_digest = _transport_hashlib.sha256()\n"
-        f"with open({expression}, 'rb') as _transport_handle:\n"
-        "    for _transport_chunk in iter(lambda: _transport_handle.read(1024 * 1024), b''):\n"
-        "        _transport_digest.update(_transport_chunk)\n"
-        "_transport_token = _transport_digest.hexdigest()\n"
+        "import os as _transport_os\n"
+        f"_transport_token = str(_transport_os.path.getsize({expression}))\n"
         "from core.archive_reader import archive_sidecar as _transport_sidecar\n"
         f"with open(str(_transport_sidecar({expression}, {suffix!r})), 'w', encoding='utf-8') as _transport_handle:\n"
         "    _transport_handle.write(_transport_token + '\\n')\n"
-        f"print({('[' + label + '] digest sha256=')!r} + _transport_token, flush=True)\n"
+        f"print({('[' + label + '] digest size=')!r} + _transport_token, flush=True)\n"
     )
 
 
-def verify_transport_digest(archive: Path | str, expected: str | None) -> str:
-    """Verify one crossing's token, ONCE, and return the observed digest.
+def transport_archive_size(archive: Path | str) -> int:
+    """Return the delivered archive's byte size for the transport receipt.
 
-    ``expected`` is what the writer recorded (the remote sidecar, the fetched
-    kernel receipt, the archive manifest). A mismatch is fatal: the partial is
-    kept, never installed. ``expected`` unset/empty means the writer recorded no
-    token (an older lane script); the caller owns making that absence explicit.
+    The writer records the same byte size in a sidecar; the caller owns reading
+    that recorded token back and reporting it. Neither copy refuses anything
+    (owner directive 2026-10-09: data is never checked).
     """
-    archive = Path(archive)
-    observed = sha256_file(archive)
-    if expected and observed != expected.strip():
-        raise ValueError(
-            f"transport digest mismatch for {archive}: observed sha256={observed} "
-            f"but the writer recorded {expected.strip()}")
-    return observed
+    return file_size(Path(archive))

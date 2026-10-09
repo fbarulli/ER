@@ -7,7 +7,8 @@ import json
 
 import pandas as pd
 
-from core.common import F, load_raw_export, load_dataset_deduped
+from core.common import load_raw_export, load_dataset_deduped
+from core.dataset import dataset
 from core.gtin import gtin_validity
 from core.identity_policy import apply_identity_links, reviewed_row_mask
 
@@ -19,8 +20,8 @@ def main():
     reviewed = reviewed_row_mask(raw)
     valid = gtin_validity(gtin)
     excluded = missing | ~valid | reviewed
-    retained = pd.read_csv(F['dataset_deduped'], dtype=str, keep_default_na=False)
-    mapping = pd.read_csv(F['sku_to_rep'], dtype=str, keep_default_na=False)
+    retained = dataset().load("dataset_deduped", dtype=str, keep_default_na=False)
+    mapping = dataset().load("sku_to_rep", dtype=str, keep_default_na=False)
     if mapping.sku_id.duplicated().any():
         raise ValueError('duplicate source IDs in representative map')
     # rep_id is a CSV row position, not a sku_id.

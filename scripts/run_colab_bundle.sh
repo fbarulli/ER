@@ -16,13 +16,13 @@
 #   handoff.json, timing_offenders.log, per-stage logs) + the regenerated
 #   data artifacts (canonical/gate/deduped/labeled/final_validation CSVs,
 #   track_setup/, prepared bundles).
-# - Enforcement of WHICH export this is comes from the committed config
-#   audit pins (audit.source_export_expected_rows / _sha256 in
-#   config/training.yaml, drift threshold 0.0), asserted the first time the
-#   prep loads the raw export: a cohort CSV against full-cohort pins fails
-#   loudly at dedupe. rand_matching.gate_census_pin is NOT the enforcement
-#   point — the gate_census stage re-records it from the regenerated
-#   gate_results.csv before labeled_pairs compares against it.
+# - The mounted export's cohort is detected structurally (a byte-size
+#   compare against the staged cohort CSVs, core.common.mounted_cohort) and
+#   tagged (ER_COHORT_TAG); there is no content-hash pin and no drift gate.
+#   A cohort export trains under its cohort's quota counts.
+#   rand_matching.gate_census_pin is NOT a cohort detector — the gate_census
+#   stage re-records it from the regenerated gate_results.csv before
+#   labeled_pairs compares against it.
 # - CPU is the safe default and no flag is needed for it; COLAB_GPU overrides
 #   it exactly like run_colab_smoke.sh, and anything other than CPU also
 #   needs the --allow-gpu acknowledgement flag, so a non-CPU request cannot

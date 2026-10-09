@@ -45,9 +45,10 @@ unqualified append:
 
 1. A run id is attached to every row. It is resolved, in order, from
    ``EUROMONITOR_TRACE_RUN``, then the launcher's ``EUROMONITOR_RUN_ID``
-   (train.py's existing immutable-run doctrine), and otherwise from a content
-   fingerprint of the run's shared artifacts (``canonical_records.csv`` +
-   ``gate_results.csv``). The fingerprint is what makes the TWO-STAGE flow
+   (train.py's existing immutable-run doctrine), and otherwise from a structural
+   identity of the run's shared artifacts (``canonical_records.csv`` +
+   ``gate_results.csv``): their declared names and byte sizes. The identity is
+   what makes the TWO-STAGE flow
    work with no orchestrator: stage 1 writes those artifacts, stage 2 READS
    them, so both stages compute the same run id and their rows land in one run.
 2. Writing a stage REPLACES that stage's rows for the current run in place
@@ -70,7 +71,7 @@ its own RESULTS subtree: the suite spawns its trained tracks with
 ``EUROMONITOR_RESULTS_DIR=<run>/<track>`` so each worker's artifacts stay its
 own. A lane that re-derives ``RESULTS/logs/training_trace.csv`` therefore writes
 a DIFFERENT file, and its per-lane ``EUROMONITOR_RUN_ID`` outranks the run
-fingerprint, so its rows can never join the data-prep rows of the same run.
+structural identity, so its rows can never join the data-prep rows of the same run.
 Launchers close that by handing every spawned lane :func:`run_trace_env` — the
 run's ONE destination (``EUROMONITOR_TRACE_PATH``), the run's id
 (``EUROMONITOR_TRACE_RUN``) and the lane's own name
@@ -81,9 +82,10 @@ own (run, stage, producer) subset: without it the second lane's commit would
 replace the first's rows. Concurrent writers of one file serialize their
 read -> merge -> write cycle on a sibling lock file (:func:`_trace_lock`).
 
-The run id itself is the run's artifacts' fingerprint, so a stage that runs
+The run id itself is the structural identity of the run's artifacts, so a stage
+that runs
 BEFORE those artifacts exist cannot know it (resolving then returns the
-PREVIOUS run's fingerprint). Such a run pins :data:`TRACE_PENDING_RUN` for the
+PREVIOUS run's identity). Such a run pins :data:`TRACE_PENDING_RUN` for the
 early stages and calls :func:`adopt_run` once its own artifacts exist, so the
 whole run lands under ONE id — the same id the training side reproduces.
 
@@ -97,7 +99,8 @@ wedge the pipeline on stale data — the prune of old runs happens inside the ve
 commit that would fail, so no write could ever heal the file. The remedy for an
 invalid historical run is to regenerate or prune it (the trace is a regenerated
 artifact). The join from an orchestrator stage to its trace rows is declared in
-``ORCHESTRATION_TRACE_STAGES`` / :func:`trace_stages_for`.
+``config/paths.yaml`` (``orchestration_stages``) and read by
+:func:`orchestration_trace_stages` / :func:`trace_stages_for`.
 
 ENTITY SAMPLING (why the per-entity rows are capped)
 ----------------------------------------------------
@@ -131,11 +134,16 @@ raises when one does not close:
 It is RUN-SCOPED: the file holds up to TRACE_RUN_HISTORY runs, so the default
 run is the one the artifacts on disk resolve to (the writers' own rule), never
 "the last matching row in the file" — see :func:`_rows_of_run`.
+
+ENFORCED IN PRODUCTION: :meth:`TraceRun.write` (the boundary every stage flush
+commits through) calls :func:`_enforce_write_accounting` before the atomic
+write. It raises only when a run's STATED identity does not close — a genuine
+mismatch — and never on a partial run that has no identity terms to close, so a
+green run is never broken. The strict contract stays in :func:`accounting`.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from collections.abc import Iterable, Iterator, Mapping
@@ -184,7 +192,7 @@ LAUNCHER_RUN_ENV = "EUROMONITOR_RUN_ID"
 # do, because each worker owns its own artifacts) must pin these two, or the
 # lanes FRAGMENT the trace: each would derive its own <lane>/logs/training_trace.csv
 # from RESULTS, and its per-lane EUROMONITOR_RUN_ID would outrank the run
-# fingerprint, so the rows could never join the data-prep rows of the same run.
+# structural identity, so the rows could never join the data-prep rows of the same run.
 # The pins are resolved by the launcher (whose RESULTS is the run root) and are
 # the only way a child learns the RUN's destination instead of re-deriving a
 # lane-local one:
@@ -199,13 +207,13 @@ LAUNCHER_RUN_ENV = "EUROMONITOR_RUN_ID"
 TRACE_PATH_ENV = "EUROMONITOR_TRACE_PATH"
 TRACE_LANE_ENV = "EUROMONITOR_TRACE_LANE"
 # The run id a preparation run's rows carry BEFORE the artifacts that define its
-# identity exist (core.tracing.run_artifact_fingerprint). resolve_run_id() at
-# that moment would return the PREVIOUS run's fingerprint, which is worse than
+# identity exist (core.tracing.run_artifact_sizes). resolve_run_id() at
+# that moment would return the PREVIOUS run's identity, which is worse than
 # "unknown": it attributes this run's rows to another run. prepare_all pins this
 # and adopts the rows once the run's own artifacts exist (see adopt_run).
 TRACE_PENDING_RUN = "run-pending"
 # The shared artifacts that DEFINE a data-prep run: stage 1 writes both, stage 2
-# reads both, so the fingerprint is the same on both sides of the handoff.
+# reads both, so the structural identity is the same on both sides of the handoff.
 RUN_FINGERPRINT_SOURCES: tuple[str, ...] = ("canonical_records", "gate_results")
 RUN_UNBOUND = "run-unbound"
 # Runs kept in the file, newest first (whole runs, never a partial one). Five
@@ -245,6 +253,18 @@ CENSUS_TOP_N = 24
 DETAIL_CELL_CHARS = 4096
 DETAIL_VALUE_CHARS = 512
 
+# ── the trace batch-grain budget ───────────────────────────────────────────
+# A stage that walks a large population does not emit one row per item: it
+# accumulates a BATCH of source rows and emits ONE BATCH row carrying the
+# batch's counts, and the remainder is announced in the stage's
+# ``batch_census`` row. Both numbers are the trace's own contract — how many
+# source rows make a batch, and how many batch rows a stage traces — so the
+# producers read them here instead of re-spelling the literals in each module
+# (build_final_validation, build_second04_pairs, graph_tracks.setup). A stage
+# that traced MORE batches than the budget would grow the file past its design.
+TRACE_BATCH_ROWS = 4096
+TRACE_MAX_BATCH_ROWS = 16
+
 # ── the accounting identity's terms ────────────────────────────────────────
 # The gtin-guard row's fields, BY NAME, because the identity is stated over
 # named populations: a term the row does not state cannot be checked, and an
@@ -259,75 +279,76 @@ CANONICAL_IDENTITY_TERMS: tuple[str, ...] = ("collapsed_same_gtin",)
 GUARD_STEP = ("data_prep", "gtin_guard.identity_claims_evaluated")
 CANONICAL_STEP = ("data_prep", "canonical.records_built")
 
-# ── the ONE registry of the preparation's orchestration stages ─────────────
+# ── the ONE registry of the preparation's orchestration stages (config SSOT) ─
 # The preparation orchestrator (``training.prepare_all``) names its stages one
 # way and each child writes its rows under its own module's stage
 # (``training.data_prep`` -> "data_prep", ``training.build_final_validation`` ->
 # "final_validation", ``graph_tracks.setup`` -> "graph_setup"/"graph_prepare"),
 # so a reader cannot join a stage's manifest entry to its trace rows without a
-# hand map. This dict IS that join, and it is the ONE declaration of the
-# preparation's stage inventory: its KEYS are every orchestration stage (in
-# execution order) and its VALUES are the trace stage name(s) the stage's
-# producer writes rows under. ``training.prepare_all`` DERIVES its ``STAGES`` /
-# ``_LANE_STAGE_ORDER`` / ``_EXTRA_LANE_STAGES`` from here instead of restating
-# the names, so the plan can never drift from the join.
+# hand map. That join IS ``config/paths.yaml``'s ``orchestration_stages`` block
+# (keys = every orchestration stage, in execution order; values = the trace
+# stage name(s) the stage's producer writes rows under), with
+# ``orchestration_lane_stages`` naming the stages only a negative-supply run tag
+# inserts. Config is the ONE home: ``training.prepare_all`` DERIVES its
+# ``STAGES``/``_LANE_STAGE_ORDER`` from the accessors below instead of restating
+# the names, so the plan can never drift from the join. The block's empty lists
+# mark a stage that writes NO trace rows today (a coverage gap a reader must not
+# mistake for "no work happened"); the two row-free stages stay explicit there.
 #
-# ``()`` marks a stage that writes NO trace rows, i.e. a coverage gap a reader
-# must not mistake for "no work happened": it is invisible in the trace. Only
-# TWO stages are genuinely row-free today — ``gate_census`` (an inline
-# measurement that writes its census JSON, not trace rows) and ``discriminator``
-# (an inline diagnostic child whose verdict lands in the manifest). The four
-# stages that used to be declared row-free (``dedupe``, ``suite_inputs``,
-# ``verify_handoff``, ``negative_supply``) all construct a ``TraceRun`` and write
-# rows, so those declarations were STALE and made a reader believe their work
-# was untraced.
-#
-# CONFIG SSOT: this map belongs in config/ (a new ``paths.yaml`` block, e.g.
-# ``orchestration_stages: {canonical_and_gates: [data_prep], ...}``) so the
-# orchestrator and the trace read one declaration. paths.yaml declares paths and
-# layouts today, not stage vocabularies, so the map lives here until that key
-# exists; ``training.prepare_all`` is the key's intended first reader.
-ORCHESTRATION_TRACE_STAGES: dict[str, tuple[str, ...]] = {
-    "dedupe": ("dedupe",),
-    "cross_country_pairs": ("build_second04_pairs",),
-    "number_reference": ("number_reference",),
-    "verify_reference": ("verify_reference",),
-    "canonical_and_gates": ("data_prep",),
-    "gate_census": (),
-    "labeled_pairs": ("labeled_pairs",),
-    "negative_supply": ("negative_supply",),
-    "discriminator": (),
-    "validation": ("final_validation",),
-    "graph_inputs": ("graph_setup", "graph_prepare"),
-    "full_bundle": ("full_bundle",),
-    "suite_inputs": ("suite_inputs",),
-    "verify_handoff": ("verify_handoff",),
-}
+# The accessors import ``core.common`` lazily: ``common`` imports the config that
+# declares this block, so a module-level import would be circular (the same
+# reason :func:`trace_path` imports it lazily).
 
-#: The registry's LANE subset: the stages the orchestrator inserts (before
-#: ``validation``) only when a negative-supply run tag is requested, and the ones
-#: ``prepare_all`` excludes when it needs the base stage list (state validation,
-#: resume arithmetic). Declared next to the registry whose keys it annotates, so
-#: ``training.prepare_all`` never spells a stage name at all.
-ORCHESTRATION_LANE_STAGES: tuple[str, ...] = ("negative_supply", "discriminator")
+
+def orchestration_trace_stages() -> dict[str, tuple[str, ...]]:
+    """The orchestration stage -> trace stage(s) join, read from config SSOT.
+
+    Names come from ``config/paths.yaml`` (``orchestration_stages``); this
+    module holds no copy of them. Keys are orchestration stages in execution
+    order, values the trace stage name(s) their producers write. An empty tuple
+    means the stage writes no trace rows today (a coverage gap, not a silent
+    success). Read through the TYPED accessor (``data_cfg().orchestration_stages``)
+    so the join is a real attribute access on the loaded config, not a string-key
+    ``.get`` that a static reader-audit cannot distinguish from a dead key.
+    """
+    from core import common
+
+    declared = common.data_cfg().orchestration_stages
+    return {str(stage): tuple(names) for stage, names in declared.items()}
+
+
+def orchestration_lane_stages() -> tuple[str, ...]:
+    """The registry's LANE subset, read from ``config/paths.yaml``.
+
+    These are the stages the orchestrator inserts (before ``validation``) only
+    when a negative-supply run tag is requested, and the ones ``prepare_all``
+    excludes when it needs the base stage list (state validation, resume
+    arithmetic). Read through the typed accessor (``data_cfg()``), the same
+    real-attribute-access SSOT :func:`orchestration_trace_stages` uses.
+    """
+    from core import common
+
+    return tuple(common.data_cfg().orchestration_lane_stages)
 
 
 def trace_stages_for(orchestration_stage: str) -> tuple[str, ...]:
     """The trace stage name(s) one orchestration stage writes rows under.
 
     Empty means the stage writes no trace rows today (a coverage gap, not a
-    silent success). ``training.prepare_all`` DERIVES its stage list from this
-    registry (its base stages are these keys minus :data:`ORCHESTRATION_LANE_STAGES`),
-    so a key here IS a stage the plan runs and there is no second list to drift
-    against. An unknown name is still a loud error: a caller asking for a stage
-    the registry never declared is a bug on the caller's side, not an empty join.
+    silent success). ``training.prepare_all`` DERIVES its stage list from the
+    same config registry (its base stages are these keys minus
+    :func:`orchestration_lane_stages`), so a key there IS a stage the plan runs
+    and there is no second list to drift against. An unknown name is still a
+    loud error: a caller asking for a stage the registry never declared is a bug
+    on the caller's side, not an empty join.
     """
+    registry = orchestration_trace_stages()
     try:
-        return ORCHESTRATION_TRACE_STAGES[str(orchestration_stage)]
+        return registry[str(orchestration_stage)]
     except KeyError as exc:
         raise ValueError(
             f"unknown orchestration stage {orchestration_stage!r}; declared: "
-            f"{sorted(ORCHESTRATION_TRACE_STAGES)}"
+            f"{sorted(registry)}"
         ) from exc
 
 
@@ -386,7 +407,7 @@ def _explicit_run_identity() -> dict[str, object] | None:
 
     The provenance matters as much as the value: when a file holds two runs, a
     reader must be able to see WHY they are two runs. The resolution rule plus
-    the fingerprint inputs are written into each stage's ``run_identity`` row.
+    the identity inputs are written into each stage's ``run_identity`` row.
     """
     for variable in (TRACE_RUN_ENV, LAUNCHER_RUN_ENV):
         value = str(os.environ.get(variable, "")).strip()
@@ -399,17 +420,20 @@ def _explicit_run_identity() -> dict[str, object] | None:
     return None
 
 
-def _fingerprint_run_identity(
+def _structural_run_identity(
     sources: dict[str, dict[str, object]],
 ) -> dict[str, object]:
-    """The content fingerprint of the run artifacts that define a run."""
+    """The structural identity of the run artifacts that define a run.
+
+    Declared artifact names plus their byte sizes — never a content digest.
+    """
     joined = "|".join(
-        f"{name}:{entry['size']}:{entry['sha256']}"
+        f"{name}:{entry['size']}"
         for name, entry in sources.items()
     )
     return {
-        "run_id": f"run-{hashlib.sha256(joined.encode()).hexdigest()[:12]}",
-        "resolution": "content fingerprint of the run artifacts",
+        "run_id": f"run-{joined}",
+        "resolution": "structural identity of the run artifacts (names + sizes)",
         "sources": sources,
     }
 
@@ -419,25 +443,24 @@ def resolve_run_identity() -> dict[str, object]:
     explicit = _explicit_run_identity()
     if explicit is not None:
         return explicit
-    sources = run_artifact_fingerprint()
+    sources = run_artifact_sizes()
     if not sources:
         return {
             "run_id": RUN_UNBOUND,
             "resolution": "no run artifact on disk yet",
             "sources": {},
         }
-    return _fingerprint_run_identity(sources)
+    return _structural_run_identity(sources)
 
 
 @timed
-def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
-    """Size + sha256 of every artifact that defines the current run.
+def run_artifact_sizes() -> dict[str, dict[str, object]]:
+    """Path + byte size of every artifact that defines the current run.
 
-    Runs on every unbound TraceRun write, so its hashing cost is traced; the
-    stage's own artifacts are the digest input.
+    Runs on every unbound TraceRun write; the stage's own artifacts are the
+    identity input.
     """
     from core.common import F
-    from core.manifest import sha256_file
 
     found: dict[str, dict[str, object]] = {}
     for key in RUN_FINGERPRINT_SOURCES:
@@ -450,7 +473,6 @@ def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
         found[key] = {
             "path": path.as_posix(),
             "size": int(path.stat().st_size),
-            "sha256": sha256_file(path),
         }
     return found
 
@@ -494,12 +516,18 @@ def _canonical_accounting(row, result: dict[str, object]) -> None:
         result[term] = None if value is None else int(float(value))
 
 
-def _enforce_row_identity(result: dict[str, object]) -> None:
+def _enforce_row_identity(result: dict[str, object], *, require_stated: bool = True) -> None:
     """The two documented row closures, or a loud failure.
 
         guard.in  == rows_retained + gtin_missing_or_nan + gs1_checksum_failed
                                   + identity_review_quarantined
         guard.out == canonical.out + collapsed_same_gtin
+
+    ``require_stated=False`` is the WRITE boundary's conservative mode: a term
+    the row does not STATE is not "zero of those", and a partial run (a smoke
+    fixture, a lane that writes a bare guard row before its canonical row
+    exists) has nothing to close, so it is skipped rather than failed. The
+    strict contract (the default) is :func:`accounting`, which the readers call.
 
     LIVE EVIDENCE for the quarantine term (results/logs/training_trace.csv, all
     three runs in it — read off the guard row's detail and the canonical row):
@@ -519,11 +547,13 @@ def _enforce_row_identity(result: dict[str, object]) -> None:
         return  # no guard row in scope: nothing to close (e.g. a pairs-only frame)
     unstated = [term for term in GUARD_IDENTITY_TERMS if result.get(term) is None]
     if unstated:
-        raise ValueError(
-            f"the gtin-guard row does not state {unstated}, so the row identity "
-            f"({GUARD_STEP[1]}) cannot be checked; an absent drop population is "
-            f"NOT zero and must be named on the row"
-        )
+        if require_stated:
+            raise ValueError(
+                f"the gtin-guard row does not state {unstated}, so the row identity "
+                f"({GUARD_STEP[1]}) cannot be checked; an absent drop population is "
+                f"NOT zero and must be named on the row"
+            )
+        return
     accounted = result["rows_retained"] + sum(
         result[term] for term in GUARD_IDENTITY_TERMS
     )
@@ -539,10 +569,12 @@ def _enforce_row_identity(result: dict[str, object]) -> None:
     if "canonical_records" not in result:
         return
     if result.get("collapsed_same_gtin") is None:
-        raise ValueError(
-            f"the canonical row ({CANONICAL_STEP[1]}) does not state "
-            f"collapsed_same_gtin, so the guard-out identity cannot be checked"
-        )
+        if require_stated:
+            raise ValueError(
+                f"the canonical row ({CANONICAL_STEP[1]}) does not state "
+                f"collapsed_same_gtin, so the guard-out identity cannot be checked"
+            )
+        return
     collapsed = result["canonical_records"] + result["collapsed_same_gtin"]
     if result["rows_retained"] != collapsed:
         raise ValueError(
@@ -616,6 +648,16 @@ def _census_accounting(
     }
 
 
+def _row_for_step(scoped: pd.DataFrame, step: tuple[str, str]) -> pd.Series | None:
+    """The last row of ``scoped`` for one (stage, step), or ``None``."""
+    stage, name = step
+    hit = scoped[
+        scoped["stage"].astype(str).eq(stage)
+        & scoped["step"].astype(str).eq(name)
+    ]
+    return None if hit.empty else hit.iloc[-1]
+
+
 def accounting(
     frame: pd.DataFrame, *, run_id: str | None = None
 ) -> dict[str, object]:
@@ -643,20 +685,12 @@ def accounting(
     """
     scoped, resolved = _rows_of_run(frame, run_id)
 
-    def row(step: tuple[str, str]) -> pd.Series | None:
-        stage, name = step
-        hit = scoped[
-            scoped["stage"].astype(str).eq(stage)
-            & scoped["step"].astype(str).eq(name)
-        ]
-        return None if hit.empty else hit.iloc[-1]
-
     result: dict[str, object] = {
         "run_id": resolved,
         "rows_in_scope": int(len(scoped)),
     }
-    _row_accounting(row(GUARD_STEP), result)
-    _canonical_accounting(row(CANONICAL_STEP), result)
+    _row_accounting(_row_for_step(scoped, GUARD_STEP), result)
+    _canonical_accounting(_row_for_step(scoped, CANONICAL_STEP), result)
     _enforce_row_identity(result)
     decisions = _census_accounting(scoped, "gate.decision_", run_id=resolved)
     if decisions:
@@ -667,6 +701,26 @@ def accounting(
         result["label_destiny"] = labels
         result["label_pairs"] = sum(labels.values())
     return result
+
+
+def _enforce_write_accounting(frame: pd.DataFrame, *, run_id: str) -> None:
+    """The write boundary's accounting enforcement (conservative).
+
+    This is the PRODUCTION wiring of :func:`accounting`: every stage flush
+    commits through :meth:`TraceRun.write`, so a run whose STATED identity does
+    not close fails here instead of publishing a trace its readers reject. Only
+    the closures are enforced -- a term the guard/canonical row does not STATE
+    is not "zero of those", and a partial run (a smoke fixture, a lane that
+    writes a bare guard row before its canonical row exists) has nothing to
+    close, so failing it would wedge the pipeline on an incomplete census. The
+    strict contract (including the "does not state a term" error) stays in
+    :func:`accounting`, which readers and tests call explicitly.
+    """
+    scoped, _ = _rows_of_run(frame, run_id)
+    result: dict[str, object] = {}
+    _row_accounting(_row_for_step(scoped, GUARD_STEP), result)
+    _canonical_accounting(_row_for_step(scoped, CANONICAL_STEP), result)
+    _enforce_row_identity(result, require_stated=False)
 
 
 def _raw_detail_text(detail: object) -> str:
@@ -1144,8 +1198,8 @@ class TraceRun:
         # An explicit run id is for hermetic callers (tests, smokes). The
         # default is resolved at WRITE time, never at construction: stage 1
         # constructs its writer before it writes the very artifacts the run
-        # fingerprint is taken from, so an early resolution would tag stage 1
-        # with the PREVIOUS run and split the two stages apart.
+        # structural identity is taken from, so an early resolution would tag
+        # stage 1 with the PREVIOUS run and split the two stages apart.
         self._run_id = run_id
         # The lane this process writes for: explicit for hermetic callers, else
         # the launcher's pin (see the pin block above). It qualifies the row's
@@ -1545,6 +1599,7 @@ class TraceRun:
                 path=f"{target} (run {self.run_id!r})",
             )
             _report_other_runs(frame, target=target, run_id=self.run_id)
+            _enforce_write_accounting(frame, run_id=self.run_id)
             atomic_write_csv(frame, target, index=False)
         return target
 
@@ -1580,8 +1635,8 @@ class TraceRun:
         """The stage's first row: which run these rows belong to, and why.
 
         Written automatically (not by the caller) so every stage commit is
-        self-describing: the run id, the rule that produced it, and the size +
-        sha256 of each artifact the fingerprint was taken from. Two runs in one
+        self-describing: the run id, the rule that produced it, and the path +
+        byte size of each artifact the identity was taken from. Two runs in one
         file are therefore explainable from the file.
         """
         identity = self._resolved_identity()
@@ -1873,9 +1928,9 @@ def adopt_run(
 ) -> int:
     """Move one run's rows onto its real run id, whole rows at a time.
 
-    A run's identity is its artifacts' fingerprint (``run_artifact_fingerprint``),
+    A run's identity is its artifacts' structural record (``run_artifact_sizes``),
     and the stages that run BEFORE those artifacts exist cannot know it: resolving
-    then would return the PREVIOUS run's fingerprint and attribute this run's rows
+    then would return the PREVIOUS run's identity and attribute this run's rows
     to another run. ``prepare_all`` therefore pins ``TRACE_PENDING_RUN`` for
     those stages and adopts their rows here, once the run's own artifacts exist,
     so the whole preparation run is ONE run in the file — the same id the
@@ -1962,15 +2017,17 @@ __all__ = [
     "ENTITY_SAMPLE_PER_REASON",
     "GUARD_IDENTITY_TERMS",
     "GUARD_STEP",
-    "ORCHESTRATION_LANE_STAGES",
-    "ORCHESTRATION_TRACE_STAGES",
+    "orchestration_lane_stages",
+    "orchestration_trace_stages",
     "PRODUCER",
     "RUN_UNBOUND",
     "SCOPE_ENTITY",
     "SCOPE_GROUP",
     "SCOPE_RUN",
+    "TRACE_BATCH_ROWS",
     "TRACE_COLUMNS",
     "TRACE_LANE_ENV",
+    "TRACE_MAX_BATCH_ROWS",
     "TRACE_PATH_ENV",
     "TRACE_PENDING_RUN",
     "TRACE_RUN_HISTORY",
@@ -1986,7 +2043,7 @@ __all__ = [
     "record",
     "resolve_run_id",
     "resolve_run_identity",
-    "run_artifact_fingerprint",
+    "run_artifact_sizes",
     "run_trace_env",
     "sample_keys",
     "stage_trace",

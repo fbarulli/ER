@@ -14,14 +14,16 @@ import sys
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(ROOT/'src'))
 from core.common import AUDIT_FINDINGS_DIR
 sys.path.insert(0, str(ROOT / 'src'))
 from core.gtin import gtin_validity
 from core.identity_policy import reviewed_row_mask
 from core.sku_identity import row_identity, identity_conflict, evaluate_sku_identity
-from dedupe_predicate_scorecard import sha256_of, EXPECTED_SHA
+from dedupe_predicate_scorecard import size_of
 
 DIMS = ('brand', 'volume_ml', 'pack', 'flavor', 'carbonation', 'sweetener',
         'sweetener_type', 'sweetening', 'pulp', 'package_type', 'package_material')
@@ -43,8 +45,10 @@ def text_identity(identity):
 
 def main():
     out = AUDIT_FINDINGS_DIR
-    digest = sha256_of(ROOT / 'dataset.csv')
-    assert digest == EXPECTED_SHA, 'Scorecard dataset has changed'
+    # Provenance, not a gate: the 2026-10-06 owner ruling removed the
+    # scorecard's dataset drift pin (there is no EXPECTED_SHA any more), so the
+    # live digest is recorded in residual_summary.json for comparison instead.
+    digest = size_of(ROOT / 'dataset.csv')
     df = pd.read_csv(ROOT / 'dataset.csv', dtype=str, keep_default_na=False)
     valid = gtin_validity(df.gtin) & ~reviewed_row_mask(df)
     eligible = df[valid].copy()
@@ -111,7 +115,7 @@ def main():
             case['disposition'] = ('keep_distinct_gtins' if kind=='different_gtin' else 'retain_trusted_match_audit_descriptors')
             cases.append(case)
         print(kind, 'pairs', len(supply), 'residuals', sum(c['kind']==kind for c in cases), flush=True)
-    summary = {'dataset_sha256':digest, 'dataset_rows':len(df), 'trusted_rows':len(eligible),
+    summary = {'dataset_size':digest, 'dataset_rows':len(df), 'trusted_rows':len(eligible),
         'pairs':{k:len(v) for k,v in pairs.items()}, 'residuals':dict(Counter(c['kind'] for c in cases)),
         'actual_decisions':dict(Counter(c['production']['decision'] for c in cases)),
         'same_gtin_conflict_dimensions':dict(Counter(d for c in cases if c['kind']=='same_gtin' for d in c['descriptor_conflicts'])),

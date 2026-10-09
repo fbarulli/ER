@@ -26,8 +26,15 @@ from cli.colab_hub import hub, timed_colab
 
 
 def _colab_launch_lock_path() -> Path:
-    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", hub().SESSION)
-    return hub()._COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
+    """The advisory lock path for this launcher's session.
+
+    The name comes from ``ColabSpec.launcher_lock_template`` (one declaration
+    beside the session it derives from), read through the live surface so a
+    test that patches SESSION still steers it.
+    """
+    surface = hub()
+    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", surface.SESSION)
+    return surface._COLAB_CLI_STATE_DIR / surface._COLAB.launcher_lock_name(lock_name)
 
 
 def _process_start_ticks(pid: int) -> int | None:

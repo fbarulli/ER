@@ -25,9 +25,14 @@ import time
 import traceback
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from cli.colab_hub import hub, timed_colab
+from cli.colab_reconnect import (
+    ControlChannelLoss,
+    ControlChannelLost,
+    ControlChannelRecovery,
+)
 
 
 def _colab_command(*args: str) -> list[str]:
@@ -81,9 +86,31 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
 
 
 @timed_colab("event")
+def _ensure_remote_parent(remote: str) -> None:
+    """Create an upload target's remote directory before the transfer.
+
+    The Colab contents API answers 500 (never 404) when the parent of an upload
+    target is missing, and the VM checkout only carries the directories Git
+    tracks: a lane upload must therefore establish its own directory. Without
+    this, every upload into a not-yet-checked-out directory fails as an opaque
+    server error.
+    """
+    surface = hub()
+    parent = str(PurePosixPath(remote).parent)
+    surface.run_colab_exec_stream(
+        surface.SESSION,
+        "import pathlib\n"
+        f"pathlib.Path({parent!r}).mkdir(parents=True, exist_ok=True)\n",
+        timeout=surface._PROBE_TIMEOUT_SECONDS,
+        log_name="upload_dir",
+    )
+
+
+@timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
     """Retry transient Colab upload/control-channel failures."""
     surface = hub()
+    surface._ensure_remote_parent(remote)
     for attempt in range(1, surface._REMOTE_UPLOAD_RETRIES + 1):
         try:
             surface.colab("upload", "-s", surface.SESSION, str(source), remote, timeout=timeout)
@@ -235,7 +262,8 @@ def run_colab_exec_stream(
         )
         if process.returncode == 0 and (not remote_traceback or recovered_traceback):
             return
-        transient = "connection was lost" in output.lower()
+        transient = ControlChannelRecovery.classify(
+            surface.SESSION, output) is ControlChannelLoss.TRANSIENT
         if retry_safe and transient and attempt < attempts:
             delay = surface._PROBE_RETRY_BACKOFF_SECONDS * attempt
             print(
@@ -411,9 +439,13 @@ else:
 print(json.dumps({{"pid": running_pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
     print(surface._stamp(), f"[{stage}] starting detached remote stage; durable log={remote_log}", flush=True)
+    recovery = ControlChannelRecovery.for_running_launcher()
     try:
         launched = surface._parse_remote_json(
-            surface.run_colab_exec_capture(surface.SESSION, launch, timeout=120)
+            recovery.run(
+                lambda: surface.run_colab_exec_capture(surface.SESSION, launch, timeout=120),
+                context=f"{stage} stage launch",
+            )
         )
         print(surface._stamp(), f"[{stage}] remote pid={launched.get('pid')}", flush=True)
         offset = 0
@@ -443,17 +475,23 @@ payload = {{
 print(json.dumps(payload), flush=True)
 """
             try:
-                payload = surface._parse_remote_json(
-                    surface.run_colab_exec_capture(surface.SESSION, probe, timeout=surface._PROBE_TIMEOUT_SECONDS)
+                # A detached trainer outlives a transient log-probe failure: the
+                # recovery re-attaches the control channel and re-reads the
+                # durable log, instead of turning the drop into a run failure.
+                payload = recovery.run(
+                    lambda: surface._parse_remote_json(
+                        surface.run_colab_exec_capture(
+                            surface.SESSION, probe,
+                            timeout=surface._PROBE_TIMEOUT_SECONDS)),
+                    context=f"{stage} log/status probe",
                 )
+            except ControlChannelLost:
+                raise
             except RuntimeError as exc:
-                # A detached trainer outlives a transient log-probe failure.
-                # Preserve its work instead of triggering recovery/teardown,
-                # but never retain an unreachable runtime past the stage budget.
-                detail = str(exc).lower()
-                fatal = ("connection was lost" in detail or
-                         f"session '{surface.SESSION}' not found".lower() in detail)
-                if stage != 'all_tracks' or fatal or time.perf_counter() - poll_started >= timeout:
+                # A probe failure that is not a channel loss must never hide a
+                # dead runtime: the all-tracks poll tolerates it inside its
+                # stage budget, every other stage keeps its fail-fast rule.
+                if stage != 'all_tracks' or time.perf_counter() - poll_started >= timeout:
                     raise
                 message = f"[{stage}] log/status unavailable; detached training continues: {exc}"
                 surface._write_training_log(message + "\n")

@@ -7,7 +7,7 @@ Usage:
     --remote-base /content/EuromonitoR/results/concurrent_train_<run-id>
 
 The script archives and downloads ordinary worker artifacts and checkpoints
-separately, then verifies every downloaded file against a remote SHA-256
+separately, then verifies every downloaded file against a remote byte-size
 manifest. It intentionally does not use DVC.
 """
 
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import json
 import re
 import shutil
@@ -23,14 +22,6 @@ import subprocess
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def colab_command(*args: str, config: Path | None = None) -> list[str]:
@@ -85,16 +76,10 @@ def safe_extract(archive: Path, destination: Path) -> None:
 
 def remote_archiver(remote_base: str, script_path: Path) -> None:
     script_path.write_text(
-        f'''import hashlib, json, pathlib, tarfile
+        f'''import json, pathlib, tarfile
 base = pathlib.Path({remote_base!r})
 if not base.is_dir():
     raise FileNotFoundError(base)
-
-def digest(handle):
-    h = hashlib.sha256()
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        h.update(chunk)
-    return h.hexdigest()
 
 def build(kind, predicate):
     files = []
@@ -114,7 +99,7 @@ def build(kind, predicate):
     with tarfile.open(archive_path, "r:gz") as archive:
         for member in archive:
             if member.isfile():
-                archived_files.append({{"path": member.name, "size": member.size, "sha256": digest(archive.extractfile(member))}})
+                archived_files.append({{"path": member.name, "size": member.size}})
     manifest = {{"kind": kind, "run_id": base.name, "files": archived_files}}
     manifest_path = base / f"manual_download_{{kind}}_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n")
@@ -179,8 +164,8 @@ def verify_manifest(root: Path, manifest: Path) -> int:
         path = root / entry["path"]
         if not path.is_file():
             raise RuntimeError(f"missing downloaded file: {path}")
-        if path.stat().st_size != entry["size"] or sha256(path) != entry["sha256"]:
-            raise RuntimeError(f"checksum/size mismatch: {path}")
+        if path.stat().st_size != entry["size"]:
+            raise RuntimeError(f"size mismatch: {path}")
         checked += 1
     return checked
 

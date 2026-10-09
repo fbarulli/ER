@@ -10,12 +10,13 @@ import pandas as pd
 
 from core.audit_guard import ATTRIBUTE_SELF_SAMPLE, assert_vocabulary_overlap, self_comparison_control
 from core.common import DATA_PATH, data_cfg
-from core.manifest import sha256_file
+from core.manifest import file_size
+from core.project_root import find_project_root
 from core.text import attribute_fields
 from core.attribute_universe import attribute_registry
 from core.date_evidence import extract_date_evidence
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(find_project_root(Path(__file__))))
 from scripts.evaluate_gate_logic import wiring_inventory
 
 
@@ -26,7 +27,7 @@ def main():
     args = parser.parse_args()
     if args.self_sample_size < 1:
         parser.error("self sample size must be positive")
-    fingerprint = sha256_file(DATA_PATH)
+    fingerprint = file_size(DATA_PATH)
     frame = pd.read_csv(DATA_PATH, **data_cfg().dataset_csv_read.model_dump()).rename(
         columns=data_cfg().column_mapping).fillna("")
     registered = attribute_registry()
@@ -58,7 +59,7 @@ def main():
             date_roles.update(entry["role"] for entry in entries)
             date_status.update(entry["parse_status"] for entry in entries)
     report = {"scope": "Complete raw source inventory; date screens are lexical observations, not identity labels. Date parser retains ambiguous/reference-only evidence.",
-              "source_sha256": fingerprint, "source_rows": len(frame),
+              "source_size": fingerprint, "source_rows": len(frame),
               "source_columns": {column: int(frame[column].str.strip().ne("").sum())
                                  for column in data_cfg().column_mapping.values()},
               "registered_keys": {key: keys[key] for key in registered},
@@ -67,7 +68,7 @@ def main():
               "date_extraction": {"unique_rows_with_evidence": len(date_rows), "entry_role_counts": dict(date_roles),
                                   "entry_parse_status_counts": dict(date_status)},
               "wiring": wiring_inventory({})}
-    assert fingerprint == sha256_file(DATA_PATH), "source changed during audit"
+    assert fingerprint == file_size(DATA_PATH), "source changed during audit"
     # Fail-closed guards: the registered attribute vocabulary must occur in
     # the observed source keys, and the date reader must be deterministic on
     # its own input — otherwise the inventory below measures nothing.

@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from graph_tracks.data import file_hash, load_text_cache
-from graph_tracks.text_cache import checkpoint_hash
+from graph_tracks.data import file_size, load_text_cache
+from graph_tracks.text_cache import checkpoint_size
 import json
 
 
@@ -49,7 +49,7 @@ def main() -> None:
     embeddings, provenance = load_text_cache(args.embeddings,ids)
     if not np.allclose(np.linalg.norm(embeddings,axis=1),1,atol=1e-4):
         raise ValueError('export vectors must be normalized')
-    if args.model and checkpoint_hash(Path(args.model)) != provenance['checkpoint_sha256']:
+    if args.model and checkpoint_size(Path(args.model)) != provenance['checkpoint_size']:
         raise ValueError('embedding checkpoint differs from requested model')
     # This diagnostic consumes the frozen vector artifact; model operations
     # belong to the prepared Colab GPU stage.
@@ -61,9 +61,9 @@ def main() -> None:
     metadata.insert(0, "atlas_id", metadata[id_column].astype(str))
     # The matrix is only interpretable together with the composition that
     # produced it, so the artifact names its own input contract.
-    metadata.insert(1,"checkpoint_sha256",provenance['checkpoint_sha256'])
+    metadata.insert(1,"checkpoint_size",provenance['checkpoint_size'])
     (args.output_dir/'embedding_provenance.json').write_text(json.dumps({
-        'source_sha256':file_hash(args.embeddings),'metadata':provenance,
+        'source_size':file_size(args.embeddings),'metadata':provenance,
         'ids':ids,'embedding_dtype':'float32'},indent=2)+'\n')
     if args.predictions:
         predictions = pd.read_csv(args.predictions, dtype=str, keep_default_na=False)
