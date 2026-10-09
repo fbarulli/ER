@@ -243,7 +243,6 @@ kernel_status = KaggleKernels.kernel_status
 stop_kernel = KaggleKernels.stop_kernel
 fetch_kernel_output = KaggleOutputs.fetch_kernel_output
 fetch_failed_kernel_log = KaggleOutputs.fetch_failed_kernel_log
-fetch_bundle_output = KaggleOutputs.fetch_bundle_output
 _spawn_autowatch = KaggleMonitor._spawn_autowatch
 autowatch_kernel = KaggleMonitor.autowatch_kernel
 supervise_kernels = KaggleMonitor.supervise_kernels

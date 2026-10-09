@@ -212,10 +212,3 @@ class KaggleOutputs:
                 plan["error_log"] = str(destination)
         return plan
 
-    @staticmethod
-    def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
-        """Back-compat entry point — delegates to the generalized fetcher."""
-        from cli import kaggle_lane as lane
-
-        return lane.fetch_kernel_output(kind="bundle", execute=execute)
-

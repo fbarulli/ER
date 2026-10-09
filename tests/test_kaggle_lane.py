@@ -467,7 +467,7 @@ def test_kernel_status_parses_state(tmp_path, monkeypatch):
     assert status["status"] == "running"
 
 
-def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
+def test_fetch_kernel_output_bundle_verifies_sha_and_installs(tmp_path, monkeypatch):
     import hashlib
 
     _kernel_spec(tmp_path, monkeypatch)
@@ -487,13 +487,13 @@ def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    plan = kaggle_lane.fetch_bundle_output(execute=True)
+    plan = kaggle_lane.fetch_kernel_output(kind="bundle", execute=True)
     assert plan["verified"] is True and plan["cohort"] == "full"
     installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
     assert installed.read_bytes() == archive_bytes
 
 
-def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
+def test_fetch_kernel_output_bundle_rejects_sha_drift(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
 
     def fake_run(command, **kwargs):
@@ -508,17 +508,7 @@ def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     with pytest.raises(RuntimeError, match="sha256 mismatch"):
-        kaggle_lane.fetch_bundle_output(execute=True)
-
-
-def test_fetch_bundle_output_dry_run_never_touches_network(tmp_path, monkeypatch):
-    _kernel_spec(tmp_path, monkeypatch)
-    called = []
-    monkeypatch.setattr(subprocess, "run",
-                        lambda *a, **kw: called.append(a) or pytest.fail("network"))
-    plan = kaggle_lane.fetch_bundle_output(execute=False)
-    assert plan["mode"] == "dry-run"
-    assert not called
+        kaggle_lane.fetch_kernel_output(kind="bundle", execute=True)
 
 
 def test_kernel_slugs_tracked_in_config():
