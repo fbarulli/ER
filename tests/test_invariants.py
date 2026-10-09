@@ -312,6 +312,22 @@ def test_kaggle_train_ships_the_sealed_result_bundle_the_finalize_boundary_accep
 
 # ── 4. config-leaf coverage + no code literal duplicates a config value ─────
 
+
+def test_mount_root_has_one_source_the_hosted_registry():
+    """Item 2: the mount root is declared ONCE, in config/hosted_datasets.yaml.
+
+    ``HostedRegistry`` is the SSOT; ``kaggle.remote.input_dir`` references it
+    (the schema default reads the registry), so the two values cannot drift.
+    """
+    from pathlib import Path
+
+    from core.common import training_cfg
+    from core.hosted_dataset import hosted_registry
+
+    assert hosted_registry().mount_root == Path(
+        training_cfg().kaggle.remote.input_dir)
+
+
 #: The config's own typed mirror: pydantic field defaults must be literals, so a
 #: value also appearing here is the declared default, not an independent SSOT
 #: copy. Reported separately (never a failure) instead of silently ignored.

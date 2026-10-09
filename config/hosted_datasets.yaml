@@ -30,8 +30,10 @@
 
 name: er-hosted-datasets
 
-# Mount address on a session (mirrors kaggle.remote.input_dir) + the ONE
-# template that renders a dataset's mount directory: /kaggle/input/<handle>.
+# Mount address on a session — the ONE source of the mount root. The kaggle
+# remote input_dir references THIS value (KaggleRemoteSpec.input_dir defaults to
+# HostedRegistry.mount_root), so the two cannot drift + the ONE template that
+# renders a dataset's mount directory: /kaggle/input/<handle>.
 mount_root: /kaggle/input
 mount_template: "{root}/{mount}"
 

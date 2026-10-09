@@ -234,7 +234,6 @@ kaggle:
     install_dir: "{kind}"
   remote:
     working_dir: /kaggle/working
-    input_dir: /kaggle/input
     scratch_dir: /kaggle/tmp
     fallback_scratch: er_{kind}
     extra_artifact_dirs:

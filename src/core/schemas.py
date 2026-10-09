@@ -3311,7 +3311,11 @@ class KaggleRemoteSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     working_dir: str = '/kaggle/working'
-    input_dir: str = '/kaggle/input'
+    # NOT declared here: config/hosted_datasets.yaml owns the mount root
+    # (HostedRegistry.mount_root) and this references it, so the two cannot
+    # drift.
+    input_dir: str = Field(
+        default_factory=lambda: str(hosted_registry().mount_root))
     scratch_dir: str = '/kaggle/tmp'
     fallback_scratch: str = 'er_{kind}'
     extra_artifact_dirs: tuple[str, ...] = ('wandb', 'cache', '.cache')
