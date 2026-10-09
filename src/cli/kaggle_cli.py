@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -54,7 +55,9 @@ class KaggleCLI:
                                  "(default: config kaggle.checkpoint)")
         parser.add_argument("--run-tag", default=None,
                             help="run tag for GPU kernels (default: from "
-                                 "config kaggle.run_tag_prefix + UTC stamp)")
+                                 "config kaggle.run_tag_prefix + UTC stamp); "
+                                 "kernel-logs: the W&B run tag to track "
+                                 "(default: the WANDB_RUN_NAME env var)")
         parser.add_argument("--cohort", choices=lane._spec().cohort_tags, default=None,
                             help="bundle-kernel/bundle-fetch: which root-level "
                                  "cohort export the CPU kernel remaps onto "
@@ -158,8 +161,13 @@ class KaggleCLI:
             spec = lane._spec()
             identity = lane.kernel_identity(args.kernel, spec)
             resolved = args.slug or identity.slug(spec)
-            print(json.dumps(lane.kernel_logs(resolved, follow=args.follow),
-                             indent=2), flush=True)
+            # Real-time tracking prefers the W&B run when a tag/key is available
+            # (Kaggle's log stream is throttled); kaggle-logs is the fallback.
+            run_tag = args.run_tag or os.environ.get("WANDB_RUN_NAME")
+            print(json.dumps(
+                lane.track_run(run_tag=run_tag, slug=resolved,
+                               follow=args.follow),
+                indent=2), flush=True)
             return
         if args.what == "fetch-results":
             kind = args.kind or "train"

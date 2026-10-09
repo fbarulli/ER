@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import time
+import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from core.common import training_cfg
 
@@ -104,3 +106,98 @@ class WandbCtx:
             if not p.exists():
                 raise FileNotFoundError(f"W&B image missing: {p}")
             self._run.log({name: wandb.Image(str(p))})
+
+
+#: W&B run states that end the tracking poll loop.
+_WANDB_TERMINAL_STATES = frozenset({"finished", "crashed", "failed", "killed"})
+
+
+class WandbRunReader:
+    """Read-only live repository over one W&B run (metrics + console output).
+
+    The writer counterpart is :class:`WandbCtx`. Given the configured
+    ``tracking.wandb.project`` and a run tag, this streams the run's latest
+    logged metrics and the live ``output.log`` console. The ``WANDB_API_KEY``
+    is resolved through the canonical credential owner
+    (``core.credentials.CredentialStore``) and exported to the wandb client's
+    environment silently — never logged or printed. Polling honours the
+    config-declared cadence (``tracking.wandb.poll_seconds``); every API error
+    fails loud with the full traceback, never swallowed.
+    """
+
+    def __init__(self, *, run_tag: str, project: str | None = None,
+                 poll_seconds: float | None = None, api: Any | None = None):
+        if project is None or poll_seconds is None:
+            cfg = training_cfg().tracking.wandb
+            project = project or cfg.project
+            poll_seconds = cfg.poll_seconds if poll_seconds is None else poll_seconds
+        self.run_tag = run_tag
+        self.project = project
+        self.poll_seconds = float(poll_seconds)
+        self._api = api
+
+    @property
+    def path(self) -> str:
+        """The ``project/run_tag`` address the wandb API resolves."""
+        return f"{self.project}/{self.run_tag}"
+
+    @classmethod
+    def available(cls) -> bool:
+        """True when a ``WANDB_API_KEY`` is resolvable (remote tracking possible)."""
+        from core.credentials import CredentialStore
+
+        return (CredentialStore.from_config()
+                .resolve_optional("wandb_api_key") is not None)
+
+    def _client(self):
+        if self._api is None:
+            from core.credentials import CredentialStore
+
+            # Silent export of the declared secrets; the value never prints.
+            CredentialStore.from_config().apply_to_environment()
+            import wandb
+
+            self._api = wandb.Api()
+        return self._api
+
+    def read_once(self) -> dict[str, Any]:
+        """One snapshot: run state, latest metrics, and the full console log."""
+        run = self._client().run(self.path)
+        output, console_error = self._console(run)
+        return {
+            "run": self.path,
+            "state": str(getattr(run, "state", "unknown")),
+            "metrics": dict(getattr(run, "summary", {}) or {}),
+            "output": output,
+            "console_error": console_error,
+        }
+
+    @staticmethod
+    def _console(run) -> tuple[str, str | None]:
+        """Read ``output.log``; a run without console capture is empty, recorded."""
+        try:
+            handle = run.file("output.log").download(replace=True)
+        except Exception as error:  # noqa: BLE001 - an absent log is not fatal
+            return "", f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
+        try:
+            return handle.read(), None
+        finally:
+            handle.close()
+
+    def stream(self, *, max_polls: int) -> Iterator[dict[str, Any]]:
+        """Yield bounded-cadence updates, stopping at a terminal run state.
+
+        Each update carries only the console lines produced since the previous
+        poll (``new_output``) so a caller appends without duplicating the log.
+        """
+        emitted = 0
+        for _ in range(max(1, int(max_polls))):
+            update = self.read_once()
+            lines = (update["output"] or "").splitlines(keepends=True)
+            update["new_output"] = "".join(lines[emitted:])
+            emitted = len(lines)
+            yield update
+            if update["state"] in _WANDB_TERMINAL_STATES:
+                return
+            time.sleep(self.poll_seconds)
+

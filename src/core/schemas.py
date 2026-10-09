@@ -2487,6 +2487,8 @@ class WandbTrackingSpec(BaseModel):
 
     project: str = Field(min_length=1)
     mode: Literal["online", "offline", "disabled"]
+    #: Live tracking-reader cadence (WandbRunReader): bounded, never a tight loop.
+    poll_seconds: float = Field(default=15.0, gt=0)
 
 
 class TrackingSpec(BaseModel):

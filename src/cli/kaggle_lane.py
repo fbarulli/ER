@@ -247,6 +247,7 @@ clear_kernel_session_id = KaggleMonitor.clear_kernel_session_id
 capture_kernel_session_id = KaggleMonitor.capture_kernel_session_id
 recorded_kernel_handle = KaggleMonitor.recorded_kernel_handle
 kernel_logs = KaggleKernels.kernel_logs
+track_run = KaggleMonitor.track_run
 _await_autowatch_receipt = KaggleChain._await_autowatch_receipt
 _clear_stale_autowatch_receipt = KaggleChain._clear_stale_autowatch_receipt
 _verify_chain_step = KaggleChain._verify_chain_step

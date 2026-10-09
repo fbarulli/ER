@@ -169,6 +169,10 @@ tracking:
   wandb:
     project: "e-r"
     mode: "online"
+    # Live tracking-reader cadence (WandbRunReader), seconds: bounded, never a
+    # tight loop. The reader is the primary real-time source; Kaggle's log
+    # stream is a best-effort fallback.
+    poll_seconds: 15
 
 # ── Credential source SSOT ───────────────────────────────────────────────────
 # Declares ONLY the source: the env file (repo-root-relative, one directory
