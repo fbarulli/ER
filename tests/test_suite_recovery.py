@@ -135,10 +135,13 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     assert any('recovery_package' in script for script in scripts)
     assert len(publications) == 1
     assert publications[0][0][0].is_file()
+    # A recorded provenance difference is a RECORD, never a refusal: the resume
+    # proceeds (data is never checked). The remote stage still fails, exactly
+    # like the fresh run above.
     monkeypatch.setattr(colab, 'verify', lambda _: {**metadata, 'revision': 'changed'})
-    with pytest.raises(ValueError, match='differs from interrupted'):
+    with pytest.raises(RuntimeError, match='worker failure'):
         colab.run(inputs, 'smoke', resume=True)
-    assert len(publications) == 1  # mismatched resume fails before publication
+    assert len(publications) == 2
     backend.GPU = 'T4'
     with pytest.raises(ValueError, match='device differs'):
         colab.run(inputs, 'smoke', resume=True)

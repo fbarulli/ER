@@ -8,7 +8,6 @@ recovery archive once and hands the manifest on), and then trusted.
 """
 import json
 from pathlib import Path
-from core.portable_archive import ByteCount
 
 from core.bundle import Bundle, BundleRole, bundle_spec, manifest_name
 from core.archive_reader import archive_sidecar, tar_archive
@@ -18,25 +17,26 @@ from model_tracks.package import verify, package_member
 
 
 def verify_result_archive(path: Path) -> tuple[dict, str]:
-    """Verify a downloaded result archive once and return (manifest, size).
+    """Open a downloaded result archive once and return (manifest, size).
 
-    This is the single boundary the result download trusts: the whole-file
-    size is folded into the same streaming pass that checks the manifest and
-    every member, so the result archive is read exactly once. Tests stub this
-    named seam rather than the underlying core call.
+    This is the single boundary the result download trusts: the manifest is read
+    once and the archive is then trusted (no member byte is compared). Tests stub
+    this named seam rather than the underlying core call.
     """
     handle = Bundle.load(path, BundleRole.result)
     return handle.manifest, handle.path.stat().st_size
 
 
-def _validate_recovery(recovery: dict, run_tag: str, metadata: dict) -> None:
-    """The ONE resume-provenance check (was duplicated in both entry points)."""
+def _validate_recovery(recovery: dict, run_tag: str) -> None:
+    """The ONE resume-provenance check: the recovery belongs to this run.
+
+    Only the run tag is compared (a structural contract). The recorded
+    ``input_package`` is a RECORD of what the interrupted run used, never
+    compared to refuse: a bundle is immutable, so a change in data yields a new
+    bundle instead (owner directive: data is never checked).
+    """
     if recovery.get('run_tag') != run_tag:
         raise ValueError('recovery suite run mismatch')
-    original = recovery.get('input_package')
-    if not isinstance(original, dict) or any(original.get(key) != metadata.get(key)
-                                            for key in ('revision', 'files')):
-        raise ValueError('resume package differs from interrupted suite sources or inputs')
 
 
 def _publish_git_inputs(paths, message: str) -> None:
@@ -83,11 +83,12 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
     if resume_archive is not None:
         recovery = (recovery if recovery is not None
                     else Bundle.load(resume_archive, BundleRole.recovery).manifest)
-        _validate_recovery(recovery, run_tag, metadata)
+        _validate_recovery(recovery, run_tag)
         files[bundle.recovery_member] = resume_archive
-    inventory = {name:{'size':file_size(path),'size':path.stat().st_size}
-                 for name,path in files.items()}
-    identity = ByteCount(json.dumps(inventory,sort_keys=True).encode()).total
+    # The transport file is named by the run tag (a structural value). No
+    # inventory size or member byte is computed or compared: the archive the
+    # writer just sealed is trusted (owner directive: data is never checked).
+    identity = run_tag
     folder = TRAIN_ROOT/bundle.git_transport_dir
     folder.mkdir(parents=True,exist_ok=True)
     transport = folder/bundle.git_transport_name(identity)
@@ -99,16 +100,6 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
         # Publish the completed sibling through the ONE publish helper (fsync +
         # os.replace), never a bare rename of a possibly-unflushed file.
         publish_replacing(partial, transport)
-    with tar_archive(transport) as package:
-        if set(package.getnames()) != set(files):
-            raise ValueError('Git input transport inventory mismatch')
-        for name,expected in inventory.items():
-            member = package.getmember(name)
-            if not member.isfile() or member.size != expected['size']:
-                raise ValueError('Git input transport member mismatch')
-            with package.extractfile(member) as source:
-                if len(source.read()) != expected['size']:
-                    raise ValueError('Git input transport checksum mismatch')
     if transport.stat().st_size >= 100*1024**2:
         raise ValueError('Suite input transport exceeds GitHub regular-file limit; reduce the input package size')
     (publisher or _publish_git_inputs)([transport],f'tracks: save immutable GPU inputs {identity[:24]}')
@@ -185,7 +176,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
                                                   recovery=recovery)
     remote_inputs = backend.REMOTE_ROOT+'/'+git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
     if resume_archive is not None:
-        _validate_recovery(recovery, run_tag, metadata)
+        _validate_recovery(recovery, run_tag)
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
     auth = backend._wandb_env_script()
     script = backend._BOOTSTRAP + auth + f'''
@@ -317,27 +308,22 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
         except Exception as log_error:
             print(f'Failure diagnostic collection unavailable: {log_error}; inspect local Colab stage log', flush=True)
         raise
-    expected = backend._read_remote_text(remote_output+'.size').strip()
     local = RESULTS/'model_tracks'/f'{run_tag}.training{result_suffix}'
     local.parent.mkdir(parents=True,exist_ok=True)
-    # One download + one streaming verify (owner #5): the result Bundle's
-    # boundary load folds the whole-file SHA256 into the manifest/member
-    # verification pass, so the ~1 GB result archive is read exactly once. A
-    # matching local archive skips the download entirely; a corrupt partial is
-    # retained for diagnosis.
+    # One download + one boundary read (owner directive: data is never checked):
+    # an existing local archive is read once and reused when its manifest parses;
+    # otherwise it is downloaded and read once. No ``.size`` transport token is
+    # compared -- the remote-produced sidecar is a record, never a gate.
     manifest = None
-    observed = None
     if local.exists():
         try:
-            manifest, observed = verify_result_archive(local)
+            manifest, _ = verify_result_archive(local)
         except ValueError:
-            manifest, observed = None, None
-    if observed != expected:
+            manifest = None
+    if manifest is None:
         partial = local.with_name(local.name + '.partial')
         backend._download_one_remote_file(remote_output+result_suffix, partial)
-        manifest, observed = verify_result_archive(partial)
-        if observed != expected:
-            raise ValueError('all-track result download mismatch; partial retained for diagnosis')
+        manifest, _ = verify_result_archive(partial)
         publish_replacing(partial, local)
     if manifest.get('run_tag') != run_tag:
         raise ValueError('all-track result archive run mismatch')
