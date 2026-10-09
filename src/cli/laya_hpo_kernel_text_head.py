@@ -256,21 +256,31 @@ class StorageResolver:
         return self.optuna.storages.RDBStorage(
             "sqlite:///" + str(path))
 
-    def _create(self, storage, sampler, pruner, study_kwargs):
+    def _direction_kwargs(self):
+        directions = self.options.objective_mode.directions()
+        return ({"directions": directions} if isinstance(directions, list)
+                else {"direction": directions})
+
+    def _create(self, storage, sampler, pruner):
         return self.optuna.create_study(
             study_name=self.study_name, sampler=sampler, pruner=pruner,
             storage=storage, **self.options.session.study_kwargs(),
-            **study_kwargs)
+            **self._direction_kwargs())
 
-    def open(self, sampler, pruner, study_kwargs):
-        """Create or resume the study, degrading to local SQLite on a miss."""
+    def open(self, sampler, pruner):
+        """Create or resume the study, degrading to local SQLite on a miss.
+
+        Construction creates the RDB schema, so the CONTROLLER calls this ONCE
+        before spawning workers; each worker then re-opens with
+        ``load_if_exists=True`` and finds the schema already there. That is what
+        keeps parallel workers from racing ``CREATE TABLE studies``.
+        """
         if self.offline:
-            return self._create(self.sqlite(), sampler, pruner, study_kwargs)
+            return self._create(self.sqlite(), sampler, pruner)
         try:
             ensure_optuna_url()
             self.config = storage_from_environment()
-            study = self._create(create_storage(self.config), sampler, pruner,
-                                 study_kwargs)
+            study = self._create(create_storage(self.config), sampler, pruner)
             self.remote = True
             return study
         except Exception as error:
@@ -280,7 +290,7 @@ class StorageResolver:
             self.remote = False
             self.config = None
             mark_offline(str(error)[:200])
-            return self._create(self.sqlite(), sampler, pruner, study_kwargs)
+            return self._create(self.sqlite(), sampler, pruner)
 
     def load(self):
         """Load an existing study (session end), degrading on an RDB outage."""

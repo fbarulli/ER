@@ -44,11 +44,6 @@ class WorkerSession:
         self.optuna = optuna
         self.options = options
 
-    def _study_kwargs(self):
-        directions = self.options.objective_mode.directions()
-        return ({"directions": directions} if isinstance(directions, list)
-                else {"direction": directions})
-
     def _observer(self, offline):
         observer = TrialObserver(WORKING / OBSERVABILITY_DIR, offline=offline)
         globals()["OBSERVER"] = observer
@@ -63,7 +58,7 @@ class WorkerSession:
                                   model_key=MODEL_KEY))
         study = self.resolver.open(
             options.sampler.create(self.optuna),
-            options.pruner.create(self.optuna), self._study_kwargs())
+            options.pruner.create(self.optuna))
         self._observer(self.resolver.offline)
         # Stale-trial reaping happens ONCE in the session controller (a worker
         # must never race a sibling's freshly-started trial).
@@ -375,11 +370,14 @@ class SessionOrchestrator:
 
     def __init__(self):
         self.options = None
+        self.optuna = None
 
     def _prepare(self):
         pip_install_runtime()
         pip_install_laya()
         import torch
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
         options = build_option_set(HPO_SPACE)
         globals()["OPTION_SET"] = options
         options.resource_caps.apply_torch(torch)
@@ -387,8 +385,24 @@ class SessionOrchestrator:
         # config-declared local SQLite study (no hard stop).
         if remote_configured():
             ensure_optuna_url()
+        self.optuna = optuna
         self.options = options
         return torch
+
+    def _prime_study(self):
+        """Create the study ONCE, before ANY worker is spawned.
+
+        RDBStorage builds its schema on construction; if every parallel worker
+        did that at once they would race on ``CREATE TABLE studies`` (the
+        reported SQLite error). The controller opens the study first, so each
+        worker's ``load_if_exists=True`` open finds the schema already committed.
+        """
+        resolver = StorageResolver(
+            self.optuna, self.options,
+            generation_study_name(generation_id=GENERATION_ID,
+                                  model_key=MODEL_KEY))
+        resolver.open(self.options.sampler.create(self.optuna),
+                      self.options.pruner.create(self.optuna))
 
     def _specs(self, torch):
         gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -442,6 +456,7 @@ class SessionOrchestrator:
 
     def run(self):
         torch = self._prepare()
+        self._prime_study()
         if remote_configured() and not self.options.session.offline:
             self._reap_stale()
         if self.options.scheduler.mode == "slots":
