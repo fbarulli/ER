@@ -311,6 +311,29 @@ def test_control_checkpointer_run_tag_guard_and_best_persist(tmp_path):
                         torch.device("cpu")) == (0, None, 0, None)
 
 
+def test_control_checkpointer_bounds_retained_epoch_checkpoints(tmp_path):
+    namespace = _perf_namespace()
+
+    class _Net(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin = torch.nn.Linear(2, 2)
+
+    model = _Net()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    checkpointer = namespace["ControlCheckpointer"](torch, str(tmp_path),
+                                                    "runA")
+    for epoch in range(5):
+        checkpointer.save(model, optimizer, scheduler, epoch, 0.9, 0)
+    names = sorted(p.name
+                   for p in (tmp_path / "checkpoints").glob("epoch_*.pt"))
+    assert names == ["epoch_4.pt"]  # only the newest resumable checkpoint
+    start, _, _, _ = checkpointer.resume(model, optimizer, scheduler,
+                                         torch.device("cpu"))
+    assert start == 5
+
+
 def test_injected_classes_mirror_the_module():
     namespace = _perf_namespace()
     cases = [(0.5, None, 0), (0.4, 0.5, 0), (0.4, 0.5, 1)]

@@ -471,10 +471,9 @@ def test_ddp_control_dev_eval_checkpoint_resume_stay_in_lockstep(tmp_path):
     # run 1 trained 2 epochs; run 2 resumed and ran 0 more
     assert result["first"]["epochs_run"] == 2
     assert result["second"]["epochs_run"] == 0
-    # rank 0 wrote per-epoch checkpoints + the persisted best
-    assert "epoch_0.pt" in result["checkpoints"]
-    assert "epoch_1.pt" in result["checkpoints"]
-    assert "best.pt" in result["checkpoints"]
+    # rank 0 kept only the newest resumable checkpoint + the persisted best
+    # (older epochs are pruned so the workspace stays bounded)
+    assert result["checkpoints"] == ["best.pt", "epoch_1.pt"]
 
 
 def test_apply_perf_patch_emits_calibration_records_timing(tmp_path,

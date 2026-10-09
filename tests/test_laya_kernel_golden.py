@@ -58,11 +58,18 @@ GOLDEN_SHA256: dict[str, str] = {
     # kernel boot/trial/epoch lines stream through `wandb.log` while the run is
     # live, since W&B exposes `output.log` only on flush/end, and for the
     # real-time wandb emissions (run events, GPU sampler, timing sink).
-    "finetune": "865aa405a830ca1fd511da464c9158fcb7c5bfa3582e2dc2b0ed59668512f328",
-    "finetune-smoke": "59a527d2bd84f78fd16ca8507c89ad9f823def66025be2414dae0f268789dd51",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the BOUNDED checkpoint fix:
+    # ControlCheckpointer.save keeps only the newest resumable epoch checkpoint
+    # (pruning the older ones first) so a size-capped /kaggle/working is not
+    # filled by every epoch's optimizer state — the disk-full that killed the
+    # 2-trial HPO session (`er-laya-hpo`, run laya_hpo_1009T195143Z) and took
+    # wandb + the Optuna SQLite study down with it.
+    "finetune": "1612b4419fdf5f4735e4afd37389e642eea925c67c0fe662946d96ce3fdbfcd9",
+    "finetune-smoke": "b3beeb6d81bd43ae2ac5d0321b676c2d1c634d61107630e6f3a23a73d4a0853b",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "9471c398f2950db446cc187788d8ad0b4d6257677ba9ffc70b2ff80b6c4af365",
+    "hpo": "e5bc108504c297aed46685a5c2687cef8225d278adb70019d02d23935461f86e",
 }
 
 
