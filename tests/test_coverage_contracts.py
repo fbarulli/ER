@@ -35,7 +35,7 @@ def test_batch_contract_rejects_unrepresented_population():
 
 
 def test_cohort_requires_unknown_difficulty_and_complete_mint_lineage():
-    fields = dict(cohort_size='0' * 64, pair_rows=2,
+    fields = dict(cohort_key='clean:bundle:2', pair_rows=2,
         minted_endpoints_total=1, minted_endpoints_covered=1,
         by_scope={'training_diagnostic': 2}, by_population={'real': 2},
         by_difficulty={'easy': 1, 'medium': 0, 'hard': 0, 'unknown': 1},

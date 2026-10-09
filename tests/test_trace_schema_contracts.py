@@ -568,7 +568,7 @@ def zero_shot_frame(**over: object) -> pd.DataFrame:
         "mask_applied2": False,
         "mask_realized_extent1": 0.0,
         "mask_realized_extent2": 0.0,
-        "mask_config_fingerprint": "a" * 64,
+        "mask_config": "cleaned",
         "model_keys": "mini",
         "lineage_id": "0123456789abcdef",
         "sim_mini": 0.75,
@@ -587,7 +587,7 @@ def test_check_zero_shot_similarity_frame_is_reachable():
     [
         {"mask_realized_extent1": 2.0},
         {"canonical1": ""},
-        {"lineage_id": "short"},
+        {"lineage_id": ""},
         {"sim_mini": "high"},
     ],
 )

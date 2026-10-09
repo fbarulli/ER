@@ -35,6 +35,10 @@ def _run_real_cohort(work: Path) -> Path:
     """Copy the real fixture and run the real producer on it. -> cohort folder."""
     setup = work / SETUP_NAME
     shutil.copytree(REPO / 'data/prepared' / SETUP_NAME, setup)
+    # The committed fixture ships a stale contract output; start from the state
+    # the producer actually runs on (no contract) so "wrote nothing" is provable.
+    (setup / 'ablation_cohort' / ablation_cohort.COHORT_CONTRACT_FILE).unlink(
+        missing_ok=True)
     from training.prepared_bundle import load_prepared_bundle
 
     _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz')
@@ -150,7 +154,7 @@ def test_untagged_unaccounted_and_mis_declared_cohorts_are_rejected() -> None:
 
     # a declared stratum set that disagrees with the carried tags is rejected
     mis_declared = CohortCoverage.model_validate({
-        'cohort_size': '0' * 64, 'pair_rows': 2,
+        'cohort_key': 'clean:bundle:2', 'pair_rows': 2,
         'minted_endpoints_total': 0, 'minted_endpoints_covered': 0,
         'by_scope': {'heldout': 1, 'bundle_diagnostic': 1},
         'by_population': {'real': 2},
