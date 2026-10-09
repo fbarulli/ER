@@ -277,9 +277,9 @@ class LayaTransportFactory:
         """Resolve this lane's watcher parameters into the shared spec.
 
         The receipt lives under ``results/laya_lane/fetch/<kind>/`` (the same
-        roof the harvest downloads to) and the progress roof is
-        ``logs/laya/lane.log``; the detached entry re-derived the spec from the
-        ``--watch`` op.
+        roof the harvest downloads to) and the progress roof is the ONE shared
+        kaggle transcript (``kaggle.logs_dir`` / ``kaggle.files.lane_log``); the
+        detached entry re-derived the spec from the ``--watch`` op.
         """
         from cli.kaggle_monitor import KaggleMonitor
         from cli.kaggle_watcher import KernelWatcherSpec
@@ -311,7 +311,7 @@ class LayaTransportFactory:
             # Distinct from the kernel's own per-kind receipt
             # (`laya_<kind>.receipt.json`) that the fetch downloads here.
             receipt_path=stage / "autowatch.receipt.json",
-            log_path=self._runtime.lane_logs_dir() / "lane.log",
+            log_path=self._runtime.lane_log_path(),
             poll_seconds=kaggle.logs_poll_seconds,
             stream_join_seconds=kaggle.limits.stream_join_seconds,
             append=True,

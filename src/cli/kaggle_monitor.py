@@ -126,8 +126,7 @@ class KaggleMonitor:
             write_json=atomic_write_json,
             receipt_path=lane.staging_dir()
             / spec.files.autowatch_receipt.format(kind=identity.kind),
-            log_path=lane.lane_logs_dir()
-            / spec.files.autowatch_log.format(which=which),
+            log_path=lane.lane_log_path(),
             poll_seconds=spec.logs_poll_seconds,
             stream_join_seconds=spec.limits.stream_join_seconds,
             append=True,
@@ -278,13 +277,16 @@ class KaggleMonitor:
         run's live stdout/stderr — the tqdm bars included. The proxy URL embeds
         the kernel_session_id, which also feeds the manual kill switch.
         Appends every decoded data payload post-processed (CR frames -> lines +
-        tagged last bar, cli.log_capture) to log_path (default: the run's
-        logs/kaggle/lane.log) and echoes decoded lines to the console. The run
-        transcript is opened fresh once per run by the pusher's first _log_lane;
-        the follower appends so it never wipes the watcher's status lines. A
-        dropped SSE connection replays from the session's FIRST line, so the
-        follower tracks how many lines it already persisted and skips the
-        replayed prefix instead of truncating the shared transcript."""
+        tagged last bar, cli.log_capture) to log_path (default: the declared
+        single transcript ``kaggle.files.lane_log`` under ``kaggle.logs_dir``)
+        and echoes decoded lines to the console. The run transcript is opened
+        fresh once per run by the pusher's first _log_lane; the follower appends
+        so it never wipes the watcher's status lines. A dropped SSE connection
+        replays from the session's FIRST line, so the follower tracks how many
+        lines it already persisted and skips the replayed prefix instead of
+        truncating the shared transcript. The stream's OWN diagnostics
+        (reconnect/rate-limit) are written through this same handle, so no 429
+        line can land in a second file."""
         from cli import kaggle_lane as lane
 
         from kagglesdk.kaggle_client import KaggleClient
@@ -298,8 +300,7 @@ class KaggleMonitor:
         owner, slash, kernel = slug.rpartition("/")
         if not slash or not owner or not kernel:
             raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
-        destination = log_path or (lane.lane_logs_dir() /
-                                   lane._spec().files.stream_log.format(kernel=kernel))
+        destination = log_path or lane.lane_log_path()
         destination.parent.mkdir(parents=True, exist_ok=True)
         plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
         session_id: int | None = None
@@ -335,6 +336,17 @@ class KaggleMonitor:
                 text += "\n"
             log_handle.write(text)
             log_handle.flush()
+
+        def log_diagnostic(text: str) -> None:
+            """Write a stream diagnostic into the SAME transcript handle.
+
+            Reconnect/rate-limit lines must never land in a second file, so
+            they ride the follower's own handle (the passed roof) rather than
+            reopening the lane transcript elsewhere.
+            """
+            stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
+            print(f"[kaggle-lane {stamp}] {text}", flush=True)
+            emit(f"{stamp} {text}")
 
         def append_progress(payload_text: str | None, raw: str) -> None:
             """Append one captured chunk as grep-able, post-processed lines.
@@ -423,18 +435,22 @@ class KaggleMonitor:
                     # appeared when the session ended. Keep reconnecting until
                     # the SESSION ends (a clean END_OF_LOG, handled above).
                     attempts += 1
-                    lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
-                              f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
                     # The next attempt replays from line 0: drop this follower's
                     # section (not the run's status lines) and rewrite it from
-                    # the replay (no dedup, no drift).
+                    # the replay (no dedup, no drift). Diagnostics are written
+                    # AFTER the truncate so they persist on the shared
+                    # transcript for the whole run.
                     log_handle.flush()
                     log_handle.seek(section_start)
                     log_handle.truncate()
                     log_handle.seek(0, os.SEEK_END)
                     delay = backoff.delay(attempts, error)
+                    log_diagnostic(
+                        f"[stream {kernel}] reconnect attempt {attempts}: "
+                        f"{type(error).__name__}: "
+                        f"{str(error)[:lane._spec().limits.error_tail_chars]}")
                     if backoff.is_rate_limited(error):
-                        lane._log_lane(
+                        log_diagnostic(
                             f"[stream {kernel}] rate-limited (429); backing off "
                             f"{delay:.0f}s before reconnect {attempts + 1}")
                     time.sleep(delay)

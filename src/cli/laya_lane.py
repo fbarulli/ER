@@ -87,7 +87,6 @@ from cli.laya_recipe import (  # noqa: F401  (public lane surface)
     HOLDOUT_EVAL_REPORT_FILE,
     HOLDOUT_JSONL,
     KINDS,
-    LANE_LOG_NAME,
     QUESTION_SCHEMA_FILE,
     LayaRecipeFactory,
 )
@@ -559,9 +558,10 @@ def main() -> None:
         push_plan = lane.push(stage_dir, execute=True)
         print(json.dumps(push_plan, indent=2), flush=True)
         # ONE detached terminal watcher now owns progress, download and release:
-        # it streams the run into logs/laya/lane.log, fetches the per-kind output
-        # into results/laya_lane/fetch/<kind>/ and stops the session. Its spawn
-        # is the same owner the ER lane uses, so `--execute` runs AND retrieves.
+        # it streams the run into the shared logs/kaggle/lane.log, fetches the
+        # per-kind output into results/laya_lane/fetch/<kind>/ and stops the
+        # session. Its spawn is the same owner the ER lane uses, so `--execute`
+        # runs AND retrieves.
         kernel_id = json.loads(
             (stage_dir / "kernel-metadata.json").read_text())["id"]
         watch_plan = watcher(args.decision, slug=kernel_id).spawn()

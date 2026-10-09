@@ -693,7 +693,7 @@ def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeyp
     kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
     # One roof (owner order 2026-10-07): every transcript landmark — decoded
     # stdout AND the watcher's status lines — lands on the single
-    # logs/kaggle/lane.log (files.stream_log default).
+    # logs/kaggle/lane.log (files.lane_log, the one declared transcript).
     destination = tmp_path / "logs" / "kaggle" / "lane.log"
     content = destination.read_text().splitlines()
     assert [line for line in content
@@ -728,7 +728,7 @@ def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkey
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
 
     kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
-    # One roof: stream transcripts append to logs/kaggle/lane.log (files.stream_log).
+    # One roof: stream transcripts append to logs/kaggle/lane.log (files.lane_log).
     content = (tmp_path / "logs" / "kaggle"
                / "lane.log").read_text().splitlines()
     # every \r frame is its own grep-able line, and the last bar stays tagged
@@ -740,7 +740,7 @@ def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatc
     """Two consecutive runs overwrite, never append-sprawl (owner order)."""
     import types
     import kagglesdk.kaggle_client
-    import cli.kaggle_runtime as runtime
+    from cli.log_capture import LaneTranscript
 
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
@@ -759,7 +759,7 @@ def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatc
                 kernels_api_client=fake_api)))
         # Each run is a fresh process: its first _log_lane truncates the
         # file and it holds no follower lock from a prior run.
-        monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+        monkeypatch.setattr(LaneTranscript, "_started", False)
         kaggle_lane._log_lane(f"{tag} push rc=0")
         (tmp_path / "logs" / "kaggle"
          / "er-train-gpu.follower.pid").unlink(missing_ok=True)
@@ -819,6 +819,61 @@ def test_stamp_matches_paris_local_format():
     assert re.fullmatch(
         r"\[kaggle-lane \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} (CET|CEST)\]",
         kaggle_lane._stamp())
+
+
+def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
+    """ER and laya share ONE transcript: staging, watcher status, stream, 429.
+
+    A laya staging line, an ER watcher status line, the live stream's decoded
+    output, and the stream's OWN rate-limit diagnostic all land in the single
+    declared transcript; the retired second roof (logs/laya/lane.log) is never
+    written.
+    """
+    import types
+    import kagglesdk.kaggle_client
+    from cli import laya_lane
+    from cli.log_capture import LaneTranscript
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr(LaneTranscript, "_started", False)
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+
+    # Staging (laya writer) + watcher status (ER writer): two writers, one roof.
+    laya_lane._log_lane("staged laya decision payload")
+    kaggle_lane._log_lane("[owner/er-train-gpu] status=running")
+
+    class RateLimited(Exception):
+        status_code = 429
+
+    frames = ['data: {"stream_name":"stdout","time":1,'
+              '"data":"hello from the kernel\\n"}']
+
+    class Stream:
+        state = {"n": 0}
+
+        def iter_lines(self):
+            self.state["n"] += 1
+            yield frames[0]
+            if self.state["n"] == 1:
+                raise RateLimited("Too Many Requests")
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+
+    body = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert "staged laya decision payload" in body
+    assert "status=running" in body
+    assert "hello from the kernel" in body
+    assert "rate-limited (429)" in body
+    assert not (tmp_path / "logs" / "laya" / "lane.log").exists()
 
 
 # ── train-kernel bundle install: pinned checkout stays authoritative ─────────

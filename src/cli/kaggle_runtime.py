@@ -9,12 +9,7 @@ import time
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
-from cli.log_capture import progress_frames_to_lines
-
-# One fresh lane.log per run: the first write of this process truncates, later
-# writes append (owner order 2026-10-07: overwrite, never append-sprawl).
-_LANE_LOG_STARTED = False
-
+from cli.log_capture import LaneTranscript, progress_frames_to_lines
 
 
 class KaggleRuntime:
@@ -37,15 +32,25 @@ class KaggleRuntime:
         """The lane's transcript directory: the config SSOT `kaggle.logs_dir`
         resolved relative to TRAIN_ROOT.
 
-        Local per-lane logs (live lane log, SSE stream captures, fetched session
-        logs) live at logs/kaggle/ — never under results/kaggle_lane (receipts,
+        Local per-lane state (fetched session logs, session-id handles,
+        follower locks) lives here — never under results/kaggle_lane (receipts,
         zip payloads, staging only). Derived from this module's TRAIN_ROOT so
-        tests can re-point the roof; the default and subdir are log_capture's
-        one-roof convention.
+        tests can re-point the roof.
         """
         from cli import kaggle_lane as lane
 
-        return (lane.TRAIN_ROOT / lane._spec().logs_dir).resolve()
+        return LaneTranscript.roof_for(lane.TRAIN_ROOT)
+
+    @staticmethod
+    def lane_log_path() -> Path:
+        """The ONE run transcript both kaggle-family lanes append to.
+
+        Path declared once in config (``kaggle.logs_dir`` +
+        ``kaggle.files.lane_log``); this is the only resolution site ER reads.
+        """
+        from cli import kaggle_lane as lane
+
+        return LaneTranscript.path_for(lane.TRAIN_ROOT)
 
     @staticmethod
     def cohort_label(dataset_csv: Path) -> str:
@@ -103,33 +108,19 @@ class KaggleRuntime:
 
     @staticmethod
     def _log_lane(line: str) -> None:
-        """Timestamped lane logging: console plus one fresh lane log per run.
+        """Timestamped lane logging: console plus the ONE shared run transcript.
 
-        The file is truncated on the first write of this process and appended
-        afterwards, so a new run writes over the previous run's transcript
-        (owner order 2026-10-07: fresh file per run, never append-sprawl).
-        A detached watcher spawned by a push shares the pusher's run transcript:
-        the pusher's first write opened it fresh and ER_KAGGLE_LANE_APPEND=1
-        tells the child process to append (never truncate again).
-        Best-effort on the file side — a log-write failure is printed and never
-        allowed to mask the operation's own outcome.
+        Every kaggle-family writer appends to ``kaggle.files.lane_log`` under
+        ``kaggle.logs_dir`` (the laya lane included), truncated once at run
+        start and appended thereafter — a detached watcher spawned by a push
+        (``ER_KAGGLE_LANE_APPEND=1``) only ever appends.
         """
-        global _LANE_LOG_STARTED
         from cli import kaggle_lane as lane
 
-        stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
-        print(f"[kaggle-lane {stamp}] {line}", flush=True)
-        try:
-            log_dir = lane.lane_logs_dir()
-            log_dir.mkdir(parents=True, exist_ok=True)
-            append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
-            mode = "a" if (_LANE_LOG_STARTED or append) else "w"
-            with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
-                handle.write(f"{stamp} {line}\n")
-            _LANE_LOG_STARTED = True
-        except OSError as error:
-            print(lane._stamp(), f"[kaggle-lane] lane.log write failed ({error}); continuing",
-                  flush=True)
+        LaneTranscript.from_config(
+            lane.TRAIN_ROOT, lane="kaggle-lane",
+            stamp=lambda: (f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"),
+        ).write(line)
 
     @staticmethod
     def _require_kaggle_executable(executable: str) -> str:

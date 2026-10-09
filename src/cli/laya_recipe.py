@@ -15,7 +15,6 @@ from core.laya_config import LayaSpec
 KINDS = ("kaggle", "colab")
 GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune",
              "finetune-smoke", "finetune-eval", "holdout-eval")
-LANE_LOG_NAME = "lane.log"
 
 DECISION_KERNEL_CODE_FILE = "laya_decision.py"
 EVAL_KERNEL_CODE_FILE = "laya_evals.py"

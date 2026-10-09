@@ -1,8 +1,9 @@
 """Laya lane runtime: the staging root, transcript roof, and CSV census.
 
 The ``LayaRuntimeFactory`` binds ONE resolved ``LayaSpec`` + the lane's
-``TRAIN_ROOT`` so no helper re-reads the global config. The transcript is one
-fresh ``logs/laya/lane.log`` per process (owner order 2026-10-07).
+``TRAIN_ROOT`` so no helper re-reads the global config. The transcript is the
+ONE shared kaggle run log (``kaggle.logs_dir`` / ``kaggle.files.lane_log``),
+truncated once per process.
 """
 from __future__ import annotations
 
@@ -14,14 +15,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from cli.log_capture import LaneTranscript
 from core.laya_config import LayaSpec
 from core.manifest import sha256_file
 
 _PARIS = ZoneInfo("Europe/Paris")  # build once, not per log line
-
-# One fresh lane.log per run: first write of this process truncates, later
-# writes append (owner order 2026-10-07: overwrite, never append-sprawl).
-_LANE_LOG_STARTED = False
 
 # The accuracy/F1 metric contract a harvest agent needs when a decision
 # CSV carries ground-truth labels (owner order 2026-10-07): the EXPECTED
@@ -51,8 +49,17 @@ class LayaRuntimeFactory:
         return (self._train_root / self._spec.staging_dir).resolve()
 
     def lane_logs_dir(self) -> Path:
-        """The lane transcript dir (one canonical roof: TRAIN_ROOT/logs)."""
-        return self._train_root / "logs" / "laya"
+        """The ONE canonical transcript roof (config ``kaggle.logs_dir``).
+
+        The laya lane shares the ER kaggle lane's transcript roof so both
+        lanes' runs land in the same file; laya-only state (fetched session
+        handles, follower locks) rides the same roof as separate files.
+        """
+        return LaneTranscript.roof_for(self._train_root)
+
+    def lane_log_path(self) -> Path:
+        """The declared single run transcript (``kaggle.files.lane_log``)."""
+        return LaneTranscript.path_for(self._train_root)
 
     def _stamp(self) -> str:
         """Bracketed Europe/Paris (CET/CEST) wall-clock prefix.
@@ -61,31 +68,22 @@ class LayaRuntimeFactory:
         order 2026-10-07) and this lane follows it; the "[laya-lane UTC-stamp]"
         phrasing in the relaunch brief predates that convention.
         """
-        return (f"[laya-lane "
-                f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}]")
+        return f"[laya-lane {self._bare_stamp()}]"
+
+    @staticmethod
+    def _bare_stamp() -> str:
+        return f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}"
 
     def log_lane(self, line: str) -> None:
-        """Timestamped lane logging: console plus one fresh lane log per run.
+        """Timestamped lane logging into the ONE shared kaggle transcript.
 
-        The file is truncated on the first write of this process and appended
-        afterwards, so a new run writes over the previous run's transcript
-        (owner order 2026-10-07: fresh file per run, never append-sprawl).
-        Best-effort on the file side — a log-write failure is printed and
-        never allowed to mask the operation's own outcome.
+        Same truncate-at-run-start/append-after semantics as the ER writer —
+        one class owns the gate, so a laya process and an ER writer in the same
+        run can never truncate each other's lines.
         """
-        global _LANE_LOG_STARTED
-        stamp = f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}"
-        print(f"[laya-lane {stamp}] {line}", flush=True)
-        try:
-            log_dir = self.lane_logs_dir()
-            log_dir.mkdir(parents=True, exist_ok=True)
-            mode = "a" if _LANE_LOG_STARTED else "w"
-            with (log_dir / "lane.log").open(mode, encoding="utf-8") as handle:
-                handle.write(f"{stamp} {line}\n")
-            _LANE_LOG_STARTED = True
-        except OSError as error:
-            print(self._stamp(), f"[laya-lane] lane.log write failed ({error}); "
-                  "continuing", flush=True)
+        LaneTranscript.from_config(
+            self._train_root, lane="laya-lane", stamp=self._bare_stamp,
+        ).write(line)
 
     @staticmethod
     def measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:

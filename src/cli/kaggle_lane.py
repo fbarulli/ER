@@ -210,6 +210,7 @@ from cli.kaggle_chain import KaggleChain
 _spec = KaggleRuntime._spec
 staging_dir = KaggleRuntime.staging_dir
 lane_logs_dir = KaggleRuntime.lane_logs_dir
+lane_log_path = KaggleRuntime.lane_log_path
 cohort_label = KaggleRuntime.cohort_label
 cohort_export_csv = KaggleRuntime.cohort_export_csv
 _git_revision = KaggleRuntime._git_revision
