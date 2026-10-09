@@ -144,8 +144,7 @@ class WandbLogSink:
             WANDB_RUN.log({self.KEY: text})
         except Exception as error:
             print("[wandb] log sink skipped: " + type(error).__name__ + ": "
-                  + str(error)[:200] + "\\n" + traceback.format_exc(),
-                  flush=True)
+                  + str(error) + "\\n" + traceback.format_exc(), flush=True)
 
 
 LOG_SINK = WandbLogSink()
@@ -170,7 +169,7 @@ def wandb_init():
         log("wandb run " + str(getattr(WANDB_RUN, "id", "")))
     except Exception as error:
         log("wandb init skipped: " + type(error).__name__ + ": "
-            + str(error)[:200])
+            + str(error) + "\\n" + traceback.format_exc())
         WANDB_RUN = None
     LOG_SINK.flush()
     return WANDB_RUN
@@ -182,7 +181,12 @@ def wandb_log_epoch(epoch, mean, extra=None):
     payload = {"epoch": epoch + 1, "train/mean_loss": mean}
     if isinstance(extra, dict):
         payload.update(extra)
-    WANDB_RUN.log(payload, step=epoch)
+    try:
+        WANDB_RUN.log(payload, step=epoch)
+    except Exception as error:  # logging must never crash training
+        log("wandb epoch log skipped: " + type(error).__name__ + ": "
+            + str(error) + "\\n" + traceback.format_exc())
+        return
     LOG_SINK.add("epoch %d loss=%.4f" % (epoch + 1, mean))
 
 
@@ -199,8 +203,9 @@ def wandb_finish():
     if WANDB_RUN is not None:
         try:
             WANDB_RUN.finish()
-        except Exception:
-            pass
+        except Exception as error:
+            log("wandb finish skipped: " + type(error).__name__ + ": "
+                + str(error) + "\\n" + traceback.format_exc())
 
 
 def wandb_log_event(name, **fields):
@@ -219,7 +224,7 @@ def wandb_log_event(name, **fields):
         WANDB_RUN.log(payload)
     except Exception as error:
         log("wandb event skipped: " + type(error).__name__ + ": "
-            + str(error)[:200])
+            + str(error) + "\\n" + traceback.format_exc())
 
 
 def wandb_log_profiler(table):
@@ -228,8 +233,9 @@ def wandb_log_profiler(table):
         return
     try:
         WANDB_RUN.log({"profiler/top_ops": table})
-    except Exception:
-        pass
+    except Exception as error:
+        log("wandb profiler skipped: " + type(error).__name__ + ": "
+            + str(error) + "\\n" + traceback.format_exc())
 
 
 @DEVICE_PATCH@
@@ -844,6 +850,8 @@ def run_ddp_trial(trial_number):
     is_baseline = seed is not None and dials == seed
     if is_rank0():
         wandb_init()
+        wandb_log_event("kernel_boot", model_key=MODEL_KEY,
+                        generation_id=GENERATION_ID, role="ddp-trial")
         wandb_log_event("baseline_start" if is_baseline else "trial_start",
                         number=int(trial_number),
                         params=json.dumps(dials, sort_keys=True),
@@ -888,6 +896,7 @@ def run_ddp_trial(trial_number):
                         number=int(trial_number),
                         value=result.get("best_dev_accuracy"),
                         dev_loss=dev_loss)
+        wandb_finish()
 
 
 '''

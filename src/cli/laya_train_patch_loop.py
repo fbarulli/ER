@@ -12,6 +12,9 @@ from cli.laya_train_patch_ddp import (
 
 
 LOOP_PATCH_TEMPLATE = '''\
+import traceback
+
+
 class ControlCheckpointer:
     """Per-epoch checkpoint save + resume with optimizer/scheduler state.
 
@@ -441,8 +444,10 @@ class WandbProfileSink:
                       for key, cuda_ms, cpu_ms, count in rows])
             WANDB_RUN.log({"profile/top_ops": table, "profile/epoch": epoch,
                            "profile/trace": str(trace_path)})
-        except Exception:
-            pass
+        except Exception as error:
+            print("[perf-patch] profiler wandb skipped: "
+                  + type(error).__name__ + ": " + str(error) + "\\n"
+                  + traceback.format_exc(), flush=True)
 
 
 class WandbTimingSink:
@@ -456,7 +461,8 @@ class WandbTimingSink:
             WANDB_RUN.log(payload)
         except Exception as error:
             print("[perf-patch] timing wandb skipped: "
-                  + type(error).__name__ + ": " + str(error)[:200], flush=True)
+                  + type(error).__name__ + ": " + str(error) + "\\n"
+                  + traceback.format_exc(), flush=True)
 
 
 def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
@@ -930,8 +936,10 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     globals()["FINETUNE_CONTROL_RESULT"] = result
     try:
         wandb_log_control_summary(result)
-    except Exception:
-        pass
+    except Exception as error:
+        print("[perf-patch] control-summary wandb skipped: "
+              + type(error).__name__ + ": " + str(error) + "\\n"
+              + traceback.format_exc(), flush=True)
     wandb_log_event("training_done", epochs_run=len(history),
                     best_dev_accuracy=best_acc)
     model.eval()
@@ -1010,7 +1018,7 @@ def _wandb_log_gpu(line):
         WANDB_RUN.log({"gpu/util_pct": util, "gpu/mem_used_mb": mem_used})
     except Exception as error:
         print("[gpu-sampler] wandb skipped: " + type(error).__name__ + ": "
-              + str(error)[:200], flush=True)
+              + str(error) + "\\n" + traceback.format_exc(), flush=True)
 
 
 def stop_gpu_sampler(handle):

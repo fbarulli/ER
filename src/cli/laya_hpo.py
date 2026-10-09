@@ -32,6 +32,7 @@ The objective maximizes DEV accuracy and records dev loss as a secondary
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import inspect
 import json
@@ -316,6 +317,44 @@ _HOST_ONLY_IMPORT = re.compile(
     r"(?:[.\s]|$)")
 
 
+def _toplevel_name(node: ast.stmt) -> str | None:
+    """The simple name bound by a top-level def/class/assignment, if any."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target = node.targets[0]
+        if isinstance(target, ast.Name):
+            return target.id
+    return None
+
+
+def _strip_duplicate_definitions(text: str, seen: set[str]) -> str:
+    """Drop top-level defs/assignments already provided by an earlier module.
+
+    The injected HPO modules share ONE namespace in the staged kernel
+    (``_LEASE_TTL_SECONDS``, the ``_shared`` resolver and ``__all__`` are each
+    defined by several modules); the first definition is canonical, so the
+    later duplicate is dead weight and removed. ``seen`` accumulates across
+    modules; only simple ``NAME = ...`` / ``def NAME`` / ``class NAME`` forms
+    participate.
+    """
+    lines = text.splitlines()
+    drop: set[int] = set()
+    for node in ast.parse(text).body:
+        name = _toplevel_name(node)
+        if name is None:
+            continue
+        if name in seen:
+            drop.update(range(node.lineno - 1,
+                              getattr(node, "end_lineno", node.lineno)))
+        else:
+            seen.add(name)
+    if not drop:
+        return text
+    return "\n".join(line for index, line in enumerate(lines)
+                     if index not in drop)
+
+
 def hpo_runtime_source() -> str:
     """The shared HPO primitives, injected verbatim into the staged script.
 
@@ -325,9 +364,11 @@ def hpo_runtime_source() -> str:
     ``FINETUNE_CONTROL_LOGIC_SOURCE`` precedent). ``from __future__`` lines are
     stripped because the script has exactly one, at the top, and every host-only
     repo import is stripped (the kernel resolves those symbols from the shared
-    injected namespace or the baked SSOT globals).
+    injected namespace or the baked SSOT globals). Top-level names defined by
+    more than one module are kept once (the first, canonical definition).
     """
     chunks: list[str] = []
+    seen: set[str] = set()
     for module in (hpo_control_plane, hpo_fencing, hpo_budget, hpo_champions,
                    laya_hpo_runtime, laya_hpo_options, hpo_observability,
                    hpo_registry, hpo_persistence):
@@ -336,7 +377,7 @@ def hpo_runtime_source() -> str:
             line for line in text.splitlines()
             if not line.lstrip().startswith("from __future__ import")
             and not _HOST_ONLY_IMPORT.match(line))
-        chunks.append(cleaned.strip("\n"))
+        chunks.append(_strip_duplicate_definitions(cleaned, seen).strip("\n"))
     return "\n\n".join(chunks)
 
 

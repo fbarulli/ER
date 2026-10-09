@@ -232,8 +232,7 @@ class WandbLogSink:
             WANDB_RUN.log({self.KEY: text})
         except Exception as error:
             print("[wandb] log sink skipped: " + type(error).__name__ + ": "
-                  + str(error)[:200] + "\\n" + traceback.format_exc(),
-                  flush=True)
+                  + str(error) + "\\n" + traceback.format_exc(), flush=True)
 
 
 LOG_SINK = WandbLogSink()
@@ -258,7 +257,7 @@ def wandb_init():
               + " -> " + WANDB_PROJECT, flush=True)
     except Exception as error:  # tracking is best-effort, never fatal
         print("[wandb] init skipped: " + type(error).__name__ + ": "
-              + str(error)[:200], flush=True)
+              + str(error) + "\\n" + traceback.format_exc(), flush=True)
         WANDB_RUN = None
     LOG_SINK.flush()
     return WANDB_RUN
@@ -272,7 +271,12 @@ def wandb_log_epoch(epoch, mean, extra=None):
         for key, value in extra.items():
             if value is not None:
                 payload[key] = value
-    WANDB_RUN.log(payload, step=epoch)
+    try:
+        WANDB_RUN.log(payload, step=epoch)
+    except Exception as error:  # logging must never crash training
+        print("[wandb] epoch log skipped: " + type(error).__name__ + ": "
+              + str(error) + "\\n" + traceback.format_exc(), flush=True)
+        return
     LOG_SINK.add("epoch %d loss=%.4f" % (epoch + 1, mean))
 
 
@@ -303,7 +307,11 @@ def wandb_log_metrics(report):
             if block.get(key) is not None:
                 flat[phase + "/" + key] = block[key]
     if flat:
-        WANDB_RUN.log(flat)
+        try:
+            WANDB_RUN.log(flat)
+        except Exception as error:  # logging must never crash training
+            print("[wandb] metrics log skipped: " + type(error).__name__ + ": "
+                  + str(error) + "\\n" + traceback.format_exc(), flush=True)
 
 
 def wandb_finish():
@@ -311,8 +319,9 @@ def wandb_finish():
     if WANDB_RUN is not None:
         try:
             WANDB_RUN.finish()
-        except Exception:
-            pass
+        except Exception as error:
+            print("[wandb] finish skipped: " + type(error).__name__ + ": "
+                  + str(error) + "\\n" + traceback.format_exc(), flush=True)
 
 
 def wandb_log_event(name, **fields):
@@ -331,7 +340,7 @@ def wandb_log_event(name, **fields):
         WANDB_RUN.log(payload)
     except Exception as error:
         log("wandb event skipped: " + type(error).__name__ + ": "
-            + str(error)[:200])
+            + str(error) + "\\n" + traceback.format_exc())
 
 
 @DEVICE_PATCH@

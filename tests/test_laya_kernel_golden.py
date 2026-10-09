@@ -10,12 +10,13 @@ every kind offline (hermetic git + config + env) with a fixed run tag and
 asserts the sha256 of each generated script against a pinned digest. A moved,
 re-wrapped, re-ordered or byte-shifted literal fails here first.
 
-The eight staged surfaces map 1:1 to the embedded text blocks:
+The staged surfaces map 1:1 to the embedded text blocks:
 ``attribute`` / ``identity`` (``DECISION_KERNEL_SCRIPT``), ``laya-cli-eval``
 (``EVAL_KERNEL_SCRIPT``), ``colab`` (``NOTEBOOK_SCRIPT``), ``finetune`` /
 ``finetune-smoke`` (``FINETUNE_KERNEL_SCRIPT``), ``finetune-eval``
 (``FINETUNE_EVAL_KERNEL_SCRIPT``) and ``holdout-eval``
-(``HOLDOUT_EVAL_KERNEL_SCRIPT``).
+(``HOLDOUT_EVAL_KERNEL_SCRIPT``). The ``hpo`` surface is the assembled
+``cli.laya_hpo`` kernel (head + tail + the injected runtime source).
 """
 from __future__ import annotations
 
@@ -57,10 +58,11 @@ GOLDEN_SHA256: dict[str, str] = {
     # kernel boot/trial/epoch lines stream through `wandb.log` while the run is
     # live, since W&B exposes `output.log` only on flush/end, and for the
     # real-time wandb emissions (run events, GPU sampler, timing sink).
-    "finetune": "33ac6d39f8edb6758f5383d054356838209cd3bc9bb825ad78ef0da2cd748ee4",
-    "finetune-smoke": "0c9f661218b27d8536a5ec4adbfd632740d92a1e7c597141ac2f37a0039d36d2",
+    "finetune": "865aa405a830ca1fd511da464c9158fcb7c5bfa3582e2dc2b0ed59668512f328",
+    "finetune-smoke": "59a527d2bd84f78fd16ca8507c89ad9f823def66025be2414dae0f268789dd51",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
+    "hpo": "9471c398f2950db446cc187788d8ad0b4d6257677ba9ffc70b2ff80b6c4af365",
 }
 
 
@@ -156,8 +158,45 @@ def _holdout_fixture(tmp_path: Path, spec: LayaSpec) -> None:
         "1,2,1,real,c1\n2,1,0,p0,c2\n", encoding="utf-8")
 
 
+def _hpo_config():
+    """The forced config carrying the golden ``LayaSpec`` for the HPO stager."""
+    base = _tcfg()
+    return base.model_copy(update={
+        "laya": _golden_spec(),
+        "kaggle": base.kaggle.model_copy(update={
+            "branch": "main", "repository": "https://example/repo.git"})})
+
+
+def _stage_hpo(tmp_path: Path, monkeypatch) -> bytes:
+    """Stage the assembled HPO kernel through the ONE owner, hermetically.
+
+    The HPO stager reads the committed search space and the forced spec, and
+    resolves its study locally; the network/git/tip lookups and the dataset
+    payload are stubbed so the render is reproducible and byte-pinnable.
+    """
+    from cli import laya_hpo
+    from cli.laya_training_run import LayaRunKind, LayaTrainingRunFactory
+    from core import runtime_inputs
+
+    monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-golden")
+    monkeypatch.delenv(laya_hpo.OPTUNA_URL_ENV, raising=False)
+    monkeypatch.setattr(laya_hpo, "training_cfg", _hpo_config)
+    monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
+    monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
+                        lambda **kwargs: {"payload": "x", "files": {}})
+    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "main")
+    monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
+                        lambda rev, repo, branch: rev)
+    receipt = LayaTrainingRunFactory.from_config(
+        spec=_golden_spec(), train_root=tmp_path,
+        training_config=_hpo_config).stage(
+            LayaRunKind.HPO, run_tag=RUN_TAG, generation_id="gen-golden")
+    stage = Path(receipt["staged"])
+    return (stage / receipt["code_file"]).read_bytes()
+
+
 def _staged_scripts(tmp_path: Path, monkeypatch) -> dict[str, bytes]:
-    """Stage all eight surfaces and return ``{label: script bytes}``."""
+    """Stage every kernel surface and return ``{label: script bytes}``."""
     _hermetic(tmp_path, monkeypatch)
     _question_schema(tmp_path)
     _decision_fixture(tmp_path, monkeypatch)
@@ -185,6 +224,7 @@ def _staged_scripts(tmp_path: Path, monkeypatch) -> dict[str, bytes]:
     staged["finetune-eval"] = script(eval_receipt)
     holdout = laya_lane.stage_holdout_eval_kernel(run_tag=RUN_TAG)
     staged["holdout-eval"] = script(holdout)
+    staged["hpo"] = _stage_hpo(tmp_path, monkeypatch)
     return staged
 
 
