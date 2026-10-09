@@ -102,13 +102,17 @@ def _hermetic_staging(monkeypatch, *, origin_tip: str = REVISION_PIN):
 # ── SSOT/additive contract ─────────────────────────────────────────────────
 def test_laya_spec_additive_and_yaml_unchanged():
     cfg_spec = common.training_cfg().laya
-    # The committed YAML carries ONLY the smoke selection (dedicated slugs +
-    # dials); every production field still comes from the schema defaults, so
-    # the block stays additive and the prod lane is unchanged.
+    # The committed YAML carries the laya run-log roof/filename plus the smoke
+    # selection (dedicated slugs + dials); every production field still comes
+    # from the schema defaults, so the block stays additive and the prod lane is
+    # unchanged.
     raw = yaml.safe_load(
         (common.TRAIN_ROOT / "config/training.yaml").read_text())
-    assert set(raw["laya"]) == {"finetune_smoke"}
+    assert set(raw["laya"]) == {"logs_dir", "lane_log", "finetune_smoke"}
+    assert raw["laya"]["logs_dir"] == "logs/laya"
+    assert raw["laya"]["lane_log"] == "lane.log"
     assert raw["laya"]["finetune_smoke"]["epochs"] == 1
+    assert cfg_spec.logs_dir == "logs/laya" and cfg_spec.lane_log == "lane.log"
     assert cfg_spec.staging_dir == "results/laya_lane"
     assert cfg_spec.gpu == "T4"
     assert cfg_spec.checkpoint_hub == "convaiinnovations/laya"
@@ -661,8 +665,8 @@ def test_decision_kind_registry_contract():
 def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     laya_lane._log_lane("staged decision payload (offline)")
-    # The laya lane shares the ER kaggle lane's ONE transcript roof.
-    log_path = tmp_path / "logs/kaggle/lane.log"
+    # The laya lane writes its OWN run transcript roof (laya.logs_dir).
+    log_path = tmp_path / "logs/laya/lane.log"
     body = log_path.read_text(encoding="utf-8")
     # kaggle-lane / colab-lane stamp convention: Europe/Paris CET|CEST zone
     assert ("CET" in body or "CEST" in body)

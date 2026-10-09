@@ -2,8 +2,8 @@
 
 The ``LayaRuntimeFactory`` binds ONE resolved ``LayaSpec`` + the lane's
 ``TRAIN_ROOT`` so no helper re-reads the global config. The transcript is the
-ONE shared kaggle run log (``kaggle.logs_dir`` / ``kaggle.files.lane_log``),
-truncated once per process.
+laya lane's OWN run log (``laya.logs_dir`` / ``laya.lane_log``), written by the
+ONE ``LaneTranscript`` owner, truncated once per process.
 """
 from __future__ import annotations
 
@@ -49,17 +49,18 @@ class LayaRuntimeFactory:
         return (self._train_root / self._spec.staging_dir).resolve()
 
     def lane_logs_dir(self) -> Path:
-        """The ONE canonical transcript roof (config ``kaggle.logs_dir``).
+        """The laya lane's OWN transcript roof (config ``laya.logs_dir``).
 
-        The laya lane shares the ER kaggle lane's transcript roof so both
-        lanes' runs land in the same file; laya-only state (fetched session
-        handles, follower locks) rides the same roof as separate files.
+        Distinct from the ER kaggle lane's roof (``kaggle.logs_dir``): the
+        launched run's live console lands in ``logs/laya/lane.log`` so it is
+        tail-able on its own. The ONE writer (``LaneTranscript``) serves both
+        roofs; only the path differs.
         """
-        return LaneTranscript.roof_for(self._train_root)
+        return (self._train_root / self._spec.logs_dir).resolve()
 
     def lane_log_path(self) -> Path:
-        """The declared single run transcript (``kaggle.files.lane_log``)."""
-        return LaneTranscript.path_for(self._train_root)
+        """The declared laya run transcript (``laya.logs_dir``/``laya.lane_log``)."""
+        return (self.lane_logs_dir() / self._spec.lane_log).resolve()
 
     def _stamp(self) -> str:
         """Bracketed Europe/Paris (CET/CEST) wall-clock prefix.
@@ -75,14 +76,14 @@ class LayaRuntimeFactory:
         return f"{datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z}"
 
     def log_lane(self, line: str) -> None:
-        """Timestamped lane logging into the ONE shared kaggle transcript.
+        """Timestamped lane logging into the laya run transcript.
 
-        Same truncate-at-run-start/append-after semantics as the ER writer —
-        one class owns the gate, so a laya process and an ER writer in the same
-        run can never truncate each other's lines.
+        Same ``LaneTranscript`` writer and truncate-at-run-start/append-after
+        semantics as the ER lane, but on the laya roof; the per-path gate means
+        the kaggle and laya transcripts never truncate each other.
         """
-        LaneTranscript.from_config(
-            self._train_root, lane="laya-lane", stamp=self._bare_stamp,
+        LaneTranscript(
+            self.lane_log_path(), lane="laya-lane", stamp=self._bare_stamp,
         ).write(line)
 
     def log_local(self, line: str) -> None:

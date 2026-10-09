@@ -364,6 +364,11 @@ kaggle:
 # smoke never trains on the production corpus nor overwrites the production
 # kernel.
 laya:
+  # The laya lane's OWN run transcript roof + filename: the launched run's
+  # live console lands in logs/laya/lane.log (streamed from the canonical
+  # reader), distinct from the kaggle lane's logs/kaggle/lane.log.
+  logs_dir: "logs/laya"
+  lane_log: "lane.log"
   finetune_smoke:
     kernel_slug: "fbarulli/er-laya-finetune-smoke"
     dataset_slug: "fbarulli/er-laya-train-smoke"

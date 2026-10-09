@@ -321,6 +321,12 @@ class LayaSpec(BaseModel):
     # Staging root (TRAIN_ROOT-relative). Receipts land under
     # results/laya_lane/<kind>/<op>/...
     staging_dir: str = "results/laya_lane"
+    # The laya lane's OWN run transcript roof + filename (TRAIN_ROOT-relative):
+    # the launched run's live console lands in logs/laya/lane.log, streamed from
+    # the canonical reader, so it is tail-able independent of the kaggle lane's
+    # transcript. ONE writer (``LaneTranscript``) serves both roofs.
+    logs_dir: str = "logs/laya"
+    lane_log: str = "lane.log"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
     # The fine-tune/eval kernels' pin (the version their flags + the PERF/

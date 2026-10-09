@@ -35,17 +35,19 @@ def lane_log(lane: str, name: str) -> Path:
 class LaneTranscript:
     """The ONE run transcript every kaggle-family lane appends to.
 
-    The path is declared once in config (``kaggle.logs_dir`` +
-    ``kaggle.files.lane_log``); both the ER lane and the laya lane write their
-    whole run — staging, watcher status, streamed kernel output, reconnect
-    diagnostics, fetch/stop results — into that single file. The first write of
-    a process truncates it (one transcript per run); later writes append, and a
-    detached child (``ER_KAGGLE_LANE_APPEND=1``) always appends so it never
-    wipes its parent's transcript.
+    Each lane declares its own roof in config — the ER lane ``kaggle.logs_dir``
+    + ``kaggle.files.lane_log``, the laya lane ``laya.logs_dir`` +
+    ``laya.lane_log`` — and writes its whole run (staging, watcher status,
+    streamed kernel output, reconnect diagnostics, fetch/stop results) into
+    that file. The first write to a given path in a process truncates it (one
+    transcript per run, per roof); later writes append, and a detached child
+    (``ER_KAGGLE_LANE_APPEND=1``) always appends so it never wipes its parent's
+    transcript. Keying the gate by path keeps the kaggle and laya roofs from
+    truncating each other.
     """
 
-    #: Process-wide gate: the first write opens with "w", the rest with "a".
-    _started = False
+    #: Process-wide gate: the first write to a path opens "w", later ones "a".
+    _started: set[Path] = set()
 
     def __init__(self, path: Path, *, lane: str, stamp: Callable[[], str]):
         self._path = path
@@ -84,10 +86,10 @@ class LaneTranscript:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
-            mode = "a" if (LaneTranscript._started or append) else "w"
+            mode = "a" if (self._path in LaneTranscript._started or append) else "w"
             with self._path.open(mode, encoding="utf-8") as handle:
                 handle.write(f"{stamp} {line}\n")
-            LaneTranscript._started = True
+            LaneTranscript._started.add(self._path)
         except OSError as error:
             print(f"[{self._lane}] lane.log write failed ({error}); continuing\n"
                   f"{traceback.format_exc()}", flush=True)

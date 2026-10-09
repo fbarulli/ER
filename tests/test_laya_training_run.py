@@ -58,10 +58,10 @@ def test_teardown_stops_then_deletes_in_dry_run(monkeypatch, tmp_path):
 def test_launch_streams_the_run_log_into_the_declared_transcript(
         monkeypatch, tmp_path):
     """The launch path writes the run's live console to the config-declared
-    local transcript (W&B primary), continuously — not only into W&B.
+    ``logs/laya/lane.log`` (W&B primary), continuously — not only into W&B.
 
-    The path is the ONE ``kaggle.logs_dir`` / ``kaggle.files.lane_log`` SSOT, so
-    the owner can ``tail -f`` it while the remote run is live.
+    The path is the ``laya.logs_dir`` / ``laya.lane_log`` SSOT, so the owner can
+    ``tail -f`` it while the remote run is live.
     """
     import json
 
@@ -104,6 +104,6 @@ def test_launch_streams_the_run_log_into_the_declared_transcript(
                       run_tag="laya_hpo_1", execute=True)
 
     assert plan["watch"]["kernel"] == "owner/er-laya-hpo"
-    transcript = tmp_path / "logs" / "kaggle" / "lane.log"
-    assert transcript.is_file(), "the launch must create the local run log"
+    transcript = tmp_path / "logs" / "laya" / "lane.log"
+    assert transcript.is_file(), "the launch must create logs/laya/lane.log"
     assert "epoch 1 loss=0.1" in transcript.read_text(encoding="utf-8")
