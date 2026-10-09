@@ -48,7 +48,12 @@ def test_changed_fingerprint_rebuilds_the_cache(tmp_path,monkeypatch):
 
 @pytest.mark.parametrize('changed',['csv','config','parser','frame'])
 def test_real_fingerprint_rebuilds_on_each_kind_of_change(tmp_path,monkeypatch,changed):
-    """Every kind of changed input rebuilds the payload instead of failing."""
+    """Every kind of changed input rebuilds the payload instead of failing.
+
+    The reuse key is STRUCTURAL (file bytes, frame shape), which is why a
+    same-size rewrite is the accepted blind spot: each case below changes the
+    size the key reads, so the rebuild is proven without content hashing.
+    """
     import core.common as common
     import pipeline
     files={}
@@ -68,7 +73,9 @@ def test_real_fingerprint_rebuilds_on_each_kind_of_change(tmp_path,monkeypatch,c
     assert len(builds)==1, 'an unchanged input tree reuses the cached payload'
     if changed=='csv':files['canonical_records'].write_text('changed')
     elif changed=='config':config.write_text('setting: changed\n')
-    elif changed=='parser':parser.write_text('version = 2\n')
-    else:frame.loc[0,'sku_name_eng']='juice'
+    # A same-size rewrite is invisible to a structural key; these two change the
+    # bytes the key reads (the parser file's length, the frame's row count).
+    elif changed=='parser':parser.write_text('version = 2\n# newer parser\n')
+    else:frame.loc[len(frame)]=['mineral-water',None]
     load_base_data(frame,cache_path=path)
     assert len(builds)==2, f'a changed {changed} input must rebuild the payload'
