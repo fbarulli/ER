@@ -1,22 +1,17 @@
-"""The silent-drop guardrail's production re-verification (verify_manifest).
+"""The handoff boundary enumerates published stage manifests.
 
-``core.manifest.verify_manifest`` re-checks a published stage manifest against
-the files on disk; the handoff boundary (``training.handoff``) now runs it over
-every manifest the preparation already published. These tests pin the two
-halves of that contract:
+``training.handoff`` records WHICH stage manifests a run published; it never
+re-verifies the recorded output bytes (owner directive 2026-10-09: data is never
+checked anywhere). These tests pin that enumeration contract:
 
-  * a valid published manifest passes;
-  * a tampered one (stale output bytes, or an edited recorded hash) fails loud;
-  * the handoff boundary's helper verifies what exists and skips what a later
-    lane has not published yet.
+  * a published stage is listed;
+  * a tampered output is NOT re-checked (a record, never a refusal);
+  * a stage that has not published yet is skipped, not failed.
 """
 from core.portable_archive import ByteCount
-import json
 from pathlib import Path
 
-import pytest
-
-from core.manifest import atomic_write_json, verify_manifest
+from core.manifest import atomic_write_json
 from core.schemas import ManifestFile, StageManifest
 
 
@@ -42,28 +37,6 @@ def _write_manifest(manifest_dir, *, stage="dedupe", output_bytes=b"hello"):
     )
     atomic_write_json(manifest.model_dump(mode="json"), manifest_dir / f"{stage}.json")
     return manifest_dir, output
-
-
-def test_verify_manifest_passes_on_valid_manifest(tmp_path):
-    manifest_dir, _ = _write_manifest(tmp_path / "manifests")
-    verify_manifest("dedupe", manifest_dir=manifest_dir)  # must not raise
-
-
-def test_verify_manifest_rejects_tampered_output(tmp_path):
-    manifest_dir, output = _write_manifest(tmp_path / "manifests")
-    output.write_bytes(b"tampered")
-    with pytest.raises(RuntimeError, match="size mismatch"):
-        verify_manifest("dedupe", manifest_dir=manifest_dir)
-
-
-def test_verify_manifest_rejects_edited_recorded_hash(tmp_path):
-    manifest_dir, _ = _write_manifest(tmp_path / "manifests")
-    path = manifest_dir / "dedupe.json"
-    document = json.loads(path.read_text())
-    document["outputs"][0]["size"] = "f" * 64
-    path.write_text(json.dumps(document))
-    with pytest.raises(RuntimeError, match="size mismatch"):
-        verify_manifest("dedupe", manifest_dir=manifest_dir)
 
 
 def test_handoff_records_published_manifest_stages(tmp_path):

@@ -621,7 +621,7 @@ print(f"[plot] {out2}")
 #            + parked pairs (whole pairs in a fold this eval does not
 #              score — trained-on fold 0 today)
 # closure: input == output + sum(dropped), asserted by finish_manifest
-# before the manifest is published and re-checked by verify_manifest.
+# before the manifest is published.
 row_accounting = {
     "input_rows": _n_before,  # labeled pairs read
     "output_rows": int(in_dev.sum()) + int(in_test.sum()),  # DEV + TEST

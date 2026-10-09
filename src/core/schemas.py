@@ -5447,7 +5447,7 @@ class StageManifest(BaseModel):
     status "complete" IS the stage's completion marker; a crashed stage
     leaves at most the previous run's manifest plus .tmp-* residue.
 
-    Closure invariant (enforced by finish_manifest and verify_manifest):
+    Closure invariant (enforced by finish_manifest at publish time):
     row_accounting.input_rows == output_rows + sum(dropped.values()).
     """
 

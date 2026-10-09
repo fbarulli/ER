@@ -441,11 +441,10 @@ def _published_manifest_stages(manifest_dir: str | Path) -> dict[str, list[str]]
     """Record which stage manifests this run published.
 
     Data is never checked (owner directive 2026-10-09): the published manifest
-    files are enumerated as a record, never re-verified against output bytes
-    (``core.manifest.verify_manifest`` is no longer called here). A stage whose
-    manifest is absent is left alone: at this boundary a missing marker means
-    the stage never published one (later lanes such as ``evaluate_models``/
-    ``zero_shot_sims`` run after the handoff).
+    files are enumerated as a record, never re-verified against output bytes.
+    A stage whose manifest is absent is left alone: at this boundary a missing
+    marker means the stage never published one (later lanes such as
+    ``evaluate_models``/``zero_shot_sims`` run after the handoff).
     """
     from core.common import training_cfg
     published = [

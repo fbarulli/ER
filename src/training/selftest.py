@@ -2327,10 +2327,8 @@ def oracle_manifest() -> None:
         finished" a sound marker);
       * the LIVE results/manifests/dedupe.json — read_manifest parses
         it against StageManifest, status is "complete", row
-        accounting closes (input == output + Σ dropped), the census
-        is pinned tolerance-free (oracle_pinned_counts convention),
-        and verify_manifest("dedupe") re-hashes every output on disk
-        and passes.
+        accounting closes (input == output + Σ dropped) and the census
+        is pinned tolerance-free (oracle_pinned_counts convention).
 
     Three-state live-manifest semantics (results/ is a gitignored
     runtime tree — a fresh clone runs the selftest only after a
@@ -2353,7 +2351,7 @@ def oracle_manifest() -> None:
     from pydantic import ValidationError
 
     from core.common import F, RESULTS, _path, training_cfg
-    from core.manifest import atomic_write, read_manifest, verify_manifest
+    from core.manifest import atomic_write, read_manifest
     from core.schemas import ManifestFile, StageManifest
 
     # ── pin 1: the StageManifest schema contract (synthetic, in-memory) ──
@@ -2492,13 +2490,6 @@ def oracle_manifest() -> None:
         and all(key in ra for key in deferred_keys),
         f"got tiers {sorted(dropped)}, keys {sorted(ra)}",
     )
-    try:
-        verify_manifest("dedupe")
-        check("verify_manifest('dedupe') passes on the live manifest", True)
-    except Exception as e:  # noqa: BLE001
-        check(
-            "verify_manifest('dedupe') passes on the live manifest", False, str(e)
-        )
     removals_path = RESULTS / F["removals"]
     try:
         removals = pd.read_csv(removals_path, dtype={"sku_id": str})
