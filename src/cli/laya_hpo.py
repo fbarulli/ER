@@ -888,17 +888,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--space", type=Path, default=None,
                         help="search-space YAML (default: the SSOT config)")
     args = parser.parse_args(argv)
-    stage = globals()[STAGE_DISPATCH[args.lane]]
-    receipt = stage(
-        revision=args.revision, run_tag=args.run_tag,
-        generation_id=args.generation_id, n_trials=args.n_trials,
-        n_jobs=args.n_jobs, space_config=args.space)
+    # The ONE owner composes the study/staging/push lifecycle; this entry point
+    # is a thin argparse shell over it (no ad-hoc assembly here).
+    from cli.laya_training_run import LayaRunKind, LayaTrainingRunFactory
+
+    run = LayaTrainingRunFactory.from_config()
+    receipt = run.stage(
+        LayaRunKind.HPO, lane=args.lane, revision=args.revision,
+        run_tag=args.run_tag, generation_id=args.generation_id,
+        n_trials=args.n_trials, n_jobs=args.n_jobs, space_config=args.space)
     print(json.dumps(receipt, indent=2, default=str), flush=True)
     if args.execute:
         if args.lane != "kaggle":
             raise SystemExit("--execute is a kaggle-lane operation")
-        plan = laya_lane.push_kaggle_kernel(Path(receipt["staged"]),
-                                            execute=True)
+        plan = run.push(Path(receipt["staged"]), execute=True)
         print(json.dumps(plan, indent=2, default=str), flush=True)
     return 0
 

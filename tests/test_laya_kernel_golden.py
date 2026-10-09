@@ -25,8 +25,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from core.common import training_cfg as _tcfg
 from core.laya_config import LayaSpec
 from cli import laya_lane
