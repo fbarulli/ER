@@ -133,7 +133,8 @@ def published_tip(repository: str, branch: str) -> str:
     if fetch.returncode != 0:
         raise RuntimeError(
             f'git fetch origin {branch} failed in {TRAIN_ROOT}: '
-            f'{fetch.stderr.strip()}')
+            f'{fetch.stderr.strip()}. Publish the run branch (git push -u '
+            f'origin {branch}) or check out a published branch and re-stage.')
     parse = subprocess.run(
         ['git', 'rev-parse', f'origin/{branch}'], cwd=TRAIN_ROOT,
         capture_output=True, text=True)
@@ -142,6 +143,65 @@ def published_tip(repository: str, branch: str) -> str:
             f'git rev-parse origin/{branch} failed in {TRAIN_ROOT}: '
             f'{parse.stdout.strip()}{parse.stderr.strip()}')
     return parse.stdout.strip()
+
+
+def current_branch() -> str:
+    """The branch checked out in ``TRAIN_ROOT`` (``''`` on a detached HEAD).
+
+    The run's own branch, so a staging surface can decide whether publishing is
+    even possible here — never a name whose checkout belongs to someone else.
+    """
+    import subprocess
+
+    from core.common import TRAIN_ROOT
+
+    result = subprocess.run(
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=TRAIN_ROOT,
+        capture_output=True, text=True)
+    branch = result.stdout.strip()
+    return branch if result.returncode == 0 and branch != 'HEAD' else ''
+
+
+def publish_run_branch(repository: str, branch: str) -> bool:
+    """Publish the checked-out run branch to origin when origin lacks it.
+
+    A run stages from the branch it is checked out on, but a branch that was
+    never pushed can neither be fetched by the tip gate nor cloned by the remote
+    kernel (``couldn't find remote ref``). Create ``origin/<branch>`` from the
+    checked-out HEAD — a fast-forward by construction — so the pin and the
+    remote clone see the same revision. An existing branch is never rewritten
+    here (the tip gate owns the revision verdict), and only the checked-out
+    branch is ever pushed. Returns whether a push happened; an unpublishable
+    branch fails loud with the full stderr and the exact command to run.
+    """
+    import subprocess
+
+    from core.common import TRAIN_ROOT
+
+    probe = subprocess.run(
+        ['git', 'ls-remote', '--exit-code', '--heads', 'origin', branch],
+        cwd=TRAIN_ROOT, capture_output=True, text=True)
+    if probe.returncode == 0:
+        return False
+    if probe.returncode != 2:
+        raise RuntimeError(
+            f'git ls-remote origin {branch} failed in {TRAIN_ROOT}: '
+            f'{probe.stderr.strip()}')
+    checked = current_branch()
+    if checked != branch:
+        raise RuntimeError(
+            f'run branch {branch!r} is not published on origin and is not the '
+            f'checked-out branch ({checked or "detached HEAD"}); check it out, '
+            f'or publish it with `git push -u origin {branch}`, then re-stage')
+    push = subprocess.run(
+        ['git', 'push', 'origin', f'HEAD:refs/heads/{branch}'], cwd=TRAIN_ROOT,
+        capture_output=True, text=True)
+    if push.returncode != 0:
+        raise RuntimeError(
+            f'failed to publish run branch {branch!r} in {TRAIN_ROOT}: '
+            f'{push.stderr.strip()}. Publish it with `git push -u origin '
+            f'{branch}`, then re-stage.')
+    return True
 
 
 def require_published_tip_match(head: str, repository: str, branch: str) -> str:

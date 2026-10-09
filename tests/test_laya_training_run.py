@@ -26,6 +26,8 @@ def _stub_lane_boundary(monkeypatch, tmp_path):
     monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
     from core import runtime_inputs
 
+    monkeypatch.setattr(runtime_inputs, "publish_run_branch",
+                        lambda repo, branch: False)
     monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
                         lambda rev, repo, branch: rev)
 

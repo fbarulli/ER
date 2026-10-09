@@ -668,6 +668,10 @@ class LayaHpoStager:
         revision = self.revision or laya_lane._git_revision()
         from core import runtime_inputs
 
+        # HPO stages from the branch it runs on; publish it first when origin
+        # does not have it (a never-pushed run branch), so the tip gate and the
+        # remote clone below can both resolve it.
+        runtime_inputs.publish_run_branch(repository, branch)
         tip = runtime_inputs.require_published_tip_match(
             revision, repository, branch)
         return repository, branch, revision, tip
