@@ -55,7 +55,7 @@ class ColabCPULaneProvision:
         root = TRAIN_ROOT.resolve()
         checkout_paths = (
             Path(resolve_model(training_cfg().training.base_model)),
-            TRAIN_ROOT / "data/prepared/smoke_200",
+            TRAIN_ROOT / training_cfg().colab.data_bundle.setup_dir,
             TRAIN_ROOT / export,
         )
         return tuple(
