@@ -408,6 +408,7 @@ def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch", lambda *a, **kw: {})
     import importlib
     monkeypatch.setattr(importlib.import_module("core.runtime_inputs"),
                         "staged_kernel_preflight", lambda stage_dir: None)
