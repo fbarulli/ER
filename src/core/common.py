@@ -38,7 +38,12 @@ from core.step_trace import timed
 log = RunLogger(__name__)
 
 def _find_project_root() -> Path:
-    """Locate the project from stable markers, never a magic parent offset."""
+    """Locate the project from stable markers, never a magic parent offset.
+
+    ``EUROMONITOR_TRAIN_ROOT`` (the canonical, checkout-independent data/log
+    root) is honored here via core.project_root, so a lane launched from a
+    worktree still writes ``logs/laya/lane.log`` at the canonical root.
+    """
     from core.project_root import find_project_root
 
     return find_project_root(Path(__file__).resolve())

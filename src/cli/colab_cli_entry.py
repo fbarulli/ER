@@ -18,17 +18,20 @@ def _find_project_root() -> Path:
 
     Must stay self-contained: this wrapper is launched with the Colab CLI's
     own interpreter, which has neither the repo on sys.path nor its deps, so
-    core.common/TRAIN_ROOT cannot be imported here.
+    core.common/TRAIN_ROOT cannot be imported here. The env overrides mirror
+    core.project_root: ``EUROMONITOR_TRAIN_ROOT`` (canonical, wins) then
+    ``EUROMONITOR_PROJECT_ROOT``.
     """
-    override = os.environ.get("EUROMONITOR_PROJECT_ROOT")
-    if override:
-        root = Path(override).expanduser().resolve()
-        if (root / "config").is_dir() and (root / "pyproject.toml").is_file():
-            return root
-        raise RuntimeError(
-            "EUROMONITOR_PROJECT_ROOT must contain config/ and pyproject.toml: "
-            f"{root}"
-        )
+    for var in ("EUROMONITOR_TRAIN_ROOT", "EUROMONITOR_PROJECT_ROOT"):
+        override = os.environ.get(var)
+        if override:
+            root = Path(override).expanduser().resolve()
+            if (root / "config").is_dir() and (root / "pyproject.toml").is_file():
+                return root
+            raise RuntimeError(
+                f"{var} must contain config/ and pyproject.toml: "
+                f"{root}"
+            )
     for candidate in Path(__file__).resolve().parents:
         if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
             return candidate

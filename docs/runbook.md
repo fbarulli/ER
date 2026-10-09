@@ -26,6 +26,11 @@ Standing rules that live in both lane docs, summarized once here:
   plus receipt; if you find an open session, the lane's `stop` op closes it.
 - **Timestamps**: UTC → none. Log stamps are Europe/Paris CET/CEST; logs
   live under `logs/<lane>/` (one roof; receipts stay under `results/`).
+- **Canonical root**: `EUROMONITOR_TRAIN_ROOT` names the canonical data/log
+  root. Export it (`EUROMONITOR_TRAIN_ROOT=/home/opc/ONE/ER`) so a run
+  launched from any checkout writes `logs/laya/lane.log` under the canonical
+  root instead of the scratch checkout. Training worktrees live under
+  `<canonical>/.worktrees/<name>` — never `/tmp`.
 
 ## Preparation
 
@@ -73,6 +78,7 @@ PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
 | Env var | Effect |
 |---|---|
 | `COLAB_GPU` | overrides the full-run runtime |
+| `EUROMONITOR_TRAIN_ROOT` | canonical data/log root; checkout-independent, overrides the file-derived root |
 | `EUROMONITOR_COLAB_SESSION` | per-launch session name, no YAML edit |
 | `WANDB_API_KEY` | only needed for online tracking |
 | `EUROMONITOR_NEGATIVE_SUPPLY_SPEC` | JSON spec for mining and discriminator thresholds |
