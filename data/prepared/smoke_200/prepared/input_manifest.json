@@ -1,21 +1,21 @@
 {
   "augmentation": "shared frozen text objective; masked, swapped and counterfactual endpoints retained",
-  "catalog_sha256": "0f379ae237fa964b4211d7e8fd0e18eff5dbfbaa7d51ff50beb524f8a76916c1",
+  "catalog_size": 149579,
   "excluded_model_inputs": [
     "gtin",
     "verified identity edges",
     "raw text"
   ],
   "feature_scope": "derived from core.sku_identity.graph_schema; every extractor descriptor is a model input",
-  "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
+  "identity_dimensions_size": 2081,
   "identity_extractor": "core.sku_identity.row_identity",
-  "identity_policy_sha256": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
-  "listings_sha256": "c8e0a97b3db2334ba40ae4c01b0e3a9fdc6718edb66534dd504b5879e5ea9996",
+  "identity_policy_size": 74172,
+  "listings_size": 127995,
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pair_lineage_sha256": "38b7b5a524ef172c2ca989902fad6c73348d971f61e956653eb642755d0d2dac",
+  "pair_lineage_size": 7646,
   "pair_trace": {
     "missing_axes": [
       "difficulty",
@@ -26,7 +26,7 @@
     "source_trace_columns": [],
     "status": "unknown: no source lineage supplied"
   },
-  "pairs_sha256": "42b9dd8acac820abd948b3b7264cd7ab40d1c7f9d7145323b31c399bbaf1e3ea",
+  "pairs_size": 1870,
   "relations": [
     "brand",
     "flavor",
@@ -38,9 +38,9 @@
     "package_type",
     "package_material"
   ],
-  "report_attributes_sha256": "ef4a93884bb80fd9e6852950cfb7152c718c4547d5295792a69820e55ee0a989",
+  "report_attributes_size": 45080,
   "schema": "er-graph-inputs-v1",
-  "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
-  "shared_training_projection_sha256": "dbf91b587d584846046473c56ee7161650ad24c28007d79eec11e8ee371db366",
-  "splits_sha256": "3b87920f64af1fb38db05e9949181a39402c09b43130944b970100044789b7bf"
+  "shared_training_data_size": 5439,
+  "shared_training_projection_size": 2580,
+  "splits_size": 3582
 }

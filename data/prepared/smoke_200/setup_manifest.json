@@ -30,6 +30,7 @@
   "schema": "er-track-setup-v1",
   "seed": 42,
   "shared_training_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
+  "shared_training_data_size": 5439,
   "skipped_labels": {
     "cross_split_negative": 351,
     "untrusted_identity_chain_listings": 3594

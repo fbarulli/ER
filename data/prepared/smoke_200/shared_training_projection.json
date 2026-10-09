@@ -1,5 +1,5 @@
 {
-  "clean_evaluation_pairs_sha256": "ade36b7799083ab85ca46ef4476e8b1685115be6cd9529f8c15d14e6c19e485a",
+  "clean_evaluation_pairs_size": 1624,
   "context_policy": "clean training catalog plus shared active endpoints; supervision only shared examples",
   "endpoint_indices": [
     0,
@@ -47,7 +47,7 @@
     11,
     12
   ],
-  "listings_sha256": "c8e0a97b3db2334ba40ae4c01b0e3a9fdc6718edb66534dd504b5879e5ea9996",
+  "listings_size": 127995,
   "node_map": {
     "0": "50518353",
     "105": "1054347099",
@@ -79,9 +79,8 @@
     "90": "1033449824",
     "980": "canonical:3450970138567"
   },
-  "pairs_sha256": "42b9dd8acac820abd948b3b7264cd7ab40d1c7f9d7145323b31c399bbaf1e3ea",
+  "pairs_size": 1870,
   "schema": "er-shared-graph-training-v1",
-  "shared_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
   "track_bindings": {
     "gnn_only": {
       "endpoint_indices": [
@@ -130,17 +129,16 @@
         11,
         12
       ],
-      "shared_data_sha256": "8eea35193b50190d030ffaffda5aef6c49aa3a1e9366d546540e5a14a4c98a4c",
       "track": "gnn_only"
     }
   },
-  "train_pair_order_sha256": "ab42d7ac5f337cd00f5aef59108b8768d6dd5f934e55ee18d0e9e94b4f0ef4ac",
+  "train_pair_order_size": 3113,
   "train_pair_rows": 26,
   "virtual_counts": {
     "added_listing": 0,
-    "augmentation": 6,
-    "canonical": 4,
-    "superseded_clean_train_pairs": 14,
+    "augmentation": 0,
+    "canonical": 0,
+    "superseded_clean_train_pairs": 26,
     "unmeasured_report_fields": 0
   }
 }

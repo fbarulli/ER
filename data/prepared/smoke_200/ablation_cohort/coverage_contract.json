@@ -2,7 +2,7 @@
   "dimensions": {
     "attribute": {
       "counts": {
-        "unknown": 321
+        "unknown": 333
       },
       "policy": "not_applicable",
       "reason": "the cohort frame carries no attribute column: pairs are stratified by population/scope/difficulty/split, and the per-attribute axis is measured separately by training.attribute_separation",
@@ -13,7 +13,7 @@
         "easy": 64,
         "hard": 56,
         "medium": 166,
-        "unknown": 35
+        "unknown": 47
       },
       "policy": "partition",
       "reason": null,
@@ -24,7 +24,7 @@
         "bundle_diagnostic": 234,
         "heldout": 20,
         "mint_diagnostic": 27,
-        "training_diagnostic": 40
+        "training_diagnostic": 52
       },
       "policy": "partition",
       "reason": null,
@@ -36,7 +36,7 @@
         "hard_negative": 10,
         "masked": 2,
         "positive": 17,
-        "real": 34,
+        "real": 46,
         "real_bundle": 234,
         "twin": 10
       },
@@ -49,7 +49,7 @@
         "dev": 75,
         "mixed": 4,
         "test": 69,
-        "train": 173
+        "train": 185
       },
       "policy": "partition",
       "reason": null,
@@ -346,13 +346,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "dev"
+          "train"
         ]
       },
       "record_id": "clean:14"
@@ -366,13 +366,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "dev"
+          "train"
         ]
       },
       "record_id": "clean:15"
@@ -386,13 +386,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "test"
+          "train"
         ]
       },
       "record_id": "clean:16"
@@ -406,13 +406,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "dev"
+          "train"
         ]
       },
       "record_id": "clean:17"
@@ -426,13 +426,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "dev"
+          "train"
         ]
       },
       "record_id": "clean:18"
@@ -446,13 +446,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "test"
+          "train"
         ]
       },
       "record_id": "clean:19"
@@ -466,13 +466,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "test"
+          "train"
         ]
       },
       "record_id": "clean:20"
@@ -486,13 +486,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "test"
+          "train"
         ]
       },
       "record_id": "clean:21"
@@ -506,13 +506,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "dev"
+          "train"
         ]
       },
       "record_id": "clean:22"
@@ -526,13 +526,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "test"
+          "train"
         ]
       },
       "record_id": "clean:23"
@@ -546,13 +546,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "test"
+          "train"
         ]
       },
       "record_id": "clean:24"
@@ -566,13 +566,13 @@
           "unknown"
         ],
         "evaluation_scope": [
-          "heldout"
+          "training_diagnostic"
         ],
         "population": [
           "real"
         ],
         "split": [
-          "dev"
+          "train"
         ]
       },
       "record_id": "clean:25"
@@ -612,7 +612,7 @@
           "real"
         ],
         "split": [
-          "test"
+          "dev"
         ]
       },
       "record_id": "clean:27"
@@ -732,10 +732,250 @@
           "real"
         ],
         "split": [
-          "dev"
+          "test"
         ]
       },
       "record_id": "clean:33"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:34"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:35"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:36"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:37"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:38"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:39"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:40"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:41"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:42"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:43"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "test"
+        ]
+      },
+      "record_id": "clean:44"
+    },
+    {
+      "dimensions": {
+        "attribute": [
+          "unknown"
+        ],
+        "difficulty": [
+          "unknown"
+        ],
+        "evaluation_scope": [
+          "heldout"
+        ],
+        "population": [
+          "real"
+        ],
+        "split": [
+          "dev"
+        ]
+      },
+      "record_id": "clean:45"
     },
     {
       "dimensions": {
