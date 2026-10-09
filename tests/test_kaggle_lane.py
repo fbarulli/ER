@@ -1104,6 +1104,46 @@ def test_kernel_logs_reads_the_kaggle_api_into_the_one_transcript(tmp_path, monk
     assert handle.read_text().strip() == "123456"
 
 
+# ── W&B real-time reader: the primary live tracking source ──────────────────
+
+def test_wandb_run_reader_reads_live_metrics_and_console(monkeypatch):
+    """The primary tracking source resolves the run by project/run_tag and
+    returns the latest metrics plus the live console output (no network)."""
+    import io
+
+    from core.wandb_ctx import WandbRunReader
+
+    class FakeFile:
+        def download(self, replace=True):
+            return io.StringIO("epoch 1 loss=0.5\n")
+
+    class FakeRun:
+        state = "running"
+        summary = {"loss": 0.5, "accuracy": 0.9}
+
+        def file(self, name):
+            assert name == "output.log"
+            return FakeFile()
+
+    class FakeApi:
+        def __init__(self):
+            self.paths: list[str] = []
+
+        def run(self, path):
+            self.paths.append(path)
+            return FakeRun()
+
+    api = FakeApi()
+    reader = WandbRunReader(run_tag="laya_123", project="e-r",
+                            poll_seconds=15.0, api=api)
+    update = reader.read_once()
+    assert api.paths == ["e-r/laya_123"]
+    assert update["state"] == "running"
+    assert update["metrics"] == {"loss": 0.5, "accuracy": 0.9}
+    assert "epoch 1 loss=0.5" in update["output"]
+    assert update["console_error"] is None
+
+
 # ── session-id capture: launch path records the id, stop consumes it ────────
 
 def _fake_stream_client(monkeypatch, url: str, closed: list[str]):

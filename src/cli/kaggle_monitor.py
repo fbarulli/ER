@@ -1,6 +1,7 @@
 """Detached supervision, live progress, and terminal harvesting."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
@@ -386,6 +387,46 @@ class KaggleMonitor:
                         f"log read for {slug} failed after {attempts} attempts: "
                         f"{type(error).__name__}: {error}") from error
                 time.sleep(delay)
+
+    @staticmethod
+    def track_run(*, run_tag: str | None, slug: str | None = None,
+                  follow: bool = True, log_path: Path | None = None,
+                  max_polls: int | None = None) -> dict[str, Any]:
+        """Track a run from the REAL-TIME W&B source, kaggle-logs as fallback.
+
+        W&B is the primary live source (Kaggle's log stream is throttled); when
+        no ``run_tag``/``WANDB_API_KEY`` is available it degrades to the ONE
+        kaggle-logs path for ``slug``. The wandb console is appended to the
+        transcript and the latest metrics/state are logged each poll.
+        """
+        from cli import kaggle_lane as lane
+        from core.wandb_ctx import WandbRunReader
+
+        if run_tag and WandbRunReader.available():
+            reader = WandbRunReader(run_tag=run_tag)
+            destination = log_path or lane.lane_log_path()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            plan: dict[str, Any] = {
+                "source": "wandb", "run": reader.path, "kernel": slug,
+                "poll_seconds": reader.poll_seconds,
+            }
+            for update in reader.stream(max_polls=max_polls or lane._spec().limits.max_polls):
+                if update.get("new_output"):
+                    KaggleMonitor._append_log(
+                        destination, reader.path, update["new_output"])
+                lane._log_lane(
+                    f"[{reader.path}] state={update['state']} "
+                    f"metrics={json.dumps(update['metrics'], default=str)[:400]}")
+                plan["state"] = update["state"]
+                plan["metrics"] = update["metrics"]
+                if update.get("console_error"):
+                    plan["console_error"] = update["console_error"]
+            return plan
+        if not slug:
+            raise RuntimeError(
+                "no WANDB_API_KEY/run_tag for real-time tracking and no kernel "
+                "slug for the kaggle-logs fallback")
+        return KaggleMonitor.kernel_logs(slug, follow=follow, log_path=log_path)
 
     @staticmethod
     def clear_kernel_session_id(slug: str) -> None:
