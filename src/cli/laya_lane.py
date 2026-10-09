@@ -32,9 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -376,10 +374,15 @@ def push_kaggle_kernel(stage_dir: Path, *, execute: bool,
         stage_dir, execute=execute, activate=activate)
 
 
-def collect_kaggle_result(decision_kind: str, slug: str, *,
+def collect_kaggle_result(kind: str, slug: str | None = None, *,
                           execute: bool = False) -> dict[str, Any]:
     return _transport_factory().collect_kaggle_result(
-        decision_kind, slug, execute=execute)
+        kind, slug, execute=execute)
+
+
+def watcher(kind: str, *, slug: str | None = None):
+    """The consolidated detached watcher for a laya decision kind."""
+    return _transport_factory().watcher(kind, slug=slug)
 
 
 # ── local eval surface ─────────────────────────────────────────────────────
@@ -449,35 +452,6 @@ class LayaLane:
 
 
 # ── main ───────────────────────────────────────────────────────────────────
-def _spawn_stream_follower(slug: str) -> None:
-    """Follow a pushed kernel's live session log into the laya lane transcript.
-
-    The laya lane otherwise has no visibility into the remote session (it never
-    opens a stream), so the training tqdm never reaches ``logs/laya/lane.log``.
-    This spawns the kaggle lane's SSE follower against the pushed slug so the
-    live output lands there. Detached (setsid) so a wrapper/shell death cannot
-    orphan or kill the follower.
-    """
-    from core.common import TRAIN_ROOT
-
-    log = TRAIN_ROOT / "logs/laya/lane.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    code = (
-        "from pathlib import Path\n"
-        "from cli.kaggle_lane import stream_kernel_logs\n"
-        f"stream_kernel_logs({slug!r}, log_path=Path({str(log)!r}))\n"
-    )
-    # The follower writes the transcript itself (``log_path``); discard its own
-    # stdout/stderr so its console echo cannot double-write every line into the
-    # same lane.log (the duplicate `[stream ...]` prefix regression).
-    subprocess.Popen(
-        [sys.executable, "-c", code], cwd=TRAIN_ROOT,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        env={**os.environ, "PYTHONPATH": str(TRAIN_ROOT / "src")},
-        start_new_session=True)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kind", choices=KINDS, default="kaggle")
@@ -503,6 +477,11 @@ def main() -> None:
                         help="tear down the running session for --decision's "
                              "kernel (kaggle only); the launch-recorded "
                              "session id feeds the SDK cancel")
+    parser.add_argument("--watch", action="store_true",
+                        help="run the terminal watcher for a pushed kernel: "
+                             "poll to terminal, download via `kaggle kernels "
+                             "output`, then release the session (kaggle only). "
+                             "This is the detached entry the push spawns")
     parser.add_argument("--session-id", action="store_true",
                         help="print the launch-recorded kernel session id for "
                              "--decision's kernel (or --slug); no network")
@@ -565,6 +544,17 @@ def main() -> None:
         print(json.dumps(plan, indent=2, default=str), flush=True)
         return
 
+    if args.watch:
+        # The detached terminal watcher's entry: poll to terminal, download via
+        # `kaggle kernels output` and release the session. It carries its own
+        # receipt under results/laya_lane/fetch/<kind>/.
+        if args.kind != "kaggle":
+            parser.error("--watch is a kaggle-lane operation")
+        plan = watcher(args.decision, slug=args.slug).autowatch(
+            execute=args.execute, slug=args.slug)
+        print(json.dumps(plan, indent=2, default=str), flush=True)
+        return
+
     lane = LayaLane(args.kind)
     receipt = lane.stage(args.decision, input_override=args.decision_input,
                          checkpoint_path=args.checkpoint)
@@ -581,10 +571,14 @@ def main() -> None:
         print(json.dumps(dataset_plan, indent=2), flush=True)
         push_plan = lane.push(stage_dir, execute=True)
         print(json.dumps(push_plan, indent=2), flush=True)
-        # Follow the pushed kernel's live session log into logs/laya/lane.log
-        # (the lane otherwise has no remote visibility and never shows a tqdm).
-        _spawn_stream_follower(
-            json.loads((stage_dir / "kernel-metadata.json").read_text())["id"])
+        # ONE detached terminal watcher now owns progress, download and release:
+        # it streams the run into logs/laya/lane.log, fetches the per-kind output
+        # into results/laya_lane/fetch/<kind>/ and stops the session. Its spawn
+        # is the same owner the ER lane uses, so `--execute` runs AND retrieves.
+        kernel_id = json.loads(
+            (stage_dir / "kernel-metadata.json").read_text())["id"]
+        watch_plan = watcher(args.decision, slug=kernel_id).spawn()
+        print(json.dumps(watch_plan, indent=2), flush=True)
     elif args.execute:
         _log_lane("colab payloads are a delivery contract only; nothing "
                   "to --execute")

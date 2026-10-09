@@ -340,10 +340,13 @@ class KaggleKernels:
         lane.clear_kernel_session_id(slug)
         push()
         try:
-            return lane.capture_kernel_session_id(slug)
+            captured = lane.capture_kernel_session_id(slug)
         except Exception as error:  # noqa: BLE001 - best-effort launch aid
             lane._log_lane(f"[{slug}] session-id capture skipped: {error}")
-            return {"session_id": None}
+            captured = None
+        # Normalise to a mapping: a capture owner that returns nothing still
+        # yields the documented `session_id: None` shape.
+        return captured if isinstance(captured, dict) else {"session_id": None}
 
     @staticmethod
     def _push_and_record_session(stage_dir: Path, slug: str) -> None:
@@ -704,13 +707,13 @@ class KaggleKernels:
         if not execute:
             return plan
         session_id: int | None = None
-        session_file = (lane.lane_logs_dir()
-                        / spec.files.session_id_file.format(
-                            kernel=resolved.rsplit("/", 1)[-1]))
-        try:
-            session_id = int(session_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            session_id = None
+        # The persisted handle is the session id when captured, else the kernel
+        # NAME (the launch-aid fallback). A non-numeric handle is not a session:
+        # fall through to the version-replace stub, which targets `resolved`.
+        handle = lane.recorded_kernel_handle(resolved) or ""
+        if handle.isdigit():
+            session_id = int(handle)
+        plan["handle"] = handle or None
         if session_id is not None:
             # Preferred: the SDK cancel — kills the exact recorded session.
             try:

@@ -12,9 +12,12 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cli.kaggle_kernels import KaggleKernels
+
+if TYPE_CHECKING:
+    from cli.kaggle_watcher import KernelWatcher, KernelWatcherSpec
 from cli.laya_recipe import (
     DECISION_BINDINGS,
     FINETUNE_DECISION,
@@ -72,24 +75,28 @@ class LayaTransportFactory:
         return None
 
     def recorded_session_id(self, slug: str) -> int | None:
-        """The launch-recorded session id for a pushed kernel (``None`` if none)."""
-        from cli import kaggle_lane as lane
+        """The recorded session id for a pushed kernel (``None`` if it holds
+        only the kernel-name fallback handle). ONE reader: the shared owner."""
+        from cli.kaggle_monitor import KaggleMonitor
 
         kernel = slug.rpartition("/")[2]
         if not kernel:
             raise ValueError(f"slug must be owner/slug, got {slug!r}")
-        path = (lane.lane_logs_dir()
-                / lane._spec().files.session_id_file.format(kernel=kernel))
-        try:
-            return int(path.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            return None
+        handle = KaggleMonitor.recorded_kernel_handle(slug)
+        return int(handle) if handle and handle.isdigit() else None
 
     @staticmethod
-    def stop_kaggle_kernel(slug: str, *, execute: bool,
-                           wait: bool = True) -> dict[str, Any]:
-        """First-class teardown of a pushed laya kernel's running session."""
-        return KaggleKernels.stop_kernel(slug, which="laya", execute=execute,
+    def stop_kaggle_kernel(slug: str, *, execute: bool, wait: bool = True,
+                           which: str = "laya") -> dict[str, Any]:
+        """First-class teardown of a pushed laya kernel's running session.
+
+        ``which`` is the harvest contract's slot (the watcher passes its own
+        identity); the slug is always explicit here, so it only names the stop
+        stage. The persisted handle — session id, else the kernel name — is read
+        by ``KaggleKernels.stop_kernel`` (SDK cancel when numeric, version-
+        replace fallback otherwise).
+        """
+        return KaggleKernels.stop_kernel(slug, which=which, execute=execute,
                                          wait=wait)
 
     def push_kaggle_kernel(self, stage_dir: Path, *, execute: bool,
@@ -109,48 +116,58 @@ class LayaTransportFactory:
                 f"{stage_dir} (kernel-metadata.json is missing); stage first "
                 "(--what stage-kernel)")
         LayaPayloadPreflight.verify(Path(stage_dir))
-        from cli import kaggle_lane as lane
-
         slug = json.loads(metadata_file.read_text(encoding="utf-8"))["id"]
-        # Record the session id at launch (the capture point the verified stop
-        # reads): a later stop then cancels the EXACT session via the SDK instead
-        # of a blind version replace. Drop any stale id first.
-        lane.clear_kernel_session_id(slug)
-        result = subprocess.run(argv, cwd=self._runtime.train_root,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True)
-        output = result.stdout or ""
-        rc = result.returncode
-        plan["returncode"] = rc
-        # `kaggle kernels push` returns rc=0 even on a soft error — e.g. the
-        # GPU-session quota message "Kernel push error: Maximum batch GPU session
-        # count of 2 reached" — so the exit code alone is NOT fail-loud.
-        lowered = (output or "").lower()
-        if rc != 0 or "error" in lowered or "successfully pushed" not in lowered:
-            tail = output.strip()[-4000:] or "(kaggle produced no output)"
-            raise RuntimeError(
-                f"kaggle kernels push failed (rc={rc}): {' '.join(argv)}\n"
-                f"--- kaggle output ---\n{tail}")
+
+        def run_push() -> None:
+            result = subprocess.run(argv, cwd=self._runtime.train_root,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            output = result.stdout or ""
+            plan["returncode"] = result.returncode
+            # `kaggle kernels push` returns rc=0 even on a soft error — e.g. the
+            # GPU quota message "Maximum batch GPU session count of 2 reached" —
+            # so the exit code alone is NOT fail-loud.
+            lowered = output.lower()
+            if (result.returncode != 0 or "error" in lowered
+                    or "successfully pushed" not in lowered):
+                tail = output.strip()[-4000:] or "(kaggle produced no output)"
+                raise RuntimeError(
+                    f"kaggle kernels push failed (rc={result.returncode}): "
+                    f"{' '.join(argv)}\n--- kaggle output ---\n{tail}")
+
+        # ONE clear->push->capture sequence, shared with the kaggle lane. The
+        # capture persists a usable handle: the session id when the proxy is up,
+        # else the kernel name (the persisted-name fallback), so stop/status/
+        # output are always targetable.
+        captured = KaggleKernels.push_with_session_capture(slug, run_push)
         plan["pushed"] = True
-        try:
-            captured = lane.capture_kernel_session_id(slug)
-            plan["session_id"] = captured.get("session_id")
-        except Exception as error:  # noqa: BLE001 - best-effort launch aid
-            plan["session_id"] = None
-            self._runtime.log_lane(f"[{slug}] session-id capture skipped: {error}")
-        self._runtime.log_lane(f"pushed kernel payload: {' '.join(argv)} rc=0 "
-                               f"session_id={plan.get('session_id')}")
+        plan["session_id"] = captured.get("session_id")
+        plan["handle"] = captured.get("handle")
+        self._runtime.log_lane(
+            f"pushed kernel payload: {' '.join(argv)} rc=0 "
+            f"session_id={plan.get('session_id')} handle={plan.get('handle')}")
         return plan
 
-    def collect_kaggle_result(self, decision_kind: str, slug: str, *,
+    def collect_kaggle_result(self, kind: str, slug: str | None = None, *,
                               execute: bool = False) -> dict[str, Any]:
-        """`kaggle kernels output` for a staged/decided kernel."""
+        """`kaggle kernels output` for a staged/decided kernel, then traceability.
+
+        Downloads to ``results/laya_lane/fetch/<kind>/`` via the canonical
+        ``kernels_output_argv`` + the 429-aware ``KernelOutputFetcher``. The
+        per-kind receipt name (``laya_<kind>.receipt.json``; smoke =
+        ``laya_finetune-smoke.receipt.json``) is accepted whether it rides the
+        kernel's ``laya_finetune.tar.gz`` or lands as a top-level download, so a
+        smoke and the prod kind can never be confused. The archive and every
+        top-level download (expanded checkpoint/base_model/wandb trees included)
+        are left in the stage for the harvest.
+        """
+        slug = slug or self.kernel_slug(kind)
         plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
-                                "decision_kind": decision_kind, "slug": slug}
+                                "kind": kind, "slug": slug}
         if not execute:
             self._runtime.log_lane(f"dry-run: would fetch kernel output for {slug}")
             return plan
-        stage = self._runtime.staging_dir() / "fetch" / decision_kind
+        stage = self._runtime.staging_dir() / "fetch" / kind
         if stage.exists():
             import shutil
 
@@ -177,7 +194,8 @@ class LayaTransportFactory:
         if not archives:
             raise RuntimeError(f"kaggle kernels output staged no archive "
                                f"under {stage} (slug {slug})")
-        receipt_name = f"laya_{decision_kind}.receipt.json"
+        receipt_name = f"laya_{kind}.receipt.json"
+        decisions_name = f"{kind}.decisions.jsonl"
         reports: dict[str, Any] = {}
         # ONE streaming pass: `r|*` never seeks, so the receipt, every JSON report
         # member and the per-row `<kind>.decisions.jsonl` member are consumed in a
@@ -190,7 +208,7 @@ class LayaTransportFactory:
         with tarfile.open(archives[0], "r|*") as tar:
             for member in tar:
                 members.append(member.name)
-                if member.name == receipt_name:
+                if Path(member.name).name == receipt_name:
                     payload = json.loads(tar.extractfile(member).read().decode())
                     continue
                 if not member.isfile():
@@ -203,13 +221,19 @@ class LayaTransportFactory:
                         reports[name] = json.loads(body.decode())
                     except (ValueError, UnicodeDecodeError):
                         continue
-                elif name == f"{decision_kind}.decisions.jsonl":
+                elif name == decisions_name:
                     body = tar.extractfile(member).read()
                     pending.append((name, body))
                     decision_rows = read_decision_rows(body)
+        # The kernel also writes the receipt beside the tar, so `kernels output`
+        # leaves it top-level; accept it there too (the tar member wins).
+        if payload is None:
+            receipt_file = stage / receipt_name
+            if receipt_file.is_file():
+                payload = json.loads(receipt_file.read_text(encoding="utf-8"))
         if payload is None:
             raise RuntimeError(
-                f"fetched archive {archives[0].name} carries no "
+                f"fetched archive {archives[0].name} and {stage} carry no "
                 f"{receipt_name}; the kernel receipt contract failed")
         for name, body in pending:
             (stage / name).write_bytes(body)
@@ -222,7 +246,7 @@ class LayaTransportFactory:
         # form: this plan is the printed `--fetch` document, so a pydantic model
         # left in it would make json.dumps raise TypeError.
         documents, artifacts = fetched_traceability(
-            payload, reports, decision_kind=decision_kind,
+            payload, reports, decision_kind=kind,
             decision_rows=decision_rows,
             staging_root=self._runtime.staging_dir())
         plan["traceability"] = documents
@@ -233,3 +257,68 @@ class LayaTransportFactory:
             f"archive={archives[0].name} members={len(members)} "
             f"reports={sorted(reports)} rows={len(decision_rows)}")
         return plan
+
+    def fetch_failed_result(self, kind: str, *, slug: str | None = None
+                            ) -> dict[str, Any]:
+        """Download and report a FAILED kernel's retained partial artifacts.
+
+        Mirrors ``KaggleOutputs.fetch_failed_kernel_log`` for the laya lane: a
+        missing receipt is recorded fail-closed so it never blocks the session
+        release the harvest performs next.
+        """
+        plan: dict[str, Any] = {"kind": kind, "mode": "executed",
+                                "error_log": None}
+        try:
+            plan["fetch"] = self.collect_kaggle_result(kind, slug, execute=True)
+        except (RuntimeError, FileNotFoundError, OSError) as error:
+            plan["fail_closed"] = str(error)[-800:]
+        return plan
+
+    def watcher(self, kind: str, *, slug: str | None = None) -> "KernelWatcher":
+        """The consolidated detached watcher bound to this lane's owners."""
+        from cli.kaggle_watcher import KernelWatcher
+
+        return KernelWatcher(self.watcher_spec(kind, slug=slug))
+
+    def watcher_spec(self, kind: str, *, slug: str | None = None
+                     ) -> "KernelWatcherSpec":
+        """Resolve this lane's watcher parameters into the shared spec.
+
+        The receipt lives under ``results/laya_lane/fetch/<kind>/`` (the same
+        roof the harvest downloads to) and the progress roof is
+        ``logs/laya/lane.log``; the detached entry re-derived the spec from the
+        ``--watch`` op.
+        """
+        from cli.kaggle_monitor import KaggleMonitor
+        from cli.kaggle_watcher import KernelWatcherSpec
+        from core.common import training_cfg
+        from core.manifest import atomic_write_json
+
+        configured = self.kernel_slug(kind)
+        resolved = slug or configured
+        if not resolved:
+            raise RuntimeError(
+                f"config names no {kind} kernel slug; name the target kernel "
+                "(owner/slug) before watching")
+        kaggle = training_cfg().kaggle
+        stage = self._runtime.staging_dir() / "fetch" / kind
+        return KernelWatcherSpec(
+            which=kind, kind=kind, configured_slug=configured,
+            fetch_output=self.collect_kaggle_result,
+            fetch_failure=self.fetch_failed_result,
+            stop=self.stop_kaggle_kernel,
+            stream_logs=KaggleMonitor.stream_kernel_logs,
+            kernel_status=KaggleKernels.kernel_status,
+            capture_session=KaggleMonitor.capture_kernel_session_id,
+            log_lane=self._runtime.log_lane,
+            write_json=atomic_write_json,
+            receipt_path=stage / f"laya_{kind}.receipt.json",
+            log_path=self._runtime.lane_logs_dir() / "lane.log",
+            poll_seconds=kaggle.logs_poll_seconds,
+            stream_join_seconds=kaggle.limits.stream_join_seconds,
+            append=True,
+            entry_argv=(sys.executable, "-m", "cli.laya_lane", "--watch",
+                        "--decision", kind, "--slug", resolved, "--execute"),
+            cwd=self._runtime.train_root,
+            source_dir=self._runtime.train_root / "src",
+        )

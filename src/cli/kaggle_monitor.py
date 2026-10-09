@@ -4,13 +4,15 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 from cli.log_capture import progress_frames_to_lines
+
+if TYPE_CHECKING:
+    from cli.kaggle_watcher import KernelWatcherSpec
 
 
 #: A kernel self-reports its session id on stdout (the numeric suffix of
@@ -89,47 +91,65 @@ class KaggleMonitor:
     """Detached supervision, live progress, and terminal harvesting."""
 
     @staticmethod
+    def _watcher_spec(which: str, *, slug: str | None = None) -> "KernelWatcherSpec":
+        """Resolve the ER lane's watcher parameters into the shared spec.
+
+        ONE registry (``kernel_identity``) resolves the watcher identity, its
+        kind and the configured slug, so the push paths and the explicit
+        ``--what autowatch`` op share this resolution — no per-surface
+        kind->which table here. ``entry_argv`` re-invokes this lane detached.
+        """
+        from cli import kaggle_lane as lane
+        from core.manifest import atomic_write_json
+
+        from cli.kaggle_watcher import KernelWatcherSpec
+
+        identity = lane.kernel_identity(which)
+        # The canonical watcher value (e.g. kind "bundle" -> which "cpu") is
+        # what the detached `--kernel` arg and the log roof take.
+        which = identity.which
+        configured_slug = identity.slug(lane._spec())
+        resolved_slug = slug or configured_slug
+        if not resolved_slug:
+            raise RuntimeError(
+                f"config kaggle.{identity.slug_attr} is unset; name the {which} "
+                "kernel in config before autowatch")
+        spec = lane._spec()
+        return KernelWatcherSpec(
+            which=which, kind=identity.kind, configured_slug=configured_slug,
+            fetch_output=lane.fetch_kernel_output,
+            fetch_failure=lane.fetch_failed_kernel_log,
+            stop=lane.stop_kernel,
+            stream_logs=lane.stream_kernel_logs,
+            kernel_status=lane.kernel_status,
+            log_lane=lane._log_lane,
+            write_json=atomic_write_json,
+            receipt_path=lane.staging_dir()
+            / spec.files.autowatch_receipt.format(kind=identity.kind),
+            log_path=lane.lane_logs_dir()
+            / spec.files.autowatch_log.format(which=which),
+            poll_seconds=spec.logs_poll_seconds,
+            stream_join_seconds=spec.limits.stream_join_seconds,
+            append=True,
+            entry_argv=(sys.executable, "-m", "cli.kaggle_lane",
+                        "--what", "autowatch", "--kernel", which, "--execute",
+                        *(["--slug", resolved_slug] if resolved_slug else [])),
+            cwd=lane.TRAIN_ROOT,
+            source_dir=lane.TRAIN_ROOT / spec.files.source_dir,
+        )
+
+    @staticmethod
     def _spawn_autowatch(which: str, *, slug: str | None = None) -> dict[str, Any]:
         """Detached self-watch spawned by every live kernel push (no args needed).
 
-        The watcher IS the terminal handler: poll to any terminal state, then
-        download (results on complete / session log on error) and release the
-        session via stub replace. Runs as its own session (setsid) so wrapper
-        timeouts and shell deaths never orphan a live kernel: the failure the
-        old supervise approach had. Dry-run never spawns; the explicit op
-        (`--what autowatch`) shares this path for manual use. One spawn per
-        push, ever: the chain reuses the push paths as-is and must never spawn
-        a second watcher on top.
+        Runs as its own session (setsid) so wrapper timeouts and shell deaths
+        never orphan a live kernel. One spawn per push, ever: the chain reuses
+        the push paths as-is and must never spawn a second watcher on top. The
+        lane-specific bits live on the spec; this is the ER caller.
         """
-        from cli import kaggle_lane as lane
+        from cli.kaggle_watcher import KernelWatcher
 
-        import subprocess
-        watcher = lane.AUTOWATCH_WHICH.get(which)
-        if watcher is None:
-            raise RuntimeError(
-                f"unknown autowatch kernel {which!r}; expected one of "
-                f"{sorted(lane.AUTOWATCH_WHICH)}")
-        which = watcher
-        log_path = lane.lane_logs_dir() / lane._spec().files.autowatch_log.format(which=which)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        # The pusher already opened the run's transcript fresh (its first
-        # _log_lane truncated lane.log); append the launch marker and let the
-        # detached watcher write the transcript itself through _log_lane +
-        # stream_kernel_logs. Its stdout is discarded so no second file handle
-        # competes for the same file (cosmetic echo would otherwise duplicate).
-        with log_path.open("ab") as handle:
-            handle.write(f"[_spawn_autowatch {time.strftime('%Y-%m-%dT%H:%M:%S')} "
-                         f"launching watcher for {which}]\n".encode())
-        subprocess.Popen(
-            [sys.executable, "-m", "cli.kaggle_lane", "--what", "autowatch",
-             "--kernel", which, "--execute",
-             *(["--slug", slug] if slug else [])],
-            cwd=lane.TRAIN_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-            env={**os.environ, "ER_KAGGLE_LANE_APPEND": "1",
-                 "PYTHONPATH": os.pathsep.join(filter(None, [
-                     str(lane.TRAIN_ROOT / lane._spec().files.source_dir), os.environ.get("PYTHONPATH")]))},
-            start_new_session=True)
-        return {"autowatch": "spawned", "kernel": which, "log": str(log_path)}
+        return KernelWatcher(KaggleMonitor._watcher_spec(which, slug=slug)).spawn()
 
     @staticmethod
     def autowatch_kernel(which: str, *, execute: bool, slug: str | None = None,
@@ -139,65 +159,17 @@ class KaggleMonitor:
         Replaces interactive supervision as the launch standard. One process:
         poll the kernel status until ANY terminal state, then (a) `complete`
         fetches + hash-verifies the result archive, (b) `error` fetches partial
-        artifacts and the session log; (c) always pushes the stub replace that releases the
-        session — the failed-kernel-solves case included. The release runs even
-        when the watcher starts against an already-terminal kernel, so no
-        session survives a finished run. Intended to run detached (setsid) so
-        wrapper timeouts cannot kill it mid-poll.
+        artifacts and the session log; (c) always pushes the stub replace that
+        releases the session — the failed-kernel-solves case included. The
+        release runs even when the watcher starts against an already-terminal
+        kernel, so no session survives a finished run. Intended to run detached
+        (setsid) so wrapper timeouts cannot kill it mid-poll.
         """
-        from cli import kaggle_lane as lane
+        from cli.kaggle_watcher import KernelWatcher
 
-        spec = lane._spec()
-        resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
-        # One registry resolves which->slug, the watcher kind and the receipt
-        # identity (the finalize job shares the CPU slug but keeps its own kind).
-        identity = lane.kernel_identity(which, spec)
-        configured_slug = identity.slug(spec)
-        slug = slug or configured_slug
-        if not slug:
-            raise RuntimeError(
-                f"config kaggle.{identity.slug_attr} is unset; name the {which} "
-                "kernel in config before autowatch")
-        kind = identity.kind
-        plan: dict[str, Any] = {
-            "mode": "executed" if execute else "dry-run",
-            "kernel": slug,
-            "poll_seconds": resolved_poll,
-        }
-        if not execute:
-            return plan
-        import threading
-        follower = threading.Thread(target=lane.stream_kernel_logs, args=(slug,),
-                                    daemon=True, name=f"stream-{which}")
-        follower.start()
-        terminal = {"complete", "error", "cancelAcknowledged"}
-        polls = 0
-        while True:
-            polls += 1
-            try:
-                status = lane.kernel_status(slug=slug)
-            except (RuntimeError, OSError) as error:
-                lane._log_lane(f"[{slug}] status query failed; retrying: {error}")
-                time.sleep(resolved_poll)
-                continue
-            if status["status"] in terminal:
-                break
-            time.sleep(resolved_poll)
-        plan["status"] = status["status"]
-        plan["polls"] = polls
-        plan.update(lane.KernelLifecycle.harvest_and_stop(
-            kind=kind, slug=slug, which=which, status=status["status"],
-            fetch_output=lane.fetch_kernel_output, fetch_failure=lane.fetch_failed_kernel_log,
-            stop=lane.stop_kernel, configured_slug=configured_slug))
-        follower.join(timeout=spec.limits.stream_join_seconds)
-        receipt = lane.staging_dir() / lane._spec().files.autowatch_receipt.format(kind=kind)
-        try:
-            lane.atomic_write_json(plan, receipt)
-        except OSError as error:
-            print(f"[kaggle-lane] autowatch receipt write failed ({error}); "
-                  "continuing", flush=True)
-        plan["receipt"] = str(receipt)
-        return plan
+        return KernelWatcher(
+            KaggleMonitor._watcher_spec(which, slug=slug)).autowatch(
+            execute=execute, slug=slug, poll_seconds=poll_seconds)
 
     @staticmethod
     def supervise_kernels(*, kinds: Sequence[str], execute: bool,
@@ -489,6 +461,48 @@ class KaggleMonitor:
             pass
 
     @staticmethod
+    def recorded_kernel_handle(slug: str) -> str | None:
+        """The persisted handle for a pushed kernel (session id OR kernel name).
+
+        ONE reader for ``logs/kaggle/<kernel>.session_id``: the launch-aid id
+        when captured, else the kernel-name fallback. ``None`` when nothing was
+        recorded.
+        """
+        from cli import kaggle_lane as lane
+
+        _, _, kernel = slug.rpartition("/")
+        if not kernel:
+            return None
+        path = (lane.lane_logs_dir()
+                / lane._spec().files.session_id_file.format(kernel=kernel))
+        try:
+            return path.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+
+    @staticmethod
+    def record_kernel_handle(slug: str, session_id: int | None) -> Path:
+        """Persist the ONE usable handle for a pushed kernel.
+
+        The launch-recorded ``kernel_session_id`` when captured (the verified
+        in-place stop's target); otherwise the kernel NAME, so status/stop/
+        output always have a non-empty handle and no ``session_id=None``
+        dead-end remains. ``stop_kernel`` reads a non-numeric handle and takes
+        its version-replace fallback against that same kernel.
+        """
+        from cli import kaggle_lane as lane
+
+        _, _, kernel = slug.rpartition("/")
+        if not kernel:
+            raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
+        path = (lane.lane_logs_dir()
+                / lane._spec().files.session_id_file.format(kernel=kernel))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lane.atomic_write_text(
+            path, f"{session_id if session_id is not None else kernel}\n")
+        return path
+
+    @staticmethod
     def capture_kernel_session_id(slug: str, *, attempts: int = 3,
                                   retry_seconds: float = 3.0,
                                   timeout_seconds: float = 15.0) -> dict[str, Any]:
@@ -499,20 +513,17 @@ class KaggleMonitor:
         the SDK's in-place ``cancel_kernel_session`` — writes
         ``logs/kaggle/<kernel>.session_id`` atomically, and closes WITHOUT
         following the stream. Retries because the proxy only serves a URL once
-        the session is up. Best-effort: on failure it returns ``session_id:
-        None`` and the autowatch stream follower still captures the id during
-        the run. The SDK call has no client timeout, so each attempt runs in a
-        daemon thread bounded by ``timeout_seconds``: a hung connect can never
-        stall the synchronous launch path that awaits this capture.
+        the session is up. When no id can be read (proxy down / stream 429), the
+        kernel NAME is persisted instead (``record_kernel_handle``) so the stop
+        handle is never empty. The SDK call has no client timeout, so each
+        attempt runs in a daemon thread bounded by ``timeout_seconds``: a hung
+        connect can never stall the synchronous launch path that awaits this
+        capture.
         """
-        from cli import kaggle_lane as lane
-
         import threading
         owner, slash, kernel = slug.rpartition("/")
         if not slash or not owner or not kernel:
             raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
-        session_file = (lane.lane_logs_dir()
-                        / lane._spec().files.session_id_file.format(kernel=kernel))
         plan: dict[str, Any] = {"kernel": slug, "session_id": None}
 
         def probe(outcome: dict[str, Any]) -> None:
@@ -554,15 +565,21 @@ class KaggleMonitor:
                 match = re.search(r'(\d{3,})(?:\?.*)?$', outcome.get("url", ""))
                 if match:
                     session_id = int(match.group(1))
-                    session_file.parent.mkdir(parents=True, exist_ok=True)
-                    lane.atomic_write_text(session_file, str(session_id) + "\n")
+                    session_file = KaggleMonitor.record_kernel_handle(
+                        slug, session_id)
                     plan["session_id"] = session_id
+                    plan["handle"] = str(session_id)
                     plan["session_id_file"] = str(session_file)
                     plan.pop("error", None)
                     return plan
                 plan["session_id"] = None
             if attempt + 1 < total:
                 time.sleep(retry_seconds)
+        # No id landed (proxy down / 429): persist the kernel NAME as the
+        # fallback handle so stop/status/output stay targetable.
+        session_file = KaggleMonitor.record_kernel_handle(slug, None)
+        plan["handle"] = kernel
+        plan["session_id_file"] = str(session_file)
         return plan
 
     @staticmethod

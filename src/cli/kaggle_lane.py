@@ -250,6 +250,7 @@ supervise_kernels = KaggleMonitor.supervise_kernels
 stream_kernel_logs = KaggleMonitor.stream_kernel_logs
 clear_kernel_session_id = KaggleMonitor.clear_kernel_session_id
 capture_kernel_session_id = KaggleMonitor.capture_kernel_session_id
+recorded_kernel_handle = KaggleMonitor.recorded_kernel_handle
 kernel_logs = KaggleMonitor.kernel_logs
 _await_autowatch_receipt = KaggleChain._await_autowatch_receipt
 _clear_stale_autowatch_receipt = KaggleChain._clear_stale_autowatch_receipt
