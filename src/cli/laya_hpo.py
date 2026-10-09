@@ -779,31 +779,6 @@ class LayaHpoStager:
         return receipt
 
 
-def stage_laya_hpo_kernel(*, revision: str | None = None,
-                          run_tag: str | None = None,
-                          generation_id: str | None = None,
-                          n_trials: int | None = None,
-                          n_jobs: int | None = None,
-                          space_config: str | Path | None = None,
-                          kernel_slug: str | None = None) -> dict[str, Any]:
-    """Stage the Kaggle HPO kernel payload (dry-safe; no push, no run).
-
-    Writes under results/laya_lane/kaggle/laya-hpo/:
-      kernel-metadata.json + laya_hpo.py + laya-hpo.receipt.json
-      (+ the staged corpus dataset payload, which carries no secret).
-    Fail-loud preconditions: ``EUROMONITOR_HPO_GENERATION_ID`` set (or
-    ``--generation-id``); the corpus + base-model dataset slugs; the
-    published-tip invariant. Storage is config-driven: a configured remote
-    ``OPTUNA_STORAGE_URL`` wins, else the declared local SQLite study. A remote
-    URL is baked ONLY into the staged ``laya_hpo.py`` (gitignored); it is
-    asserted absent from the receipt.
-    """
-    return LayaHpoStager(
-        "kaggle", revision=revision, run_tag=run_tag,
-        generation_id=generation_id, n_trials=n_trials, n_jobs=n_jobs,
-        space_config=space_config, kernel_slug=kernel_slug).stage()
-
-
 def _compose_colab_entry(script_name: str, working: str,
                          input_root: str) -> str:
     """The Colab driver: override the env roots and run the shared kernel.
@@ -829,45 +804,17 @@ def _compose_colab_entry(script_name: str, working: str,
     )
 
 
-def stage_laya_hpo_colab(*, revision: str | None = None,
-                         run_tag: str | None = None,
-                         generation_id: str | None = None,
-                         n_trials: int | None = None,
-                         n_jobs: int | None = None,
-                         space_config: str | Path | None = None,
-                         working: str = COLAB_WORKING,
-                         input_root: str = COLAB_INPUT_ROOT
-                         ) -> dict[str, Any]:
-    """Stage the Colab HPO payload (delivery contract; no session is opened).
-
-    The same ``LayaHpoStager`` path as Kaggle: same script + branch pin + URL
-    injection, with the Colab entry driver overriding the working/input roots.
-    Writes under results/laya_lane/colab/laya-hpo/: laya_hpo.py +
-    laya_hpo_colab.py + laya-hpo.receipt.json.
-    """
-    return LayaHpoStager(
-        "colab", revision=revision, run_tag=run_tag,
-        generation_id=generation_id, n_trials=n_trials, n_jobs=n_jobs,
-        space_config=space_config, working=working,
-        input_root=input_root).stage()
-
-
 # ── the embedded Kaggle kernel script (text home: cli.laya_hpo_kernel_text) ──
 from cli.laya_hpo_kernel_text import HPO_KERNEL_TEMPLATE as _HPO_KERNEL_TEMPLATE
 
-# ── entry/CLI dispatch registry (one entry per lane) ───────────────────────
-STAGE_DISPATCH = {
-    "kaggle": "stage_laya_hpo_kernel",
-    "colab": "stage_laya_hpo_colab",
-}
-
 
 def main(argv: list[str] | None = None) -> int:
-    """Stage (and optionally push) the laya HPO payload for one lane.
+    """Stage (and optionally publish+push+watch) the laya HPO payload.
 
-    Offline by default: the staged receipts are printed. ``--execute`` (Kaggle
-    only) additionally runs ``kaggle kernels push`` through the landed laya
-    lane's gated push. The owner launches the sweep; this lane never starts one.
+    Offline by default: the staged receipt is printed. ``--execute`` (Kaggle
+    only) runs the owner's lifecycle — publish the freshly staged corpus,
+    ``kaggle kernels push``, then spawn the detached watcher. The owner launches
+    the sweep; this lane never starts one.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lane", choices=LANES, default="kaggle",
@@ -888,8 +835,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--space", type=Path, default=None,
                         help="search-space YAML (default: the SSOT config)")
     args = parser.parse_args(argv)
-    # The ONE owner composes the study/staging/push lifecycle; this entry point
-    # is a thin argparse shell over it (no ad-hoc assembly here).
+    # The ONE owner composes the study/staging/publish/push/watch lifecycle;
+    # this entry point is a thin argparse shell over it (no ad-hoc assembly).
     from cli.laya_training_run import LayaRunKind, LayaTrainingRunFactory
 
     run = LayaTrainingRunFactory.from_config()
@@ -901,27 +848,37 @@ def main(argv: list[str] | None = None) -> int:
     if args.execute:
         if args.lane != "kaggle":
             raise SystemExit("--execute is a kaggle-lane operation")
-        plan = run.push(Path(receipt["staged"]), execute=True)
+        # publish the freshly staged corpus -> push -> spawn the watcher: the
+        # fine-tune execute path, so the run never attaches a stale dataset.
+        plan = run.launch(LayaRunKind.HPO, stage_dir=Path(receipt["staged"]),
+                          run_tag=receipt["run_tag"], execute=True)
         print(json.dumps(plan, indent=2, default=str), flush=True)
     return 0
 
 
 class KernelSlugRegistry:
-    """The HPO kind's kernel-slug dispatch.
+    """The HPO kind's external-kind descriptor registration.
 
-    The HPO slug lives in the HPO space SSOT, not ``LayaSpec``, so it is
-    registered with the transport factory's external-kind map. One job: map the
-    ``laya-hpo`` kind to the slug actually staged (an explicit override wins
-    over the SSOT).
+    The HPO slug lives in the HPO space SSOT, not ``LayaSpec``, so the WHOLE
+    descriptor — kernel slug, receipt filename and the attached-dataset attr —
+    is registered with the transport factory's external-kind maps. One job: map
+    the ``laya-hpo`` kind to the slug actually staged (an explicit override wins
+    over the SSOT) plus the constants its kernel/receipt contract pins, so the
+    harvest resolves ``laya-hpo.receipt.json`` and the publish resolves the
+    fine-tune corpus — never a guess, never the decision-payload fallback.
     """
+
+    #: The LayaSpec field naming the corpus the HPO kernel attaches.
+    DATASET_ATTR = "finetune_dataset_slug"
 
     def __init__(self, kind: str = HPO_DECISION):
         self.kind = kind
 
     def register(self, slug: str | None = None) -> str | None:
         effective = slug or load_space().get("kernel_slug")
-        if effective:
-            LayaTransportFactory.register_external_kind(self.kind, effective)
+        LayaTransportFactory.register_external_kind(
+            self.kind, effective, receipt_name=HPO_RECEIPT_FILE,
+            dataset_attr=self.DATASET_ATTR)
         return effective
 
     def resolve(self) -> str:
@@ -956,7 +913,6 @@ __all__ = [
     "HPO_RECEIPT_FILE",
     "LANES",
     "OPTUNA_URL_ENV",
-    "STAGE_DISPATCH",
     "HpoReceipt",
     "HpoStagePlan",
     "KernelSlugRegistry",
@@ -974,8 +930,6 @@ __all__ = [
     "route_dials",
     "sample_dials",
     "space_digest",
-    "stage_laya_hpo_colab",
-    "stage_laya_hpo_kernel",
     "study_identity",
     "trial_full_value",
     "trial_primary_value",

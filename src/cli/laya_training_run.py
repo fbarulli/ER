@@ -9,8 +9,12 @@ setup is a class call, never scattered ad-hoc assembly:
   * :meth:`stage` — the fine-tune / HPO payload from the config SSOT
     (``LayaSpec`` / ``FinetuneSpec`` / ``config/laya_hpo_space.yaml``) through
     ``LayaStagingFactory`` + ``LayaRecipeFactory`` (and ``LayaHpoStager``);
+  * :meth:`publish` — create-or-version the dataset the kernel attaches, from
+    the same config SSOT, BEFORE the push (``LayaPublishFactory``);
   * :meth:`push` — ``kaggle kernels push`` with the shared session capture
     (``LayaTransportFactory`` -> ``KaggleKernels.push_with_session_capture``);
+  * :meth:`launch` — the ONE ``--execute`` lifecycle: publish -> push -> spawn
+    the detached terminal watcher (the fine-tune lane's proven execute path);
   * :meth:`track` — real-time via the canonical readers (the W&B run reader,
     degrading to the ONE execution-log reader; the removed SSE follower is
     never used);
@@ -24,12 +28,14 @@ unrepresentable (:class:`LayaRunKind` is an enum over the SSOT decision kinds).
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from cli.laya_hpo import HPO_DECISION, LANES as HPO_LANES
+from cli.laya_publish import LayaPublishFactory
 from cli.laya_recipe import (
     FINETUNE_DECISION,
     FINETUNE_EVAL_DECISION,
@@ -67,12 +73,14 @@ class LayaTrainingRun:
         *,
         staging: LayaStagingFactory,
         transport: LayaTransportFactory,
+        publisher: LayaPublishFactory,
         study_resolver: Callable[..., ResolvedStudy],
         hpo_stager: Callable[..., Any],
         tracker: Callable[..., dict[str, Any]],
     ) -> None:
         self._staging = staging
         self._transport = transport
+        self._publisher = publisher
         self._study_resolver = study_resolver
         self._hpo_stager = hpo_stager
         self._tracker = tracker
@@ -116,12 +124,43 @@ class LayaTrainingRun:
                 revision=revision, run_tag=run_tag)
         raise ValueError(f"unknown laya run kind: {kind!r}")
 
-    # ── transport ──────────────────────────────────────────────────────────
+    # ── publish / transport ────────────────────────────────────────────────
+    def publish(self, kind: LayaRunKind, *, run_tag: str,
+                execute: bool = False) -> dict[str, Any]:
+        """Create-or-version the dataset the kernel attaches (``--execute`` gated)."""
+        return self._publisher.publish_laya_dataset(
+            kind.value, run_tag=run_tag, execute=execute)
+
     def push(self, stage_dir: Path, *, execute: bool = False,
              activate: bool = True) -> dict[str, Any]:
         """Push a staged payload with the shared session capture."""
         return self._transport.push_kaggle_kernel(
             Path(stage_dir), execute=execute, activate=activate)
+
+    def watch(self, kind: LayaRunKind, *, slug: str) -> dict[str, Any]:
+        """Spawn the ONE detached terminal watcher for a pushed kernel."""
+        return self._transport.watcher(kind.value, slug=slug).spawn()
+
+    def launch(self, kind: LayaRunKind, *, stage_dir: Path, run_tag: str,
+               execute: bool = False) -> dict[str, Any]:
+        """The ONE ``--execute`` lifecycle: publish dataset -> push -> watch.
+
+        Mirrors the fine-tune lane's execute path exactly: the attached inputs
+        travel as the dataset BEFORE the push (a stale remote dataset would be
+        attached silently otherwise), then ONE detached watcher owns progress,
+        download and release. Dry-run stops after the gated publish/push plans.
+        """
+        result: dict[str, Any] = {
+            "publish": self.publish(kind, run_tag=run_tag, execute=execute),
+            "push": self.push(Path(stage_dir), execute=execute),
+        }
+        if not execute:
+            return result
+        kernel_id = json.loads(
+            (Path(stage_dir) / "kernel-metadata.json").read_text(encoding="utf-8")
+        )["id"]
+        result["watch"] = self.watch(kind, slug=kernel_id)
+        return result
 
     def track(self, *, run_tag: str | None = None, slug: str | None = None,
               follow: bool = True) -> dict[str, Any]:
@@ -175,6 +214,7 @@ class LayaTrainingRunFactory:
         return LayaTrainingRun(
             staging=cls.build_staging(spec, runtime, training_config),
             transport=LayaTransportFactory(spec, runtime),
+            publisher=LayaPublishFactory(spec, runtime),
             study_resolver=laya_hpo.resolve_study_storage,
             hpo_stager=laya_hpo.LayaHpoStager,
             tracker=KaggleMonitor.track_run)

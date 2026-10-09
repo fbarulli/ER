@@ -46,15 +46,50 @@ class LayaTransportFactory:
     #: registers the "laya-hpo" kind), so ``kernel_slug`` resolves without
     #: duplicating the slug into LayaSpec or hardcoding it in the lane.
     EXTERNAL_KIND_SLUGS: ClassVar[dict[str, str]] = {}
+    #: External kind -> the receipt filename its kernel writes. The default is
+    #: ``laya_<kind>.receipt.json`` (the landed decision/finetune contract); an
+    #: external lane registers its own so ``collect_kaggle_result`` never guesses.
+    EXTERNAL_KIND_RECEIPTS: ClassVar[dict[str, str]] = {}
+    #: External kind -> the LayaSpec attribute naming the dataset it attaches.
+    #: The publish owner resolves the corpus slug from here, never from the
+    #: decision-payload fallback.
+    EXTERNAL_KIND_DATASETS: ClassVar[dict[str, str]] = {}
 
     def __init__(self, spec: LayaSpec, runtime: LayaRuntimeFactory):
         self._spec = spec
         self._runtime = runtime
 
     @classmethod
-    def register_external_kind(cls, kind: str, slug: str) -> None:
-        """Register a sibling lane's external decision kind -> kernel slug."""
-        cls.EXTERNAL_KIND_SLUGS[kind] = slug
+    def register_external_kind(cls, kind: str, slug: str | None = None, *,
+                               receipt_name: str | None = None,
+                               dataset_attr: str | None = None) -> None:
+        """Register a sibling lane's external decision kind.
+
+        One call carries the whole descriptor: its kernel ``slug`` (optional —
+        the space SSOT may resolve it later), the ``receipt_name`` its kernel
+        writes, and the ``dataset_attr`` on ``LayaSpec`` naming the dataset it
+        attaches. Only the supplied slots are recorded, so a part-registration
+        never blanks an earlier one.
+        """
+        if slug:
+            cls.EXTERNAL_KIND_SLUGS[kind] = slug
+        if receipt_name:
+            cls.EXTERNAL_KIND_RECEIPTS[kind] = receipt_name
+        if dataset_attr:
+            cls.EXTERNAL_KIND_DATASETS[kind] = dataset_attr
+
+    @classmethod
+    def external_dataset_attr(cls, kind: str) -> str | None:
+        """The ``LayaSpec`` dataset attribute an external kind attaches, if any."""
+        return cls.EXTERNAL_KIND_DATASETS.get(kind)
+
+    def receipt_name(self, kind: str) -> str:
+        """The receipt filename a decision kind's kernel writes.
+
+        The external-kind registry wins (an external lane names its own file);
+        otherwise the landed ``laya_<kind>.receipt.json`` contract holds.
+        """
+        return self.EXTERNAL_KIND_RECEIPTS.get(kind, f"laya_{kind}.receipt.json")
 
     def kernel_slug(self, decision_kind: str) -> str:
         """The pushed Kaggle kernel slug a decision kind runs on (stop target)."""
@@ -168,8 +203,9 @@ class LayaTransportFactory:
 
         Downloads to ``results/laya_lane/fetch/<kind>/`` via the canonical
         ``kernels_output_argv`` + the 429-aware ``KernelOutputFetcher``. The
-        per-kind receipt name (``laya_<kind>.receipt.json``; smoke =
-        ``laya_finetune-smoke.receipt.json``) is accepted whether it rides the
+        receipt name is resolved by :meth:`receipt_name` (the external-kind
+        registry wins; otherwise ``laya_<kind>.receipt.json``, e.g. smoke =
+        ``laya_finetune-smoke.receipt.json``) and accepted whether it rides the
         kernel's ``laya_finetune.tar.gz`` or lands as a top-level download, so a
         smoke and the prod kind can never be confused. The archive and every
         top-level download (expanded checkpoint/base_model/wandb trees included)
@@ -208,7 +244,7 @@ class LayaTransportFactory:
         if not archives:
             raise RuntimeError(f"kaggle kernels output staged no archive "
                                f"under {stage} (slug {slug})")
-        receipt_name = f"laya_{kind}.receipt.json"
+        receipt_name = self.receipt_name(kind)
         decisions_name = f"{kind}.decisions.jsonl"
         reports: dict[str, Any] = {}
         # ONE streaming pass: `r|*` never seeks, so the receipt, every JSON report

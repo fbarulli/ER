@@ -22,6 +22,7 @@ from cli.laya_recipe import (
     HOLDOUT_EVAL_DECISION,
 )
 from cli.laya_runtime import LayaRuntimeFactory
+from cli.laya_transport import LayaTransportFactory
 from core.bundle import Bundle, BundleRole
 from core.laya_config import LayaSpec
 from core.manifest import atomic_write_json
@@ -83,44 +84,55 @@ class LayaPublishFactory:
             f"archive={archive_name} bytes={receipt['bytes']} -> {stage}")
         return receipt
 
-    def publish_laya_dataset(self, decision_kind: str, *, run_tag: str,
-                             execute: bool) -> dict[str, Any]:
-        """`--execute`-gated create-or-version of the laya inputs dataset."""
-        payload = (self._runtime.staging_dir() / "kaggle" / decision_kind
-                   / DATASET_PAYLOAD_DIR)
-        metadata_file = payload / DATASET_METADATA_FILE
-        plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
-                                "payload": str(payload)}
-        if not execute:
-            plan["note"] = ("the dataset attach rides --execute only "
-                            "(mirroring the kernels-push gate)")
-            self._runtime.log_lane(
-                f"dry-run: dataset payload for {decision_kind} would "
-                f"publish to the remote surface at {payload}")
-            return plan
-        if not metadata_file.is_file():
-            raise RuntimeError(
-                "--activate gate: no staged dataset payload at "
-                f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
+    def _dataset_target(self, decision_kind: str) -> tuple[str, str]:
+        """``(slug, config_key)`` the decision kind's attached dataset resolves to.
+
+        The external-kind registry wins first (a sibling lane whose dataset is
+        not a ``LayaSpec`` field of the shared bindings, e.g. HPO attaches the
+        fine-tune corpus); otherwise the landed spec bindings apply. Fails loud
+        on an unset slug so a dry run and an executed attach agree on the target.
+        """
         spec = self._spec
-        corpus_kind = decision_kind in (FINETUNE_DECISION, FINETUNE_SMOKE_DECISION,
-                                        FINETUNE_EVAL_DECISION)
-        if decision_kind == HOLDOUT_EVAL_DECISION:
+        external_attr = LayaTransportFactory.external_dataset_attr(decision_kind)
+        if external_attr:
+            slug, key = getattr(spec, external_attr), external_attr
+        elif decision_kind == HOLDOUT_EVAL_DECISION:
             slug, key = spec.holdout_dataset_slug, "holdout_dataset_slug"
         elif decision_kind == FINETUNE_CKPT_DECISION:
             slug, key = spec.finetune_ckpt_dataset, "finetune_ckpt_dataset"
         elif decision_kind == FINETUNE_SMOKE_DECISION:
             slug = spec.finetune_smoke.dataset_slug
             key = "finetune_smoke.dataset_slug"
+        elif decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION):
+            slug, key = spec.finetune_dataset_slug, "finetune_dataset_slug"
         else:
-            slug = (spec.finetune_dataset_slug if corpus_kind
-                    else spec.dataset_slug)
-            key = "finetune_dataset_slug" if corpus_kind else "dataset_slug"
-        plan["slug"] = slug
+            slug, key = spec.dataset_slug, "dataset_slug"
         if not slug:
             raise RuntimeError(
                 f"config laya.{key} is unset; name the dataset (owner/slug) "
-                "before an executed attach")
+                "before an attach")
+        return slug, key
+
+    def publish_laya_dataset(self, decision_kind: str, *, run_tag: str,
+                             execute: bool) -> dict[str, Any]:
+        """`--execute`-gated create-or-version of the laya inputs dataset."""
+        payload = (self._runtime.staging_dir() / "kaggle" / decision_kind
+                   / DATASET_PAYLOAD_DIR)
+        metadata_file = payload / DATASET_METADATA_FILE
+        slug, _ = self._dataset_target(decision_kind)
+        plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
+                                "payload": str(payload), "slug": slug}
+        if not execute:
+            plan["note"] = ("the dataset attach rides --execute only "
+                            "(mirroring the kernels-push gate)")
+            self._runtime.log_lane(
+                f"dry-run: dataset {slug} for {decision_kind} would "
+                f"publish to the remote surface at {payload}")
+            return plan
+        if not metadata_file.is_file():
+            raise RuntimeError(
+                "--activate gate: no staged dataset payload at "
+                f"{payload} ({DATASET_METADATA_FILE} is missing); stage first")
         from cli import kaggle_lane as lane
         from cli.kaggle_datasets import KaggleDatasets
 

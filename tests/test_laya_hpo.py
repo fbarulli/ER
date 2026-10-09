@@ -520,6 +520,14 @@ def test_assert_secret_absent_raises_on_leak():
     laya_hpo.assert_secret_absent({"ok": True}, secret)  # no raise
 
 
+def _hpo_stage(**kwargs):
+    """Stage the HPO payload through the ONE owner (the lane's public surface)."""
+    from cli.laya_training_run import LayaRunKind, LayaTrainingRunFactory
+
+    return LayaTrainingRunFactory.from_config().stage(
+        LayaRunKind.HPO, **kwargs)
+
+
 def _stage(monkeypatch, tmp_path, url):
     """Stage with the network/git/tip dependencies stubbed."""
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-1")
@@ -537,7 +545,7 @@ def _stage(monkeypatch, tmp_path, url):
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
                         lambda rev, repo, branch: rev)
-    return laya_hpo.stage_laya_hpo_kernel()
+    return _hpo_stage()
 
 
 def test_stage_kernel_without_remote_url_bakes_the_local_study(monkeypatch,
@@ -634,7 +642,7 @@ def _stage_colab(monkeypatch, tmp_path, url):
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
                         lambda rev, repo, branch: rev)
-    return laya_hpo.stage_laya_hpo_colab()
+    return _hpo_stage(lane="colab")
 
 
 def test_stage_colab_writes_entry_without_the_secret(monkeypatch, tmp_path):
@@ -654,10 +662,42 @@ def test_stage_colab_writes_entry_without_the_secret(monkeypatch, tmp_path):
     assert not (stage / "kernel-metadata.json").exists()  # colab is not a kernel
 
 
-def test_cli_lane_dispatch_registry_is_complete():
-    assert set(laya_hpo.STAGE_DISPATCH) == set(laya_hpo.LANES)
-    assert laya_hpo.STAGE_DISPATCH["kaggle"] == "stage_laya_hpo_kernel"
-    assert laya_hpo.STAGE_DISPATCH["colab"] == "stage_laya_hpo_colab"
+def test_hpo_receipt_and_publish_resolve_the_shared_contract(monkeypatch,
+                                                              tmp_path):
+    """The end-to-end HPO receipt/publish path: the payload publishes the
+    fine-tune corpus (``finetune_dataset_slug``, never the decision fallback)
+    and the harvest accepts the kernel's OWN ``laya-hpo.receipt.json`` (never
+    the guessed ``laya_laya-hpo.receipt.json``)."""
+    import io
+    import subprocess
+    import tarfile
+
+    _stage(monkeypatch, tmp_path, None)
+    assert LayaTransportFactory.EXTERNAL_KIND_RECEIPTS[
+        laya_hpo.HPO_DECISION] == laya_hpo.HPO_RECEIPT_FILE
+
+    monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
+    spec = laya_lane.training_cfg().laya
+    plan = laya_lane.publish_laya_dataset(
+        laya_hpo.HPO_DECISION, run_tag="laya_t", execute=False)
+    assert plan["slug"] == spec.finetune_dataset_slug
+    assert plan["slug"] != spec.dataset_slug
+
+    def fake_run(args, **kwargs):
+        destination = Path(args[args.index("-p") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        body = json.dumps({"kernel": "laya-hpo", "run_tag": "laya_t"}).encode()
+        with tarfile.open(destination / "laya_hpo.tar.gz", "w:gz") as tar:
+            info = tarfile.TarInfo(laya_hpo.HPO_RECEIPT_FILE)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(laya_lane.subprocess, "run", fake_run)
+    fetch = laya_lane.collect_kaggle_result(
+        laya_hpo.HPO_DECISION, "owner/er-laya-hpo", execute=True)
+    assert fetch["receipt"]["kernel"] == "laya-hpo"
+    assert "not_applicable" in fetch["traceability"]["record_grain"]
 
 
 def test_kernel_slug_dispatch_resolves_the_hpo_kind():
@@ -1071,9 +1111,8 @@ def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
                         lambda rev, repo, branch: rev)
-    return laya_hpo.stage_laya_hpo_kernel(space_config=space_config,
-                                          kernel_slug=kernel_slug,
-                                          n_trials=n_trials)
+    return _hpo_stage(space_config=space_config, kernel_slug=kernel_slug,
+                      n_trials=n_trials)
 
 
 def test_offline_staging_needs_no_url(monkeypatch, tmp_path):

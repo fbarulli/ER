@@ -373,7 +373,12 @@ def record_grain_traceability(decision_kind: str, *, receipt: dict,
     """Build the PER-ROW report from the fetched grain (identity CSV / evals cases)."""
     binding = DECISION_BINDINGS.get(decision_kind)
     if binding is None:
-        raise ValueError(f"unknown decision kind: {decision_kind!r}")
+        # An external lane kind (e.g. laya-hpo) is not a per-row decision kind:
+        # state the gap so `fetched_traceability` records `not_applicable`
+        # instead of crashing the harvest of an otherwise valid archive.
+        raise RecordGrainGap(
+            f"decision kind {decision_kind!r} has no per-row decision binding "
+            "(see corpus_traceability)")
     if not binding.get("record_columns"):
         raise RecordGrainGap(
             f"decision kind {decision_kind!r} reports through the corpus grain, "
