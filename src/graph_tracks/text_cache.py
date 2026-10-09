@@ -9,42 +9,41 @@ import numpy as np
 import pandas as pd
 from graph_tracks.data import file_size
 
-_CONTENT_SIZE_MEMO: dict[tuple, str] = {}
+#: Stat-signature -> measured checkpoint size. The SIGNATURE is the census the
+#: identity is built from (each member's path, size and mtime_ns); the VALUE is
+#: the summed member bytes a checkpoint's size contract needs.
+_CONTENT_SIZE_MEMO: dict[tuple, int] = {}
 
-def composition_fingerprint():
-    """Fingerprint the local composition code and all shipped parser config.
 
-    Same stat-signature memo as checkpoint_size (mtime+size identify
-    content). The fingerprinted files are editable source/config, so any
-    write to them changes mtime_ns and forces a re-measure; only repeated
-    READS within a process reuse the size.
+def composition_fingerprint() -> str:
+    """The structural identity of the local composition code and shipped parser config.
+
+    The identity IS the stat census of the tracked files -- each one's declared
+    path, byte size and modification time, in sorted order -- never a byte length
+    and never a content digest (owner directive 2026-10-08): a summed size
+    aliases two different file sets of the same total. It is rendered as
+    canonical JSON text so a JSON round trip (requests and export metadata carry
+    it) preserves it exactly.
+
+    No memo is needed: the census is the key AND the identity, so the stat walk
+    it requires is the whole cost. The tracked files are editable source/config,
+    so any write moves at least one mtime_ns and the identity moves with it.
     """
     from core.common import TRAIN_ROOT, training_cfg
     files = list((TRAIN_ROOT / 'src/core').rglob('*.py'))
     files += list((TRAIN_ROOT / 'src/ner').rglob('*.py'))
     files += [TRAIN_ROOT / 'src/graph_tracks/text_cache.py', TRAIN_ROOT / 'src/pipeline.py']
     # The pinned config set is declared ONCE (config/training.yaml packaging
-    # block, the same list the runtime snapshot ships); the cache key lists
-    # exactly those files, so a new pinned config invalidates the cache too.
+    # block, the same list the runtime snapshot ships); the census lists
+    # exactly those files, so a new pinned config invalidates it too.
     files += [TRAIN_ROOT / 'config' / name
               for name in training_cfg().packaging.snapshot_pinned_configs]
     files.sort()
     tracked = []
     for path in files:
         info = path.stat()
-        tracked.append((path.relative_to(TRAIN_ROOT).as_posix(), info.st_mtime_ns, info.st_size))
-    signature = ('composition_fingerprint', tuple(tracked))
-    if len(_CONTENT_SIZE_MEMO) > 64:
-        _CONTENT_SIZE_MEMO.clear()
-    memoized = _CONTENT_SIZE_MEMO.get(signature)
-    if memoized is not None:
-        return memoized
-    size = ByteCount()
-    for path in files:
-        size.update(path.relative_to(TRAIN_ROOT).as_posix().encode())
-        size.update(str(file_size(path)).encode())
-    _CONTENT_SIZE_MEMO[signature] = size.total
-    return _CONTENT_SIZE_MEMO[signature]
+        tracked.append((path.relative_to(TRAIN_ROOT).as_posix(), info.st_size, info.st_mtime_ns))
+    return json.dumps(tracked, ensure_ascii=False)
 
 
 def compose_texts(catalog: Path, *, composer=None):
@@ -74,7 +73,7 @@ def texts_size(texts):
     return ByteCount(json.dumps(texts, ensure_ascii=False).encode()).total
 
 
-def checkpoint_size(path: Path, *, use_memo: bool = True) -> str:
+def checkpoint_size(path: Path, *, use_memo: bool = True) -> int:
     if not path.is_dir():
         raise ValueError('checkpoint must be a local directory; remote revisions are not pinned here')
     files = sorted(p for p in path.rglob('*') if p.is_file())
