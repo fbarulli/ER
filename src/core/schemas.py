@@ -1007,6 +1007,122 @@ class PairedBootstrapSpec(BaseModel):
     confidence: float = Field(gt=0.0, lt=1.0)
 
 
+# ── sample-plan targets (config/sampling.yaml) ──────────────────────────────
+# A slice is a FILTER over samples: one row IS one sample, and a value selects
+# the rows whose declared column parse yields it. ``scalar`` reads a plain cell
+# (a brand); ``set_literal`` reads a stored list literal as a BAG of values
+# (``['coke']`` -> coke), matching the set-valued slice columns the validation
+# lane already uses.
+SampleValueParse = Literal["scalar", "set_literal"]
+
+
+class SamplingTargetsSpec(BaseModel):
+    """The declared statistical targets the sample plan is measured against.
+
+    ``confidence`` + ``ci_half_width`` describe the proportion-estimate target
+    (n = z^2 p(1-p) / h^2, with ``worst_case_proportion`` as p when no measured
+    metric supplies one); ``alpha`` + ``power`` + ``target_effect`` describe the
+    paired McNemar improvement that must stay detectable on the SAME validation
+    samples; ``min_subgroup_support`` is the prevalence floor below which a
+    subgroup is not meaningful; and ``max_realistic_n`` is the largest
+    validation the fold deal can realistically yield, used to flag subgroups no
+    split can make measurable. ``two_proportion_baseline`` is the reference rate
+    of the independent two-proportion (CI-MDE) variant.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    confidence: float = Field(gt=0.0, lt=1.0)
+    ci_half_width: float = Field(gt=0.0, lt=1.0)
+    alpha: float = Field(gt=0.0, lt=1.0)
+    power: float = Field(gt=0.0, lt=1.0)
+    target_effect: float = Field(gt=0.0, lt=1.0)
+    worst_case_proportion: float = Field(gt=0.0, lt=1.0)
+    min_subgroup_support: int = Field(ge=1)
+    max_realistic_n: int = Field(ge=1)
+    two_proportion_baseline: float = Field(gt=0.0, lt=1.0)
+
+
+class ValidationSetSpec(BaseModel):
+    """The validation set the plan emits and the bundle member it travels under.
+
+    ``path``/``manifest_path`` are repository-relative output addresses;
+    ``bundle_member`` is the name the set carries INSIDE the prepared-input
+    package, so the Colab tracks lane validates on exactly these rows and no
+    second validation file is resolved remotely.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    manifest_path: str = Field(min_length=1)
+    bundle_member: str = Field(min_length=1)
+
+
+class SamplingSliceSpec(BaseModel):
+    """One declared slice: how a value is read from its column.
+
+    ``parse`` is ``scalar`` (a plain cell, e.g. a brand or a difficulty label)
+    or ``set_literal`` (a stored list literal read as a BAG of values).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    parse: SampleValueParse
+
+
+class DifficultyDefinitionSpec(BaseModel):
+    """The canonical difficulty producer the sample plan records (not re-derives).
+
+    The labels themselves come from ``training.difficulty.measure_pair`` with the
+    ``training.yaml difficulty`` spec; this names the producer and the labels so
+    the manifest can state the definition version without a second heuristic.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    producer: str = Field(min_length=1)
+    labels: tuple[Literal["easy", "medium", "hard", "unknown"], ...] = Field(min_length=1)
+    measured_labels_path: str | None = None
+
+
+class SamplingPlanSpec(BaseModel):
+    """The sample-plan contract (``config/sampling.yaml``): targets + slices.
+
+    ``slices`` maps each slice/attribute COLUMN to how its values are read; the
+    column name IS the slice name, so a slice and its source column can never
+    drift apart. The class resolves this document through the ONE read+validate
+    home (``core.common.load_validated_yaml``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    targets: SamplingTargetsSpec
+    slices: dict[str, SamplingSliceSpec] = Field(min_length=1)
+    #: Composite cells: cell name -> the slice names whose values cross to form
+    #: one cell (e.g. every attribute value x difficulty level). Each component
+    #: name must be a declared slice; a cell value joins them as ``a=v|b=w``.
+    cells: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    #: The canonical difficulty producer recorded in every emitted manifest.
+    difficulty_definition: DifficultyDefinitionSpec | None = None
+    #: The emitted validation set + the bundle member it travels under. Optional
+    #: so a targets-only document still validates (the calculator needs no
+    #: artifact address).
+    validation_set: ValidationSetSpec | None = None
+
+    @model_validator(mode="after")
+    def _cells_reference_declared_slices(self) -> "SamplingPlanSpec":
+        for name, components in self.cells.items():
+            if not components:
+                raise ValueError(f"composite cell {name!r} declares no component slices")
+            unknown = [item for item in components if item not in self.slices]
+            if unknown:
+                raise ValueError(
+                    f"composite cell {name!r} references undeclared slices {unknown}"
+                )
+        return self
+
+
 class PerformanceSpec(BaseModel):
     """Operational-cost instrumentation (latency / memory / refresh)."""
 

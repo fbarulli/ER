@@ -340,12 +340,39 @@ def _portable_config_models(cfg, setup: Path) -> dict[str, dict]:
     }
 
 
+def _sample_plan_sources(files: dict[str, Path]) -> None:
+    """Ship the SamplePlan-built validation set + manifest (declared SSOT).
+
+    The validation set is sized and materialized by ``core.sample_plan``
+    (``config/sampling.yaml`` ``validation_set:``); the tracks lane validates on
+    exactly these rows, so the artifacts travel IN the package at their declared
+    repository-relative member paths. Resolution is unconditional, like every
+    other declared input — no data gate.
+    """
+    from core.common import TRAIN_ROOT
+    from core.sample_plan import sampling_plan_spec
+
+    declared = sampling_plan_spec().validation_set
+    if declared is None:
+        return
+    # The declared member name IS the package key (repository-relative), so the
+    # tracks lane resolves the set at exactly the path the plan declares.
+    members = {
+        declared.bundle_member: declared.path,
+        declared.manifest_path: declared.manifest_path,
+    }
+    for member, relative in members.items():
+        source = (TRAIN_ROOT / relative).resolve()
+        files[member] = source
+
+
 def _runtime_sources(cfg) -> dict[str, Path]:
     from core.common import F, TRAIN_ROOT
     files = runtime_snapshot_files(ablation_config=TRAIN_ROOT / cfg.ablation_config)
     for key in INPUT_KEYS:
         source = Path(F[key]).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
+    _sample_plan_sources(files)
     return files
 
 

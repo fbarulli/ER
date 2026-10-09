@@ -1,0 +1,92 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# config/sampling.yaml — the SAMPLE PLAN's targets (owner: core.sample_plan).
+#
+# This is the ONE home of the numbers the validation sample must satisfy for a
+# measurement to be representative: how precisely a proportion is estimated,
+# how small a before/after improvement must stay detectable, and how rare a
+# subgroup may be before it stops being measurable. The calculator
+# (src/core/sample_plan.py -> SamplePlan) reads them through the config
+# boundary in src/core/schemas.py (SamplingPlanSpec); scripts/sample_plan.py
+# emits the plan from the REAL prevalences. No number below is repeated in
+# code.
+#
+# UNITS. The validation population is the scored pair population; a "sample"
+# is one scored pair. A slice is a FILTER over those samples: one row IS one
+# sample, and a value selects the rows whose parse yields it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+targets:
+  # Proportion estimate: n = z^2 * p(1-p) / h^2 (95% -> z = 1.959964).
+  confidence: 0.95
+  ci_half_width: 0.05
+  # Paired McNemar improvement target (measured before/after on the SAME
+  # validation samples): alpha two-sided, power 1-beta, and the smallest
+  # effect that must remain detectable.
+  alpha: 0.05
+  power: 0.80
+  target_effect: 0.02
+  # p used when no measured metric supplies one: 0.50 is the worst case.
+  worst_case_proportion: 0.50
+  # Two-proportion / CI-MDE variant reference rate (independent samples).
+  two_proportion_baseline: 0.50
+  # A subgroup with fewer than this many samples in the population is not
+  # meaningful (below the support floor that attribute_separation already
+  # enforces at min_value_support).
+  min_subgroup_support: 30
+  # The largest validation the component-fold deal can realistically produce;
+  # a subgroup whose expected support at this N is still below the floor
+  # cannot be measured at any realistic split and needs stratified/oversampled
+  # validation.
+  max_realistic_n: 5000
+
+# Slice/attribute COLUMN -> how a value is read from it.
+#   parse: scalar       a plain cell (a brand name, a difficulty label)
+#   parse: set_literal  a stored list literal read as a BAG of values (['coke'])
+slices:
+  mode_brand: {parse: scalar}
+  # Structural pair difficulty, measured ONLY by the canonical producer
+  # (training.difficulty.measure_pair + training.yaml difficulty spec, versioned
+  # below). A pair with no measured label stays `unknown`; easy/hard is never
+  # invented. It travels as a column in the emitted validation set.
+  difficulty: {parse: scalar}
+  volume_set: {parse: set_literal}
+  pack_set: {parse: set_literal}
+  package_type_set: {parse: set_literal}
+  package_material_set: {parse: set_literal}
+  flavor_set: {parse: set_literal}
+  carbonation_set: {parse: set_literal}
+  sweetener_set: {parse: set_literal}
+
+# Composite (attribute value x difficulty) cells: the HARD stratum has near-50%
+# accuracy (max variance) and the smallest cell binds the total, so sizing is
+# per cell, never one pooled N. `difficulty` is retained as its own stratum.
+cells:
+  volume_difficulty: [volume_set, difficulty]
+  pack_difficulty: [pack_set, difficulty]
+  package_type_difficulty: [package_type_set, difficulty]
+  package_material_difficulty: [package_material_set, difficulty]
+  flavor_difficulty: [flavor_set, difficulty]
+  carbonation_difficulty: [carbonation_set, difficulty]
+  sweetener_difficulty: [sweetener_set, difficulty]
+
+# The canonical difficulty definition the labels come from (recorded in the
+# manifest). Version + thresholds are the SSOT in config/training.yaml
+# `difficulty:`; this names the producer so a reader can audit it.
+difficulty_definition:
+  producer: "training.difficulty.measure_pair"
+  labels: [easy, medium, hard, unknown]
+  # The per-pair measured labels (local-only; gitignored). When absent the
+  # builder retains `unknown` and records the reason — it never invents a level.
+  measured_labels_path: "reports/difficulty/full/pairs.csv"
+
+
+# The validation set the plan emits and the ONE member it travels under into
+# the prepared-input package the Colab tracks lane consumes. The tracks lane
+# validates on exactly these rows; there is no second validation path.
+# Paths are repository-relative (the script resolves them against the repo
+# root); the bundle member name is what the prepared-input package carries.
+validation_set:
+  path: "data/validation/sample_plan_validation.csv"
+  manifest_path: "results/validation/sample_plan_manifest.json"
+  bundle_member: "data/validation/sample_plan_validation.csv"
+
