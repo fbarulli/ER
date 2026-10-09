@@ -201,13 +201,11 @@ def _log_local(line: str) -> None:
 
 
 def _staging_factory() -> LayaStagingFactory:
+    from cli.laya_training_run import LayaTrainingRunFactory
+
     spec = _spec()
     runtime = LayaRuntimeFactory(spec, TRAIN_ROOT)
-    return LayaStagingFactory(
-        spec=spec, runtime=runtime, recipe=LayaRecipeFactory(spec),
-        training_cfg=training_cfg, git_revision=_git_revision,
-        env_value=_env_value, wandb_project=_wandb_project,
-        decision_preflight=LAYA_RUNTIME_PREFLIGHT)
+    return LayaTrainingRunFactory.build_staging(spec, runtime, training_cfg)
 
 
 def _publish_factory() -> LayaPublishFactory:
@@ -216,6 +214,14 @@ def _publish_factory() -> LayaPublishFactory:
 
 def _transport_factory() -> LayaTransportFactory:
     return LayaTransportFactory(_spec(), _runtime())
+
+
+def _training_run():
+    """The ONE run owner, wired from the lane boundary (see its factory)."""
+    from cli.laya_training_run import LayaTrainingRunFactory
+
+    return LayaTrainingRunFactory.from_config(
+        spec=_spec(), train_root=TRAIN_ROOT, training_config=training_cfg)
 
 
 # ── recipe surface ─────────────────────────────────────────────────────────
@@ -487,6 +493,12 @@ def main() -> None:
                         help="delete --decision's kernel (kaggle only), "
                              "releasing a live session first; dry-run unless "
                              "--execute")
+    parser.add_argument("--track", action="store_true",
+                        help="real-time tracking via the W&B run reader, "
+                             "degrading to the ONE kaggle execution-log reader "
+                             "(kaggle only)")
+    parser.add_argument("--run-tag", default=None,
+                        help="the W&B run tag to track (--track)")
     parser.add_argument("--watch", action="store_true",
                         help="run the terminal watcher for a pushed kernel: "
                              "poll to terminal, download via `kaggle kernels "
@@ -530,8 +542,8 @@ def main() -> None:
         # report JSONs land under results/laya_lane/fetch/<decision>/.
         if not args.slug:
             parser.error("--fetch requires --slug owner/slug")
-        plan = collect_kaggle_result(args.decision, args.slug,
-                                     execute=args.execute)
+        plan = _training_run().harvest(args.decision, args.slug,
+                                       execute=args.execute)
         print(json.dumps(plan, indent=2), flush=True)
         return
 
@@ -555,13 +567,24 @@ def main() -> None:
         return
 
     if args.delete:
-        # First-class deletion: resolve the kernel the decision ran on (or an
-        # explicit --slug), release a live session, then delete. Dry-run by
-        # default.
+        # Teardown: resolve the kernel the decision ran on (or an explicit
+        # --slug), stop its running session, THEN delete the kernel. Dry-run by
+        # default (the owner composes the two canonical transport calls).
         if args.kind != "kaggle":
             parser.error("--delete is a kaggle-lane operation")
         slug = args.slug or kernel_slug(args.decision)
-        plan = delete_kaggle_kernel(slug, execute=args.execute)
+        plan = _training_run().teardown(slug, execute=args.execute)
+        print(json.dumps(plan, indent=2, default=str), flush=True)
+        return
+
+    if args.track:
+        # Real-time tracking: the W&B run reader first (no run tag -> the ONE
+        # kaggle execution-log reader for the resolved kernel). Kaggle only.
+        if args.kind != "kaggle":
+            parser.error("--track is a kaggle-lane operation")
+        slug = args.slug or kernel_slug(args.decision)
+        plan = _training_run().track(run_tag=args.run_tag, slug=slug,
+                                     follow=True)
         print(json.dumps(plan, indent=2, default=str), flush=True)
         return
 

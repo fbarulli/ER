@@ -25,8 +25,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from core.common import training_cfg as _tcfg
 from core.laya_config import LayaSpec
 from cli import laya_lane
@@ -47,8 +45,11 @@ GOLDEN_SHA256: dict[str, str] = {
     # guard, unconditional epoch stop broadcast) is merged with the laya-lanes
     # holdout/HPO surfaces; finetune/finetune-smoke carry both, holdout-eval
     # carries the lanes runtime preflight.
-    "finetune": "d2d71da5bf77dedacdd0c61a9507a41500cfb84f2e16c3a3e4a7a1b2b6464852",
-    "finetune-smoke": "98fdc3c3645e39e5f9dea84299287110faa40ae38d77b091ed2cf1f43e345fc9",
+    # Re-pinned again for the W&B real-time reader: the finetune kernel sets
+    # PYTHONUNBUFFERED=1 at the top so the live output.log reader sees lines
+    # immediately (no other byte moved).
+    "finetune": "b2e580e77e96202f978739efb8291138834fbff8be66821a9f84086edc89f832",
+    "finetune-smoke": "ef9b220cfc0c5a9f86e0f80069ab0efc1e282e4df625c564fb09d828414de13e",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
 }
