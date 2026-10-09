@@ -58,6 +58,10 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         events.append('download')
         target.write_bytes(b'corrupt' if corrupt else payload.read_bytes())
     monkeypatch.setattr(backend, '_download_one_remote_file', download)
+    monkeypatch.setattr(backend, '_upload_with_retries',
+                        lambda *a, **k: events.append('upload'))
+    monkeypatch.setattr('model_tracks.run_retention.publish_result_paths',
+                        lambda *a, **k: events.append('retain'))
     monkeypatch.setattr(backend, 'stop', lambda: events.append('stop') or released)
     monkeypatch.setattr(time, 'sleep', lambda _: None)
     monkeypatch.setattr(resume, 'validate_archived_track', lambda *a, **kw: events.append('validate'))
@@ -67,7 +71,7 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         # loudly when the boundary reads it (data is never pre-checked).
         with pytest.raises(ValueError):
             colab.run(inputs, 'run', git_inputs=transport)
-        assert events[:2] == ['train', 'download']
+        assert events[:3] == ['upload', 'train', 'download']
         return
     if not released:
         with pytest.raises(RuntimeError, match='termination could not be verified'):
@@ -75,7 +79,8 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         assert 'pull' not in events and 'complete' not in events
         return
     assert colab.run(inputs, 'run', git_inputs=transport) == 'final.zip'
-    assert events == ['train', 'download', 'stop'] + ['validate'] * 3 + [('complete', {'publish': False})]
+    assert events == ['upload', 'train', 'download', 'stop'] + ['validate'] * 3 + [
+        ('complete', {'publish': False}), 'retain']
 
 
 def test_suite_runtime_does_not_require_dvc_distribution(monkeypatch):
