@@ -14,6 +14,9 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from cli import laya_lane
 from cli.laya_smoke import FinetuneSmokeCorpus
 from core.laya_config import FinetuneSmokeSpec, LayaSpec
@@ -121,6 +124,28 @@ def test_smoke_kernel_stages_cpu_with_dedicated_slugs_and_dials(
     # the rendered payload still clears both staging-time AST gates
     laya_lane._kernel_script_gate(script)
     laya_lane._module_scope_gate(script)
+
+
+def test_smoke_kernel_stages_gpu_when_device_is_cuda(tmp_path, monkeypatch):
+    _spec(tmp_path, monkeypatch, finetune_smoke=FinetuneSmokeSpec(
+        kernel_slug=SMOKE_KERNEL, dataset_slug=SMOKE_DATASET, device="cuda"))
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_finetune_kernel(run_tag="laya_smoke",
+                                              smoke=True)
+    stage = Path(receipt["staged"])
+    metadata = json.loads((stage / "kernel-metadata.json").read_text())
+    # device="cuda" is the ONE source: metadata + baked env + receipt agree
+    assert metadata["enable_gpu"] is True
+    assert receipt["device"] == "cuda"
+    assert receipt["gpu"] == "T4 (single)"
+    script = (stage / "laya_finetune.py").read_text()
+    assert _baked(script, "FINETUNE_DEVICE") == "cuda"
+
+
+def test_smoke_device_rejects_unknown_values():
+    with pytest.raises(ValidationError):
+        FinetuneSmokeSpec(device="tpu")
 
 
 def test_smoke_kind_routes_through_the_decision_dispatch(tmp_path, monkeypatch):

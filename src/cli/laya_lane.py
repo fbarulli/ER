@@ -4395,7 +4395,8 @@ def stage_finetune_kernel(*, revision: str | None = None,
     """Stage the kaggle fine-tune kernel payload (dry-safe).
 
     Writes under results/laya_lane/kaggle/<kind>/ (``finetune``, or
-    ``finetune-smoke`` for the CPU smoke):
+    ``finetune-smoke``; the smoke runs CPU unless
+    ``laya.finetune_smoke.device: cuda``):
       kernel-metadata.json + laya_finetune.py + <kind>.receipt.json
       (+ the staged corpus dataset payload).
     Fail-loud preconditions (no silent skip):
@@ -4453,15 +4454,19 @@ def stage_finetune_kernel(*, revision: str | None = None,
     stage = staging_dir() / "kaggle" / kind
     stage.mkdir(parents=True, exist_ok=True)
     tag = run_tag or spec.run_tag_prefix + decision_tag()
+    # ONE device source: the smoke's `laya.finetune_smoke.device` (default
+    # "cpu" = the original CPU smoke) or the prod `laya.finetune.device`.
+    device = smoke_spec.device if smoke else spec.finetune.device
     metadata: dict[str, Any] = {
         "id": slug,
         "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
         "code_file": FINETUNE_CODE_FILE,
         "language": "python",
         "kernel_type": "script",
-        # the CPU smoke pins enable_gpu=False; the prod kind keeps the single
-        # T4 (the script pins CUDA_VISIBLE_DEVICES=0 either way).
-        "enable_gpu": not smoke,
+        # enable_gpu derives from the SAME device: a cpu smoke never requests a
+        # GPU; prod keeps its single T4 (the script pins CUDA_VISIBLE_DEVICES=0
+        # either way).
+        "enable_gpu": not smoke or device != "cpu",
         "enable_internet": True,
         # THE CORPUS + THE BASE CHECKPOINT TRAVEL AS DATASETS: kernels push
         # does NOT ship the co-located JSONL files, and the base checkpoint
@@ -4473,7 +4478,6 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "is_private": True,
     }
     recipe = _finetune_smoke_recipe(spec) if smoke else finetune_config(spec)
-    device = "cpu" if smoke else spec.finetune.device
     values = {
         "LAYA_PACKAGE": spec.finetune_package,
         "BASE_MODEL_ARCHIVE": spec.base_model_archive,
@@ -4515,7 +4519,7 @@ def stage_finetune_kernel(*, revision: str | None = None,
     receipt = {
         "kernel": slug,
         "kind": kind,
-        "gpu": "CPU (smoke)" if smoke else "T4 (single)",
+        "gpu": "CPU (smoke)" if smoke and device == "cpu" else "T4 (single)",
         "run_tag": tag,
         "staged": str(stage),
         "code_file": FINETUNE_CODE_FILE,
