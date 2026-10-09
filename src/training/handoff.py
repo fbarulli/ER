@@ -336,20 +336,20 @@ def _validated_by_note(plan_identity_revalidate: bool) -> list[str]:
     validated_by = ['model_tracks.preflight (suite_inputs, same run and process)',
                     'training.train_prepared (trainer start, per training run)']
     if plan_identity_revalidate:
-        validated_by.append('training.handoff (data size recomputed at this boundary)')
+        validated_by.append('training.handoff (frozen plan revalidated at this boundary)')
     return validated_by
 
 
-def _maybe_recompute_plan_size(prepared, plan, loss, smoke: bool,
-                                 plan_identity_revalidate: bool,
-                                 validated_by: list[str]) -> None:
-    """The plan size stays preflight-attested unless this boundary runs standalone."""
+def _maybe_revalidate_plan(plan, loss, smoke: bool,
+                           plan_identity_revalidate: bool,
+                           validated_by: list[str]) -> None:
+    """The frozen plan stays preflight-attested unless this boundary runs standalone."""
     if not plan_identity_revalidate:
         return
     from core.common import SEED
     from training.run_plan import validate_run_plan
-    validate_run_plan(prepared, plan, loss=loss, train_frac=1., sample=smoke, seed=SEED)
-    validated_by.append('training.handoff (data size recomputed at this boundary)')
+    validate_run_plan(plan, loss=loss, train_frac=1., sample=smoke, seed=SEED)
+    validated_by.append('training.handoff (frozen plan revalidated at this boundary)')
 
 
 def _maybe_check_tokens(timing: Timing, prepared) -> dict[str, Any]:
@@ -367,10 +367,9 @@ def _attest_loss_batch(prepared, graph: dict, suite, *,
                        plan_identity_revalidate: bool = False):
     """Loss/batch correctness of the frozen objective (the trainer's contract).
 
-    The data-size identity was enforced by the suite preflight during
-    suite_inputs of this same run and process; here the structural contract
-    is attested over the cached plan, and the size is only recomputed when
-    this boundary runs standalone.
+    The frozen objective was attested by the suite preflight during suite_inputs
+    of this same run and process; here the structural contract is re-attested
+    over the cached plan, and revalidated only when this boundary runs standalone.
     """
     from core.common import training_cfg
     plan = prepared.get('training_plan')
@@ -383,8 +382,8 @@ def _attest_loss_batch(prepared, graph: dict, suite, *,
     loss = training_cfg().training.loss
     identity = _validate_frozen_plan_identity(plan, loss)
     validated_by = _validated_by_note(plan_identity_revalidate)
-    _maybe_recompute_plan_size(prepared, plan, loss, smoke,
-                                 plan_identity_revalidate, validated_by)
+    _maybe_revalidate_plan(plan, loss, smoke,
+                           plan_identity_revalidate, validated_by)
     batch_sizes = _resolve_batch_sizes(plan, smoke)
     timing = Timing('training.handoff.loss_batch')
     timing.mark('plan_identity')

@@ -35,6 +35,10 @@ skip it.
 - **No hardcoded vars.** Magic numbers/strings/paths/flags go in config (YAML/env) and are
   read from there — never literals buried in code.
 - **Make illegal states unrepresentable** (enums/models over free strings/booleans).
+- **Data is never checked by anyone.** Inputs (datasets, artifacts, bundles, files) are
+  immutable: any data change yields a NEW artifact/bundle. Never add a data-integrity,
+  existence, size, hash/digest, or staleness/verify gate. Config/schema (pydantic on
+  YAML/config) validation is NOT a data check and still applies.
 
 ## 3. Errors, logging, observability
 

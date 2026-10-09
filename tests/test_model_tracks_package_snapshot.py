@@ -99,7 +99,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     from model_tracks import training_data as shared_training_data_mod
     from model_tracks import shared_graph_data as shared_graph_data_mod
     shared_stub = shared_training_data_mod.SharedTrainingData.model_construct(
-        source_rows=1, canonical_rows=0, payload_rows=1, inputs_size={},
+        source_rows=1, canonical_rows=0, payload_rows=1,
         examples=[], endpoints=[])
     monkeypatch.setattr(prepared_bundle_mod, 'load_prepared_bundle', lambda _: (SimpleNamespace(), {}))
     monkeypatch.setattr(shared_training_data_mod, 'from_bundle', lambda *a, **k: shared_stub)

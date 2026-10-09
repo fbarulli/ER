@@ -1,7 +1,5 @@
 """Bound CPU preparation plans for GPU workers; no encoder forward passes."""
 from __future__ import annotations
-from core.portable_archive import ByteCount
-import json
 import math
 from pathlib import Path
 import numpy as np
@@ -53,12 +51,12 @@ def validate_collapse_regulation(config):
     Owner ruling 2026-10-07: the only real test that matters is if the loss
     functions have all they need to regulate collapse.  We check ONLY the
     uniformity regularizer and the collapse guardrail; every unrelated config
-    key (laya/kaggle/paths/script lanes) is ignored on purpose, because the
-    plan's data/row identity is already bound by ``data_size``.
+    key (laya/kaggle/paths/script lanes) is ignored on purpose: data is never
+    checked, and the plan binds only the objective/sampling contract.
 
     Pure and cheap by construction: O(number of collapse knobs) dict reads of
-    an already-loaded config object.  No ``data_size``, no array work, no
-    model/dataset load, no full-config serialisation, no config reload.
+    an already-loaded config object.  No array work, no model/dataset load, no
+    full-config serialisation, no config reload.
     """
     config = config or {}
     training = config.get('training') or {}
@@ -118,29 +116,18 @@ def validate_collapse_regulation(config):
     return config
 
 
-def data_size(bundle) -> int:
-    size = ByteCount()
-    for key in ('payload','row_bc','country','mask_audit','hard_negative_mask_audit','holdout_populations'):
-        value = bundle.get(key)
-        if isinstance(value,np.ndarray): value=value.tolist()
-        size.update(json.dumps({key:value},sort_keys=True,ensure_ascii=False,default=str).encode())
-    size.update(json.dumps(bundle['df'].to_dict(orient='list'),sort_keys=True,ensure_ascii=False,default=str).encode())
-    for key in ('pos','hp_pairs','neg','train_neg','structured_features','emb0'):
-        array=np.asarray(bundle[key])
-        size.update(key.encode());size.update(str(array.dtype).encode());size.update(str(array.shape).encode())
-        size.update(array.tobytes())
-    for key in ('neg_sources','train_neg_sources'):
-        size.update(json.dumps(np.asarray(bundle[key]).tolist(),ensure_ascii=False).encode())
-    for key in ('labeled_pairs_csv','canonical_records_csv','gate_results_csv'):
-        size.update(bundle[key])
-    return size.total
+def plan_identity(*, loss, train_frac, sample, seed=SEED):
+    """The frozen plan's identity: the objective and the sampling contract only.
 
-
-def plan_identity(bundle,*,loss,train_frac,sample,seed=SEED):
+    No data size/hash is bound: a bundle is immutable, so any data change yields
+    a NEW bundle rather than a plan that must be compared against the old one
+    (owner directive: data is never checked). Legacy identities that still carry
+    `config_size`/`data_size` load unchanged because unknown keys are ignored.
+    """
     if not 0 < train_frac <= 1:
         raise ValueError('local training plan requires 0 < train_frac <= 1')
-    return {'loss':loss,'train_frac':float(train_frac),'sample':bool(sample),'seed':int(seed),
-            'data_size':data_size(bundle)}
+    return {'loss': loss, 'train_frac': float(train_frac), 'sample': bool(sample),
+            'seed': int(seed)}
 
 
 #: The frozen input files a prepared bundle carries inline. The bundle member
@@ -206,20 +193,20 @@ def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
     from training.attrition import build_attrition_ledger
     for fold in fixed['folds']:
         fold['objective']['attrition_ledger'] = build_attrition_ledger(bundle, fold)
-    return {'version':1,'identity':plan_identity(bundle,loss=loss,train_frac=train_frac,sample=sample,seed=seed),
+    return {'version':1,'identity':plan_identity(loss=loss,train_frac=train_frac,sample=sample,seed=seed),
             'holdout':{'train':train_bc,'dev':dev_bc,'test':test_bc},'inputs':fixed}
 
 
-def validate_run_plan(bundle,plan,*,loss,train_frac,sample,seed=SEED):
-    expected=plan_identity(bundle,loss=loss,train_frac=train_frac,sample=sample,seed=seed)
+def validate_run_plan(plan,*,loss,train_frac,sample,seed=SEED):
+    expected=plan_identity(loss=loss,train_frac=train_frac,sample=sample,seed=seed)
     identity = dict(plan.get('identity') or {})
-    # Bind only the identity fields we still own. A frozen plan built before
-    # the whole-config hash was retired still carries a legacy
-    # `config_size` key; ignoring it is exactly what lets the existing
-    # bundle validate without a rebuild. `data_size` is the real binding.
+    # Bind only the objective and the sampling contract. A frozen plan built
+    # before the config/data identities were retired still carries a legacy
+    # `config_size`/`data_size` key; ignoring it is exactly what lets the
+    # bundle validate without a rebuild (owner directive: data is never checked).
     bound = {key: identity.get(key) for key in expected}
     if plan.get('version')!=1 or bound!=expected:
-        raise ValueError('prepared training row plan differs from loss/train_frac/sample/seed/data; rebuild locally')
+        raise ValueError('prepared training row plan differs from loss/train_frac/sample/seed; rebuild locally')
     validate_collapse_regulation(load_config())
     if plan['inputs']['skipped'] or not plan['inputs']['folds']:
         raise ValueError('prepared training row plan has failed/skipped folds')

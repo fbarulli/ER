@@ -51,7 +51,7 @@ def _frozen_plan(loss, rows, batch_sizes, epochs):
                for device, bs in batch_sizes.items()}
     return {'version': 1,
             'identity': {'loss': loss, 'train_frac': 1.0, 'sample': False,
-                         'seed': SEED, 'config_size': '0' * 64, 'data_size': '1' * 64},
+                         'seed': SEED},
             'holdout': {'train': [], 'dev': [], 'test': []},
             'inputs': {'skipped': False,
                        'folds': [{'objective': {'dataset': {'anchor': list(rows)},

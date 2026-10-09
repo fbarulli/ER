@@ -180,7 +180,7 @@ def preflight(config: Path) -> dict:
     payload_size = _payload_size(bundle['payload'])
     if bundle['training_tokens']['payload_size'] != payload_size or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
         raise ValueError('training native tokens differ from frozen payload')
-    validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
+    validate_run_plan(bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
     from core.common import runtime
     batch_sizes = {device: int(runtime('batch_size_' + device)) for device in ('cpu', 'cuda')}
     if is_smoke:

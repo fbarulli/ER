@@ -180,16 +180,16 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         raise ValueError("prepared bundle lacks local training row plan; rebuild locally before GPU training")
     if attestation is not None:
         # The handoff boundary attested this exact bundle's plan identity and
-        # epoch coverage; re-proving the bundle bytes is the only live check.
+        # epoch coverage; the sealed plan is consumed as it was frozen.
         plan = bundle["training_plan"]
     else:
         from training.run_plan import validate_run_plan
 
         _run_plan_started = time.perf_counter()
-        plan = validate_run_plan(bundle, bundle["training_plan"], loss=args.loss,
+        plan = validate_run_plan(bundle["training_plan"], loss=args.loss,
                                  train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
         emit_timing(
-            f"[timing] training.run_plan data_size_revalidation: "
+            f"[timing] training.run_plan row_plan_revalidation: "
             f"{time.perf_counter() - _run_plan_started:.3f}s"
         )
     if shared_path:

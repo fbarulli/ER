@@ -112,7 +112,6 @@ class SharedTrainingData(BaseModel):
     source_rows: int = Field(gt=0)
     canonical_rows: int = Field(ge=0)
     payload_rows: int = Field(gt=0)
-    inputs_size: dict[str, int]
     endpoints: list[TrainingEndpoint]
     examples: list[TrainingExample] = Field(min_length=1)
 
@@ -220,11 +219,7 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
             source_id=source_id, parent_index=copies.get(index),
             text_size=ByteCount(bundle['payload'][index].encode()).total))
     return SharedTrainingData(source_rows=source_rows, canonical_rows=len(gtins),
-        payload_rows=len(bundle['payload']), inputs_size={
-            'frozen_data': plan['identity']['data_size'],
-            **{
-            key: ByteCount(bundle[key]).total
-            for key in ('canonical_records_csv', 'labeled_pairs_csv', 'gate_results_csv')}},
+        payload_rows=len(bundle['payload']),
         endpoints=endpoints, examples=examples)
 
 

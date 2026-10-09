@@ -7,12 +7,11 @@ from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding,
 def shared():
     return SharedTrainingData.model_validate({
         'source_rows': 2, 'canonical_rows': 1, 'payload_rows': 4,
-        'inputs_size': {'frozen_data': 'a' * 64},
         'endpoints': [
-            dict(payload_index=0, kind='listing', entity='entity', source_id='sku', text_size='b' * 64),
-            dict(payload_index=2, kind='canonical', entity='entity', source_id='canonical', text_size='c' * 64),
+            dict(payload_index=0, kind='listing', entity='entity', source_id='sku', text_size=64),
+            dict(payload_index=2, kind='canonical', entity='entity', source_id='canonical', text_size=64),
             dict(payload_index=3, kind='augmentation', entity='entity', source_id='copy',
-                 parent_index=0, text_size='d' * 64),
+                 parent_index=0, text_size=64),
         ],
         'examples': [dict(example_id=i, anchor=0, positive=2, negative=3, population='twin') for i in range(2)],
     })

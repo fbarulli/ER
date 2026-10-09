@@ -8,18 +8,18 @@ from training.sampler import FrozenBatchSampler
 
 @pytest.fixture
 def saved_plan(monkeypatch):
-    identity = dict(loss='mnrl', train_frac=1., sample=True, seed=1729,
-                    data_size='same-data')
-    monkeypatch.setattr(run_plan, 'plan_identity', lambda *args, **kwargs: dict(identity, **{
+    identity = dict(loss='mnrl', train_frac=1., sample=True, seed=1729)
+    monkeypatch.setattr(run_plan, 'plan_identity', lambda **kwargs: dict(identity, **{
         key: kwargs[key] for key in ('loss', 'train_frac', 'sample', 'seed')}))
-    # A frozen plan built before the whole-config hash was retired still
-    # carries a legacy `config_size`; the run-plan path must ignore it.
-    return dict(version=1, identity=dict(identity, config_size='old-config'),
+    # A frozen plan built before the config/data identities were retired still
+    # carries legacy `config_size`/`data_size`; the run-plan path must ignore them.
+    return dict(version=1, identity=dict(identity, config_size='old-config',
+                                         data_size='old-data'),
                 inputs=dict(skipped=[], folds=[{}]))
 
 
 def validate(plan, *, sample=True):
-    return run_plan.validate_run_plan({}, plan, loss='mnrl', train_frac=1.,
+    return run_plan.validate_run_plan(plan, loss='mnrl', train_frac=1.,
                                       sample=sample, seed=1729)
 
 
@@ -42,12 +42,10 @@ def _valid_collapse_config():
     }
 
 
-def test_plan_identity_drops_whole_config_hash(monkeypatch):
-    monkeypatch.setattr(run_plan, 'data_size', lambda bundle: 4242)
-    identity = run_plan.plan_identity({}, loss='mnrl', train_frac=1., sample=False)
-    assert 'config_size' not in identity
+def test_plan_identity_binds_objective_and_sampling_only():
+    identity = run_plan.plan_identity(loss='mnrl', train_frac=1., sample=False)
     assert identity == {'loss': 'mnrl', 'train_frac': 1.0, 'sample': False,
-                        'seed': run_plan.SEED, 'data_size': 4242}
+                        'seed': run_plan.SEED}
 
 
 def test_frozen_inputs_materialize_from_the_bundle_members(tmp_path, monkeypatch):
@@ -103,15 +101,15 @@ def test_full_training_accepts_unrelated_config_drift(saved_plan):
     assert validate(saved_plan, sample=False) is saved_plan
 
 
-def test_full_training_still_rejects_data_drift(saved_plan):
+def test_legacy_data_and_config_identity_are_ignored(saved_plan):
+    """A frozen plan's retired keys never gate the plan: data is never checked."""
     saved_plan['identity']['sample'] = False
     saved_plan['identity']['data_size'] = 'other-data'
-    with pytest.raises(ValueError, match='row plan differs'):
-        validate(saved_plan, sample=False)
+    saved_plan['identity']['config_size'] = 'other-config'
+    assert validate(saved_plan, sample=False) is saved_plan
 
 
-@pytest.mark.parametrize('field,value', [('data_size', 'other-data'),
-                                       ('loss', 'contrastive'), ('seed', 42),
+@pytest.mark.parametrize('field,value', [('loss', 'contrastive'), ('seed', 42),
                                        ('train_frac', .5), ('sample', False)])
 def test_smoke_rejects_incompatible_plan(saved_plan, field, value):
     saved_plan['identity'][field] = value
@@ -136,7 +134,6 @@ def test_collapse_regulation_gate_is_pure_and_cheap(monkeypatch):
     def _boom(*args, **kwargs):
         raise AssertionError(
             'the collapse gate must not derive data or reload the config')
-    monkeypatch.setattr(run_plan, 'data_size', _boom)
     monkeypatch.setattr(run_plan, 'load_config', _boom)
     config = _valid_collapse_config()
     assert run_plan.validate_collapse_regulation(config) is config

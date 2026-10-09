@@ -214,12 +214,12 @@ def test_d4_uniformity_counters_classify_batches_and_drain():
     )
 
 
-def test_d6_unattested_path_carries_data_digest_mark():
+def test_d6_unattested_path_carries_plan_revalidation_mark():
     import inspect
     import training.train_prepared as tp
 
     main_src = inspect.getsource(tp._main)
-    assert "data_size_revalidation" in main_src
+    assert "row_plan_revalidation" in main_src
     assert "validate_run_plan" in main_src
 
 
