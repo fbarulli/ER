@@ -2742,9 +2742,6 @@ def main() -> None:
         close_live_log()
         release_colab_launch_lock(launch_lock)
 
-if __name__ == "__main__":
-    main()
-
 # Session/runtime/environment moved to cli.colab_runtime (split phase C);
 # imported at module end so _timed_colab resolution at decoration time works.
 from cli.colab_runtime import (
@@ -2768,4 +2765,7 @@ from cli.colab_runtime import (
     verify_remote_models,
     verify_training_inputs,
 )  # split phase C
+
+if __name__ == "__main__":
+    main()
 
