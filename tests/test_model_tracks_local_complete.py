@@ -216,6 +216,9 @@ def test_interrupted_text_report_preserves_future_artifacts(tmp_path, monkeypatc
     # every prior-attempt text__* artifact is preserved, not mixed
     assert any(name.endswith('text__future_artifact.json') for name in preserved)
     assert any(name.endswith('text__training_report.md') for name in preserved)
+    # the declared `vectors` artifact is the trained output, never parked
+    assert not any(name.endswith('text__vectors.npz') for name in preserved)
+    assert (text_dir / 'text__vectors.npz').read_bytes() == b'text-vectors'
     assert (text_dir / 'text__future_artifact.json').read_text() == 'attempt 2'
     assert (text_dir / 'text__training_report.md').read_text() == 'attempt 2'
 

@@ -433,7 +433,7 @@ def _postprocess_tracks(tree: Bundle, setup: Path, settings) -> None:
             continue
         if track == "text":
             from model_tracks.text_report import complete as text_complete
-            _park_interrupted(output, "text__*")
+            _park_interrupted(output, "text__*", track=track)
             text_complete(output, setup, device="cpu", report_test=settings.report_test)
             route = 'text_report'
         elif track == "cascade":
@@ -521,7 +521,7 @@ def _complete_graph_track(tree: Bundle, output: Path, setup: Path, track: str,
     if checkpoint is None or not checkpoint.is_file():
         raise ValueError(f"selected checkpoint unavailable: {track}")
     report = output / Artifacts.member_name("local_completion", track=track)
-    _park_interrupted(output, report.name)
+    _park_interrupted(output, report.name, track=track)
     report.mkdir()
     saved_inference = output / Artifacts.member_name("inference", track=track)
     from model_tracks.ablation import file_size as _file_size
@@ -579,7 +579,7 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
     artifacts = worker._cascade_artifacts(tree._root(), lane)
     records = load_records(listings)
     pair_index = load_pairs(pairs, records)
-    _park_interrupted(output, "cascade__*")
+    _park_interrupted(output, "cascade__*", track="cascade")
     ranked, relevant, decisions = worker._cascade_roles(records, pair_index, artifacts)
     # An unknown query count is reported as unknown, never guessed: the roles
     # object owns the count and a caller may legitimately hand back a shape that
@@ -616,11 +616,16 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
     )
 
 
-def _park_interrupted(output: Path, pattern: str) -> None:
-    """Preserve interrupted artifacts rather than mixing them into a new attempt."""
+def _park_interrupted(output: Path, pattern: str, *, track: str) -> None:
+    """Preserve interrupted artifacts rather than mixing them into a new attempt.
+
+    The track's declared ``vectors`` artifact is the trained output a re-run
+    composes its report from, so it is NEVER parked. Its name comes from
+    ``Artifacts`` (config SSOT), never a re-spelled suffix.
+    """
     import time
-    parked = [path for path in sorted(output.glob(pattern))
-              if not path.name.endswith("__vectors.npz")]
+    keep = Artifacts.member_name("vectors", track=track)
+    parked = [path for path in sorted(output.glob(pattern)) if path.name != keep]
     for path in parked:
         path.rename(path.with_name(f"interrupted-{time.time_ns()}-{path.name}"))
     trace().add(
