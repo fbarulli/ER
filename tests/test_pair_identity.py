@@ -38,6 +38,16 @@ def test_pair_id_folds_a_upc12_to_its_gtin13_sibling():
     assert PairIdentity.of(UPC12, OTHER) == PairIdentity.of(EAN13, OTHER)
 
 
+def test_pair_id_reconciles_a_source_spelling_with_its_norm_column():
+    """The 13-digit source spelling and its 14-digit ``*_norm`` sibling are ONE pair.
+
+    Every artifact's ``*_norm`` column is 14 digits, while source frames carry
+    13; the boundary canonicalizes both, so a pair joins across artifacts.
+    """
+    source = "4260183211006"
+    assert PairIdentity.of(source, OTHER) == PairIdentity.of("0" + source, OTHER)
+
+
 def test_pair_id_is_unique_per_gate_pair():
     pairs = [("1" * 13, "2" * 13), ("2" * 13, "3" * 13), ("1" * 13, "3" * 13)]
     ids = {PairIdentity.of(a, b) for a, b in pairs}

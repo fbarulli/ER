@@ -39,9 +39,16 @@ class PairIdentity:
         labeled / validation frames, but the raw exports carry such cells). A
         ``None`` must not become the shared key of every malformed endpoint, so
         the stripped raw spelling is the fallback.
+
+        A normalized digit GTIN is left-padded to the 14-digit width every
+        artifact's ``*_norm`` column uses, so the 13-digit source spelling and
+        its 14-digit ``_norm`` sibling are ONE endpoint (one canonical spelling
+        at the boundary, not a check).
         """
         key, _valid = normalize_gtin_value(raw)
-        return key if key else str(raw).strip()
+        if key:
+            return key.zfill(14) if key.isdigit() else key
+        return str(raw).strip()
 
     @classmethod
     def of(cls, gtin1: object, gtin2: object) -> str:

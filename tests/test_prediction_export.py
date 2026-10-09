@@ -93,7 +93,11 @@ def test_label_score_threshold_and_predicted_are_carried():
     assert list(frame["score"]) == [0.9, 0.2]
     assert list(frame["predicted"]) == [1, 0]
     assert list(frame["threshold"]) == [0.5, 0.5]
-    assert list(frame["gtin1_norm"]) == [EAN13, PairIdentity.endpoint_key(OTHER)]
+    assert list(frame["gtin1_norm"]) == [PairIdentity.endpoint_key(EAN13),
+                                         PairIdentity.endpoint_key(OTHER)]
+    # ONE ``_norm`` meaning across artifacts: the 14-digit width every
+    # validation/prediction frame shares (13-digit sources are left-padded).
+    assert all(len(value) == 14 for value in frame["gtin1_norm"])
 
 
 def test_filename_parallels_the_trained_lane_pair_dump():
