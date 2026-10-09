@@ -188,7 +188,8 @@ class KaggleCLI:
             spec = lane._spec()
             identity = lane.kernel_identity(args.kernel, spec)
             resolved = args.slug or identity.slug(spec)
-            print(json.dumps(lane.stream_kernel_logs(resolved), indent=2), flush=True)
+            print(json.dumps(lane.kernel_logs(resolved, follow=True),
+                             indent=2), flush=True)
             return
         if args.what == "kernel-status":
             print(json.dumps(lane.kernel_status(which=args.kernel, slug=args.slug), indent=2), flush=True)

@@ -243,7 +243,6 @@ fetch_failed_kernel_log = KaggleOutputs.fetch_failed_kernel_log
 _spawn_autowatch = KaggleMonitor._spawn_autowatch
 autowatch_kernel = KaggleMonitor.autowatch_kernel
 supervise_kernels = KaggleMonitor.supervise_kernels
-stream_kernel_logs = KaggleMonitor.stream_kernel_logs
 clear_kernel_session_id = KaggleMonitor.clear_kernel_session_id
 capture_kernel_session_id = KaggleMonitor.capture_kernel_session_id
 recorded_kernel_handle = KaggleMonitor.recorded_kernel_handle
