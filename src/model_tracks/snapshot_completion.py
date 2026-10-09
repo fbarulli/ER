@@ -137,7 +137,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             )
             env = {**os.environ, 'PYTHONPATH': str(snapshot / 'src'),
                    'EUROMONITOR_PROJECT_ROOT': str(snapshot),
-                   'EUROMONITOR_RESULTS_DIR': str(snapshot / 'training_results'),
+                   'EUROMONITOR_RESULTS_DIR': str(snapshot / 'results' / 'training_results'),
                    'MPLCONFIGDIR': str(snapshot / 'matplotlib'),
                    'CUDA_VISIBLE_DEVICES': '', 'PYTHONUNBUFFERED': '1'}
             print(f'[snapshot-completion] frozen CPU runtime; '

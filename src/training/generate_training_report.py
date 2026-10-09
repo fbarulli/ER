@@ -16,9 +16,9 @@ resolve from that ONE binding rather than a literal here.
 Example::
 
     python -m training.generate_training_report \
-      --metrics training_results/<run>/worker_1/*fold_metrics.csv \
-      --pairs training_results/<run>/worker_1/*fold0_pairs.csv \
-      --out-dir training_results/<run>/worker_1/report
+      --metrics results/training_results/<run>/worker_1/*fold_metrics.csv \
+      --pairs results/training_results/<run>/worker_1/*fold0_pairs.csv \
+      --out-dir results/training_results/<run>/worker_1/report
 """
 
 from __future__ import annotations

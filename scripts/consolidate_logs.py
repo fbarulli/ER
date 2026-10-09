@@ -1,7 +1,7 @@
 """Consolidate run logs into one ordered file.
 
 The operator otherwise chases per-stage / per-lane / per-run logs across
-``logs/``, ``results/``, ``training_results/`` and the scratch roots. This
+``logs/``, ``results/`` and the scratch roots. This
 walks the given roots, orders every log by mtime, and writes a single
 concatenated document with a header per source so one file tells the whole
 story.
@@ -9,7 +9,7 @@ story.
   PYTHONPATH=src .venv/bin/python scripts/consolidate_logs.py
   # only the last 3h, include scratch smoke logs, cap each file:
   PYTHONPATH=src .venv/bin/python scripts/consolidate_logs.py \
-      --roots logs results training_results /tmp/opencode \
+      --roots logs results /tmp/opencode \
       --since-minutes 180 --max-bytes-per-file 200000
 
 Defaults are behavior-neutral (read-only discovery; one output file).
@@ -20,7 +20,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_ROOTS = ('logs', 'results', 'training_results', 'ablation_profile', 'training_profile')
+DEFAULT_ROOTS = ('logs', 'results', 'ablation_profile', 'training_profile')
 DEFAULT_EXTENSIONS = ('.log', '.jsonl')
 
 

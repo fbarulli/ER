@@ -115,7 +115,7 @@ def is_duplicate_copy(member):
 def runs():
     found = {}
     for base in (PROJECT / 'results/model_tracks', PROJECT / 'results/graph_tracks',
-                 PROJECT / 'training_results'):
+                 PROJECT / 'results/training_results'):
         if not base.exists():
             continue
         for path in sorted(base.iterdir(), reverse=True):

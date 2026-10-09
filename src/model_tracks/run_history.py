@@ -3,7 +3,8 @@
 Two run sources share one facts model:
 - bundle runs: results/training_prep/<id>/ folders carrying manifest.json
   (the offline preparation pipeline's per-run record);
-- training runs: training_results/<id>/ recognized by the retention layer's
+- training runs: the training-results root (TRAINING_RESULTS/<id>) recognized
+  by the retention layer's
   track-marker logic (model_tracks.run_retention._looks_like_run — reused,
   never duplicated).
 
@@ -439,7 +440,7 @@ def bundle_facts(run_dir: Path) -> RunFacts:
 
 
 def training_run_facts(run_dir: Path) -> RunFacts:
-    """Facts for one training run (training_results/<id>, marker-verified)."""
+    """Facts for one training run (TRAINING_RESULTS/<id>, marker-verified)."""
     from model_tracks.run_retention import _looks_like_run
 
     run_dir = Path(run_dir).resolve()
@@ -460,15 +461,15 @@ def training_run_facts(run_dir: Path) -> RunFacts:
 
 
 def _default_prep_roots() -> list[Path]:
-    from core.common import TRAIN_ROOT
+    from core.common import RESULTS
 
-    return [TRAIN_ROOT / "results" / _preparation().run_dir_base]
+    return [RESULTS / _preparation().run_dir_base]
 
 
 def _default_training_roots() -> list[Path]:
-    from core.common import TRAIN_ROOT
+    from core.common import TRAINING_RESULTS
 
-    return [TRAIN_ROOT / "training_results"]
+    return [TRAINING_RESULTS]
 
 
 def list_bundles(prep_roots: Iterable[Path] | None = None) -> list[Path]:
@@ -774,7 +775,7 @@ def main() -> None:
     parser.add_argument("--prep-root", action="append", default=None,
                         help="results/training_prep root (repeatable)")
     parser.add_argument("--training-root", action="append", default=None,
-                        help="training_results root (repeatable)")
+                        help="training-results root (repeatable)")
     arguments = parser.parse_args()
     prep_roots = [Path(p) for p in arguments.prep_root] if arguments.prep_root else None
     training_roots = ([Path(p) for p in arguments.training_root]

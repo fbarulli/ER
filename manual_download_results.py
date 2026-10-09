@@ -23,6 +23,8 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from core.common import TRAINING_RESULTS
+
 
 def colab_command(*args: str, config: Path | None = None) -> list[str]:
     """Use the repository wrapper so manual downloads share launcher state."""
@@ -193,7 +195,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     run_id = Path(args.remote_base.rstrip("/")).name.removeprefix("concurrent_train_")
-    destination = args.destination or Path("training_results") / run_id
+    destination = args.destination or TRAINING_RESULTS / run_id
     destination.mkdir(parents=True, exist_ok=True)
 
     lock = acquire_session_lock(args.session, args.config)

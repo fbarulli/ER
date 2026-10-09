@@ -38,9 +38,13 @@ paths:
   # A clean clone therefore has every non-model CSV needed by data prep,
   # training, and inference without relying on local artifact directories.
   data_dir: "data"
-  results_dir: "results"                # frozen inputs + run-tree parent +
-                                        # shared/orchestration outputs at repo root
-  training_results_dir: "training_results" # verified Colab smoke outputs
+  results_dir: "results"                # ONE result root: frozen inputs, run
+                                        # trees, and lane outputs at repo root
+  # The Colab lane's output root (CPU bundle deliveries + verified GPU training
+  # / smoke runs). A DECLARED SUBPATH of results_dir (owner decision 2026-10-09:
+  # one physical root, CPU/GPU kept as distinct subdirs) — never a second
+  # top-level root.
+  training_results_dir: "results/training_results"
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   logs_dir: "logs"                      # per-step orchestrator logs
@@ -51,10 +55,12 @@ paths:
   laya_data_dir: "data/laya"
   ablation_dir: "artifacts/abl_opt"
   # The DVC output-root inventory by KEY (never a second spelling of a path):
-  # the sweep resolves each key through the ONE value above.
+  # the sweep resolves each key through the ONE value above. ``training_results_dir``
+  # is deliberately NOT listed: it is a SUBPATH of ``results_dir`` now, so the
+  # results root already covers its payloads (listing both would publish them
+  # twice and overlap).
   dvc_output_root_keys:
     - results_dir
-    - training_results_dir
     - embeddings_dir
     - logs_dir
     - training_profile_dir

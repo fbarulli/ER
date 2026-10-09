@@ -9,7 +9,7 @@ This module is part of the training call: the colab download path calls it.
 
 Owner goal 2026-10-09: every run RESULT (the suite result archives, the frozen
 input transports and the per-run trees under ``results/``, plus the verified
-``training_results/`` runs) is published through the SAME flow —
+training-results subtree ``TRAINING_RESULTS`` under it) is published through the SAME flow —
 ``publish_result_paths`` / ``publish_training_run`` reuse one DVC track, push and
 pointer-commit implementation, so the dagshub remote is the only place run
 payloads live and Git carries only ``*.dvc`` pointers and small receipts.
@@ -31,7 +31,7 @@ Verified layout facts (independent check 2026-10-05):
   levels below the run root (track_inventory.json or <track>__run_manifest.json
   under <run>/<track>/ or <run>/worker_1/<track>/); a run root itself never
   carries them, so the check recurses no deeper than that.
-- .gitignore ignores training_results/ wholesale; retention commits only
+- .gitignore ignores results/ wholesale; retention commits only
   the *.dvc sidecars and the DVC-managed .gitignore additions, enabled by
   explicit negations in .gitignore.
 """
@@ -306,7 +306,7 @@ def _looks_like_run(path: Path) -> bool:
     Markers only ever live in track subdirectories one or two levels below
     the run root (`<run>/<track>/<marker>` or `<run>/worker_1/<track>/<marker>`):
     results/model_tracks/<id>/<track>/<inventory_file>,
-    training_results/<run>/worker_1/<track>/<inventory_file> AND
+    TRAINING_RESULTS/<run>/worker_1/<track>/<inventory_file> AND
     <track>__run_manifest.json variants all match; nothing deeper and no
     run-root file can fake it.
     """
@@ -409,7 +409,7 @@ def list_runs() -> list[RunIndexEntry]:
     """Enumerate pruned-away runs recoverable from the DVC remote.
 
     Primary source: the remote directory's .dvc sidecars (dvc list over the
-    committed training_results tree). Each entry also carries the retention
+    committed training-results tree). Each entry also carries the retention
     commit that published it, when known.
     """
     from core.common import TRAINING_RESULTS

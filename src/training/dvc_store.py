@@ -660,7 +660,7 @@ def _publish_tracked_pointer_index(
 
     Worker output trees remain ignored and DVC-backed.  The tracked copies are
     only pointer metadata; each copied pointer is rewritten to restore its
-    original ``training_results/...`` target from a clean checkout. This writes
+    original ``TRAINING_RESULTS/...`` target from a clean checkout. This writes
     metadata and never reads (pulls) an object back.
     """
     import yaml

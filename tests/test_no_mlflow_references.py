@@ -16,7 +16,7 @@ Scope: every surface this project owns as code -- ``src``, ``config``,
 ``submission`` and ``tests``, plus the root-level code/config files
 (``*.py``, ``*.yaml``, ``*.toml``, ``*.txt``, ``*.cfg``, ``*.ini``, .gitignore).
 Generated run state and evidence records (``artifacts/``, ``jev/``, ``logs/``,
-``results/``, ``training_results/``, ``training_profile/``, ``wandb/``,
+``results/``, ``training_profile/``, ``wandb/``,
 ``.dvc/``, ``data/``, ``colab_cli_state/``) are data, not code: a captured log
 or a frozen before-image is a RECORD of what ran, so it is deliberately out of
 scope and must never be rewritten to look tidier than it was.
