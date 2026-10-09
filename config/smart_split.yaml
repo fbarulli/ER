@@ -1,0 +1,32 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# config/smart_split.yaml — the ONE smart-split declaration (owner:
+# core.smart_split.SmartSplit). Both training checkouts (laya + tracks) consume
+# this: the roles name what each physical split is FOR, the ratios are the
+# carve fractions, and the strata are the subgroups the stratified carve keeps
+# represented in every split. No value here is re-spelled in code.
+#
+# The power targets (the achievable MDE that sizes dev/validation) live in the
+# sibling SSOT config/sampling.yaml — read through core.sample_plan.SamplePlan.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# role -> the physical split file/quarter it names. `train` fits; `select` is
+# the HPO objective/early-stop split (dev); `validate` is the held-out report
+# split (test). A lane that reads this map can never disagree about the roles.
+roles:
+  train: train
+  select: dev
+  validate: test
+
+# physical split -> fraction of the population (largest-remainder allocation).
+ratios:
+  train: 0.5277777777777778
+  dev: 0.24305555555555555
+  test: 0.22916666666666666
+
+# The subgroup axes the stratified carve balances across every split. Both ride
+# every laya corpus record as a top-level tag; the component-deal tracks grain
+# keeps its leakage-safe fold and reads the same role map.
+strata: [difficulty_slice, attribute]
+
+# Per-stratum shuffle seed (the carve is a deterministic function of the data).
+seed: 1729
