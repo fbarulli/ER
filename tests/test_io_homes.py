@@ -213,9 +213,6 @@ def test_worker_package_verify_checks_manifest_and_paths(tmp_path: Path,
         lambda *a, **k: types.SimpleNamespace(stdout='rev\n'))
     worker_package.verify(manifest)
 
-    payload.write_text('tampered: cascade\n')
-    worker_package.verify(manifest)  # data is trusted: no byte comparison
-
 
 def test_worker_package_verify_rejects_a_traversal_member(tmp_path: Path,
                                                           monkeypatch) -> None:

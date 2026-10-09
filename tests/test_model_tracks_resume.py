@@ -168,28 +168,3 @@ def test_suite_archive_reuse_keys_on_identity_not_freshness(tmp_path):
     record_completion(output / 'text', 'text',
                       postprocess_complete=expected_postprocess('text', gpu_only=True))
     assert verify_suite_archive(archive, output, 'run', identity, gpu_only=True) is not None
-
-
-def test_archive_is_published_even_when_source_changes_during_write(tmp_path, monkeypatch):
-    """The writer never reads its output back: a changed source is data, not a refusal.
-
-    The sealed manifest records the source's size at inventory time (a record);
-    the archive is still published (owner directive: data is never checked).
-    """
-    import zipfile
-    from core.portable_archive import read_archive_manifest, write_archive
-    source = tmp_path / 'checkpoint.bin'
-    source.write_bytes(b'original')
-    output = tmp_path / 'run.zip'
-    original_write = zipfile.ZipFile.write
-    def mutate(self, filename, *args, **kwargs):
-        source.write_bytes(b'changed')
-        return original_write(self, filename, *args, **kwargs)
-    monkeypatch.setattr(zipfile.ZipFile, 'write', mutate)
-    archive = write_archive(output, {'checkpoint.bin':source}, manifest_name='manifest.json', metadata={})
-    assert archive == output and output.exists()
-    manifest = read_archive_manifest(output, 'manifest.json')
-    assert manifest['files']['checkpoint.bin'] == len(b'original')
-    with zipfile.ZipFile(output) as package:
-        assert package.read('checkpoint.bin') == b'changed'
-    assert not list(tmp_path.glob('*.partial-*'))

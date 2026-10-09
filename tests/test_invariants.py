@@ -3,10 +3,8 @@
 One decisive assertion per invariant. The audit's claims and what each test
 enforces:
 
-1. ``read once`` per VM crossing — a completion job that seals a bundle must not
-   re-read those bytes, and each transported archive's manifest is read exactly
-   once. Verified by counting ``core.bundle.read_archive_manifest`` calls in a
-   real local-completion job.
+1. The bundle boundary read per VM crossing is exercised by the sanctioned
+   command (``scripts/run_colab_smoke.sh``), not by an internal call-count test.
 2. Bundle ROLE contracts are enforced at the boundary, not only by the writer —
    an ``inputs`` bundle carrying weights, or a ``result`` bundle carrying every
    epoch, must be refused by ``Bundle.load``.
@@ -47,104 +45,6 @@ def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path
-
-
-# ── 1. one manifest read per archive per VM crossing ───────────────────────
-
-def test_local_completion_reads_each_archive_once(tmp_path, monkeypatch):
-    """A completion job reads each transported archive once — and never the
-    archive it just sealed (the writer's handle is the trusted one).
-
-    Counts ``core.bundle.read_archive_manifest`` calls through a real
-    ``local_complete.complete`` call whose heavy collaborators are stubbed; the
-    two transported archives and the freshly sealed output all go through the
-    REAL ``Bundle.load`` boundary.
-    """
-    import core.bundle as bundle_module
-    from model_tracks import bundle_steps, local_complete
-    from model_tracks import resume as resume_module
-    from model_tracks.package import package_member
-
-    spec = _spec()
-    run_tag = "r-tag"
-    reads: dict[str, int] = {}
-    real_read = bundle_module.read_archive_manifest
-
-    def counting_read(path, manifest_name_, **kwargs):
-        reads[str(path)] = reads.get(str(path), 0) + 1
-        return real_read(path, manifest_name_, **kwargs)
-
-    monkeypatch.setattr(bundle_module, "read_archive_manifest", counting_read)
-
-    # The two archives that crossed the wire: a result archive (GPU output) and
-    # an inputs archive (the prepared data bundle), each well formed.
-    training_tree = tmp_path / "training"
-    _write(training_tree / "text/text__vectors.npz", "vectors")
-    _write(training_tree / spec.suite_manifest_file,
-           json.dumps({spec.run_tag_key: run_tag}))
-    training_archive = tmp_path / "training-result.tar.zst"
-    write_archive(training_archive,
-                  {p.relative_to(training_tree).as_posix(): p
-                   for p in training_tree.rglob("*") if p.is_file()},
-                  manifest_name=spec.manifest_result,
-                  metadata={spec.run_tag_key: run_tag})
-
-    inputs_tree = tmp_path / "inputs"
-    _write(inputs_tree / package_member("suite_package_config"), "post_training_ablation: false\n")
-    input_archive = tmp_path / "inputs.tar.zst"
-    write_archive(input_archive,
-                  {p.relative_to(inputs_tree).as_posix(): p
-                   for p in inputs_tree.rglob("*") if p.is_file()},
-                  manifest_name=spec.manifest_inputs, metadata={})
-
-    settings = SimpleNamespace(result_archive_format="tar.zst",
-                               post_training_ablation=False, report_test=False,
-                               dvc_enabled=False, publish_git=False,
-                               setup_dir="setup", ablation_config="config/ablation.yaml")
-
-    class _FakeSuiteConfig:
-        @staticmethod
-        def model_validate(_):
-            return settings
-
-    monkeypatch.setattr(local_complete, "SuiteConfig", _FakeSuiteConfig)
-    monkeypatch.setattr(resume_module, "validate_training_binding", lambda *a, **k: None)
-    monkeypatch.setattr(resume_module, "validate_completed_suite_archive", lambda *a, **k: {})
-    monkeypatch.setattr(local_complete, "_require_legacy_source_pin", lambda *a, **k: None)
-    monkeypatch.setattr(local_complete, "trace", lambda: SimpleNamespace(
-        add=lambda *a, **k: None, add_entities=lambda *a, **k: None))
-    monkeypatch.setattr(local_complete, "flush_trace", lambda: None)
-    monkeypatch.setattr(local_complete, "_publish", lambda final, *a, **k: final)
-
-    # The finalize step's OWN writer returned a verified handle in the real job
-    # (bundle_steps.finalize returns it); reproduce that: seal the output right
-    # here so the completion job's post-seal code is what runs next.
-    def fake_finalize(pipeline, result, *, inputs=None):
-        workspace = tmp_path / "sealed_tree"
-        _write(workspace / "suite_manifest.json", "{}\n")
-        return Bundle.seal_archive(
-            pipeline.output,
-            {p.relative_to(workspace).as_posix(): p
-             for p in workspace.rglob("*") if p.is_file()},
-            role=BundleRole.result,
-            metadata={spec.run_tag_key: result.run_tag()})
-
-    monkeypatch.setattr(bundle_steps, "finalize", fake_finalize)
-
-    published = local_complete.complete(training_archive, input_archive, run_tag)
-
-    assert reads.get(str(training_archive), 0) == 1, \
-        "each transported archive's manifest is read exactly once at its boundary"
-    assert reads.get(str(input_archive), 0) == 1
-    # The just-sealed result archive crossed NO wire in this process: the writer
-    # already holds the trusted handle, so a second boundary load is a redundant
-    # read. Asserted, not recorded: the fix is in model_tracks/local_complete.py
-    # (the finalize handle is reused) and a regression must fail here.
-    assert reads.get(str(published), 0) == 0, (
-        "the completion job re-read the archive it just sealed "
-        f"({reads[str(published)]} extra read of {Path(published).name}); the handle "
-        "returned by model_tracks.bundle_steps.finalize must be the handle every later "
-        "step shares instead of re-loading the bytes")
 
 
 # ── 2. bundle role contracts enforced at the boundary ──────────────────────

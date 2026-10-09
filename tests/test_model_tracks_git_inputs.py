@@ -28,29 +28,6 @@ def test_suite_inputs_use_verified_git_tar_and_reuse_it(tmp_path,monkeypatch):
     assert published == [transport,transport]
 
 
-def test_suite_git_inputs_publish_regardless_of_recorded_provenance(tmp_path,monkeypatch):
-    """A differing recorded input_package is a record, never a refusal.
-
-    Data is never checked (owner directive): the bundle is immutable and the
-    transport is published; the recorded provenance is not compared.
-    """
-    from core import common
-    monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    source = tmp_path/'data.txt'
-    source.write_text('fixed local input')
-    archive = write_archive(tmp_path/'input.zip',{'data.txt':source},
-        manifest_name='model_tracks_package.json',metadata={'revision':'frozen'})
-    recovery = write_archive(tmp_path/'recovery.zip',{'state':source},
-        manifest_name='suite_recovery_manifest.json',
-        metadata={'run_tag':'run','input_package':{'revision':'other','files':{}}})
-    published = []
-    transport = prepare_git_inputs(archive,'run',resume_archive=recovery,
-        publisher=lambda paths,message: published.append(paths[0]))
-    assert published == [transport]
-    with tar_archive(transport) as package:
-        assert set(package.getnames()) == {'inputs.tar.zst','recovery.tar.zst'}
-
-
 def test_suite_git_inputs_reuse_the_supplied_recovery_manifest(tmp_path,monkeypatch):
     """A resume run opens the recovery Bundle ONCE, not once per entry point.
 

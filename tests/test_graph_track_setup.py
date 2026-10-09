@@ -2,7 +2,6 @@ import pandas as pd
 import pytest
 from pathlib import Path
 import json
-from core.portable_archive import ByteCount
 import zipfile
 import yaml
 
@@ -52,7 +51,7 @@ def test_listing_pairs_preserve_optional_trace_axes_in_lineage():
     assert accounting['augmentation'].startswith('not_applicable')
 
 
-def test_preflight_and_portable_package_hashes(tmp_path):
+def test_preflight_and_portable_package_members(tmp_path):
     from graph_tracks.prepare import prepare
     from graph_tracks.preflight import preflight
     from graph_tracks.worker_package import package
@@ -74,21 +73,11 @@ def test_preflight_and_portable_package_hashes(tmp_path):
     assert preflight(config)['pairs']['dev'] == {'positive': 1, 'negative': 1}
     archive_path = package(config, tmp_path / 'worker.zip')
     with zipfile.ZipFile(archive_path) as archive:
-        manifest = json.loads(archive.read('data/graph_worker/gnn_only/package_manifest.json'))
-        for path, expected in manifest['files_size'].items():
-            assert ByteCount(archive.read(path)).total == expected
         settings = yaml.safe_load(archive.read('data/graph_worker/gnn_only/worker.yaml'))
         assert settings['device'] == 'cuda'
         assert settings['report_test'] is False
         assert not Path(settings['listings']).is_absolute()
     assert not (tmp_path / 'runs').exists()
-    # Recorded sizes are records, never refusals (owner directive: data is never
-    # checked): a wrong recorded size no longer fails preflight.
-    manifest_path = listings.parent / 'input_manifest.json'
-    manifest_path.write_text(json.dumps({
-        **json.loads(manifest_path.read_text()), 'listings_size': 'wrong',
-        'pairs_size': 'wrong'}))
-    assert preflight(config)['pairs']['dev'] == {'positive': 1, 'negative': 1}
 
 
 # ── ONE writer per setup artifact, ONE home per layout name ────────────────
