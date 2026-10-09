@@ -1034,8 +1034,8 @@ def test_receipt_worker_cap_is_the_gpu_capped_plan(monkeypatch, tmp_path):
     """#8: max_workers is the GPU-capped worker plan (no shared-data cache)."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert "shared_data" not in receipt["options"]
-    # slots mode: 2 GPUs (n_jobs) x 2 slots each, capped at max_concurrent=4.
-    assert receipt["budget"]["max_workers"] == 4
+    # slots mode: 2 GPUs (n_jobs) x 1 slot each, capped at max_concurrent=2.
+    assert receipt["budget"]["max_workers"] == 2
 
 
 def _hpo_space_from_script(script: str) -> dict:

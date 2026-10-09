@@ -59,19 +59,15 @@ profiler:
 # See training/laya_hpo_options.py: one class per responsibility, a name->
 # builder registry per family, assembled by `build_option_set`.
 options:
-  # A) trial parallelism — multi-PROCESS slots per GPU
-  # Tradeoff (2xT4): 2 workers per card = 4 processes, but only 2 GPUs, so
-  # across the session there are 2 truly-parallel (one per card) + 2 sharing a
-  # card through MPS. Sharing requires MPS and a per-process VRAM cap, and it
-  # carries OOM risk (the full mb=8 recipe peaks ~8.07 GB/proc, above the
-  # ~7.7 GB/0.5 cap). The seeded baseline is the first probe: run it (a short
-  # 1-epoch probe first via warm_start.baseline_dials.epochs: 1 if validating a
-  # new card) BEFORE spending the full budget; an OOM fails the trial LOUD, it
-  # is never silently shrunk.
+  # A) trial parallelism — one worker PROCESS per GPU (true parallelism).
+  # 1 slot/card: the full recipe peaks ~8.07 GB/proc, above the ~7.7 GB
+  # per-process cap that 2 slots/card (~0.5 fraction) would impose, so sharing
+  # a T4 via MPS OOMs any trial sampling micro_batch 8/16. One uncapped worker
+  # per card fits the full recipe; MPS is therefore OFF.
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 2            # 2 worker PROCESSES per GPU (MPS-shared card)
-  max_concurrent_trials: 4    # = slots_per_gpu * visible GPUs: 4 on 2xT4
-  mps: true                   # required to run 2 processes on one GPU
+  slots_per_gpu: 1            # one worker PROCESS per GPU (no MPS sharing)
+  max_concurrent_trials: 2    # = slots_per_gpu * visible GPUs: 2 on 2xT4
+  mps: false                  # no process shares a GPU this round
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
     backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
