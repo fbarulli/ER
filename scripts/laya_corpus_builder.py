@@ -42,6 +42,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
+from core.laya_config import LayaSplitRoles
 from scripts.laya_corpus_cases import CorpusCaseRenderer
 from scripts.laya_corpus_composer import compose_side, compose_state
 from scripts.laya_corpus_growth import GrowthFoldIngestor
@@ -216,18 +217,40 @@ class SplitAllocator:
         return {key: listing_counts.get(key, 0) / total for key in SPLIT_ORDER}
 
     @staticmethod
-    def _assign_splits(items: list, ratios: dict[str, float],
-                       seed: int) -> dict[str, list]:
-        """Deterministically shuffle (seed) and slice into the three splits."""
-        allocation = SplitAllocator._allocate(len(items), ratios)
-        shuffled = list(items)
-        random.Random(seed).shuffle(shuffled)
-        out: dict[str, list] = {}
-        cursor = 0
-        for key in SPLIT_ORDER:
-            out[key] = shuffled[cursor:cursor + allocation[key]]
-            cursor += allocation[key]
+    def _assign_splits(items: list, ratios: dict[str, float], seed: int,
+                       stratum_of: Callable[[dict], str]) -> dict[str, list]:
+        """Deterministically shuffle (seed) and slice into the three splits.
+
+        STRATIFIED by ``stratum_of`` (the corpus's documented subgroup key):
+        each stratum is allocated independently at the same ratios, so a rare
+        stratum is represented proportionally in EVERY split instead of being
+        concentrated by one global shuffle. ``_allocate`` still sums each
+        stratum to its own total, so every record lands in exactly one split
+        and the split sizes are unchanged.
+        """
+        by_stratum: dict[str, list] = defaultdict(list)
+        for item in items:
+            by_stratum[stratum_of(item)].append(item)
+        out: dict[str, list] = {key: [] for key in SPLIT_ORDER}
+        for stratum in sorted(by_stratum):
+            members = list(by_stratum[stratum])
+            random.Random(f"{seed}:{stratum}").shuffle(members)
+            allocation = SplitAllocator._allocate(len(members), ratios)
+            cursor = 0
+            for key in SPLIT_ORDER:
+                out[key].extend(members[cursor:cursor + allocation[key]])
+                cursor += allocation[key]
         return out
+
+    @staticmethod
+    def _difficulty_stratum(record: dict) -> str:
+        """The rendered corpus record's documented difficulty stratum."""
+        return record["difficulty_slice"]
+
+    @staticmethod
+    def _gate_reason_stratum(row: dict) -> str:
+        """A raw gate row's bounded reason family (its key subgroup)."""
+        return GateReasonRules.gate_reason_family(row["gate_reason"])
 
     @staticmethod
     def _stratified_sample(rows: list[dict], target: int,
@@ -382,7 +405,8 @@ class CorpusBuilder:
                 **CorpusCaseRenderer._single_meta(attribute)))
         self.state_pkg = state_pkg
         self.state_splits = SplitAllocator._assign_splits(
-            state_records, self.ratios, self.seed)
+            state_records, self.ratios, self.seed,
+            SplitAllocator._difficulty_stratum)
 
     def _build_listing_pair_cases(self) -> None:
         pair_by_split: dict[str, list[dict]] = {key: [] for key in SPLIT_ORDER}
@@ -450,12 +474,14 @@ class CorpusBuilder:
         self.sampled = sampled
         self.gate_reason_sample = Counter(row["gate_reason"] for row in sampled)
         self.gate_splits = SplitAllocator._assign_splits(
-            sampled, self.ratios, self.seed)
+            sampled, self.ratios, self.seed,
+            SplitAllocator._gate_reason_stratum)
         # Every joinable `proceed` gate row rides the corpus for its gate
         # verdict / reason labels (identity_claim stays unlabelled: the gate
         # verdict is not a GTIN truth). Deterministic row order, then split.
         self.proceed_splits = SplitAllocator._assign_splits(
-            list(self.proceed), self.ratios, self.seed)
+            list(self.proceed), self.ratios, self.seed,
+            SplitAllocator._gate_reason_stratum)
         self.gate_reason_families = Counter(
             GateReasonRules.gate_reason_family(row["gate_reason"])
             for row in self.gate)
@@ -556,15 +582,18 @@ class CorpusBuilder:
                                          + len(self.sampled)
                                          + identity_negatives_emitted)
         self.mask_splits = SplitAllocator._assign_splits(
-            mask_records, self.ratios, self.seed)
+            mask_records, self.ratios, self.seed,
+            SplitAllocator._difficulty_stratum)
         self.aug_splits = SplitAllocator._assign_splits(
-            aug_records, self.ratios, self.seed)
+            aug_records, self.ratios, self.seed,
+            SplitAllocator._difficulty_stratum)
 
     def _build_better_match_cases(self) -> None:
         better_records = CorpusCaseRenderer.better_match_records(
             self.pairs, self.by_sku, self.questions)
         self.better_splits = SplitAllocator._assign_splits(
-            better_records, self.ratios, self.seed)
+            better_records, self.ratios, self.seed,
+            SplitAllocator._difficulty_stratum)
 
     # ── emit ───────────────────────────────────────────────────────────────
     def _emit_splits(self) -> None:
@@ -572,6 +601,7 @@ class CorpusBuilder:
         split_sizes: dict[str, int] = {}
         split_counts: dict[str, dict] = {}
         split_paths: dict[str, Path] = {}
+        split_records: dict[str, list] = {}
         for key in SPLIT_ORDER:
             path = self.output_dir / f"{key}.jsonl"
             lines = (self.pair_by_split[key] + self.gate_records_by_split[key]
@@ -582,6 +612,7 @@ class CorpusBuilder:
                 for record in lines:
                     handle.write(JsonLine.dump(record) + "\n")
             split_paths[key] = path
+            split_records[key] = lines
             split_sizes[key] = len(lines)
             split_counts[key] = {
                 "listing_positive": sum(
@@ -605,6 +636,7 @@ class CorpusBuilder:
         self.split_paths = split_paths
         self.split_sizes = split_sizes
         self.split_counts = split_counts
+        self.split_records = split_records
 
     def _quarantine_fallback(self) -> None:
         unknown_path = self.output_dir / "unknown_pairs.csv"
@@ -651,6 +683,78 @@ class CorpusBuilder:
         self.difficulty_slice_census = difficulty_slice_census
         self.gate_reason_census = gate_reason_census
         self.attribute_census = attribute_census
+        self.all_records = all_records
+        self.strata_coverage = self._strata_coverage()
+        self.corpus_split_plan = self._corpus_split_plan()
+
+    #: The corpus subgroup axes the carve is stratified/sized against. Both
+    #: ride every record as top-level tags (CorpusCaseRenderer._record), so the
+    #: census reads the emitted truth, never a re-derivation.
+    CORPUS_SLICES: dict[str, str] = {
+        "difficulty_slice": "scalar",
+        "attribute": "scalar",
+    }
+
+    def _strata_coverage(self) -> dict:
+        """Per-split counts of each corpus subgroup (the carve's coverage)."""
+        return {
+            key: {
+                slice_name: dict(sorted(Counter(
+                    record[slice_name] for record in self.split_records[key]
+                ).items()))
+                for slice_name in self.CORPUS_SLICES
+            }
+            for key in SPLIT_ORDER
+        }
+
+    def _corpus_split_plan(self) -> dict:
+        """The power-consistent carve plan (targets: config/sampling.yaml).
+
+        Reuses the canonical ``SamplePlan`` over the corpus's own subgroups so
+        dev (select) and validation (held-out report) are sized to the SAME
+        declared MDE the rest of the project measures against. The binding
+        meaningful subgroup sets the per-subgroup floor; ``reachable`` states
+        whether the carve can deliver it (`False` = the census, not the split,
+        is the constraint). Read-only: it measures, it never gates.
+        """
+        from core.common import training_cfg
+        from core.sample_plan import SamplePlan, SubgroupCensus
+
+        plan = SamplePlan.from_config()
+        census = SubgroupCensus(self.CORPUS_SLICES)
+        censuses = census.census(self.all_records)
+        folds = int(training_cfg().split.holdout_component_folds)
+        report = plan.plan(
+            censuses, labeled_census=len(self.all_records),
+            component_folds=folds)
+        binding = report.binding
+        return {
+            "per_subgroup_n": report.per_subgroup_n,
+            "binding": None if binding is None else {
+                "slice": binding.slice, "value": binding.value,
+                "support": binding.support, "share": binding.share,
+                "required_n": binding.required_n},
+            "recommended_n": report.recommended_n,
+            "recommended_validation_size": report.recommended_validation_size,
+            "validation_size_unit": report.validation_size_unit,
+            "reachable": report.validation_size_reachable,
+            "mde_paired": {
+                "dev": plan.mde_paired(self.split_sizes["dev"]),
+                "validation": plan.mde_paired(self.split_sizes["test"]),
+                "at_per_subgroup_n": plan.mde_paired(report.per_subgroup_n),
+            },
+            "targets": {
+                name: getattr(report, name) for name in (
+                    "confidence", "ci_half_width", "alpha", "power",
+                    "target_effect", "min_subgroup_support")},
+            "slices": [
+                {"slice": slice_plan.slice,
+                 "population": slice_plan.population,
+                 "populated": slice_plan.populated,
+                 "values": len(slice_plan.requirements)}
+                for slice_plan in report.slices
+            ],
+        }
 
     def _write_receipt(self) -> dict:
         receipt = {
@@ -721,6 +825,12 @@ class CorpusBuilder:
             "split_ratios": {key: self.ratios[key] for key in SPLIT_ORDER},
             "split_sizes": self.split_sizes,
             "split_counts": self.split_counts,
+            # The carve's SSOT: which split SELECTS (HPO objective/early-stop)
+            # and which VALIDATES (the held-out report) — never re-spelled in a
+            # consumer. `test.jsonl` is the validation role, unchanged.
+            "split_roles": dict(LayaSplitRoles.ROLES),
+            "strata_coverage": self.strata_coverage,
+            "sample_plan": self.corpus_split_plan,
             "question_schema_sha256": self.question_sha,
             "sha256": {
                 **{f"{key}.jsonl": Digest.sha256(self.split_paths[key])
@@ -800,6 +910,16 @@ def main() -> None:
           + json.dumps(receipt["split_sizes"]))
     print("[laya-build-dataset] split_counts="
           + json.dumps(receipt["split_counts"]))
+    print("[laya-build-dataset] split_roles="
+          + json.dumps(receipt["split_roles"]))
+    print("[laya-build-dataset] strata_coverage="
+          + json.dumps(receipt["strata_coverage"]))
+    print("[laya-build-dataset] sample_plan="
+          + json.dumps(receipt["sample_plan"]))
+    if receipt["sample_plan"]["reachable"] is False:
+        print("[laya-build-dataset] WARNING: sample plan unreachable for this "
+              "corpus size: the census, not the split, is the binding "
+              "constraint (see sample_plan.binding)")
     print("[laya-build-dataset] question_label_census="
           + json.dumps(receipt["question_label_census"]))
     print("[laya-build-dataset] difficulty_slice_census="

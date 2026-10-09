@@ -237,6 +237,22 @@ class EvalCalibrationSpec(BaseModel):
         return self
 
 
+class LayaSplitRoles:
+    """The corpus carve's role map — declared ONCE, read by every consumer.
+
+    The fine-tune TRAINS on ``train``; the HPO objective/early-stop SELECTS on
+    ``select`` (``dev``); the held-out eval/report VALIDATES on ``validate``
+    (``test``). The receipt's ``split_roles`` block and the eval binding both
+    read this map, so the roles can never drift from the corpus.
+    """
+
+    TRAIN = "train"
+    SELECT = "dev"
+    VALIDATE = "test"
+    ROLES: dict[str, str] = {"train": TRAIN, "select": SELECT,
+                             "validate": VALIDATE}
+
+
 class FinetuneSmokeSpec(BaseModel):
     """laya.finetune_smoke — the tiny end-to-end smoke of the finetune kernel.
 
@@ -364,8 +380,9 @@ class LayaSpec(BaseModel):
     # a fallback when the hint misses.
     finetune_ckpt_dir: str = "checkpoint"
     # The corpus split the eval-only kernel scores. Held out by construction:
-    # the fine-tune trains on train and evaluates/calibrates on dev.
-    finetune_eval_split: Literal["train", "dev", "test"] = "test"
+    # the fine-tune trains on train and evaluates/calibrates on dev. The name
+    # comes from the ONE role map, never re-spelled.
+    finetune_eval_split: Literal["train", "dev", "test"] = LayaSplitRoles.VALIDATE
     finetune_eval_batch_size: int = Field(default=16, ge=1, le=256)
     # ── holdout-eval path (component-disjoint verification ON Kaggle) ──────
     # Scores a fine-tuned checkpoint on the component-disjoint holdout (real

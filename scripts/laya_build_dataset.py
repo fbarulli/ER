@@ -24,9 +24,13 @@ from pathlib import Path
 
 # Run-directly bootstrap: `python scripts/laya_build_dataset.py` puts only the
 # scripts dir on sys.path, so the `scripts.` package imports below would fail.
-# Importing it as a package (`scripts.laya_build_dataset`) skips this branch.
+# The builder now also reads the core layer (the role map + the sample plan),
+# so this checkout's `src/` must resolve too. Importing it as a package
+# (`scripts.laya_build_dataset`) skips this branch.
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    _ROOT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(_ROOT / "src"))
+    sys.path.insert(0, str(_ROOT))
 
 from scripts.laya_corpus_builder import (
     BUNDLE_PATH,

@@ -17,14 +17,19 @@
 
 targets:
   # Proportion estimate: n = z^2 * p(1-p) / h^2 (95% -> z = 1.959964).
+  # h=0.07 is the ACHIEVABLE precision: the corpus's rarest meaningful
+  # subgroup (difficulty_slice=multi_diff, ~2.1% share) forbids h=0.05 (a
+  # 38k-sample demand the 14k corpus cannot reach); h=0.07 keeps per-subgroup
+  # N = 196, which the carve covers (reachable=True).
   confidence: 0.95
-  ci_half_width: 0.05
+  ci_half_width: 0.07
   # Paired McNemar improvement target (measured before/after on the SAME
   # validation samples): alpha two-sided, power 1-beta, and the smallest
-  # effect that must remain detectable.
+  # effect that must remain detectable. 0.04 is the achievable MDE; 0.02
+  # demanded a 38k validation the corpus cannot supply.
   alpha: 0.05
   power: 0.80
-  target_effect: 0.02
+  target_effect: 0.04
   # p used when no measured metric supplies one: 0.50 is the worst case.
   worst_case_proportion: 0.50
   # Two-proportion / CI-MDE variant reference rate (independent samples).

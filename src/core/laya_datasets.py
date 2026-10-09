@@ -57,7 +57,8 @@ class LayaDatasets:
     CORPUS = LayaDataset(
         key="corpus", slug="fbarulli/er-laya-train", role="input", exists=True,
         note="data/laya/{train,dev,test}.jsonl + receipt; attached by the "
-             "fine-tune and eval-only kernels")
+             "fine-tune and eval-only kernels. Roles (LayaSplitRoles): train = "
+             "fit, dev = HPO select/early-stop, test = held-out validate")
     REQUESTS = LayaDataset(
         key="requests", slug="fbarulli/er-laya-requests", role="input",
         exists=True,
