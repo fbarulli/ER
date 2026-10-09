@@ -19,5 +19,13 @@ Standing rules:
   details; trivial changes need no test.
 - Credentials: API keys live in `.env` one directory above the project root
   (`/home/opc/ONE/.env`, i.e. `../.env`); never print or read values.
+- Flag consequential actions (delete, force-push, shared-state write, constraining
+  hardware/parallelism): require verifying the artifact (`git ls-files` — tracked files are
+  NEVER deleted; open fds / `swapon` / mounts / live processes ⇒ never; reversible?), stating
+  the tradeoff, preferring reversible over `rm -rf`, and owner confirmation when a capability
+  is removed.
+- Capability reductions (force one GPU, split an owner, drop a symbol) need a red-teamed
+  opposing argument first.
+- Verify every claim against the real artifact — never trust a summary or self-report.
 
 $ARGUMENTS

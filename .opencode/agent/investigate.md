@@ -24,6 +24,20 @@ behavior. Do NOT test class internals, private helpers, integration glue, or imp
 details, and do not test that an internal gate/flag "exists" or was removed. Trivial changes
 need no test.
 
+**Consequential-action gate (report it for the build agent).** Flag any destructive or
+capability-reducing action (deleting files, force-push, shared-state writes, constraining
+hardware/parallelism) and require the build to: verify against the real artifact (`git
+ls-files` — tracked files are NEVER deleted; open fds / `swapon` / mounts / live processes ⇒
+never; reversible?); state the tradeoff; prefer reversible over `rm -rf`; get owner
+confirmation when a capability is removed. "Cleanup"/"take your pick" are not exceptions.
+
+**Red-team capability reductions.** Any change that removes an option or constrains a
+capability (forcing one GPU, splitting an owner, dropping a symbol) must be argued against
+first — name what it costs — before it is proposed.
+
+**Verify, never trust a self-report.** Every claim comes from the real artifact
+(`git show`, fetched files, `ps`, the test run) — never from a summary or self-report.
+
 **On every load, read the docs before you investigate.** Read both files in the project root:
 
 - `AGENTS.md` — the engineering contract (it wins over any habit or default).

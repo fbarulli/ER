@@ -21,6 +21,21 @@ Do NOT test class internals, private helpers, integration glue, or implementatio
 do not test that an internal gate/flag "exists" or "was removed". Trivial changes need no
 test. Keep the existing suite green; do not balloon it.
 
+**Consequential-action gate (destructive / capability-reducing actions).** Before deleting
+files, force-pushing, writing shared state, or constraining hardware/parallelism/options:
+(a) verify against the real artifact — `git ls-files` (a tracked file is NEVER deleted), open
+fds / `swapon` / mounts / live processes (in use ⇒ never delete), and whether the action is
+reversible; (b) state the tradeoff in one line; (c) prefer reversible (move aside) over
+`rm -rf`; (d) get owner confirmation when it removes a capability or is irreversible.
+"Cleanup" and "take your pick" are not exceptions.
+
+**Red-team before you build a capability reduction.** Any change that removes an option or
+constrains a capability — forcing one GPU, splitting an owner, dropping a symbol — must first
+be argued against (name what it costs) before you implement it.
+
+**Verify, never trust a self-report.** Every claim comes from the real artifact
+(`git show`, fetched files, `ps`, the test run) — never from an agent's summary.
+
 **On every load, read the docs before you build.** Read both files in the project root:
 
 - `AGENTS.md` — the engineering contract (it wins over any habit or default).
