@@ -316,7 +316,9 @@ class LayaTransportFactory:
             capture_session=KaggleMonitor.capture_kernel_session_id,
             log_lane=self._runtime.log_lane,
             write_json=atomic_write_json,
-            receipt_path=stage / f"laya_{kind}.receipt.json",
+            # Distinct from the kernel's own per-kind receipt
+            # (`laya_<kind>.receipt.json`) that the fetch downloads here.
+            receipt_path=stage / "autowatch.receipt.json",
             log_path=self._runtime.lane_logs_dir() / "lane.log",
             poll_seconds=kaggle.logs_poll_seconds,
             stream_join_seconds=kaggle.limits.stream_join_seconds,
