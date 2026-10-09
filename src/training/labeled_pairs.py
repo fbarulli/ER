@@ -59,6 +59,7 @@ from core.common import (
     load_config,
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+from core.pair_identity import PairIdentity
 from core.run_log import RunLogger
 from core.schemas import check_labeled_pairs_frame
 from core.step_trace import timed
@@ -119,16 +120,23 @@ class GateSplit:
 
     @staticmethod
     def labeled_frame(g: pd.DataFrame, pos_mask, neg_mask) -> pd.DataFrame:
-        """pos + hard-neg gate rows projected to the labeled contract."""
+        """pos + hard-neg gate rows projected to the labeled contract.
+
+        ``pair_id`` is stamped here (the ONE key, core.pair_identity), not
+        carried from the gate frame: this stage reads the gate CSV from disk,
+        so it must work whether or not that artifact already carries the key.
+        """
         pos = g[pos_mask].copy()
         pos["true_label"] = 1
         neg = g[neg_mask].copy()
         neg["true_label"] = 0
-        return pd.concat(
+        out = pd.concat(
             [pos[["gtin1", "gtin2", "true_label"]],
              neg[["gtin1", "gtin2", "true_label"]]],
             ignore_index=True,
         )
+        out["pair_id"] = PairIdentity.column(out["gtin1"], out["gtin2"])
+        return out
 
 
 # ── the four-bucket partition ledger ────────────────────────────────────────
@@ -366,7 +374,7 @@ def _record_partition(
     )
     records = [
         {
-            "pair": f"{row['gtin1']}|{row['gtin2']}",
+            "pair": PairIdentity.of(row["gtin1"], row["gtin2"]),
             "label": str(labels.loc[index]),
             "gate_decision": str(row["gate_decision"]),
             "similarity": row["similarity"],

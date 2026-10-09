@@ -101,6 +101,7 @@ import pandas as pd
 from core.columns import ATTRIBUTE_DIMENSION_COLUMNS
 from core.common import F, RESULTS, SEED, load_dataset_deduped, training_cfg
 from core.manifest import atomic_write_csv
+from core.pair_identity import PairIdentity
 from core.run_log import RunLogger
 from core.schemas import check_canonical_records_frame, upgrade_canonical_records_frame
 from core.tracing import (ENTITY_ROW_CAP, ENTITY_SAMPLE_PER_REASON,
@@ -819,6 +820,9 @@ class ValidationRowAssembler:
         for name, _col in SLICE_FIELDS:
             row[f"v1_{name}"] = c1.get(name, "")
             row[f"v2_{name}"] = c2.get(name, "")
+        # THE pair key (core.pair_identity SSOT), appended last so every
+        # pre-existing column keeps its position in the CSV read contract.
+        row["pair_id"] = PairIdentity.of(k1, k2)
         return row, OUTCOME_SCORED
 
     def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
@@ -848,9 +852,9 @@ class ValidationRowAssembler:
             triples_list, desc="final_validation_rows", unit="pair"
         ):
             if pairs_in_batch == 0:
-                first_pair = f"{g1}|{g2}"
+                first_pair = PairIdentity.of(g1, g2)
                 rows_in_batch = 0
-            last_pair = f"{g1}|{g2}"
+            last_pair = PairIdentity.of(g1, g2)
             pairs_in_batch += 1
             row, reason = self.assemble_with_reason(g1, g2, label)
             folded = {

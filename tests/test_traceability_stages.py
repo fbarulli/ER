@@ -28,6 +28,7 @@ import pandas as pd
 import pytest
 
 import core.tracing as tracing
+from core.pair_identity import PairIdentity
 from core.schemas import TraceRow
 from core.gtin import is_valid_gtin_checksum
 
@@ -319,7 +320,7 @@ def test_labeled_pairs_partition_census_joins_the_manifest_buckets(trace_target)
     # the fallback pair is NAMED, with its decision and similarity
     named = entity_rows(trace)
     fallback = named[named["reason"] == lp.BUCKET_FALLBACK]
-    assert list(fallback["key"]) == [f"{VALID_GTIN}|4"]
+    assert list(fallback["key"]) == [PairIdentity.of(VALID_GTIN, "4")]
     evidence = detail_of(fallback.iloc[0])
     assert evidence["gate_decision"] == "fallback"
     assert evidence["similarity"] == 0.9

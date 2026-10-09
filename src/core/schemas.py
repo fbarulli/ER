@@ -4682,9 +4682,18 @@ GATE_RESULTS_COLUMNS: tuple[str, ...] = (
     "gate_decision",
     "gate_reason",
     "similarity",
+    # The stable, direction-independent pair key (core.pair_identity): the ONE
+    # join spine from gate -> labeled -> validation -> prediction. Appended, so
+    # every pre-existing column keeps its position (the CSV read contract).
+    "pair_id",
 )
 
-LABELED_PAIRS_COLUMNS: tuple[str, ...] = ("gtin1", "gtin2", "true_label")
+LABELED_PAIRS_COLUMNS: tuple[str, ...] = (
+    "gtin1",
+    "gtin2",
+    "true_label",
+    "pair_id",
+)
 
 ZERO_SHOT_TRACE_COLUMNS: tuple[str, ...] = (
     "gtin1",
@@ -5022,6 +5031,12 @@ def check_gate_results_frame(df: pd.DataFrame) -> pd.DataFrame:
     empty_reason = (df["gate_reason"].fillna("").astype(str).str.strip() == "").sum()
     if empty_reason:
         raise ValueError(f"{int(empty_reason)} rows with empty gate_reason")
+    empty_pair = (df["pair_id"].fillna("").astype(str).str.strip() == "").sum()
+    if empty_pair:
+        raise ValueError(
+            f"{int(empty_pair)} rows with empty pair_id — the stable pair key "
+            "(core.pair_identity) must be stamped by the producer"
+        )
     return df
 
 
@@ -5049,6 +5064,12 @@ def check_labeled_pairs_frame(df: pd.DataFrame) -> pd.DataFrame:
     dups = df.duplicated(subset=["gtin1", "gtin2"]).sum()
     if dups:
         raise ValueError(f"{int(dups)} duplicate (gtin1, gtin2) rows")
+    empty_pair = (df["pair_id"].fillna("").astype(str).str.strip() == "").sum()
+    if empty_pair:
+        raise ValueError(
+            f"{int(empty_pair)} rows with empty pair_id — the stable pair key "
+            "(core.pair_identity) must be stamped by the producer"
+        )
     return df
 
 

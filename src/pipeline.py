@@ -47,6 +47,7 @@ from core.common import (
     vocabulary,
 )
 from core.run_log import RunLogger
+from core.pair_identity import PairIdentity
 from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
 from core.schemas import (
     CanonicalRecord,
@@ -4061,6 +4062,12 @@ class _PipelineSteering:
         self.results_df = self.results_df.sort_values(
             ["gtin1", "gtin2"], kind="stable"
         ).reset_index(drop=True)
+        # THE pair key (core.pair_identity SSOT): direction-independent, so the
+        # gate row joins the labeled, validation and prediction rows that name
+        # the same pair with the endpoints swapped.
+        self.results_df["pair_id"] = PairIdentity.column(
+            self.results_df["gtin1"], self.results_df["gtin2"]
+        )
         RESULTS.mkdir(parents=True, exist_ok=True)
         # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
         # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
