@@ -388,13 +388,19 @@ class EvalProvenance(BaseModel):
     receipt carries ``decision_csv_size``). The per-source requirement below
     names only the key the contract demands for that source. Every value is a
     structural byte size — no content is fingerprinted anywhere.
+
+    The mapping is named ``digests`` because that is the name the writer, the
+    fetched-lane adapters and this module's own contract suite all use, and it
+    is the persisted JSON key; renaming the field to ``inputs`` stranded every
+    producer with ``extra_forbidden`` (falsified 2026-10-09: the fetched
+    record-grain artifact failed to build).
     """
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     source: EvalSource
     model_id: str = Field(min_length=1)
     laya_package: str | None = None
-    inputs: dict[str, int] = Field(default_factory=dict)
+    digests: dict[str, str] = Field(default_factory=dict)
     # A fine-tune eval's most important traceability fact: was the scored split
     # really held out, and how many items overlapped training data.
     is_held_out: bool | None = None
@@ -405,7 +411,7 @@ class EvalProvenance(BaseModel):
 
     @model_validator(mode="after")
     def source_inputs_present(self):
-        # The structural input keys a source may name for its scored INPUT; at
+        # The input keys a source may name for its scored INPUT; at
         # least one must be present. ``laya_cli_eval`` accepts either the
         # decision CSV the harness derived its dataset from or that dataset
         # itself: the kaggle evals kernel writes ``evals_dataset_size``, so
@@ -416,9 +422,9 @@ class EvalProvenance(BaseModel):
             "identity_decision_csv": ("decision_csv_size",),
             "laya_cli_eval": ("decision_csv_size", "evals_dataset_size"),
         }.get(self.source)
-        if required and not (set(required) & set(self.inputs)):
+        if required and not (set(required) & set(self.digests)):
             raise ValueError(
-                f"source={self.source} requires one of inputs[{', '.join(required)}]")
+                f"source={self.source} requires one of digests[{', '.join(required)}]")
         return self
 
 
