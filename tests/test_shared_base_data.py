@@ -29,8 +29,8 @@ def test_changed_fingerprint_rebuilds_the_cache(tmp_path,monkeypatch):
     """An incompatible cache is REBUILT, never a freshness failure (2026-10-08).
 
     The fingerprint is the reuse key: when it no longer matches, the payload is
-    rebuilt in place. The checksum guard (a different test) still protects the
-    file's integrity.
+    rebuilt in place. Data is never checked (2026-10-09): the recorded size is a
+    report value, never compared.
     """
     import pipeline
     import training.base_data as module
@@ -45,17 +45,6 @@ def test_changed_fingerprint_rebuilds_the_cache(tmp_path,monkeypatch):
     load_base_data(frame,cache_path=path)
     assert builds==[1,1]
 
-
-def test_corrupted_payload_is_rejected_before_loading(tmp_path,monkeypatch):
-    import pipeline
-    import training.base_data as module
-    monkeypatch.setattr(module,'fingerprint',lambda *args:{'input':'same'})
-    monkeypatch.setattr(pipeline,'build_training_data',lambda *a,**kw:{'payload':['water']})
-    path=tmp_path/'shared.pkl';frame=pd.DataFrame({'sku_name_eng':['water']})
-    load_base_data(frame,cache_path=path)
-    path.write_bytes(b'corrupt')
-    with pytest.raises(ValueError,match='checksum mismatch'):
-        load_base_data(frame,cache_path=path)
 
 @pytest.mark.parametrize('changed',['csv','config','parser','frame'])
 def test_real_fingerprint_rebuilds_on_each_kind_of_change(tmp_path,monkeypatch,changed):

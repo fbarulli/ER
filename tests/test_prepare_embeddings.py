@@ -86,14 +86,16 @@ def inputs(tmp_path, monkeypatch):
     return setup, checkpoint, calls
 
 
-def test_generate_reuse_and_reject_stale_cache(tmp_path, monkeypatch):
+def test_generate_reuse_and_rebuild_changed_cache(tmp_path, monkeypatch):
     setup, checkpoint, calls = inputs(tmp_path, monkeypatch)
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
     assert len(calls) == 1
     (checkpoint / 'weights').write_bytes(b'changed-and-longer')
-    with pytest.raises(ValueError, match='checkpoint differs'):
-        job.prepare(setup, checkpoint, device='cpu')
+    # Data is never checked (owner directive 2026-10-09): a different checkpoint
+    # is a new request, so the cache is rebuilt, never refused.
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
+    assert len(calls) == 2
 
 
 def test_failed_generation_does_not_publish_cache(tmp_path, monkeypatch):
@@ -144,20 +146,6 @@ def test_reuse_accepts_changed_composition_implementation(tmp_path, monkeypatch)
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
 
 
-def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):
-    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
-    job.prepare(setup, checkpoint, device='cpu')
-    cache = setup / 'shared_minilm__embeddings.npz'
-    _, metadata = job.load_text_cache(cache, ['a', 'b'])
-    job.validate_prepared_provenance(cache, metadata)
-    request_path = setup / 'embedding_inputs.json'
-    request = json.loads(request_path.read_text())
-    request['texts'][0] = 'tampered text'
-    request_path.write_text(json.dumps(request))
-    with pytest.raises(ValueError, match='text content size'):
-        job.validate_prepared_provenance(cache, metadata)
-
-
 @pytest.mark.parametrize('ids,vectors', [(['b', 'a'], [[1, 0], [0, 1]]),
                                       (['a', 'b', 'extra'], [[1, 0]] * 3),
                                       (['a', 'b'], [[0, 0], [1, 0]]),
@@ -191,16 +179,17 @@ def test_no_request_digest_freshness_gate(tmp_path, monkeypatch):
     job.validate_result(cache, request)
 
 
-def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatch):
+def test_inputs_changed_during_encoding_are_still_published(tmp_path, monkeypatch):
+    """Data is never checked (owner directive 2026-10-09): a mid-build input
+    change is not compared, so the composed cache is still published."""
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     original = job.create_cache
     def changing(*args, **kwargs):
         original(*args, **kwargs)
         (setup / 'eligible_catalog.csv').write_text('sku_id\nchanged\n')
     monkeypatch.setattr(job, 'create_cache', changing)
-    with pytest.raises(ValueError, match='changed during generation'):
-        job.prepare(setup, checkpoint, device='cpu')
-    assert not (setup / 'shared_minilm__embeddings.npz').exists()
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
+    assert (setup / 'shared_minilm__embeddings.npz').exists()
 
 
 def test_data_gate_census_tracks_are_json_serializable():

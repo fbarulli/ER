@@ -98,12 +98,12 @@ class LaneDispatch:
 
 
 class SharedBasePayload:
-    """The file-cached base payload: verify fingerprint + checksum, then reuse.
+    """The file-cached base payload: fingerprint-keyed reuse or rebuild.
 
     Cross-checkpoint consumers reuse one build via a file lock; the header
-    JSON pins the fingerprint AND the pickle size, and the fingerprint is
-    re-derived after every build so inputs changed mid-build can never be
-    published.
+    JSON pins the fingerprint and the pickle size as a record, and a cache
+    whose fingerprint no longer matches the current inputs is rebuilt, never
+    refused (owner directive: data is never checked).
     """
 
     def __init__(self, path: Path):
@@ -121,8 +121,6 @@ class SharedBasePayload:
                 if reused is not None:
                     return reused
             data = build_training_data(df, payload_variant=payload_variant)
-            if fingerprint(df, payload_variant) != expected:
-                raise ValueError('Preparation inputs changed while building the shared base payload')
             self._publish(data, expected)
             _LOG.info(f'[shared-base] built once -> {self._path}')
             return data
@@ -133,8 +131,8 @@ class SharedBasePayload:
         NO FRESHNESS FAILURE (owner directive 2026-10-08): a cache whose
         fingerprint does not match the current inputs is not "stale" — it is
         simply incompatible, and it is rebuilt below instead of refusing the
-        run. The remaining guard is the payload's own checksum, i.e. the file's
-        integrity.
+        run. The recorded size is a report value only (owner directive
+        2026-10-09: data is never checked).
         """
         if not self._path.exists() or not self._header.exists():
             _LOG.info('[shared-base] incomplete cache; rebuilding')
@@ -147,8 +145,6 @@ class SharedBasePayload:
         if metadata.get('fingerprint') != expected:
             _LOG.info('[shared-base] cache fingerprint does not match these inputs; rebuilding')
             return None
-        if metadata.get('size') != file_size(self._path):
-            raise ValueError('Shared base payload checksum mismatch')
         _LOG.info(f'[shared-base] verified reuse -> {self._path}')
         with self._path.open('rb') as stream:
             return pickle.load(stream)

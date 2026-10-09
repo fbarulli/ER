@@ -19,10 +19,10 @@ from training.validation_inference import resolve_best_checkpoint, threshold_ass
 
 # ── scored-pair validation census (2026-10-01 contract) ─────────────────────
 # Row accounting is re-measured from the artifacts at exec time — never
-# hardcoded — and every read is byte-stability asserted, so an artifact being
-# regenerated concurrently is never counted half-written:
+# hardcoded — and every size is a recorded report value, never a byte gate
+# (owner directive 2026-10-09: data is never checked):
 #   source census  dataset.csv rows == deduped + dropped (re-measured
-#                  byte-stable at exec time; no pinned expectation)
+#                  re-measured at exec time; no pinned expectation)
 #   fold map       results/training/validation_fold_map.csv maps every graph
 #                  entity to its fold; folds 2+3 are the validation side
 #   scored pairs   data/final_validation.csv (files.final_validation binding)
@@ -59,11 +59,8 @@ class ScoredValidationAccounting(BaseModel):
 
 
 def _byte_stable_csv_rows(path: Path) -> int:
-    """Count CSV rows once, asserting the file's bytes stayed identical."""
-    digest_before = file_size(path)
+    """Count CSV rows once (no byte-stability gate: data is never checked)."""
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if file_size(path) != digest_before:
-        raise RuntimeError(f"{path} changed while it was being read")
     return len(frame)
 
 
@@ -106,16 +103,13 @@ def scored_validation_accounting() -> dict[str, object]:
 
 
 def _csv_identity(path: Path) -> dict[str, object]:
-    before = file_size(path)
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if file_size(path) != before:
-        raise RuntimeError(f"{path} changed while provenance was being read")
     return CsvIdentity.model_validate({
         "path": str(path.resolve()),
         "rows": int(len(frame)),
         "columns": list(frame.columns),
         "bytes": path.stat().st_size,
-        "size": before,
+        "size": file_size(path),
     }).model_dump()
 
 

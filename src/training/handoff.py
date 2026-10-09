@@ -43,7 +43,7 @@ STAGE = 'verify_handoff'
 CHECK_ORDER: tuple[str, ...] = (
     'provenance', 'bundle_load', 'graph_manifest',
     'worker_settings', 'loss_batch', 'package_verify', 'inventory',
-    'manifest_verify',
+    'manifest_published',
 )
 
 #: ``reason`` cells are NOT capped by core.tracing (only ``detail`` is), so the
@@ -437,26 +437,22 @@ def _manifest_directory(root: str | Path) -> Path:
     return manifest_dir if manifest_dir.is_absolute() else Path(root) / manifest_dir
 
 
-def _verify_published_manifests(manifest_dir: str | Path) -> dict[str, list[str]]:
-    """Re-verify every published stage manifest against the files on disk.
+def _published_manifest_stages(manifest_dir: str | Path) -> dict[str, list[str]]:
+    """Record which stage manifests this run published.
 
-    Walks the audit registry (``audit.manifest_stages``) and re-checks each
-    stage whose manifest this run actually published through
-    ``core.manifest.verify_manifest`` (outputs present and hash-matching,
-    expected outputs produced, row accounting closed, no ``.tmp-*`` residue).
-    A stage whose manifest is absent is left alone: at this boundary a missing
-    marker means the stage never published one (later lanes such as
-    ``evaluate_models``/``zero_shot_sims`` run after the handoff), not that a
-    PUBLISHED marker drifted — only that drift fails loud here.
+    Data is never checked (owner directive 2026-10-09): the published manifest
+    files are enumerated as a record, never re-verified against output bytes
+    (``core.manifest.verify_manifest`` is no longer called here). A stage whose
+    manifest is absent is left alone: at this boundary a missing marker means
+    the stage never published one (later lanes such as ``evaluate_models``/
+    ``zero_shot_sims`` run after the handoff).
     """
     from core.common import training_cfg
-    from core.manifest import verify_manifest
-    verified: list[str] = []
-    for stage in training_cfg().audit.manifest_stages:
-        if (Path(manifest_dir) / f'{stage}.json').exists():
-            verify_manifest(stage, manifest_dir=manifest_dir)
-            verified.append(stage)
-    return {'verified_stages': verified}
+    published = [
+        stage for stage in training_cfg().audit.manifest_stages
+        if (Path(manifest_dir) / f'{stage}.json').exists()
+    ]
+    return {'published_stages': published}
 
 
 def verify_training_loads(*, root, suite, suite_config_path, checkpoint,
@@ -561,13 +557,13 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
         'inventory',
         detail={'artifacts': len(final_inventory)},
         source='training.prepare_all.file_inventory (the resume contract)')
-    with timing.section('manifest_verify'):
-        manifest_summary = _verify_published_manifests(_manifest_directory(root))
+    with timing.section('manifest_published'):
+        manifest_summary = _published_manifest_stages(_manifest_directory(root))
     trace.check(
-        'manifest_verify',
-        detail={'verified_stages': manifest_summary['verified_stages']},
-        source=('core.manifest.verify_manifest re-checked over the published '
-                'audit.manifest_stages markers'))
+        'manifest_published',
+        detail={'published_stages': manifest_summary['published_stages']},
+        source=('training.handoff._published_manifest_stages (the stage manifests '
+                'audit.manifest_stages this run published; no byte re-check)'))
 
     checks: dict[str, Any] = {
         'provenance': 'recorded (src/scripts/config/raw inputs/checkpoint read back)',
@@ -578,7 +574,7 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
                         'smoke': bool(graph.get('smoke', False))},
         'graph_worker_settings': settings_summary,
         'suite_package': package_checks,
-        'manifest_verify': manifest_summary['verified_stages'],
+        'manifest_published': manifest_summary['published_stages'],
     }
     if attestation is None:
         checks['loss_batch_correctness'] = token_checks

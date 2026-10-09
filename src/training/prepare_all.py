@@ -7,7 +7,7 @@ Shape of this module (one responsibility per unit):
   PreparationState / PreparedFile    persisted preparation contract
   _RunContext                        one immutable load of owning configs
   size/verification primitives    size, file_inventory, copy ISLANDbundle
-  resume primitives                  verify_reusable_outputs, verify_stage_manifest
+  resume primitives                  verify_stage_manifest
   stage measurement                  refresh_gate_census
   PrepareRun                         the orchestrator; each method owns one job
   prepare_all / main                 public wrapper + CLI
@@ -32,7 +32,6 @@ from typing import Any, Literal
 from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
-import yaml
 from tqdm import tqdm
 
 from core.run_log import RunLogger
@@ -107,6 +106,21 @@ class PreparedFile(BaseModel):
     bytes: StrictInt = Field(ge=0)
 
 
+class ProvenanceEntry(BaseModel):
+    """One tracked preparation input's structural census: byte size + mtime_ns.
+
+    The dict key is the input's DECLARED name (its resolved path, or the
+    checkpoint slot for the checkpoint directory, whose size is its summed
+    member bytes). Never a byte length as the identity and never a content
+    digest (owner directive 2026-10-08): a size alone aliases two different
+    inputs of equal size and hides a same-size rewrite, which ``mtime_ns``
+    makes visible.
+    """
+    model_config = ConfigDict(extra='forbid')
+    size: int = Field(ge=0)
+    mtime_ns: int = Field(ge=0)
+
+
 class PreparationState(BaseModel):
     """Persisted resume contract; old unverified states require regeneration."""
     model_config = ConfigDict(extra='allow', allow_inf_nan=False)
@@ -119,7 +133,7 @@ class PreparationState(BaseModel):
     tracks_config: str
     negative_supply_mode: Literal['gate', 'lane']
     negative_supply_run_tag: str = Field(pattern=_RUN_TAG_PATTERN)
-    provenance: dict[str, int]
+    provenance: dict[str, ProvenanceEntry]
     smoke_original: dict[str, int]
     reusable_outputs: dict[str, PreparedFile] = Field(default_factory=dict)
 
@@ -156,20 +170,26 @@ class _RunContext:
 
 
 @timed
-def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, str]:
-    """Pin source, owning configs, raw input and baseline checkpoint content."""
-    from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT, artifact
+def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, ProvenanceEntry]:
+    """Pin source, owning configs, raw input and baseline checkpoint content.
+
+    Every entry is a structural census keyed by the input's declared name: the
+    input's own byte size plus its mtime_ns, or -- for the checkpoint DIRECTORY
+    -- the summed member bytes every lane binds a checkpoint by. A byte length is
+    never the identity (owner directive 2026-10-08): it aliases two different
+    inputs of equal size, so a resume could adopt another input's bytes.
+    """
+    from core.portable_archive import file_size
     from graph_tracks.text_cache import checkpoint_size
-    identity = {}
-    for path in _LOG.progress(_provenance_paths(root, suite_config), desc='provenance_size', unit='file'):
-        if path.resolve() == Path(TRAINING_CONFIG_PATH).resolve():
-            # The run measures its own gate census; it is output, not a setting.
-            config = yaml.safe_load(path.read_text())
-            identity[str(path.resolve())] = ByteCount(
-                json.dumps(config, sort_keys=True).encode()).total
-        else:
-            identity[str(path.resolve())] = size(path)
-    identity['text_checkpoint'] = checkpoint_size(Path(checkpoint), use_memo=False)
+    identity: dict[str, ProvenanceEntry] = {}
+    for path in _LOG.progress(_provenance_paths(root, suite_config), desc='provenance_census', unit='file'):
+        resolved = path.resolve()
+        identity[str(resolved)] = ProvenanceEntry(size=file_size(resolved),
+                                                  mtime_ns=resolved.stat().st_mtime_ns)
+    checkpoint = Path(checkpoint)
+    identity['text_checkpoint'] = ProvenanceEntry(
+        size=checkpoint_size(checkpoint, use_memo=False),
+        mtime_ns=checkpoint.stat().st_mtime_ns)
     return identity
 
 
@@ -206,23 +226,6 @@ def _pipeline_layouts() -> dict[str, str]:
     return {key: str(LAYOUTS[key].template)
             for key in ('source_code_dir', 'scripts_dir', 'config_dir',
                         'model_tracks_config', 'negative_supply_discriminator')}
-
-
-@timed
-def verify_reusable_outputs(entries: dict[str, PreparedFile]) -> list[str]:
-    """Paths of cached resume outputs that no longer match their recorded bytes.
-
-    Integrity only (owner directive 2026-10-08): the recorded size is checked
-    against the artifact on disk and the mismatches are RETURNED, never raised.
-    A mismatch is not a validity verdict; the caller rebuilds the files it can
-    no longer reuse instead of failing the run.
-    """
-    mismatches: list[str] = []
-    for path, entry in _LOG.progress(entries.items(), desc='verify_reusable', unit='file'):
-        artifact = Path(path)
-        if not artifact.exists() or artifact.stat().st_size != entry.bytes or size(path) != entry.size:
-            mismatches.append(path)
-    return mismatches
 
 
 @timed
@@ -282,21 +285,18 @@ def _copy_file_with_progress(source: Path, destination: Path) -> None:
 
 @timed
 def verify_stage_manifest(path: str | Path) -> bool:
-    """Whether a prerequisite manifest is complete and internally consistent.
+    """Whether a prerequisite stage published a complete manifest.
 
-    Integrity only (owner directive 2026-10-08): a manifest whose recorded
-    sizes no longer match on disk is NOT a validity verdict and does NOT
-    fail the run. It returns ``False`` so the caller rebuilds the prerequisite.
-    An absent or unparseable manifest also returns ``False``.
+    Data is never checked (owner directive 2026-10-09): the recorded sizes are
+    a record, never compared. A manifest that does not parse, or that is not
+    marked ``complete``, is not usable; that is a publish marker, not a data
+    gate.
     """
-    from core.tracing import trace_path
     try:
         manifest = _load_stage_manifest(path)
     except (OSError, ValueError):
         return False
-    if manifest.status != 'complete':
-        return False
-    return _manifest_sizes_match(manifest, trace_path)
+    return manifest.status == 'complete'
 
 
 def _load_stage_manifest(path: str | Path):
@@ -308,23 +308,6 @@ def _load_stage_manifest(path: str | Path):
     except ValueError as exc:
         exc.add_note(f'Preparation prerequisite manifest: {path}')
         raise
-
-
-def _manifest_sizes_match(manifest, trace_path) -> bool:
-    """Whether every recorded input/output size still matches its artifact.
-
-    The append-only consolidated trace is exempt (it is not a frozen input).
-    """
-    with trace_step('verify_stage_manifest.size_check',
-                    outputs=len(manifest.inputs) + len(manifest.outputs)):
-        entries = manifest.inputs + manifest.outputs
-        for entry in _LOG.progress(entries, desc='verify_manifest', unit='entry',
-                                   total=len(entries)):
-            if Path(entry.path).resolve() == trace_path().resolve():
-                continue
-            if size(entry.path) != entry.size:
-                return False
-    return True
 
 
 @timed
@@ -683,22 +666,17 @@ class PrepareRun:
             self.manifest.pop('error', None)
 
     def _validate_resume(self, previous_state, previous) -> bool:
-        """Whether the saved run state still matches this run's bytes.
+        """Whether the saved run state belongs to this run's identity.
 
-        Structural mismatches fail loud (a resume pointing at another run or
-        lane is a mistake, not drift). Byte drift is NOT an error: it returns
-        ``False`` so the caller silently rebuilds from the first stage.
+        Only structural identity is checked (run directory, run tag). Data is
+        never checked (owner directive 2026-10-09): the recorded provenance, the
+        smoke baseline and the reusable-output sizes are records, never compared
+        to refuse or force a rebuild.
         """
         if previous_state.run_dir != str(self.run_dir):
             raise ValueError('Preparation manifest belongs to another run directory')
         if self.requested_tag and self.requested_tag != previous_state.negative_supply_run_tag:
             raise ValueError('Resume negative-supply run tag differs from the saved run')
-        if previous_state.provenance != self.manifest['provenance']:
-            return False
-        if previous_state.smoke_original != self.smoke_before:
-            return False
-        if verify_reusable_outputs(previous_state.reusable_outputs):
-            return False
         return True
 
     # --- stage planning ---------------------------------------------------

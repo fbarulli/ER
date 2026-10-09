@@ -66,25 +66,25 @@ def test_verify_manifest_rejects_edited_recorded_hash(tmp_path):
         verify_manifest("dedupe", manifest_dir=manifest_dir)
 
 
-def test_handoff_manifest_verify_passes_on_valid_and_reports_stages(tmp_path):
-    from training.handoff import _manifest_directory, _verify_published_manifests
+def test_handoff_records_published_manifest_stages(tmp_path):
+    from training.handoff import _manifest_directory, _published_manifest_stages
     manifest_dir = _manifest_directory(tmp_path)
     _write_manifest(manifest_dir, stage="dedupe")
-    summary = _verify_published_manifests(manifest_dir)
-    assert summary == {"verified_stages": ["dedupe"]}
+    summary = _published_manifest_stages(manifest_dir)
+    assert summary == {"published_stages": ["dedupe"]}
 
 
-def test_handoff_manifest_verify_rejects_tampered(tmp_path):
-    from training.handoff import _manifest_directory, _verify_published_manifests
+def test_handoff_does_not_recheck_tampered_output(tmp_path):
+    """Data is never checked: the boundary enumerates published stages, no byte re-check."""
+    from training.handoff import _manifest_directory, _published_manifest_stages
     manifest_dir = _manifest_directory(tmp_path)
     _, output = _write_manifest(manifest_dir, stage="dedupe")
     output.write_bytes(b"tampered")
-    with pytest.raises(RuntimeError, match="size mismatch"):
-        _verify_published_manifests(manifest_dir)
+    assert _published_manifest_stages(manifest_dir) == {"published_stages": ["dedupe"]}
 
 
-def test_handoff_manifest_verify_skips_absent_stages(tmp_path):
-    from training.handoff import _manifest_directory, _verify_published_manifests
+def test_handoff_skips_absent_stages(tmp_path):
+    from training.handoff import _manifest_directory, _published_manifest_stages
     manifest_dir = _manifest_directory(tmp_path)
     # nothing published yet: a later-lane absence is not a failure
-    assert _verify_published_manifests(manifest_dir) == {"verified_stages": []}
+    assert _published_manifest_stages(manifest_dir) == {"published_stages": []}

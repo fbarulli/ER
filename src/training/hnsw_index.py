@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from core.portable_archive import ByteCount
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,11 +34,6 @@ def normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
     if np.any(norms <= 1e-12):
         raise ValueError("HNSW embeddings contain a zero-length vector")
     return np.ascontiguousarray(matrix / norms, dtype=np.float32)
-
-
-def _ids_size(ids: Sequence[str]) -> int:
-    payload = "\n".join(str(value) for value in ids).encode("utf-8")
-    return ByteCount(payload).total
 
 
 class PersistentHnswIndex:
@@ -125,7 +119,6 @@ class PersistentHnswIndex:
             "ef_construction": self.ef_construction,
             "M": self.M,
             "ef_search": self.ef_search,
-            "id_size": _ids_size(normalized_ids),
             "preprocessing_fingerprint": preprocessing_fingerprint,
             "files": {
                 "index": INDEX_FILENAME,
@@ -179,7 +172,6 @@ class PersistentHnswIndex:
             "normalized": True,
             "ef_construction": self.ef_construction,
             "M": self.M,
-            "id_size": _ids_size(normalized_ids),
             "preprocessing_fingerprint": preprocessing_fingerprint,
         }
         mismatches = {

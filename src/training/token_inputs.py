@@ -169,10 +169,8 @@ def payload_size(payload) -> int:
 class PreparedTokenLookup:
     """No fixed-text tokenizer calls; explicitly registered dynamic text only."""
 
-    def __init__(self, model, table, payload, *, recorded_size: int | None = None):
+    def __init__(self, model, table, payload):
         self._require_policy(model, table)
-        expected_size = payload_size(payload) if recorded_size is None else recorded_size
-        self._require_payload(table, payload, expected_size)
         self.table = table
         validate_training_tokens(table)
         self.indices = {text: index for index, text in enumerate(table["texts"])}
@@ -188,10 +186,6 @@ class PreparedTokenLookup:
     def _require_policy(self, model, table) -> None:
         if table.get("version") != 1 or table["policy"] != checkpoint_policy(model):
             raise ValueError("prepared training tokenizer/checkpoint policy mismatch; rebuild locally")
-
-    def _require_payload(self, table, payload, size: int) -> None:
-        if table["payload_size"] != size:
-            raise ValueError("prepared training token payload mismatch; rebuild locally")
 
     def _require_fixed_membership(self, payload) -> None:
         if any(text not in self.indices for text in payload):

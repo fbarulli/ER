@@ -5596,12 +5596,6 @@ def train_one_config(
         country = fixed_inputs["shared"]['country']
         rows = list(fixed_inputs["skipped"])
         _canon_attrs: dict[str, dict] | None = None
-        if prepared_tokens is not None:
-            from training.token_inputs import payload_size
-
-            prepared_payload_size = payload_size(payload)
-        else:
-            prepared_payload_size = None
     # ── CONSOLIDATED TRACE: one config-level row + the per-grain accumulators
     # that are published once, after the fold loop, so the stage keeps ONE
     # commit (train.py) and the row volume stays inside core.tracing's caps.
@@ -5772,7 +5766,7 @@ def train_one_config(
                 if prepared_tokens is not None:
                     from training.token_inputs import PreparedTokenLookup
                     token_lookup = PreparedTokenLookup(
-                        model, prepared_tokens, payload, recorded_size=prepared_payload_size
+                        model, prepared_tokens, payload
                     )
 
                 # ── build the training dataset FIRST (steps derive from it) ──

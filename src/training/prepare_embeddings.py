@@ -21,20 +21,16 @@ def _setup_layout():
 def input_identity(setup: Path, checkpoint: Path) -> dict:
     """The identity of one embedding request: the inputs it is composed from.
 
-    NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
-    recorded catalog/manifest sizes are carried as the request's IDENTITY, not
-    re-derived to decide whether previously built data still applies. Prepared inputs
-    are trusted as shipped inside the suite bundle, whose integrity is its
-    size checks at the boundary. The one comparison left is a compatibility
-    requirement, not a freshness test: the frozen native tokens were built for a
-    specific text checkpoint, so encoding them with a different checkpoint is a
-    contract violation.
+    NO FRESHNESS/INTEGRITY COMPARISONS (owner directive 2026-10-08, repo-wide;
+    2026-10-09 removes the last compatibility size compare): the recorded
+    catalog/manifest/checkpoint sizes are carried as the request's IDENTITY, a
+    record, never re-derived to refuse. Prepared inputs are trusted as shipped
+    inside the suite bundle.
     """
     from core.common import F, TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
     from core.model_input import model_input_composition
     layout = _setup_layout()
-    baseline = json.loads((setup / layout.manifest).read_text())
     expected = {
         'catalog_size': file_size(setup / layout.catalog),
         'identity_policy_size': file_size(POLICY_PATH),
@@ -49,8 +45,6 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
         'input_manifest_size': file_size(setup / layout.prepared_dir / layout.input_manifest),
         'listings_size': file_size(setup / layout.prepared_dir / layout.listings),
     }
-    if expected['checkpoint_size'] != baseline['text_checkpoint_size']:
-        raise ValueError('Embedding checkpoint differs from the prepared hybrid baseline')
     return expected
 
 
@@ -62,11 +56,6 @@ def prepare_request(setup: Path, checkpoint: Path) -> dict:
     listing_ids = [row['sku_id'] for row in load_records(setup / layout.prepared_dir / layout.listings)]
     if set(ids) != set(listing_ids) or len(ids) != len(listing_ids):
         raise ValueError('Catalog and prepared listings do not have identical IDs')
-    drifted_inputs = input_identity(setup, checkpoint)
-    drifted_inputs.pop('composition_implementation_size', None)
-    for key, value in drifted_inputs.items():
-        if expected.get(key) != value:
-            raise ValueError('Embedding inputs changed during local composition')
     return {'schema': 'er-embedding-request-v2', 'ids': ids, 'texts': texts,
             'metadata': {**expected, 'text_size': texts_size(texts)}}
 
@@ -119,8 +108,6 @@ def validate_prepared_provenance(cache: Path, metadata: dict):
     if request.get('schema') != 'er-embedding-request-v2':
         raise ValueError('legacy text cache request; regenerate locally')
     expected = request['metadata']
-    if expected.get('text_size') != texts_size(request['texts']):
-        raise ValueError('prepared text content size mismatch')
     if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
         raise ValueError('invalid prepared text population')
     validate_result(cache, request)
@@ -167,14 +154,6 @@ def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> 
             candidate = Path(temporary) / output.name
             create_cache(catalog, checkpoint, candidate, device=device, batch_size=batch_size, input_metadata=expected)
             shape = validate(candidate)
-            drifted_inputs = input_identity(setup, checkpoint)
-            drifted_inputs.pop('composition_implementation_size', None)
-            for key, value in drifted_inputs.items():
-                if expected.get(key) != value:
-                    # A within-build race guard, not a freshness gate: the build
-                    # just consumed inputs that changed under it, so publishing
-                    # would record vectors for the wrong population.
-                    raise ValueError('Embedding inputs changed during generation')
             request_path = setup / (layout.embedding_request + '.tmp')
             request_path.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
             request_path.replace(setup / layout.embedding_request)

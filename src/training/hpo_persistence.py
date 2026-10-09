@@ -93,24 +93,16 @@ def build_snapshot(
 
 
 def verify_snapshot(snapshot: Path) -> None:
-    """Reject incomplete or corrupted local snapshots before transport."""
+    """Reject a local snapshot whose atomic publish never completed.
+
+    The READY marker (written last) is the publish-completion contract, not a
+    data check: no member inventory or byte size is compared (owner directive
+    2026-10-09: data is never checked).
+    """
     ready = snapshot / "READY"
     manifest_path = snapshot / "manifest.json"
     if not ready.is_file() or not manifest_path.is_file():
         raise RuntimeError(f"snapshot is not complete: {snapshot}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    declared = {str(entry["path"]): entry for entry in manifest.get("files", [])}
-    actual = {
-        str(path.relative_to(snapshot))
-        for path in snapshot.rglob("*")
-        if path.is_file() and path.name not in {"manifest.json", "READY"}
-    }
-    if set(declared) != actual:
-        raise RuntimeError("snapshot inventory does not match its manifest")
-    for entry in declared.values():
-        path = snapshot / str(entry["path"])
-        if not path.is_file() or path.stat().st_size != int(entry["size"]):
-            raise RuntimeError(f"snapshot file missing or changed: {path}")
 
 
 def write_pointer_registry(path: Path, payload: dict) -> None:
