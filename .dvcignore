@@ -1,12 +1,15 @@
-# Patterns DVC skips. Run results and transports under results/ and
-# training_results/ MUST stay visible: they are what DVC tracks. This file only
-# keeps DVC's walks away from trees it will never track.
+# Patterns DVC skips. NEVER list a DVC-managed output root here: a tracked
+# output under an ignored path makes every repo-wide walk (`dvc status`,
+# `dvc gc --workspace`) fail with "Path ... is ignored by .dvcignore", and the
+# declared roots (config/paths.yaml dvc_output_root_keys: results/,
+# training_results/, artifacts/embeddings/, logs/, training_profile/,
+# artifacts/abl_opt/, wandb/, data/laya/) are exactly what DVC tracks.
+# This file therefore only keeps DVC's walks away from trees it will never
+# track.
 .venv/
 .dvc-cache/
 .dvc-site-cache/
 node_modules/
 graphify-out/
 archify/
-logs/
 matplotlib/
-wandb/
