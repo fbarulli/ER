@@ -184,7 +184,6 @@ def _stage_hpo(tmp_path: Path, monkeypatch) -> bytes:
     monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": "x", "files": {}})
-    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "main")
     monkeypatch.setattr(runtime_inputs, "require_published_tip_match",
                         lambda rev, repo, branch: rev)
     receipt = LayaTrainingRunFactory.from_config(

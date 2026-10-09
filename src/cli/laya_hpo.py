@@ -37,7 +37,6 @@ import hashlib
 import inspect
 import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -407,17 +406,6 @@ def _kernel_script_gate(script: str) -> None:
     compile(script, "<laya-hpo-payload>", "exec")
 
 
-def _current_git_branch() -> str:
-    """The branch baked as BRANCH (falls back to the config branch)."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=TRAIN_ROOT,
-        capture_output=True, text=True, check=False)
-    branch = result.stdout.strip() if result.returncode == 0 else ""
-    if not branch or branch == "HEAD":
-        return training_cfg().kaggle.branch
-    return branch
-
-
 # The runtime preflight is inline (not the finetune lane's constant) so it reads
 # the env-driven INPUTS root and thus works on BOTH Kaggle and Colab.
 _HPO_RUNTIME_PREFLIGHT = '''\
@@ -703,15 +691,18 @@ class LayaHpoStager:
             corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
 
     def _git_pin(self) -> tuple[str, str, str, Any]:
-        """``(repository, branch, revision, published_tip)``."""
+        """``(repository, branch, revision, published_tip)``.
+
+        The branch is the config SSOT (``kaggle.branch``), exactly like every
+        sibling staging surface (``cli.laya_staging``): the published branch is
+        what the tip gate pins against, never the transient local branch of the
+        checkout the probe happens to run from.
+        """
         repository = training_cfg().kaggle.repository
-        branch = _current_git_branch()
+        branch = training_cfg().kaggle.branch
         revision = self.revision or laya_lane._git_revision()
         from core import runtime_inputs
 
-        # HPO stages from the branch it runs on; publish it first when origin
-        # does not have it (a never-pushed run branch), so the tip gate and the
-        # remote clone below can both resolve it.
         runtime_inputs.publish_run_branch(repository, branch)
         tip = runtime_inputs.require_published_tip_match(
             revision, repository, branch)

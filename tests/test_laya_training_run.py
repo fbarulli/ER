@@ -23,7 +23,6 @@ def _stub_lane_boundary(monkeypatch, tmp_path):
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": str(tmp_path / "ds"),
                                           "files": {}})
-    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
     from core import runtime_inputs
 
     monkeypatch.setattr(runtime_inputs, "publish_run_branch",

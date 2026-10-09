@@ -541,7 +541,6 @@ def _stage(monkeypatch, tmp_path, url):
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": str(tmp_path / "ds"),
                                           "files": {}})
-    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "publish_run_branch",
                         lambda repo, branch: False)
@@ -565,48 +564,23 @@ def test_stage_kernel_without_remote_url_bakes_the_local_study(monkeypatch,
     compile(script, str(Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE), "exec")
 
 
-def test_stage_publishes_an_unpushed_run_branch_before_the_tip_gate(
-        monkeypatch, tmp_path):
-    """The reported blocker: a checked-out run branch that is not on origin
-    cannot be fetched by the tip gate (`couldn't find remote ref`). Staging now
-    publishes it first, so the gate and the remote clone resolve it and the
-    receipt records the published tip."""
-    import subprocess
+def test_staged_pin_uses_the_config_branch_not_the_local_checkout(monkeypatch,
+                                                                  tmp_path):
+    """A throwaway checkout branch must never reach the staged pin.
 
-    monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-publish-1")
-    monkeypatch.delenv(laya_hpo.OPTUNA_URL_ENV, raising=False)
-    monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
-    monkeypatch.setattr(laya_lane, "_git_revision", lambda: "a" * 40)
-    monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
-    monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
-                        lambda **kwargs: {"payload": str(tmp_path / "ds"),
-                                          "files": {}})
-    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-run-x")
-    from core import common
+    Regression: ``_git_pin`` resolved ``HEAD``'s local branch, so a probe
+    launched from a ``.worktrees/laya-*`` branch baked that unpublished name and
+    the tip gate's ``git fetch origin <branch>`` failed. The pin is the config
+    SSOT branch, exactly like the sibling ``cli.laya_staging`` surface.
+    """
+    from core.common import training_cfg
 
-    monkeypatch.setattr(common, "TRAIN_ROOT", tmp_path)
-    pushes: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        if command[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-            return subprocess.CompletedProcess(command, 0, "laya-run-x\n", "")
-        if command[:2] == ["git", "ls-remote"]:
-            return subprocess.CompletedProcess(command, 2, "", "")
-        if command[:2] == ["git", "push"]:
-            pushes.append(command)
-            return subprocess.CompletedProcess(command, 0, "", "")
-        if command[:2] == ["git", "fetch"]:
-            return subprocess.CompletedProcess(command, 0, "", "")
-        if command[:2] == ["git", "rev-parse"]:
-            return subprocess.CompletedProcess(command, 0, "a" * 40, "")
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    receipt = _hpo_stage()
-    assert pushes and pushes[0][:2] == ["git", "push"]
-    assert pushes[0][3] == "HEAD:refs/heads/laya-run-x"
-    assert receipt["published_tip"] == "a" * 40
-    assert receipt["published_pin"]["branch"] == "laya-run-x"
+    base = training_cfg()
+    forced = base.model_copy(update={
+        "kaggle": base.kaggle.model_copy(update={"branch": "laya-config-pin"})})
+    monkeypatch.setattr(laya_hpo, "training_cfg", lambda: forced)
+    receipt = _stage(monkeypatch, tmp_path, None)
+    assert receipt["published_pin"]["branch"] == "laya-config-pin"
 
 
 def test_staged_kernel_is_self_contained_with_the_baked_registry(monkeypatch,
@@ -684,7 +658,6 @@ def _stage_colab(monkeypatch, tmp_path, url):
     monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": "x", "files": {}})
-    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "publish_run_branch",
                         lambda repo, branch: False)
@@ -1188,7 +1161,6 @@ def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
                         lambda **kwargs: {"payload": str(tmp_path / "ds"),
                                           "files": {}})
-    monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "publish_run_branch",
                         lambda repo, branch: False)
