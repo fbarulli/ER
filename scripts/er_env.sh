@@ -60,7 +60,7 @@ shared_venv_dir() {
 cmd_venv() {
   local shared
   shared="$(shared_venv_dir "${1:-}")"
-  [[ -x "$shared/bin/python" ]] || exit 1
+  [[ -x "$shared/bin/python" ]] || die "shared venv missing: $shared/bin/python"
   printf '%s\n' "$shared"
 }
 
