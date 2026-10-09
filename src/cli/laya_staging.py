@@ -291,24 +291,12 @@ class LayaStagingFactory:
         template = (DECISION_KERNEL_SCRIPT if decision_kind != "laya-cli-eval"
                     else EVAL_KERNEL_SCRIPT)
         tag = run_tag or spec.run_tag_prefix + self.decision_tag()
-        metadata: dict[str, Any] = {
-            "id": slug,
-            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": code_file,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": True,
-            # single T4: the payload never requests the double accelerator;
-            # the script itself pins CUDA_VISIBLE_DEVICES=0.
-            "enable_internet": True,
-            # THE INPUTS TRAVEL AS THE DATASET: kernels push does NOT ship
-            # the co-located csv/schema files, so resolve_input would
-            # FileNotFoundError once boot passes — attach the dataset slug.
-            "dataset_sources": [dataset_slug],
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        # single T4: the payload never requests the double accelerator; the
+        # script itself pins CUDA_VISIBLE_DEVICES=0. THE INPUTS TRAVEL AS THE
+        # DATASET: kernels push does NOT ship the co-located csv/schema files,
+        # so resolve_input would FileNotFoundError once boot passes.
+        metadata = KaggleKernels.kernel_metadata(
+            slug, code_file, enable_gpu=True, dataset_sources=[dataset_slug])
         entry = DECISION_BINDINGS[decision_kind]
         staged_csv = input_receipt["staged"]
         values = {
@@ -524,19 +512,9 @@ class LayaStagingFactory:
         dataset_sources = [dataset_slug]
         if ckpt_dataset:
             dataset_sources.append(ckpt_dataset)
-        metadata: dict[str, Any] = {
-            "id": slug,
-            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": HOLDOUT_EVAL_CODE_FILE,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": True,
-            "enable_internet": True,
-            "dataset_sources": dataset_sources,
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        metadata = KaggleKernels.kernel_metadata(
+            slug, HOLDOUT_EVAL_CODE_FILE, enable_gpu=True,
+            dataset_sources=dataset_sources)
         values = {
             "LAYA_PACKAGE": spec.finetune_package,
             "RUN_TAG": tag,
@@ -636,22 +614,12 @@ class LayaStagingFactory:
         stage = self._runtime.staging_dir() / "kaggle" / kind
         stage.mkdir(parents=True, exist_ok=True)
         tag = run_tag or spec.run_tag_prefix + self.decision_tag()
-        metadata: dict[str, Any] = {
-            "id": slug,
-            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": FINETUNE_CODE_FILE,
-            "language": "python",
-            "kernel_type": "script",
-            # the CPU smoke pins enable_gpu=False; the prod kind keeps the single
-            # T4 (the script pins CUDA_VISIBLE_DEVICES=0 either way).
-            "enable_gpu": not smoke,
-            "enable_internet": True,
-            # THE CORPUS + THE BASE CHECKPOINT TRAVEL AS DATASETS.
-            "dataset_sources": [dataset_slug, base_dataset],
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        # the CPU smoke pins enable_gpu=False; the prod kind keeps the single
+        # T4 (the script pins CUDA_VISIBLE_DEVICES=0 either way). THE CORPUS +
+        # THE BASE CHECKPOINT TRAVEL AS DATASETS.
+        metadata = KaggleKernels.kernel_metadata(
+            slug, FINETUNE_CODE_FILE, enable_gpu=not smoke,
+            dataset_sources=[dataset_slug, base_dataset])
         recipe = self._finetune_smoke_recipe() if smoke \
             else self._recipe.finetune_config()
         device = "cpu" if smoke else spec.finetune.device
@@ -767,20 +735,10 @@ class LayaStagingFactory:
         dataset_sources = [dataset_slug]
         if ckpt_dataset and not checkpoint_path:
             dataset_sources.append(ckpt_dataset)
-        metadata: dict[str, Any] = {
-            "id": slug,
-            "title": slug.rsplit("/", 1)[-1].replace("-", " ").title(),
-            "code_file": FINETUNE_EVAL_CODE_FILE,
-            "language": "python",
-            "kernel_type": "script",
-            "enable_gpu": True,
-            "enable_internet": True,
-            # THE HELD-OUT SPLIT + THE CHECKPOINT TRAVEL AS DATASETS.
-            "dataset_sources": dataset_sources,
-            "kernel_sources": [],
-            "competition_sources": [],
-            "is_private": True,
-        }
+        # THE HELD-OUT SPLIT + THE CHECKPOINT TRAVEL AS DATASETS.
+        metadata = KaggleKernels.kernel_metadata(
+            slug, FINETUNE_EVAL_CODE_FILE, enable_gpu=True,
+            dataset_sources=dataset_sources)
         eval_jsonl = FINETUNE_EVAL_SPLIT_FILES[split]
         calibration = self._recipe.eval_calibration_config()
         values = {
