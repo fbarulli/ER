@@ -11,9 +11,9 @@ lifecycle is never edited (owner ruling 910ee17).  The pinned capabilities:
   owner-launched named session is re-verified by the shared primitive
   (cli.colab.ensure_session) and never reallocated; a GPU accelerator is
   never reshaped by this lane.
-* streaming          — EVERY prep chunk reaches BOTH transcripts (root
-  system log + training.log); [done] only on clean completion, [failed]
-  otherwise (fail-loud, never retried).
+* streaming          — EVERY prep chunk reaches the ONE lane transcript
+  (start_live_log); [done] only on clean completion, [failed] otherwise
+  (fail-loud, never retried).
 * tqdm passthrough   — strict fd inheritance in the emitted prepare script
   (902689e final state); this lane never captures stderr. tqdm itself lives
   in the preparation code; nothing here duplicates progress rendering.
@@ -41,7 +41,7 @@ import argparse
 import os
 from pathlib import Path
 
-from core.common import F, training_cfg
+from core.common import training_cfg
 
 import cli.colab as colab
 from cli.colab_lane import ColabCPULane, cohort_label as _canonical_cohort_label
@@ -82,13 +82,6 @@ def run_bundle_prep(dataset_csv: Path | None = None) -> None:
     lane().run_cpu_prep(dataset_csv)
 
 
-def _qualify_session_transcripts(session: str) -> None:
-    """Per-session root/training transcript paths for the 2-parallel cap."""
-    lane().qualify_session_transcripts(F, session)
-
-
-
-
 def _stamp() -> str:
     """Bracketed Europe/Paris (CET/CEST) wall-clock prefix."""
     return _lane_stamp("colab-data-bundle-prep")
@@ -104,8 +97,6 @@ def main() -> None:
     args = parser.parse_args()
     colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
-    session = os.environ.get("EUROMONITOR_COLAB_SESSION", colab.SESSION)
-    _qualify_session_transcripts(session)
     colab.start_live_log()
     try:
         run_bundle_prep(dataset_csv=args.dataset_csv)
