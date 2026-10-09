@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from core.common import TRAIN_ROOT
 
@@ -70,7 +70,7 @@ class LaneTranscript:
 
     @classmethod
     def from_config(cls, train_root: Path, *, lane: str,
-                    stamp: Callable[[], str]) -> "LaneTranscript":
+                    stamp: Callable[[], str]) -> LaneTranscript:
         return cls(cls.path_for(train_root), lane=lane, stamp=stamp)
 
     def write(self, line: str) -> None:

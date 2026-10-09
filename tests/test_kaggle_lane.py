@@ -831,7 +831,10 @@ def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
     separate state file.
     """
     import types
+    from typing import ClassVar
+
     import kagglesdk.kaggle_client
+
     from cli import laya_lane
     from cli.log_capture import LaneTranscript
 
@@ -847,11 +850,11 @@ def test_one_lane_log_carries_staging_watcher_and_stream(tmp_path, monkeypatch):
     class RateLimited(Exception):
         status_code = 429
 
-    frames = ['data: {"stream_name":"stdout","time":1,'
-              '"data":"hello from the kernel\\n"}']
+    frames = [('data: {"stream_name":"stdout","time":1,'
+               '"data":"hello from the kernel\\n"}')]
 
     class Stream:
-        state = {"n": 0}
+        state: ClassVar[dict[str, int]] = {"n": 0}
 
         def iter_lines(self):
             self.state["n"] += 1
