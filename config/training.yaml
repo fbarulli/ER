@@ -180,11 +180,19 @@ credentials:
   # The Kaggle CLI credential paths the owner materializes / guards.
   kaggle_credentials_file: ".kaggle/kaggle.json"
   kaggle_access_token_file: ".kaggle/access_token"
+  # HPO study storage source (training.hpo_study.StudyOwner). The remote URL
+  # (when set) wins; otherwise the TRAIN_ROOT-relative local SQLite study is
+  # shared by a single VM's parallel worker processes. The URL itself lives in
+  # the .env above, never here.
+  study:
+    local_file: "results/laya_lane/hpo_study.db"
   keys:
     kaggle_api_key: "KAGGLE_API_KEY"
     kaggle_username: "KAGGLE_USERNAME"
     wandb_api_key: "WANDB_API_KEY"
     hf_token: "HF_TOKEN"
+    optuna_storage_url: "OPTUNA_STORAGE_URL"
+    hpo_generation_id: "EUROMONITOR_HPO_GENERATION_ID"
 
 # ── Kaggle dataset/export transport lane ───────────────────────────────────
 # Parallel dataset/transport lane (branch kaggle-lane): packages/uploads

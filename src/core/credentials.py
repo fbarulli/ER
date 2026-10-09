@@ -41,6 +41,40 @@ class CredentialKeysSpec(BaseModel):
     kaggle_username: str = "KAGGLE_USERNAME"
     wandb_api_key: str = "WANDB_API_KEY"
     hf_token: str = "HF_TOKEN"
+    # HPO study SOURCE names (never values): the shared PostgreSQL URL and the
+    # generation id that scopes the study. The study-owner class
+    # (training.hpo_study.StudyOwner) resolves both through THIS store.
+    optuna_storage_url: str = "OPTUNA_STORAGE_URL"
+    hpo_generation_id: str = "EUROMONITOR_HPO_GENERATION_ID"
+
+
+class StudySpec(BaseModel):
+    """credentials.study — the HPO study storage SSOT (additive).
+
+    Declares the local, file-based SQLite study used when no remote URL is
+    configured (a single VM whose parallel worker processes share one study
+    file). ``local_file`` is a TRAIN_ROOT-relative fragment; ``None`` means no
+    local fallback, so the study owner fails loud when the remote URL is also
+    absent. A config without this block loads with these defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    local_file: str | None = "results/laya_lane/hpo_study.db"
+
+    @model_validator(mode="after")
+    def _local_file_is_portable(self) -> StudySpec:
+        if self.local_file is None:
+            return self
+        fragment = self.local_file.strip()
+        if not fragment:
+            raise ValueError("credentials.study.local_file must be non-empty")
+        candidate = Path(fragment)
+        if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
+            raise ValueError(
+                "credentials.study.local_file must be a TRAIN_ROOT-relative "
+                f"path fragment: {self.local_file!r}")
+        return self
 
 
 class CredentialsSpec(BaseModel):
@@ -60,6 +94,8 @@ class CredentialsSpec(BaseModel):
     kaggle_credentials_file: str = ".kaggle/kaggle.json"
     kaggle_access_token_file: str = ".kaggle/access_token"
     keys: CredentialKeysSpec = Field(default_factory=CredentialKeysSpec)
+    # HPO study storage source (additive; the StudyOwner reads this block).
+    study: StudySpec = Field(default_factory=StudySpec)
 
     @model_validator(mode="after")
     def _paths_are_home_relative_fragments(self) -> CredentialsSpec:
