@@ -445,6 +445,20 @@ class WandbProfileSink:
             pass
 
 
+class WandbTimingSink:
+    """Mirrors the per-phase wall-clock seconds to the live wandb run."""
+
+    @staticmethod
+    def log(payload):
+        try:
+            if WANDB_RUN is None:
+                return
+            WANDB_RUN.log(payload)
+        except Exception as error:
+            print("[perf-patch] timing wandb skipped: "
+                  + type(error).__name__ + ": " + str(error)[:200], flush=True)
+
+
 def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                       on_epoch_end=None, parallel=False):
     # Faithful copy of laya.train.train_model (0.3.29) carrying the three
@@ -453,6 +467,10 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     import time
     import torch
     from laya import train as laya_train
+
+    # laya ran the pre-train dev evaluation inside finetune() before calling
+    # this loop; log the transition so the quiet stretch is visible remotely.
+    wandb_log_event("pretrain_eval_done")
 
     controls = TrainingControls.parse(globals().get("FINETUNE_CONTROL"), {})
     control = controls.block
@@ -914,6 +932,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         wandb_log_control_summary(result)
     except Exception:
         pass
+    wandb_log_event("training_done", epochs_run=len(history),
+                    best_dev_accuracy=best_acc)
     model.eval()
     return history
 
@@ -925,7 +945,8 @@ def apply_perf_patch():
         print("[perf-patch] disabled via " + PERF_PATCH_ENV, flush=True)
         return False
     from laya import train as laya_train
-    globals()["PHASE_TIMINGS"] = CalibrationTimingHook.install_for_rank(laya_train, is_rank0())
+    globals()["PHASE_TIMINGS"] = CalibrationTimingHook.install_for_rank(
+        laya_train, is_rank0(), sink=WandbTimingSink.log)
     laya_train.train_model = _perf_train_model
     print("[perf-patch] laya.train.train_model patched: on-GPU loss (1 sync/"
           "epoch), single device move, encode memoization", flush=True)
@@ -933,30 +954,71 @@ def apply_perf_patch():
 
 
 def start_gpu_sampler():
+    """Start the ONE 1 Hz GPU poller: append gpu_usage.log AND mirror to wandb.
+
+    The existing sampler loop is reused (same 1 Hz cadence, same log file) but
+    runs in-process so it reaches the live wandb run; there is still exactly one
+    poller. A wandb write failure is fail-soft and never stops the samples.
+    """
     if not perf_patch_enabled():
         return None
     if shutil.which("nvidia-smi") is None:
         log("gpu sampler: nvidia-smi absent; skipping")
         return None
+    import threading
+
     path = WORKING / "gpu_usage.log"
     path.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen(
-        ["nvidia-smi",
-         "--query-gpu=utilization.gpu,memory.used,memory.total",
-         "--format=csv,noheader", "-l", "1", "-f", str(path)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    stop_event = threading.Event()
+    thread = threading.Thread(target=_gpu_sampler_loop, args=(path, stop_event),
+                              daemon=True)
+    thread.start()
     log("gpu sampler: 1 Hz -> " + str(path))
-    return proc
+    return thread, stop_event
 
 
-def stop_gpu_sampler(proc):
-    if not proc:
+def _gpu_sampler_loop(path, stop_event):
+    command = ["nvidia-smi",
+               "--query-gpu=utilization.gpu,memory.used,memory.total",
+               "--format=csv,noheader"]
+    with path.open("w", encoding="utf-8", buffering=1) as handle:
+        while not stop_event.wait(1.0):
+            try:
+                output = subprocess.run(command, capture_output=True, text=True,
+                                        check=False, timeout=5).stdout
+            except Exception as error:
+                print("[gpu-sampler] query skipped: " + type(error).__name__,
+                      flush=True)
+                continue
+            for line in output.splitlines():
+                handle.write(line.strip() + "\\n")
+                _wandb_log_gpu(line)
+
+
+def _wandb_log_gpu(line):
+    if WANDB_RUN is None:
         return
-    proc.terminate()
+    parts = [part.strip() for part in line.split(",")]
+    if len(parts) < 2:
+        return
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        util = float(parts[0].rstrip("%").strip())
+        mem_used = float(parts[1].split()[0])
+    except (ValueError, IndexError):
+        return
+    try:
+        WANDB_RUN.log({"gpu/util_pct": util, "gpu/mem_used_mb": mem_used})
+    except Exception as error:
+        print("[gpu-sampler] wandb skipped: " + type(error).__name__ + ": "
+              + str(error)[:200], flush=True)
+
+
+def stop_gpu_sampler(handle):
+    if not handle:
+        return
+    thread, stop_event = handle
+    stop_event.set()
+    thread.join(timeout=5)
 
 
 def summarize_gpu_usage(path):

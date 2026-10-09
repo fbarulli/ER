@@ -614,8 +614,9 @@ class PhaseTimings:
                 return self._inner.__exit__(exc_type, exc, traceback)
             return False
 
-    def __init__(self, rank0=True):
+    def __init__(self, rank0=True, sink=None):
         self.rank0 = bool(rank0)
+        self._sink = sink
         self._current = {}
         self._history = []
         self._stack = []
@@ -647,17 +648,37 @@ class PhaseTimings:
             return
         import os
 
+        payload = {}
         for name, entry in self._current.items():
             message = (f"[timing] laya {name} epoch={int(epoch)} "
                        f"elapsed_seconds={entry['seconds']:.3f}")
             print(message, flush=True)
             PhaseTimings._append_line(os.environ.get("ER_TIMING_LOG"), message)
+            seconds = round(entry["seconds"], 3)
             self._history.append({"section": name, "epoch": int(epoch),
                                   "depth": int(entry["depth"]),
                                   "calls": int(entry["calls"]),
-                                  "seconds": round(entry["seconds"], 3)})
+                                  "seconds": seconds})
+            payload["timing/laya/" + name] = seconds
         self._write_json(os.environ.get("ER_TIMING_OUT"))
         self._current = {}
+        self._emit_sink(payload)
+
+    def _emit_sink(self, payload):
+        """Mirror the per-phase seconds to the live sink (fail-soft).
+
+        The optional sink is the one seam to remote telemetry; a sink failure
+        is recorded in full and never interrupts training.
+        """
+        if self._sink is None or not payload:
+            return
+        try:
+            self._sink(payload)
+        except Exception:
+            import traceback
+
+            print("[timing] sink failed: " + traceback.format_exc(),
+                  flush=True)
 
     @staticmethod
     def _append_line(destination, message):
@@ -722,8 +743,8 @@ class CalibrationTimingHook:
         return timings
 
     @classmethod
-    def install_for_rank(cls, laya_train, rank0):
-        return cls(PhaseTimings(rank0=rank0)).install(laya_train)
+    def install_for_rank(cls, laya_train, rank0, sink=None):
+        return cls(PhaseTimings(rank0=rank0, sink=sink)).install(laya_train)
 
 
 class ProfilerSession:

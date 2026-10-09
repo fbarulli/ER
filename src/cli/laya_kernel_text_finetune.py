@@ -148,9 +148,15 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Unbuffered child processes: the wandb/output.log live reader must see lines
-# immediately (rank workers inherit this via os.environ copies).
+# Live output.log: line-buffer this process, and set PYTHONUNBUFFERED so the
+# spawned DDP workers inherit an unbuffered stdout (the live W&B/output.log
+# reader sees lines immediately; rank workers inherit this via os.environ).
 os.environ.setdefault("PYTHONUNBUFFERED", "1")
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
@@ -307,6 +313,25 @@ def wandb_finish():
             WANDB_RUN.finish()
         except Exception:
             pass
+
+
+def wandb_log_event(name, **fields):
+    """Log ONE structured run transition to wandb (no stream of noise).
+
+    The transition name rides ``run/event``; each non-None detail rides
+    ``run/event/<key>``. Fail-soft: a tracking error is recorded, never fatal.
+    """
+    if WANDB_RUN is None:
+        return
+    payload = {"run/event": str(name)}
+    for key, value in fields.items():
+        if value is not None:
+            payload["run/event/" + key] = value
+    try:
+        WANDB_RUN.log(payload)
+    except Exception as error:
+        log("wandb event skipped: " + type(error).__name__ + ": "
+            + str(error)[:200])
 
 
 @DEVICE_PATCH@
@@ -554,6 +579,7 @@ def _finetune_session(distributed, session):
         out_dir = WORKING / ("checkpoint.rank" + str(dist_env()[1]))
     if is_rank0():
         wandb_init()
+        wandb_log_event("kernel_boot", run_tag=RUN_TAG, ddp=distributed)
     gpu_handle = start_gpu_sampler() if is_rank0() else None
     try:
         summary = run_laya_finetune(train, dev, base_model, out_dir, device)
@@ -607,6 +633,10 @@ def _finetune_session(distributed, session):
                 log("held-out " + held_out["eval_source"] + " items="
                     + str(held_out["items"]) + " accuracy="
                     + str(held_out["metrics"].get("accuracy")))
+                wandb_log_event(
+                    "held_out_eval_done",
+                    accuracy=held_out["metrics"].get("accuracy"),
+                    items=held_out["items"])
             except Exception as error:  # keep the checkpoint; surface failure
                 receipt["held_out_error"] = (
                     type(error).__name__ + ": " + str(error)[:400])
@@ -624,6 +654,9 @@ def _finetune_session(distributed, session):
                 if item.name not in ("laya_finetune.tar.gz", "base_model"):
                     tar.add(item, arcname=item.name)
         log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
+        wandb_log_event("harvest_written",
+                        receipt=str(WORKING / RECEIPT_NAME),
+                        archive=str(WORKING / "laya_finetune.tar.gz"))
         wandb_finish()
 
     # Barrier + rank-0-only gate: only rank 0 evaluates the held-out split,

@@ -30,9 +30,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-# Unbuffered worker processes: the wandb/output.log live reader must see lines
-# immediately (per-GPU workers inherit this via os.environ copies).
+# Live output.log: line-buffer this process, and set PYTHONUNBUFFERED so the
+# spawned worker processes (spawned below) inherit an unbuffered stdout too.
 os.environ.setdefault("PYTHONUNBUFFERED", "1")
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
@@ -196,6 +201,25 @@ def wandb_finish():
             WANDB_RUN.finish()
         except Exception:
             pass
+
+
+def wandb_log_event(name, **fields):
+    """Log ONE structured run transition to wandb (no stream of noise).
+
+    The transition name rides ``run/event``; each non-None detail rides
+    ``run/event/<key>``. Fail-soft: a tracking error is recorded, never fatal.
+    """
+    if WANDB_RUN is None:
+        return
+    payload = {"run/event": str(name)}
+    for key, value in fields.items():
+        if value is not None:
+            payload["run/event/" + key] = value
+    try:
+        WANDB_RUN.log(payload)
+    except Exception as error:
+        log("wandb event skipped: " + type(error).__name__ + ": "
+            + str(error)[:200])
 
 
 def wandb_log_profiler(table):
@@ -528,6 +552,14 @@ def apply_fidelity_and_staging(options, trial_number, config_dict, control_dict,
     return resource, frozen, trial_train
 
 
+def baseline_dials():
+    """The enqueued SSOT baseline seed (a fixed-param trial), or None."""
+    options = HPO_SPACE.get("options") or {}
+    enqueue = (options.get("warm_start") or {}).get("enqueue") or []
+    seed = enqueue[-1] if enqueue else None
+    return seed if isinstance(seed, dict) else None
+
+
 def run_trial(trial, device, train_path, dev_path, base_model):
     import torch
     from laya import train as laya_train
@@ -552,6 +584,12 @@ def run_trial(trial, device, train_path, dev_path, base_model):
         % (int(trial.number), device, resource, options.fidelity.dimension,
            frozen, options.warm_start.mode,
            json.dumps(dials, sort_keys=True)))
+    seed = baseline_dials()
+    is_baseline = seed is not None and dials == seed
+    wandb_log_event("baseline_start" if is_baseline else "trial_start",
+                    number=int(trial.number),
+                    params=json.dumps(dials, sort_keys=True),
+                    resource=resource)
     rank0 = True
     try:
         rank0 = bool(globals()["is_rank0"]())
@@ -597,6 +635,9 @@ def run_trial(trial, device, train_path, dev_path, base_model):
     trial.set_user_attr("fidelity_resource", int(resource))
     log("trial %d done dev_accuracy=%s dev_loss=%s epoch_time_s=%.1f"
         % (int(trial.number), accuracy, dev_loss, epoch_time))
+    wandb_log_event("baseline_end" if is_baseline else "trial_end",
+                    number=int(trial.number), value=float(accuracy),
+                    dev_loss=dev_loss)
     return float(accuracy), dev_loss, out_dir, float(epoch_time)
 
 
@@ -799,6 +840,14 @@ def run_ddp_trial(trial_number):
     if is_rank0() and out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    seed = baseline_dials()
+    is_baseline = seed is not None and dials == seed
+    if is_rank0():
+        wandb_init()
+        wandb_log_event("baseline_start" if is_baseline else "trial_start",
+                        number=int(trial_number),
+                        params=json.dumps(dials, sort_keys=True),
+                        resource=resource)
     profiler = TrialProfiler(
         torch_module=torch, config=HPO_SPACE.get("profiler") or {},
         trace_path=out_dir / "profiler" / ("trial_" + str(int(trial_number))
@@ -827,13 +876,18 @@ def run_ddp_trial(trial_number):
         destroy_if_distributed()
     if is_rank0():
         result = globals().get("FINETUNE_CONTROL_RESULT") or {}
+        dev_loss = dev_loss_from_report(out_dir)
         data = {"accuracy": result.get("best_dev_accuracy"),
-                "dev_loss": dev_loss_from_report(out_dir),
+                "dev_loss": dev_loss,
                 "checkpoint": str(out_dir),
                 "epoch_time_s": max(0.0, finished - started)}
         path = DdpTrialRunner(options.scheduler, os.path.abspath(__file__),
                               result_dir=WORKING).result_path(trial_number)
         path.write_text(json.dumps(data) + "\\n", encoding="utf-8")
+        wandb_log_event("baseline_end" if is_baseline else "trial_end",
+                        number=int(trial_number),
+                        value=result.get("best_dev_accuracy"),
+                        dev_loss=dev_loss)
 
 
 '''
