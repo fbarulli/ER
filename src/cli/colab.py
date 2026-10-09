@@ -585,6 +585,7 @@ from cli.colab_launch import (  # noqa: E402,F401
 from cli.colab_transport import (  # noqa: E402,F401
     _colab_command,
     _download_file_with_visibility,
+    _ensure_remote_parent,
     _format_bytes,
     _local_file_size,
     _parse_remote_json,

@@ -25,7 +25,7 @@ import time
 import traceback
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from cli.colab_hub import hub, timed_colab
 
@@ -81,9 +81,31 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
 
 
 @timed_colab("event")
+def _ensure_remote_parent(remote: str) -> None:
+    """Create an upload target's remote directory before the transfer.
+
+    The Colab contents API answers 500 (never 404) when the parent of an upload
+    target is missing, and the VM checkout only carries the directories Git
+    tracks: a lane upload must therefore establish its own directory. Without
+    this, every upload into a not-yet-checked-out directory fails as an opaque
+    server error.
+    """
+    surface = hub()
+    parent = str(PurePosixPath(remote).parent)
+    surface.run_colab_exec_stream(
+        surface.SESSION,
+        "import pathlib\n"
+        f"pathlib.Path({parent!r}).mkdir(parents=True, exist_ok=True)\n",
+        timeout=surface._PROBE_TIMEOUT_SECONDS,
+        log_name="upload_dir",
+    )
+
+
+@timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
     """Retry transient Colab upload/control-channel failures."""
     surface = hub()
+    surface._ensure_remote_parent(remote)
     for attempt in range(1, surface._REMOTE_UPLOAD_RETRIES + 1):
         try:
             surface.colab("upload", "-s", surface.SESSION, str(source), remote, timeout=timeout)
