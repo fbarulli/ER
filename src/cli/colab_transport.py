@@ -28,6 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cli.colab_hub import hub, timed_colab
+from cli.colab_reconnect import (
+    ControlChannelLoss,
+    ControlChannelLost,
+    ControlChannelRecovery,
+)
 
 
 def _colab_command(*args: str) -> list[str]:
@@ -235,7 +240,8 @@ def run_colab_exec_stream(
         )
         if process.returncode == 0 and (not remote_traceback or recovered_traceback):
             return
-        transient = "connection was lost" in output.lower()
+        transient = ControlChannelRecovery.classify(
+            surface.SESSION, output) is ControlChannelLoss.TRANSIENT
         if retry_safe and transient and attempt < attempts:
             delay = surface._PROBE_RETRY_BACKOFF_SECONDS * attempt
             print(
@@ -411,9 +417,13 @@ else:
 print(json.dumps({{"pid": running_pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
     print(surface._stamp(), f"[{stage}] starting detached remote stage; durable log={remote_log}", flush=True)
+    recovery = ControlChannelRecovery.for_running_launcher()
     try:
         launched = surface._parse_remote_json(
-            surface.run_colab_exec_capture(surface.SESSION, launch, timeout=120)
+            recovery.run(
+                lambda: surface.run_colab_exec_capture(surface.SESSION, launch, timeout=120),
+                context=f"{stage} stage launch",
+            )
         )
         print(surface._stamp(), f"[{stage}] remote pid={launched.get('pid')}", flush=True)
         offset = 0
@@ -443,17 +453,23 @@ payload = {{
 print(json.dumps(payload), flush=True)
 """
             try:
-                payload = surface._parse_remote_json(
-                    surface.run_colab_exec_capture(surface.SESSION, probe, timeout=surface._PROBE_TIMEOUT_SECONDS)
+                # A detached trainer outlives a transient log-probe failure: the
+                # recovery re-attaches the control channel and re-reads the
+                # durable log, instead of turning the drop into a run failure.
+                payload = recovery.run(
+                    lambda: surface._parse_remote_json(
+                        surface.run_colab_exec_capture(
+                            surface.SESSION, probe,
+                            timeout=surface._PROBE_TIMEOUT_SECONDS)),
+                    context=f"{stage} log/status probe",
                 )
+            except ControlChannelLost:
+                raise
             except RuntimeError as exc:
-                # A detached trainer outlives a transient log-probe failure.
-                # Preserve its work instead of triggering recovery/teardown,
-                # but never retain an unreachable runtime past the stage budget.
-                detail = str(exc).lower()
-                fatal = ("connection was lost" in detail or
-                         f"session '{surface.SESSION}' not found".lower() in detail)
-                if stage != 'all_tracks' or fatal or time.perf_counter() - poll_started >= timeout:
+                # A probe failure that is not a channel loss must never hide a
+                # dead runtime: the all-tracks poll tolerates it inside its
+                # stage budget, every other stage keeps its fail-fast rule.
+                if stage != 'all_tracks' or time.perf_counter() - poll_started >= timeout:
                     raise
                 message = f"[{stage}] log/status unavailable; detached training continues: {exc}"
                 surface._write_training_log(message + "\n")

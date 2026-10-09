@@ -179,6 +179,10 @@ _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
 _RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
 _REMOTE_UPLOAD_RETRIES = _COLAB.remote_upload_retries
+#: Bounded control-channel re-attach policy (ColabSpec.reconnect). Read at call
+#: time by ControlChannelRecovery.for_running_launcher(); no call site re-spells
+#: the attempt/backoff bound.
+_RECONNECT = _COLAB.reconnect
 _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
@@ -579,6 +583,15 @@ from cli.colab_launch import (  # noqa: E402,F401
 )
 
 
+# Control-channel recovery moved to cli.colab_reconnect (split phase of
+# colab.py); re-exported so the legacy `from cli import colab` surface and its
+# monkeypatch needles are unchanged.
+from cli.colab_reconnect import (  # noqa: E402,F401
+    ControlChannelLoss,
+    ControlChannelLost,
+    ControlChannelRecovery,
+)
+
 # Colab CLI transport moved to cli.colab_transport (split phase);
 # re-exported so the legacy `from cli import colab` surface and its
 # monkeypatch needles are unchanged.
@@ -814,6 +827,7 @@ print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
         syncer.start()
     offsets = {str(item["worker"]): 0 for item in launched["workers"]}
     live_signatures: dict[str, str] = {}
+    recovery = ControlChannelRecovery.for_running_launcher()
     try:
         while True:
             probe = _BOOTSTRAP + f"""
@@ -844,26 +858,25 @@ payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
             try:
-                payload = _parse_remote_json(
-                    run_colab_exec_capture(
-                        SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
-                        training_output=True,
-                    )
+                # The trainer is detached and keeps writing remotely.  A
+                # transient control-channel loss is re-attached by the bounded
+                # recovery and the durable log is read again -- it must not
+                # turn a log read into a training failure and VM teardown.
+                payload = recovery.run(
+                    lambda: _parse_remote_json(
+                        run_colab_exec_capture(
+                            SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
+                            training_output=True,
+                        )
+                    ),
+                    context="train log/status probe",
                 )
+            except ControlChannelLost:
+                # The session is gone or the bounded budget is exhausted: there
+                # can be no remote worker left to poll.  Propagate so main's
+                # finally tears down local state and releases the session lock.
+                raise
             except RuntimeError as exc:
-                # The trainer is detached and continues writing remotely.  A
-                # transient empty/control-channel reply must not turn a log
-                # read into a training failure followed by VM teardown.
-                # A lost kernel or missing session is not transient: there
-                # can be no remote worker left to poll.  Propagate it so
-                # main's finally tears down local state and releases the
-                # session lock for the next launch.
-                detail = str(exc).lower()
-                if (
-                    "connection was lost" in detail
-                    or f"session '{SESSION}' not found".lower() in detail
-                ):
-                    raise
                 message = f"[probe] log/status unavailable; continuing worker: {exc}"
                 _write_training_log(message + "\n")
                 print(f"{_stamp()} {message}", flush=True)
@@ -2022,62 +2035,31 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     )
 
 def stop(*, stop_local_owner: bool = False) -> bool:
-    confirmed = False
-    print(_stamp(), f"[stop] tearing down '{SESSION}'")
-    # RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
-    # stop() runs in main()'s finally — if the lane itself raised, the
-    # lane's exception is the root cause and must stay the error the
-    # operator sees; raising here would MASK it with a teardown failure
-    # in the finally path. Callers that require confirmed release inspect
-    # the returned boolean before beginning CPU postprocessing. Never hide it: an unreleased VM burns
-    # Colab GPU quota until manually reaped, so warn loudly with the
-    # consequence + the exact recovery command.
-    try:
-        result = colab("stop", "-s", SESSION, check=False, timeout=30)
-        if result.returncode:
-            print(
-                _stamp(),
-                f"[warn] VM release command returned rc={result.returncode}; "
-                f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}",
-                file=sys.stderr,
-            )
-        status = colab("sessions", check=False, timeout=30)
-        if SESSION in (status.stdout or ""):
-            print(
-                _stamp(),
-                f"[warn] teardown verification still lists '{SESSION}'; "
-                "the VM may still be live and consuming quota.",
-                file=sys.stderr,
-            )
-        elif status.returncode == 0:
-            confirmed = True
-            print(_stamp(), "[stop] teardown verified: session is no longer listed")
-        else:
-            print(
-                _stamp(),
-                f"[warn] could not verify teardown; sessions command returned "
-                f"rc={status.returncode}: {status.stderr[-1000:]!r}",
-                file=sys.stderr,
-            )
-    except (subprocess.SubprocessError, OSError) as exc:
-        print(
-            _stamp(),
-            f"[warn] VM release request failed — the VM '{SESSION}' may "
-            f"STILL BE LIVE and burning Colab GPU quota until it times "
-            f"out or is reaped. After handling the failure above, reclaim "
-            f"it with: colab stop -s {SESSION}   (or 'colab sessions' "
-            f"to check). Original error: {exc}",
-            file=sys.stderr,
-        )
+    """Release this launcher's VM and report whether teardown was confirmed.
+
+    RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
+    stop() runs in main()'s finally - if the lane itself raised, the lane's
+    exception is the root cause and must stay the error the operator sees;
+    raising here would MASK it with a teardown failure in the finally path.
+    Callers that require confirmed release inspect the returned boolean before
+    beginning CPU postprocessing. Never hide it: an unreleased VM burns Colab
+    GPU quota until manually reaped, so the release class warns loudly with the
+    consequence + the exact recovery command.
+
+    The release itself lives in cli.colab_release: the CLI stop is attempted
+    first, and the launcher's OWN stop-by-name path releases the session
+    server-side when the CLI stop fails or leaves it listed.
+    """
+    confirmed = ColabSessionRelease(SESSION).release()
     if stop_local_owner:
         stop_local_launch_owner()
-    print(_stamp(), "[stop] VM release requested")
     return confirmed
 
 
 # Self-watch moved to cli.colab_self_watch (phase-1 split of colab.py);
 # re-exported so the legacy `from cli import colab` surface and its
 # monkeypatch needles are unchanged.
+from cli.colab_release import ColabSessionRelease  # noqa: E402,F401
 from cli.colab_self_watch import (  # noqa: E402,F401
     _SELF_WATCH_BUDGET_SECONDS,
     _SELF_WATCH_POLL_SECONDS,

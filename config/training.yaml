@@ -541,6 +541,16 @@ colab:
   remote_upload_retries: 3
   remote_upload_backoff_seconds: 5
   remote_upload_max_backoff_seconds: 30
+  # Control-channel recovery: when the upstream CLI reports the kernel
+  # connection was lost, the launcher re-attaches with capped exponential
+  # backoff instead of aborting the run. The detached trainer keeps writing on
+  # the VM meanwhile, so a bounded re-attach resumes the poll; a session that is
+  # actually gone is terminal at once. Bounds are in seconds; the backoff
+  # sequence is initial * 2**(n-1), capped at max.
+  reconnect:
+    attempts: 6
+    initial_backoff_seconds: 5.0
+    max_backoff_seconds: 60.0
   checkpoint_manifest_name: "checkpoint_manifest.json"
   latest_best_marker: "latest_best.json"
   result_archive_name: "result_bundle.tar.zst"

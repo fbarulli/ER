@@ -2917,6 +2917,32 @@ class ColabLaneEnvSpec(BaseModel):
     unbuffered: Literal[True] = True
 
 
+class ColabReconnectSpec(BaseModel):
+    """The Colab control-channel recovery policy (detect a loss, re-attach, bound).
+
+    A lost control channel is not a failed run: the detached trainer keeps
+    writing on the VM while the launcher's channel is down. This policy bounds
+    how many times the launcher re-establishes the channel and how long it
+    waits between attempts (capped exponential backoff) before the loss is
+    declared terminal. One declaration, read by every poll loop that must
+    survive a transient drop.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempts: int = Field(ge=1, le=20)
+    initial_backoff_seconds: float = Field(gt=0.0, le=600.0)
+    max_backoff_seconds: float = Field(gt=0.0, le=3600.0)
+
+    @model_validator(mode="after")
+    def _cap_is_not_below_the_initial_backoff(self) -> "ColabReconnectSpec":
+        if self.max_backoff_seconds < self.initial_backoff_seconds:
+            raise ValueError(
+                "colab.reconnect.max_backoff_seconds must be >= "
+                "colab.reconnect.initial_backoff_seconds")
+        return self
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
@@ -3006,6 +3032,8 @@ class ColabSpec(BaseModel):
     remote_upload_retries: int = Field(ge=1, le=10)
     remote_upload_backoff_seconds: int = Field(ge=1)
     remote_upload_max_backoff_seconds: int = Field(ge=1)
+    #: Bounded re-attach policy for a lost control channel (cli.colab_reconnect).
+    reconnect: ColabReconnectSpec
     checkpoint_manifest_name: str = Field(min_length=1)
     latest_best_marker: str = Field(min_length=1)
     result_archive_name: str = Field(min_length=1)
