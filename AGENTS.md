@@ -71,6 +71,10 @@ skip it.
   proxy. Vet every number: find what limits it and rule out that it measured something else.
 - **Keep it green.** Run lint/typecheck/tests; a new branch/loop/parser/money/security path
   leaves one small test behind. Trivial changes need none.
+- **Test public behavior only.** Tests target the public API — at most one focused test per
+  public behavior. Do **not** test baked-in/internal behavior (class internals, private helpers,
+  integration glue, implementation details); it is correct by construction and there is nothing
+  internal to test. Do not test that an internal gate "exists" or "was removed".
 - **Sequence as small verifiable units**, each ending in a checkable state; order delivery so
   the sequence proves itself.
 
