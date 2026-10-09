@@ -54,10 +54,6 @@ class DownloadResult:
     resumed: bool = False
     archive: Path | None = None
 
-    @property
-    def empty(self) -> bool:
-        return not self.files
-
 
 class DownloadError(RuntimeError):
     """A download failed; ``traceback_text`` carries the FULL traceback."""
@@ -142,14 +138,17 @@ class _RetryingDownloader:
                 traceback_text=_stack())
 
     # ── engine ────────────────────────────────────────────────────────────
-    def _download(self, *, slug: str, dest: Path, tail: Sequence[str],
+    def _download(self, *, slug: str, dest: Path, tail: Sequence[str] = (),
+                  command: Sequence[str] | None = None,
                   require_globs: Sequence[str] = (),
                   allow_empty: bool = False) -> DownloadResult:
         dest = Path(dest)
         resumed = dest.is_dir() and any(dest.iterdir())
         if not dest.exists():
             dest.mkdir(parents=True, exist_ok=True)
-        command = self._command(*tail)
+        # A caller may hand the full argv (built by the canonical builder) so
+        # the download verbs never re-spell a token here.
+        command = list(command) if command is not None else self._command(*tail)
         stdout = ""
         last_error: BaseException | None = None
         for attempt in range(1, self._max_attempts + 1):
@@ -205,9 +204,14 @@ class KernelOutputFetcher(_RetryingDownloader):
               require_globs: Sequence[str] = ("*.tar.gz", "*.zip"),
               allow_empty: bool = False) -> DownloadResult:
         self._validate_slug(slug)
+        # ONE argv home: the canonical `kernels output` token shape
+        # (KaggleKernels.kernels_output_argv), never re-spelled here.
+        from cli.kaggle_kernels import KaggleKernels
+
         return self._download(
             slug=slug, dest=Path(dest),
-            tail=("kernels", "output", slug, "-p", str(dest)),
+            command=KaggleKernels.kernels_output_argv(
+                self._prefix, slug, Path(dest)),
             require_globs=require_globs, allow_empty=allow_empty)
 
     @staticmethod

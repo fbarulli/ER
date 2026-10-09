@@ -1,11 +1,12 @@
-"""CPU end-to-end smoke of the finetune kernel — offline pins.
+"""End-to-end smoke of the finetune kernel — offline pins.
 
 The smoke is the smallest honest validation of the NEW finetune kernel (dials +
 profiler + early-stop/dev-eval + the fail-loud fetchers): it reuses the SAME
-kernel template, staging and push surface, but pins CPU, a tiny subset corpus
-and DEDICATED slugs (``laya.finetune_smoke``). These pins prove the staged
-payload is CPU (never a GPU request), carries the smoke dials, and that the
-subset builder is deterministic and receipted.
+kernel template, staging and push surface, but pins a tiny subset corpus and
+DEDICATED slugs (``laya.finetune_smoke``). ``laya.finetune_smoke.device`` is
+the ONE runtime source (``"cpu"`` default, ``"cuda"`` for the GPU path). These
+pins prove the staged payload matches the device selection, carries the smoke
+dials, and that the subset builder is deterministic and receipted.
 """
 from __future__ import annotations
 

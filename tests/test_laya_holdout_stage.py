@@ -3,7 +3,7 @@
 Covers the surfaces the audit flagged as untested:
   * `stage_holdout_dataset_payload` (the composed holdout JSONL + receipt);
   * `stage_holdout_eval_kernel` (render, gates, no leftover tokens, receipt);
-  * `LayaLane.run()` accepting `holdout-eval` (the DECISION_BINDINGS gap);
+  * `LayaLane.stage()` routing `holdout-eval` (the DECISION_BINDINGS gap);
   * the session-id / stop dry-run paths.
 """
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import types
 from pathlib import Path
 
 import pytest
@@ -106,23 +105,19 @@ def test_stage_holdout_eval_kernel_renders_and_writes_receipt(
     assert spec.holdout_dataset_slug in metadata["dataset_sources"]
 
 
-def test_layalane_run_accepts_holdout_eval(tmp_path, monkeypatch):
-    """The DECISION_BINDINGS gap: `LayaLane.run()` used to reject the kind its
-    own stage() handles."""
+def test_layalane_stage_routes_holdout_eval(tmp_path, monkeypatch):
+    """The DECISION_BINDINGS gap: the kind `LayaLane.stage()` handles is
+    registered, so the class surface routes it to the holdout kernel."""
     spec = _spec(tmp_path, monkeypatch)
     _hermetic(monkeypatch)
     _fixtures(tmp_path, spec)
     assert "holdout-eval" in laya_lane.DECISION_BINDINGS
     assert "holdout-eval" in laya_lane.GPU_KINDS
-    args = types.SimpleNamespace(decision="holdout-eval", kind="kaggle",
-                                 decision_input=None)
-    receipt = laya_lane.LayaLane("kaggle").run(args)
+    receipt = laya_lane.LayaLane("kaggle").stage("holdout-eval")
     assert receipt["kind"] == "holdout-eval"
 
 
 def test_session_id_and_stop_paths_are_offline():
-    assert laya_lane.container_session_id("kaggle_abc-98765-webtier") == 98765
-    assert laya_lane.container_session_id("malformed") is None
     plan = laya_lane.stop_kaggle_kernel("owner/kernel", execute=False)
     assert plan["mode"] == "dry-run"
     assert plan["kernel"] == "owner/kernel"

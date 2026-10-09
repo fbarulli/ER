@@ -51,7 +51,7 @@ def test_kernel_fetch_verifies_the_landed_archive(tmp_path):
         argv_prefix=("kaggle",), runner=lambda command: _fw(command, "laya.tar.gz"),
         sleep=lambda _: None, backoff=_backoff()).fetch(
         "owner/slug", tmp_path / "out")
-    assert result.attempts == 1 and not result.empty
+    assert result.attempts == 1
     assert [path.name for path in result.files] == ["laya.tar.gz"]
     assert result.command[:2] == ("kaggle", "kernels")
 

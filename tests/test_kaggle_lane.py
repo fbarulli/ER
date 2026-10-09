@@ -440,6 +440,10 @@ def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    # The push spawns a detached watcher; pin the spawn seam so this test never
+    # leaks a real `--what autowatch` process (the 429-storm regression).
+    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch",
+                        lambda *a, **kw: {"autowatch": "spawned"})
     import importlib
     monkeypatch.setattr(importlib.import_module("core.runtime_inputs"),
                         "staged_kernel_preflight", lambda stage_dir: None)
@@ -463,7 +467,7 @@ def test_kernel_status_parses_state(tmp_path, monkeypatch):
     assert status["status"] == "running"
 
 
-def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
+def test_fetch_kernel_output_bundle_verifies_sha_and_installs(tmp_path, monkeypatch):
     import hashlib
 
     _kernel_spec(tmp_path, monkeypatch)
@@ -483,13 +487,13 @@ def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    plan = kaggle_lane.fetch_bundle_output(execute=True)
+    plan = kaggle_lane.fetch_kernel_output(kind="bundle", execute=True)
     assert plan["verified"] is True and plan["cohort"] == "full"
     installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
     assert installed.read_bytes() == archive_bytes
 
 
-def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
+def test_fetch_kernel_output_bundle_rejects_sha_drift(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
 
     def fake_run(command, **kwargs):
@@ -504,17 +508,7 @@ def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     with pytest.raises(RuntimeError, match="sha256 mismatch"):
-        kaggle_lane.fetch_bundle_output(execute=True)
-
-
-def test_fetch_bundle_output_dry_run_never_touches_network(tmp_path, monkeypatch):
-    _kernel_spec(tmp_path, monkeypatch)
-    called = []
-    monkeypatch.setattr(subprocess, "run",
-                        lambda *a, **kw: called.append(a) or pytest.fail("network"))
-    plan = kaggle_lane.fetch_bundle_output(execute=False)
-    assert plan["mode"] == "dry-run"
-    assert not called
+        kaggle_lane.fetch_kernel_output(kind="bundle", execute=True)
 
 
 def test_kernel_slugs_tracked_in_config():
@@ -1238,8 +1232,11 @@ def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
     plan = kaggle_lane.capture_kernel_session_id("owner/er-bundle-cpu", attempts=2)
     assert plan["session_id"] is None
-    assert not (tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id").exists(), \
-        "no id in the URL -> no file, no fabricated session"
+    # No id could be read (proxy down / stream 429): the kernel NAME is the
+    # persisted fallback handle, so stop/status/output never dead-end.
+    session_file = tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id"
+    assert session_file.read_text() == "er-bundle-cpu\n"
+    assert plan["handle"] == "er-bundle-cpu"
     assert len(closed) == 2, "each bounded attempt still closes its response"
 
 

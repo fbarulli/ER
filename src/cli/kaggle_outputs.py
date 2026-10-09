@@ -36,7 +36,6 @@ class KaggleOutputs:
         SSOT target; train/embed outputs record a skip note (no SSOT dataset).
         """
         from cli import kaggle_lane as lane
-        from cli.kaggle_kernels import KaggleKernels
 
         spec = lane._spec()
         # One registry (config SSOT) resolves the slug, the bundle role, and the
@@ -64,9 +63,16 @@ class KaggleOutputs:
         if stage.exists():
             retained = stage.with_name(f"{stage.name}.{time.time_ns()}")
             stage.rename(retained)
-        stage.mkdir(parents=True)
-        command = KaggleKernels.kernels_output_argv([executable], slug, stage)
-        _, _ = lane._run_kaggle(command)
+        # ONE download transport: the 429-aware, fail-loud, silent-empty-loud
+        # KernelOutputFetcher — never a bare `kaggle kernels output` through
+        # _run_kaggle. It creates the stage dir, paces 429s and raises on an
+        # rc=0/zero-file run (the CLI's silent-empty success); the manifest/sha
+        # verification below is unchanged.
+        from cli.kaggle_download import KernelOutputFetcher
+
+        KernelOutputFetcher(
+            argv_prefix=(executable,), cwd=lane.TRAIN_ROOT).fetch(
+            slug, stage, require_globs=())
         failure = lane.KernelLifecycle.failure_output(stage)
         if failure:
             plan.update(failure)
@@ -205,11 +211,4 @@ class KaggleOutputs:
                 shutil.copy2(candidate, destination)
                 plan["error_log"] = str(destination)
         return plan
-
-    @staticmethod
-    def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
-        """Back-compat entry point — delegates to the generalized fetcher."""
-        from cli import kaggle_lane as lane
-
-        return lane.fetch_kernel_output(kind="bundle", execute=execute)
 

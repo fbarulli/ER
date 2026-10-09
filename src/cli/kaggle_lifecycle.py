@@ -4,9 +4,14 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.manifest import sha256_file
+
+#: The harvest seam: a fetch called on the success path, a fetch called on the
+#: failure path, and the session release. Each lane binds its own owners.
+FetchCallable = Callable[..., dict[str, Any]]
+StopCallable = Callable[..., dict[str, Any]]
 
 
 class KernelLifecycle:
@@ -90,8 +95,17 @@ class KernelLifecycle:
 
     @staticmethod
     def harvest_and_stop(*, kind: str, slug: str, which: str,
-                         status: str, fetch_output, fetch_failure,
-                         stop, configured_slug: str | None) -> dict[str, Any]:
+                         status: str, fetch_output: FetchCallable,
+                         fetch_failure: FetchCallable, stop: StopCallable,
+                         configured_slug: str | None) -> dict[str, Any]:
+        """Fetch the terminal run and release its session, retrying each leg.
+
+        The two fetch seams have the ER owner signatures already: the success
+        fetch is called ``fetch_output(kind=..., execute=True, **target)`` and
+        the failure fetch ``fetch_failure(kind, **target)``; the stop is called
+        ``stop(slug=..., which=..., execute=True)``. A second lane (laya) binds
+        its own owners to the same contract, so there is ONE harvest.
+        """
         from cli import kaggle_lane as lane
 
         limits = lane._spec().limits

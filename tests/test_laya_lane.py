@@ -1342,3 +1342,77 @@ def test_fetch_path_fails_loud_on_a_silent_empty_kernel_output(
     # the stage was created fresh and left empty — never a silent success
     stage = laya_lane.staging_dir() / "fetch" / "attribute"
     assert stage.is_dir() and not any(stage.iterdir())
+
+
+# ── automatic post-run harvest: `--execute` runs AND retrieves ──────────────
+
+def test_laya_execute_retrieves_output_and_persists_handle(
+        tmp_path, monkeypatch):
+    """ONE public pin for the regression: a laya `--execute` push hands off to
+    the harvest watcher, which downloads the terminal run into
+    results/laya_lane/fetch/<kind>/ (per-kind receipt included) and persists a
+    usable session handle (id or kernel name)."""
+    import io
+    import subprocess
+    import tarfile
+
+    from cli import kaggle_lane as klane
+    from cli.kaggle_monitor import KaggleMonitor
+    from cli.kaggle_watcher import KernelWatcher
+
+    _spec(tmp_path, monkeypatch)
+    # the session handle is lane-roof state under logs/kaggle: keep it in tmp.
+    monkeypatch.setattr(klane, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr("cli.laya_transport.LayaPayloadPreflight.verify",
+                        lambda stage_dir: None)
+
+    stage = tmp_path / "results/laya_lane/kaggle/finetune-smoke"
+    stage.mkdir(parents=True)
+    (stage / "kernel-metadata.json").write_text(
+        json.dumps({"id": "owner/er-laya-finetune-smoke"}), encoding="utf-8")
+    monkeypatch.setattr(
+        laya_lane.LayaLane, "stage",
+        lambda self, decision, **kwargs: {"staged": str(stage),
+                                          "run_tag": "laya_smoke"})
+    monkeypatch.setattr(laya_lane, "publish_laya_dataset",
+                        lambda *args, **kwargs: {"published": True})
+    # the detached process boundary: run the watcher inline instead of Popen.
+    monkeypatch.setattr(
+        KernelWatcher, "spawn",
+        lambda self: self.autowatch(execute=True,
+                                    slug="owner/er-laya-finetune-smoke"))
+    monkeypatch.setattr(laya_lane.KaggleKernels, "kernel_status",
+                        lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
+    monkeypatch.setattr(laya_lane.KaggleKernels, "stop_kernel",
+                        lambda *a, **kw: {"stopped": True})
+    monkeypatch.setattr(KaggleMonitor, "stream_kernel_logs", lambda *a, **kw: {})
+    # the proxy never answers -> the session handle falls back to the kernel name
+    import kagglesdk.kaggle_client
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: (_ for _ in ()).throw(RuntimeError("proxy down")))
+    monkeypatch.setattr(klane.time, "sleep", lambda seconds: None)
+
+    def fake_run(command, **kwargs):
+        destination = Path(command[command.index("-p") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "laya_finetune-smoke.receipt.json").write_text(
+            json.dumps({"gpu_kind": "finetune-smoke"}), encoding="utf-8")
+        with tarfile.open(destination / "laya_finetune.tar.gz", "w:gz") as tar:
+            body = b"{}"
+            info = tarfile.TarInfo("train_report.json")
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+        return subprocess.CompletedProcess(
+            command, 0, stdout="Kernel successfully pushed")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("sys.argv", [
+        "laya", "--kind", "kaggle", "--decision", "finetune-smoke", "--execute"])
+    laya_lane.main()
+
+    fetched = laya_lane.staging_dir() / "fetch" / "finetune-smoke"
+    assert (fetched / "laya_finetune.tar.gz").is_file()
+    assert (fetched / "laya_finetune-smoke.receipt.json").is_file()
+    handle = tmp_path / "logs/kaggle/er-laya-finetune-smoke.session_id"
+    assert handle.read_text().strip() == "er-laya-finetune-smoke"
