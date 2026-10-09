@@ -30,7 +30,7 @@ Structure:
   colab_lane_cpu_provision — the CPU lane's provisioning order and the
                              byte-exact prepare-launch script segments.
   colab_lane_cpu_poll      — the VM prepare-log poll (offset probes,
-                             transit tolerance, dual transcripts, exits).
+                             transit tolerance, the one lane transcript, exits).
   colab_lane_cpu_delivery  — the delivery archive, run_delivery's
                              launch/poll/collect/download phases, and the
                              frozen resume-state upload.
@@ -53,8 +53,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from core.common import TRAIN_ROOT, training_cfg
-from cli import log_capture
+from core.common import TRAIN_ROOT
 from core.run_log import RunLogger
 from core.schemas import ColabBundlePlan
 from training.prepare_all_trace import timed
@@ -158,18 +157,6 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
             yield
         finally:
             transport.run_colab_exec_stream = original
-
-    @timed
-    def qualify_session_transcripts(self, file_map: dict, session: str) -> None:
-        """Per-session root/training transcript paths for the 2-parallel cap."""
-        # One roof (owner order 2026-10-07): per-session transcripts live under
-        # the DECLARED Colab log directory (ColabSpec.log_dir), so the roof is
-        # never re-spelled beside the lane's own declarations.
-        log_dir = training_cfg().colab.log_dir
-        file_map["colab_live_log"] = log_capture.lane_log_at(
-            log_dir, f"colab_system_{session}.log")
-        file_map["colab_training_log"] = log_capture.lane_log_at(
-            log_dir, f"training_{session}.log")
 
     @timed
     def run_cpu_prep(self, dataset_csv: Path | None = None) -> None:

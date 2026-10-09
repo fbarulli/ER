@@ -108,21 +108,19 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     }
     if not state["delivered"]:
         captured: list[str] = []
-        destination = _self_watch_root(run_id)
-        for name in (hub().LANE_LOG_NAME,
-                     f"colab_system_{hub().SESSION}.log", f"training_{hub().SESSION}.log",
-                     "lane.log", "system.log", "training.log"):
-            try:
-                from cli import log_capture
-                source = log_capture.lane_log_at(hub()._COLAB.log_dir, name)
-                if (source.is_file()
-                        and source.stat().st_size <= _SELF_WATCH_TRANSCRIPT_MAX_BYTES):
-                    destination.mkdir(parents=True, exist_ok=True)
-                    kept = destination / f"captured_{name}"
-                    shutil.copy2(source, kept)
-                    captured.append(kept.name)
-            except OSError:
-                continue
+        # One transcript per lane: capture exactly the file start_live_log
+        # opened (the declared lane path), never a legacy side name.
+        source = hub().lane_transcript_path()
+        try:
+            if (source.is_file()
+                    and source.stat().st_size <= _SELF_WATCH_TRANSCRIPT_MAX_BYTES):
+                destination = _self_watch_root(run_id)
+                destination.mkdir(parents=True, exist_ok=True)
+                kept = destination / f"captured_{source.name}"
+                shutil.copy2(source, kept)
+                captured.append(kept.name)
+        except OSError:
+            captured = []
         state["transcripts_captured"] = captured
     return state
 

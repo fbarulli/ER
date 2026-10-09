@@ -10,8 +10,8 @@ byte-identical when the lane is unused.  The pinned capabilities:
   only when config/training.yaml colab.high_mem says so; an
   owner-launched named session is re-verified and never reallocated; a
   GPU accelerator is never reshaped;
-* streaming — the lane forwards EVERY prep chunk to BOTH transcripts
-  (root system log + training.log) and prints [done] only on clean
+* streaming — the lane forwards EVERY prep chunk to the ONE lane
+  transcript (start_live_log) and prints [done] only on clean
   completion ([failed] otherwise, never retried);
 * tqdm passthrough — the emitted prepare script never captures the
   child's stderr (fd inheritance is how the bars stream live; 902689e);
@@ -368,23 +368,6 @@ def test_the_own_lane_prints_done_only_on_clean_completion(
     captured = capsys.readouterr()
     assert "[done] cpu prep lane completed" in captured.out
     assert "[failed]" not in captured.out
-
-
-def test_lane_transcripts_are_session_qualified_in_its_own_process(
-    monkeypatch, tmp_path
-):
-    """Two parallel prep lanes must not truncate each other's records: the
-    lane mutates the PROCESS-LOCAL file map so the shared tee primitive
-    resolves per-session paths; the module map itself is untouched."""
-    from core import common
-    saved = common.F["colab_live_log"], common.F["colab_training_log"]
-    try:
-        prep._qualify_session_transcripts("er-prep-3k")
-        assert common.F["colab_live_log"].name == "colab_system_er-prep-3k.log"
-        assert common.F["colab_training_log"].name == "training_er-prep-3k.log"
-        assert common.F["colab_live_log"].parent == saved[0].parent
-    finally:
-        common.F["colab_live_log"], common.F["colab_training_log"] = saved
 
 
 def test_the_own_lane_reports_failed_and_reraises(monkeypatch, tmp_path, capsys):
