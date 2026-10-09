@@ -1169,9 +1169,6 @@ def stage_question_schema(kind: str, *,
     return receipt
 
 
-
-
-
 # ── kernel / notebook payload composition ──────────────────────────────────
 @lru_cache(maxsize=8)
 def _parse(script: str) -> ast.Module:
@@ -1266,16 +1263,6 @@ def decision_tag() -> str:
     the console/lane.log stamp itself stays Europe/Paris per the landed
     kaggle_lane convention)."""
     return datetime.now(ZoneInfo("UTC")).strftime("%m%dT%H%M%SZ")
-
-
-
-
-
-
-
-
-
-
 
 
 def stage_dataset_payload(decision_kind: str, *, dataset_slug: str,
@@ -1762,8 +1749,6 @@ def stage_holdout_dataset_payload(*, dataset_slug: str, holdout_csv: Path,
     _log_lane(f"staged holdout dataset payload {dataset_slug} "
               f"rows={len(lines)} (skipped {skipped}) -> {stage}")
     return receipt
-
-
 
 
 def stage_holdout_eval_kernel(*, revision: str | None = None,
