@@ -57,6 +57,31 @@ import sys
 # module here, and split modules resolve it at call time — never importing a
 # second copy.
 sys.modules["__colab_runtime_self__"] = sys.modules[__name__]
+# ── launcher worktree guard (mirrors tests/conftest.py) ─────────────────────
+# The shared venv is an editable install of the PRIMARY checkout
+# (/home/opc/ONE/ER/src), so running this launcher from a git worktree would
+# import `core` / `training` / `model_tracks` from the primary tree and
+# silently stage/package the WRONG code (conftest guards tests; the launcher
+# did not). Force THIS file's checkout onto sys.path first, then refuse to run
+# when `core` still resolves outside it.
+import pathlib as _launcher_pathlib
+
+_LAUNCHER_SRC = _launcher_pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_LAUNCHER_SRC.parent))
+sys.path.insert(0, str(_LAUNCHER_SRC))
+
+import core as _launcher_core
+
+if not _launcher_pathlib.Path(_launcher_core.__file__).resolve().is_relative_to(
+    _LAUNCHER_SRC
+):
+    raise RuntimeError(
+        "REFUSING TO RUN: cli.colab imported 'core' from "
+        f"{_launcher_core.__file__}, not this checkout's {_LAUNCHER_SRC}. The "
+        "shared venv's editable .pth points at the primary checkout; export "
+        "PYTHONPATH=src (or run this launcher from its own checkout) so "
+        "staging/packaging uses the worktree code."
+    )
 from core.archive_reader import tar_archive
 import threading
 import time
