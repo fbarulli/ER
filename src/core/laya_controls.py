@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import Any
 
 
 class ControlBlock:
@@ -657,22 +658,19 @@ class ProfilerSession:
         finally:
             self._profiler = None
 
-    def top_ops(self, profiler):
-        events = list(profiler.key_averages())
-        try:
-            events.sort(key=lambda event: float(
-                getattr(event, "self_cuda_time_total", 0.0) or 0.0),
-                reverse=True)
-        except Exception:
-            pass
-        rows = []
-        for event in events[:self._top_n]:
-            rows.append((
-                str(event.key),
-                float(getattr(event, "self_cuda_time_total", 0.0) or 0.0) / 1000.0,
-                float(getattr(event, "self_cpu_time_total", 0.0) or 0.0) / 1000.0,
-                int(getattr(event, "count", 0) or 0)))
-        return rows
+    @staticmethod
+    def _device_time_us(event: object) -> float:
+        # Older Kaggle images expose the CUDA-specific name.
+        duration = getattr(event, "self_device_time_total", None)
+        if duration is None:
+            duration = getattr(event, "self_cuda_time_total", 0.0)
+        return float(duration or 0.0)
+
+    def top_ops(self, profiler: "Any") -> list[tuple[str, float, float, int]]:  # noqa: UP037 -- also injected without future annotations
+        rows = [(str(event.key), self._device_time_us(event) / 1000.0,
+                 float(event.self_cpu_time_total) / 1000.0, int(event.count))
+                for event in profiler.key_averages()]
+        return sorted(rows, key=lambda row: row[1], reverse=True)[:self._top_n]
 
     def _handle_trace(self, profiler):
         try:
