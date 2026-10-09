@@ -640,6 +640,32 @@ def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
     assert "staged decision payload" in body
 
 
+def test_only_kaggle_run_lines_reach_the_shared_transcript(tmp_path, monkeypatch):
+    """Invariant: the ONE Kaggle transcript carries Kaggle-run lines only.
+
+    A colab-delivery stage (not a Kaggle run) writes no line into the shared
+    transcript, a kaggle-kernel stage does, and no logs/laya roof appears.
+    """
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    from cli.log_capture import LaneTranscript
+
+    monkeypatch.setattr(LaneTranscript, "_started", False)
+    transcript = tmp_path / "logs/kaggle/lane.log"
+
+    laya_lane.stage_colab_notebook(decision_kind="identity")
+    assert not transcript.exists(), (
+        "a colab delivery stage must never write the Kaggle transcript")
+
+    laya_lane.stage_decision_kernel(decision_kind="identity")
+    body = transcript.read_text(encoding="utf-8")
+    assert "staged kaggle kernel" in body
+    assert "colab" not in body
+    assert not (tmp_path / "logs/laya").exists()
+
+
 def test_stage_receipts_layout_is_per_op(tmp_path, monkeypatch):
     """Receipts land under results/laya_lane/<kind>/<decision>/ exactly."""
     _spec(tmp_path, monkeypatch)

@@ -193,6 +193,11 @@ def _log_lane(line: str) -> None:
     _runtime().log_lane(line)
 
 
+def _log_local(line: str) -> None:
+    """Console-only line for a laya surface that is NOT a Kaggle run."""
+    _runtime().log_local(line)
+
+
 def _staging_factory() -> LayaStagingFactory:
     spec = _spec()
     runtime = LayaRuntimeFactory(spec, TRAIN_ROOT)
@@ -567,10 +572,10 @@ def main() -> None:
         watch_plan = watcher(args.decision, slug=kernel_id).spawn()
         print(json.dumps(watch_plan, indent=2), flush=True)
     elif args.execute:
-        _log_lane("colab payloads are a delivery contract only; nothing "
-                  "to --execute")
+        _log_local("colab payloads are a delivery contract only; nothing "
+                   "to --execute")
     else:
-        _log_lane("dry-run only; pass --execute to touch the remote surface")
+        _log_local("dry-run only; pass --execute to touch the remote surface")
 
 
 if __name__ == "__main__":

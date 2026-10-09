@@ -85,6 +85,15 @@ class LayaRuntimeFactory:
             self._train_root, lane="laya-lane", stamp=self._bare_stamp,
         ).write(line)
 
+    def log_local(self, line: str) -> None:
+        """Console-only line for a laya surface that is NOT a Kaggle run.
+
+        Colab delivery staging and the local CPU eval run on this box, not on
+        Kaggle; their line must never enter the shared Kaggle transcript (the
+        staged receipt carries the durable evidence).
+        """
+        print(f"[laya-lane {self._bare_stamp()}] {line}", flush=True)
+
     @staticmethod
     def measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:
         """Stdlib CSV census: header check + row count + sha256 + bytes.
