@@ -215,6 +215,15 @@ def offline_active(options):
     return offline_marker_path().is_file()
 
 
+def local_study_path():
+    """The config-declared shared SQLite study file under WORKING.
+
+    One declaration so the resolver and the archive never drift; a single VM's
+    parallel worker processes all open THIS file.
+    """
+    return WORKING / (LOCAL_STUDY_FILE or "hpo_study.db")
+
+
 class StorageResolver:
     """Open the session's Optuna study on the config-selected storage backend.
 
@@ -236,12 +245,8 @@ class StorageResolver:
         self.remote = False
         self.config = None
 
-    def local_path(self):
-        """The config-declared shared SQLite study file under WORKING."""
-        return WORKING / (LOCAL_STUDY_FILE or "hpo_study.db")
-
     def sqlite(self):
-        path = self.local_path()
+        path = local_study_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         return self.optuna.storages.RDBStorage(
             "sqlite:///" + str(path))

@@ -398,9 +398,11 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
     text runs on Kaggle (defaults) and Colab (the entry driver overrides them).
     A remote URL (when configured) is baked into the token; otherwise the
     config-declared local SQLite fragment is baked and the kernel shares that
-    file across its parallel worker processes — no secret, no hardcoded URL.
+    file across its parallel worker processes — no secret, no hardcoded URL,
+    and no host-absolute path (the kernel joins the fragment to its WORKING).
     """
-    url = storage.storage_url() if storage is not None else ""
+    url = (storage.storage_url()
+           if storage is not None and storage.is_remote else "")
     optuna_env_script = _optuna_env_script(url) if url else ""
     preflight = laya_lane._template(_HPO_RUNTIME_PREFLIGHT, {
         "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],

@@ -359,8 +359,7 @@ class SessionArchive:
             builder = SnapshotBuilder(generation=WORKING,
                                       sequence=int(time.time()))
             snapshot = builder.build(
-                include,
-                (WORKING / "hpo_offline.db") if session_offline else None)
+                include, local_study_path() if session_offline else None)
             log("hpo snapshot -> " + str(snapshot))
         except Exception as error:
             log("hpo snapshot skipped: " + str(error)[:200])
