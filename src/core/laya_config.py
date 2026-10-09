@@ -134,8 +134,11 @@ class FinetuneSpec(BaseModel):
     # ── extended knobs (all default-OFF; HPO-searchable dials) ──────────────
     # no_decay_bias_norm: exclude bias/norm (ndim<=1) params from weight_decay.
     no_decay_bias_norm: bool = False
-    # optim_state_dtype: bf16 optimizer states/master weights (composes with
-    # amp_dtype, which only governs the forward compute).
+    # optim_state_dtype: requested optimizer-state dtype. Native AdamW requires
+    # state.dtype == param.dtype on every backend (single/foreach/fused), so it
+    # is honoured only where the parameters already carry it; otherwise the
+    # state follows the parameter dtype (composes with amp_dtype, which only
+    # governs the forward compute).
     optim_state_dtype: Literal["fp32", "bf16"] = "fp32"
     # lr_scaling: scale the peak LR from effective batch (micro*accum*world)
     # over base_batch; explicit encoder_lr/head_lr win when "none".

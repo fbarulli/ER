@@ -350,20 +350,33 @@ class ParamGroupBuilder:
 
 
 class OptimizerStateCaster:
-    """Best-effort bf16 optimizer states (composes with AMP forward dtype)."""
+    """Keep each optimizer-state tensor in its parameter's dtype.
+
+    Every native AdamW backend (single-tensor, ``foreach`` and ``fused``)
+    requires ``state.dtype == param.dtype`` per index; casting state alone to
+    ``optim_state_dtype`` raises inside torch's grouped kernels
+    (``_group_tensors_by_device_and_dtype`` / ``lerp_``). The requested dtype is
+    honoured only where the parameters already carry it; wherever it differs the
+    state is reconciled to the parameter dtype so ``optimizer.step`` stays valid.
+    """
 
     @staticmethod
     def apply(torch_module, optimizer, dtype_name):
-        if str(dtype_name or "fp32").lower() != "bf16":
+        if str(dtype_name or "fp32").lower() not in ("fp32", "bf16"):
             return False
-        target = torch_module.bfloat16
-        for state in optimizer.state.values():
-            for key, value in list(state.items()):
-                if (torch_module.is_tensor(value)
-                        and value.is_floating_point()
-                        and value.dtype != target):
-                    state[key] = value.to(target)
-        return True
+        changed = False
+        for group in optimizer.param_groups:
+            for param in group["params"]:
+                state = optimizer.state.get(param)
+                if not state:
+                    continue
+                for key, value in list(state.items()):
+                    if (torch_module.is_tensor(value)
+                            and value.is_floating_point()
+                            and value.dtype != param.dtype):
+                        state[key] = value.to(param.dtype)
+                        changed = True
+        return changed
 
 
 class LrScaler:

@@ -68,20 +68,31 @@ def test_param_group_builder_splits_bias_and_norm():
     assert laya_controls.ParamGroupBuilder.apply(model, groups, False) is groups
 
 
-# ── optimizer state precision ──────────────────────────────────────────────
-def test_optimizer_state_caster_bf16():
-    model = torch.nn.Linear(2, 2)
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-    for param in model.parameters():
-        optimizer.state[param] = {"exp_avg": torch.zeros_like(param)}
-    assert laya_controls.OptimizerStateCaster.apply(
-        torch, optimizer, "fp32") is False
-    assert all(optimizer.state[p]["exp_avg"].dtype == torch.float32
-               for p in model.parameters())
-    assert laya_controls.OptimizerStateCaster.apply(
-        torch, optimizer, "bf16") is True
-    assert all(optimizer.state[p]["exp_avg"].dtype == torch.bfloat16
-               for p in model.parameters())
+# ── optimizer state precision (public: optimizer builds + steps) ───────────
+@pytest.mark.parametrize("param_dtype, dial", [
+    (torch.float32, "bf16"),    # AMP master weights: bf16 state broke fused
+    (torch.float16, "fp32"),
+])
+def test_optimizer_step_keeps_state_in_param_dtype(param_dtype, dial):
+    """Native AdamW requires state.dtype == param.dtype (single/foreach/fused);
+    the requested optim_state_dtype must never leave a mismatched state that
+    makes the next optimizer.step() raise."""
+    namespace = _perf_namespace()
+    model = torch.nn.Linear(4, 4).to(param_dtype)
+    config = types.SimpleNamespace(weight_decay=0.0, head_lr=1e-3,
+                                   encoder_lr=1e-3)
+    control = {"optimizer": "adamw", "optim_state_dtype": dial,
+               "no_decay_bias_norm": False}
+    optimizer = namespace["TrainingOptimizer"].make(
+        torch, model, [{"params": list(model.parameters()), "lr": 1e-3}],
+        config, control)
+    for _ in range(2):
+        for param in model.parameters():
+            param.grad = torch.zeros_like(param)
+        optimizer.step()
+        namespace["OptimizerStateCaster"].apply(torch, optimizer, dial)
+        for param in model.parameters():
+            assert optimizer.state[param]["exp_avg"].dtype == param.dtype
 
 
 # ── lr scaling ─────────────────────────────────────────────────────────────

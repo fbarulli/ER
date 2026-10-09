@@ -47,8 +47,14 @@ GOLDEN_SHA256: dict[str, str] = {
     # (os.environ.setdefault("PYTHONUNBUFFERED", "1") so the live W&B/output.log
     # readers see lines immediately) are all merged. Only finetune/finetune-smoke
     # carry the unbuffered child block; holdout-eval keeps its lanes preflight.
-    "finetune": "b2e580e77e96202f978739efb8291138834fbff8be66821a9f84086edc89f832",
-    "finetune-smoke": "ef9b220cfc0c5a9f86e0f80069ab0efc1e282e4df625c564fb09d828414de13e",
+    #
+    # finetune / finetune-smoke re-pinned again for the fused-safe optimizer-state
+    # fix: OptimizerStateCaster now reconciles state to the parameter dtype
+    # (native AdamW requires state.dtype == param.dtype on single/foreach/fused)
+    # instead of casting it to bf16, which left fused AdamW with mismatched
+    # tensors. Only those two surfaces carry the perf-patch control logic.
+    "finetune": "70b83e3a190d25f738b0660ac718570a844448ae41267f82176d314e2b600fd8",
+    "finetune-smoke": "130f64273ada8b5f0af8da14f062b28e179bcf3629084b633bc01e1580e1d156",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
 }
