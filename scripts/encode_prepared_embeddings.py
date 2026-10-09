@@ -82,8 +82,7 @@ class EncodeRequest:
 
     def __init__(self, request_path: Path, checkpoint: Path):
         self.path = request_path
-        self.raw = request_path.read_bytes()
-        self.values = json.loads(self.raw)
+        self.values = json.loads(request_path.read_text())
         self._check_schema()
         self._bind_checkpoint(checkpoint)
         self.token_archive = request_path.parent / 'prepared_text.npz'
@@ -226,15 +225,22 @@ def _verify_population(request, vectors) -> None:
 def _publish_embeddings(args: argparse.Namespace, request, vectors) -> None:
     """One publish: bound metadata, compressed npz, size sidecar."""
     import numpy as np
+    info = request.path.stat()
     metadata = {**request.values['metadata'],
-                'request_size': ByteCount(request.raw).total,
+                # The structural census of the request that produced this export
+                # -- its declared name, byte size and mtime_ns -- never a byte
+                # length as the request's identity (owner directive 2026-10-08).
+                'request_census': {'name': request.path.name, 'size': info.st_size,
+                                   'mtime_ns': info.st_mtime_ns},
                 'embedding_dtype': 'float32'}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('wb') as handle:
         np.savez_compressed(handle, ids=np.asarray(request.values['ids'], dtype=str),
                             embeddings=vectors, metadata=json.dumps(metadata, sort_keys=True))
-    args.output.with_suffix('.size').write_text(
-        str(ByteCount(args.output.read_bytes()).total) + '\n')
+    # The transport token is the delivered file's st_size (the ONE sidecar rule,
+    # core.archive_reader.archive_sidecar / cli.colab_bundle_transport), so the
+    # output is never read back just to re-measure it.
+    args.output.with_suffix('.size').write_text(str(args.output.stat().st_size) + '\n')
 
 
 @timed
