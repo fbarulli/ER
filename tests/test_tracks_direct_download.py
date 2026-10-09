@@ -39,11 +39,11 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     monkeypatch.setattr(common, 'RESULTS', tmp_path)
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(colab, 'verify', lambda _: dict(revision='revision', files={}))
-    # The result download trusts one named single-pass verify seam. Stub it so
-    # a tiny fixture archive is never parsed as a real tar.zst; the returned
-    # whole-file digest still drives the corruption check.
-    monkeypatch.setattr(colab, 'verify_result_archive',
-                        lambda path: (dict(run_tag='run', files={}), file_size(path)))
+    # The result download trusts the lane class's single-pass boundary read.
+    # Stub the class seam so a tiny fixture archive is never parsed as a real
+    # tar.zst; the returned size still drives the local reuse.
+    monkeypatch.setattr(colab.TracksLane, 'verify_result_archive',
+                        staticmethod(lambda path: (dict(run_tag='run', files={}), file_size(path))))
     monkeypatch.setattr(backend, 'GPU', 'CPU')
     monkeypatch.setattr(backend, '_env_value', lambda _: None)
     monkeypatch.setattr(backend, '_wandb_env_script', lambda: '')
