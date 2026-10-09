@@ -61,6 +61,7 @@ from core.common import (
     training_cfg,
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+from core.prediction_export import PredictionExport
 from core.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
 from core.ranking_metrics import ranking_at_k, youden_threshold
 
@@ -187,6 +188,13 @@ if not os.path.exists(_FINAL_VALIDATION_CSV):
         f"{_FINAL_VALIDATION_CSV} is missing. Rebuild with "
         "`PYTHONPATH=src python -m src.training.build_final_validation`."
     )
+# The validation frame's per-side slice columns, keyed by the SSOT pair_id, so
+# every per-sample prediction below can be read on the same row as the slice it
+# scored (core.prediction_export). Loaded once, joined per model.
+_validation = pd.read_csv(
+    _FINAL_VALIDATION_CSV, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
+)
+_slices = PredictionExport.slice_frame(_validation)
 if "true_label" not in df.columns:
     raise SystemExit("labeled census lost its `true_label` column")
 
@@ -237,13 +245,20 @@ if _NEG_POLICY == "train_side":
     # raw endpoint mismatch stays visible as fold_raw (byte-visible evidence)
     _raw = df[["fold", "fold_2", "true_label"]].copy()
     df["fold_raw_only_census"] = _raw["fold"]
-    df.loc[df["true_label"] == 0, "fold"] = [
+    # The rule is computed on the NEGATIVE subset only; assigning a full-frame
+    # list into a boolean mask raised "Must have equal len keys and value"
+    # (falsified 2026-10-09: the lane could not run under policy B at all, so
+    # no prediction was ever emitted on that path).
+    _neg_mask = df["true_label"] == 0
+    df.loc[_neg_mask, "fold"] = [
         negative_pair_fold(
             _NEG_POLICY, int(f1), int(f2), n_folds=_N_FOLDS
         )
-        for f1, f2 in zip(_raw["fold"], _raw["fold_2"])
+        for f1, f2 in zip(
+            _raw.loc[_neg_mask, "fold"], _raw.loc[_neg_mask, "fold_2"]
+        )
     ]
-    df.loc[df["true_label"] == 0, "fold_2"] = df.loc[df["true_label"] == 0, "fold"]
+    df.loc[_neg_mask, "fold_2"] = df.loc[_neg_mask, "fold"]
     # ATTRIBUTION (measured on the current census, 1,023 positives / 7,713
     # negatives): dropped.straddling_fold_pairs 4,728 -> 0 and
     # parked_fold_pairs 1,927 -> 5,669 under policy B; in-play grows
@@ -393,6 +408,9 @@ def evaluate_model(
 
 
 summary_rows = []
+#: Per-model per-sample prediction dumps (core.prediction_export): the artifact
+#: that makes "which pair did this model miss, and on what slice" answerable.
+prediction_paths: list = []
 # models whose sim column is present in the sweep output (a partial sweep
 # is evaluated — never crash on a missing column, say it loudly instead).
 # Skipped models are recorded for the manifest (model-level facts, NOT a
@@ -471,6 +489,21 @@ for model_name, sim_col in MODEL_COLUMNS.items():
             print(f"    sim={row[sim_col]:.3f}")
             print(f"      GTIN1 {row['gtin1']}: {str(row['canon1'])[:80]}")
             print(f"      GTIN2 {row['gtin2']}: {str(row['canon2'])[:80]}")
+    # ── per-sample prediction artifact (was computed then DISCARDED) ──────
+    # One row per scored pair, keyed by the SSOT pair_id and joined to the
+    # validation slice columns, so a metric can be drilled back to the sample
+    # that produced it (core.prediction_export).
+    prediction_path = PredictionExport.write(
+        PredictionExport.frame(
+            df_model, _slices, model=model_name, eval_half="test",
+            score_column=sim_col, threshold=thr,
+        ),
+        RESULTS / PredictionExport.filename(model_name, "test", _TEST_FOLD),
+    )
+    prediction_paths.append(prediction_path)
+    print(
+        f"  [traceability] {len(df_model):,} scored pairs -> {prediction_path}"
+    )
 
 summary_df = pd.DataFrame(summary_rows)[list(EVAL_SUMMARY_COLUMNS)]
 # boundary contract: exact columns, every row an EvalSummaryRow (provenance
@@ -615,13 +648,16 @@ row_accounting = {
     "models_skipped_no_sweep_column": len(_models_skipped),
     "models_skipped_names": sorted(_models_skipped),
     "summary_rows": len(summary_df),
+    # per-sample prediction dumps: one row per scored TEST pair per model
+    "prediction_artifacts": len(prediction_paths),
+    "prediction_rows_per_model": int(in_test.sum()),
     "holdout_component_folds": int(_split.holdout_component_folds),
     "dev_fold": int(_DEV_FOLD),
     "test_fold": int(_TEST_FOLD),
 }
 manifest_path = finish_manifest(
     manifest,
-    outputs=[summary_out, out1, out2],
+    outputs=[summary_out, out1, out2, *prediction_paths],
     row_accounting=row_accounting,
     expected_outputs=[F["model_evaluation_summary"]],
 )
