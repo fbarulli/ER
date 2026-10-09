@@ -17,5 +17,7 @@ common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 main_root="$(dirname "$common_dir")"
 [[ -x "$main_root/scripts/er_env.sh" ]] || exit 0
 
-"$main_root/scripts/er_env.sh" link "$worktree_root" >/dev/null 2>&1 || true
+# Stdout is suppressed (the link target is not interesting); stderr is NOT, so a
+# real warning (e.g. a branch that still tracks .venv-link) is actually seen.
+"$main_root/scripts/er_env.sh" link "$worktree_root" >/dev/null || true
 exit 0
