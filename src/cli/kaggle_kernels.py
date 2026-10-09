@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -73,17 +72,20 @@ class KaggleKernels:
     def _wandb_api_key() -> str:
         """The key a staged kernel bakes, or a loud refusal (never silent).
 
-        The environment wins; otherwise the repository's own .env is read
-        through ``core.common.TRAIN_ROOT`` — the stable project root, NOT the
-        lane's ``TRAIN_ROOT``, which alternate checkouts and tests re-point and
-        which must never hide the operator's key from the bake.
+        The canonical owner (core.credentials.CredentialStore) resolves the
+        configured ``credentials.keys.wandb_api_key`` — process environment
+        first, the declared env file second — against the STABLE project root
+        (``core.common.TRAIN_ROOT``), NOT the lane's ``TRAIN_ROOT``, which
+        alternate checkouts and tests re-point and which must never hide the
+        operator's key from the bake.
         """
-        from cli import kaggle_lane as lane
         from core.common import TRAIN_ROOT as repository_root
+        from core.credentials import CredentialStore
 
-        return (os.environ.get("WANDB_API_KEY")
-                or lane._env_dot_value("WANDB_API_KEY", repository_root)
-                or KaggleKernels._bake_wandb_key_missing())
+        key = CredentialStore.from_config(
+            root=repository_root).resolve_optional("wandb_api_key")
+        return (key.get_secret_value() if key
+                else KaggleKernels._bake_wandb_key_missing())
 
     @staticmethod
     def kernel_metadata(slug: str, code_file: str, *, enable_gpu: bool,

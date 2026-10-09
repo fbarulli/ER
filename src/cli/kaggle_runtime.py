@@ -178,63 +178,41 @@ class KaggleRuntime:
         return result.returncode, output
 
     @staticmethod
-    def _env_dot_value(name: str, root: Path | None = None) -> str | None:
-        """Read a simple KEY=VALUE from <root>/.env or its parent .env.
-
-        Same semantics as cli.colab._env_value: no printing (secrets stay out of
-        every log), env-var override first, never cloned into the repo. ``root``
-        defaults to the lane's TRAIN_ROOT (the staging knob tests and alternate
-        checkouts re-point); a caller passes the repository root explicitly for
-        a value whose lookup must survive that redirection.
-        """
-        from cli import kaggle_lane as lane
-
-        search_root = lane.TRAIN_ROOT if root is None else Path(root)
-        for env_path in (search_root / ".env", search_root.parent / ".env"):
-            if not env_path.is_file():
-                continue
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                key, separator, value = line.partition("=")
-                if separator and key.strip() == name:
-                    value = value.strip().strip('"').strip("'")
-                    if value:
-                        return value
-        return None
-
-    @staticmethod
     def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str, Any]:
-        """Materialize ~/.kaggle/kaggle.json from the environment.
+        """Materialize ~/.kaggle/kaggle.json from the credential SSOT.
 
-        The token never enters this repository or argv: it is read from the
-        config-named environment variable (overridable with --key-env) and
-        written to the standard credential path with 0600 permissions. Dry run
-        by default; --execute writes the file.
+        The token never enters this repository or argv: it is read through the
+        canonical owner (core.credentials.CredentialStore) — the config-declared
+        env var, process env first, the declared env file second — and written
+        to the standard credential path with 0600 permissions. Dry run by
+        default; --execute writes the file.
         """
         from cli import kaggle_lane as lane
+        from core.credentials import CredentialStore
 
         spec = lane._spec()
-        resolved_env = key_env or spec.api_key_env
+        store = CredentialStore.from_config(root=lane.TRAIN_ROOT)
+        resolved_env = key_env or store.spec.keys.kaggle_api_key
         if not spec.username:
             raise RuntimeError(
                 "config kaggle.username is unset; name the Kaggle account before "
                 "writing credentials")
-        token = os.environ.get(resolved_env, "").strip()
+        token = store.resolve_env_optional(resolved_env)
         plan: dict[str, Any] = {
             "mode": "executed" if execute else "dry-run",
             "target": str(lane.CREDENTIALS_PATH),
             "username": spec.username,
             "key_env": resolved_env,
-            "key_present": bool(token),
+            "key_present": token is not None,
         }
         if not execute:
             return plan
-        if not token:
-            raise RuntimeError(
-                f"environment variable {resolved_env!r} is empty or unset; export "
-                "the Kaggle API token (credentials never live in this repository)")
+        # fail loud with the full traceback when the required key is absent
+        secret = store.resolve_env(resolved_env)
         lane.CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
         lane.CREDENTIALS_PATH.write_text(
-            json.dumps({"username": spec.username, "key": token}) + "\n",
+            json.dumps({"username": spec.username,
+                        "key": secret.get_secret_value()}) + "\n",
             encoding="utf-8")
         lane.CREDENTIALS_PATH.chmod(0o600)
         if lane.ACCESS_TOKEN_PATH.exists():
