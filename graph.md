@@ -277,3 +277,125 @@ by dev results and evaluate the selected approach once on held-out test.
 Use both pair-level and final-cluster metrics for selection. If candidate
 recall deteriorates, fix neighbor selection before tuning the scorer; if
 ranking improves but clusters overmerge, inspect calibration and merge policy.
+
+## Executable result interpretation
+
+`src/graph_tracks/interpretation.py` provides `GraphQualityInterpreter.compare`.
+It reports raw candidate-minus-baseline deltas, accounts for metrics where
+lower is better, and explains common tradeoffs. It does not train a model,
+choose a threshold, calculate missing metrics, or automatically promote a run.
+
+Use the same evaluation population, precision target, retrieval K/candidate
+budget, and cluster policy for both experiments. Select architectures on dev;
+report the selected architecture on test without retuning it there. The
+existing report's `recall_at_precision` is a PR-curve operating-point summary,
+not proof that a previously selected threshold achieves that precision on test.
+
+This example uses **invented numbers to demonstrate interpretation**, not
+results from this repository. Run it with the repository `src` on `PYTHONPATH`:
+
+```python
+from graph_tracks.interpretation import (
+    GraphComparisonPolicy,
+    GraphQualityInterpreter,
+    GraphQualityMetrics,
+)
+
+baseline = GraphQualityMetrics(
+    pr_auc=0.91,
+    recall_at_precision=0.76,
+    known_positive_recall=0.94,
+    bcubed_precision=0.98,
+    bcubed_recall=0.83,
+    brier=0.08,
+    overmerge_rate=0.02,
+)
+candidate = GraphQualityMetrics(
+    pr_auc=0.94,
+    recall_at_precision=0.79,
+    known_positive_recall=0.89,
+    bcubed_precision=0.94,
+    bcubed_recall=0.87,
+    brier=0.07,
+    overmerge_rate=0.06,
+)
+# An illustrative absolute effect-size tolerance; configure for your use case.
+policy = GraphComparisonPolicy(minimum_change=0.005)
+report = GraphQualityInterpreter.compare(baseline, candidate, policy)
+print(report.model_dump_json(indent=2))
+```
+
+Interpret this example as follows:
+
+- Pair ranking and recall at the precision target improved.
+- Retrieval recall fell by five percentage points. More true matches are
+  missing before the decoder gets a chance to score them.
+- B-cubed recall improved but precision fell: clusters recover more members
+  while also mixing identities. The increased overmerge rate reinforces this.
+- Brier error decreased, but that does not cancel the retrieval/cluster
+  regressions. A lower Brier score alone does not establish perfect calibration.
+- This is a tradeoff to investigate, not an overall winner.
+
+`minimum_change` is an absolute tolerance on the metric's scale; it is not a
+p-value or confidence interval. The interpreter labels changes no greater than
+that tolerance `within_tolerance`. For a final decision, inspect paired
+component-bootstrap intervals and variation across training seeds.
+
+### Connecting actual reports
+
+The existing artifacts supply these fields:
+
+| Interpreter field | Source |
+| --- | --- |
+| `pr_auc` | Selected split row in `gnn_only__model_evaluation_summary.csv` |
+| `recall_at_precision` | Same row, using its `agreed_precision` operating target |
+| `known_positive_recall` | Selected split and K row in `gnn_only__retrieval_summary.csv` |
+| `bcubed_precision`, `bcubed_recall` | A separate cluster evaluation against reference identities; not emitted by the current graph report |
+| `brier` | Probability evaluation on the labeled population; not emitted by the current graph pair report |
+| `overmerge_rate` | Fraction of predicted clusters containing multiple true identities, on a population with reference identities |
+
+Populate `GraphQualityMetrics` with the measurements available for each run.
+Omit unmeasured fields or use `None`; the comparison reports `not_reported`.
+This includes an unattained precision target: absence is not the same as a
+measured recall of zero. When transferring CSV values, represent blank cells as
+`None`, not NaN. Do not substitute pair precision for B-cubed precision.
+
+You can store those selected summaries as new JSON artifacts and load them
+through the public boundary model:
+
+```python
+from pathlib import Path
+from graph_tracks.interpretation import (
+    GraphComparisonPolicy,
+    GraphQualityInterpreter,
+    GraphQualityMetrics,
+)
+
+baseline = GraphQualityMetrics.model_validate_json(
+    Path("baseline_quality.json").read_text())
+candidate = GraphQualityMetrics.model_validate_json(
+    Path("candidate_quality.json").read_text())
+policy = GraphComparisonPolicy.model_validate_json(
+    Path("comparison_policy.json").read_text())
+print(GraphQualityInterpreter.compare(
+    baseline, candidate, policy).model_dump_json(indent=2))
+```
+
+`comparison_policy.json` contains the chosen `minimum_change`, for example
+`{"minimum_change": 0.005}`. The interpreter performs no file/digest/staleness
+checks and does not alter its inputs.
+
+### Reading the architecture ablations
+
+| Comparison | Result pattern | Interpretation / next experiment |
+| --- | --- | --- |
+| Existing encoder: cosine vs symmetric MLP | Pair metrics improve, retrieval unchanged | Evidence for a better decoder, not better embeddings; inspect contradiction slices |
+| Existing encoder vs two-layer SAGE, same decoder | Retrieval and operating-point metrics improve | Evidence that neighborhood representations help; inspect sparse/unseen nodes |
+| SAGE vs GATv2, same decoder | Edge-aware attention helps only common attributes | Check rare-attribute and high-degree-node slices before attributing broad benefit |
+| GATv2 with vs without edge features | No improvement beyond run variability | Edge features have not demonstrated added value; keep the simpler variant |
+| Residual/dropout ablation | Training fit improves but dev worsens | Possible overfitting; examine seed variation and regularization |
+| Any model | AP improves, recall at required precision falls | The ranking improvement misses the deployment operating point |
+| Any model | Cluster recall rises, purity falls | Possible overmerging through false bridges; inspect merge decisions |
+
+These patterns suggest what to inspect. Controlled ablations are needed to
+attribute causality; the interpreter intentionally makes no such claim.
