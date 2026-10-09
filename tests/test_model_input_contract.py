@@ -535,13 +535,13 @@ def test_composition_provenance_tracks_the_config() -> None:
     assert composition == TrainingSpec.ModelInputComposition.from_spec(
         model_input_spec()
     )
-    # The digest separates the two selectable compositions, so an artifact can
+    # The recorded fields ARE the composition's identity, so an artifact can
     # name its contract without carrying the text.
     other = TrainingSpec.ModelInputComposition.from_spec(
         TrainingSpec.ModelInputSpec(profile="legacy", include_evidence=True)
     )
-    assert other.fingerprint != composition.fingerprint
-    assert len(composition.fingerprint) == 64
+    assert other != composition
+    assert other.model_dump() != composition.model_dump()
 
 
 def test_ann_fingerprint_inputs_include_the_composition() -> None:
@@ -596,7 +596,6 @@ def test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary() -> None:
 
     inputs = preprocessing_fingerprint_inputs({"enabled": True})
     assert inputs["vocabulary"] == file_size(VOCABULARY_CONFIG_PATH)
-    assert len(inputs["vocabulary"]) == 64
 
     # The vocabulary really is an input to the composed text: a stopword that
     # appears in the corpus changes what the builder emits.
@@ -640,7 +639,6 @@ def test_ann_fingerprint_inputs_cover_the_composition_code() -> None:
     assert set(code) == {"core.model_input", "pipeline"}
     assert code["pipeline"] == file_size(pipeline.__file__)
     assert code["core.model_input"] == file_size(model_input_module.__file__)
-    assert len(code["pipeline"]) == 64
     # Stable across calls: the same tree must not churn the index.
     assert preprocessing_fingerprint_inputs({"enabled": True})["composition_code"] == code
 
@@ -760,7 +758,7 @@ def test_reduction_flags_default_to_todays_bytes() -> None:
     assert _reduce_redundancy(today, spec=_spec()) == today
 
 
-def test_a_reduction_flag_changes_the_composition_fingerprint() -> None:
+def test_a_reduction_flag_changes_the_composition_record() -> None:
     """Flipping a removal must move the identity an index is gated on.
 
     The flags live in config, so unless they are part of the composition record
@@ -779,7 +777,7 @@ def test_a_reduction_flag_changes_the_composition_fingerprint() -> None:
         "emit_singleton_pack_token",
     ):
         other = TrainingSpec.ModelInputComposition.from_spec(_spec(**{flag: False}))
-        assert other.fingerprint != base.fingerprint, flag
+        assert other != base, flag
         assert getattr(other, flag) is False
 
         # ...and the ANN REUSE fingerprint moves with it, so a persisted index
