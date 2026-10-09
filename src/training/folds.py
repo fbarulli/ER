@@ -54,6 +54,7 @@ import pandas as pd
 from core.disjoint_sets import DisjointSet
 from core.run_log import RunLogger
 from core.schemas import CalibrationPartition, FoldSets
+from core.smart_split import SmartSplit
 from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
@@ -385,18 +386,15 @@ class ComponentIndex:
     def folds(self, k: int, seed: int) -> list[set[str]]:
         """Deal the components round-robin over k seeded folds.
 
-        Every positive pair sits inside ONE component → inside ONE fold: no
-        straddle, no silent loss, no leak (leakage travels exactly along the
-        edges we split on). Unlinked gtins become singleton components —
-        still fold members so their mined negatives split group-aware.
+        The deal is the ONE ``SmartSplit.deal_uniform`` (shared with the laya
+        smart-split owner), so both training checkouts fold the same source
+        graph the same way. Every positive pair sits inside ONE component →
+        inside ONE fold: no straddle, no silent loss, no leak (leakage travels
+        exactly along the edges we split on). Unlinked gtins become singleton
+        components — still fold members so their mined negatives split
+        group-aware.
         """
-        comp_list = self.ds.components()
-        rng = np.random.default_rng(seed)
-        order = rng.permutation(len(comp_list))
-        folds: list[set[str]] = [set() for _ in range(k)]
-        for i, comp_idx in enumerate(order):
-            folds[i % k] |= comp_list[comp_idx]
-        return folds
+        return SmartSplit.deal_uniform(self.ds.components(), k, seed)
 
     def ids(self) -> dict[str, int]:
         """Stable component id per gtin (sorted-member ordering).
