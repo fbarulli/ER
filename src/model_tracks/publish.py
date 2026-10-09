@@ -41,7 +41,7 @@ def persist_results(archive: Path, run_tag: str, *, bundle=None) -> Path:
     handle = Bundle.load(Path(archive), BundleRole.result) if bundle is None else bundle
     if handle.run_tag() != run_tag:
         raise ValueError('publication run mismatch')
-    workspace = archive_sidecar(archive, '.publication')
+    workspace = archive_sidecar(archive, bundle_spec().publication_sidecar_suffix)
     workspace.mkdir(exist_ok=True)
     payload = workspace / archive.name
     if payload.exists() and file_size(payload) != handle.path.stat().st_size:
@@ -60,7 +60,7 @@ def persist_results(archive: Path, run_tag: str, *, bundle=None) -> Path:
     index = common.artifact('dvc_publication_manifest', {'run_id': run_tag, 'worker': 1})
     publication = json.loads(index.read_text())
     refs = [index, *(common.TRAIN_ROOT / entry['pointer'] for entry in publication['pointers'])]
-    receipt = archive_sidecar(archive, '.publication.json')
+    receipt = archive_sidecar(archive, bundle_spec().publication_receipt_suffix)
     receipt.write_text(json.dumps({
         'run_tag': run_tag, 'archive_size': handle.path.stat().st_size,
         'verified_download': True,

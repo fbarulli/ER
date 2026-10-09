@@ -24,7 +24,7 @@ def _publish(bundle, tag):
     receipt = persist_results(bundle.path, tag, bundle=bundle)
     # Verified remote storage and the receipt retain the generation; avoid
     # accumulating duplicate checkpoint bytes on the Colab disk.
-    shutil.rmtree(archive_sidecar(bundle.path, '.publication'))
+    shutil.rmtree(archive_sidecar(bundle.path, bundle_spec().publication_sidecar_suffix))
     bundle.path.unlink()
     return receipt
 
@@ -53,7 +53,7 @@ class ArtifactPublisher:
             _LOG.info(f'[incremental] generation {generation} has no files; '
                       'nothing to publish')
             return
-        directory = self.output / '_artifact_publications'
+        directory = self.output / bundle_spec().artifact_publications_dir
         directory.mkdir(exist_ok=True)
         # Snapshot before returning: checkpoint rotation and mutable reports
         # cannot change the bytes read by the background DVC publisher. The

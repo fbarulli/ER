@@ -3649,6 +3649,19 @@ class BundleSpec(BaseModel):
     # the events into the result archive). No content-identity companion is
     # written or read anywhere.
     events_sidecar_suffix: str = ".events.jsonl"
+    # A machine's local-only files: they exist to run, never to ship, so every
+    # bundle walk drops them by name.
+    local_only_filenames: tuple[str, ...] = Field(default_factory=lambda: (
+        ".env", "config.local"))
+    # The publication workspace beside an archive (``<name>.publication``) and
+    # its receipt (``<name>.publication.json``): publication transients, never
+    # a bundle deliverable.
+    publication_sidecar_suffix: str = ".publication"
+    publication_receipt_suffix: str = ".publication.json"
+    # Raw graph-lane payload dirs (``<track>__payload``); resume-only state.
+    payload_suffix: str = "__payload"
+    # The incremental publisher's staging dir; never a bundle deliverable.
+    artifact_publications_dir: str = "_artifact_publications"
 
 
 class PreparationSpec(BaseModel):

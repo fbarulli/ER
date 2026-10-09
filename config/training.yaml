@@ -1595,3 +1595,10 @@ bundle:
   postprocess_location_local: "local CPU"
   postprocess_location_bundle: "bundle finalize"
   events_sidecar_suffix: ".events.jsonl"
+  local_only_filenames:
+    - ".env"
+    - "config.local"
+  publication_sidecar_suffix: ".publication"
+  publication_receipt_suffix: ".publication.json"
+  payload_suffix: "__payload"
+  artifact_publications_dir: "_artifact_publications"

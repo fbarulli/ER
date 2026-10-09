@@ -20,7 +20,7 @@ import json
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -482,6 +482,43 @@ class Bundle(BaseModel):
                 break
         return frozenset(selected)
 
+    def recovery_state_members(self) -> frozenset[str]:
+        """This tree's members that only the RECOVERY role retains.
+
+        The positive half of the role contract: every checkpoint member and
+        every resume-only file that the RESULT predicate drops. Derived from the
+        SAME :meth:`is_result_member` and :meth:`selected_checkpoint_dirs` the
+        seal uses, so a recovery walk and a result seal can never disagree about
+        what a resume needs.
+        """
+        spec = _bundle_spec()
+        selected = self.selected_checkpoint_dirs()
+        return frozenset(
+            relative for relative in self.members()
+            if (spec.checkpoint_dir in Path(relative).parts
+                or Path(relative).name in spec.resume_only_filenames)
+            and not self.is_result_member(relative, selected_checkpoints=selected))
+
+    @classmethod
+    def assert_recovery_retains(cls, directory: Path | str,
+                                retained: Iterable[str], *,
+                                where: str = "recovery bundle") -> None:
+        """Refuse a recovery member set that pruned this tree's resume state.
+
+        ``directory`` is the source tree; ``retained`` the member names the
+        recovery bundle will ship. The contract: every member the RESULT role
+        drops but a resume needs (:meth:`recovery_state_members`) must be
+        ``retained``. One home for the assertion, so a walk that only *excludes*
+        (and would happily seal a pruned suite) cannot masquerade as the role
+        contract.
+        """
+        tree = cls.from_directory(directory, BundleRole.result)
+        present = set(retained)
+        missing = sorted(member for member in tree.recovery_state_members()
+                         if member not in present)
+        if missing:
+            raise ValueError(f"{where} pruned resume state: " + ", ".join(missing[:5]))
+
     @staticmethod
     def is_result_member(relative: str, *,
                          selected_checkpoints: frozenset[str] = frozenset()) -> bool:
@@ -502,12 +539,12 @@ class Bundle(BaseModel):
             return False
         if parts[-1] in spec.resume_only_filenames:
             return False
-        if parts[-1] in {".env", "config.local"}:
+        if parts[-1] in spec.local_only_filenames:
             return False
-        if any(part.endswith(".publication") or part.endswith("__payload")
-               for part in parts):
+        if any(part.endswith(spec.publication_sidecar_suffix)
+               or part.endswith(spec.payload_suffix) for part in parts):
             return False
-        if "_artifact_publications" in parts and not relative.endswith(".json"):
+        if spec.artifact_publications_dir in parts and not relative.endswith(".json"):
             return False
         if spec.checkpoint_dir in parts:
             if not selected_checkpoints:

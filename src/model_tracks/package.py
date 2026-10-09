@@ -610,45 +610,18 @@ def verify(path: Path) -> dict:
     return Bundle.load(Path(path), BundleRole.inputs).manifest
 
 
-def _assert_recovery_contract(output: Path, files: dict[str, Path]) -> None:
-    """Assert the recovery role positively: all epochs + resume state travel.
-
-    ``_recovery_sources`` is an exclusion walk, so on its own it proves nothing
-    about recovery: it would happily seal a suite whose checkpoint state was
-    pruned. The resume contract is asserted here, before the writer opens the
-    archive, against an independent authority: every member the RESULT role
-    keeps out of a delivered bundle but a resume needs -- every non-selected
-    epoch, and every optimizer/scheduler/scaler file -- must be a member of this
-    recovery bundle. A suite that stopped before writing any checkpoint has
-    nothing to assert (its logs and inputs still travel); a suite that has one
-    can never silently lose it.
-    """
-    from core.bundle import Bundle, BundleRole
-    spec = bundle_spec()
-    tree = Bundle.from_directory(output, BundleRole.result)
-    selected = tree.selected_checkpoint_dirs()
-    resume_state = []
-    for relative in tree.members():
-        checkpoint_state = spec.checkpoint_dir in Path(relative).parts
-        resume_only = Path(relative).name in spec.resume_only_filenames
-        if (checkpoint_state or resume_only) and not tree.is_result_member(
-                relative, selected_checkpoints=selected):
-            resume_state.append(relative)
-    missing = sorted(relative for relative in resume_state if relative not in files)
-    if missing:
-        raise ValueError('recovery bundle pruned resume state: '
-                         + ', '.join(missing[:5]))
-
-
 def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
+    from core.bundle import Bundle
+    spec = bundle_spec()
     files = {}
     for path in tracked(_walk_files(output, excluded_dirs=RECOVERY_EXCLUDED,
-                                   excluded_suffixes=('.publication', '__payload')),
+                                   excluded_suffixes=(spec.publication_sidecar_suffix,
+                                                      spec.payload_suffix)),
                         desc='recovery.scan_files'):
-        if path.name in {'.env', 'config.local'} or path.resolve() == destination:
+        if path.name in set(spec.local_only_filenames) or path.resolve() == destination:
             continue
         files[path.relative_to(output).as_posix()] = path
-    _assert_recovery_contract(output, files)
+    Bundle.assert_recovery_retains(output, files)
     return files
 
 
