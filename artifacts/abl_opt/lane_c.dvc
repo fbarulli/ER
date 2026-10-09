@@ -1,0 +1,6 @@
+outs:
+- md5: d88272f6bd2c0811f3a47b95a875cfbf.dir
+  size: 40989
+  nfiles: 9
+  hash: md5
+  path: lane_c

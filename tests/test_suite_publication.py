@@ -25,7 +25,7 @@ def test_suite_persists_binary_checkpoints_and_collects_restore_references(tmp_p
     def publish(source, run_id, worker):
         from core.schemas import DvcPublicationManifest
         DvcPublicationManifest(schema_version='1', run_id=run_id, worker=worker,
-            remote='https://example.test/dvc', verified_download=True,
+            remote='https://example.test/dvc',
             pointers=[{'pointer':'suite.zip.dvc','outputs':['suite.zip']}])
         assert calls == [(['dvc','add','suite.zip'], source)]
         with zipfile.ZipFile(source/'suite.zip') as bundle:
@@ -37,7 +37,7 @@ def test_suite_persists_binary_checkpoints_and_collects_restore_references(tmp_p
         index.write_text(json.dumps({'pointers':[{'pointer':pointer.relative_to(tmp_path).as_posix()}]}))
     monkeypatch.setattr(dvc_store, 'publish', publish)
     receipt = json.loads(persist_results(archive,'suite').read_text())
-    assert receipt['verified_download'] is True
+    assert 'verified_download' not in receipt
     assert set(receipt['references']) == {'dvc_refs/suite/worker_1/publication_manifest.json',
                                         'dvc_refs/suite/worker_1/suite.zip.dvc'}
 

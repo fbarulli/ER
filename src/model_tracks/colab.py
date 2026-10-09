@@ -66,31 +66,25 @@ class TracksLane:
 
     # --------------------------------------------------------------- publishing
     def _publish_git_inputs(self, paths, message: str) -> None:
-        """Publish the input transport to the branch the Colab VM actually clones.
+        """Archive the input transport, then push its pointer to the cloned branch.
 
-        ``push_artifacts`` commits on the current branch and pushes its upstream.
-        The VM clones ``colab.branch``, so when the working branch differs from it
-        the clone would miss the transport and the remote stage would abort with a
-        FileNotFoundError. Re-point the publication at the configured branch with a
-        fast-forward push (never forced).
+        The transport bytes are archived in the dagshub DVC remote (write-only
+        storage) while git keeps only the ``*.dvc`` pointer; the VM never pulls
+        from DVC, the launcher uploads the local archive to it. The pointer must
+        still reach the branch the VM clones, so the commit is pushed explicitly
+        to ``colab.branch`` (a fast-forward, never forced).
         """
         import subprocess
         from core.common import TRAIN_ROOT, training_cfg
-        from model_tracks.publish import push_artifacts
-        push_artifacts(paths, message)
+        from model_tracks.run_retention import publish_result_paths
+
+        publish_result_paths(paths)
         branch = training_cfg().colab.branch
-        try:
-            head = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-                                  cwd=TRAIN_ROOT, text=True, capture_output=True,
-                                  check=True).stdout.strip()
-        except (OSError, subprocess.CalledProcessError):
-            return
-        if head and head != 'HEAD' and head != branch:
-            subprocess.run(['git', 'push', 'origin', f'HEAD:{branch}'],
-                           cwd=TRAIN_ROOT, check=True)
+        subprocess.run(['git', 'push', 'origin', f'HEAD:{branch}'],
+                       cwd=TRAIN_ROOT, check=True)
 
     def prepare_git_inputs(self, recovery: dict | None = None, publisher=None) -> Path:
-        """Save this lane's immutable inputs through the Git artifact publisher.
+        """Save this lane's immutable inputs through the DVC-backed publisher.
 
         ``recovery`` is the ALREADY loaded recovery manifest (the caller that
         opened the same archive for its provenance check passes it down), so a
@@ -99,7 +93,9 @@ class TracksLane:
         Every archive name and the transport directory come from the ONE data
         bundle declaration (``ColabSpec.data_bundle``), the same declaration both
         Colab lanes read. The transport is named by the run tag (a structural
-        value); nothing about its bytes is compared.
+        value); nothing about its bytes is compared. The transport is identified
+        only by its run tag and reused when it already exists, so relaunching a
+        run neither rebuilds nor re-pushes it.
         """
         from core.common import TRAIN_ROOT, training_cfg
         bundle = training_cfg().colab.data_bundle
@@ -123,10 +119,8 @@ class TracksLane:
             # Publish the completed sibling through the ONE publish helper (fsync +
             # os.replace), never a bare rename of a possibly-unflushed file.
             publish_replacing(partial, transport)
-        if transport.stat().st_size >= 100*1024**2:
-            raise ValueError('Suite input transport exceeds GitHub regular-file limit; reduce the input package size')
-        (publisher or self._publish_git_inputs)([transport],
-            f'tracks: save immutable GPU inputs {identity[:24]}')
+        (publisher or self._publish_git_inputs)(
+            [transport], f'tracks: save immutable GPU inputs {identity[:24]}')
         return transport
 
     # ----------------------------------------------------------- failure receipt
@@ -209,6 +203,7 @@ from core.archive_reader import tar_archive
 root=pathlib.Path({backend.REMOTE_ROOT!r})
 archive_path=pathlib.Path({remote_zip!r})
 transport=pathlib.Path({remote_inputs!r})
+transport.parent.mkdir(parents=True,exist_ok=True)
 archive_path.parent.mkdir(parents=True,exist_ok=True)
 with tar_archive(transport) as package:
     expected_members={{{bundle.transport_member!r}}} | ({{{bundle.recovery_member!r}}} if {resume_archive is not None!r} else set())
@@ -258,6 +253,12 @@ else:
         command.append("--resume")
     subprocess.run(command,cwd=root,env=env,check=True)
 '''
+        # The transport is an INPUT the lane consumes: materialize it directly on
+        # the VM. DVC is write-only storage (owner mandate 2026-10-09), so no lane
+        # pulls an input back from it; the launcher uploads the local archive that
+        # prepare_git_inputs produced and archived.
+        backend._upload_with_retries(
+            git_inputs, remote_inputs, timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
         try:
             backend.run_detached_stage('all_tracks',['/usr/bin/python3','-c',script],
                                        timeout=backend._WORKER_TIMEOUT_SECONDS)
@@ -370,7 +371,14 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
                 validate_archived_track(result, manifest, track,
                                         postprocess_complete=expected_postprocess(track, gpu_only=True))
         from model_tracks.snapshot_completion import complete
-        return complete(local, self.archive, run_tag, publish=False)
+        final = complete(local, self.archive, run_tag, publish=False)
+        # Run RESULT retention (owner goal 2026-10-09): the downloadable training
+        # archive and the sealed completion archive go to the dagshub DVC remote;
+        # git keeps only their *.dvc pointers, and the local payloads are freed so
+        # a finished run no longer occupies local disk (dvc pull restores either).
+        from model_tracks.run_retention import publish_result_paths
+        publish_result_paths([local, final], drop_local=True)
+        return final
 
 
 def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Path | None = None,

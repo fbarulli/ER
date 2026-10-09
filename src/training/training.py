@@ -5682,12 +5682,10 @@ def train_one_config(
                     },
                 ).parent
                 if resume and not any(checkpoint_dir.glob(f"checkpoint-*/{_trainer_state_filename()}")):
-                    if checkpoint_publication_deferred():
-                        raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
-                    from training.dvc_store import restore_checkpoint
-
-                    restore_checkpoint(RESULTS, checkpoint_dir)
-                    print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
+                    # DVC is WRITE-ONLY storage: resume loads the LOCAL
+                    # materialized checkpoints only, never a DVC pull. Absent
+                    # local state fails loud here instead of reaching the remote.
+                    raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
 
                 ensure_parent(checkpoint_dir)
                 # ── CONSOLIDATED TRACE: the fold's input populations ──────────
@@ -7839,18 +7837,14 @@ class _HpoStream:
 
     @staticmethod
     def _restore_study_db(args, study_db: Path) -> None:
-        """Resume precondition: a downloaded sqlite study, or restore from DVC."""
+        """Resume precondition: a locally downloaded sqlite study (never DVC)."""
         if not args.resume:
             return
-        if checkpoint_publication_deferred():
-            if not study_db.is_file():
-                raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
-            print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
-        else:
-            from training.dvc_store import restore_checkpoint
-
-            restore_checkpoint(RESULTS, study_db)
-            print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+        # DVC is WRITE-ONLY storage: resume loads the LOCAL materialized study
+        # only. Absent local state fails loud here instead of a DVC pull.
+        if not study_db.is_file():
+            raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
+        print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
 
     @staticmethod
     def _resolve_study(args):

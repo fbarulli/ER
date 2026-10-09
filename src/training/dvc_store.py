@@ -14,12 +14,19 @@ DVC_EXCLUDED_DIRS = frozenset({
     "_checkpoint_upload_staging", "wandb",
 })
 
-# A verification pull is intentionally bounded: one target per command made a
-# large result set spend most of its time starting DVC and negotiating with the
-# remote, while an unbounded list can exceed the operating system argv limit.
-_VERIFY_PULL_ARGV_BYTES = 48 * 1024
+# Output suffixes DVC tracks for a worker result tree. BINARY tensors and
+# checkpoints are included: they live in sidecar-free files (text__vectors.npz,
+# gnn_only__graph_model.pt, *.ckpt) whose only per-file archive entry is a
+# *.dvc pointer, so omitting them left those artifacts unarchived.
+_TRACKED_OUTPUT_SUFFIXES = frozenset({
+    ".csv", ".json", ".png", ".log", ".yaml", ".yml", ".txt",
+    ".npz", ".npy", ".pt", ".pth", ".bin", ".safetensors", ".ckpt",
+    ".parquet", ".zip", ".tar", ".gz", ".tgz", ".zst",
+})
 
-
+# DVC is WRITE-ONLY storage (owner mandate 2026-10-09): every lane pushes its
+# outputs and NEVER loads (pull/checkout/fetch) from DVC. Only push targets
+# exist here; operator-side restores live in the retention CLI.
 def _write_dvc_event(source: Path, event: str, **values: object) -> None:
     """Append structured DVC state beside the worker's result bundle."""
     record = {"event": event, "timestamp_unix": time.time(), "monotonic_seconds": time.monotonic(), **values}
@@ -30,10 +37,9 @@ def _write_dvc_event(source: Path, event: str, **values: object) -> None:
     print(f"[dvc-state] {event} | {json.dumps(values, sort_keys=True)}", flush=True)
 
 def _run(command: list[str], cwd: Path) -> str:
-    # ``--jobs`` parallelises DVC's internal object transfer. It is valid for
-    # push and pull alike; injecting it only for push left every pull (the
-    # verification pull restores a whole result set) single-threaded.
-    if command[:2] in (["dvc", "push"], ["dvc", "pull"]) and "--jobs" not in command:
+    # ``--jobs`` parallelises DVC's internal object transfer. It applies to the
+    # push path this module drives; DVC is write-only, so there is no pull.
+    if command[:2] == ["dvc", "push"] and "--jobs" not in command:
         jobs = str(common.training_cfg().colab.dvc_jobs)
         command = [command[0], command[1], "--jobs", jobs, *command[2:]]
     hidden_after = {"password", "access_key_id", "secret_access_key"}
@@ -43,13 +49,11 @@ def _run(command: list[str], cwd: Path) -> str:
     ]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
     cfg = common.training_cfg().colab
-    # Pushes can be interrupted after the object reached the remote, and pulls
-    # and cloud-status checks are read-only.  All three are safe to retry.  Do
-    # not retry ``dvc add`` or configuration mutations: a later attempt could
+    # A push can be interrupted after the object reached the remote, and the
+    # cloud-status comparison is read-only, so both are safe to retry. Do not
+    # retry ``dvc add`` or configuration mutations: a later attempt could
     # observe a changed worker directory and falsely describe a different run.
-    retry_safe = command[:2] in (
-        ["dvc", "push"], ["dvc", "pull"], ["dvc", "status"],
-    )
+    retry_safe = command[:2] in (["dvc", "push"], ["dvc", "status"])
     attempts = cfg.dvc_push_retries if retry_safe else 1
     for attempt in range(1, attempts + 1):
         attempt_started = time.monotonic()
@@ -131,86 +135,6 @@ def _dvc_status_is_clean(output: str) -> bool:
     )
 
 
-def _tracked_outputs(source: Path) -> list[Path]:
-    import yaml
-    outputs: list[Path] = []
-    for pointer in sorted(source.rglob("*.dvc")):
-        if not pointer.is_file():
-            continue
-        if ".resume" in pointer.parts or "_checkpoints" in pointer.parts:
-            continue
-        data = yaml.safe_load(pointer.read_text(encoding="utf-8")) or {}
-        for entry in data.get("outs", []):
-            path = pointer.parent / str(entry["path"])
-            if path.is_file():
-                outputs.append(path)
-            elif path.is_dir():
-                outputs.extend(sorted(child for child in path.rglob("*") if child.is_file()))
-    return outputs
-
-
-def _bounded_pointer_batches(pointers: list[Path], source: Path) -> list[list[str]]:
-    """Group DVC targets without risking an overlong process argument list."""
-    batches: list[list[str]] = []
-    batch: list[str] = []
-    batch_bytes = 0
-    for pointer in pointers:
-        target = str(pointer.relative_to(source))
-        target_bytes = len(os.fsencode(target)) + 1
-        if batch and batch_bytes + target_bytes > _VERIFY_PULL_ARGV_BYTES:
-            batches.append(batch)
-            batch, batch_bytes = [], 0
-        batch.append(target)
-        batch_bytes += target_bytes
-    if batch:
-        batches.append(batch)
-    return batches
-
-
-def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, str]]:
-    """Pull into a clean directory; prove the remote is independently readable."""
-    tracked = _tracked_outputs(source)
-    if not tracked:
-        raise RuntimeError("DVC push produced no tracked output pointers")
-    with tempfile.TemporaryDirectory(
-        prefix=".dvc-verify-", dir=source.parent
-    ) as temp:
-        verify = Path(temp)
-        _configure_workspace(verify, token=token, remote=remote)
-        for pointer in source.rglob("*.dvc"):
-            if not pointer.is_file():
-                continue
-            if ".resume" in pointer.parts or "_checkpoints" in pointer.parts:
-                continue
-            target = verify / pointer.relative_to(source)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(pointer, target)
-        # Pull in bounded batches. This amortizes DVC process startup and
-        # remote negotiation across a run's pointers without risking argv
-        # exhaustion for a large result set.
-        pointers = [
-            pointer
-            for pointer in sorted(source.rglob("*.dvc"))
-            if (
-                pointer.is_file()
-                and ".resume" not in pointer.parts
-                and "_checkpoints" not in pointer.parts
-            )
-        ]
-        for targets in _bounded_pointer_batches(pointers, source):
-            _run(["dvc", "pull", "--force", *targets], verify)
-        result = []
-        for original in tracked:
-            restored = verify / original.relative_to(source)
-            if not restored.is_file():
-                raise RuntimeError(f"DVC pull did not restore {original.name}")
-            result.append({
-                "path": str(original.relative_to(source)),
-                "size": file_size(restored),
-            })
-        return result
-
-
 def _remote_owner(remote: str) -> str:
     """DagsHub account owning ``remote``.
 
@@ -274,6 +198,34 @@ def _configure(source: Path, token: str) -> str:
     """Configure an isolated, no-SCM DVC workspace for one worker."""
     remote = common.training_cfg().colab.dvc_remote_url
     _configure_workspace(source, token=token, remote=remote)
+    return remote
+
+
+def configure_repo_remote(root: Path, token: str) -> str:
+    """Select and authenticate the configured remote in a repository-level DVC repo.
+
+    A clone already declares its remote in the tracked ``.dvc/config``
+    (``no_scm=True``); only the credential pair belongs in the git-ignored
+    ``.dvc/config.local``. ``.env`` stays authoritative: the password is
+    re-applied on every call, so a rotated ``DVC_API_KEY`` takes effect without
+    re-initialising the workspace. Unlike :func:`_configure_workspace` this never
+    relocates the cache — a repository clone keeps its own layout.
+    """
+    from dvc.config import Config
+
+    remote = common.training_cfg().colab.dvc_remote_url
+    root = root.resolve()
+    if not (root / ".dvc").is_dir():
+        raise FileNotFoundError(f"no repository-level DVC workspace under {root}")
+    config = Config(str(root / ".dvc"))
+    with config.edit("repo") as values:
+        values["core"]["remote"] = "dagshub"
+        values["remote"]["dagshub"] = {"url": remote}
+    with config.edit("local") as values:
+        values["remote"]["dagshub"] = {
+            "auth": "basic", "user": _remote_owner(remote), "password": token,
+        }
+    (root / ".dvc" / "config.local").chmod(0o600)
     return remote
 
 
@@ -359,10 +311,10 @@ def publish_checkpoint(
             # leaves the resume pointer referring to a nonexistent remote
             # object. Push the exact native pointer explicitly.
             # One push implementation for every caller: a successful process
-            # is not sufficient evidence on its own, so _push_targets also
+            # is not sufficient evidence on its own, so push_targets also
             # requires DVC's cloud comparison to report this exact pointer in
             # sync before the resume metadata is made visible.
-            _push_targets(source, [str(native_relative)])
+            push_targets(source, [str(native_relative)])
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     # Expose the durable resume pointer only after the exact target push has
@@ -451,7 +403,7 @@ def publish_checkpoints(
                     "published while training ran)",
                     flush=True,
                 )
-                _push_targets(source, remaining)
+                push_targets(source, remaining)
             else:
                 print(
                     f"[checkpoint-dvc] all {len(native_relatives)} checkpoint "
@@ -473,7 +425,7 @@ def publish_checkpoints(
     return pointers
 
 
-def _push_targets(source: Path, targets: list[str]) -> None:
+def push_targets(source: Path, targets: list[str]) -> None:
     """Push exactly these targets and require a clean cloud comparison.
 
     The single network step, shared by the streaming publisher and the final
@@ -595,7 +547,7 @@ class _CheckpointStreamer:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
                     _configure(self.source, token)
-                    _push_targets(self.source, batch)
+                    push_targets(self.source, batch)
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         except BaseException as exc:  # a broken remote must never fail training
@@ -698,33 +650,6 @@ def stage_checkpoint(source: Path, checkpoint: Path) -> None:
         checkpoint_streamer(source).signal(str(native_pointer.relative_to(source)))
 
 
-def _pointer_outputs(source: Path, pointer: Path) -> list[Path]:
-    """Return the output paths declared by a DVC pointer.
-
-    Resume pointers are deliberately kept outside the normal DVC metadata
-    tree (under ``.resume``), so DVC itself cannot infer the source directory
-    from the pointer's location.  Reading the declared output paths gives the
-    preflight code a way to verify that a pull restored the complete object.
-    """
-    import yaml
-
-    source = source.resolve()
-    pointer = pointer.resolve()
-    pointer.relative_to(source)
-    data = yaml.safe_load(pointer.read_text(encoding="utf-8")) or {}
-    outputs: list[Path] = []
-    for entry in data.get("outs", []):
-        # DVC interprets outs.path relative to the pointer's directory, not
-        # the repository root.  This matters because resume pointers are
-        # deliberately stored under source/.resume/.
-        path = (pointer.parent / str(entry["path"])).resolve()
-        path.relative_to(source)
-        outputs.append(path)
-    if not outputs:
-        raise RuntimeError(f"DVC resume pointer has no outputs: {pointer}")
-    return outputs
-
-
 def _publish_tracked_pointer_index(
     source: Path,
     run_id: str,
@@ -735,7 +660,8 @@ def _publish_tracked_pointer_index(
 
     Worker output trees remain ignored and DVC-backed.  The tracked copies are
     only pointer metadata; each copied pointer is rewritten to restore its
-    original ``training_results/...`` target from a clean checkout.
+    original ``training_results/...`` target from a clean checkout. This writes
+    metadata and never reads (pulls) an object back.
     """
     import yaml
 
@@ -787,7 +713,6 @@ def _publish_tracked_pointer_index(
         run_id=run_id,
         worker=int(worker),
         remote=remote,
-        verified_download=True,
         pointers=pointer_records,
     )
     manifest_path = common.artifact(
@@ -800,76 +725,6 @@ def _publish_tracked_pointer_index(
     return manifest_path
 
 
-def restore_pointer(source: Path, pointer: Path) -> list[Path]:
-    """Pull and verify one previously published resume pointer.
-
-    This is the fail-fast primitive used before a trainer subprocess starts.
-    It intentionally verifies every declared output instead of merely
-    checking that ``dvc pull`` returned zero: a successful DVC command can
-    still leave an incomplete working tree when a pointer is missing or
-    malformed.
-    """
-    try:
-        token = os.environ.get("DVC_API_KEY")
-        if not token:
-            raise RuntimeError("DVC_API_KEY is required to restore a checkpoint")
-        source = source.resolve()
-        pointer = pointer.resolve()
-        pointer.relative_to(source)
-        outputs = _pointer_outputs(source, pointer)
-        _configure(source, token)
-        _run(["dvc", "pull", "--force", str(pointer.relative_to(source))], source)
-        missing = [str(path) for path in outputs if not path.is_file() and not path.is_dir()]
-        if missing:
-            raise RuntimeError(
-                f"DVC restore did not materialize outputs for {pointer.name}: "
-                + ", ".join(missing)
-            )
-        return outputs
-    except BaseException:
-        print(f"[dvc] restore_pointer traceback for {pointer}:", flush=True)
-        traceback.print_exc()
-        raise
-
-
-def restore_checkpoint(source: Path, checkpoint_root: Path) -> Path:
-    """Restore a previously DVC-pushed checkpoint tree through its pointer."""
-    source = source.resolve()
-    checkpoint_root = checkpoint_root.resolve()
-    checkpoint_root.relative_to(source)
-    pointer = common.artifact("resume_pointer", {"name": checkpoint_root.name})
-    resume_dir = pointer.parent
-    if not pointer.is_file():
-        # New asynchronous publishing writes one durable pointer per immutable
-        # ``checkpoint-N`` directory.  Restore the newest published checkpoint
-        # beneath this Trainer output root; an unfinished upload has no pointer
-        # and therefore can never be selected for resume.
-        candidates: list[tuple[int, Path]] = []
-        for candidate in sorted(resume_dir.glob("checkpoint-*.dvc")):
-            try:
-                outputs = _pointer_outputs(source, candidate)
-            except (OSError, ValueError):
-                continue
-            if len(outputs) != 1 or outputs[0].parent != checkpoint_root:
-                continue
-            try:
-                # Concurrent HPO adds a stable output-root suffix to avoid
-                # clobbering pointers from trials that share a global step.
-                step_text = candidate.stem.removeprefix("checkpoint-").split("--", 1)[0]
-                step = int(step_text)
-            except ValueError:
-                continue
-            candidates.append((step, candidate))
-        if not candidates:
-            raise FileNotFoundError(
-                f"DVC resume pointer is missing for {checkpoint_root}"
-            )
-        _, pointer = max(candidates)
-    restore_pointer(source, pointer)
-    if not checkpoint_root.is_dir() and not checkpoint_root.is_file():
-        raise RuntimeError(f"DVC restore did not materialize {checkpoint_root}")
-    return checkpoint_root
-
 def publish(source: Path, run_id: str, worker: int) -> None:
     token = os.environ.get("DVC_API_KEY")
     if not token:
@@ -881,16 +736,12 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         run_id=run_id,
         worker=int(worker),
     )
-    tracked_suffixes = {
-        ".csv", ".json", ".png", ".log", ".yaml", ".yml", ".txt",
-    }
-    excluded_dirs = DVC_EXCLUDED_DIRS
     paths = []
     for path in sorted(source.rglob("*")):
-        if not path.is_file() or path.suffix not in tracked_suffixes:
+        if not path.is_file() or path.suffix not in _TRACKED_OUTPUT_SUFFIXES:
             continue
         relative = path.relative_to(source)
-        if any(part in excluded_dirs for part in relative.parts):
+        if any(part in DVC_EXCLUDED_DIRS for part in relative.parts):
             continue
         if relative.as_posix() in {"canonical_records.csv", "gate_results.csv"}:
             continue
@@ -905,13 +756,18 @@ def publish(source: Path, run_id: str, worker: int) -> None:
             _run(["dvc", "push"], source)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-    outputs = _verify_clean_pull(source, token, remote)
+    # Write-only: the push is the deliverable. No read-back pull verifies it
+    # (DVC is never used to load), so the manifest records the pointers DVC
+    # wrote, not a re-download.
+    outputs = [
+        pointer.relative_to(source).as_posix()
+        for pointer in sorted(source.rglob("*.dvc"))
+    ]
     manifest = {
         "run_id": run_id,
         "worker": worker,
         "remote": remote,
-        "verified_download": True,
-        "outputs": outputs,
+        "pointers": outputs,
     }
     (source / "dvc_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -921,13 +777,13 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     )
     _write_dvc_event(
         source,
-        "worker_publish_verified",
+        "worker_publish_pushed",
         run_id=run_id,
         worker=int(worker),
         output_count=len(outputs),
         publication_manifest=str(publication_manifest),
     )
-    print("[dvc] clean pull verified; DagsHub DVC remote is authoritative", flush=True)
+    print("[dvc] outputs pushed; DVC is write-only storage", flush=True)
 
 def main() -> None:
     p = argparse.ArgumentParser(); p.add_argument("--source", type=Path, required=True); p.add_argument("--run-id", required=True); p.add_argument("--worker", type=int, required=True)

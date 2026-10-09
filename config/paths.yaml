@@ -44,6 +44,23 @@ paths:
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   logs_dir: "logs"                      # per-step orchestrator logs
+  # Run-output roots that are DVC-MANAGED (owner mandate 2026-10-09): their
+  # payloads live in the dagshub remote, git holds only *.dvc pointers.
+  training_profile_dir: "training_profile"
+  wandb_dir: "wandb"
+  laya_data_dir: "data/laya"
+  ablation_dir: "artifacts/abl_opt"
+  # The DVC output-root inventory by KEY (never a second spelling of a path):
+  # the sweep resolves each key through the ONE value above.
+  dvc_output_root_keys:
+    - results_dir
+    - training_results_dir
+    - embeddings_dir
+    - logs_dir
+    - training_profile_dir
+    - wandb_dir
+    - laya_data_dir
+    - ablation_dir
   # Machine-written audit findings. Tracked on purpose: this is the durable
   # evidence record for identity/gate adjudication, and the audit scripts read
   # each other's JSON here. Declared once so no script spells the path itself.

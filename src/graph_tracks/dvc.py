@@ -69,7 +69,7 @@ def snapshot(source: Path, track: str, *, remote=None, push=False, generation="f
     manifest = project / name(track, 'dvc_manifest.json')
     manifest.write_text(json.dumps({'schema': 'er-graph-dvc-v1', 'track': track,
         'payload': payload.name, 'files': sizes, 'remote_configured': bool(remote),
-        'pushed': push, 'verified_restore': False}, indent=2, sort_keys=True) + '\n')
+        'pushed': push}, indent=2, sort_keys=True) + '\n')
     _run(['add', payload.name], project)
     if remote:
         _run(['remote', 'add', '-d', 'graph-store', remote], project)
@@ -78,18 +78,18 @@ def snapshot(source: Path, track: str, *, remote=None, push=False, generation="f
         if not remote:
             raise ValueError('DVC push needs explicit remote')
         _run(['push'], project)
-    # Prove clean restore, not merely successful add/push exit codes.
-    with tempfile.TemporaryDirectory(prefix='er-graph-dvc-verify-') as tmp:
-        restored = restore(project, Path(tmp) / 'restored')
-        if inventory(restored) != sizes:
-            raise RuntimeError('DVC restore verification failed')
-    metadata = json.loads(manifest.read_text())
-    metadata['verified_restore'] = True
-    manifest.write_text(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
+    # DVC is WRITE-ONLY storage (owner mandate 2026-10-09): the push IS the
+    # deliverable. No read-back restore verifies it, and no lane loads from DVC
+    # (restore() remains an operator-only tool below).
     return project
 
 
 def restore(project: Path, output: Path) -> Path:
+    """OPERATOR-ONLY: pull one archived graph snapshot back (never a lane load).
+
+    DVC is write-only storage for every lane; this manual retrieval tool exists
+    for an operator outside the pipelines and must not be called by a lane.
+    """
     if output.exists():
         raise FileExistsError(output)
     markers = list(project.glob('*__dvc_manifest.json'))

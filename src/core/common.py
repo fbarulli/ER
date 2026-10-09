@@ -672,6 +672,16 @@ RESULTS.mkdir(parents=True, exist_ok=True)
 TRAINING_RESULTS = _path(_CFG["paths"]["training_results_dir"])
 TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
 
+
+def dvc_output_roots() -> tuple[Path, ...]:
+    """The DVC-managed output roots, resolved from their declared path keys.
+
+    The keys are declared once in ``config/paths.yaml``; resolving them HERE
+    keeps a single spelling of each path (a root is referenced by key, never
+    re-typed into the inventory).
+    """
+    return tuple(_path(_CFG["paths"][key]) for key in _CFG["paths"]["dvc_output_root_keys"])
+
 # Machine-written audit findings: the identity/gate adjudication evidence and
 # the generated .md report beside each JSON. ONE declaration, resolved here, so
 # the audit scripts cannot drift apart. These files are cross-read (one script's

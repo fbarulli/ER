@@ -206,6 +206,14 @@ class DataPathsSpec(BaseModel):
     models_dir: str
     embeddings_dir: str
     logs_dir: str
+    # Run-output roots that are DVC-managed (owner mandate 2026-10-09): their
+    # payloads live in the dagshub remote and git keeps only *.dvc pointers.
+    # ``dvc_output_root_keys`` names them BY KEY so no path is spelled twice.
+    training_profile_dir: str
+    wandb_dir: str
+    laya_data_dir: str
+    ablation_dir: str
+    dvc_output_root_keys: list[str]
     # Machine-written audit findings (JSON evidence + its generated .md
     # report). Declared HERE so no script hardcodes the path: six audit
     # scripts used to spell `identity/findings/<name>` independently, and
@@ -258,7 +266,11 @@ class DvcPublicationPointer(BaseModel):
 
 
 class DvcPublicationManifest(BaseModel):
-    """Pydantic contract for the tracked DVC publication index."""
+    """Pydantic contract for the tracked DVC publication index.
+
+    DVC is write-only storage (owner mandate 2026-10-09): this index records the
+    pointers that were PUSHED, never a read-back verification.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -266,7 +278,6 @@ class DvcPublicationManifest(BaseModel):
     run_id: str = Field(min_length=1)
     worker: int = Field(ge=1)
     remote: str = Field(min_length=1)
-    verified_download: bool
     pointers: list[DvcPublicationPointer] = Field(min_length=1)
 
 

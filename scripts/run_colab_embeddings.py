@@ -19,6 +19,12 @@ def _setup_layout():
     return training_cfg().preparation.graph_setup
 
 
+def publish_results(paths, message: str) -> None:
+    """Default publisher: DVC-track, push and point at the paths (run_retention)."""
+    from model_tracks.run_retention import publish_result_paths
+    publish_result_paths(paths)
+
+
 def complete_local_handoff(local, request):
     from model_tracks.preflight import preflight
     validate_result(local, request)
@@ -38,9 +44,8 @@ def complete_local_handoff(local, request):
 
 
 def persist_embeddings(local, handoff, publisher=None, *, additional_files=None, namespace="embedding_job", prefix="embeddings"):
-    """Save the verified embedding tar.zst with the existing Git artifact flow."""
+    """Save the verified embedding tar.zst through the DVC-backed publisher."""
     from core.portable_archive import ByteCount
-    from model_tracks.publish import push_artifacts
     setup = local.parent
     layout = _setup_layout()
     files = {p.relative_to(setup).as_posix(): p for p in (
@@ -50,8 +55,11 @@ def persist_embeddings(local, handoff, publisher=None, *, additional_files=None,
         if p.is_file()}
     files.update(additional_files or {})
     files['local_handoff.json'] = handoff
-    identity = ByteCount(json.dumps({key: file_size(path) for key, path in files.items()},
-                                        sort_keys=True).encode()).total
+    # Structural identity (names + byte sizes): the retired sha256 token became a
+    # ByteCount total, so render it as text before truncating it into the tag
+    # (4cc0af9 left the slice on an int and broke every persist call).
+    identity = str(ByteCount(json.dumps({key: file_size(path) for key, path in files.items()},
+                                        sort_keys=True).encode()).total)
     run_tag = prefix + '-' + identity[:24]
     folder = TRAIN_ROOT / 'results' / namespace / run_tag
     folder.mkdir(parents=True, exist_ok=True)
@@ -73,12 +81,10 @@ def persist_embeddings(local, handoff, publisher=None, *, additional_files=None,
         expected = {(item['path'], item['size']) for item in manifest['included']}
         if {(item.path, item.size) for item in verified.included} != expected:
             raise ValueError('existing embedding archive differs from validated result')
-    if archive.stat().st_size >= 100 * 1024**2:
-        raise ValueError('Embedding archive exceeds the GitHub regular-file limit; use DVC publisher')
-    print(f'[{prefix}/local] saving verified tar.zst to GitHub: {archive}', flush=True)
+    print(f'[{prefix}/local] saving verified tar.zst through DVC: {archive}', flush=True)
     kind = 'cache' if prefix == 'embeddings' else 'results'
-    (publisher or push_artifacts)([archive], f'{prefix}: save verified {kind} {run_tag}')
-    print(f'[{prefix}/local] GitHub save complete: {archive}', flush=True)
+    (publisher or publish_results)([archive], f'{prefix}: save verified {kind} {run_tag}')
+    print(f'[{prefix}/local] DVC save complete: {archive}', flush=True)
     return archive
 
 
@@ -167,12 +173,11 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
                 archive.add(tokens,arcname='prepared_text.npz')
                 archive.add(TRAIN_ROOT/'src/core/encoding_inputs.py',arcname='encoding_inputs.py')
                 archive.add(TRAIN_ROOT / 'scripts/encode_prepared_embeddings.py', arcname='encode.py')
-            from model_tracks.publish import push_artifacts
             stored = TRAIN_ROOT / 'results/embedding_job/inputs' / f'embeddings-{request_size}.tar.zst'
             stored.parent.mkdir(parents=True, exist_ok=True)
             import shutil
             shutil.copy2(package, stored)
-            (publisher or push_artifacts)([stored], f'embeddings: save prepared {device} inputs {request_size}')
+            (publisher or publish_results)([stored], f'embeddings: save prepared {device} inputs {request_size}')
             remote_package = backend.REMOTE_ROOT + '/' + stored.relative_to(TRAIN_ROOT).as_posix()
             # The frozen checkpoint already ships in Git. The worker verifies
             # its actual bytes against the local request before GPU encoding.
@@ -188,6 +193,11 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
             backend.run_colab_exec_stream(backend.SESSION,
                 f'import pathlib\npathlib.Path({job!r}).mkdir(parents=True)\n',
                 timeout=120, log_name='embedding_directory', retry_safe=True)
+            # The input package is an INPUT the lane consumes: materialize it on
+            # the VM by direct upload. DVC is write-only storage (no lane loads).
+            backend._upload_with_retries(
+                stored, remote_package,
+                timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
             script = (
                 'import pathlib, subprocess, sys, tarfile\n'
                 f'sys.path.insert(0, {backend.REMOTE_ROOT + "/src"!r})\n'
@@ -195,7 +205,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
                 'from graph_tracks.data import file_size\n'
                 f'root = pathlib.Path({job!r})\n'
                 f"package = pathlib.Path({remote_package!r})\n"
-                f"assert file_size(package) == {file_size(package)!r}, 'Git input package size mismatch'\n"
+                f"assert file_size(package) == {file_size(package)!r}, 'input package size mismatch'\n"
                 "with tar_archive(package) as archive:\n"
                 "    archive.extractall(root, filter='data')\n"
                 "subprocess.run([sys.executable, str(root/'encode.py'), '--request', str(root/'request.json'), "

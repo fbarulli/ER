@@ -2555,8 +2555,11 @@ def main() -> None:
             runtime_paths: tuple[str, ...] = ()
             if suite_git_inputs is not None:
                 from core.common import resolve_model
+                # The immutable input transport is materialized on the VM by a
+                # direct upload (DVC is write-only: no lane loads from it), so the
+                # checkout needs only the text-model directory.
                 runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
-                                      for path in (suite_git_inputs, Path(resolve_model(suite.text_model))))
+                                      for path in (Path(resolve_model(suite.text_model)),))
             validate_runtime_checkout(extra_paths=runtime_paths)
             ensure_session()
             # The session exists now, so the prewarmed upload can run for real.  It
