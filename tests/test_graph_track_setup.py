@@ -25,6 +25,32 @@ def test_listing_split_and_negative_accounting():
                for r in pairs.itertuples(index=False))
 
 
+def test_real_gate_negatives_fill_the_scored_halves_within_split():
+    """The scored halves get REAL gate hard_no negatives, same-split only.
+
+    A cross-split hard_no pair would score a trained-on endpoint and a
+    non-hard_no row is not a negative; only the same-split hard_no pair may
+    enter, capped by the sampler target.
+    """
+    from graph_tracks.setup import ScoredNegativeSampler
+
+    catalog = pd.DataFrame({'sku_id': ['a', 'b', 'c'],
+                            'gtin': ['1', '2', '3']})
+    gates = pd.DataFrame({
+        'gtin1': ['1', '1', '1'],
+        'gtin2': ['2', '3', '2'],
+        'gate_decision': ['hard_no', 'hard_no', 'proceed'],
+    })
+    sampler = ScoredNegativeSampler(gates, target=1, seed=0, source='test')
+    _, _, pairs, accounting = listing_contract(
+        catalog, pd.DataFrame(), {'train': {'1', '2'}, 'dev': {'3'}},
+        negative_sampler=sampler)
+    rows = list(pairs.itertuples(index=False, name=None))
+    assert ('a', 'b', 0, 'train') in rows
+    assert all(not (r.sku_id1 == 'a' and r.sku_id2 == 'c') for r in pairs.itertuples())
+    assert accounting['gate_negative_pairs'] == 1
+
+
 def test_setup_rejects_positive_split_leakage():
     catalog = pd.DataFrame({'sku_id': ['a', 'b'], 'gtin': ['1', '2']})
     labels = pd.DataFrame({'gtin1': ['1'], 'gtin2': ['2'], 'true_label': ['1']})

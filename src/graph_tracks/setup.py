@@ -3,6 +3,8 @@
 Derives the same component split as text training. Labeled entity pairs use
 the lexically first listing per entity; same-entity listings form positive
 chains. Cross-split negatives are excluded and counted, never relabeled.
+Real gate hard_no negatives are sampled per split so the scored halves carry
+the support the SSOT floor requires.
 
 One responsibility per unit:
 
@@ -11,6 +13,8 @@ One responsibility per unit:
   _eligible_listing_groups   retained catalog + its listing groups
   _apply_source_labels       labeled-pair supervision, one row at a time
   _chain_pairs               trusted same-entity positive chains
+  ScoredNegativeSampler      real gate hard_no negatives, sampled per split
+  _apply_gate_negatives      the sampled negatives into the pair ledger
   listing_contract           the pairing orchestrator
   setup                      the artifact orchestrator (stages below)
 
@@ -64,6 +68,10 @@ _LOG = RunLogger(__name__)
 
 #: The pipeline stage these rows belong to (core.tracing ``stage`` column).
 STAGE = "graph_setup"
+
+#: The gate decision that marks a REAL different-GTIN identity negative
+#: (``core.schemas.GateDecision`` domain; the value the gate itself labels).
+GATE_NEGATIVE_DECISION = "hard_no"
 
 
 def _setup_layout():
@@ -363,12 +371,115 @@ def _apply_source_labels(labels: pd.DataFrame, groups, roles,
     return source_axes
 
 
-def listing_contract(catalog, labels, populations, trace: TraceRun | None = None):
+class ScoredNegativeSampler:
+    """Sample REAL gate ``hard_no`` negatives into the graph scored pairs.
+
+    The prepared pair file carries almost no negatives (the labeled source
+    ships twelve), so the scored dev/test halves cannot fit a Youden threshold
+    or report a false-positive rate. ``data/gate_results.csv`` (the declared
+    frozen input) owns the REAL different-GTIN negative pool; this class
+    samples a balanced slice per split, keeping ONLY pairs whose two endpoints
+    share one split (a cross-split negative would score a trained-on endpoint).
+    The per-split cap is the SSOT negative target passed in as ``target`` —
+    never a literal here — and the draw is seeded, so the emitted pair file is
+    byte-reproducible.
+    """
+
+    def __init__(self, gates: pd.DataFrame, *, target: int, seed: int,
+                 source: str) -> None:
+        # The class owns "REAL gate negative": the hard_no decision is the gate's
+        # own label (core.schemas.GateDecision), not a caller-chosen filter.
+        self._gates = gates.loc[gates['gate_decision'].eq(GATE_NEGATIVE_DECISION)]
+        self._target = int(target)
+        self._seed = int(seed)
+        self._source = str(source)
+
+    @classmethod
+    def from_config(cls, gates: pd.DataFrame, *, source: str) -> "ScoredNegativeSampler":
+        """Build from the config SSOT (negative target + determinism seed)."""
+        from core.common import SEED, training_cfg
+        target = int(training_cfg().evaluation.robust_validation.min_test_negatives)
+        return cls(gates, target=target, seed=SEED, source=source)
+
+    def _same_split_pool(self, roles: dict[str, str],
+                         groups: dict[str, list[str]]) -> dict[str, list[tuple[str, str]]]:
+        """Same-split hard_no entity pairs, deduped, keyed by split role."""
+        from training.folds import normalize_gtin
+        pools: dict[str, list[tuple[str, str]]] = {}
+        seen: set[tuple[str, str]] = set()
+        for row in self._gates.itertuples(index=False):
+            left, right = normalize_gtin(row.gtin1), normalize_gtin(row.gtin2)
+            split = roles.get(left)
+            if split is None or roles.get(right) != split:
+                continue
+            if left not in groups or right not in groups:
+                continue
+            key = (left, right) if left < right else (right, left)
+            if key in seen:
+                continue
+            seen.add(key)
+            pools.setdefault(split, []).append(key)
+        return pools
+
+    def sample(self, roles: dict[str, str],
+               groups: dict[str, list[str]]) -> list[tuple[str, str, str]]:
+        """Up to ``target`` same-split negatives per split, as listing pairs."""
+        import numpy as np
+        pools = self._same_split_pool(roles, groups)
+        rng = np.random.default_rng(self._seed)
+        rows: list[tuple[str, str, str]] = []
+        for split in sorted(pools):
+            keys = sorted(pools[split])
+            take = min(self._target, len(keys))
+            for index in rng.choice(len(keys), size=take, replace=False):
+                left, right = keys[int(index)]
+                rows.append((groups[left][0], groups[right][0], split))
+        return rows
+
+    def trace(self, sampled: list[tuple[str, str, str]]) -> dict:
+        """The supply census this pass emitted (never a silent no-op)."""
+        by_split: Counter = Counter(split for _, _, split in sampled)
+        return {
+            'step': 'negatives', 'substep': 'gate_hard_no_sampled',
+            'reason': (
+                'real different-gtin gate hard_no pairs are sampled per split up '
+                'to the SSOT negative target, keeping only pairs whose endpoints '
+                'share one split'
+            ),
+            'detail': {
+                'target_per_split': self._target,
+                'candidates': int(len(self._gates)),
+                'sampled_by_split': dict(sorted(by_split.items())),
+            },
+            'source': self._source,
+        }
+
+
+def _apply_gate_negatives(sampler: ScoredNegativeSampler, groups,
+                          roles: dict[str, str], ledger: _PairLedger,
+                          trace: TraceRun | None = None) -> int:
+    """Add the sampled REAL gate-negative pairs to the ledger; return the count."""
+    sampled = sampler.sample(roles, groups)
+    for left, right, split in sampled:
+        ledger.add(left, right, 0, split,
+                   {'kind': 'gate_hard_no_negative', 'augmentation': 'not_applicable'})
+    if trace is not None and sampled:
+        row = sampler.trace(sampled)
+        trace.add(row['step'], row['substep'],
+                  in_count=int(row['detail']['candidates']),
+                  out_count=len(sampled), reason=row['reason'],
+                  detail=row['detail'], source=row['source'])
+    return len(sampled)
+
+
+def listing_contract(catalog, labels, populations, trace: TraceRun | None = None, *,
+                     negative_sampler: ScoredNegativeSampler | None = None):
     """Pair the catalog under the shared split policy; return frames + accounts.
 
     ``trace`` (optional) receives this unit's BATCH-grain rows; the stage rows
     that summarize the accounting are emitted by :func:`setup`, which holds the
-    frames those counts describe.
+    frames those counts describe. ``negative_sampler`` (optional) supplies the
+    REAL gate hard_no negatives the scored halves need to carry support.
     """
     from training.folds import normalize_gtin
     roles = _normalize_split_roles(populations)
@@ -376,10 +487,16 @@ def listing_contract(catalog, labels, populations, trace: TraceRun | None = None
     ledger = _PairLedger()
     chain_pairs = _chain_pairs(groups, roles, ledger, frame, trace)
     source_axes = _apply_source_labels(labels, groups, roles, ledger, trace)
+    gate_negative_pairs = (
+        _apply_gate_negatives(negative_sampler, groups, roles, ledger, trace)
+        if negative_sampler is not None else 0
+    )
     pairs = ledger.frame()
     # Trace-only bookkeeping rides in DataFrame attrs, NOT in `accounting`: the
-    # accounting dict is serialized verbatim into the setup manifest, so adding
-    # a key here would change an emitted artifact's bytes.
+    # accounting dict is serialized verbatim into the setup manifest, so a key
+    # that is not a manifest fact would change an emitted artifact's bytes.
+    # ``gate_negative_pairs`` below IS a manifest fact (the real-negative supply
+    # the scored halves carry), so it belongs in the accounting.
     pairs.attrs['chain_pairs_accepted'] = int(chain_pairs)
     accounting = {
         'excluded_unassigned_listings': excluded,
@@ -388,6 +505,7 @@ def listing_contract(catalog, labels, populations, trace: TraceRun | None = None
         'missing_axes': sorted({'difficulty', 'masking', 'gendata', 'gate_evidence'} - set(source_axes)),
         'augmentation': ('not_applicable: graph track uses fixed labels '
                          'without generated/masked pairs'),
+        'gate_negative_pairs': int(gate_negative_pairs),
         'pair_lineage': _pair_lineage_records(ledger),
     }
     return frame, assignments, pairs, accounting
@@ -423,8 +541,15 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     train, dev, test = derive_holdout(data['pos'], data['row_bc'],
                                       dict(training_cfg().split), seed=SEED)
     labels = pd.read_csv(F['labeled_pairs'], dtype=str, keep_default_na=False)
+    # The scored halves need REAL negatives; the labeled source alone cannot
+    # supply the SSOT floor. The declared gate_results input owns the real
+    # different-GTIN pool, sampled per split up to the configured target.
+    gates = pd.read_csv(F['gate_results'], dtype=str, keep_default_na=False)
+    negative_sampler = ScoredNegativeSampler.from_config(
+        gates, source=str(F['gate_results']))
     frame, assignments, pairs, accounting = listing_contract(
-        catalog, labels, {'train': train, 'dev': dev, 'test': test}, trace)
+        catalog, labels, {'train': train, 'dev': dev, 'test': test}, trace,
+        negative_sampler=negative_sampler)
     _record_supervision(trace, catalog, frame, labels, pairs, accounting)
     timing.mark('splits_and_listing_contract')
     # Validate before publishing any setup artifacts.
@@ -650,7 +775,8 @@ def _write_setup_manifest(output: Path, accounting: dict, baseline_size: int,
         'text_checkpoint_status': 'local baseline; fine-tuning history not inferred',
         'split_protocol': 'training.folds.derive_holdout',
         'pair_protocol': 'first listing per labeled entity plus same-entity positive chains',
-        'negative_policy': 'same-split labeled negatives only',
+        'negative_policy': ('same-split labeled negatives plus a per-split sample '
+                            'of real gate hard_no negatives (SSOT negative target)'),
         'pair_counts': {split: {str(label): int(count) for label, count in group.label.value_counts().items()}
                         for split, group in pairs.groupby('split')},
         **accounting,

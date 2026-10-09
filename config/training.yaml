@@ -816,7 +816,15 @@ evaluation:
     repeats: 3             # independent seeded assignments, 15 scored folds total
     seed: 42
     min_slice_size: 25     # suppress unstable brand/category slices
-    min_test_negatives: 5  # reject/reseed a fold with fewer test negatives
+    # RE-PINNED 2026-10-09 (was 5): the statistical knee for a scored half to
+    # fit a Youden threshold and report a false-positive rate. The gate
+    # hard_no pool supports up to 100 real negatives in EVERY scored half
+    # (measured on data/gate_results.csv by endpoint split: train 1666, dev
+    # 457, test 463; the rest straddle splits and are excluded), so 100 is
+    # achievable and is the ONE floor graph_tracks.setup samples to (the same
+    # value the preflight and the fold guards read). Raising it above the
+    # pool's per-split support would make the floor unmeetable.
+    min_test_negatives: 100
     max_split_attempts: 100 # bounded reseed/re-shuffle attempts for strict CV
     dimensions: [brand, category, attribute]
     operating_thresholds:
