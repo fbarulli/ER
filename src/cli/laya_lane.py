@@ -354,10 +354,6 @@ def kernel_slug(decision_kind: str) -> str:
     return _transport_factory().kernel_slug(decision_kind)
 
 
-def container_session_id(container: str) -> int | None:
-    return LayaTransportFactory.container_session_id(container)
-
-
 def recorded_session_id(slug: str) -> int | None:
     return _transport_factory().recorded_session_id(slug)
 
@@ -440,15 +436,6 @@ class LayaLane:
             raise RuntimeError("push is a kaggle-lane operation")
         return push_kaggle_kernel(stage_dir, execute=execute,
                                   activate=activate)
-
-    def run(self, args: argparse.Namespace) -> dict[str, Any]:
-        """Dispatch the parsed main() args through this lane."""
-        if args.decision not in DECISION_BINDINGS:
-            raise ValueError(f"unknown decision kind: {args.decision!r}")
-        if args.kind != self.kind:
-            raise ValueError(f"--kind {args.kind!r} does not match the "
-                             f"lane kind {self.kind!r}")
-        return self.stage(args.decision, input_override=args.decision_input)
 
 
 # ── main ───────────────────────────────────────────────────────────────────

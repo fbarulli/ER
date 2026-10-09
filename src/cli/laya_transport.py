@@ -66,14 +66,6 @@ class LayaTransportFactory:
                 f"before addressing {decision_kind!r}")
         return slug
 
-    @staticmethod
-    def container_session_id(container: str) -> int | None:
-        """The kernel session id inside ``KAGGLE_CONTAINER_NAME``."""
-        parts = str(container or "").rsplit("-", 2)
-        if len(parts) == 3 and parts[1].isdigit():
-            return int(parts[1])
-        return None
-
     def recorded_session_id(self, slug: str) -> int | None:
         """The recorded session id for a pushed kernel (``None`` if it holds
         only the kernel-name fallback handle). ONE reader: the shared owner."""

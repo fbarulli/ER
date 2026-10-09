@@ -218,8 +218,8 @@ DECISION_BINDINGS: dict[str, dict[str, Any]] = {
     "holdout-eval": {
         # Corpus-grain like the two finetune kinds: the component-disjoint
         # holdout rows (state + expected + stratum) are the contract, built by
-        # stage_holdout_dataset_payload. Registered so `LayaLane.run()` accepts
-        # the kind; `LayaLane.stage()` routes it to stage_holdout_eval_kernel.
+        # stage_holdout_dataset_payload; `LayaLane.stage()` routes the kind to
+        # stage_holdout_eval_kernel.
         "wanted_columns": ("state", "questions", "expected"),
         "state_column": "state",
         "record_columns": None,
