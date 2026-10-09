@@ -100,11 +100,11 @@ def test_kaggle_kernel_scripts_resolve_companions_through_the_shared_rule():
 
 
 def test_fetched_output_reader_resolves_the_companion_through_the_shared_rule():
-    """The fetched-output reader trusts the manifest's recorded size only."""
+    """The fetched-output reader resolves its archive through the SSOT identity."""
     from cli.kaggle_outputs import KaggleOutputs
 
     source = inspect.getsource(KaggleOutputs.fetch_kernel_output)
-    assert 'manifest.get("archive_size")' in source
+    assert 'lane.kernel_identity(kind, spec)' in source
     # no digest companion is read back at the fetch boundary
     assert '.sha' + '256' not in source
     assert 'archive_name + spec.files' not in source

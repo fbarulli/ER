@@ -47,3 +47,12 @@ def test_explicit_cpu_smoke_encodes_without_cuda(tmp_path, monkeypatch):
                                   '--output',str(output),'--device','cpu'])
     module.main()
     assert output.is_file()
+    # the export records the request's structural census (name/size/mtime_ns,
+    # never a byte length) and the transport token is the delivered file's own
+    # st_size, so the output is never read back just to re-measure it.
+    with np.load(output, allow_pickle=False) as published:
+        metadata = json.loads(str(published['metadata']))
+    assert metadata['request_census'] == {
+        'name': source.name, 'size': source.stat().st_size,
+        'mtime_ns': source.stat().st_mtime_ns}
+    assert output.with_suffix('.size').read_text() == str(output.stat().st_size) + '\n'
