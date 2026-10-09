@@ -160,7 +160,7 @@ masking_profiles:
 tracking:
   wandb:
     project: "e-r"
-    mode: "offline"
+    mode: "online"
 
 # ── Kaggle dataset/export transport lane ───────────────────────────────────
 # Parallel dataset/transport lane (branch kaggle-lane): packages/uploads
@@ -408,7 +408,7 @@ colab:
   # names are the lane's own injection contract.
   wandb:
     project: "e-r"
-    mode: "offline"
+    mode: "online"
     api_key_env: "WANDB_API_KEY"
     run_name_env: "WANDB_RUN_NAME"
     dir_env: "WANDB_DIR"
