@@ -104,6 +104,15 @@ class LayaTransportFactory:
         return KaggleKernels.stop_kernel(slug, which=which, execute=execute,
                                          wait=wait)
 
+    @staticmethod
+    def delete_kaggle_kernel(slug: str, *, execute: bool = False) -> dict[str, Any]:
+        """First-class deletion of a pushed laya kernel by slug.
+
+        Hands straight to the shared owner (``KaggleKernels.delete_kernel``),
+        which releases a live session before the SDK delete; dry-run gated.
+        """
+        return KaggleKernels.delete_kernel(slug, execute=execute)
+
     def push_kaggle_kernel(self, stage_dir: Path, *, execute: bool,
                            activate: bool = True) -> dict[str, Any]:
         """`kaggle kernels push` a staged payload, `--execute`-gated."""

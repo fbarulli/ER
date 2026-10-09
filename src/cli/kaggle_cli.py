@@ -17,7 +17,7 @@ class KaggleCLI:
         parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                             "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
                             "train-kernel", "embed-kernel", "embed-objective", "finalize-kernel",
-                            "kernel-logs", "fetch-results", "stop", "supervise", "autowatch",
+                            "kernel-logs", "fetch-results", "stop", "delete", "supervise", "autowatch",
                             "kernel-stream", "chain"],
                             default="package")
         parser.add_argument("--dataset-csv", type=Path, default=None,
@@ -199,6 +199,16 @@ class KaggleCLI:
             print(json.dumps(lane.stop_kernel(slug=resolved, which=args.kernel,
                                          execute=args.execute,
                                          wait=not args.no_wait), indent=2), flush=True)
+            return
+        if args.what == "delete":
+            spec = lane._spec()
+            identity = lane.kernel_identity(args.kernel, spec)
+            resolved = args.slug or identity.slug(spec)
+            print(json.dumps(lane.delete_kernel(resolved, execute=args.execute),
+                             indent=2), flush=True)
+            if not args.execute:
+                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to "
+                      "delete the kernel", flush=True)
             return
         spec = lane._spec()
         if args.what == "submission":
