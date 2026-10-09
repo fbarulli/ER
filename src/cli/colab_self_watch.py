@@ -37,17 +37,20 @@ def _self_watch_root(run_id: str) -> Path:
     """Receipt + captured-log folder for one watcher (lane receipts roof)."""
     return hub().TRAINING_RESULTS / f"self_watch_{run_id}"
 
-def _session_listed() -> bool:
+def _session_listed(session: str | None = None) -> bool:
     """Read the session state through the exact surface main()/stop() use.
 
     An unreachable CLI means unknown state, which must default to live: a
     false 'absent' would forfeit the release guarantee the watcher exists for.
+    ``session`` names the session to look for; the launcher's own session is the
+    default, and the release path asks for the one it is stopping by name.
     """
+    name = session if session is not None else hub().SESSION
     try:
         result = hub().colab("sessions", check=False, timeout=30)
     except (subprocess.SubprocessError, OSError):
         return True
-    return hub().SESSION in (result.stdout or "")
+    return name in (result.stdout or "")
 
 def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     """Detach the release/delivery self-watch for one executed remote run.

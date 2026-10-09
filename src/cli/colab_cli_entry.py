@@ -7,9 +7,12 @@ keep-alive child use the same writable state, history, and logging behavior.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -115,6 +118,108 @@ def _token_config_path(upstream_path: str) -> str:
     return str(project_token)
 
 
+def _attempt(action, description: str) -> None:
+    """Run one best-effort teardown step, logging any failure in full."""
+    try:
+        action()
+    except Exception:
+        logging.exception("colab-cli entrypoint: %s failed", description)
+
+
+def _harden_runtime_stop(runtime_module) -> None:
+    """Close the kernel client's channels even when its manager is gone.
+
+    Upstream ``ColabRuntime.stop()`` reaches straight into
+    ``self._kernel_client._manager.client``.  ``_manager`` can be None (a lost
+    connection tears it down), and then the AttributeError is caught and logged
+    while EVERY close in the same ``try`` is skipped -- the exec process keeps
+    its websocket open, never exits, and the launcher waits out the full stage
+    timeout before killing it.  Close whatever still exists, each step guarded
+    and logged with its traceback, and never raise from teardown.
+    """
+    runtime_class = runtime_module.ColabRuntime
+    if getattr(runtime_class, "_er_hardened_stop", False):
+        return
+
+    def stop(self, shutdown_kernel: bool = False) -> None:
+        client = getattr(self, "_kernel_client", None)
+        if client is None:
+            return
+        manager = getattr(client, "_manager", None)
+        channel_client = None
+        if manager is not None:
+            try:
+                channel_client = manager.client
+            except Exception:
+                logging.exception("colab-cli entrypoint: manager.client unavailable")
+        if channel_client is not None:
+            _attempt(channel_client.stop_channels, "stop_channels")
+            kernel_socket = getattr(channel_client, "kernel_socket", None)
+            if kernel_socket is not None:
+                _attempt(kernel_socket.close, "kernel_socket.close")
+        else:
+            # No manager-owned channel client to close: fall back to the
+            # client's own stop path so a fork with another close route still
+            # runs it. ``_own_kernel`` is False, so no kernel is shut down here.
+            _attempt(lambda: client.stop(shutdown_kernel=False), "kernel client stop")
+        if shutdown_kernel and manager is not None:
+            _attempt(lambda: manager.shutdown_kernel(now=True), "shutdown_kernel")
+
+    runtime_class.stop = stop
+    runtime_class._er_hardened_stop = True
+
+
+def _release_session(session_name: str) -> int:
+    """Unassign one session server-side, independent of the CLI's own stop()."""
+    from colab_cli.common import state
+
+    record = state.store.get(session_name)
+    endpoint = getattr(record, "endpoint", None)
+    verdict: dict[str, object] = {"session": session_name, "endpoint": endpoint}
+    if not endpoint:
+        verdict.update(released=False, reason="no local session record")
+        print(json.dumps(verdict))
+        return 0
+    try:
+        assigned = {assignment.endpoint for assignment in state.client.list_assignments()}
+    except BaseException as exc:
+        traceback.print_exc()
+        verdict.update(released=False, reason=f"list_assignments failed: {exc!r}")
+        print(json.dumps(verdict))
+        return 1
+    if endpoint in assigned:
+        try:
+            state.client.unassign(endpoint)
+        except BaseException as exc:
+            traceback.print_exc()
+            verdict.update(released=False, reason=f"unassign failed: {exc!r}")
+            print(json.dumps(verdict))
+            return 1
+        verdict.update(released=True, action="unassigned")
+    else:
+        verdict.update(released=True, action="already_absent")
+    state.store.remove(session_name)
+    print(json.dumps(verdict))
+    return 0
+
+
+def _register_release_command(app) -> None:
+    """Add the launcher's own stop-by-name command to the CLI app.
+
+    ``colab stop`` depends on the CLI's local record and its kernel-client
+    teardown; this command releases the VM server-side from the recorded
+    endpoint, so a failed CLI stop cannot leave the VM held open.
+    """
+    import typer
+
+    @app.command(name="release-session")
+    def release_session(
+        session: str = typer.Option(..., "-s", "--session", help="Session name"),
+    ) -> None:
+        """Release a session by name without the CLI's stop() path."""
+        raise typer.Exit(_release_session(session))
+
+
 def main() -> None:
     # The CLI's native dependencies are built for its own interpreter, so a
     # wrapper started under a different python hands over before importing.
@@ -143,7 +248,13 @@ def main() -> None:
 
     session_commands.spawn_keep_alive = _spawn_keep_alive
 
+    import colab_cli.runtime as runtime_module
+
+    _harden_runtime_stop(runtime_module)
+
     from colab_cli.cli import app
+
+    _register_release_command(app)
 
     sys.argv[0] = "colab"
     app()

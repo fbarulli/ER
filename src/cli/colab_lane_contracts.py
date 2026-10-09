@@ -104,11 +104,16 @@ class ColabLaneBase:
         return self.surface._parse_remote_json(output)
 
     def transit_fatal(self, detail: str) -> bool:
-        lowered = str(detail).lower()
-        return (
-            "connection was lost" in lowered
-            or f"session '{self.session}' not found".lower() in lowered
-        )
+        """Whether a transport failure is any control-channel loss.
+
+        The markers live once, in cli.colab_reconnect: this contract only says
+        that both a transient drop and a vanished session are fatal to the
+        lane's poll, which is what its caller does with the answer.
+        """
+        from cli.colab_reconnect import ControlChannelLoss, ControlChannelRecovery
+
+        return ControlChannelRecovery.classify(
+            self.session, str(detail)) is not ControlChannelLoss.OTHER
 
     @staticmethod
     def checkout_relative_guard(value: str, *, message: str) -> None:
