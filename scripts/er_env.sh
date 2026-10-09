@@ -64,24 +64,39 @@ cmd_venv() {
   printf '%s\n' "$shared"
 }
 
+# Drop the obsolete `.venv-link` alias, but only when git does not track it.
+# Some branches still commit it; deleting a tracked file would leave that
+# worktree permanently dirty, so we leave it and warn instead.
+drop_legacy_venv_link() {
+  local root="$1"
+  if git -C "$root" ls-files --error-unmatch -- .venv-link >/dev/null 2>&1; then
+    printf 'er_env: WARNING: %s/.venv-link is tracked on this branch; leaving it (run: git rm --cached .venv-link)\n' "$root" >&2
+  else
+    rm -f "$root/.venv-link"
+  fi
+}
+
 cmd_link() {
   local root main_root shared target
   root="$(worktree_root "${1:-}")"
   main_root="$(main_worktree_root "${1:-}")"
   shared="$main_root/.venv"
   [[ -x "$shared/bin/python" ]] || die "shared venv missing: $shared/bin/python"
-  target="$root/.venv"
   if [[ "$root" == "$main_root" ]]; then
-    : # the main worktree owns $shared as a real directory
-  elif [[ -L "$target" ]]; then
+    # The main worktree owns $shared as a real directory; there is no link to make.
+    drop_legacy_venv_link "$root"
+    printf 'er_env: main worktree owns %s; no link needed\n' "$shared"
+    return 0
+  fi
+  target="$root/.venv"
+  if [[ -L "$target" ]]; then
     [[ "$(readlink -f "$target")" == "$(readlink -f "$shared")" ]] || ln -sfn "$shared" "$target"
   elif [[ -e "$target" ]]; then
     die "$target exists and is not a symlink; refusing to clobber a real venv"
   else
     ln -s "$shared" "$target"
   fi
-  # .venv-link was a redundant second name for the same env; drop it.
-  rm -f "$root/.venv-link"
+  drop_legacy_venv_link "$root"
   printf 'er_env: %s -> %s\n' "$target" "$shared"
 }
 
