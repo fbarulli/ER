@@ -439,6 +439,26 @@ laya_runtime_preflight()
 '''
 
 
+class HpoArtifactPolicy:
+    """What an HPO trial retains: configs + results, never weights it cannot use.
+
+    A trial is scored by its dev metrics and is never resumed (``run_trial``
+    wipes its output dir), so the resumable per-epoch checkpoint (model +
+    optimizer + scheduler), the per-epoch HF ``checkpoint_latest`` snapshot and
+    the ``best.pt`` file have no consumer and only fill the size-capped
+    ``/kaggle/working``. ``save_each_epoch=False`` disables all three; the final
+    model ``laya.finetune`` writes into the trial dir IS the champion result and
+    is kept, and ``keep_best`` still restores the best epoch into it.
+    """
+
+    #: Control overrides baked into the HPO trial's FINETUNE_CONTROL (SSOT).
+    CONTROL_OVERRIDES = {"save_each_epoch": False, "resume": False}
+
+    @classmethod
+    def apply(cls, control: dict[str, Any]) -> dict[str, Any]:
+        return {**control, **cls.CONTROL_OVERRIDES}
+
+
 def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
                         budget_trials: int, budget_jobs: int,
                         storage: ResolvedStudy | None,
@@ -471,7 +491,8 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "BASE_MODEL_DIR": spec.base_model_dir,
         "FINETUNE_DEVICE": spec.finetune.device,
         "BASE_FINETUNE_CONFIG": repr(laya_lane.finetune_config(spec)),
-        "BASE_FINETUNE_CONTROL": repr(laya_lane.finetune_control(spec)),
+        "BASE_FINETUNE_CONTROL": repr(HpoArtifactPolicy.apply(
+            laya_lane.finetune_control(spec))),
         "HPO_SPACE": repr(space),
         "N_TRIALS": str(budget_trials),
         "N_JOBS": str(budget_jobs),

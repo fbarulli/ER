@@ -17,7 +17,6 @@ import math
 import time
 import types
 from contextlib import nullcontext
-from pathlib import Path
 
 
 def _shared(name: str):
@@ -666,8 +665,8 @@ class TrialProfiler:
     * CPU + CUDA activities, ``profile_memory=True``, ``with_stack=False``;
     * a bounded ``schedule`` (wait/warmup/active/repeat) so only a slice of the
       trial is sampled; the schedule is advanced once per optimizer step;
-    * a chrome trace at ``trace_path`` plus a ``key_averages()`` top-op table to
-      the logger (stdout) and the optional wandb callback;
+    * a ``key_averages()`` top-op table to the logger (stdout) and the optional
+      wandb callback — HPO keeps results, not a chrome trace;
     * rank-0 only and CUDA-only (auto-disabled on CPU);
     * a profiler error NEVER fails the trial (``__exit__`` returns False and
       every step is guarded).
@@ -675,12 +674,11 @@ class TrialProfiler:
     Torch is injected so this is unit-testable without a GPU.
     """
 
-    def __init__(self, *, torch_module, config, trace_path, device_type,
+    def __init__(self, *, torch_module, config, device_type,
                  laya_train=None, namespace=None, logger=None, wandb_log=None,
                  rank0=True):
         self.torch = torch_module
         self.config = dict(config or {})
-        self.trace_path = Path(trace_path)
         self.device_type = str(device_type)
         self.laya_train = laya_train
         self.namespace = namespace
@@ -707,12 +705,10 @@ class TrialProfiler:
             return self
         try:
             torch_module = self.torch
-            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
             self._profiler = torch_module.profiler.profile(
                 activities=[torch_module.profiler.ProfilerActivity.CPU,
                             torch_module.profiler.ProfilerActivity.CUDA],
                 schedule=profiler_schedule(torch_module, self.config),
-                on_trace_ready=self._on_trace_ready,
                 profile_memory=True, with_stack=False, record_shapes=False)
             self._uninstall = install_phase_hooks(
                 torch_module=torch_module,
@@ -720,7 +716,7 @@ class TrialProfiler:
                 laya_train=self.laya_train, namespace=self.namespace,
                 on_optimizer_step=self.step)
             self._profiler.start()
-            self._emit("profiler started -> " + str(self.trace_path))
+            self._emit("profiler started (top-op table only)")
         except Exception as error:  # noqa: BLE001 - fail soft
             self.enabled = False
             self._emit("profiler setup failed (continued unprofiled): "
@@ -735,13 +731,6 @@ class TrialProfiler:
             self._profiler.step()
         except Exception:  # noqa: BLE001,S110
             pass
-
-    def _on_trace_ready(self, profiler):
-        try:
-            profiler.export_chrome_trace(str(self.trace_path))
-            self._emit("profiler trace -> " + str(self.trace_path))
-        except Exception as error:  # noqa: BLE001
-            self._emit("profiler trace export failed: " + str(error)[:200])
 
     def _report(self):
         limit = int(self.config.get("top_ops", 15))
@@ -767,12 +756,6 @@ class TrialProfiler:
             except Exception:  # noqa: BLE001,S110
                 pass
             if self.enabled:
-                try:
-                    if not self.trace_path.is_file():
-                        self._profiler.export_chrome_trace(str(self.trace_path))
-                except Exception as error:  # noqa: BLE001
-                    self._emit("profiler final export failed: "
-                               + str(error)[:200])
                 try:
                     self._report()
                 except Exception as error:  # noqa: BLE001

@@ -737,11 +737,15 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             # saved/deployed weights are the same epoch selection picked.
             if step.improved:
                 best_acc = dev.accuracy
+                # keep_best restores the early-stop optimum into the FINAL
+                # model; the best.pt FILE only serves a resume, so a
+                # configs+results run (save_each_epoch=False) skips it.
                 if control.get("keep_best") and is_rank0():
                     best_state = {key: value.detach().cpu().clone()
                                   for key, value in
                                   ControlCheckpointer.unwrap(model).state_dict().items()}
-                    checkpointer.save_best(model, best, best_acc, epoch)
+                    if control.get("save_each_epoch"):
+                        checkpointer.save_best(model, best, best_acc, epoch)
             stop_flag = step.stop and bool(control.get("early_stop"))
             if plateau:
                 scheduler.step(metric_value)
@@ -755,9 +759,12 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         wandb_log_epoch(epoch, mean, extra)
         profiler.flush_epoch(epoch + 1)
         with profiler.phase("checkpoint_save"):
-            if on_epoch_end is not None:
-                on_epoch_end(epoch, mean)
+            # save_each_epoch owns EVERY per-epoch artifact: the torch resume
+            # checkpoint (model+optimizer+scheduler) AND the caller's HF
+            # snapshot. A configs+results run writes neither.
             if control.get("save_each_epoch"):
+                if on_epoch_end is not None:
+                    on_epoch_end(epoch, mean)
                 checkpointer.save(model, optimizer, scheduler, epoch, best,
                                   bad_epochs)
         if swa_state is not None and epoch >= swa_start:

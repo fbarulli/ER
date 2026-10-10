@@ -878,6 +878,27 @@ def test_stage_kernel_receipt_carries_the_option_set(monkeypatch, tmp_path):
     assert receipt["options"]["session"]["processes_only"] is True
 
 
+def test_staged_hpo_trial_keeps_configs_and_results_only(monkeypatch, tmp_path):
+    """An HPO trial retains configs + results, never resume/optimizer state."""
+    import ast
+    import re
+
+    receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    baked = re.search(r"BASE_FINETUNE_CONTROL = (\{.*\})\n", script)
+    control = ast.literal_eval(baked.group(1))
+    # no per-epoch resumable checkpoint (model+optimizer+scheduler), no
+    # per-epoch HF snapshot and no best.pt: the trial is never resumed and
+    # nothing downstream consumes those weights.
+    assert control["save_each_epoch"] is False
+    assert control["resume"] is False
+    # keep_best still restores the best epoch into the FINAL (kept) result model.
+    assert control["keep_best"] is True
+    # the HPO profiler keeps the top-op table, never a chrome trace.
+    assert "export_chrome_trace" not in laya_hpo.hpo_runtime_source()
+
+
 def test_stage_kernel_wires_the_parallelism_fixes(monkeypatch, tmp_path):
     """The staged script must carry the real fixes, not the old bugs."""
     receipt = _stage(monkeypatch, tmp_path, "postgresql://u:p@h/db")
@@ -1049,14 +1070,15 @@ def test_profiler_annotates_every_phase_without_gpu(tmp_path):
     laya = _FakeLayaTrain()
     namespace = _fake_namespace()
     trace = tmp_path / "ckpt" / "profiler" / "trial_0.json"
+    lines: list[str] = []
     original_backward = torch_module.Tensor.backward
     original_metrics = namespace["DevEvaluator"].metrics
     profiler = laya_hpo_runtime.TrialProfiler(
         torch_module=torch_module,
         config={"enabled": True, "wait": 1, "warmup": 1, "active": 2,
                 "repeat": 1, "top_ops": 5},
-        trace_path=trace, device_type="cuda", laya_train=laya,
-        namespace=namespace, logger=lambda line: None, rank0=True)
+        device_type="cuda", laya_train=laya,
+        namespace=namespace, logger=lines.append, rank0=True)
     with profiler:
         laya.encode_item()
         laya.soft_ce_loss()
@@ -1079,7 +1101,10 @@ def test_profiler_annotates_every_phase_without_gpu(tmp_path):
     assert torch_module.profiler.session.started
     assert torch_module.profiler.session.steps >= 1   # advanced per optimizer step
     assert torch_module.profiler.session.stopped
-    assert trace.is_file()
+    # HPO keeps the top-op table, never a chrome trace.
+    assert torch_module.profiler.session.exports == []
+    assert not trace.is_file()
+    assert any("profiler top ops" in line for line in lines)
     # Hooks are restored after the trial (no global leakage).
     assert torch_module.Tensor.backward is original_backward
     assert namespace["DevEvaluator"].metrics is original_metrics
@@ -1122,7 +1147,7 @@ def test_profiler_fail_soft_when_setup_raises(tmp_path):
         torch_module=torch_module,
         config={"enabled": True, "wait": 1, "warmup": 1, "active": 1,
                 "repeat": 1, "top_ops": 5},
-        trace_path=tmp_path / "p" / "trial_0.json", device_type="cuda",
+        device_type="cuda",
         laya_train=_FakeLayaTrain(), namespace=_fake_namespace(),
         logger=lambda line: None, rank0=True)
     with profiler:
@@ -1139,7 +1164,7 @@ def test_profiler_disabled_never_starts(tmp_path, device_type, config):
     torch_module = _FakeTorch()
     profiler = laya_hpo_runtime.TrialProfiler(
         torch_module=torch_module, config=config,
-        trace_path=tmp_path / "p" / "trial_0.json", device_type=device_type,
+        device_type=device_type,
         laya_train=_FakeLayaTrain(), namespace=_fake_namespace(),
         logger=lambda line: None, rank0=True)
     with profiler:
@@ -1154,7 +1179,7 @@ def test_profiler_disabled_for_non_rank0(tmp_path):
         torch_module=torch_module,
         config={"enabled": True, "wait": 1, "warmup": 1, "active": 1,
                 "repeat": 1, "top_ops": 5},
-        trace_path=tmp_path / "p" / "trial_0.json", device_type="cuda",
+        device_type="cuda",
         laya_train=_FakeLayaTrain(), namespace=_fake_namespace(),
         logger=lambda line: None, rank0=False)
     with profiler:

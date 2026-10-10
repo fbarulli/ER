@@ -604,8 +604,6 @@ def run_trial(trial, device, train_path, dev_path, base_model):
     profiler_config = HPO_SPACE.get("profiler") or {}
     profiler = TrialProfiler(
         torch_module=torch, config=profiler_config,
-        trace_path=out_dir / "profiler" / ("trial_" + str(int(trial.number))
-                                           + ".json"),
         device_type=("cuda" if str(device).startswith("cuda") else "cpu"),
         laya_train=laya_train, namespace=globals(),
         logger=log, wandb_log=wandb_log_profiler, rank0=rank0)
@@ -858,8 +856,6 @@ def run_ddp_trial(trial_number):
                         resource=resource)
     profiler = TrialProfiler(
         torch_module=torch, config=HPO_SPACE.get("profiler") or {},
-        trace_path=out_dir / "profiler" / ("trial_" + str(int(trial_number))
-                                           + ".json"),
         device_type=("cuda" if device.startswith("cuda") else "cpu"),
         laya_train=laya_train, namespace=globals(), logger=log,
         wandb_log=wandb_log_profiler, rank0=is_rank0())

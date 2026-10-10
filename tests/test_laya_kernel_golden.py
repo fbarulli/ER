@@ -59,17 +59,18 @@ GOLDEN_SHA256: dict[str, str] = {
     # live, since W&B exposes `output.log` only on flush/end, and for the
     # real-time wandb emissions (run events, GPU sampler, timing sink).
     #
-    # finetune / finetune-smoke / hpo re-pinned for the BOUNDED checkpoint fix:
-    # ControlCheckpointer.save keeps only the newest resumable epoch checkpoint
-    # (pruning the older ones first) so a size-capped /kaggle/working is not
-    # filled by every epoch's optimizer state — the disk-full that killed the
-    # 2-trial HPO session (`er-laya-hpo`, run laya_hpo_1009T195143Z) and took
-    # wandb + the Optuna SQLite study down with it.
-    "finetune": "1612b4419fdf5f4735e4afd37389e642eea925c67c0fe662946d96ce3fdbfcd9",
-    "finetune-smoke": "b3beeb6d81bd43ae2ac5d0321b676c2d1c634d61107630e6f3a23a73d4a0853b",
+    # finetune / finetune-smoke / hpo re-pinned for the bounded-checkpoint fix
+    # (ControlCheckpointer keeps only the newest resumable epoch file) and the
+    # HPO configs+results ruling: save_each_epoch now owns EVERY per-epoch
+    # artifact (the torch resume checkpoint AND the caller's HF snapshot) and
+    # also gates the best.pt file, so an HPO trial writes no optimizer/scheduler
+    # state and no checkpoint/weight files; the HPO profiler keeps the top-op
+    # table but no longer exports a chrome trace.
+    "finetune": "7925882d10a505d3676012e4c13543760399fea1a65750a90983a4ba9401ccf6",
+    "finetune-smoke": "4855323ac5ff63afaf0ae7c508c24505885ae4c7ad08f0cfdde607d246eb01b5",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "e5bc108504c297aed46685a5c2687cef8225d278adb70019d02d23935461f86e",
+    "hpo": "5f5fc012ed10a8c019af66983c702caf260f4d0d5bbcc99a571236e44bb2afc8",
 }
 
 
