@@ -3,8 +3,9 @@
 The operator otherwise chases per-stage / per-lane / per-run logs across
 ``logs/``, ``results/`` and the scratch roots. This
 walks the given roots, orders every log by mtime, and writes a single
-concatenated document with a header per source so one file tells the whole
-story.
+concatenated document with one CET-stamped header per source, labelled by
+platform + lane (``colab/<lane>``, ``kaggle/<lane>``, ``laya/<lane>``,
+``prepare/<lane>``), so one file tells the whole story.
 
   PYTHONPATH=src .venv/bin/python scripts/consolidate_logs.py
   # only the last 3h, include scratch smoke logs, cap each file:
@@ -17,11 +18,45 @@ Defaults are behavior-neutral (read-only discovery; one output file).
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DEFAULT_ROOTS = ('logs', 'results', 'ablation_profile', 'training_profile')
 DEFAULT_EXTENSIONS = ('.log', '.jsonl')
+#: The ONE wall-clock the lane stamps use (owner order 2026-10-07).
+_PARIS = ZoneInfo('Europe/Paris')
+#: The lane a log path belongs to, by its first path component under a root.
+LANES = ('colab', 'kaggle', 'laya', 'prepare')
+#: Run-tree roots mapped onto the platform/lane vocabulary (no lane dir).
+RUN_ROOTS = (
+    ('results/training_prep', 'prepare'),
+    ('results/training_results', 'colab'),
+    ('results/kaggle_lane', 'kaggle'),
+    ('results/model_tracks', 'tracks'),
+    ('results/logs', 'tracks'),
+    ('training_profile', 'profile'),
+    ('ablation_profile', 'ablation'),
+)
+
+
+def _lane_of(path: Path) -> str:
+    """The ``<platform>/<lane>`` label for one log path.
+
+    ``logs/<lane>/`` carries the platform+lane directly; a ``results/`` run
+    tree is mapped through ``RUN_ROOTS`` (``prepare/<stage>``,
+    ``tracks/<track>``, ...). The fallback is the file's stem.
+    """
+    parts = path.parts
+    posix = path.as_posix()
+    for prefix, platform in RUN_ROOTS:
+        if posix.startswith(prefix + '/'):
+            return f"{platform}/{path.stem}"
+    for index, part in enumerate(parts):
+        if part in LANES:
+            lane = parts[index + 1] if index + 1 < len(parts) else ''
+            return f"{part}/{Path(lane).stem}" if lane else part
+    return path.stem
 
 
 def discover(roots: tuple[str, ...], extensions: tuple[str, ...]) -> list[Path]:
@@ -61,7 +96,7 @@ def main() -> None:
 
     cutoff = None
     if args.since_minutes is not None:
-        cutoff = datetime.now(timezone.utc).timestamp() - args.since_minutes * 60
+        cutoff = datetime.now(_PARIS).timestamp() - args.since_minutes * 60
 
     entries = []
     for path in discover(tuple(args.roots), tuple(args.extensions)):
@@ -75,13 +110,14 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     with output.open('w', encoding='utf-8', errors='replace') as handle:
-        handle.write(f"# consolidated logs — {datetime.now(timezone.utc).isoformat()} — "
+        handle.write(f"# consolidated logs — {datetime.now(_PARIS):%Y-%m-%dT%H:%M:%S %Z} — "
                      f"{len(entries)} file(s)\n")
         handle.write(f"# roots: {', '.join(str(root) for root in args.roots)}\n")
         for mtime, path in entries:
-            stamp = datetime.fromtimestamp(mtime, timezone.utc).isoformat() if mtime else 'unknown'
+            stamp = (f"{datetime.fromtimestamp(mtime, _PARIS):%Y-%m-%dT%H:%M:%S %Z}"
+                     if mtime else 'unknown')
             handle.write('\n' + '=' * 100 + '\n')
-            handle.write(f'===== {path}  (mtime={stamp})\n')
+            handle.write(f'===== [{_lane_of(path)}] {path}  (mtime={stamp})\n')
             handle.write('=' * 100 + '\n')
             try:
                 data = path.read_bytes()
