@@ -437,8 +437,21 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                   + str(error)[:120], flush=True)
     epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
     steps_per_epoch = math.ceil(epoch_len / config.micro_batch)
-    updates = max(1, math.ceil(steps_per_epoch / config.grad_accum)
-                  * config.epochs)
+    # The schedule length MUST equal the ACTUAL optimizer-step count. With
+    # batch_size_ramp the per-epoch grad_accum (hence the step count) is below
+    # the target on the ramp epochs, so a length computed from the target makes
+    # OneCycleLR raise "Tried to step N+1 times. The specified number of total
+    # steps is N" on the first ramped epoch. Sum the real per-epoch steps.
+    ramp_on = bool(control.get("batch_size_ramp"))
+    target_grad_accum = int(config.grad_accum)
+    epoch_grad_accums = [
+        (BatchRamp.grad_accum(epoch, target_grad_accum,
+                              control.get("batch_ramp_start_frac"),
+                              control.get("batch_ramp_epochs"))
+         if ramp_on else target_grad_accum)
+        for epoch in range(config.epochs)]
+    updates = max(1, sum(math.ceil(steps_per_epoch / grad_accum)
+                         for grad_accum in epoch_grad_accums))
     scheduler_factory = controls.scheduler(optimizer, updates, config.min_lr)
     scheduler = scheduler_factory.build()
     scheduler_kind = scheduler_factory.kind
@@ -482,8 +495,6 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     drop_path_on = bool(control.get("drop_path"))
     dynamic_padding_on = bool(control.get("dynamic_padding"))
     pad_to_multiple = control.get("pad_to_multiple")
-    ramp_on = bool(control.get("batch_size_ramp"))
-    target_grad_accum = int(config.grad_accum)
     optim_state_dtype = control.get("optim_state_dtype")
     adv_eps = control.get("adv_eps")
     adv_kind = control.get("adv_kind")
@@ -531,10 +542,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 epoch, config.epochs, control.get("drop_path_rate"),
                 control.get("drop_path_schedule")))
         # batch-size ramp ramps grad_accum (rank-symmetric => DDP lockstep);
-        # steps_per_epoch/updates stay on the TARGET so schedules keep length.
-        epoch_grad_accum = (BatchRamp.grad_accum(
-            epoch, target_grad_accum, control.get("batch_ramp_start_frac"),
-            control.get("batch_ramp_epochs")) if ramp_on else target_grad_accum)
+        # the per-epoch value is the one the schedule length was summed from.
+        epoch_grad_accum = epoch_grad_accums[epoch]
         if ddp_sampler is not None:
             # Per-epoch reseed: every rank shuffles identically then takes a
             # disjoint stride slice, so no item is trained twice per epoch.

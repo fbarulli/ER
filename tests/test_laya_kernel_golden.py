@@ -66,11 +66,11 @@ GOLDEN_SHA256: dict[str, str] = {
     # also gates the best.pt file, so an HPO trial writes no optimizer/scheduler
     # state and no checkpoint/weight files; the HPO profiler keeps the top-op
     # table but no longer exports a chrome trace.
-    "finetune": "7925882d10a505d3676012e4c13543760399fea1a65750a90983a4ba9401ccf6",
-    "finetune-smoke": "4855323ac5ff63afaf0ae7c508c24505885ae4c7ad08f0cfdde607d246eb01b5",
+    "finetune": "7c86c40ce082c33ac34ed0d0f83be415632c79d284251e49638c2ca2b6d3bc59",
+    "finetune-smoke": "7f1d32ee3763abe4c2dfbfc212d636fa5cc46455f3b6b7c7f3260e7874a10755",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "5f5fc012ed10a8c019af66983c702caf260f4d0d5bbcc99a571236e44bb2afc8",
+    "hpo": "9a7230d9e7beaf58f6ec4d65eb24cde6f853da296a3c7fc4de7be78ea30329c0",
 }
 
 
