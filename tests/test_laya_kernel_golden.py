@@ -72,11 +72,18 @@ GOLDEN_SHA256: dict[str, str] = {
     # single-writer tail (teardown_after_training replaces run_on_rank0), and
     # init_process_group bakes the new laya.ddp_timeout_minutes SSOT knob as
     # DDP_TIMEOUT_MINUTES (defense-in-depth for rank 0's slow final save).
-    "finetune": "1fc0d119c03b8dd883f813e3de2bf7d19d4a68be6f26f919fb431db775a9e629",
-    "finetune-smoke": "0aa5a8d8529016eb68923cd398503fccbb5df9d5572317d6d075d69695f54b49",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the per-epoch wandb step
+    # regression fix (8146f87 class): the wandb helpers are now ONE shared
+    # block (cli.laya_kernel_text_wandb, injected at @WANDB_HELPERS@), NO sink
+    # passes an explicit step= anymore, and wandb_init declares `epoch` the
+    # step metric of the per-epoch namespaces (define_metric), so interleaved
+    # log/line/event/timing/gpu sinks can never make wandb drop epoch rows.
+    "finetune": "ad66aa5bfc21f6555eb4acbb4fa6df1cb74d0fab7bdba51ec37b5b38c033d803",
+    "finetune-smoke": "dcaea8fa9b09162c702ef8481ab06867e775491c40a7fa55ca2759074087e398",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "1abe2ddd6bc12a7b8fd54d5e21297d6cc85b2411a878021db67965ee8bcfc087",
+    "hpo": "10f382b06d9cac0278431ea7b46c38c54bdfc606dec5476832f23ed14a871b40",
 }
 
 

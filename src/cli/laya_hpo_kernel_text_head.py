@@ -1,7 +1,13 @@
-"""Head of the embedded HPO Kaggle kernel-script text (cli.laya_hpo)."""
+"""Head of the embedded HPO Kaggle kernel-script text (cli.laya_hpo).
+
+The W&B helpers are the ONE shared block (``cli.laya_kernel_text_wandb``),
+injected at the ``@WANDB_HELPERS@`` marker at import time.
+"""
 from __future__ import annotations
 
-HPO_KERNEL_TEMPLATE_HEAD = '''\
+from cli.laya_kernel_text_wandb import WANDB_HELPERS_SOURCE
+
+_HPO_KERNEL_TEMPLATE_HEAD_RAW = '''\
 """ER laya fine-tune HPO on a Kaggle 2xT4 session (cli.laya_hpo).
 
 Installs laya + Optuna/SQLAlchemy/psycopg over pip, reads the attached JSONL
@@ -91,7 +97,6 @@ if CUDA_VISIBLE_DEVICES:
 @OPTUNA_ENV_SCRIPT@
 @HPO_RUNTIME_SOURCE@
 
-WANDB_RUN = None
 # Per-trial globals the perf patch reads (this worker runs ONE trial at a
 # time; each worker is its own process, so the globals never race).
 FINETUNE_CONFIG = {}
@@ -107,50 +112,6 @@ OPTION_SET = None
 OBSERVER = None
 
 
-class WandbLogSink:
-    """Batch notable log lines into the live W&B text channel `log/line`.
-
-    W&B exposes `output.log` only on flush/end, so `log/line` is the sole
-    surface visible while the run is live. Lines are buffered and flushed on N
-    lines or the bounded interval; the capped pre-init buffer holds the worker
-    boot lines until `wandb_init` succeeds. Fail-soft: a write error is recorded
-    in full, never fatal.
-    """
-
-    KEY = "log/line"
-    MAX_LINES = 20
-    MAX_BUFFER = 400
-    FLUSH_SECONDS = 15.0
-
-    def __init__(self):
-        self._pending = []
-        self._flushed_at = time.monotonic()
-
-    def add(self, line):
-        self._pending.append(str(line))
-        if len(self._pending) > self.MAX_BUFFER:
-            del self._pending[:-self.MAX_BUFFER]
-        if WANDB_RUN is not None and (
-                len(self._pending) >= self.MAX_LINES
-                or time.monotonic() - self._flushed_at >= self.FLUSH_SECONDS):
-            self.flush()
-
-    def flush(self):
-        if WANDB_RUN is None or not self._pending:
-            return
-        text = "\\n".join(self._pending)
-        self._pending = []
-        self._flushed_at = time.monotonic()
-        try:
-            WANDB_RUN.log({self.KEY: text})
-        except Exception as error:
-            print("[wandb] log sink skipped: " + type(error).__name__ + ": "
-                  + str(error) + "\\n" + traceback.format_exc(), flush=True)
-
-
-LOG_SINK = WandbLogSink()
-
-
 def log(line):
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     text = "[laya-hpo " + stamp + "] " + str(line)
@@ -158,87 +119,11 @@ def log(line):
     LOG_SINK.add(text)
 
 
-def wandb_init(name=None, group=None, config=None):
-    global WANDB_RUN
-    if not WANDB_API_KEY:
-        return None
-    os.environ["WANDB_API_KEY"] = WANDB_API_KEY
-    try:
-        import wandb
-        WANDB_RUN = wandb.init(project=WANDB_PROJECT, name=name or RUN_TAG,
-                               group=group, reinit=True,
-                               config=config or {"hpo_space": HPO_SPACE})
-        log("wandb run " + str(getattr(WANDB_RUN, "id", "")))
-    except Exception as error:
-        log("wandb init skipped: " + type(error).__name__ + ": "
-            + str(error) + "\\n" + traceback.format_exc())
-        WANDB_RUN = None
-    LOG_SINK.flush()
-    return WANDB_RUN
+# The shared W&B helpers (SSOT: cli.laya_kernel_text_wandb) read the default
+# init config from this global: the search space.
+WANDB_INIT_CONFIG = {"hpo_space": HPO_SPACE}
 
-
-def wandb_log_epoch(epoch, mean, extra=None):
-    if WANDB_RUN is None:
-        return
-    payload = {"epoch": epoch + 1, "train/mean_loss": mean}
-    if isinstance(extra, dict):
-        payload.update(extra)
-    try:
-        WANDB_RUN.log(payload, step=epoch)
-    except Exception as error:  # logging must never crash training
-        log("wandb epoch log skipped: " + type(error).__name__ + ": "
-            + str(error) + "\\n" + traceback.format_exc())
-        return
-    LOG_SINK.add("epoch %d loss=%.4f" % (epoch + 1, mean))
-
-
-def wandb_log_control_summary(result):
-    if WANDB_RUN is None or not isinstance(result, dict):
-        return
-    payload = {"select/best_dev_accuracy": result.get("best_dev_accuracy"),
-               "early_stop/stopped": 1 if result.get("stopped") else 0}
-    WANDB_RUN.log({k: v for k, v in payload.items() if v is not None})
-
-
-def wandb_finish():
-    LOG_SINK.flush()
-    if WANDB_RUN is not None:
-        try:
-            WANDB_RUN.finish()
-        except Exception as error:
-            log("wandb finish skipped: " + type(error).__name__ + ": "
-                + str(error) + "\\n" + traceback.format_exc())
-
-
-def wandb_log_event(name, **fields):
-    """Log ONE structured run transition to wandb (no stream of noise).
-
-    The transition name rides ``run/event``; each non-None detail rides
-    ``run/event/<key>``. Fail-soft: a tracking error is recorded, never fatal.
-    """
-    if WANDB_RUN is None:
-        return
-    payload = {"run/event": str(name)}
-    for key, value in fields.items():
-        if value is not None:
-            payload["run/event/" + key] = value
-    try:
-        WANDB_RUN.log(payload)
-    except Exception as error:
-        log("wandb event skipped: " + type(error).__name__ + ": "
-            + str(error) + "\\n" + traceback.format_exc())
-
-
-def wandb_log_profiler(table):
-    """Mirror a per-trial key_averages() top-op table to wandb (best-effort)."""
-    if WANDB_RUN is None:
-        return
-    try:
-        WANDB_RUN.log({"profiler/top_ops": table})
-    except Exception as error:
-        log("wandb profiler skipped: " + type(error).__name__ + ": "
-            + str(error) + "\\n" + traceback.format_exc())
-
+@WANDB_HELPERS@
 
 @DEVICE_PATCH@
 
@@ -911,3 +796,8 @@ def run_ddp_trial(trial_number):
 
 
 '''
+
+# The ONE shared wandb-helpers block (SSOT: cli.laya_kernel_text_wandb) is
+# injected at import, so the staging token pass never sees @WANDB_HELPERS@.
+HPO_KERNEL_TEMPLATE_HEAD = _HPO_KERNEL_TEMPLATE_HEAD_RAW.replace(
+    "@WANDB_HELPERS@", WANDB_HELPERS_SOURCE)
