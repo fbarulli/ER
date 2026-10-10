@@ -165,6 +165,16 @@ def validate_space(space: dict[str, Any]) -> None:
         if (not isinstance(top_runs, int) or isinstance(top_runs, bool)
                 or top_runs < 1):
             raise ValueError("laya HPO plot.top_runs must be a positive int")
+    corpus = space.get("corpus")
+    if corpus is not None:
+        if not isinstance(corpus, dict):
+            raise TypeError("laya HPO corpus must be a mapping")
+        for key in ("dir", "dataset_slug"):
+            value = corpus.get(key)
+            if value is not None and (not isinstance(value, str)
+                                      or not value.strip()):
+                raise ValueError(
+                    f"laya HPO corpus.{key} must be a non-empty string")
     # The option components own their own validation; assemble once so a bad
     # parallelism/sampler/pruner/fidelity/warm-start/ensemble name fails at
     # load, not mid-sweep.

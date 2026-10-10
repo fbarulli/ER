@@ -864,8 +864,10 @@ def test_stage_kernel_metadata_and_receipt_shape(monkeypatch, tmp_path):
                       .read_text(encoding="utf-8"))
     assert meta["enable_gpu"] is True and meta["is_private"] is True
     assert meta["code_file"] == laya_hpo.HPO_CODE_FILE
+    # The corpus travels under the SPACE's own slug (the 50/50 carve), never
+    # the fine-tune lane's corpus dataset.
     assert meta["dataset_sources"] == [
-        laya_lane.training_cfg().laya.finetune_dataset_slug,
+        laya_hpo.load_space()["corpus"]["dataset_slug"],
         laya_lane.training_cfg().laya.base_model_dataset,
     ]
     assert receipt["study"]["study_name"] == "euromonitor::gen-stage-1::laya"
@@ -1227,7 +1229,7 @@ def _write_space(tmp_path, mutate):
 
 
 def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
-                kernel_slug=None, n_trials=None):
+                kernel_slug=None, n_trials=None, dataset_calls=None):
     """Stage the Kaggle payload with the network/git/tip deps stubbed."""
     monkeypatch.setenv(laya_hpo.GENERATION_ID_ENV, "gen-stage-obs")
     if url:
@@ -1237,9 +1239,14 @@ def _stage_with(monkeypatch, tmp_path, url, *, space_config=None,
     monkeypatch.setattr(laya_lane, "staging_dir", lambda: Path(tmp_path))
     monkeypatch.setattr(laya_lane, "_git_revision", lambda: "a" * 40)
     monkeypatch.setattr(laya_lane, "_log_lane", lambda line: None)
+
+    def _payload_stub(**kwargs):
+        if dataset_calls is not None:
+            dataset_calls.append(kwargs)
+        return {"payload": str(tmp_path / "ds"), "files": {}}
+
     monkeypatch.setattr(laya_lane, "stage_finetune_dataset_payload",
-                        lambda **kwargs: {"payload": str(tmp_path / "ds"),
-                                          "files": {}})
+                        _payload_stub)
     monkeypatch.setattr(laya_hpo, "_current_git_branch", lambda: "laya-hpo")
     from core import runtime_inputs
     monkeypatch.setattr(runtime_inputs, "publish_run_branch",
@@ -1303,8 +1310,9 @@ def test_receipt_worker_cap_is_the_gpu_capped_plan(monkeypatch, tmp_path):
     """#8: max_workers is the GPU-capped worker plan (no shared-data cache)."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert "shared_data" not in receipt["options"]
-    # slots mode: 2 GPUs (n_jobs) x 1 slot each, capped at max_concurrent=2.
-    assert receipt["budget"]["max_workers"] == 2
+    # slots mode: the owner's 4-parallel round — n_jobs=4 workers, 2 slots per
+    # card on the 2xT4 session, capped at max_concurrent=4.
+    assert receipt["budget"]["max_workers"] == 4
 
 
 def _hpo_space_from_script(script: str) -> dict:
@@ -1317,28 +1325,54 @@ def _hpo_space_from_script(script: str) -> dict:
     raise AssertionError("staged script carries no HPO_SPACE literal")
 
 
-def test_staging_seeds_the_ssot_baseline_once(monkeypatch, tmp_path):
-    """The staged space carries ONE enqueue seed equal to the FinetuneSpec recipe."""
+def test_staging_enqueues_no_baseline_pure_hpo(monkeypatch, tmp_path):
+    """OWNER DIRECTIVE (2026-10-10): PURE HPO — the staged space enqueues NO
+    baseline seed trial (warm_start.baseline=false), so every trial is TPE-
+    sampled. The seed mechanism stays config-gated for a future round."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
         encoding="utf-8")
     space = _hpo_space_from_script(script)
-    seeds = space["options"]["warm_start"]["enqueue"]
-    assert len(seeds) == 1
-    seed = seeds[0]
-    assert set(seed) == set(space["dials"])
-    spec = laya_lane.training_cfg().laya
-    recipe = {**laya_lane.finetune_config(spec),
-              **laya_lane.finetune_control(spec)}
-    for name in ("encoder_lr", "head_lr", "weight_decay",
-                 "early_stop_patience", "lr_scheduler", "loss_schedule", "ema"):
-        assert seed[name] == recipe[name], name
-    # The seeded baseline halves the activation footprint at the same effective
-    # batch / optimizer-step count (config warm_start.baseline_dials).
-    assert seed["micro_batch"] == 4 and seed["grad_accum"] == 16
-    assert seed["micro_batch"] * seed["grad_accum"] == 64
-    assert recipe["micro_batch"] * recipe["grad_accum"] == 64
-    assert receipt["budget"]["max_workers"] >= 2
+    assert space["options"]["warm_start"]["baseline"] is False
+    assert space["options"]["warm_start"]["enqueue"] == []
+    # 4 parallel workers on the 2xT4 session (owner directive: 2 slots/card).
+    assert receipt["budget"]["n_jobs"] == 4
+    assert receipt["budget"]["max_workers"] == 4
+
+
+def test_fidelity_caps_every_trial_at_three_epochs(monkeypatch, tmp_path):
+    """OWNER DIRECTIVE: <=3 epochs per trial via the config SSOT (the fidelity
+    lever, full=3 + stages=1 + pruner=none) — never a code literal. The staged
+    space carries the cap and FidelitySchedule pins resource()->3 for EVERY
+    trial number, which apply_fidelity_and_staging writes to TrainConfig."""
+    from training.laya_hpo_options import FidelitySchedule
+
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    space = _hpo_space_from_script(script)
+    fidelity = space["options"]["fidelity"]
+    assert fidelity["enabled"] is True
+    assert fidelity["dimension"] == "epochs"
+    assert fidelity["full"] == 3 and fidelity["stages"] == 1
+    schedule = FidelitySchedule(fidelity)
+    assert all(schedule.resource(n) == 3 for n in range(8))
+
+
+def test_staging_uses_the_space_corpus_carve(monkeypatch, tmp_path):
+    """The space `corpus:` block is the HPO corpus SSOT (owner's 50/50
+    directive): the dataset payload stages from the carve dir and publishes
+    under its OWN slug, never the fine-tune lane's corpus."""
+    calls: list[dict] = []
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db",
+                          dataset_calls=calls)
+    space = laya_hpo.load_space()
+    corpus = space["corpus"]
+    assert receipt["dataset"]["slug"] == corpus["dataset_slug"]
+    assert receipt["dataset"]["corpus_dir"] == str(
+        laya_hpo.TRAIN_ROOT / corpus["dir"])
+    assert calls and calls[0]["corpus_dir"] == laya_hpo.TRAIN_ROOT / corpus["dir"]
+    assert calls[0]["dataset_slug"] == corpus["dataset_slug"]
 
 
 def test_staged_kernel_pins_the_config_declared_gpus_before_torch(monkeypatch,

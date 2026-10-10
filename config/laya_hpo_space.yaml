@@ -27,12 +27,27 @@ model_key: laya
 
 # TPE budget/sampler. `n_trials` is the CLUSTER budget for the generation
 # (shared across every worker and Kaggle session on this study name); each
-# worker splits the remaining budget so sessions do not multiply it. The budget
-# INCLUDES the seeded baseline trial: 1 baseline + 2 TPE sweep. Override per
-# launch with `--n-trials` (the CLI bake is validated by the lane tests).
+# worker splits the remaining budget so sessions do not multiply it. The
+# budget is PURE TPE sweep (owner directive 2026-10-10: no baseline seed
+# trial — see options.warm_start.baseline). Override per launch with
+# `--n-trials` (the CLI bake is validated by the lane tests).
 n_trials: 3
-n_jobs: 2          # one GPU worker per visible T4 (2xT4 in a Kaggle session)
+n_jobs: 4          # owner directive: 4 parallel workers on the 2xT4 session
 seed: 1729
+
+# The HPO corpus carve (owner directive 2026-10-10): 50/50 train<->validate,
+# component-aware STRATIFIED, ZERO leakage — carved by
+# scripts/laya_hpo_corpus.py through the canonical smart-split profile
+# `laya_hpo_5050` (config/smart_split.yaml). `dir` is the carved corpus root
+# (train.jsonl + dev.jsonl; test.jsonl is EMPTY by construction — the 50/50
+# carve has no test role, so the kernel's session-end held-out eval records a
+# reasoned skip). `dataset_slug` is DISTINCT from the fine-tune lane's corpus
+# slug so an HPO publish never clobbers the fine-tune corpus version.
+# Absent keys fall back to the LayaSpec defaults (finetune_corpus_dir /
+# finetune_dataset_slug).
+corpus:
+  dir: data/laya_hpo5050
+  dataset_slug: fbarulli/er-laya-hpo5050
 
 # The objective contract (rank trials on DEV only; never touch test).
 objective:
@@ -68,14 +83,17 @@ plot:
 # builder registry per family, assembled by `build_option_set`.
 options:
   # A) trial parallelism — one worker PROCESS per GPU (true parallelism).
-  # 1 slot/card: the full recipe peaks ~8.07 GB/proc, above the ~7.7 GB
-  # per-process cap that 2 slots/card (~0.5 fraction) would impose, so sharing
-  # a T4 via MPS OOMs any trial sampling micro_batch 8/16. One uncapped worker
-  # per card fits the full recipe; MPS is therefore OFF.
+  # OWNER DIRECTIVE (2026-10-10): attempt 4 parallel AS-IS on the 2xT4
+  # session (2 slots/card). The documented memory math: the full recipe peaks
+  # ~8.07 GB/proc while 2 slots/card impose a ~7.7 GB per-process cap
+  # (cuda_alloc_fraction 1.0 split across that GPU's slots, MPS OFF), so a
+  # trial sampling micro_batch 8/16 is EXPECTED to OOM. Per the owner, an OOM
+  # is the ACCEPTED outcome of this attempt: no silent downshift, no
+  # feasibility block — the failure is reported, not engineered away.
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 1            # one worker PROCESS per GPU (no MPS sharing)
-  max_concurrent_trials: 2    # = slots_per_gpu * visible GPUs: 2 on 2xT4
-  mps: false                  # no process shares a GPU this round
+  slots_per_gpu: 2            # two worker PROCESSes per T4 (no MPS sharing)
+  max_concurrent_trials: 4    # = slots_per_gpu * visible GPUs: 4 on 2xT4
+  mps: false                  # no process shares a GPU via MPS this round
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
     backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
@@ -91,20 +109,24 @@ options:
     multivariate: true        # TPE joint kernel (parameter interactions)
     constant_liar: true       # parallel workers do not chase in-flight points
   pruner:
-    # OFF: every trial (including the seeded baseline) runs to full fidelity.
-    # Tradeoff: no intermediate-pruning savings, but the baseline cannot be
-    # pruned mid-run, so it always yields the clean reference/champion.
-    kind: none                  # none (baseline-safe) | hyperband | successive_halving | median
+    # OFF: every trial runs to the full epoch cap (owner's round: pure TPE
+    # sweep at fixed fidelity — no baseline seed, no intermediate pruning).
+    kind: none                  # none | hyperband | successive_halving | median
     n_startup_trials: 5
     n_warmup_steps: 1
     min_resource: 1
     max_resource: auto        # Hyperband's largest resource ("auto" or epochs)
     reduction_factor: 3
   fidelity:
-    enabled: false            # multi-fidelity (ASHA/Hyperband lever)
+    # The EPOCH CAP (owner directive 2026-10-10: <=3 epochs per trial — the
+    # 8-epoch smoke hit loss 0.0004 by epoch 3, so 3 is enough). enabled +
+    # dimension=epochs + stages=1 pins EVERY trial's TrainConfig.epochs to
+    # `full` (apply_fidelity_and_staging); this YAML is the SSOT, never a
+    # code literal.
+    enabled: true             # epoch-cap lever ON (no pruning: pruner=none)
     dimension: epochs         # epochs | subset
     small: 1
-    full: 8
+    full: 3
     stages: 1
   multi_objective: false      # maximize dev_accuracy, minimize secondary
   multi_objective_secondary: epoch_time_s
@@ -114,14 +136,17 @@ options:
   # C) warm start / ensembling
   warm_start:
     mode: base                # scratch | base | champion
-    baseline: true            # enqueue the SSOT FinetuneSpec recipe as ONE
-                              # trial, so the baseline runs in parallel with
-                              # the sweep (derived host-side, no code literal)
-    # In-space overrides applied to the seeded SSOT recipe (empty = the exact
-    # FinetuneSpec recipe). mb=4 * ga=16 keeps the effective batch and the
-    # optimizer-step count at 64 like the mb=8 * ga=8 recipe, while halving the
-    # activation footprint so two slots fit a T4. Add `epochs: 1` for the short
-    # 1-epoch memory probe before the full budget.
+    # OWNER DIRECTIVE (2026-10-10): PURE HPO — no baseline seed trial. With
+    # baseline=false, BaselineSeedFactory.apply leaves `enqueue` untouched and
+    # the kernel's baseline_dials() resolves to None, so EVERY trial is TPE-
+    # sampled (no fixed-param "-baseline" run). The seed mechanism is retained
+    # (config-gated) for a future round; flip to true to re-enqueue the SSOT
+    # FinetuneSpec recipe as one trial.
+    baseline: false
+    # In-space overrides applied to the seeded SSOT recipe when baseline is
+    # re-enabled (empty = the exact FinetuneSpec recipe). mb=4 * ga=16 keeps
+    # the effective batch and optimizer-step count at 64 while halving the
+    # activation footprint. Inert while baseline=false.
     baseline_dials:
       micro_batch: 4
       grad_accum: 16

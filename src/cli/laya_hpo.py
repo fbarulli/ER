@@ -405,6 +405,7 @@ class HpoStagePlan:
         "branch",
         "budget_jobs",
         "budget_trials",
+        "corpus_dir",
         "dataset_receipt",
         "dataset_slug",
         "generation",
@@ -508,6 +509,7 @@ class HpoReceipt:
         receipt["gpu"] = ("T4 (2x when the session exposes it; one worker "
                           "process per device, run in parallel)")
         receipt["dataset"] = {"slug": plan.dataset_slug,
+                              "corpus_dir": str(plan.corpus_dir),
                               "payload": plan.dataset_receipt["payload"],
                               "files": plan.dataset_receipt["files"]}
         receipt["base_model"] = {"dataset": plan.base_dataset,
@@ -555,18 +557,32 @@ class LayaHpoStager:
         self.input_root = input_root
 
     # ── resolution (each helper answers one question) ──────────────────────
-    def _dataset_slugs(self, spec) -> tuple[str, str]:
-        dataset_slug = spec.finetune_dataset_slug
-        if not dataset_slug:
+    def _corpus(self, spec, space) -> tuple[Path, str]:
+        """The HPO corpus carve + its dataset slug (space-YAML SSOT).
+
+        The ``corpus:`` block names the owner's 50/50 component-aware carve
+        (``scripts/laya_hpo_corpus.py``) and its OWN dataset slug, so an HPO
+        publish never clobbers the fine-tune lane's corpus version; absent
+        keys fall back to the LayaSpec corpus/slug (the historical behaviour).
+        """
+        corpus = space.get("corpus") or {}
+        directory = TRAIN_ROOT / str(corpus.get("dir")
+                                     or spec.finetune_corpus_dir)
+        slug = corpus.get("dataset_slug") or spec.finetune_dataset_slug
+        if not slug:
             raise RuntimeError(
-                "config laya.finetune_dataset_slug is unset; the corpus travels "
-                "as that dataset (owner/slug) — name it before staging")
+                "neither the space corpus.dataset_slug nor config "
+                "laya.finetune_dataset_slug is set; the corpus travels as "
+                "that dataset (owner/slug) — name it before staging")
+        return directory, slug
+
+    def _base_dataset(self, spec) -> str:
         base_dataset = spec.base_model_dataset
         if not base_dataset:
             raise RuntimeError(
                 "config laya.base_model_dataset is unset; the base checkpoint "
                 "travels as that dataset (owner/slug) — name it before staging")
-        return dataset_slug, base_dataset
+        return base_dataset
 
     def _options(self, space):
         """Build the option set from the search-space config block."""
@@ -590,10 +606,9 @@ class LayaHpoStager:
                 f"{space_path(self.space_config)} (owner/slug) before staging")
         return kernel
 
-    def _dataset_receipt(self, spec, dataset_slug) -> dict[str, Any]:
+    def _dataset_receipt(self, dataset_slug, corpus_dir) -> dict[str, Any]:
         return laya_lane.stage_finetune_dataset_payload(
-            dataset_slug=dataset_slug,
-            corpus_dir=TRAIN_ROOT / spec.finetune_corpus_dir, kind=HPO_DECISION)
+            dataset_slug=dataset_slug, corpus_dir=corpus_dir, kind=HPO_DECISION)
 
     def _git_pin(self) -> tuple[str, str, str, Any]:
         """``(repository, branch, revision, published_tip)``."""
@@ -628,17 +643,19 @@ class LayaHpoStager:
     def plan(self) -> HpoStagePlan:
         spec = training_cfg().laya
         space = load_space(self.space_config)
-        # Seed the SSOT baseline recipe as one enqueued trial (when enabled)
-        # BEFORE repr(space) is baked, so the remote worker runs the baseline as
-        # one process in parallel with the sweep.
+        # PURE HPO (owner directive): warm_start.baseline=false leaves the
+        # enqueue list empty, so BaselineSeedFactory.apply is a no-op and every
+        # trial is TPE-sampled. The call stays (config-gated) so re-enabling
+        # the baseline seed needs no code change. Applied BEFORE repr(space).
         space = BaselineSeedFactory(spec).apply(space)
         options = self._options(space)
         offline = bool(options.session.offline)
         generation, key, study_name = study_identity(
             space=space, generation_id=self.generation_id)
         storage = self._storage(offline, generation, key)
-        dataset_slug, base_dataset = self._dataset_slugs(spec)
-        dataset_receipt = self._dataset_receipt(spec, dataset_slug)
+        corpus_dir, dataset_slug = self._corpus(spec, space)
+        base_dataset = self._base_dataset(spec)
+        dataset_receipt = self._dataset_receipt(dataset_slug, corpus_dir)
         kernel = self._kernel(space)
         repository, branch, revision, tip = self._git_pin()
         stage_dir = self._stage_dir()
@@ -654,7 +671,8 @@ class LayaHpoStager:
             lane=self.lane, spec=spec, space=space, options=options,
             storage=storage,
             generation=generation, key=key, study_name=study_name,
-            dataset_slug=dataset_slug, base_dataset=base_dataset, kernel=kernel,
+            dataset_slug=dataset_slug, base_dataset=base_dataset,
+            corpus_dir=corpus_dir, kernel=kernel,
             repository=repository, branch=branch, revision=revision, tip=tip,
             dataset_receipt=dataset_receipt, stage_dir=stage_dir, tag=tag,
             budget_trials=budget_trials, budget_jobs=budget_jobs, script=script,
