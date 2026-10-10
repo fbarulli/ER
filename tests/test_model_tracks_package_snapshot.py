@@ -60,8 +60,11 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     config_dir = tmp_path / 'config'
     config_dir.mkdir()
     snapshots = {}
-    for name in ('paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
-                 'identity_reviews.json', 'vocabulary.json', 'text_track.yaml', 'attribute_ablation.yaml'):
+    # The pinned-config list comes FROM the SSOT (training.yaml
+    # packaging.snapshot_pinned_configs); a hardcoded subset here drifts every
+    # time the declaration grows (18dbf62 left this fixture behind).
+    from core.common import training_cfg
+    for name in training_cfg().packaging.snapshot_pinned_configs:
         snapshots[f'config/{name}'] = f'current {name}\n'.encode()
         (config_dir / name).write_bytes(snapshots[f'config/{name}'])
     inputs = {}
