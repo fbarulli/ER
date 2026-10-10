@@ -142,8 +142,10 @@ def test_rendered_kernel_embeds_gpu_sampler_and_perf_patch(
     # (2) the loop consumes pre-moved tensors; _forward is unchanged
     assert 'mask = batch["marker_mask"].to(device)' in script
     assert 'qtype = batch["qtype"].to(device)' in script
-    # (3) encode memoization keyed by (item id, option order)
-    assert "encoded = cache.get(key)" in script
+    # (3) encode memoization: ONE process-wide memo (EncodeMemo) serves the
+    # training loop AND every calibration_records/eval path
+    assert "class EncodeMemo" in script
+    assert "EncodeMemo.install(" in script
     assert "draw_option_order(" in script
 
 

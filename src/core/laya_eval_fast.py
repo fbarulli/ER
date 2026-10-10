@@ -74,6 +74,68 @@ class EvalRecordsHook:
         return policy
 
 
+class EncodeMemo:
+    """Process-wide memoization of laya's ``encode_item`` (ONE cache for the
+    training loop AND every eval path).
+
+    laya re-tokenizes from the raw item on EVERY ``calibration_records``
+    call, so the 27,305-item dev split paid tokenization every epoch inside
+    dev_eval, and the finetune before/after evals paid it again. The loop's
+    old per-call dict covered TRAIN items only; this memo wraps the module
+    function once, so every caller hits the same cache. Keyed by
+    ``(id(item), args, kwargs)`` — items are immutable dicts owned by the
+    trial; ``reset()`` per trial (apply_perf_patch) bounds the cache to ONE
+    trial's items, the same lifetime the loop-local dict had.
+    """
+
+    def __init__(self):
+        self._cache = {}
+        self.hits = 0
+        self.lookups = 0
+
+    @staticmethod
+    def _key(item, args, kwargs):
+        def part(value):
+            return tuple(value) if isinstance(value, list) else value
+        return ((id(item),) + tuple(part(value) for value in args)
+                + tuple(sorted((name, part(value))
+                               for name, value in kwargs.items())))
+
+    def lookup(self, item, args, kwargs):
+        self.lookups += 1
+        return self._cache.get(self._key(item, args, kwargs))
+
+    def store(self, item, args, kwargs, encoded):
+        self._cache[self._key(item, args, kwargs)] = encoded
+
+    def reset(self):
+        self._cache.clear()
+        self.hits = 0
+        self.lookups = 0
+        return self
+
+    @classmethod
+    def install(cls, laya_train, memo):
+        current = laya_train.encode_item
+        if getattr(current, "_er_memo", None) is memo:
+            return memo
+        original = getattr(current, "_er_original", current)
+
+        def encode_item(tok, item, *args, **kwargs):
+            encoded = memo.lookup(item, args, kwargs)
+            if encoded is None:
+                encoded = original(tok, item, *args, **kwargs)
+                memo.store(item, args, kwargs, encoded)
+            else:
+                memo.hits += 1
+            return encoded
+
+        encode_item._er_memo = memo
+        encode_item._er_original = original
+        laya_train.encode_item = encode_item
+        return memo
+
+
 class DevEvaluator:
     """Rank-0 dev scoring + end-of-run calibration/confusion artifacts."""
 

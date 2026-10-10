@@ -60,6 +60,7 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_controls.ProfilerSession,
         laya_eval_fast.EvalRecordsPolicy,
         laya_eval_fast.EvalRecordsHook,
+        laya_eval_fast.EncodeMemo,
         laya_eval_fast.DevEvaluator,
     )
 )

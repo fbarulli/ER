@@ -407,8 +407,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     order_rng = random.Random(config.seed)
     params = [p for g in groups for p in g["params"]]
     history = []
-    cache = {}
-    hits = lookups = 0
+    memo = globals().get("ENCODE_MEMO") or EncodeMemo()
     # ── control state ────────────────────────────────────────────────────
     # `dev_enabled` is computed identically on every rank (the control block
     # and the stashed rows are the same everywhere), so the per-epoch
@@ -520,17 +519,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 for it in chunk_items:
                     order = laya_train.draw_option_order(
                         it, order_rng, config.shuffle_options)
-                    key = (id(it), tuple(order) if order is not None else None,
-                           max_len, head_max_len, parallel)
-                    encoded = cache.get(key)
-                    if encoded is None:
-                        encoded = laya_train.encode_item(
-                            tok, it, max_len, head_max_len, order, parallel)
-                        cache[key] = encoded
-                    else:
-                        hits += 1
-                    lookups += 1
-                    chunk.append(encoded)
+                    chunk.append(laya_train.encode_item(
+                        tok, it, max_len, head_max_len, order, parallel))
             with profiler.phase("collate+batch_move"):
                 batch = laya_train.collate_items([chunk], tok.pad_token_id)
                 # dynamic padding: laya's collate already pads to the batch
@@ -651,7 +641,8 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         epoch_time = max(0.0, time.time() - epoch_started)
         lr_now = float(optimizer.param_groups[0]["lr"])
         print("epoch %d/%d mean loss %.4f lr %.6g grad_accum %d hits %d/%d"
-              % (epoch + 1, config.epochs, mean, lr_now, epoch_grad_accum, hits, lookups), flush=True)
+              % (epoch + 1, config.epochs, mean, lr_now, epoch_grad_accum,
+                 memo.hits, memo.lookups), flush=True)
         grad_norm_mean = ((grad_norm_sum / grad_steps).item() if grad_steps else None)
         # ── per-epoch dev evaluation (rank 0) + broadcast ───────────────
         dev = None
@@ -803,6 +794,8 @@ def apply_perf_patch():
     control = TrainingControls.parse(globals().get("FINETUNE_CONTROL"), {}).block
     policy = globals().setdefault("EVAL_RECORDS_POLICY", EvalRecordsPolicy())
     EvalRecordsHook.install(laya_train, policy.update(control))
+    EncodeMemo.install(laya_train,
+                       globals().setdefault("ENCODE_MEMO", EncodeMemo()).reset())
     laya_train.train_model = _perf_train_model
     print("[perf-patch] laya.train.train_model patched: on-GPU loss (1 sync/"
           "epoch), single device move, encode memoization; eval records "

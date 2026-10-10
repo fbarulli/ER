@@ -84,3 +84,30 @@ def test_eval_speed_knobs_are_default_off_and_hpo_on():
     assert (inspect.getsource(laya_eval_fast.EvalRecordsHook)
             in laya_lane.FINETUNE_PERF_PATCH_SOURCE)
     assert "EvalRecordsHook.install(" in laya_lane.FINETUNE_PERF_PATCH_SOURCE
+
+
+def test_encode_memo_serves_every_caller_and_resets_per_trial():
+    """ONE cache for the loop AND the eval paths: the second call with the
+    same (item, args) never re-tokenizes; reset() (the per-trial bound)
+    makes the next call encode again."""
+    import types
+
+    encoded_calls = []
+
+    def encode_item(tok, item, *args, **kwargs):
+        encoded_calls.append(item)
+        return {"ids": [1], "item": item}
+
+    laya_train = types.SimpleNamespace(encode_item=encode_item)
+    memo = laya_eval_fast.EncodeMemo.install(laya_train,
+                                             laya_eval_fast.EncodeMemo())
+    item = {"q": 1}
+    first = laya_train.encode_item(None, item, 8, 4, None, False)
+    second = laya_train.encode_item(None, item, 8, 4, None, False)
+    nested = laya_train.encode_item(None, item, 8, 4, parallel=False,
+                                    option_order=None)  # different kwargs
+    assert first is second and encoded_calls == [item, item]
+    assert nested is not first and (memo.hits, memo.lookups) == (1, 3)
+    memo.reset()
+    laya_train.encode_item(None, item, 8, 4, None, False)
+    assert len(encoded_calls) == 3 and memo.lookups == 1 and memo.hits == 0
