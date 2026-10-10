@@ -52,7 +52,7 @@ sims | mixed | smoke | bundle | stop`. Flags:
 | `--prepared-input-package <path>` | reuse a `training.prepare_all` `all_tracks_inputs` package; suite-only; archive-integrity verified then copied to `results/model_tracks/<tag>__inputs.<fmt>`. `<path>` may be the archive, a bundle directory (resolved through its `bundle.receipt.json`'s `archive`, else the canonical `all_tracks_inputs.tar.zst`), so `results/kaggle_lane/full/bundle` works directly. Unspecified on the default `--what tracks` launch, it resolves to that full bundle. A path that resolves to nothing fails before the VM with every known bundle + cohort/revision (`resolve_prepared_input_package`, `prepared_package_candidates`) |
 | `--dataset-csv` | raw export for `--what bundle` only (colab.py:2215–2219) |
 | `--train-frac`, `--epochs`, `--workers`, `--model`, `--loss`, `--run-label`, `--masking-profile`, `--collapse-guardrail-profile` | plain `train`/`dual-train`/`hpo` knobs (colab.py:2220–2260) |
-| `--sample` | sampled-training cap; requires `--tracks-config` frozen parent splits (colab.py:2235–2239) |
+| `--sample` | legacy sampled-training cap for `--what dual-train` ONLY; refused on a suite (`--tracks-config`) and on plain `--what train` — a sampled suite is PREPARED with `model_tracks.smoke_inputs.prepare_smoke` (writes a child `suite.yaml` over a frozen parent split) then launched by naming that `suite.yaml` (colab.py:2241–2246, suite guard colab.py:2379–2389) |
 | `--resume-run <id>` | resume `concurrent_train_<id>` or a prior suite run (needs the original `__inputs` archive, colab.py:2261–2265); not supported by dual-train (colab.py:2644–2645) |
 | `--resume-hpo`, `--hpo-persistence {local,none}`, `--hpo-mode`, `--hpo-jobs` | Optuna durability/schedule (colab.py:2266–2298) |
 | `--gpu <name>` | accelerator request; `CPU` is the safe default (colab.py:2277–2281) |
@@ -94,7 +94,9 @@ PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_3k.csv
 
 | intent | rule | anchor |
 |---|---|---|
-| sampled `--what train --sample N` | rejected: `sampled training requires --tracks-config with frozen parent splits` — sanctioned path is the suite | colab.py:2235–2239 |
+| `--sample` on a suite (`--tracks-config`) | rejected: `--sample does not apply to an all-track suite; prepare a sampled suite with model_tracks.smoke_inputs.prepare_smoke and launch its suite.yaml` — the suite trains the frozen inputs it is handed and has no `--sample` reader, so the flag would silently no-op | colab.py:2379–2389 |
+| sampled `--what train --sample N` | rejected: `sampled --what train is retired; prepare a sampled suite with model_tracks.smoke_inputs.prepare_smoke and launch it via --tracks-config` | colab.py:2455–2460 |
+| `--sample` live reader | only `--what dual-train --sample N` (legacy sampled dual-train); every other lane refuses or ignores it | colab.py:2698 |
 | legacy `--sample` bundle rebuild | rejected: `legacy sampled preparation does not preserve the shared component split` | colab_bundle_prewarm.py:335 |
 | legacy `--what smoke` (no tracks-config) | raised before provisioning: `legacy smoke does not preserve the shared component holdout; use --what tracks --tracks-config ...` — the smoke body behind this branch is unreachable | colab.py:2413–2416; dispatch 2614 |
 | `--tracks-config` on other `--what` | `--tracks-config applies to train/tracks/smoke only` | colab.py:2351 |

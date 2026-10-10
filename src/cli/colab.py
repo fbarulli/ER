@@ -2240,7 +2240,9 @@ def main() -> None:
     )
     ap.add_argument(
         "--sample", type=int, default=None,
-        help="optional smoke cap for --what train; full data when omitted",
+        help="legacy sampled-training cap for --what dual-train only; refused "
+             "on a suite (prepare a sampled suite with "
+             "model_tracks.smoke_inputs.prepare_smoke instead)",
     )
     ap.add_argument(
         "--model",
@@ -2377,6 +2379,15 @@ def main() -> None:
             raise ValueError('--tracks-config applies to train/tracks/smoke only')
         if args.refresh_data or args.train_only:
             raise ValueError('all-track suite requires prepared inputs and full postprocessing')
+        if args.sample is not None:
+            # The suite trains the frozen prepared inputs it is handed; it has
+            # no --sample reader, so accepting the flag would silently drop it.
+            # A sampled suite is PREPARED (model_tracks.smoke_inputs.prepare_smoke
+            # writes a child suite.yaml over a frozen parent split), then
+            # launched by naming that suite.yaml — never by a launch-time cap.
+            raise ValueError(
+                '--sample does not apply to an all-track suite; prepare a sampled '
+                'suite with model_tracks.smoke_inputs.prepare_smoke and launch its suite.yaml')
         from model_tracks.config import load_config as load_suite
         from model_tracks.preflight import preflight as suite_preflight
         from model_tracks.package import package as suite_package
@@ -2444,7 +2455,9 @@ def main() -> None:
             'results/model_tracks/smoke_20261001_128/suite.yaml --gpu CPU')
     if args.what == 'train' and suite_archive is None:
         if args.sample is not None:
-            raise ValueError('sampled training requires --tracks-config with frozen parent splits')
+            raise ValueError(
+                'sampled --what train is retired; prepare a sampled suite with '
+                'model_tracks.smoke_inputs.prepare_smoke and launch it via --tracks-config')
         _legacy_validation_sources()
 
     GPU = args.gpu

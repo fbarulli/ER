@@ -770,5 +770,24 @@ class PreparedBundleUploadTests(unittest.TestCase):
             self.assertTrue(remotes[0].endswith("/worker_1/worker_1_baseline.pkl.gz"))
 
 
+class SampleSuiteGuardTests(unittest.TestCase):
+    """--sample must never silently no-op on an all-track suite (GAP3)."""
+
+    def test_sample_is_refused_on_a_suite(self):
+        """The suite trains the frozen inputs it is handed; --sample is dead there.
+
+        A sampled suite is PREPARED (model_tracks.smoke_inputs.prepare_smoke),
+        not capped at launch. The guard fires before any provisioning, so this
+        needs no VM mocks.
+        """
+        with mock.patch.object(
+            sys, "argv", ["colab.py", "--what", "tracks", "--sample", "5", "--gpu", "CPU"]
+        ):
+            with self.assertRaises(ValueError) as raised:
+                colab.main()
+        self.assertIn("does not apply to an all-track suite", str(raised.exception))
+        self.assertIn("prepare_smoke", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
