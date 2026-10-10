@@ -157,15 +157,16 @@ def log(line):
     LOG_SINK.add(text)
 
 
-def wandb_init():
+def wandb_init(name=None, group=None, config=None):
     global WANDB_RUN
     if not WANDB_API_KEY:
         return None
     os.environ["WANDB_API_KEY"] = WANDB_API_KEY
     try:
         import wandb
-        WANDB_RUN = wandb.init(project=WANDB_PROJECT, name=RUN_TAG,
-                               config={"hpo_space": HPO_SPACE})
+        WANDB_RUN = wandb.init(project=WANDB_PROJECT, name=name or RUN_TAG,
+                               group=group, reinit=True,
+                               config=config or {"hpo_space": HPO_SPACE})
         log("wandb run " + str(getattr(WANDB_RUN, "id", "")))
     except Exception as error:
         log("wandb init skipped: " + type(error).__name__ + ": "
@@ -592,6 +593,15 @@ def run_trial(trial, device, train_path, dev_path, base_model):
            json.dumps(dials, sort_keys=True)))
     seed = baseline_dials()
     is_baseline = seed is not None and dials == seed
+    # ONE wandb run PER TRIAL, grouped by the run tag, so trials never share a
+    # run and their epoch/metric curves stay separate; the baseline seed trial
+    # gets its own run too.
+    wandb_init(name=RUN_TAG + ("-baseline" if is_baseline else "-trial-")
+               + str(int(trial.number)), group=RUN_TAG,
+               config={"trial": int(trial.number),
+                       "is_baseline": bool(is_baseline),
+                       "params": json.dumps(dials, sort_keys=True),
+                       "resource": resource})
     wandb_log_event("baseline_start" if is_baseline else "trial_start",
                     number=int(trial.number),
                     params=json.dumps(dials, sort_keys=True),
@@ -641,7 +651,8 @@ def run_trial(trial, device, train_path, dev_path, base_model):
         % (int(trial.number), accuracy, dev_loss, epoch_time))
     wandb_log_event("baseline_end" if is_baseline else "trial_end",
                     number=int(trial.number), value=float(accuracy),
-                    dev_loss=dev_loss)
+                    dev_loss=dev_loss, epoch_time_s=float(epoch_time))
+    wandb_finish()
     return float(accuracy), dev_loss, out_dir, float(epoch_time)
 
 
@@ -847,9 +858,12 @@ def run_ddp_trial(trial_number):
     seed = baseline_dials()
     is_baseline = seed is not None and dials == seed
     if is_rank0():
-        wandb_init()
-        wandb_log_event("kernel_boot", model_key=MODEL_KEY,
-                        generation_id=GENERATION_ID, role="ddp-trial")
+        wandb_init(name=RUN_TAG + ("-baseline" if is_baseline else "-trial-")
+                   + str(int(trial_number)), group=RUN_TAG,
+                   config={"trial": int(trial_number),
+                           "is_baseline": bool(is_baseline),
+                           "params": json.dumps(dials, sort_keys=True),
+                           "resource": resource})
         wandb_log_event("baseline_start" if is_baseline else "trial_start",
                         number=int(trial_number),
                         params=json.dumps(dials, sort_keys=True),
