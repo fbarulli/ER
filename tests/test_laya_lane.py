@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -696,6 +697,18 @@ def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
     assert ("CET" in body or "CEST" in body)
     assert body.startswith("2026-")
     assert "staged decision payload" in body
+
+
+def test_lane_logs_dir_resolves_under_canonical_root(tmp_path, monkeypatch):
+    """A worktree launch still logs to the canonical (main) tree: the roof is
+    ProjectRoot.canonical(TRAIN_ROOT) joined with the DECLARED laya.logs_dir
+    (db02bc4 convention), never a re-spelled literal."""
+    cfg_spec = _spec(tmp_path, monkeypatch)
+    canonical_root = tmp_path / "canonical"
+    monkeypatch.setattr(
+        laya_lane, "ProjectRoot",
+        types.SimpleNamespace(canonical=lambda source: canonical_root))
+    assert laya_lane.lane_logs_dir() == canonical_root / cfg_spec.logs_dir
 
 
 def test_stage_receipts_layout_is_per_op(tmp_path, monkeypatch):

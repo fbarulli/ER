@@ -184,6 +184,11 @@ class LayaSpec(BaseModel):
     # Staging root (TRAIN_ROOT-relative). Receipts land under
     # results/laya_lane/<kind>/<op>/...
     staging_dir: str = "results/laya_lane"
+    # The lane's OWN transcript roof (repo-relative), resolved under the
+    # CANONICAL checkout so a run launched from .worktrees/<name> still logs
+    # to the main tree — the log_capture one-roof convention, declared once
+    # here instead of re-spelled beside the lane's log file name.
+    logs_dir: str = "logs/laya"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
     # The fine-tune/eval kernels' pin (the version their flags + the PERF/

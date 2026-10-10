@@ -64,9 +64,10 @@ from core.eval_trace import (
 )
 from core.laya_config import LayaHostedRole, LayaSpec
 from core.manifest import atomic_write_json, file_size
+from core.project_root import ProjectRoot
 from core.results import Results
 
-# One roof (kaggle_lane precedent: TRAIN_ROOT/logs/<lane>/).
+# One CANONICAL roof (kaggle_lane/log_capture precedent: <canonical>/logs/<lane>/).
 KINDS = ("kaggle", "colab")
 GPU_KINDS = ("attribute", "identity", "laya-cli-eval", "finetune",
              "finetune-eval", "holdout-eval")
@@ -854,8 +855,14 @@ def staging_dir() -> Path:
 
 
 def lane_logs_dir() -> Path:
-    """The lane transcript dir (one canonical roof: TRAIN_ROOT/logs)."""
-    return TRAIN_ROOT / "logs" / "laya"
+    """The lane transcript dir — one CANONICAL roof (``laya.logs_dir``).
+
+    Resolved through ``ProjectRoot.canonical`` (the db02bc4 log_capture
+    convention), so a run launched from ``.worktrees/<name>`` still logs to
+    the main tree; the roof is the declared ``laya.logs_dir``, never a
+    re-spelled literal.
+    """
+    return (ProjectRoot.canonical(TRAIN_ROOT) / _spec().logs_dir).resolve()
 
 
 def _stamp() -> str:
