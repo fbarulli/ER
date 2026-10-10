@@ -33,10 +33,13 @@ ordering hazards.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from functools import lru_cache
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 class ProjectRoot:
@@ -121,6 +124,10 @@ class ProjectRoot:
                  "--git-common-dir"],
                 capture_output=True, text=True, check=True)
         except (OSError, subprocess.CalledProcessError):
+            # Not a git checkout (or git absent): no shared checkout to step out
+            # of, so the marker root stands. The reason is recorded, not silent.
+            _log.debug("canonical root: git common dir unavailable at %s", marker,
+                       exc_info=True)
             return marker
         common = result.stdout.strip()
         return Path(common).parent if common else marker
