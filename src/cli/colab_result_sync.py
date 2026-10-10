@@ -463,16 +463,27 @@ def _read_remote_text(remote: str) -> str:
     raise RuntimeError("remote read returned no marker")
 
 
+def result_root_name(run_id: str, *, smoke: bool = False) -> str:
+    """The TRAINING_RESULTS root name one run's local artifacts land in.
+
+    Smoke runs join a separate retention lane (``smoke_`` prefix, 4186da7);
+    every other run keeps its bare id.  ONE declaration: the verified download
+    and the launcher's remote-run metadata both key their root through here, so
+    the metadata can never orphan into a root the download does not use (the
+    ebca9ed delivery-root class on the metadata side).
+    """
+    return f"smoke_{run_id}" if smoke else run_id
+
+
 def download_verified_training_results(
     remote_base: str, workers: int, *, smoke: bool = False
 ) -> None:
     """Transfer one manifest-backed result archive before VM teardown."""
     surface = hub()
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    # Smoke runs join a separate retention lane (smoke_ prefix): the local
-    # root must already carry the prefix BEFORE extraction so the overwrite
-    # sweep below governs only this lane.
-    local_base = surface.TRAINING_RESULTS / (f"smoke_{run_id}" if smoke else run_id)
+    # The root must already carry the lane's name BEFORE extraction so the
+    # overwrite sweep below governs only this lane.
+    local_base = surface.TRAINING_RESULTS / result_root_name(run_id, smoke=smoke)
     local_base.mkdir(parents=True, exist_ok=True)
     # Receipts key to the root the archive actually lands in (smoke_ included) —
     # the same root the transport derives from the destination itself.

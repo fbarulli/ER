@@ -484,10 +484,18 @@ def _result_event(
     detail_text = " ".join(f"{key}={value}" for key, value in details.items())
     print(_stamp(), f"[result-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
 
-def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
-    """Persist the remote location before uploads or training begin."""
+def _record_remote_run(remote_base: str, *, workers: int, lane: str,
+                       smoke: bool = False) -> None:
+    """Persist the remote location before uploads or training begin.
+
+    The metadata root is the SAME TRAINING_RESULTS root the verified download
+    lands in (``result_root_name`` SSOT): a smoke run's ``remote_run.json``
+    rides in ``smoke_<run_id>/`` beside its results, never orphaned in a bare
+    ``<run_id>/`` root the download never writes to (the ebca9ed delivery-root
+    class on the metadata side).
+    """
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    root = TRAINING_RESULTS / run_id
+    root = TRAINING_RESULTS / result_root_name(run_id, smoke=smoke)
     root.mkdir(parents=True, exist_ok=True)
     metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -642,7 +650,7 @@ def run_parallel_train_and_tail(
         else f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     )
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    _record_remote_run(remote_base, workers=workers, lane="train")
+    _record_remote_run(remote_base, workers=workers, lane="train", smoke=smoke)
     if prepared_bundles is not None and remote_checkout_bundles is not None:
         raise ValueError("prepared bundles must be uploaded or checkout-native, not both")
     if remote_checkout_bundles is not None:
@@ -936,6 +944,7 @@ from cli.colab_result_sync import (  # noqa: E402,F401
     _read_remote_text,
     _load_result_manifest,
     download_verified_training_results,
+    result_root_name,
 )
 # publish_local_hpo_results moved to cli.colab_retention (phase-1 split of
 # colab.py); re-exported so the legacy `from cli import colab` surface and
@@ -1186,7 +1195,7 @@ def run_single_train_and_stream(
     stamp = _lane_run_stamp()
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    _record_remote_run(remote_base, workers=1, lane="train")
+    _record_remote_run(remote_base, workers=1, lane="train", smoke=smoke)
     if not final_inference:
         remote_validation_inputs = {"sample": "", "source": "", "training": ""}
     elif remote_validation_csv is not None:

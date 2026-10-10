@@ -109,6 +109,21 @@ def test_smoke_result_download_keys_every_receipt_to_the_smoke_root(
     assert not (results / RUN_ID).exists()
 
 
+def test_smoke_remote_run_metadata_lands_in_the_smoke_root(tmp_path, monkeypatch):
+    """Metadata side of the same class: a smoke run's ``remote_run.json`` rides
+    in the ``smoke_``-prefixed root the verified download uses — never orphaned
+    in a bare ``<run_id>/`` root the download never writes to."""
+    results = tmp_path / "training_results"
+    monkeypatch.setattr(colab, "TRAINING_RESULTS", results)
+
+    colab._record_remote_run(
+        f"/content/ER/results/concurrent_train_{RUN_ID}",
+        workers=1, lane="train", smoke=True)
+
+    assert (results / ("smoke_" + RUN_ID) / "remote_run.json").is_file()
+    assert not (results / RUN_ID).exists()
+
+
 def test_run_retention_never_sweeps_the_bundle_delivery_root(tmp_path):
     # run_retention recognizes (and prunes) only completed runs carrying
     # track markers, and replace_smoke's overwrite rule targets smoke_ names.
