@@ -1,7 +1,0 @@
-[gtin-guard] excluded 152 identity-review rows (GLN or unresolved formulation)
-[gtin-guard] dropped 3,715 rows whose gtin FAILS the GS1 check digit (no canonical/labels form on a barcode that cannot be trusted as identity)
-[gtin-guard] total dropped 45,412 rows (missing/NaN gtin or failed checksum) — they cannot be grouped by product
-[trace] data_prep steps written -> /home/opc/ONE/ER/results/logs/training_trace.csv | gate decisions: {'hard_no': 115766, 'fallback': 18551, 'proceed': 929}
-pairs: 135,246 | canonical records: 13,216
-[numbers] 0 digit-token resolutions via regex fallback (not in reference CSV)
-[manifest] data_prep complete -> /home/opc/ONE/ER/results/manifests/data_prep.json | closure 71,623 == 13,216 kept-visible + 45,412 dropped
