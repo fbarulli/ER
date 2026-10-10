@@ -419,8 +419,20 @@ class KaggleMonitor:
                 lane._log_lane(
                     f"[{reader.path}] state={update['state']} "
                     f"metrics={json.dumps(update['metrics'], default=str)[:400]}")
+                family = update.get("runs") or []
+                if len(family) > 1:
+                    # The HPO family: every per-trial run is its own handle
+                    # (the per-trial metrics live in the trial runs, never in
+                    # the controller's summary), so each state+summary rides
+                    # its own line in the local transcript.
+                    for entry in family:
+                        lane._log_lane(
+                            f"[{reader.path}#{entry['name']}] "
+                            f"state={entry['state']} metrics="
+                            f"{json.dumps(entry['metrics'], default=str)[:240]}")
                 plan["state"] = update["state"]
                 plan["metrics"] = update["metrics"]
+                plan["runs"] = family
                 if update.get("console_error"):
                     plan["console_error"] = update["console_error"]
                 if update.get("live_error"):

@@ -1106,9 +1106,10 @@ def test_kernel_logs_reads_the_kaggle_api_into_the_one_transcript(tmp_path, monk
 
 # ── W&B real-time reader: the primary live tracking source ──────────────────
 
-def test_wandb_run_reader_reads_live_metrics_and_console(monkeypatch):
-    """The primary tracking source resolves the run by project/run_tag and
-    returns the latest metrics plus the live console output (no network)."""
+def test_wandb_run_reader_resolves_the_display_name_and_reads_it(monkeypatch):
+    """``Api.run`` resolves run IDs, never display names: the reader must
+    resolve the tag to its run through the project's ``display_name`` query and
+    then return that run's state, metrics and live console (no network)."""
     import io
 
     from core.wandb_ctx import WandbRunReader
@@ -1118,6 +1119,8 @@ def test_wandb_run_reader_reads_live_metrics_and_console(monkeypatch):
             return io.StringIO("epoch 1 loss=0.5\n")
 
     class FakeRun:
+        id = "abc123"
+        name = "laya_123"
         state = "running"
         summary = {"loss": 0.5, "accuracy": 0.9}
 
@@ -1126,22 +1129,79 @@ def test_wandb_run_reader_reads_live_metrics_and_console(monkeypatch):
             return FakeFile()
 
     class FakeApi:
-        def __init__(self):
-            self.paths: list[str] = []
+        default_entity = "fbarulli"
 
-        def run(self, path):
-            self.paths.append(path)
-            return FakeRun()
+        def __init__(self):
+            self.queries: list[tuple] = []
+
+        def runs(self, path="", filters=None, order=None):
+            self.queries.append((path, filters, order))
+            return [FakeRun()]
 
     api = FakeApi()
     reader = WandbRunReader(run_tag="laya_123", project="e-r",
                             poll_seconds=15.0, api=api)
     update = reader.read_once()
-    assert api.paths == ["e-r/laya_123"]
+    path, filters, order = api.queries[0]
+    assert path == "fbarulli/e-r"
+    assert filters == {"display_name": {"$regex": r"^laya_123(-|$)"}}
+    assert order == "+created_at"
+    assert update["run"] == "e-r/laya_123"
     assert update["state"] == "running"
     assert update["metrics"] == {"loss": 0.5, "accuracy": 0.9}
+    assert update["runs"] == [{"id": "abc123", "name": "laya_123",
+                               "state": "running",
+                               "metrics": {"loss": 0.5, "accuracy": 0.9}}]
     assert "epoch 1 loss=0.5" in update["output"]
     assert update["console_error"] is None
+
+
+def test_wandb_run_reader_tracks_the_per_trial_run_family(monkeypatch):
+    """The HPO per-trial metrics live in ``<tag>-trial-N`` runs, NOT the
+    controller: the reader resolves the whole family, concatenates every
+    member's live batches in a stable order, and surfaces each trial's state +
+    summary as its own handle while ANY member is still running."""
+    from core.wandb_ctx import WandbRunReader
+
+    class FakeRun:
+        def __init__(self, run_id, name, state, summary, live):
+            self.id, self.name, self.state = run_id, name, state
+            self.summary = summary
+            self._live = live
+
+        def scan_history(self, keys=None):
+            return [{"log/line": text} for text in self._live]
+
+        def file(self, name):
+            raise FileNotFoundError("output.log is 404 while the run is live")
+
+    controller = FakeRun("c1", "laya_hpo_x", "running", {"run/event": "boot"},
+                         ["controller line\n"])
+    trial0 = FakeRun("t0", "laya_hpo_x-trial-0", "finished",
+                     {"select/best_dev_accuracy": 0.91, "epoch": 3},
+                     ["trial 0 done\n"])
+    trial1 = FakeRun("t1", "laya_hpo_x-trial-1", "running",
+                     {"epoch": 2, "train/mean_loss": 0.04}, ["trial 1 epoch 2\n"])
+
+    class FakeApi:
+        default_entity = "fbarulli"
+
+        def runs(self, path="", filters=None, order=None):
+            return [controller, trial0, trial1]
+
+    reader = WandbRunReader(run_tag="laya_hpo_x", project="e-r",
+                            poll_seconds=0.0, api=FakeApi())
+    updates = list(reader.stream(max_polls=1))
+    assert len(updates) == 1
+    update = updates[0]
+    assert update["state"] == "running"
+    assert [entry["name"] for entry in update["runs"]] == [
+        "laya_hpo_x", "laya_hpo_x-trial-0", "laya_hpo_x-trial-1"]
+    assert update["runs"][1]["metrics"]["select/best_dev_accuracy"] == 0.91
+    assert update["runs"][2]["state"] == "running"
+    # the primary is the RUNNING exact-name controller: its console is read
+    assert update["new_output"] == (
+        "controller line\ntrial 0 done\ntrial 1 epoch 2\n")
 
 
 def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
@@ -1152,14 +1212,13 @@ def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
 
     from core.wandb_ctx import WandbRunReader
 
-    class RunNotFoundError(Exception):
-        pass
-
     class FakeFile:
         def download(self, replace=True):
             return io.StringIO("epoch 1 loss=0.5\n")
 
     class FakeRun:
+        id = "abc123"
+        name = "laya_123"
         state = "running"
         summary = {"loss": 0.5}
 
@@ -1167,20 +1226,20 @@ def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
             return FakeFile()
 
     class FakeApi:
+        default_entity = "fbarulli"
+
         def __init__(self):
             self.calls = 0
 
-        def run(self, path):
+        def runs(self, path="", filters=None, order=None):
             self.calls += 1
-            if self.calls == 1:
-                raise RunNotFoundError("not registered yet")
-            return FakeRun()
+            return [] if self.calls == 1 else [FakeRun()]
 
     reader = WandbRunReader(run_tag="laya_123", project="e-r",
                             poll_seconds=0.0, api=FakeApi())
     updates = list(reader.stream(max_polls=2))
     assert [update["state"] for update in updates] == ["pending", "running"]
-    assert updates[0]["console_error"].startswith("RunNotFoundError")
+    assert updates[0]["console_error"].startswith("CommError")
     assert updates[1]["new_output"] == "epoch 1 loss=0.5\n"
 
 
@@ -1194,6 +1253,8 @@ def test_wandb_run_reader_console_fails_loud_on_a_real_error(monkeypatch):
         pass
 
     class FakeRun:
+        id = "abc123"
+        name = "laya_123"
         state = "running"
         summary = {}
 
@@ -1201,8 +1262,10 @@ def test_wandb_run_reader_console_fails_loud_on_a_real_error(monkeypatch):
             raise TransportError("HTTP 500: upstream unavailable")
 
     class FakeApi:
-        def run(self, path):
-            return FakeRun()
+        default_entity = "fbarulli"
+
+        def runs(self, path="", filters=None, order=None):
+            return [FakeRun()]
 
     reader = WandbRunReader(run_tag="laya_123", project="e-r",
                             poll_seconds=0.0, api=FakeApi())
@@ -1221,6 +1284,8 @@ def test_track_run_streams_the_live_log_channel_into_the_lane_transcript(
     _kernel_spec(tmp_path, monkeypatch)
 
     class FakeRun:
+        id = "abc123"
+        name = "laya_live"
         state = "finished"
         summary = {"accuracy": 0.9}
 
@@ -1234,9 +1299,11 @@ def test_track_run_streams_the_live_log_channel_into_the_lane_transcript(
             raise FileNotFoundError("output.log is 404 while the run is live")
 
     class FakeApi:
-        def run(self, path):
-            assert path.endswith("/laya_live")
-            return FakeRun()
+        default_entity = "fbarulli"
+
+        def runs(self, path="", filters=None, order=None):
+            assert path.endswith("/e-r") or "/" in path
+            return [FakeRun()]
 
     monkeypatch.setattr(WandbRunReader, "available",
                         classmethod(lambda cls: True))

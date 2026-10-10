@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import traceback
 from pathlib import Path
@@ -118,33 +119,45 @@ LIVE_LOG_KEY = "log/line"
 
 
 class WandbRunReader:
-    """Read-only live repository over one W&B run (metrics + live text channel).
+    """Read-only live repository over one W&B run FAMILY (metrics + live text).
 
-    The writer counterpart is :class:`WandbCtx`. Given the configured
-    ``tracking.wandb.project`` and a run tag, this streams the run's latest
-    logged metrics and its live text channel (``log/line``), falling back to the
-    ``output.log`` console. The ``WANDB_API_KEY`` is resolved through the
-    canonical credential owner (``core.credentials.CredentialStore``) and
-    exported to the wandb client's environment silently — never logged or
-    printed. Polling honours the config-declared cadence
-    (``tracking.wandb.poll_seconds``); a W&B read error is recorded, never
-    fatal (the console fallback still runs).
+    The writer counterpart is :class:`WandbCtx`. ``wandb.Api.run`` resolves a
+    run ID — NEVER a display name — so the configured
+    ``tracking.wandb.project`` plus a run TAG is resolved to real runs by a
+    ``display_name`` query: the family is the tag's own run(s) plus the
+    per-trial runs the HPO kernels create (``<tag>-trial-N`` / ``<tag>-
+    baseline``, grouped under the tag). The primary run (the newest RUNNING
+    exact-name match, else the newest family member) carries the run state,
+    the live text channel (``log/line``) and the ``output.log`` console
+    fallback; EVERY family member contributes its live batches (stable
+    oldest-first order, so the watcher's append-only prefix never shuffles)
+    and its own state + summary metrics as a per-run handle — the per-trial
+    metrics live in the trial runs, not the controller's. The
+    ``WANDB_API_KEY`` is resolved through the canonical credential owner
+    (``core.credentials.CredentialStore``) and exported to the wandb client's
+    environment silently — never logged or printed. Polling honours the
+    config-declared cadence (``tracking.wandb.poll_seconds``); a family that
+    has not registered yet is the recorded transient startup case, any other
+    W&B read error is recorded with its full traceback or re-raised, never
+    silently swallowed.
     """
 
     def __init__(self, *, run_tag: str, project: str | None = None,
-                 poll_seconds: float | None = None, api: Any | None = None):
+                 poll_seconds: float | None = None, api: Any | None = None,
+                 entity: str | None = None):
         if project is None or poll_seconds is None:
             cfg = training_cfg().tracking.wandb
             project = project or cfg.project
             poll_seconds = cfg.poll_seconds if poll_seconds is None else poll_seconds
         self.run_tag = run_tag
         self.project = project
+        self.entity = entity
         self.poll_seconds = float(poll_seconds)
         self._api = api
 
     @property
     def path(self) -> str:
-        """The ``project/run_tag`` address the wandb API resolves."""
+        """The ``project/run_tag`` display address (logging; NOT an API path)."""
         return f"{self.project}/{self.run_tag}"
 
     @classmethod
@@ -166,15 +179,70 @@ class WandbRunReader:
             self._api = wandb.Api()
         return self._api
 
+    def _address(self) -> str:
+        """The ``entity/project`` the wandb API queries (default entity aware)."""
+        client = self._client()
+        entity = self.entity or str(getattr(client, "default_entity", "") or "")
+        return f"{entity}/{self.project}" if entity else self.project
+
+    def _family(self) -> list:
+        """The tag's run family, oldest-first (a stable, append-only order).
+
+        One ``display_name`` query resolves the tag's own run(s) AND the
+        per-trial children (``<tag>-trial-N``); a family that has not
+        registered yet raises the transient startup error the stream retries.
+        """
+        pattern = "^" + re.escape(self.run_tag) + "(-|$)"
+        found = list(self._client().runs(
+            path=self._address(),
+            filters={"display_name": {"$regex": pattern}},
+            order="+created_at"))
+        if not found:
+            from wandb.errors import CommError
+
+            raise CommError(
+                f"no wandb run displays as {self.run_tag!r} (or a per-trial "
+                f"child of it) in {self._address()} yet")
+        return found
+
+    def _primary(self, family: list):
+        """The tracked run: the newest RUNNING exact-name match (the finetune
+        run / the HPO controller), else the newest exact name, else the newest
+        family member."""
+        exact = [run for run in family
+                 if str(getattr(run, "name", "")) == self.run_tag]
+        candidates = exact or family
+        live = [run for run in candidates
+                if str(getattr(run, "state", "")) not in _WANDB_TERMINAL_STATES]
+        return (live or candidates)[-1]
+
     def read_once(self) -> dict[str, Any]:
-        """One snapshot: run state, metrics, the live channel, the console log."""
-        run = self._client().run(self.path)
-        output, console_error = self._console(run)
-        live, live_error = self._live(run)
+        """One snapshot: family state, the primary's metrics/console/live text,
+        and EVERY family member as a per-run handle (``runs``)."""
+        family = self._family()
+        primary = self._primary(family)
+        output, console_error = self._console(primary)
+        live: list[str] = []
+        live_error: str | None = None
+        runs: list[dict[str, Any]] = []
+        for run in family:
+            batches, error = self._live(run)
+            live.extend(batches)
+            live_error = live_error or error
+            runs.append({
+                "id": str(getattr(run, "id", "")),
+                "name": str(getattr(run, "name", "")),
+                "state": str(getattr(run, "state", "unknown")),
+                "metrics": dict(getattr(run, "summary", {}) or {}),
+            })
+        non_terminal = [entry["state"] for entry in runs
+                        if entry["state"] not in _WANDB_TERMINAL_STATES]
         return {
             "run": self.path,
-            "state": str(getattr(run, "state", "unknown")),
-            "metrics": dict(getattr(run, "summary", {}) or {}),
+            "state": (non_terminal[0] if non_terminal
+                      else str(getattr(primary, "state", "unknown"))),
+            "metrics": dict(getattr(primary, "summary", {}) or {}),
+            "runs": runs,
             "output": output,
             "console_error": console_error,
             "live": live,
@@ -247,15 +315,16 @@ class WandbRunReader:
         return type(error).__name__ in {"RunNotFoundError", "CommError"}
 
     def stream(self, *, max_polls: int) -> Iterator[dict[str, Any]]:
-        """Yield bounded-cadence updates, stopping at a terminal run state.
+        """Yield bounded-cadence updates, stopping when the FAMILY is terminal.
 
         Each update carries only the text produced since the previous poll
-        (``new_output``) so a caller appends without duplicating the log. The
-        live ``log/line`` channel is primary — the only surface W&B exposes
-        while the run is live — and ``output.log`` is the fallback, used only
-        until the first live batch arrives. A run the kernel has not registered
-        yet yields a ``pending`` update (recorded, never fatal) and is retried
-        at the same cadence.
+        (``new_output``) so a caller appends without duplicating the log: the
+        family's live ``log/line`` batches are concatenated oldest-run-first
+        (a stable, append-only order — new trial runs land at the end), and
+        ``output.log`` is the fallback used only until the first live batch
+        arrives. The loop stops when EVERY family member is terminal. A family
+        the kernel has not registered yet yields a ``pending`` update
+        (recorded, never fatal) and is retried at the same cadence.
         """
         emitted = 0
         emitted_live = 0
@@ -267,13 +336,18 @@ class WandbRunReader:
                 if not self._not_ready(error):
                     raise
                 yield {"run": self.path, "state": "pending", "metrics": {},
-                       "output": "", "live": [], "new_output": "",
+                       "runs": [], "output": "", "live": [], "new_output": "",
                        "console_error": f"{type(error).__name__}: {error}",
                        "live_error": None}
                 time.sleep(self.poll_seconds)
                 continue
             batches = update.get("live") or []
-            new_live = "".join(batches[emitted_live:])
+            # Each flushed batch joins its own lines WITHOUT a trailing
+            # newline, so batches are re-separated here or the transcript
+            # glues the last line of one flush to the first of the next.
+            new_live = "".join(
+                batch if batch.endswith("\n") else batch + "\n"
+                for batch in batches[emitted_live:])
             emitted_live = len(batches)
             live_seen = live_seen or bool(batches)
             if new_live:
