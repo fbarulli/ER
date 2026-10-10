@@ -53,6 +53,8 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_controls.RDrop,
         laya_controls.DropPath,
         laya_controls.DynamicPadder,
+        laya_controls.TqdmLaneWriter,
+        laya_controls.LaneProgress,
         laya_controls.PhaseTimings,
         laya_controls.CalibrationTimingHook,
         laya_controls.ProfilerSession,
@@ -69,6 +71,20 @@ try:
     wandb_log_epoch
 except NameError:
     WANDB_RUN = None
+
+    class _OfflineLogSink:
+        """No-op log sink so the offline PERF-patch exec (unit tests) runs
+        without the kernel's shared wandb block."""
+
+        @staticmethod
+        def add(line):
+            return None
+
+        @staticmethod
+        def flush():
+            return None
+
+    LOG_SINK = _OfflineLogSink()
 
     def wandb_log_epoch(epoch, mean, extra=None):
         return None

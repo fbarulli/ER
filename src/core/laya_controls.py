@@ -582,6 +582,70 @@ class DynamicPadder:
         return result
 
 
+class TqdmLaneWriter:
+    """File-like tee that makes a kernel-side tqdm bar reach the lane log.
+
+    tqdm refresh frames ride the given stream (stderr: the Kaggle console
+    capture carries the CR frames and the host-side formatter expands them,
+    tagging the last bar ``[tqdm]``) AND the live wandb text sink (the
+    W&B-primary lane log), one tagged line per non-empty frame. The bar
+    throttles its own refreshes (``LaneProgress.MIN_INTERVAL_SECONDS``), so
+    the sink never sees a frame storm. Writes never raise into the loop.
+    """
+
+    TAG = "[tqdm] "
+
+    def __init__(self, stream, sink_add):
+        self._stream = stream
+        self._sink_add = sink_add
+
+    def write(self, text):
+        text = str(text)
+        if self._stream is not None:
+            self._stream.write(text)
+        for frame in text.split("\r"):
+            frame = frame.strip()
+            if frame:
+                self._sink_add(self.TAG + frame)
+        return len(text)
+
+    def flush(self):
+        if self._stream is not None:
+            self._stream.flush()
+
+
+class LaneProgress:
+    """The rank-0 training bars (epochs + steps within an epoch), fail-soft.
+
+    ``bar(iterable, **kwargs)`` returns a tqdm bar when enabled and tqdm is
+    importable (it rides the transformers dependency), else the bare iterable,
+    so the training loop NEVER depends on the bar. Non-rank-0 ranks construct
+    it disabled (one bar per session, never interleaved rank frames). The
+    display refresh is throttled to one frame per
+    ``MIN_INTERVAL_SECONDS`` so the teed sink lines stay bounded.
+    """
+
+    MIN_INTERVAL_SECONDS = 30.0
+
+    def __init__(self, enabled, sink, stream=None):
+        self.enabled = bool(enabled)
+        self._sink = sink
+        self._stream = stream
+
+    def bar(self, iterable, **kwargs):
+        if not self.enabled:
+            return iterable
+        try:
+            from tqdm import tqdm
+        except ImportError:  # pragma: no cover - tqdm rides transformers
+            return iterable
+        kwargs.setdefault("mininterval", self.MIN_INTERVAL_SECONDS)
+        kwargs.setdefault("disable", False)
+        kwargs.setdefault("file", TqdmLaneWriter(self._stream,
+                                                 self._sink.add))
+        return tqdm(iterable, **kwargs)
+
+
 class PhaseTimings:
     """Rank-0 wall-clock accumulator for named phases (GPU-free, fail-soft).
 

@@ -407,3 +407,34 @@ def test_staged_kernel_bakes_controls_and_wandb_metrics():
                   "MetricFlattener", "DevReport", "TrainingControls",
                   "ProfilerSession", "ControlCheckpointer"):
         assert "class " + klass in script, klass
+
+
+def test_lane_progress_bars_reach_the_stream_and_the_live_sink():
+    """The rank-0 tqdm bars: frames ride the console stream AND tee into the
+    live wandb sink tagged '[tqdm]' (so the bar reaches the lane log on both
+    capture paths); disabled returns the bare iterable — the training loop
+    must never depend on the bar."""
+    import io
+
+    class FakeSink:
+        def __init__(self):
+            self.lines = []
+
+        def add(self, line):
+            self.lines.append(line)
+
+    stream = io.StringIO()
+    sink = FakeSink()
+    progress = laya_controls.LaneProgress(True, sink, stream)
+    seen = list(progress.bar(range(3), desc="epochs", unit="epoch",
+                             mininterval=0.0))
+    assert seen == [0, 1, 2]
+    text = stream.getvalue()
+    assert "epochs" in text and "\r" in text
+    assert any(line.startswith("[tqdm] ") and "epochs" in line
+               for line in sink.lines)
+
+    before = len(sink.lines)
+    quiet = laya_controls.LaneProgress(False, sink, stream)
+    assert list(quiet.bar(range(2))) == [0, 1]
+    assert len(sink.lines) == before

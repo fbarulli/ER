@@ -81,11 +81,17 @@ GOLDEN_SHA256: dict[str, str] = {
     # log/line/event/timing/gpu sinks can never make wandb drop epoch rows.
     # wandb_finish additionally re-drives `wandb sync` on the run dir (the
     # documented "Fatal error while uploading data" recovery), fail-soft.
-    "finetune": "12bd9ddad742fbf974c4b7a66a2e38203756889fc1860775d69fc0a0221cfcf2",
-    "finetune-smoke": "f6eb56efe2d73ecd2a1f3de5c0774a25f0e0bad02f65608ac0923622dbe211df",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the rank-0 tqdm bars: the
+    # perf-patched loop now emits a real epochs bar + a steps-within-epoch bar
+    # (LaneProgress/TqdmLaneWriter, injected from core.laya_controls), tee'd
+    # into the live wandb log channel so the bar reaches the lane log; the
+    # offline-exec fallback stubs LOG_SINK for the DDP unit test.
+    "finetune": "f48dcfba4acaca9a74916e7bde12d6753a4563c7c369e151823b398e1a112bb8",
+    "finetune-smoke": "1aca5a1b90064d5b3cbb364fa5cdce0fb21b89dfdf3838b0e67fa1634c962cc1",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "71ce15c55c69450625b0bddcef4568d1c690baad46fc5eb085daf5070e543bb0",
+    "hpo": "f23c7e13e2079aa2f7a6b42fefed709cba1a85d8f8c3a040e784cc805ba94079",
 }
 
 

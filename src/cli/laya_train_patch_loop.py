@@ -349,6 +349,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     # Faithful copy of laya.train.train_model (0.3.29) carrying the three
     # recipe-neutral perf changes AND the YAML-driven training controls read
     # from the baked FINETUNE_CONTROL block (never a TrainConfig kwarg).
+    import sys
     import time
     import torch
     from laya import train as laya_train
@@ -525,7 +526,14 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     if profiler.enabled:
         profiler.start()
 
-    for epoch in range(start_epoch, config.epochs):
+    # rank-0 progress bars (epochs + steps within an epoch): stderr carries
+    # the CR frames to the console capture and the tee mirrors them into the
+    # live wandb log channel, so the bar reaches the lane log either way.
+    progress = LaneProgress(is_rank0(), LOG_SINK, sys.stderr)
+    epoch_bar = progress.bar(range(start_epoch, config.epochs),
+                             desc="epochs", unit="epoch",
+                             initial=start_epoch, total=config.epochs)
+    for epoch in epoch_bar:
         epoch_started = time.time()
         profiler.epoch = epoch + 1
         if gradual and epoch >= int(unfreeze_after):
@@ -564,7 +572,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         total, n_steps = None, 0
         grad_norm_sum, grad_steps = 0.0, 0
         optimizer.zero_grad(set_to_none=True)
-        for start in range(0, len(epoch_items), config.micro_batch):
+        for start in progress.bar(range(0, len(epoch_items),
+                                        config.micro_batch),
+                                  desc="epoch %d/%d" % (epoch + 1,
+                                                        config.epochs),
+                                  unit="batch", leave=False):
             chunk_items = epoch_items[start:start + config.micro_batch]
             chunk = []
             with profiler.phase("data.encode"):
@@ -787,6 +799,9 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             print("[perf-patch] early stop at epoch %d (%s=%s best=%s)"
                   % (epoch + 1, early_metric, metric_value, best), flush=True)
             break
+    _close_bar = getattr(epoch_bar, "close", None)
+    if _close_bar is not None:
+        _close_bar()
     profiler.close()
     # ── end-of-training weight selection (rank 0 only) ──────────────────
     if is_rank0():
