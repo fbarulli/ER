@@ -123,9 +123,10 @@ class ProjectRoot:
                 ["git", "-C", str(marker), "rev-parse", "--path-format=absolute",
                  "--git-common-dir"],
                 capture_output=True, text=True, check=True)
-        except (OSError, subprocess.CalledProcessError):
-            # Not a git checkout (or git absent): no shared checkout to step out
-            # of, so the marker root stands. The reason is recorded, not silent.
+        except Exception:
+            # git absent, the root is not a checkout, or a caller has disabled
+            # subprocess (tests): there is no shared checkout to step out of, so
+            # the marker root stands — recorded, never a silent swallow.
             _log.debug("canonical root: git common dir unavailable at %s", marker,
                        exc_info=True)
             return marker

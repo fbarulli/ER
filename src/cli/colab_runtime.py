@@ -437,13 +437,15 @@ def _env_value(name: str) -> str | None:
     """Read a simple KEY=VALUE entry without printing or cloning secrets.
 
     ONE implementation shared by the Colab and laya lanes: the checkout's
-    .env, its parent's, the box's project .env ($HOME/ONE/.env, the path
-    .bashrc sources), then the process environment.
+    .env, its parent's, the canonical ER checkout's parent .env (derived, never a
+    literal path), then the process environment.
     """
     from pathlib import Path
 
-    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env",
-                     Path.home() / "ONE" / ".env"):
+    from core.project_root import ProjectRoot
+
+    canonical_env = ProjectRoot.canonical(TRAIN_ROOT).parent / ".env"
+    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env", canonical_env):
         if not env_path.is_file():
             continue
         for line in env_path.read_text(encoding="utf-8").splitlines():
