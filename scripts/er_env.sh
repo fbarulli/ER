@@ -15,6 +15,7 @@
 # Usage:
 #   scripts/er_env.sh venv     [worktree_root]  # print shared venv dir (exit 1 if absent)
 #   scripts/er_env.sh link     [worktree_root]  # ensure that worktree's .venv points at it
+#   scripts/er_env.sh env-file [worktree_root]  # print the repo .env path (uv --env-file "$(...)")
 #
 # `worktree_root` defaults to the current directory. Exit codes: 0 ok; non-zero
 # = not an ER checkout, or the shared venv is missing (a real error — never
@@ -56,6 +57,20 @@ worktree_root() {
 
 shared_venv_dir() {
   printf '%s/.venv' "$(main_worktree_root "${1:-}")"
+}
+
+# The ONE secrets file lives beside the main worktree (one level above it) —
+# the same location core.project_root.ProjectRoot.canonical + core.env_file
+# resolve in Python. Shell callers (uv --env-file) ask this, never re-derive git.
+env_file_path() {
+  printf '%s/.env' "$(dirname "$(main_worktree_root "${1:-}")")"
+}
+
+cmd_env_file() {
+  local path
+  path="$(env_file_path "${1:-}")"
+  [[ -f "$path" ]] || die "env file missing: $path"
+  printf '%s\n' "$path"
 }
 
 cmd_venv() {
@@ -104,5 +119,6 @@ cmd_link() {
 case "${1:-}" in
   venv) cmd_venv "${2:-}" ;;
   link) cmd_link "${2:-}" ;;
-  *) die "usage: er_env.sh {venv|link} [worktree_root]" ;;
+  env-file) cmd_env_file "${2:-}" ;;
+  *) die "usage: er_env.sh {venv|link|env-file} [worktree_root]" ;;
 esac
