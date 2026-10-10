@@ -764,14 +764,16 @@ def _pair_lineage_document(accounting: dict, output: Path, F) -> dict:
 def _write_setup_manifest(output: Path, accounting: dict, baseline_size: int,
                           checkpoint: Path, pairs: pd.DataFrame, F, revision: str) -> None:
     """The setup manifest: the run's identity + pairing policy + pair counts."""
-    from core.common import SEED
+    from core.common import SEED, portable_path
     from core.identity_policy import POLICY_PATH
     write_json(output / _setup_layout().manifest, {
         'schema': 'er-track-setup-v1', 'git_revision': revision, 'seed': SEED,
         'source_catalog_size': file_size(F['dataset_deduped']),
         'labeled_pairs_size': file_size(F['labeled_pairs']),
         'identity_policy_size': file_size(POLICY_PATH),
-        'text_checkpoint': str(checkpoint), 'text_checkpoint_size': baseline_size,
+        # Portable (checkout-relative) so a VM-built setup never embeds
+        # /content/EuromonitoR and the shipped bundle resolves on any machine.
+        'text_checkpoint': portable_path(checkpoint), 'text_checkpoint_size': baseline_size,
         'text_checkpoint_status': 'local baseline; fine-tuning history not inferred',
         'split_protocol': 'training.folds.derive_holdout',
         'pair_protocol': 'first listing per labeled entity plus same-entity positive chains',
@@ -812,6 +814,7 @@ def _suite_report_test() -> bool | None:
 def _write_track_configs(output: Path, templates: dict, listings: Path,
                          baseline_size: int) -> None:
     """Render each graph track's runnable config against this setup tree."""
+    from core.common import portable_path
     from graph_tracks.config import GraphConfig
     # The held-out test switch comes FROM THE CONFIG SSOT (the suite's own
     # report_test), never from a literal here: preflight compares the prepared
@@ -819,9 +822,13 @@ def _write_track_configs(output: Path, templates: dict, listings: Path,
     report_test = _suite_report_test()
     for track in ('gnn_only', 'cascade'):
         cfg = templates[track].copy()
-        cfg.update(listings=str(listings),
-                   pairs=str(listings.parent / 'pairs.csv'),
-                   input_manifest=str(listings.parent / _setup_layout().input_manifest))
+        # Record the setup inputs PORTABLY (checkout-relative): a VM-built setup
+        # must not embed /content/EuromonitoR absolute paths, or the shipped
+        # bundle is only consumable on a VM with the same root. This is the form
+        # the committed fixtures use and every consumer resolves back.
+        cfg.update(listings=portable_path(listings),
+                   pairs=portable_path(listings.parent / 'pairs.csv'),
+                   input_manifest=portable_path(listings.parent / _setup_layout().input_manifest))
         if report_test is not None:
             cfg['report_test'] = report_test
         if track == 'cascade':

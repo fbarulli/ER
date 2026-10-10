@@ -1186,6 +1186,26 @@ def _materialized_model(candidates: list[Path], reference: str) -> str:
     )
 
 
+def portable_path(path, *, train_root: Path | None = None) -> str:
+    """A recorded path value that survives transport between machines.
+
+    Shipped setup/config data must never embed the machine that produced it (a
+    Colab VM records ``/content/EuromonitoR/...``), so anything inside the
+    checkout is recorded RELATIVE to it — the form the committed fixtures use
+    and the form every consumer resolves back through the checkout root. A
+    genuinely external path (not under the checkout) stays absolute rather than
+    being silently rewritten. This is the ONE writer of portable config paths;
+    producers (``graph_tracks.setup``) and re-recorders (``smoke_inputs``) both
+    route through it instead of spelling ``relative_to`` at each call site.
+    """
+    root = Path(TRAIN_ROOT if train_root is None else train_root).resolve()
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
 def resolve_model(key_or_sub: str) -> str:
     """Resolve a registry key, configured subdirectory, or local path."""
     reference = str(key_or_sub).strip()

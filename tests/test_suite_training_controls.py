@@ -504,3 +504,32 @@ def test_results_pointer_states_deferred_metrics():
     pointer = train_entry.results_pointer([{'fold': 0, 'status': 'failed'}], run_tag='run1', args=args, metrics_csv_name='x.csv')
     assert pointer['metrics_status'] is None
     assert pointer['n_folds_ok'] == 0
+
+
+def test_checkout_path_reroots_a_foreign_absolute_path(tmp_path):
+    """A shipped setup may name the producing machine's absolute paths.
+
+    A VM-prepared bundle records ``/content/EuromonitoR/<checkout-relative>``;
+    that path is not live here. ``_checkout_path`` re-roots a non-live absolute
+    path against THIS checkout by its longest resolving tail, so an immutable
+    delivered bundle stays consumable without editing a byte. A live absolute
+    path and a checkout-relative path resolve unchanged.
+    """
+    from model_tracks.smoke_inputs import _checkout_path
+
+    train_root = tmp_path / 'checkout'
+    (train_root / 'data' / 'track_setup' / 'prepared').mkdir(parents=True)
+    target = train_root / 'data' / 'track_setup' / 'prepared' / 'listings.json'
+    target.write_text('{}')
+
+    # a foreign VM absolute path re-roots to the live checkout member
+    foreign = '/content/EuromonitoR/data/track_setup/prepared/listings.json'
+    assert _checkout_path(foreign, train_root=train_root) == target.resolve()
+    # a checkout-relative path resolves under the checkout
+    assert _checkout_path('data/track_setup/prepared/listings.json',
+                          train_root=train_root) == target.resolve()
+    # a live absolute path resolves to itself
+    assert _checkout_path(str(target), train_root=train_root) == target.resolve()
+    # a genuinely external path (no resolving tail) is returned as-is
+    external = '/nonexistent-root/some/external/file.bin'
+    assert _checkout_path(external, train_root=train_root) == Path(external).resolve()

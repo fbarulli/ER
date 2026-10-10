@@ -518,6 +518,48 @@ def test_generated_cascade_config_leaves_trained_inputs_null(tmp_path):
 
 
 
+def test_write_track_configs_records_portable_checkout_relative_inputs(tmp_path, monkeypatch):
+    """A VM-built setup records checkout-relative inputs, never /content paths.
+
+    The producer used to write ``str(listings)`` (the resolved absolute path),
+    so a setup built on a Colab VM embedded ``/content/EuromonitoR/...`` and the
+    delivered bundle was only consumable on a VM with the same root. It now
+    routes through the ONE ``core.common.portable_path`` writer, so anything
+    under the checkout is recorded relative to it (the committed fixtures' form)
+    and resolves on any machine.
+    """
+    import yaml
+
+    import core.common
+    from graph_tracks import setup as graph_setup
+
+    # templates load from the real checkout; the setup OUTPUT is a fake checkout
+    templates = graph_setup._load_setup_templates(Path(core.common.TRAIN_ROOT))
+    checkout = tmp_path / "checkout"
+    prepared = checkout / "data" / "track_setup" / "prepared"
+    prepared.mkdir(parents=True)
+    listings = prepared / "listings.json"
+    listings.write_text("{}")
+    (prepared / "pairs.csv").write_text("sku_id1,sku_id2,label,split\n")
+    (prepared / "input_manifest.json").write_text("{}")
+    # portable_path resolves against core.common.TRAIN_ROOT; point it here and
+    # bypass the suite report_test lookup (no suite config under the fake root).
+    monkeypatch.setattr(core.common, "TRAIN_ROOT", checkout)
+    monkeypatch.setattr(graph_setup, "_suite_report_test", lambda: None)
+
+    out = checkout / "data" / "track_setup"
+    graph_setup._write_track_configs(out, templates, listings, "baseline-sha")
+
+    for track in ("gnn_only", "cascade"):
+        lane = yaml.safe_load((out / f"{track}.yaml").read_text())
+        for key in ("listings", "pairs", "input_manifest"):
+            value = lane[key]
+            assert not Path(value).is_absolute(), f"{track}.{key} leaked an absolute path"
+            assert str(checkout) not in value
+            assert (checkout / value).is_file(), f"{track}.{key} does not resolve"
+        assert value.startswith("data/track_setup/prepared/")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # graph_tracks/prepare
 # ══════════════════════════════════════════════════════════════════════════

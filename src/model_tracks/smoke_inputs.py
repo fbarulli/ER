@@ -9,6 +9,18 @@ import numpy as np
 import pandas as pd
 import yaml
 
+#: The canonical portable-path writer (core.common): a recorded value that
+#: survives transport. Bound here so this module's re-recording of a smoke
+#: child's paths routes through the ONE implementation the producer also uses.
+from core.common import portable_path as _portable_path
+
+
+def _checkout_relative_tails(path: Path):
+    """The path's suffixes, longest first, as checkout-relative candidates."""
+    parts = Path(path).parts
+    for start in range(1, len(parts)):
+        yield Path(*parts[start:])
+
 
 def _checkout_path(value, *, train_root: Path) -> Path:
     """One config path value as an absolute checkout path.
@@ -16,23 +28,26 @@ def _checkout_path(value, *, train_root: Path) -> Path:
     Suite configs name their inputs either absolutely (a prepared tree) or
     checkout-relative (the committed fixtures); the relative form is the one
     that survives transport, so both are resolved from the checkout root.
+
+    A shipped setup may also record the PRODUCING machine's absolute path (a
+    Colab VM checkout root such as ``/content/EuromonitoR/...`` that is not
+    this machine's). Such a path is not live here, so re-root it against THIS
+    checkout by its longest checkout-relative tail that resolves — an immutable
+    delivered bundle then stays consumable without editing a single byte. A
+    genuinely external path (no resolving tail) is returned as-is, so the
+    caller's own check names it.
     """
     path = Path(value)
-    return path.resolve() if path.is_absolute() else (train_root / path).resolve()
-
-
-def _portable_path(path: Path, *, train_root: Path) -> str:
-    """A written config value that survives transport.
-
-    A fixture must not embed the machine it was built on, so anything inside
-    the checkout is recorded relative to it; a genuinely external path stays
-    absolute rather than being silently rewritten.
-    """
-    resolved = Path(path).resolve()
-    try:
-        return resolved.relative_to(train_root).as_posix()
-    except ValueError:
-        return str(resolved)
+    if not path.is_absolute():
+        return (train_root / path).resolve()
+    resolved = path.resolve()
+    if resolved.exists():
+        return resolved
+    for tail in _checkout_relative_tails(path):
+        candidate = (train_root / tail).resolve()
+        if candidate.exists():
+             return candidate
+    return resolved
 
 
 #: The lane-config keys that name an input the smoke must repoint at its own tree.
@@ -214,9 +229,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         arrays[field]=np.array([[remap[int(a)],remap[int(b)]] for a,b in source[mask]],dtype=int).reshape(-1,2)
         masks[field]=mask
     parent_manifest = json.loads((setup/layout.manifest).read_text())
-    # The parent records its baseline checkpoint absolutely (a live tree) or
-    # checkout-relative (a committed fixture), and the child re-records it
-    # portably so a checked-in smoke never names the machine that built it.
+    # The parent records its baseline checkpoint as a live local path, a
+    # checkout-relative fixture path, OR (a shipped VM bundle) the producing
+    # machine's absolute model path. ``_checkout_path`` re-roots a foreign
+    # absolute path against THIS checkout, and the child re-records it portably
+    # so a checked-in smoke never names the machine that built it.
     checkpoint = _checkout_path(parent_manifest['text_checkpoint'], train_root=train_root)
     write_prepared_bundle(output/'text_prepared.pkl.gz',df=bundle['df'].iloc[source_indices].reset_index(drop=True),
         payload=[bundle['payload'][i] for i in indices],structured_features=np.asarray(bundle['structured_features'])[indices],
