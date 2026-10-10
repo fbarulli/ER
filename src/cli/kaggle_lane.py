@@ -79,6 +79,11 @@ CREDENTIALS_PATH = Path.home() / training_cfg().credentials.kaggle_credentials_f
 
 ACCESS_TOKEN_PATH = Path.home() / training_cfg().credentials.kaggle_access_token_file
 
+#: kaggle CLI 2.x authenticates from this OAuth token FIRST (kagglesdk
+#: KaggleCredentials), so it shadows the kaggle.json this lane writes; the lane
+#: names it from the SAME credential SSOT, never a second literal.
+OAUTH_CREDENTIALS_PATH = Path.home() / training_cfg().credentials.kaggle_oauth_credentials_file
+
 #: The finalize job is the second bundle_steps role and runs as a second version
 #: of the SAME bundling CPU kernel slug (one Kaggle kernel; Kaggle mounts one
 #: code file per pushed version). Its two names are config-owned

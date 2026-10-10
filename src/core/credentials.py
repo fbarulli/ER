@@ -91,7 +91,12 @@ class CredentialsSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     env_file: str = DEFAULT_ENV_FILE
+    # The three Kaggle CLI credential locations, all home-relative fragments.
+    # kaggle CLI 2.x authenticates from the OAuth token FIRST, then kaggle.json
+    # (key/username); ``access_token`` is the legacy 1.x token file. The lane
+    # names all three so it is never blind to the file its installed CLI uses.
     kaggle_credentials_file: str = ".kaggle/kaggle.json"
+    kaggle_oauth_credentials_file: str = ".kaggle/credentials.json"
     kaggle_access_token_file: str = ".kaggle/access_token"
     keys: CredentialKeysSpec = Field(default_factory=CredentialKeysSpec)
     # HPO study storage source (additive; the StudyOwner reads this block).
@@ -101,7 +106,8 @@ class CredentialsSpec(BaseModel):
     def _paths_are_home_relative_fragments(self) -> CredentialsSpec:
         if not self.env_file.strip():
             raise ValueError("credentials.env_file must be non-empty")
-        for name in ("kaggle_credentials_file", "kaggle_access_token_file"):
+        for name in ("kaggle_credentials_file", "kaggle_oauth_credentials_file",
+                     "kaggle_access_token_file"):
             value = Path(getattr(self, name))
             if value.is_absolute() or ".." in value.parts or not value.parts:
                 raise ValueError(

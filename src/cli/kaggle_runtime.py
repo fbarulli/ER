@@ -215,6 +215,14 @@ class KaggleRuntime:
             plan["written"] = True
             plan["blocked_by_access_token"] = str(lane.ACCESS_TOKEN_PATH)
             return plan
+        if lane.OAUTH_CREDENTIALS_PATH.exists():
+            # kaggle CLI 2.x authenticates from the OAuth credentials file FIRST
+            # (kagglesdk KaggleCredentials -> ~/.kaggle/credentials.json), so it
+            # shadows the kaggle.json just written. Report that the file in force
+            # is the OAuth one instead of a silent success.
+            plan["written"] = True
+            plan["shadowed_by_oauth_credentials"] = str(lane.OAUTH_CREDENTIALS_PATH)
+            return plan
         plan["written"] = True
         return plan
 

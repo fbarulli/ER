@@ -183,6 +183,8 @@ credentials:
   env_file: "../.env"
   # The Kaggle CLI credential paths the owner materializes / guards.
   kaggle_credentials_file: ".kaggle/kaggle.json"
+  # kaggle CLI 2.x authenticates from this OAuth token FIRST (then kaggle.json).
+  kaggle_oauth_credentials_file: ".kaggle/credentials.json"
   kaggle_access_token_file: ".kaggle/access_token"
   # HPO study storage source (training.hpo_study.StudyOwner). The remote URL
   # (when set) wins; otherwise the TRAIN_ROOT-relative local SQLite study is
