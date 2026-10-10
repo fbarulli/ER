@@ -89,6 +89,14 @@ class KernelWatcher:
         """
         spec = self._spec
         spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+        # A receipt from a PREVIOUS watch is stale: clear it before the new
+        # watcher starts so no reader (or re-spawned watcher) mistakes the old
+        # run's terminal plan for this one's. Best-effort; absence is fine.
+        if spec.receipt_path.exists():
+            try:
+                spec.receipt_path.unlink()
+            except OSError as error:
+                spec.log_lane(f"[{spec.which}] stale receipt not cleared: {error}")
         with spec.log_path.open("ab") as handle:
             handle.write(self._launch_marker().encode())
         subprocess.Popen(
@@ -121,6 +129,13 @@ class KernelWatcher:
                                 "kernel": slug, "poll_seconds": resolved_poll}
         if not execute:
             return plan
+        # Clear a stale receipt from a prior watch (the detached path clears it
+        # in spawn(); an explicit autowatch does not go through spawn()).
+        if spec.receipt_path.exists():
+            try:
+                spec.receipt_path.unlink()
+            except OSError as error:
+                spec.log_lane(f"[{slug}] stale receipt not cleared: {error}")
         stream: dict[str, Any] = {}
         follower = threading.Thread(
             target=self._stream, args=(slug,),
