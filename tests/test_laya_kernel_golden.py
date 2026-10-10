@@ -79,11 +79,13 @@ GOLDEN_SHA256: dict[str, str] = {
     # passes an explicit step= anymore, and wandb_init declares `epoch` the
     # step metric of the per-epoch namespaces (define_metric), so interleaved
     # log/line/event/timing/gpu sinks can never make wandb drop epoch rows.
-    "finetune": "ad66aa5bfc21f6555eb4acbb4fa6df1cb74d0fab7bdba51ec37b5b38c033d803",
-    "finetune-smoke": "dcaea8fa9b09162c702ef8481ab06867e775491c40a7fa55ca2759074087e398",
+    # wandb_finish additionally re-drives `wandb sync` on the run dir (the
+    # documented "Fatal error while uploading data" recovery), fail-soft.
+    "finetune": "12bd9ddad742fbf974c4b7a66a2e38203756889fc1860775d69fc0a0221cfcf2",
+    "finetune-smoke": "f6eb56efe2d73ecd2a1f3de5c0774a25f0e0bad02f65608ac0923622dbe211df",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "10f382b06d9cac0278431ea7b46c38c54bdfc606dec5476832f23ed14a871b40",
+    "hpo": "71ce15c55c69450625b0bddcef4568d1c690baad46fc5eb085daf5070e543bb0",
 }
 
 

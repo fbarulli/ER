@@ -1,9 +1,10 @@
-"""The staged kernels' W&B step contract (the 8146f87 regression class).
+"""The staged kernels' W&B step + teardown contract (the 8146f87 regression class).
 
 Pins the ONE shared wandb-helpers block (``cli.laya_kernel_text_wandb``): every
 sink rides wandb's monotonic auto-increment step (never an explicit ``step=``),
-and ``wandb_init`` declares ``epoch`` the step metric of the per-epoch
-namespaces.
+``wandb_init`` declares ``epoch`` the step metric of the per-epoch namespaces,
+and ``wandb_finish`` re-drives ``wandb sync`` so an interrupted upload is
+recovered instead of silently lost.
 """
 from __future__ import annotations
 
@@ -133,3 +134,22 @@ def test_per_epoch_rows_survive_the_interleaved_sinks_on_monotonic_steps(
     for pattern in ("train/*", "dev/*", "select/*", "early_stop/*",
                     "epoch_time_s"):
         assert pattern in epoch_declarations
+
+
+def test_wandb_finish_redrives_the_upload_with_wandb_sync(monkeypatch):
+    """The run logged "Fatal error while uploading data ... Use wandb sync":
+    teardown must re-drive the upload for the run dir (fail-soft, recorded)."""
+    fake_subprocess = FakeSubprocess()
+    namespace, _lines = _exec_helpers(FakeWandb(), fake_subprocess, monkeypatch)
+    namespace["wandb_init"]()
+    namespace["wandb_finish"]()
+    assert fake_subprocess.calls == [
+        [sys.executable, "-m", "wandb", "sync",
+         "/tmp/kernel/wandb/run-20260101_000000-abc123"]]
+
+    # A failing sync is recorded with its reason, never raised.
+    failing = FakeSubprocess(returncode=1)
+    namespace, lines = _exec_helpers(FakeWandb(), failing, monkeypatch)
+    namespace["wandb_init"]()
+    namespace["wandb_finish"]()
+    assert any("sync failed" in line for line in lines)

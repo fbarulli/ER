@@ -16,6 +16,10 @@ indexed by epoch while the interleaved boot/log-line/event/timing/gpu sinks can
 never regress the step again (wandb silently DROPPED every explicit-step epoch
 row once the auto-increment sinks had advanced the global step: "Tried to log
 to step 0 that is less than the current step N ... this data will be ignored").
+
+TEARDOWN: ``wandb_finish`` re-drives ``wandb sync`` on the run dir — the
+documented recovery for "Fatal error while uploading data ... Use wandb sync"
+— fail-soft with the full recorded reason, so telemetry never dies silently.
 """
 from __future__ import annotations
 
@@ -29,6 +33,10 @@ WANDB_RUN = None
 # contract; the host-side consolidated plot reads these same namespaces).
 EPOCH_STEP_METRICS = ("train/*", "dev/*", "select/*", "early_stop/*",
                       "epoch_time_s")
+
+# `wandb sync` teardown-retry budget (seconds): an already-synced run dir is a
+# fast no-op, an interrupted upload gets ONE bounded re-drive.
+WANDB_SYNC_TIMEOUT_SECONDS = 900.0
 
 class WandbLogSink:
     """Batch notable log lines into the live W&B text channel `log/line`.
@@ -173,15 +181,42 @@ def wandb_log_metrics(report):
                 + str(error) + "\\n" + traceback.format_exc())
 
 
+def wandb_sync_unsent(run_dir):
+    """Re-drive wandb's upload for this run's dir (the documented recovery for
+    "Fatal error while uploading data ... Use wandb sync").
+
+    Runs after EVERY finish(): an already-synced dir is a fast no-op and an
+    interrupted upload is retried, so telemetry never dies silently. Fail-soft
+    with the FULL recorded reason — the staged artifacts are the durable
+    record; a sync failure must never fail the session.
+    """
+    if not run_dir:
+        return
+    sync_dir = str(Path(run_dir).parent)
+    command = [sys.executable, "-m", "wandb", "sync", sync_dir]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True,
+                                   timeout=WANDB_SYNC_TIMEOUT_SECONDS)
+    except Exception as error:
+        log("[wandb] sync skipped: " + type(error).__name__ + ": "
+            + str(error) + "\\n" + traceback.format_exc())
+        return
+    if completed.returncode != 0:
+        log("[wandb] sync failed (exit " + str(completed.returncode) + "): "
+            + ((completed.stderr or completed.stdout or "")[-2000:]))
+
+
 def wandb_finish():
     LOG_SINK.flush()
     if WANDB_RUN is None:
         return
+    run_dir = str(getattr(WANDB_RUN, "dir", "") or "")
     try:
         WANDB_RUN.finish()
     except Exception as error:
         log("[wandb] finish skipped: " + type(error).__name__ + ": "
             + str(error) + "\\n" + traceback.format_exc())
+    wandb_sync_unsent(run_dir)
 
 
 def wandb_log_event(name, **fields):
