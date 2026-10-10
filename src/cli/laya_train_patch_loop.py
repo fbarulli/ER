@@ -452,6 +452,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         start_epoch, best, bad_epochs, best_record = checkpointer.resume(
             model, optimizer, scheduler, device)
     best_acc = (best_record or {}).get("accuracy")
+    best_dev_loss = None
     best_state = (best_record or {}).get("model")
     stopped = False
     stopped_epoch = None
@@ -685,6 +686,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             # saved/deployed weights are the same epoch selection picked.
             if step.improved:
                 best_acc = dev.accuracy
+                best_dev_loss = dev.loss
                 # keep_best restores the early-stop optimum into the FINAL
                 # model; the best.pt FILE only serves a resume, so a
                 # configs+results run (save_each_epoch=False) skips it.
@@ -752,6 +754,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         "stopped": bool(stopped),
         "stopped_epoch": stopped_epoch,
         "best_dev_accuracy": best_acc,
+        "best_dev_loss": best_dev_loss,
         "best_metric": best,
         "bad_epochs": bad_epochs,
         "scheduler": scheduler_kind,

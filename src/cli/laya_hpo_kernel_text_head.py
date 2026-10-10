@@ -392,8 +392,14 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
     apply_perf_patch()
     apply_device_patch()
     from laya import train as laya_train
-    config = laya_train.TrainConfig(**FINETUNE_CONFIG,
-                                    eval_data=str(dev_path))
+    # final_eval OFF (the HPO trial policy): laya's finetune would score its
+    # before/after tables over the FULL dev split — redundant with the
+    # per-epoch DevEvaluator that ranks the trial — so eval_data stays unset
+    # and laya falls back to the small calibration slice (its in-sample note
+    # lands in train_report.json; the trial's dev_loss is best_dev_loss).
+    eval_data = (str(dev_path)
+                 if FINETUNE_CONTROL.get("final_eval", True) else None)
+    config = laya_train.TrainConfig(**FINETUNE_CONFIG, eval_data=eval_data)
     config.validate()
     globals()["FINETUNE_OUTPUT_DIR"] = str(out_dir)
     if FINETUNE_CONTROL.get("eval_dev"):
@@ -535,7 +541,11 @@ def run_trial(trial, device, train_path, dev_path, base_model):
     if accuracy is None:
         raise RuntimeError("trial %d produced no best_dev_accuracy"
                            % int(trial.number))
-    dev_loss = dev_loss_from_report(out_dir)
+    # The loop's best-epoch dev loss wins (the epoch the trial is ranked
+    # on); the report fallback only exists for final_eval runs without dev.
+    dev_loss = result.get("best_dev_loss")
+    if dev_loss is None:
+        dev_loss = dev_loss_from_report(out_dir)
     trial.set_user_attr("epoch_time_s", float(epoch_time))
     trial.set_user_attr("fidelity_resource", int(resource))
     log("trial %d done dev_accuracy=%s dev_loss=%s epoch_time_s=%.1f"
@@ -785,7 +795,9 @@ def run_ddp_trial(trial_number):
         destroy_if_distributed()
     if is_rank0():
         result = globals().get("FINETUNE_CONTROL_RESULT") or {}
-        dev_loss = dev_loss_from_report(out_dir)
+        dev_loss = result.get("best_dev_loss")
+        if dev_loss is None:
+            dev_loss = dev_loss_from_report(out_dir)
         data = {"accuracy": result.get("best_dev_accuracy"),
                 "dev_loss": dev_loss,
                 "checkpoint": str(out_dir),

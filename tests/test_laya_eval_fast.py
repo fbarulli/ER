@@ -111,3 +111,44 @@ def test_encode_memo_serves_every_caller_and_resets_per_trial():
     memo.reset()
     laya_train.encode_item(None, item, 8, 4, None, False)
     assert len(encoded_calls) == 3 and memo.lookups == 1 and memo.hits == 0
+
+
+def test_hpo_final_eval_off_and_loop_stamps_best_dev_loss(monkeypatch):
+    """An HPO trial never pays laya's full-dev before/after eval (the
+    per-epoch DevEvaluator already ranks it): the trial policy turns
+    final_eval OFF (finetune-lane default stays ON) and the loop stamps the
+    ranked epoch's raw dev loss into the control result as the trial's
+    dev_loss source."""
+    import sys
+    import torch
+    from test_laya_ddp import (_Cfg, _TinyNet, _load_ddp_namespace,
+                               _make_fake_laya)
+
+    # SSOT: default-ON in the finetune lane, OFF in the HPO trial policy
+    assert FinetuneSpec().final_eval is True
+    assert "final_eval" in laya_lane.FINETUNE_CONTROL_FIELDS
+    from cli.laya_hpo import HpoArtifactPolicy
+    override = HpoArtifactPolicy.apply(laya_lane.finetune_control())
+    assert override["final_eval"] is False
+    # the staged kernel gates eval_data on the control (no phantom knob)
+    assert ('FINETUNE_CONTROL.get("final_eval", True)'
+            in laya_lane._hpo_kernel_script_source()
+            if hasattr(laya_lane, "_hpo_kernel_script_source") else True)
+
+    # behaviour: the loop result carries the best epoch's dev loss
+    namespace = _load_ddp_namespace()
+    fake = _make_fake_laya([])
+    monkeypatch.setitem(sys.modules, "laya", fake)
+    monkeypatch.setitem(sys.modules, "laya.train", fake.train)
+    namespace["FINETUNE_CONTROL"] = {**laya_lane.finetune_control(),
+                                     "eval_dev": True}
+    namespace["FINETUNE_DEV_ROWS"] = [{"state": "x"}]
+    items = [{"i": index, "label": index % 3} for index in range(4)]
+    cfg = _Cfg()
+    cfg.epochs = 1
+    namespace["_perf_train_model"](
+        _TinyNet(), types.SimpleNamespace(pad_token_id=0), items, cfg,
+        torch.device("cpu"), 8, 4)
+    result = namespace["FINETUNE_CONTROL_RESULT"]
+    assert result["best_dev_accuracy"] == 0.9
+    assert result["best_dev_loss"] == 0.5   # the fake dev eval's loss

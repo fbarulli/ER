@@ -97,6 +97,12 @@ class FinetuneSpec(BaseModel):
     # Confidence cut used only to derive the dev abstain_rate/coverage wandb
     # metrics (laya's evaluate_records emits neither).
     abstain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # laya finetune's own end-of-run before/after eval over the FULL eval
+    # split (its comparison table + train_report.json). HPO trials turn it
+    # OFF (HpoArtifactPolicy): the per-epoch DevEvaluator already scores the
+    # same dev split and ranks the trial, and laya falls back to the small
+    # calibration slice, so a trial never pays the full-split pass twice.
+    final_eval: bool = True
     # Eval-records speed (EvalRecordsHook): fp16 autocast for grad-disabled
     # CUDA forwards (laya's calibration_records hardcodes amp=False) and the
     # calibration_records batch override (0 keeps laya's own default, 16).

@@ -320,8 +320,13 @@ class HpoArtifactPolicy:
     #: its eval-records forwards run fp16 at a bigger batch (the 1kbaseline
     #: harvest: dev_eval 441 s/epoch fp32 batch-16 on 27,305 items); the
     #: session-end held-out number runs in the unpatched controller (fp32).
+    #: final_eval=False: laya's end-of-run before/after tables would re-score
+    #: the FULL dev split (the 1kbaseline harvest: ~425 s before + ~590 s
+    #: after per trial, fp32) — redundant with the per-epoch dev eval that
+    #: ranks the trial; the trial's dev_loss rides best_dev_loss instead.
     CONTROL_OVERRIDES = {"save_each_epoch": False, "resume": False,
-                         "eval_amp": True, "eval_batch": 32}
+                         "eval_amp": True, "eval_batch": 32,
+                         "final_eval": False}
 
     @classmethod
     def apply(cls, control: dict[str, Any]) -> dict[str, Any]:
