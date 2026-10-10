@@ -265,6 +265,43 @@ class SessionReceiptWriter:
                 "top_k": options.ensembler.top_k,
                 "selected": [int(t.number) for t in selected]}
 
+    def _held_out(self, best):
+        """The session-end held-out eval of the champion (the end-to-end trace:
+        train -> per-epoch dev eval -> promotion -> HOLDOUT eval -> receipt).
+
+        Runs AFTER selection is final, so it is never an HPO signal
+        (objective.forbidden=test still governs sampling/ranking); it is the
+        honest generalization number of the promoted champion. DEFAULT-ON
+        (ER_LAYA_HELD_OUT, the shared gate); fail-soft with the recorded
+        reason: no champion, an empty held-out split (the 50/50 HPO carve has
+        no test role) or an eval failure never discards the session receipt.
+        """
+        if not held_out_enabled():
+            return {"skipped": "ER_LAYA_HELD_OUT off"}
+        checkpoint = (best.user_attrs.get("checkpoint")
+                      if best is not None else None)
+        if not checkpoint or not Path(str(checkpoint)).is_dir():
+            return {"skipped": "no champion checkpoint to evaluate"}
+        try:
+            import torch
+            test_path = resolve_input(TEST_JSONL)
+            if test_path.stat().st_size == 0:
+                return {"skipped": "empty held-out split (the 50/50 HPO "
+                                   "carve has no test role)"}
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            held_out = evaluate_held_out(test_path, checkpoint, device)
+        except Exception as error:
+            log("held-out evaluation FAILED: " + type(error).__name__ + ": "
+                + str(error)[:400] + "\\n" + traceback.format_exc())
+            return {"error": type(error).__name__ + ": " + str(error)[:400]}
+        log("held-out " + held_out["eval_source"] + " items="
+            + str(held_out["items"]) + " accuracy="
+            + str(held_out["metrics"].get("accuracy")))
+        wandb_log_event("held_out_eval_done",
+                        accuracy=held_out["metrics"].get("accuracy"),
+                        items=held_out["items"])
+        return held_out
+
     def build(self, study):
         trials = self._trial_rows(study)
         best = self._best(study)
@@ -291,6 +328,7 @@ class SessionReceiptWriter:
         receipt["ensemble"] = self._ensemble(trials)
         receipt["observability"] = self.observer.as_dict()
         receipt["registry"] = default_registry().describe()
+        receipt["held_out"] = self._held_out(best)
         return receipt, best
 
     def write(self, receipt, best):

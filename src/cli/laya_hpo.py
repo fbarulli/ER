@@ -487,6 +487,11 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "RUN_TAG": tag,
         "TRAIN_JSONL": laya_lane.FINETUNE_CORPUS_FILES[0],
         "DEV_JSONL": laya_lane.FINETUNE_CORPUS_FILES[1],
+        # The held-out split rides for the session-end champion eval ONLY
+        # (never an HPO signal); the batch is the same SSOT knob the finetune
+        # kernel bakes (laya.laya_decision_batch_size).
+        "TEST_JSONL": laya_lane.FINETUNE_CORPUS_FILES[2],
+        "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
         "BASE_MODEL_ARCHIVE": spec.base_model_archive,
         "BASE_MODEL_DIR": spec.base_model_dir,
         "FINETUNE_DEVICE": spec.finetune.device,

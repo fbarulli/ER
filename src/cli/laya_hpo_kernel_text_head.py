@@ -11,7 +11,8 @@ _HPO_KERNEL_TEMPLATE_HEAD_RAW = '''\
 """ER laya fine-tune HPO on a Kaggle 2xT4 session (cli.laya_hpo).
 
 Installs laya + Optuna/SQLAlchemy/psycopg over pip, reads the attached JSONL
-corpus (train/dev; the held-out test split is NEVER an HPO signal) and the
+corpus (train/dev; the held-out test split is NEVER an HPO signal — it is
+scored ONCE at session end for the promoted champion's honest number) and the
 attached base-model archive, then spawns one worker process PER visible GPU.
 Every worker claims trials from the SAME shared PostgreSQL Optuna study (the
 URL arrives through the injected OPTUNA_STORAGE_URL environment variable),
@@ -49,6 +50,10 @@ LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
 TRAIN_JSONL = "@TRAIN_JSONL@"
 DEV_JSONL = "@DEV_JSONL@"
+# The held-out split: NEVER an HPO signal (selection is dev-only); it is
+# scored ONCE at session end for the promoted champion's honest number.
+TEST_JSONL = "@TEST_JSONL@"
+HELD_OUT_BATCH = @HELD_OUT_BATCH@
 BASE_MODEL_ARCHIVE = "@BASE_MODEL_ARCHIVE@"
 BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
 FINETUNE_DEVICE = "@FINETUNE_DEVICE@"

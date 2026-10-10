@@ -966,6 +966,59 @@ def summarize_gpu_usage(path):
         "mem_used_peak_mb": max(mems),
         "mem_total_mb": total_mb,
     }
+
+
+# The DEFAULT-ON held-out gate (owner order), declared ONCE for both kernels.
+HELD_OUT_ENV = "ER_LAYA_HELD_OUT"
+
+
+def held_out_enabled():
+    """DEFAULT-ON held-out validation; opt out with ER_LAYA_HELD_OUT=0."""
+    return os.environ.get(HELD_OUT_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def evaluate_held_out(test_path, checkpoint, device):
+    """Score a trained checkpoint on the HELD-OUT test split (both kernels).
+
+    DEFAULT-ON (owner order, gate: held_out_enabled): the training-time eval is
+    the dev split and overlaps training/calibration, so this is the run's
+    honest generalization number. The raw (uncalibrated) metrics are reported —
+    the calibration was already fitted on the calibration split during
+    training. An empty/unusable split raises RuntimeError (NOT SystemExit):
+    the callers' fail-soft handlers catch Exception, so a held-out failure is
+    recorded with its reason and NEVER discards the checkpoint/receipt.
+    """
+    import torch
+    from laya import train as laya_train
+
+    model, tok, cfg = laya_train.load_checkpoint(str(checkpoint))
+    model = model.to(torch.device(device)).eval()
+    max_len = int(cfg.get("max_len", 512))
+    head_max_len = int(cfg.get("head_max_len", 192))
+    parallel = laya_train.uses_parallel_layout(cfg)
+    rows = laya_train.read_jsonl(str(test_path))
+    items, skipped = laya_train.items_from_rows(
+        tok, rows, max_len, head_max_len, label_smoothing=0.0)
+    if not items:
+        raise RuntimeError(
+            "held-out split " + str(Path(test_path).name) + " produced no "
+            "usable items (skipped: " + repr(skipped) + ")")
+    log("held-out rows " + str(len(rows)) + " -> items " + str(len(items)))
+    records = laya_train.calibration_records(
+        model, tok, items, device, max_len, head_max_len,
+        batch_size=int(globals().get("HELD_OUT_BATCH", 8)), parallel=parallel)
+    return {
+        "eval_mode": "held_out",
+        "is_held_out": True,
+        "eval_source": str(Path(test_path).name),
+        "eval_split": "test",
+        "rows": len(rows),
+        "items": len(items),
+        "skipped": skipped,
+        "checkpoint": str(checkpoint),
+        "metrics": laya_train.evaluate_records(records),
+    }
 '''
 
 FINETUNE_PERF_PATCH_SOURCE = (

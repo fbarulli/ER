@@ -95,11 +95,21 @@ GOLDEN_SHA256: dict[str, str] = {
     # publishes .ddp_teardown_done; peers hold their CUDA contexts until it
     # lands, bounded + fail-soft), so a peer can never tear its context down
     # mid-teardown on rank 0.
-    "finetune": "24ed060320f176dca42d450a6f7368960b7d5a3dc90e373e8de653906c57fcc1",
-    "finetune-smoke": "54852b739406fad2f9406cee682c1327e877a2c18851999a978deb7fbbb94633",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the shared held-out eval:
+    # evaluate_held_out moved from the finetune kernel text into the shared
+    # PERF-patch loop module (ONE definition, both kernels), its gate is the
+    # shared held_out_enabled() (ER_LAYA_HELD_OUT default-on), and it raises
+    # RuntimeError (not SystemExit) so the fail-soft handlers catch it and a
+    # held-out failure never discards the checkpoint/receipt. The HPO kernel
+    # now scores the promoted champion on the held-out split at session end
+    # (TEST_JSONL + HELD_OUT_BATCH baked; after selection is final, so it is
+    # never an HPO signal).
+    "finetune": "809737e611a6b616b72631fdd9b452ddd34e8ecac60b914a313d568275b1790d",
+    "finetune-smoke": "72332be643febe5701dfdc9c582672d52946f06183aad36f552b3c2f6b95b573",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "3d81486f6a5ae8e7329208e2f71ac8f4904b9fbef748190f577495981d3c3f30",
+    "hpo": "af09999d7333eb7fd93fffb1c2cf1bcc32626d65951059492b6a0433af8653fd",
 }
 
 

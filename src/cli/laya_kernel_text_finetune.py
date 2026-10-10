@@ -356,47 +356,6 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
-def evaluate_held_out(test_path, checkpoint, device):
-    """Score the just-trained checkpoint on the HELD-OUT test split.
-
-    DEFAULT-ON (owner order): the training-time eval is the dev split and
-    overlaps training/calibration, so this is the run's honest generalization
-    number. The raw (uncalibrated) metrics are reported — the calibration was
-    already fitted on the calibration split during training. Opt out with
-    ER_LAYA_HELD_OUT=0.
-    """
-    import torch
-    from laya import train as laya_train
-
-    model, tok, cfg = laya_train.load_checkpoint(str(checkpoint))
-    model = model.to(torch.device(device)).eval()
-    max_len = int(cfg.get("max_len", 512))
-    head_max_len = int(cfg.get("head_max_len", 192))
-    parallel = laya_train.uses_parallel_layout(cfg)
-    rows = laya_train.read_jsonl(str(test_path))
-    items, skipped = laya_train.items_from_rows(
-        tok, rows, max_len, head_max_len, label_smoothing=0.0)
-    if not items:
-        raise SystemExit(
-            "held-out split " + test_path.name + " produced no usable items "
-            "(skipped: " + repr(skipped) + ")")
-    log("held-out rows " + str(len(rows)) + " -> items " + str(len(items)))
-    records = laya_train.calibration_records(
-        model, tok, items, device, max_len, head_max_len,
-        batch_size=HELD_OUT_BATCH, parallel=parallel)
-    return {
-        "eval_mode": "held_out",
-        "is_held_out": True,
-        "eval_source": test_path.name,
-        "eval_split": "test",
-        "rows": len(rows),
-        "items": len(items),
-        "skipped": skipped,
-        "checkpoint": str(checkpoint),
-        "metrics": laya_train.evaluate_records(records),
-    }
-
-
 def session_env():
     # Self-report the container session identity so the host-side log follower
     # can persist logs/kaggle/<kernel>.session_id for the verified in-place
@@ -489,8 +448,7 @@ def _finetune_session(distributed, session):
         # scores the just-trained checkpoint on the held-out `test` split, so
         # the receipt always carries the honest generalization number. Opt out
         # with ER_LAYA_HELD_OUT=0; a failure never discards the checkpoint.
-        if os.environ.get("ER_LAYA_HELD_OUT", "1").strip().lower() not in (
-                "0", "false", "off", "no"):
+        if held_out_enabled():
             try:
                 held_out = evaluate_held_out(test, WORKING / "checkpoint",
                                              device)

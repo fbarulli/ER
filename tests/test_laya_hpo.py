@@ -609,6 +609,32 @@ def test_stage_publishes_an_unpushed_run_branch_before_the_tip_gate(
     assert receipt["published_pin"]["branch"] == "laya-run-x"
 
 
+def test_both_kernels_trace_the_holdout_eval_end_to_end(monkeypatch,
+                                                        tmp_path):
+    """The end-to-end trace (train -> per-epoch dev eval -> HOLDOUT eval ->
+    receipt) on BOTH GPU paths: the staged HPO kernel scores the promoted
+    champion on the held-out split at session end (default-on gate, fail-soft,
+    never an HPO signal), and the fine-tune kernel's rank-0 tail runs the SAME
+    shared evaluate_held_out — ONE definition, injected via the shared PERF
+    patch, gated by held_out_enabled()."""
+    receipt = _stage(monkeypatch, tmp_path, None)
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    assert 'TEST_JSONL = "test.jsonl"' in script
+    assert "HELD_OUT_BATCH = " in script
+    assert 'receipt["held_out"] = self._held_out(best)' in script
+    assert "if not held_out_enabled():" in script
+    assert "def evaluate_held_out(" in script  # via the shared PERF patch
+    assert "held_out_eval_done" in script
+
+    finetune = (laya_lane.FINETUNE_KERNEL_SCRIPT
+                + laya_lane.FINETUNE_PERF_PATCH_SOURCE)
+    assert finetune.count("def evaluate_held_out(") == 1
+    assert "if held_out_enabled():" in finetune
+    assert "raise RuntimeError(" in finetune  # fail-soft class, not SystemExit
+    assert 'receipt["held_out"] = held_out' in finetune
+
+
 def test_staged_kernel_is_self_contained_with_the_baked_registry(monkeypatch,
                                                                 tmp_path):
     """The kernel imports NO repo module; the SSOT registry keys are baked in.
