@@ -329,15 +329,20 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
 def main() -> None:
     """Train with W&B telemetry and local run artifacts."""
     RunLogger.configure_console()
-    # --prepare-bundle materializes the suite's training bundle: the whole
-    # process is that stage (see BUNDLE_STAGE), so its rows can never collide
-    # with the training lane's rows for the same run.
-    if "--prepare-bundle" in sys.argv:
-        training_trace(BUNDLE_STAGE)
     from core.wandb_ctx import WandbCtx
 
-    run_name = "hpo" if "--hpo" in sys.argv else "train_gpu"
-    with WandbCtx(run_name) as _wandb:
+    if "--prepare-bundle" in sys.argv:
+        # --prepare-bundle materializes the suite's training bundle: the whole
+        # process is that stage (see BUNDLE_STAGE), so its rows can never collide
+        # with the training lane's rows for the same run. The lane runs no
+        # experiment, so it takes the no-op tracking context — WANDB_API_KEY is
+        # not a precondition of preparing a bundle (the reason is recorded by
+        # the factory). Real training/HPO lanes keep the always-on context.
+        training_trace(BUNDLE_STAGE)
+        context = WandbCtx.for_input_preparation("bundle_prep")
+    else:
+        context = WandbCtx("hpo" if "--hpo" in sys.argv else "train_gpu")
+    with context as _wandb:
         _main_inner(_wandb)
 
 

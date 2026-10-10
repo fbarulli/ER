@@ -10,24 +10,52 @@ from core.common import training_cfg
 
 
 class WandbCtx:
-    """One run: cloud telemetry is always on. A missing key fails loud —
-    no silent local-only degradation (owner order 2026-10-07 'bake wandb in,
-    always on'; training/prepared tracking.wandb.mode owns the dashboard lane,
-    never this class)."""
+    """One run: cloud telemetry is always on for experiment lanes. A missing
+    key fails loud — no silent local-only degradation (owner order 2026-10-07
+    'bake wandb in, always on'; training/prepared tracking.wandb.mode owns the
+    dashboard lane, never this class).
 
-    def __init__(self, name: str):
+    The ``--prepare-bundle`` lane runs no experiment (it only materializes the
+    training inputs), so it builds this context through ``for_input_preparation``
+    — a no-op that neither requires nor opens W&B. That path records why
+    tracking is off; it is never silent."""
+
+    def __init__(self, name: str, *, track: bool = True) -> None:
         spec = training_cfg().tracking.wandb
-        enabled = bool(os.environ.get("WANDB_API_KEY")) and spec.mode != "disabled"
         self._run = None
         self._name, self._project, self._mode = name, spec.project, spec.mode
-        if not enabled:
+        self._enabled = (
+            track
+            and spec.mode != "disabled"
+            and bool(os.environ.get("WANDB_API_KEY"))
+        )
+        if track and not self._enabled:
             raise RuntimeError(
                 '[wandb] WANDB_API_KEY absent while tracking.wandb.mode='
                 + str(spec.mode)
                 + ' — the cloud mirror is always on; export '
                   'WANDB_API_KEY (or drop it in .env) before training')
 
+    @classmethod
+    def for_input_preparation(cls, name: str) -> WandbCtx:
+        """The no-op context for a lane that prepares inputs, not an experiment.
+
+        ``--prepare-bundle`` only materializes the training inputs, so
+        WANDB_API_KEY must never be a precondition of preparing a bundle.
+        Tracking is intentionally off; the reason is recorded here (fail-soft
+        only with a recorded reason — never a silent local-only run).
+        """
+        context = cls(name, track=False)
+        print(
+            "[wandb] disabled for input preparation (--prepare-bundle): the "
+            "lane runs no experiment, so WANDB_API_KEY is not required",
+            flush=True,
+        )
+        return context
+
     def __enter__(self):
+        if not self._enabled:
+            return self
         import wandb
         run_name = os.environ.get("WANDB_RUN_NAME", self._name)
         # Disable W&B's broad host sampler. Training emits the deliberately
