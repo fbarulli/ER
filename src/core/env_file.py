@@ -12,8 +12,8 @@ The file lives beside the CANONICAL checkout (one level above it), not beside
 whichever linked worktree launched the run, so its location is resolved through
 git's common dir — the same answer from the main checkout and every worktree —
 never spelled as a path. ``path``/``apply`` are the ONE way a caller locates or
-loads it; the uv launcher (``scripts/er.sh``) feeds the same path to
-``uv run --env-file``.
+loads it; the uv launcher (``scripts/er_env.sh env-file``) prints the same path
+for ``uv run --env-file``.
 
 Values are read, never printed: a caller decides whether a secret may travel.
 """

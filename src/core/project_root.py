@@ -74,9 +74,12 @@ class ProjectRoot:
         and the ``.env`` beside it belong to the canonical checkout. ``git
         rev-parse --git-common-dir`` names that shared ``.git`` (the same answer
         from the main checkout and any worktree), so this is the ONE home for the
-        worktree step: ``EnvFile`` and the credential store call it, the launcher
-        asks it — none re-derives it. A non-git tree falls back to the
-        marker-derived root. Cached per process — the root cannot move mid-run.
+        worktree step: ``EnvFile`` and the lane log roofs call it, and the shell
+        launcher (``scripts/er_env.sh``) mirrors the same git step — none
+        re-derives it. Git is spawned only on the linked-worktree signature
+        (``.git`` as a FILE); the main checkout, an ad-hoc root and a non-git
+        tree answer without a subprocess. Cached per process — the root cannot
+        move mid-run.
         """
         try:
             marker = cls.find(source_file)
@@ -84,6 +87,11 @@ class ProjectRoot:
             # Not a marker-bearing checkout (an ad-hoc/test root): there is no
             # canonical checkout to step out of, so answer with the path itself.
             marker = Path(source_file).resolve()
+        if not (marker / ".git").is_file():
+            # A linked git worktree has ``.git`` as a FILE (a gitdir pointer);
+            # the main checkout has a ``.git`` DIR and an ad-hoc root has none.
+            # Neither needs stepping out, so answer without spawning git.
+            return marker
         try:
             result = subprocess.run(
                 ["git", "-C", str(marker), "rev-parse", "--path-format=absolute",
