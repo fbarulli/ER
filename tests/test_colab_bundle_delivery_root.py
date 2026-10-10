@@ -136,3 +136,51 @@ def test_run_retention_never_sweeps_the_bundle_delivery_root(tmp_path):
     assert not _looks_like_run(delivery_dir)
     assert not delivery_dir.name.startswith("smoke_")
     assert not _looks_like_run(colab._bundle_delivery_local(RUN_ID))
+
+
+def test_install_delivery_routes_data_to_checkout_and_prep_to_results(tmp_path):
+    """The install step maps each delivery member to its consumable home.
+
+    ``data/*`` lands under the checkout root (the prepared trees a launch
+    packages); ``training_prep/*`` lands under ``results/`` (where the prepared
+    ``all_tracks_inputs`` package is scanned). A member under any other
+    top-level name is not part of the delivery contract and is skipped, never
+    guessed at. No VM, no transport — pure local extraction through the ONE
+    ``core.archive_reader.tar_archive`` reader.
+    """
+    from cli.colab_lane import ColabCPULane
+    from core.archive_reader import tar_archive
+
+    checkout = tmp_path / "checkout"
+    results = tmp_path / "results"
+    checkout.mkdir()
+    results.mkdir()
+    # build a delivery archive with the two contract roots + one stray member
+    staging = tmp_path / "staging"
+    (staging / "data" / "track_setup").mkdir(parents=True)
+    (staging / "data" / "track_setup" / "cascade.yaml").write_text("track: cascade\n")
+    (staging / "data" / "prepared").mkdir(parents=True)
+    (staging / "data" / "prepared" / "full.bin").write_bytes(b"prepared")
+    (staging / "training_prep" / "20261010T160841744159").mkdir(parents=True)
+    (staging / "training_prep" / "20261010T160841744159"
+     / "all_tracks_inputs.tar.zst").write_bytes(b"package")
+    (staging / "stray").mkdir()
+    (staging / "stray" / "ignored.txt").write_text("not part of the contract")
+    archive = tmp_path / "bundle_delivery.tar.zst"
+    with tar_archive(archive, "w") as tar:
+        for rel in ("data", "training_prep", "stray"):
+            tar.add(staging / rel, arcname=rel, recursive=True)
+
+    installed = ColabCPULane().install_delivery(
+        archive, checkout=checkout, results=results)
+
+    # data/* under the checkout, training_prep/* under results
+    assert (checkout / "data" / "track_setup" / "cascade.yaml").is_file()
+    assert (checkout / "data" / "prepared" / "full.bin").is_file()
+    assert (results / "training_prep" / "20261010T160841744159"
+            / "all_tracks_inputs.tar.zst").is_file()
+    # the stray top-level member is never written anywhere
+    assert not (checkout / "stray").exists()
+    assert not (results / "stray").exists()
+    # FILE counts only (the two data files, the one prep package)
+    assert installed == {"data": 2, "training_prep": 1}

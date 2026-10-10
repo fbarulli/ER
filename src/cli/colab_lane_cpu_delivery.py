@@ -231,3 +231,48 @@ with tar_archive(delivery, "w") as tar:
         print(_stamp(), f"[bundle] delivered size={observed} "
               f"(writer token {writer_token or 'absent'})", flush=True)
         return observed
+
+    @timed
+    def install_delivery(self, archive: Path, *, checkout: Path | None = None,
+                         results: Path | None = None) -> dict[str, int]:
+        """Install a delivered bundle archive into the checkout (local, no VM).
+
+        ``_download_delivery`` lands one immutable ``bundle_delivery.tar.zst``
+        under its TRAINING_RESULTS root; this is the phase that makes it
+        consumable by a launch. ``data/*`` members install under the checkout
+        root (the prepared ``track_setup`` / ``prepared`` trees a GPU launch
+        packages), and ``training_prep/*`` installs under ``results/`` (where
+        ``prepared_package_candidates`` and ``run_history`` scan the prepared
+        ``all_tracks_inputs`` package). A member under any other top-level name
+        is not part of the delivery contract and is skipped, never guessed at.
+        The archive is immutable and trusted, so no byte is re-checked (owner
+        directive: data is never checked); extraction goes through the ONE
+        ``core.archive_reader.tar_archive`` reader (no ``zstd`` binary needed)
+        with tarfile's ``data`` filter for path safety.
+
+        Returns the per-root installed FILE counts (directories excluded).
+        """
+        from core.archive_reader import tar_archive
+        from core.common import RESULTS, TRAIN_ROOT
+
+        checkout = Path(checkout) if checkout is not None else Path(TRAIN_ROOT)
+        results = Path(results) if results is not None else Path(RESULTS)
+        roots = {"data": checkout, "training_prep": results}
+        installed = {key: 0 for key in roots}
+        archive = Path(archive)
+        with tar_archive(archive, "r") as tar:
+            for member in tar.getmembers():
+                top = member.name.split("/", 1)[0]
+                root = roots.get(top)
+                if root is None:
+                    continue
+                tar.extract(member, path=root, filter="data")
+                if member.isfile():
+                    installed[top] += 1
+        print(
+            _stamp(),
+            f"[bundle] installed {archive.name}: data={installed['data']} files -> "
+            f"{checkout}, training_prep={installed['training_prep']} files -> {results}",
+            flush=True,
+        )
+        return installed

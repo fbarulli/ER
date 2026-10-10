@@ -84,7 +84,19 @@ def main() -> None:
     ap.add_argument("--preflight-only", action="store_true",
                     help="print the lane plan without contacting Colab "
                          "(dry run; no default flips)")
+    ap.add_argument("--install-delivery", type=Path, default=None, metavar="ARCHIVE",
+                    help="install a downloaded bundle_delivery.tar.zst into the "
+                         "checkout (data/* -> checkout, training_prep/* -> "
+                         "results/) and exit; no VM is contacted. This is the "
+                         "canonical install step a launch consumes.")
     args = ap.parse_args()
+    if args.install_delivery is not None:
+        # Local-only install of an already-delivered archive: no provisioning,
+        # no transport, so the lane's release/keep-alive machinery never runs.
+        installed = lane().install_delivery(args.install_delivery)
+        print(json.dumps({"installed": installed,
+                          "archive": str(args.install_delivery)}, indent=2, sort_keys=True))
+        return
     if args.preflight_only:
         _plan_only(args)
         return
