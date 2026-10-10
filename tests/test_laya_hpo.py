@@ -148,6 +148,7 @@ def test_space_targets_route_to_the_right_channel():
                                               "target": "config",
                                               "lo": 0.0, "hi": 1.0}),
      "FinetuneSpec"),
+    (lambda s: s.update(plot={"top_runs": 0}), "top_runs"),
 ])
 def test_validate_space_rejects_malformed(mutation, message):
     space = json.loads(json.dumps(laya_hpo.load_space()))

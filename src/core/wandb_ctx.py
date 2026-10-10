@@ -185,7 +185,7 @@ class WandbRunReader:
         entity = self.entity or str(getattr(client, "default_entity", "") or "")
         return f"{entity}/{self.project}" if entity else self.project
 
-    def _family(self) -> list:
+    def family(self) -> list:
         """The tag's run family, oldest-first (a stable, append-only order).
 
         One ``display_name`` query resolves the tag's own run(s) AND the
@@ -219,7 +219,7 @@ class WandbRunReader:
     def read_once(self) -> dict[str, Any]:
         """One snapshot: family state, the primary's metrics/console/live text,
         and EVERY family member as a per-run handle (``runs``)."""
-        family = self._family()
+        family = self.family()
         primary = self._primary(family)
         output, console_error = self._console(primary)
         live: list[str] = []

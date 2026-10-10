@@ -105,11 +105,15 @@ GOLDEN_SHA256: dict[str, str] = {
     # now scores the promoted champion on the held-out split at session end
     # (TEST_JSONL + HELD_OUT_BATCH baked; after selection is final, so it is
     # never an HPO signal).
+    #
+    # hpo re-pinned for the consolidated-plot SSOT: the space YAML's new
+    # plot.top_runs block rides the baked HPO_SPACE literal (the kernel bytes
+    # move; the plot itself renders host-side via cli.laya_hpo_plots).
     "finetune": "809737e611a6b616b72631fdd9b452ddd34e8ecac60b914a313d568275b1790d",
     "finetune-smoke": "72332be643febe5701dfdc9c582672d52946f06183aad36f552b3c2f6b95b573",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "af09999d7333eb7fd93fffb1c2cf1bcc32626d65951059492b6a0433af8653fd",
+    "hpo": "9bc37b3544aff5aaa9d4a36d81028896359364536483339e1e8e8b5fee71d730",
 }
 
 

@@ -55,6 +55,14 @@ profiler:
   repeat: 1
   top_ops: 15
 
+# The ONE consolidated plot artifact (cli.laya_hpo_plots, `uv run`-rendered
+# from the cloud history): ALL per-epoch losses + metrics overlay in a SINGLE
+# plot (like wandb's multi-run GPU SM Clock / Network Traffic panels) and the
+# gpu/network panel is limited to the TOP-N runs ranked by the promoted dev
+# accuracy (select/best_dev_accuracy).
+plot:
+  top_runs: 3
+
 # ── HPO option set (every option is selected here; no code literals) ────────
 # See training/laya_hpo_options.py: one class per responsibility, a name->
 # builder registry per family, assembled by `build_option_set`.
