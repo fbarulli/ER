@@ -191,8 +191,10 @@ class DataFilesSpec(BaseModel):
     # name) so the producer and the dashboard resolve the SAME
     # root:results/report.json location instead of each spelling it.
     training_report: str
-    colab_live_log: str
-    colab_training_log: str
+    # colab_live_log / colab_training_log REMOVED (log-layout consolidation):
+    # they were a SECOND declaration of the Colab transcript dir that
+    # ``colab.log_dir`` already owns; the ONE lane-transcript accessor
+    # (``cli.log_capture.lane_log``) resolves it from the SSOT logs root.
 
 
 class DataPathsSpec(BaseModel):
@@ -3117,11 +3119,19 @@ class ColabSpec(BaseModel):
 
     @field_validator("log_dir")
     @classmethod
-    def _log_dir_is_under_the_log_root(cls, value: str) -> str:
-        candidate = Path(value)
-        if candidate.is_absolute() or ".." in candidate.parts or len(candidate.parts) < 2:
+    def _log_dir_is_a_bare_lane_name(cls, value: str) -> str:
+        """One bare lane subdir name under the SSOT logs root.
+
+        The root itself comes from ``paths.logs_dir`` and is composed by the
+        ONE accessor (``cli.log_capture``); a value carrying ``logs/`` (or any
+        separator) would be a second spelling of the root, so it is refused.
+        """
+        candidate = Path(value.strip())
+        if (not value.strip() or candidate.is_absolute() or ".." in candidate.parts
+                or len(candidate.parts) != 1):
             raise ValueError(
-                f"colab.log_dir must be a repository-relative directory under logs/: {value!r}")
+                f"colab.log_dir must be a bare lane directory name under the "
+                f"logs root: {value!r}")
         return value
 
     @field_validator("log_name_template")
@@ -3218,8 +3228,13 @@ class ColabSpec(BaseModel):
         return self.log_name_template.format(session=session)
 
     def lane_log_relative_path(self, session: str) -> str:
-        """The declared transcript path for one session: ``<log_dir>/<name>``."""
-        return f"{self.log_dir}/{self.transcript_name(session)}"
+        """The declared transcript path for one session.
+
+        ``<logs_root>/<log_dir>/<name>``: the root name is the SSOT
+        (``paths.logs_dir``) and the lane subdir is this class's ``log_dir``, so
+        neither the root nor the lane is re-spelled at the call site.
+        """
+        return f"{_data_cfg().paths.logs_dir}/{self.log_dir}/{self.transcript_name(session)}"
 
     def launcher_lock_name(self, session: str) -> str:
         """The advisory lock file name that guards one launcher session."""
@@ -3599,11 +3614,12 @@ class KaggleSpec(BaseModel):
     # Git-shipped checkpoint the embed kernel encodes against (member of
     # checkout_paths, so it arrives with the sparse clone).
     checkpoint: str = "artifacts/models"
-    # kernel-logs polling cadence and transcript directory (relative to
-    # TRAIN_ROOT — one canonical roof at logs/<lane>/, owner order
-    # 2026-10-07; colab log-poll mirror, cadence-adapted to kernels).
+    # kernel-logs polling cadence and the bare lane subdir under the SSOT
+    # logs root (one canonical roof at <logs_root>/<lane>/, owner order
+    # 2026-10-07; colab log-poll mirror, cadence-adapted to kernels). The root
+    # itself is ``paths.logs_dir``, composed by ``cli.log_capture``.
     logs_poll_seconds: float = Field(default=15.0, ge=1.0)
-    logs_dir: str = "logs/kaggle"
+    logs_dir: str = "kaggle"
     # Tag prefix for generated run tags (gpu_<UTC stamp>).
     run_tag_prefix: str = "gpu_"
 

@@ -16,6 +16,8 @@ itself, during the very same import cycle, without ordering hazards.
 from __future__ import annotations
 
 import os
+import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 ROOT_ENV_VAR = "EUROMONITOR_PROJECT_ROOT"
@@ -47,3 +49,28 @@ def find_project_root(source_file: Path) -> Path:
         if _has_root_markers(candidate):
             return candidate
     raise RuntimeError(f"Could not locate project root from {source_file}")
+
+
+@lru_cache(maxsize=None)
+def canonical_root(project_root: Path) -> Path:
+    """The repository's ONE canonical root for ``project_root``.
+
+    A linked git worktree (``git worktree add``) is itself a project root, but
+    state that must be shared across worktrees — the logs roof — belongs in the
+    MAIN worktree, not a per-checkout copy. The main worktree is the parent of
+    the shared git dir (``--git-common-dir``), so every worktree of one repo
+    agrees on the same answer. Falls back to ``project_root`` when git is
+    unavailable or the directory is not inside a checkout (a bare VM checkout,
+    a test's tmp root).
+    """
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse",
+             "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return Path(project_root).resolve()
+    if not common:
+        return Path(project_root).resolve()
+    return Path(common).resolve().parent
