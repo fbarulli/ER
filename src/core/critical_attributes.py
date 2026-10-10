@@ -38,9 +38,9 @@ CRITICAL_ATTRIBUTE_DIMENSIONS: tuple[str, ...] = (
 # EXACTLY as core.common honors it — one root, one vocabulary, everywhere.
 @lru_cache(maxsize=1)
 def _attribute_vocabulary() -> dict:
-    from core.project_root import find_project_root
+    from core.project_root import ProjectRoot
 
-    root = find_project_root(Path(__file__).resolve())
+    root = ProjectRoot.find(Path(__file__).resolve())
     data = json.loads((root / "config" / "vocabulary.json").read_text(encoding="utf-8"))
     from core.attribute_vocabulary import validated_attribute_vocabulary
 

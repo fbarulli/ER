@@ -70,7 +70,7 @@ GOLDEN_SHA256: dict[str, str] = {
     "finetune-smoke": "7f1d32ee3763abe4c2dfbfc212d636fa5cc46455f3b6b7c7f3260e7874a10755",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "17f440a918e8e37f2afb4e7d277b74f3154f77204f9b318f6c04df4623cc7ebf",
+    "hpo": "bf7f739ab0947cac859e95f2d067cf22334bebdb0be0dfabb0e48416ca8d3bf2",
 }
 
 

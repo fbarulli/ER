@@ -50,8 +50,9 @@ _ADAPTER_LAYA = "training.hpo_objectives:LayaObjective"
 
 
 def project_root() -> Path:
-    from core.project_root import find_project_root
-    return find_project_root(Path(__file__).resolve())
+    from core.project_root import ProjectRoot
+
+    return ProjectRoot.find(Path(__file__).resolve())
 
 
 def ssot_model_keys() -> list[str]:

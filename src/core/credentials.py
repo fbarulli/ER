@@ -229,8 +229,19 @@ class CredentialStore:
 
     @staticmethod
     def _resolve_env_file(root: Path, spec: CredentialsSpec) -> Path:
+        """Resolve the declared ``env_file`` beside the CANONICAL checkout.
+
+        The fragment (``../.env``) is root-relative; resolving it against the
+        canonical checkout — not the scratch worktree that launched the run — is
+        why the shared secrets file is found from anywhere. ONE owner of that
+        step: :meth:`core.project_root.ProjectRoot.canonical`.
+        """
         fragment = Path(spec.env_file)
-        return fragment if fragment.is_absolute() else (root / fragment).resolve()
+        if fragment.is_absolute():
+            return fragment
+        from core.project_root import ProjectRoot
+
+        return (ProjectRoot.canonical(root) / fragment).resolve()
 
     @staticmethod
     def _read_env_file(path: Path) -> dict[str, str]:

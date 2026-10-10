@@ -44,9 +44,9 @@ def _find_project_root() -> Path:
     root) is honored here via core.project_root, so a lane launched from a
     worktree still writes ``logs/laya/lane.log`` at the canonical root.
     """
-    from core.project_root import find_project_root
+    from core.project_root import ProjectRoot
 
-    return find_project_root(Path(__file__).resolve())
+    return ProjectRoot.find(Path(__file__).resolve())
 
 
 TRAIN_ROOT = _find_project_root()
