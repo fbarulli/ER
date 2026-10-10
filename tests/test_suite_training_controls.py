@@ -227,6 +227,13 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     for track in ('gnn_only', 'cascade'):
         settings = yaml.safe_load((output / f'{track}.yaml').read_text())
         assert settings['listings'] == str(output / 'prepared/listings.json')
+        if track == 'cascade':
+            # The staged parent carries the retired package-time placeholders
+            # (an immutable delivered bundle does too); the sampled child
+            # re-declares both null so ITS worker resolves the same-run
+            # text/gnn_only tracks instead of raising on a stale literal.
+            assert settings['text_index'] is None
+            assert settings['gnn_checkpoint'] is None
     assert preparations == ['text', 'baseline']
     assert cache_calls == [], 'smoke prepares native requests; baseline forward belongs to the worker'
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C']
