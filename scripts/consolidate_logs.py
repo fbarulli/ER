@@ -1,18 +1,21 @@
 """Consolidate run logs into one ordered file.
 
 The operator otherwise chases per-stage / per-lane / per-run logs across
-``logs/``, ``results/`` and the scratch roots. This
+the ONE canonical logs root, ``results/`` and the scratch roots. This
 walks the given roots, orders every log by mtime, and writes a single
 concatenated document with a header per source so one file tells the whole
 story.
 
-  PYTHONPATH=src .venv/bin/python scripts/consolidate_logs.py
-  # only the last 3h, include scratch smoke logs, cap each file:
   PYTHONPATH=src .venv/bin/python scripts/consolidate_logs.py \
-      --roots logs results /tmp/opencode \
+      --output results/consolidated.log
+  # only the last 3h, cap each file:
+  PYTHONPATH=src .venv/bin/python scripts/consolidate_logs.py \
+      --output results/consolidated.log \
       --since-minutes 180 --max-bytes-per-file 200000
 
-Defaults are behavior-neutral (read-only discovery; one output file).
+The output path is REQUIRED: the tool never invents an ad-hoc top-level
+``logs/*.log`` (that would be a second log location beside the declared lane
+dirs). The logs root is resolved from the SSOT (``cli.log_capture``).
 """
 from __future__ import annotations
 
@@ -20,7 +23,9 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_ROOTS = ('logs', 'results', 'ablation_profile', 'training_profile')
+from cli.log_capture import logs_root
+
+DEFAULT_ROOTS = (str(logs_root()), 'results', 'ablation_profile', 'training_profile')
 DEFAULT_EXTENSIONS = ('.log', '.jsonl')
 
 
@@ -52,7 +57,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--roots', nargs='*', default=list(DEFAULT_ROOTS))
     parser.add_argument('--extensions', nargs='*', default=list(DEFAULT_EXTENSIONS))
-    parser.add_argument('--output', type=Path, default=Path('logs/consolidated.log'))
+    parser.add_argument('--output', type=Path, required=True,
+                        help='destination file (required: never an ad-hoc '
+                             'top-level logs dump)')
     parser.add_argument('--since-minutes', type=float, default=None,
                         help='only files modified within the last N minutes')
     parser.add_argument('--max-bytes-per-file', type=int, default=None,
