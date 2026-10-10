@@ -369,7 +369,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             bundle_path.with_suffix(bundle_path.suffix + '.json').read_text())
         events.emit('input_validation', 'configured', device=cfg.device,
                     report_test=cfg.report_test, bundle=str(cfg.text_bundle),
-                    payload=manifest.payload_variant)
+                    payload=manifest.payload_variant, text_loss=cfg.text_loss)
         command = [sys.executable, '-m', 'training.train_prepared', '--bundle', cfg.text_bundle,
                    '--shared-training-data', str(setup / layout.shared_training_data),
                    '--training-binding', str(setup / layout.text_training_binding),
@@ -377,6 +377,11 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                    '--payload', manifest.payload_variant, '--run-tag', run_tag,
                    '--device', cfg.device,
                    '--report-test' if cfg.report_test else '--no-report-test']
+        # A declared text-loss variation reaches the trainer; None omits --loss
+        # so the trainer's own config default stays the SSOT (the GNN track has
+        # one fixed composite objective and no such knob).
+        if cfg.text_loss:
+            command.extend(['--loss', cfg.text_loss])
         if resume and any((output / spec.checkpoint_dir).rglob(spec.trainer_state_file)):
             command.append('--resume')
         setup_manifest = json.loads((setup / layout.manifest).read_text())

@@ -94,7 +94,8 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(worker, 'load_config', lambda _: SimpleNamespace(
         setup_dir='.', text_bundle='bundle', text_model='minilm_l6', epochs=1,
-        device='cpu', report_test=report_test, post_training_ablation=False))
+        device='cpu', report_test=report_test, post_training_ablation=False,
+        text_loss=None))
     # The worker reads only the bundle's sidecar manifest to build its command;
     # the trainer performs the full verified load after the barrier. Loading the
     # whole bundle here cost ~19s and made the text worker the barrier straggler.
@@ -120,6 +121,45 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     events = [json.loads(line) for line in (tmp_path / 'out/worker_events.jsonl').read_text().splitlines()]
     publication = [row['status'] for row in events if row['phase'] == 'publication']
     assert publication == ['skipped']
+
+
+@pytest.mark.parametrize('text_loss', ['contrastive', 'triplet', None])
+def test_text_worker_passes_declared_loss(tmp_path, monkeypatch, text_loss):
+    """A declared suite text_loss reaches the trainer as ``--loss``; None omits it.
+
+    The GNN track has one fixed composite objective and no knob, so only the
+    text lane varies. ``None`` keeps the trainer's own config default (the SSOT)
+    by omitting ``--loss`` entirely.
+    """
+    from model_tracks import worker
+    import core.common
+    import model_tracks.text_report
+
+    (tmp_path / 'setup_manifest.json').write_text('{}')
+    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR', str(tmp_path / 'out'))
+    monkeypatch.setenv('ER_TRACK_BARRIER', str(tmp_path))
+    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
+    monkeypatch.setattr(worker, 'load_config', lambda _: SimpleNamespace(
+        setup_dir='.', text_bundle='bundle', text_model='minilm_l6', epochs=1,
+        device='cpu', report_test=False, post_training_ablation=False,
+        text_loss=text_loss))
+    _sidecar_manifest(tmp_path)
+    monkeypatch.setattr(worker, 'wait_for_start', lambda *_: None)
+    commands = []
+    monkeypatch.setattr(worker.subprocess, 'run', lambda command, **_: commands.append(command))
+    monkeypatch.setattr(model_tracks.text_report, 'complete',
+                        lambda output, *_, **__: (output / 'text__report.json').write_text('{}'))
+    import model_tracks.text_export
+    monkeypatch.setattr(model_tracks.text_export, 'forward',
+                        lambda output, *_, **__: (output / 'text__vectors.npz',
+                                                  SimpleNamespace()))
+    monkeypatch.delenv('ER_INCREMENTAL_DVC', raising=False)
+    worker.run(tmp_path / 'suite.yaml', 'text', 'test')
+    command = commands[0]
+    if text_loss is None:
+        assert '--loss' not in command
+    else:
+        assert command[command.index('--loss') + 1] == text_loss
 
 
 @pytest.mark.parametrize('has_embeddings', [False, True])
