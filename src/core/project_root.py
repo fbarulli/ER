@@ -55,6 +55,11 @@ class ProjectRoot:
     ROOT_ENV_VAR = "EUROMONITOR_PROJECT_ROOT"
     TRAIN_ROOT_ENV_VAR = "EUROMONITOR_TRAIN_ROOT"
     _MARKERS = ("config", "pyproject.toml")
+    #: The declared worktree root (mirrors config paths.worktrees_dir, the
+    #: mandated ``<canonical>/.worktrees/<name>`` layout). A leaf cannot read
+    #: config, so the structural step is taken from this name and git is only
+    #: the fallback for a non-standard layout.
+    _WORKTREES_DIR = ".worktrees"
 
     @classmethod
     def _has_markers(cls, candidate: Path) -> bool:
@@ -118,6 +123,16 @@ class ProjectRoot:
             # Not a marker-bearing checkout (an ad-hoc/test root): there is no
             # canonical checkout to step out of, so answer with the path itself.
             marker = Path(source_file).resolve()
+        # The mandated layout is <canonical>/.worktrees/<name>: take the step
+        # structurally (no subprocess). Git is only the fallback for a linked
+        # worktree living somewhere else.
+        if marker.parent.name == cls._WORKTREES_DIR:
+            return marker.parent.parent
+        if not (marker / ".git").is_file():
+            # A linked git worktree has ``.git`` as a FILE (a gitdir pointer);
+            # the main checkout has a ``.git`` DIR and an ad-hoc root has none.
+            # Neither needs stepping out, so answer without spawning git.
+            return marker
         try:
             result = subprocess.run(
                 ["git", "-C", str(marker), "rev-parse", "--path-format=absolute",

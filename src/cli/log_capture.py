@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
+from core.project_root import ProjectRoot
 
 LOGS_DIR_NAME = "logs"
 # Tag prefixed to the retained last carriage-return frame of a chunk.
@@ -21,8 +22,13 @@ LAST_BAR_TAG = "[tqdm]"
 
 
 def logs_root() -> Path:
-    """The canonical log root (TRAIN_ROOT/logs), created on demand."""
-    root = (TRAIN_ROOT / LOGS_DIR_NAME).resolve()
+    """The canonical log root, created on demand.
+
+    Resolved through ``ProjectRoot.canonical`` so EVERY lane's logs land in the
+    canonical (main) tree at the same roof, whether the run launched from main
+    or from a linked ``.worktrees/<name>`` checkout — never the scratch checkout.
+    """
+    root = (ProjectRoot.canonical(TRAIN_ROOT) / LOGS_DIR_NAME).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -62,8 +68,14 @@ class LaneTranscript:
 
     @classmethod
     def roof_for(cls, train_root: Path) -> Path:
-        """The declared transcript directory (``kaggle.logs_dir``)."""
-        return (Path(train_root) / cls._kaggle().logs_dir).resolve()
+        """The declared transcript directory (``kaggle.logs_dir``).
+
+        Resolved under the CANONICAL checkout, so the kaggle-family transcript
+        lands in the main tree (``logs/kaggle/lane.log``) even when the run
+        launched from a linked worktree.
+        """
+        return (ProjectRoot.canonical(Path(train_root))
+                / cls._kaggle().logs_dir).resolve()
 
     @classmethod
     def path_for(cls, train_root: Path) -> Path:
