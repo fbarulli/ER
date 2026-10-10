@@ -401,6 +401,16 @@ class LayaSpec(BaseModel):
     run_tag_prefix: str = "laya_"
     # SINGLE T4 per owner ruling; the meta never requests 2xT4.
     gpu: Literal["T4"] = "T4"
+    # The DDP process-group collective timeout, baked into the fine-tune and
+    # HPO kernels' `init_process_group(timeout=...)`. Torch's 10-minute
+    # default is SMALLER than rank 0's single-writer tail: the 2xT4 run
+    # measured 512.7 s of held-out eval + tar against that 600 s default, so a
+    # marginally slower tail aborted the job with an NCCL watchdog
+    # DistBackendError. The structural fix (tear the group down BEFORE the
+    # rank-0 tail) removes the divergence; this is the defense-in-depth
+    # headroom for a legitimately slow save / all_reduce.
+    # Tradeoff: a genuinely hung rank is detected after THIS long, not 10 min.
+    ddp_timeout_minutes: float = Field(default=120.0, gt=0.0)
     laya_decision_batch_size: int = Field(default=8, ge=1, le=128)
     # 0 DISABLES the decision lane (no payload may stage a session).
     laya_decision_epochs: int = Field(default=1, ge=0, le=8)

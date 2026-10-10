@@ -66,11 +66,17 @@ GOLDEN_SHA256: dict[str, str] = {
     # also gates the best.pt file, so an HPO trial writes no optimizer/scheduler
     # state and no checkpoint/weight files; the HPO profiler keeps the top-op
     # table but no longer exports a chrome trace.
-    "finetune": "7c86c40ce082c33ac34ed0d0f83be415632c79d284251e49638c2ca2b6d3bc59",
-    "finetune-smoke": "7f1d32ee3763abe4c2dfbfc212d636fa5cc46455f3b6b7c7f3260e7874a10755",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the NCCL watchdog teardown
+    # fix: the process group is destroyed on ALL ranks together BEFORE rank 0's
+    # single-writer tail (teardown_after_training replaces run_on_rank0), and
+    # init_process_group bakes the new laya.ddp_timeout_minutes SSOT knob as
+    # DDP_TIMEOUT_MINUTES (defense-in-depth for rank 0's slow final save).
+    "finetune": "1fc0d119c03b8dd883f813e3de2bf7d19d4a68be6f26f919fb431db775a9e629",
+    "finetune-smoke": "0aa5a8d8529016eb68923cd398503fccbb5df9d5572317d6d075d69695f54b49",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "bf7f739ab0947cac859e95f2d067cf22334bebdb0be0dfabb0e48416ca8d3bf2",
+    "hpo": "1abe2ddd6bc12a7b8fd54d5e21297d6cc85b2411a878021db67965ee8bcfc087",
 }
 
 

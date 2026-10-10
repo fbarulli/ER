@@ -172,6 +172,7 @@ FINETUNE_CONFIG = @FINETUNE_CONFIG@
 # by `_perf_train_model` from this module global.
 FINETUNE_CONTROL = @FINETUNE_CONTROL@
 HELD_OUT_BATCH = @HELD_OUT_BATCH@
+DDP_TIMEOUT_MINUTES = @DDP_TIMEOUT_MINUTES@
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
 # The receipt member `collect_kaggle_result` requires: `laya_<kind>.receipt.json`
@@ -649,7 +650,10 @@ def _finetune_session(distributed, session):
             except Exception as error:  # keep the checkpoint; surface failure
                 receipt["held_out_error"] = (
                     type(error).__name__ + ": " + str(error)[:400])
-                log("held-out evaluation FAILED: " + receipt["held_out_error"])
+                # FULL traceback in the stream (contract: never a one-liner);
+                # the receipt keeps the short digest.
+                log("held-out evaluation FAILED: " + receipt["held_out_error"]
+                    + "\\n" + traceback.format_exc())
         # Mirror the run to wandb (rank 0 only; no-op without WANDB_API_KEY).
         if isinstance(receipt.get("train_report"), dict):
             wandb_log_metrics(receipt["train_report"])
@@ -668,10 +672,14 @@ def _finetune_session(distributed, session):
                         archive=str(WORKING / "laya_finetune.tar.gz"))
         wandb_finish()
 
-    # Barrier + rank-0-only gate: only rank 0 evaluates the held-out split,
-    # writes the receipt and tars /kaggle/working; every rank then tears the
-    # process group down.
-    run_on_rank0(rank0_work)
+    # Teardown BEFORE the tail (the NCCL watchdog class fix): all ranks
+    # barrier + destroy the process group together, then rank 0 ALONE -- with
+    # no group alive on any rank -- evaluates the held-out split, writes the
+    # receipt and tars /kaggle/working. The single-process path is unchanged
+    # (teardown is a no-op; is_rank0() is trivially true).
+    teardown_after_training()
+    if is_rank0():
+        rank0_work()
 
 
 def finetune_worker(rank, world_size):
@@ -682,6 +690,8 @@ def finetune_worker(rank, world_size):
     try:
         _finetune_session(distributed=True, session=session_env())
     finally:
+        # No-op on the happy path (teardown_after_training already destroyed
+        # the group before rank 0's tail); the exception path's safety net.
         destroy_if_distributed()
 
 

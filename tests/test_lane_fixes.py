@@ -61,6 +61,7 @@ def _render_finetune_script() -> str:
         "FINETUNE_CONTROL": repr(laya_lane.finetune_control()),
         "FINETUNE_DEVICE": "auto",
         "HELD_OUT_BATCH": str(laya_lane._spec().laya_decision_batch_size),
+        "DDP_TIMEOUT_MINUTES": str(laya_lane._spec().ddp_timeout_minutes),
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",

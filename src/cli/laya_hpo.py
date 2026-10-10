@@ -505,6 +505,9 @@ def _compose_hpo_script(*, spec, space, generation: str, key: str, tag: str,
         "LOCAL_STUDY_FILE": local_study_file or "",
         "WANDB_API_KEY": laya_lane._env_value("WANDB_API_KEY") or "",
         "WANDB_PROJECT": laya_lane._wandb_project(),
+        # The DDP collective-timeout knob (laya.ddp_timeout_minutes, SSOT):
+        # the HPO kernel injects the same PERF/DDP patch text as finetune.
+        "DDP_TIMEOUT_MINUTES": str(spec.ddp_timeout_minutes),
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,

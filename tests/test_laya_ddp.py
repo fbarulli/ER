@@ -30,9 +30,20 @@ N_ITEMS = 8  # divisible by WORLD -> exact disjoint cover with no padding
 SEED = 1729
 
 
-def _load_ddp_namespace():
-    """Exec the finetune PERF/DDP source exactly as the rendered kernel does."""
-    namespace = {"os": os, "math": math, "random": random}
+def _load_ddp_namespace(ddp_timeout_minutes=None):
+    """Exec the finetune PERF/DDP source exactly as the rendered kernel does.
+
+    ``DDP_TIMEOUT_MINUTES`` is the baked kernel literal (SSOT
+    ``laya.ddp_timeout_minutes``); tests may pin a SHORT one to prove the
+    teardown order survives a rank-0 tail that outlives the collective
+    timeout.
+    """
+    if ddp_timeout_minutes is None:
+        from core.laya_config import LayaSpec
+
+        ddp_timeout_minutes = LayaSpec().ddp_timeout_minutes
+    namespace = {"os": os, "math": math, "random": random,
+                 "DDP_TIMEOUT_MINUTES": ddp_timeout_minutes}
     exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
     return namespace
 
@@ -179,13 +190,6 @@ def _ddp_worker(rank, world_size, out_path):
         shards = [None for _ in range(world_size)]
         dist.all_gather_object(shards, local_indices)
 
-        # rank-0 gate: the save/eval callback must fire on rank 0 only.
-        gate_calls = []
-        gate_results = [None for _ in range(world_size)]
-        result = namespace["run_on_rank0"](
-            lambda: gate_calls.append(rank) or "staged")
-        dist.all_gather_object(gate_results, result)
-
         processed = []
         laya = _make_fake_laya(processed)
         import sys
@@ -200,11 +204,23 @@ def _ddp_worker(rank, world_size, out_path):
         histories = [None for _ in range(world_size)]
         dist.all_gather_object(histories, history)
 
+        # The _finetune_session contract: teardown FIRST (all ranks together),
+        # then the rank-0-only tail with NO process group alive -- so the tail
+        # result can only travel by file, never by a collective.
+        namespace["teardown_after_training"]()
+        gate_calls = []
+        gate_result = None
+        if namespace["is_rank0"]():
+            gate_calls.append(rank)
+            gate_result = "staged"
+        Path(f"{out_path}.rank{rank}").write_text(json.dumps({
+            "gate_calls": gate_calls,
+            "gate_result": gate_result,
+        }), encoding="utf-8")
+
         if rank == 0:
             Path(out_path).write_text(json.dumps({
                 "shards": shards,
-                "gate_results": gate_results,
-                "gate_calls": gate_calls,
                 "history": history,
                 "histories": histories,
             }), encoding="utf-8")
@@ -226,9 +242,11 @@ def test_ddp_two_rank_shards_gate_and_finite_loss(tmp_path):
     assert set(rank0).isdisjoint(set(rank1))
     assert sorted(rank0 + rank1) == list(range(N_ITEMS))
 
-    # rank-0-only gate: only rank 0 returned the staged result
-    assert result["gate_results"] == ["staged", None]
-    assert result["gate_calls"] == [0]
+    # rank-0-only tail AFTER the joint teardown: only rank 0 staged
+    gates = [json.loads(Path(f"{out_path}.rank{r}").read_text(
+        encoding="utf-8")) for r in range(WORLD)]
+    assert [gate["gate_result"] for gate in gates] == ["staged", None]
+    assert [gate["gate_calls"] for gate in gates] == [[0], []]
 
     # 2-process run completed and the loss is finite (finite on both ranks)
     assert result["history"]
@@ -238,6 +256,44 @@ def test_ddp_two_rank_shards_gate_and_finite_loss(tmp_path):
     assert all(
         all(math.isfinite(value) for value in history)
         for history in result["histories"])
+
+
+def _tail_worker(rank, world_size, tail_seconds, out_path):
+    """The fixed control flow under a tail that OUTLIVES the PG timeout.
+
+    The pre-fix flow parked rank 1 on destroy_process_group's final barrier
+    while rank 0 ran its long single-writer tail; the gloo/NCCL watchdog
+    aborted rank 1 once the tail passed the collective timeout (the real
+    2xT4 run: 512.7 s tail vs the 600 s NCCL default -> checkTimeout ->
+    DistBackendError). Here the timeout is pinned SHORTER than the tail, so
+    any collective alive during the tail makes this worker (and the spawn
+    join) fail; the reordered flow completes on both ranks.
+    """
+    import time
+
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace(
+        ddp_timeout_minutes=tail_seconds / 120.0)  # timeout = tail/2
+    assert namespace["init_distributed"](backend="gloo") is True
+    try:
+        namespace["teardown_after_training"]()
+        if namespace["is_rank0"]():
+            time.sleep(tail_seconds)  # the long rank-0 tail, PG-free
+            Path(out_path).write_text("tail-done", encoding="utf-8")
+    finally:
+        namespace["destroy_if_distributed"]()  # idempotent no-op here
+
+
+def test_rank0_tail_longer_than_collective_timeout_survives(tmp_path):
+    out_path = tmp_path / "tail.txt"
+    torch.multiprocessing.spawn(
+        _tail_worker, args=(WORLD, 8.0, str(out_path)), nprocs=WORLD,
+        join=True, start_method="spawn")
+    assert out_path.read_text(encoding="utf-8") == "tail-done"
 
 
 def test_dist_env_reads_rank_vars_and_ddp_optout(monkeypatch):
@@ -354,6 +410,7 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
         "FINETUNE_CONTROL": repr(laya_lane.finetune_control()),
         "FINETUNE_DEVICE": "auto",
         "HELD_OUT_BATCH": str(laya_lane._spec().laya_decision_batch_size),
+        "DDP_TIMEOUT_MINUTES": str(laya_lane._spec().ddp_timeout_minutes),
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",
@@ -375,8 +432,14 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
     assert "def finetune_worker" in script
     assert 'DistributedDataParallel' in script
     assert "build_distributed_sampler" in script
-    assert "run_on_rank0(rank0_work)" in script
+    # the teardown-before-tail order + the config-baked collective timeout
+    assert "teardown_after_training()" in script
+    assert "if is_rank0():\n        rank0_work()" in script
+    assert "run_on_rank0" not in script
     assert "destroy_if_distributed()" in script
+    assert ("DDP_TIMEOUT_MINUTES = "
+            f"{laya_lane._spec().ddp_timeout_minutes}") in script
+    assert "timeout=timedelta(minutes=DDP_TIMEOUT_MINUTES)" in script
     # the single-process branch is preserved byte-for-byte
     assert "random.Random(config.seed + epoch).shuffle(epoch_items)" in script
 

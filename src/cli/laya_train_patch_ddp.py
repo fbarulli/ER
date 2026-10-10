@@ -134,6 +134,7 @@ def init_distributed(backend=None):
         return False
     import torch
     import torch.distributed as dist
+    from datetime import timedelta
     local_rank, rank, world_size = dist_env()
     if backend is None:
         backend = "nccl" if torch.cuda.is_available() else "gloo"
@@ -144,7 +145,16 @@ def init_distributed(backend=None):
         # torch.multiprocessing.spawn does not (single box => localhost).
         os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
         os.environ.setdefault("MASTER_PORT", "29500")
-        torch.distributed.init_process_group(backend)
+        # Explicit GENEROUS collective timeout (config SSOT: the baked
+        # DDP_TIMEOUT_MINUTES literal = laya.ddp_timeout_minutes). Torch's
+        # 10-min default is smaller than rank 0's legitimate slow collectives
+        # (the final checkpoint save runs while the other ranks wait at the
+        # post-training barrier), and the NCCL watchdog then aborts a healthy
+        # job: checkTimeout -> DistBackendError, the 2026-10-10 2xT4 run.
+        # Defense-in-depth only; the teardown reorder (teardown_after_training)
+        # is what removes the divergence.
+        torch.distributed.init_process_group(
+            backend, timeout=timedelta(minutes=DDP_TIMEOUT_MINUTES))
     return True
 
 
@@ -193,13 +203,18 @@ def destroy_if_distributed():
         dist.destroy_process_group()
 
 
-def run_on_rank0(fn):
-    # rank 0 ONLY stages: the barrier first guarantees every rank finished
-    # training before the single writer touches /kaggle/working.
+def teardown_after_training():
+    # The 2xT4 NCCL watchdog class (checkTimeout -> DistBackendError, the
+    # 2026-10-10 run): rank 0's single-writer tail (held-out eval + receipt +
+    # tar of /kaggle/working; 512.7 s measured) ran while every other rank
+    # parked on the group's next collective -- the final barrier inside
+    # destroy_process_group -- and a tail longer than the watchdog timeout
+    # aborted a healthy job. Reordered so NO rank ever parks on a collective
+    # during the tail: every rank confirms training done (barrier), every rank
+    # destroys the group TOGETHER right now, and only THEN does rank 0 run its
+    # tail as a plain single process with no process group alive anywhere.
     barrier_if_distributed()
-    if is_rank0():
-        return fn()
-    return None
+    destroy_if_distributed()
 
 
 def resolve_nprocs():

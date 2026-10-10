@@ -704,6 +704,10 @@ class LayaStagingFactory:
             "FINETUNE_CONTROL": repr(self._recipe.finetune_control()),
             "FINETUNE_DEVICE": device,
             "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
+            # The DDP collective-timeout knob (laya.ddp_timeout_minutes,
+            # SSOT): baked like every other kernel literal, never spelled
+            # twice.
+            "DDP_TIMEOUT_MINUTES": str(spec.ddp_timeout_minutes),
             "RECEIPT_NAME": f"laya_{kind}.receipt.json",
             # wandb mirror: the key is read from .env at staging and baked in
             # (never committed); empty key -> the kernel logs nothing.
