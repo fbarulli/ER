@@ -89,7 +89,7 @@ def test_space_loads_declared_dials_and_metadata():
         "early_stop_patience", "warmup_frac", "lr_scheduler", "encoder_lr",
         "head_lr", "weight_decay", "micro_batch", "grad_accum",
         "label_smoothing", "sigma_start", "sigma_end", "ema", "swa",
-        "layer_decay",
+        "layer_decay", "gradient_checkpointing",
         # optional control dials (default-OFF)
         "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
         "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
@@ -98,7 +98,7 @@ def test_space_loads_declared_dials_and_metadata():
         "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
         "contrastive_margin_end",
     }
-    assert len(space["dials"]) == 33
+    assert len(space["dials"]) == 34
     assert space["model_key"] == "laya"
     assert space["objective"] == {
         "direction": "maximize", "primary": "dev_accuracy",
@@ -133,6 +133,9 @@ def test_space_targets_route_to_the_right_channel():
     dials = laya_hpo.load_space()["dials"]
     assert dials["encoder_lr"]["target"] == "config"
     assert dials["micro_batch"]["target"] == "config"
+    # the backward-pass lever (space v3): a TrainConfig knob, never a control
+    assert dials["gradient_checkpointing"]["target"] == "config"
+    assert dials["gradient_checkpointing"]["choices"] == [False, True]
     assert dials["early_stop_patience"]["target"] == "control"
     assert dials["lr_scheduler"]["target"] == "control"
     assert dials["ema"]["target"] == "control"

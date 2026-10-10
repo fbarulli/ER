@@ -19,7 +19,7 @@
 # PostgreSQL Optuna URL lives exclusively in the runtime secret store
 # (`OPTUNA_STORAGE_URL`) and is injected into the staged kernel, never here.
 
-space_version: 2
+space_version: 3
 
 # The shared-study identity (the model boundary; kept distinct from the
 # generation boundary, which is runtime environment).
@@ -212,6 +212,15 @@ dials:
     type: categorical
     target: config
     choices: [4, 8, 16]
+  # The backward-pass lever (1kbaseline harvest: backward = 1,529 s/epoch,
+  # 47% of the epoch, backward/forward ~= 1.9 = the checkpointing recompute).
+  # OFF trades activation memory for ~-20-35% backward; a micro_batch 16 +
+  # checkpointing-off trial MAY OOM at 2 slots/GPU — the accepted outcome of
+  # this round (options.parallelism): reported, never engineered away.
+  gradient_checkpointing:
+    type: categorical
+    target: config
+    choices: [false, true]
   grad_accum:
     type: categorical
     target: config

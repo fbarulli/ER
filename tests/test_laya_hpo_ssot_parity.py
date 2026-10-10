@@ -129,5 +129,7 @@ def test_space_is_bound_in_the_paths_ssot():
 
 def test_dial_space_version_and_count_are_pinned():
     space = laya_hpo.load_space()
-    assert space["space_version"] == 2
-    assert len(space["dials"]) == 33
+    # v3: + gradient_checkpointing (the backward-pass lever harvested from
+    # the 1kbaseline runs: 1,529 s/epoch under the checkpointing recompute)
+    assert space["space_version"] == 3
+    assert len(space["dials"]) == 34
