@@ -2595,7 +2595,12 @@ def main() -> None:
                 raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
             if args.refresh_data:
                 run_data_prep()
-            elif args.what != "smoke" and not prepared_train_runtime:
+            elif args.what not in {"smoke", "bundle"} and not prepared_train_runtime:
+                # The bundle lane REGENERATES every derived CSV from the raw
+                # export (training.prepare_all), so it must not require the
+                # frozen derived inputs a checkout no longer ships (0a8d317
+                # untracked them). Every other non-prepared lane still consumes
+                # the frozen inputs and keeps the check.
                 verify_training_inputs()
             # Default self-watch spawn point (owner order 2026-10-07): the
             # gates ran pre-provisioning and the first healthy provisioning
