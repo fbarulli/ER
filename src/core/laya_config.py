@@ -269,9 +269,9 @@ class FinetuneSmokeSpec(BaseModel):
     dataset_slug: str | None = LayaCorpora.SMOKE.slug
     # Where the tiny subsets are generated (TRAIN_ROOT-relative, gitignored).
     corpus_dir: str = "results/laya_lane/smoke_corpus"
-    train_rows: int = Field(default=200, ge=1, le=5000)
-    dev_rows: int = Field(default=100, ge=1, le=5000)
-    test_rows: int = Field(default=100, ge=1, le=5000)
+    train_rows: int = Field(default=1000, ge=1, le=5000)
+    dev_rows: int = Field(default=300, ge=1, le=5000)
+    test_rows: int = Field(default=300, ge=1, le=5000)
     epochs: int = Field(default=1, ge=1, le=8)
     micro_batch: int = Field(default=1, ge=1, le=64)
     grad_accum: int = Field(default=1, ge=1, le=64)
