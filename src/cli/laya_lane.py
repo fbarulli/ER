@@ -1683,6 +1683,7 @@ def init_distributed(backend=None):
         return False
     import torch
     import torch.distributed as dist
+    from datetime import timedelta
     local_rank, rank, world_size = dist_env()
     if backend is None:
         backend = "nccl" if torch.cuda.is_available() else "gloo"
@@ -1693,7 +1694,16 @@ def init_distributed(backend=None):
         # torch.multiprocessing.spawn does not (single box => localhost).
         os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
         os.environ.setdefault("MASTER_PORT", "29500")
-        torch.distributed.init_process_group(backend)
+        # Explicit GENEROUS collective timeout (config SSOT: the baked
+        # DDP_TIMEOUT_MINUTES literal = laya.ddp_timeout_minutes). Torch's
+        # 10-min default is smaller than rank 0's legitimate slow collectives
+        # (the final checkpoint save runs while the other ranks wait at the
+        # post-training barrier), and the NCCL watchdog then aborts a healthy
+        # job: checkTimeout -> DistBackendError, the 2026-10-10 2xT4 run.
+        # Defense-in-depth only; the teardown reorder (teardown_after_training)
+        # is what removes the divergence.
+        torch.distributed.init_process_group(
+            backend, timeout=timedelta(minutes=DDP_TIMEOUT_MINUTES))
     return True
 
 
@@ -1713,13 +1723,18 @@ def destroy_if_distributed():
         dist.destroy_process_group()
 
 
-def run_on_rank0(fn):
-    # rank 0 ONLY stages: the barrier first guarantees every rank finished
-    # training before the single writer touches /kaggle/working.
+def teardown_after_training():
+    # The 2xT4 NCCL watchdog class (checkTimeout -> DistBackendError, the
+    # 2026-10-10 run): rank 0's single-writer tail (held-out eval + receipt +
+    # tar of /kaggle/working; 512.7 s measured) ran while every other rank
+    # parked on the group's next collective -- the final barrier inside
+    # destroy_process_group -- and a tail longer than the watchdog timeout
+    # aborted a healthy job. Reordered so NO rank ever parks on a collective
+    # during the tail: every rank confirms training done (barrier), every rank
+    # destroys the group TOGETHER right now, and only THEN does rank 0 run its
+    # tail as a plain single process with no process group alive anywhere.
     barrier_if_distributed()
-    if is_rank0():
-        return fn()
-    return None
+    destroy_if_distributed()
 
 
 def resolve_nprocs():
@@ -2033,6 +2048,7 @@ BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
 FINETUNE_DEVICE = "@FINETUNE_DEVICE@"
 FINETUNE_CONFIG = @FINETUNE_CONFIG@
 HELD_OUT_BATCH = @HELD_OUT_BATCH@
+DDP_TIMEOUT_MINUTES = @DDP_TIMEOUT_MINUTES@
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"
@@ -2302,9 +2318,13 @@ def _finetune_session(distributed, session):
                     + str(held_out["items"]) + " accuracy="
                     + str(held_out["metrics"].get("accuracy")))
             except Exception as error:  # keep the checkpoint; surface failure
+                import traceback
                 receipt["held_out_error"] = (
                     type(error).__name__ + ": " + str(error)[:400])
-                log("held-out evaluation FAILED: " + receipt["held_out_error"])
+                # FULL traceback in the stream (contract: never a one-liner);
+                # the receipt keeps the short digest.
+                log("held-out evaluation FAILED: " + receipt["held_out_error"]
+                    + "\\n" + traceback.format_exc())
         (WORKING / "laya_finetune.receipt.json").write_text(
             json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
         with tarfile.open(WORKING / "laya_finetune.tar.gz", "w:gz",
@@ -2314,10 +2334,14 @@ def _finetune_session(distributed, session):
                     tar.add(item, arcname=item.name)
         log("staged laya_finetune.tar.gz + receipt in /kaggle/working")
 
-    # Barrier + rank-0-only gate: only rank 0 evaluates the held-out split,
-    # writes the receipt and tars /kaggle/working; every rank then tears the
-    # process group down.
-    run_on_rank0(rank0_work)
+    # Teardown BEFORE the tail (the NCCL watchdog class fix): all ranks
+    # barrier + destroy the process group together, then rank 0 ALONE -- with
+    # no group alive on any rank -- evaluates the held-out split, writes the
+    # receipt and tars /kaggle/working. The single-process path is unchanged
+    # (teardown is a no-op; is_rank0() is trivially true).
+    teardown_after_training()
+    if is_rank0():
+        rank0_work()
 
 
 def finetune_worker(rank, world_size):
@@ -2328,6 +2352,8 @@ def finetune_worker(rank, world_size):
     try:
         _finetune_session(distributed=True, session=session_env())
     finally:
+        # No-op on the happy path (teardown_after_training already destroyed
+        # the group before rank 0's tail); the exception path's safety net.
         destroy_if_distributed()
 
 
@@ -3389,6 +3415,9 @@ def stage_finetune_kernel(*, revision: str | None = None,
         "FINETUNE_CONFIG": repr(recipe),
         "FINETUNE_DEVICE": spec.finetune.device,
         "HELD_OUT_BATCH": str(spec.laya_decision_batch_size),
+        # The DDP collective-timeout knob (laya.ddp_timeout_minutes, SSOT):
+        # baked like every other kernel literal, never spelled twice.
+        "DDP_TIMEOUT_MINUTES": str(spec.ddp_timeout_minutes),
         "REPOSITORY": repository,
         "BRANCH": branch,
         "REVISION": revision,

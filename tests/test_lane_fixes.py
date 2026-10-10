@@ -60,6 +60,7 @@ def _render_finetune_script() -> str:
         "FINETUNE_CONFIG": repr(laya_lane.finetune_config()),
         "FINETUNE_DEVICE": "auto",
         "HELD_OUT_BATCH": str(laya_lane._spec().laya_decision_batch_size),
+        "DDP_TIMEOUT_MINUTES": str(laya_lane._spec().ddp_timeout_minutes),
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",
