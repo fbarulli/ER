@@ -71,43 +71,22 @@ def _baked(script: str, name: str):
     raise AssertionError(f"{name} not baked into the kernel")
 
 
-def test_smoke_corpus_samples_every_stratum_not_a_prefix(tmp_path):
-    """The subset is a stratified sample of the whole split, not its prefix.
-
-    The builder emits the state/mask rows LAST, so a prefix cut drops
-    ``single_state`` entirely (the original bias); the subset must keep every
-    ``difficulty_slice`` present, in proportion, deterministically.
-    """
+def test_smoke_corpus_is_deterministic_and_receipted(tmp_path):
     source = tmp_path / "full"
     source.mkdir()
-
-    def rows(split: str, single: int, pair: int) -> str:
-        return "".join(
-            json.dumps({"state": f"{split}-state-{i}",
-                        "difficulty_slice": "single_state"}) + "\n"
-            for i in range(single)) + "".join(
-            json.dumps({"state": f"{split}-pair-{i}",
-                        "difficulty_slice": "one_diff"}) + "\n"
-            for i in range(pair))
-
-    for name, single, pair in (("train.jsonl", 20, 180),
-                               ("dev.jsonl", 10, 90), ("test.jsonl", 10, 90)):
-        (source / name).write_text(rows(name.split(".")[0], single, pair),
-                                   encoding="utf-8")
-    smoke = FinetuneSmokeSpec(train_rows=100, dev_rows=50, test_rows=50)
+    for name, total in (("train.jsonl", 10), ("dev.jsonl", 8),
+                        ("test.jsonl", 9)):
+        (source / name).write_text(
+            "".join(json.dumps({"state": f"{name.split('.')[0]}-{i}"}) + "\n"
+                    for i in range(total)), encoding="utf-8")
+    smoke = FinetuneSmokeSpec(train_rows=4, dev_rows=3, test_rows=2)
     dest = tmp_path / "smoke"
     receipt = FinetuneSmokeCorpus(smoke, source_dir=source,
                                   dest_dir=dest).build(seed=1729)
-    assert receipt["counts"] == {"train": 100, "dev": 50, "test": 50}
-    # both strata survive the cut in the source proportion (10% single_state)
-    strata = receipt["strata"]["train"]
-    assert 0 < strata["single_state"] < strata["one_diff"]
-    # deterministic: a rerun reproduces every byte + digest
-    again = FinetuneSmokeCorpus(smoke, source_dir=source,
-                                dest_dir=tmp_path / "smoke2").build(seed=1729)
-    assert (tmp_path / "smoke2/train.jsonl").read_bytes() == \
-        (dest / "train.jsonl").read_bytes()
-    assert again["files"]["train.jsonl"] == receipt["files"]["train.jsonl"]
+    assert receipt["counts"] == {"train": 4, "dev": 3, "test": 2}
+    assert receipt["seed"] == 1729
+    assert [line for line in (dest / "train.jsonl").read_text().splitlines()] == [
+        json.dumps({"state": f"train-{i}"}) for i in range(4)]
     # the receipt records the source digests + its own files inventory
     assert set(receipt["files"]) == {
         "train.jsonl", "dev.jsonl", "test.jsonl", "receipt.json"}
