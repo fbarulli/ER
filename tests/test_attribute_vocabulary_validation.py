@@ -23,8 +23,8 @@ def test_both_readers_reject_unusable_attribute_vocabulary(tmp_path, monkeypatch
     (tmp_path / 'config').mkdir()
     path = tmp_path / 'config/vocabulary.json'
     path.write_text(json.dumps(data))
-    from core import project_root
-    monkeypatch.setattr(project_root, 'find_project_root', lambda _: tmp_path)
+    from core.project_root import ProjectRoot
+    monkeypatch.setattr(ProjectRoot, 'find', lambda _: tmp_path)
     critical_attributes._attribute_vocabulary.cache_clear()
     try:
         with pytest.raises(SystemExit, match='vocabulary.attribute_vocabulary'):
