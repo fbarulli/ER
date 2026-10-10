@@ -84,6 +84,7 @@ from core.common import (
     training_cfg,
 )
 from core.bundle import CHECKPOINT_PREFIX
+from core.env_file import EnvFile
 from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
 from training.prepare_all_trace import timed
@@ -2199,6 +2200,7 @@ def default_prepared_input_package() -> Path | None:
 
 
 def main() -> None:
+    EnvFile.apply()  # the ONE env load; keys never hand-exported
     RunLogger.configure_console()
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)

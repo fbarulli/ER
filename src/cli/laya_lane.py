@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+from core.env_file import EnvFile
 from core.portable_archive import ByteCount
 import json
 import os
@@ -4123,6 +4124,7 @@ def _spawn_stream_follower(slug: str) -> None:
 
 
 def main() -> None:
+    EnvFile.apply()  # the ONE env load; keys never hand-exported
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kind", choices=KINDS, default="kaggle")
     parser.add_argument("--decision", choices=GPU_KINDS, default="attribute",

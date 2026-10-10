@@ -12,7 +12,9 @@ class KaggleCLI:
     @staticmethod
     def run() -> None:
         from cli import kaggle_lane as lane
+        from core.env_file import EnvFile
 
+        EnvFile.apply()  # the ONE env load; keys never hand-exported
         parser = argparse.ArgumentParser(description=lane.__doc__)
         parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                             "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
