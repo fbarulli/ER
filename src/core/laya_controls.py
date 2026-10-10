@@ -695,6 +695,10 @@ class PhaseTimings:
 
         self._stack.append((name, time.perf_counter()))
 
+    def depth(self):
+        """The number of currently-open phase scopes (0 = top level)."""
+        return len(self._stack)
+
     def exit(self, name):
         if not self.rank0 or not self._stack:
             return
@@ -783,28 +787,44 @@ class PhaseTimings:
 
 
 class CalibrationTimingHook:
-    """Time every ``laya.train.calibration_records`` call once (rank 0).
+    """Time TOP-LEVEL ``laya.train.calibration_records`` calls once (rank 0).
 
     Installed by the perf patch BEFORE the device patch, so the device wrapper
     closes over THIS wrapper and the underlying function still does all the
-    work; only one timing scope is entered per call. The pre-train dev
-    evaluation runs before the training loop exists, so this is the only seam
-    that can time it.
+    work. A NESTED call (the per-epoch dev eval's records inside ``dev_eval``)
+    is already attributed to its enclosing phase, so the hook stays silent
+    there — the old wrap-every-call behaviour reported the same ~440 s of dev
+    records work under three names (dev_eval + calibration +
+    calibration_records) in every harvested timing table. Install is
+    idempotent (ONE wrapper per process): a per-trial ``apply_perf_patch``
+    swaps the timings target instead of stacking a wrapper. The pre-train dev
+    evaluation is a top-level call, so this is still the only seam that can
+    time it.
     """
+
+    HOLDER = "_er_calibration_timings"
 
     def __init__(self, timings):
         self._timings = timings
 
     def install(self, laya_train):
+        holder = getattr(laya_train, self.HOLDER, None)
+        if holder is not None:
+            holder[0] = self._timings
+            return self._timings
         original = laya_train.calibration_records
-        timings = self._timings
+        holder = [self._timings]
 
         def calibration_records(model, tok, items, device, *args, **kwargs):
+            timings = holder[0]
+            if timings is None or timings.depth() > 0:
+                return original(model, tok, items, device, *args, **kwargs)
             with timings.phase("calibration_records"):
                 return original(model, tok, items, device, *args, **kwargs)
 
         laya_train.calibration_records = calibration_records
-        return timings
+        setattr(laya_train, self.HOLDER, holder)
+        return self._timings
 
     @classmethod
     def install_for_rank(cls, laya_train, rank0, sink=None):

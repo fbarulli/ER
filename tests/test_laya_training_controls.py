@@ -438,3 +438,32 @@ def test_lane_progress_bars_reach_the_stream_and_the_live_sink():
     quiet = laya_controls.LaneProgress(False, sink, stream)
     assert list(quiet.bar(range(2))) == [0, 1]
     assert len(sink.lines) == before
+
+
+def test_calibration_timing_hook_is_top_level_only_and_idempotent():
+    """The hook must never double-attribute: a records call nested inside
+    another phase (the per-epoch dev eval) belongs to that phase alone, and a
+    per-trial re-install swaps the target instead of stacking wrappers."""
+    import types
+
+    calls = []
+    laya_train = types.SimpleNamespace(
+        calibration_records=lambda *a, **k: calls.append(a) or [])
+
+    logged = []
+    timings = laya_controls.PhaseTimings(rank0=True, sink=logged.append)
+    laya_controls.CalibrationTimingHook(timings).install(laya_train)
+    # per-trial re-install: ONE wrapper, the new timings becomes the target
+    second = laya_controls.PhaseTimings(rank0=True, sink=logged.append)
+    laya_controls.CalibrationTimingHook(second).install(laya_train)
+
+    laya_train.calibration_records(None, None, [], None)      # top level
+    with second.phase("dev_eval"):
+        laya_train.calibration_records(None, None, [], None)  # nested: silent
+    second.flush(1)
+
+    assert len(calls) == 2               # the underlying work ran twice...
+    assert len(logged) == 1              # ...but exactly ONE table was emitted
+    payload = logged[0]
+    assert set(payload) == {"timing/laya/dev_eval",
+                            "timing/laya/calibration_records"}

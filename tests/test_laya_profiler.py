@@ -245,8 +245,10 @@ def test_rendered_kernel_annotates_phases_and_schedules_profiler():
                   "backward", "optimizer_step", "dev_eval",
                   "checkpoint_save"):
         assert 'phase("%s")' % phase in script, phase
-    # calibration is annotated inside DevEvaluator (gated via `annotate`)
-    assert 'annotate("calibration")' in script
+    # the records timing lives in the TOP-LEVEL-only CalibrationTimingHook
+    # (the mislabeled per-eval annotate("calibration") scope is gone: it
+    # triple-reported the dev_eval work in every timing table)
+    assert 'timings.depth() > 0' in script
     assert "class ProfilerSession" in script
     assert "def phase(self, name)" in script
     assert "torch.profiler.profile(" in script

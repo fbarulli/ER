@@ -122,11 +122,11 @@ GOLDEN_SHA256: dict[str, str] = {
     # batch (FinetuneSpec eval_amp/eval_batch, default-OFF; the HPO trial
     # policy enables them), and DevEvaluator moved out of the loop template
     # into the injected module (the loop file drops back under the 1k cap).
-    "finetune": "9142631df91320e58eeecf9d22a134d39d415e319ffe806947fde54d5555de14",
-    "finetune-smoke": "f4e6fa33ac9dd38f184c0cfd6a043a560b80abd5cb82fc8b382b0057087918ba",
+    "finetune": "65b8b7e770b8cf985679adbae55e30a1f3249e3ed6bf8c9cab0b2a4159331e83",
+    "finetune-smoke": "1d6d524a5f043083cb5010f06d617e7c20df5a3579802377ba74dbb43162f662",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "03a9704cab3e8782a8a14fadf6d2fae4b84efd751ce10ebfc2afadc5a7960aa2",
+    "hpo": "3fbce569049502673df7eb267fe024a82190ff2035f2a3b2d57de155f35e20a0",
 }
 
 

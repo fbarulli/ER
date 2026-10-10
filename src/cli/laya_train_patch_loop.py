@@ -663,8 +663,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 with profiler.phase("dev_eval"):
                     dev = DevEvaluator.metrics(
                         laya_train, model, tok, dev_items, device,
-                        max_len, head_max_len, parallel, control,
-                        annotate=profiler.phase)
+                        max_len, head_max_len, parallel, control)
             payload = dev.payload() if dev is not None else [0.0, 0.0, 0.0,
                                                              -1.0, -1.0]
             has_dev, dev_acc, dev_loss, dev_abstain, dev_cov = DistributedBroadcast.values(
@@ -775,8 +774,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             model.eval()
             result["error_artifacts"] = DevEvaluator.artifacts(
                 laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control,
-                annotate=profiler.phase)
+                head_max_len, parallel, control)
         except Exception as error:
             result["error_artifacts_error"] = (
                 type(error).__name__ + ": " + str(error)[:200])

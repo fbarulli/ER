@@ -79,10 +79,10 @@ class DevEvaluator:
 
     @staticmethod
     def metrics(laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control, annotate=None):
+                head_max_len, parallel, control):
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
-                                        parallel, annotate)
+                                        parallel)
         metrics = laya_train.evaluate_records(records)
         return DevReport.from_metrics(
             metrics, records=records,
@@ -90,10 +90,10 @@ class DevEvaluator:
 
     @staticmethod
     def artifacts(laya_train, model, tok, dev_items, device, max_len,
-                  head_max_len, parallel, control, annotate=None):
+                  head_max_len, parallel, control):
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
-                                        parallel, annotate)
+                                        parallel)
         metrics = laya_train.evaluate_records(records)
         confusion = {}
         for qtype, logits, target, k in records:
@@ -127,11 +127,7 @@ class DevEvaluator:
 
     @staticmethod
     def _records(laya_train, model, tok, dev_items, device, max_len,
-                 head_max_len, parallel, annotate=None):
-        import contextlib
-
-        scope = annotate("calibration") if annotate else contextlib.nullcontext()
-        with scope:
-            return laya_train.calibration_records(
-                model, tok, dev_items, device, max_len, head_max_len,
-                parallel=parallel)
+                 head_max_len, parallel):
+        return laya_train.calibration_records(
+            model, tok, dev_items, device, max_len, head_max_len,
+            parallel=parallel)
