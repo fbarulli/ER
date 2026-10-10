@@ -72,9 +72,22 @@ def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = Fals
 
 
 def _cascade_lane(setup: Path):
-    """The validated cascade lane config (never a trained graph lane)."""
+    """The validated cascade lane config (never a trained graph lane).
+
+    The cascade's two trained inputs (``text_index`` / ``gnn_checkpoint``) are
+    RUN-TIME artifacts of the other tracks under a results root that resolves
+    to a different absolute path on a VM, so a package-time declaration can
+    never name them correctly. ``setup._write_track_configs`` now emits both
+    null (the GraphConfig contract), but an already-packaged setup — a
+    delivered bundle, which is immutable and never regenerated — may still
+    carry the retired placeholder literals. Clearing both here routes the lane
+    through the SAME same-run resolver (``_cascade_artifacts``) the local
+    finalize uses (``bundle_steps._complete_cascade_track``), so a stale
+    declaration can never make the VM cascade raise FileNotFoundError.
+    """
     from graph_tracks.config import load_config as load_graph_config
-    return load_graph_config(setup / 'cascade.yaml', expected_track='cascade')
+    lane = load_graph_config(setup / 'cascade.yaml', expected_track='cascade')
+    return lane.model_copy(update={'text_index': None, 'gnn_checkpoint': None})
 
 
 def _catalog_vectors(track_root: Path, track: str) -> tuple[Path, bool]:

@@ -36,8 +36,11 @@ def _portable_path(path: Path, *, train_root: Path) -> str:
 
 
 #: The lane-config keys that name an input the smoke must repoint at its own tree.
-_SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache',
-                     'text_index', 'gnn_checkpoint')
+#: ``text_index`` / ``gnn_checkpoint`` are NOT here: they name the cascade's
+#: RUN-TIME trained artifacts (under a results root that only exists once the
+#: suite runs), never a setup-tree input, so a smoke child always re-declares
+#: them null and lets the worker resolve its own same-run tracks.
+_SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache')
 
 
 def _setup_layout():
@@ -243,6 +246,13 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         settings = _repoint_smoke_paths(graph_settings[track], setup=setup,
                                         output=output, train_root=train_root)
         settings.update(device='cpu',epochs=1,report_test=False)
+        if track == 'cascade':
+            # The cascade's trained inputs are run-time artifacts, never a
+            # setup-tree path: a smoke child re-declares both null so its own
+            # worker resolves the same-run text/gnn_only tracks (an immutable
+            # delivered parent may still carry the retired placeholders).
+            settings['text_index'] = None
+            settings['gnn_checkpoint'] = None
         write_track_config(output, track, settings)
     text_settings.update(report_test=False)
     write_text_config(output, text_settings)

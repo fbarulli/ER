@@ -459,19 +459,20 @@ def test_graph_setup_traces_retention_supervision_and_untrusted_listings(trace_t
     assert int(applied["in_count"]) == 0 and int(applied["out_count"]) == 0
 
 
-def test_generated_cascade_config_names_the_trained_tracks_artifacts(tmp_path):
-    """The generated cascade.yaml points at the TRAINED tracks' artifact names.
+def test_generated_cascade_config_leaves_trained_inputs_null(tmp_path):
+    """The generated cascade.yaml declares NO package-time trained-input paths.
 
-    It used to point into the setup tree (``<setup>/text_index``), which is not
-    where a trained artifact ever lands, so the cascade lane died with
-    FileNotFoundError before ranking anything. The names come from the artefact
-    SSOT (graph_tracks.artifacts.name) under the declared results root, and match
-    the shipped template the worker is documented against.
+    ``text_index`` / ``gnn_checkpoint`` name RUN-TIME artifacts of the other
+    tracks under a results root that only exists once the suite runs (and
+    resolves to a different absolute path on a VM). A package-time literal can
+    never name them, so the producer leaves both null and the worker's resolver
+    (``worker._cascade_artifacts``) locates the same-run index and the
+    bundle-selected scorer checkpoint behind the barrier. Writing a literal here
+    made the VM cascade lane raise FileNotFoundError before ranking anything.
     """
     import yaml
 
     from core.common import TRAIN_ROOT
-    from graph_tracks.artifacts import name
     from graph_tracks.config import load_config as load_graph_config, load_text_config
     from graph_tracks.setup import (
         _load_setup_templates,
@@ -497,28 +498,24 @@ def test_generated_cascade_config_names_the_trained_tracks_artifacts(tmp_path):
     assert prepared_report_test(tmp_path) == switches
 
     lane = load_graph_config(tmp_path / "cascade.yaml", expected_track="cascade")
-    results_root = Path(lane.output_dir)
-    assert Path(lane.text_index) == results_root / name("text", "index")
-    assert Path(lane.gnn_checkpoint) == results_root / name(
-        "gnn_only", "best_checkpoint.json"
-    )
-    # the bug being fixed: nothing points into the setup tree
-    assert not Path(lane.text_index).is_absolute()
-    assert str(tmp_path) not in str(lane.text_index)
-    assert str(tmp_path) not in str(lane.gnn_checkpoint)
+    # the contract: both trained inputs stay null so the resolver finds the
+    # same-run artifacts (identical to the committed smoke fixture's shape)
+    assert lane.text_index is None and lane.gnn_checkpoint is None
+    assert lane.text_cache is None
 
-    # the shipped template carries the SAME config-owned names
+    # the shipped template declares the SAME null contract
     shipped = yaml.safe_load(
         (Path(TRAIN_ROOT) / "config" / "graph_tracks_cascade.yaml").read_text()
     )
-    assert lane.text_index == shipped["text_index"]
-    assert lane.gnn_checkpoint == shipped["gnn_checkpoint"]
+    assert shipped["text_index"] is None
+    assert shipped["gnn_checkpoint"] is None
 
     # gnn_only still forbids cascade artifact references
     gnn = load_graph_config(tmp_path / "gnn_only.yaml", expected_track="gnn_only")
     assert gnn.text_index is None and gnn.gnn_checkpoint is None
     assert gnn.report_test is switches["gnn_only"]
     assert load_text_config(tmp_path / "text.yaml").report_test is switches["text"]
+
 
 
 # ══════════════════════════════════════════════════════════════════════════

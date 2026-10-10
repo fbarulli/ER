@@ -130,6 +130,48 @@ def test_cascade_lane_config_forbids_the_fused_text_cache(tmp_path):
         GraphConfig.model_validate(lane)
 
 
+def test_cascade_lane_clears_packaged_placeholders_to_resolve_same_run(tmp_path):
+    """A packaged cascade.yaml with placeholder literals resolves the SAME run.
+
+    A delivered bundle is immutable and never regenerated, so its cascade.yaml
+    can still carry the retired package-time placeholders
+    (``results/graph_tracks/text__index``). ``_cascade_lane`` clears both so the
+    VM worker routes through the same-run resolver instead of raising
+    FileNotFoundError on a literal that names a run-time artifact. This is the
+    consumer half of the GAP1 root-cause fix.
+    """
+    import yaml
+
+    setup = tmp_path / 'setup'
+    setup.mkdir()
+    (setup / 'listings.json').write_text('{}')
+    (setup / 'pairs.csv').write_text('sku_id1,sku_id2,label,split\n')
+    (setup / 'cascade.yaml').write_text(yaml.safe_dump({
+        'track': 'cascade', 'listings': 'listings.json', 'pairs': 'pairs.csv',
+        'output_dir': 'results/graph_tracks',
+        # the retired package-time placeholders a stale bundle still carries
+        'text_index': 'results/graph_tracks/text__index',
+        'gnn_checkpoint': 'results/graph_tracks/gnn_only__best_checkpoint.json',
+    }))
+
+    lane = worker._cascade_lane(setup)
+    assert lane.text_index is None and lane.gnn_checkpoint is None
+
+    # with both cleared, the resolver locates the same-run trained artifacts
+    results = tmp_path / 'results' / 'graph_tracks'
+    (results / 'text' / 'text__index').mkdir(parents=True)
+    (results / 'text' / 'text__vectors.npz').write_bytes(b'text-ann')
+    (results / 'gnn_only').mkdir(parents=True)
+    (results / 'gnn_only' / 'gnn_only__vectors.npz').write_bytes(b'gnn')
+    checkpoint = results / 'gnn_only' / name('gnn_only', 'graph_model.pt')
+    checkpoint.write_bytes(b'scorer')
+    (results / 'gnn_only' / name('gnn_only', 'best_checkpoint.json')).write_text(
+        json.dumps({'path': str(checkpoint)}))
+    artifacts = worker._cascade_artifacts(results, lane)
+    assert artifacts['text_index'] == results / 'text' / 'text__index'
+    assert artifacts['gnn_checkpoint'] == checkpoint
+
+
 # ---------------------------------------------------------------------------
 # (b) cascade worker branch: validate inputs, then report_cascade
 # ---------------------------------------------------------------------------

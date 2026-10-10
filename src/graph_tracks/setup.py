@@ -812,7 +812,6 @@ def _suite_report_test() -> bool | None:
 def _write_track_configs(output: Path, templates: dict, listings: Path,
                          baseline_size: int) -> None:
     """Render each graph track's runnable config against this setup tree."""
-    from graph_tracks.artifacts import name
     from graph_tracks.config import GraphConfig
     # The held-out test switch comes FROM THE CONFIG SSOT (the suite's own
     # report_test), never from a literal here: preflight compares the prepared
@@ -827,20 +826,18 @@ def _write_track_configs(output: Path, templates: dict, listings: Path,
             cfg['report_test'] = report_test
         if track == 'cascade':
             # The cascade consumes the trained text ANN and the trained
-            # gnn_only scorer. Both are artifacts of the OTHER tracks, named
-            # through the ONE artifact-naming SSOT (graph_tracks.artifacts.name)
-            # under the declared results root — the exact names the worker's
-            # resolver consumes. They used to point into THIS setup tree
-            # (output/text_index, output/gnn_checkpoint.json), which is not
-            # where a trained artifact ever lands, so the cascade lane raised
-            # FileNotFoundError before ranking anything. No text_cache fusion is
-            # ever declared.
+            # gnn_only scorer, but both are RUN-TIME artifacts of the other
+            # tracks under a results root that only exists once the suite runs
+            # (and resolves to a different absolute path on a VM). A setup
+            # package cannot name them, so its lane leaves BOTH null: the
+            # worker's resolver (``worker._cascade_artifacts``) then locates
+            # the same-run index and the bundle-selected scorer checkpoint.
+            # Declaring a package-time literal here made the VM cascade lane
+            # raise FileNotFoundError before ranking anything. No text_cache
+            # fusion is ever declared.
             cfg.pop('text_cache', None)
-            results_root = Path(str(cfg['output_dir']))
-            cfg['text_index'] = str(results_root / name('text', 'index'))
-            cfg['gnn_checkpoint'] = str(
-                results_root / name('gnn_only', 'best_checkpoint.json')
-            )
+            cfg['text_index'] = None
+            cfg['gnn_checkpoint'] = None
         cfg = GraphConfig.model_validate(cfg).model_dump()
         write_track_config(output, track, cfg)
 

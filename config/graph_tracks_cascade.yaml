@@ -7,9 +7,13 @@ listings: data/graph_tracks/listings.json
 pairs: data/graph_tracks/pairs.csv
 # Real cascade inputs (resolved by the worker after the trained tracks finish):
 # the text ANN used as the recall-oriented ranker and the gnn_only pair scorer
-# checkpoint used as the precision-oriented decider.
-text_index: results/graph_tracks/text__index
-gnn_checkpoint: results/graph_tracks/gnn_only__best_checkpoint.json
+# checkpoint used as the precision-oriented decider. Both are RUN-TIME artifacts
+# under a results root that only exists once the suite runs, so a package-time
+# declaration can never name them: both stay null and the worker's resolver
+# (worker._cascade_artifacts) locates the same-run index and the bundle-selected
+# scorer checkpoint behind the barrier.
+text_index: null
+gnn_checkpoint: null
 output_dir: results/graph_tracks
 input_manifest: data/graph_tracks/input_manifest.json
 # Candidate budget for the ranker before the decider reranks.
