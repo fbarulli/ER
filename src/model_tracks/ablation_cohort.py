@@ -231,7 +231,7 @@ def prepare_cohort(setup, bundle):
         # 2026-10-08): no shadow `*__clean_shared_inputs` copy exists, so the
         # cohort reads its pairs straight from the setup it was given.
         clean = setup
-        clean_pairs = pd.read_csv(clean / 'pairs.csv', dtype=str, keep_default_na=False)
+        clean_pairs = pd.read_csv(clean / layout.pairs, dtype=str, keep_default_na=False)
         catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
         rows = catalog.set_index('sku_id', drop=False).to_dict('index')
         records = {r['sku_id']: r for r in load_records(setup / layout.prepared_dir / layout.listings)}
@@ -319,7 +319,7 @@ def prepare_cohort(setup, bundle):
                     'heldout': sum(1 for p in cohort if p['evaluation_scope'] == 'heldout'),
                     'training_diagnostic': sum(1 for p in cohort
                                                if p['evaluation_scope'] == 'training_diagnostic')},
-            source=source_name(clean / 'pairs.csv'),
+            source=source_name(clean / layout.pairs),
         )
     # Include the entire minted supply, including copies not selected by MNRL,
     # and every frozen objective pair (including easy sampled negatives).
