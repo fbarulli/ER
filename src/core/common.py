@@ -39,9 +39,9 @@ log = RunLogger(__name__)
 
 def _find_project_root() -> Path:
     """Locate the project from stable markers, never a magic parent offset."""
-    from core.project_root import find_project_root
+    from core.project_root import ProjectRoot
 
-    return find_project_root(Path(__file__).resolve())
+    return ProjectRoot.find(Path(__file__).resolve())
 
 
 TRAIN_ROOT = _find_project_root()

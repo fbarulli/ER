@@ -25,13 +25,15 @@ def test_env_file_resolves_and_loads_from_a_linked_worktree(
         tmp_path, monkeypatch):
     """A worktree resolves the canonical ``.env`` and ``apply`` loads it."""
     canonical = tmp_path / "canonical"
-    canonical.mkdir()
+    (canonical / "config").mkdir(parents=True)
+    (canonical / "config" / "paths.yaml").write_text("{}\n", encoding="utf-8")
+    (canonical / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
     _git(canonical, "init", "-q")
     _git(canonical, "config", "user.email", "t@example.com")
     _git(canonical, "config", "user.name", "t")
-    (canonical / "f").write_text("x", encoding="utf-8")
-    _git(canonical, "add", "f")
+    _git(canonical, "add", "-A")
     _git(canonical, "commit", "-qm", "init")
+    # the linked worktree is a full checkout too: it carries the root markers.
     worktree = tmp_path / "linked"
     _git(canonical, "worktree", "add", "-q", str(worktree))
     # the ONE env file lives beside the CANONICAL checkout (its parent).

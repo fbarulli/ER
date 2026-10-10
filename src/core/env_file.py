@@ -20,34 +20,12 @@ Values are read, never printed: a caller decides whether a secret may travel.
 from __future__ import annotations
 
 import os
-import subprocess
 from collections.abc import Iterator
-from functools import lru_cache
 from pathlib import Path
 
 
 class EnvFile:
     """Read ``KEY=VALUE`` entries from the repo's ``.env`` (or one level above)."""
-
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def _canonical_root(root: Path) -> Path:
-        """The canonical checkout root shared by every linked worktree.
-
-        ``git rev-parse --git-common-dir`` names the shared ``.git`` (identical
-        from the main checkout and every worktree), so its parent is the
-        canonical checkout from anywhere. A non-git tree falls back to ``root``.
-        Cached per process: the checkout root cannot change under a run.
-        """
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(root), "rev-parse", "--path-format=absolute",
-                 "--git-common-dir"],
-                capture_output=True, text=True, check=True)
-        except (OSError, subprocess.CalledProcessError):
-            return root
-        common = result.stdout.strip()
-        return Path(common).parent if common else root
 
     @classmethod
     def search_paths(cls, root: Path | None = None) -> tuple[Path, ...]:
@@ -58,13 +36,15 @@ class EnvFile:
         passes the root it means. The canonical ``.env`` is the SSOT for a
         worktree that has no local override.
         """
+        from core.project_root import ProjectRoot
+
         if root is None:
             from core.common import TRAIN_ROOT
 
             resolved = Path(TRAIN_ROOT)
         else:
             resolved = Path(root)
-        canonical = cls._canonical_root(resolved)
+        canonical = ProjectRoot.canonical(resolved)
         candidates = [resolved / ".env", canonical.parent / ".env"]
         if canonical != resolved:
             candidates.append(resolved.parent / ".env")
