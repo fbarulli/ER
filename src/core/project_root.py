@@ -16,10 +16,13 @@ ordering hazards.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from functools import lru_cache
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 class ProjectRoot:
@@ -75,13 +78,29 @@ class ProjectRoot:
         asks it — none re-derives it. A non-git tree falls back to the
         marker-derived root. Cached per process — the root cannot move mid-run.
         """
-        marker = cls.find(source_file)
+        try:
+            marker = cls.find(source_file)
+        except RuntimeError:
+            # Not a marker-bearing checkout (an ad-hoc/test root): there is no
+            # canonical checkout to step out of, so answer with the path itself.
+            marker = Path(source_file).resolve()
         try:
             result = subprocess.run(
                 ["git", "-C", str(marker), "rev-parse", "--path-format=absolute",
                  "--git-common-dir"],
                 capture_output=True, text=True, check=True)
         except (OSError, subprocess.CalledProcessError):
+            # Not a git checkout (or git absent): no shared checkout to step out
+            # of, so the marker root stands. The reason is recorded, not silent.
+            _log.debug("canonical root: git common dir unavailable at %s", marker,
+                       exc_info=True)
             return marker
         common = result.stdout.strip()
         return Path(common).parent if common else marker
+
+
+# Back-compat entry point for the ~50 existing callers (``scripts/``,
+# ``dashboard/``, ``jev/``) that import ``find_project_root``. The behaviour
+# lives in :meth:`ProjectRoot.find`; this is a name binding, not a second
+# implementation. New code should call ``ProjectRoot.find`` directly.
+find_project_root = ProjectRoot.find
