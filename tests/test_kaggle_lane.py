@@ -765,6 +765,31 @@ def test_lane_logs_dir_is_under_canonical_logs_root(tmp_path, monkeypatch):
     assert kaggle_lane.lane_logs_dir() == (tmp_path / "logs" / "kaggle").resolve()
 
 
+def test_lane_logs_dir_from_a_linked_worktree_is_the_canonical_roof(
+        tmp_path, monkeypatch):
+    """A run launched from ``<canonical>/.worktrees/<name>`` transcripts to the
+    MAIN tree: the roof is the canonical checkout's logs/kaggle, never the
+    scratch checkout's (the leak pinned for log_capture, on the kaggle roof)."""
+    from core.project_root import ProjectRoot
+
+    canonical = tmp_path / "canonical"
+    (canonical / "config").mkdir(parents=True)
+    (canonical / "config" / "paths.yaml").write_text("{}\n", encoding="utf-8")
+    (canonical / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "t"], ["add", "-A"],
+                 ["commit", "-qm", "init"]):
+        subprocess.run(["git", *args], cwd=canonical, check=True,
+                       capture_output=True)
+    worktree = canonical / ".worktrees" / "run"
+    subprocess.run(["git", "worktree", "add", "-q", str(worktree)],
+                   cwd=canonical, check=True, capture_output=True)
+
+    monkeypatch.delenv(ProjectRoot.ENV_VAR, raising=False)
+    _spec(worktree, monkeypatch)
+    assert kaggle_lane.lane_logs_dir() == (canonical / "logs" / "kaggle").resolve()
+
+
 
 def _fixed_paris_datetime():
     from datetime import datetime as real_datetime
