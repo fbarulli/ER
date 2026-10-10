@@ -474,7 +474,10 @@ def download_verified_training_results(
     # sweep below governs only this lane.
     local_base = surface.TRAINING_RESULTS / (f"smoke_{run_id}" if smoke else run_id)
     local_base.mkdir(parents=True, exist_ok=True)
-    surface._result_event(run_id, "download", "started", workers=workers)
+    # Receipts key to the root the archive actually lands in (smoke_ included) —
+    # the same root the transport derives from the destination itself.
+    root_name = local_base.name
+    surface._result_event(root_name, "download", "started", workers=workers)
     remote_archive = surface._prepare_remote_result_archive(remote_base, workers)
     local_archive = local_base / surface._RESULT_ARCHIVE_NAME
     surface._download_file_with_visibility(
@@ -483,11 +486,10 @@ def download_verified_training_results(
         worker=None,
         index=1,
         total=1,
-        run_id=run_id,
     )
     manifest = surface._extract_result_archive(local_archive, local_base, run_id, workers)
     surface._result_event(
-        run_id,
+        root_name,
         "download",
         "completed",
         workers=workers,

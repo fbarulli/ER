@@ -1503,15 +1503,16 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
 def _bundle_delivery_local(run_id: str) -> Path:
     """Local delivery root for one bundle lane delivery archive.
 
-    `_download_file_with_visibility` resolves its display/event paths with
-    local.relative_to(TRAINING_RESULTS / run_id) (and `_result_event` writes
-    into that same root), so the delivery MUST sit directly under
-    TRAINING_RESULTS / <the run_id passed to that call>. run_bundle therefore
-    derives one `colab_bundle_`-prefixed run id via this helper and passes
-    Path(root).name as the download run_id, keeping the whole transfer inside
-    a single TRAINING_RESULTS/colab_bundle_<run_id> root. Retention is
-    unaffected: run_retention prunes only track-marker-carrying completed
-    runs under TRAINING_RESULTS, and bundle deliveries carry none.
+    `_download_file_with_visibility` DERIVES its display/event root from the
+    destination itself (``local.relative_to(TRAINING_RESULTS).parts[0]``, and
+    `_result_event` writes into that same root), so the delivery MUST sit
+    directly under TRAINING_RESULTS in exactly one root. run_bundle therefore
+    derives one `colab_bundle_`-prefixed run id via this helper (the
+    `ColabLaneBase.delivery_root` SSOT), keeping the whole transfer — archive,
+    progress display, and receipts — inside a single
+    TRAINING_RESULTS/colab_bundle_<run_id> root. Retention is unaffected:
+    run_retention prunes only track-marker-carrying completed runs under
+    TRAINING_RESULTS, and bundle deliveries carry none.
     """
     from cli.colab_lane import ColabCPULane
 
@@ -1599,17 +1600,12 @@ print("[bundle] delivery archive ready", flush=True)
     run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
     delivery_dir = _bundle_delivery_local(run_id)
     delivery_dir.mkdir(parents=True, exist_ok=True)
-    # The download's run_id must be the PREFIXED name of the delivery root:
-    # _download_file_with_visibility resolves local.relative_to(
-    # TRAINING_RESULTS / run_id), so only the exact sibling-free id inside
-    # that root satisfies the contract (see _bundle_delivery_local).
     _download_file_with_visibility(
         remote=f"{REMOTE_ROOT}/bundle_delivery.tar.zst",
         local=delivery_dir / "bundle_delivery.tar.zst",
         worker=None,
         index=1,
         total=1,
-        run_id=delivery_dir.name,
     )
     print(
         _stamp(),

@@ -39,6 +39,16 @@ _LOG = RunLogger(__name__)
 class ColabCPULaneDelivery:
     """Delivery archive assembly + the run_delivery orchestration phases."""
 
+    def receipt_root(self, run_id: str) -> str:
+        """The lane's result-event root name: the delivery root's own name.
+
+        ``_result_event`` keys receipts to ``TRAINING_RESULTS / <name>``; every
+        receipt of this lane lands in the delivery root, so the archive and its
+        events share ONE root (the run_bundle contract of commit 4d40d1e that
+        the fb10b68 lane consolidation never wired).
+        """
+        return self.delivery_root(run_id).name
+
     @timed
     def delivery_segment(self) -> str:
         """The remote delivery assembly, ending with its transport token.
@@ -120,20 +130,21 @@ with tar_archive(delivery, "w") as tar:
     def _upload_resume_state(self, run_id: str, resume_state: Path) -> None:
         """Upload the frozen resume state with its started/completed events."""
         resume_state = Path(resume_state)
+        receipt_root = self.receipt_root(run_id)
         print(
             _stamp(),
             f"[bundle] resume: uploading {resume_state} -> "
             f"{self.remote_root}/{RESUME_STATE_ARCHIVE} ...",
             flush=True,
         )
-        self.result_event(run_id, "upload", "started", file=str(resume_state))
+        self.result_event(receipt_root, "upload", "started", file=str(resume_state))
         self.upload_with_retries(
             resume_state,
             f"{self.remote_root}/{RESUME_STATE_ARCHIVE}",
             timeout=RESUME_STATE_UPLOAD_TIMEOUT_SECONDS,
         )
         self.result_event(
-            run_id, "upload", "completed",
+            receipt_root, "upload", "completed",
             remote=f"{self.remote_root}/{RESUME_STATE_ARCHIVE}"
         )
 
@@ -178,7 +189,8 @@ with tar_archive(delivery, "w") as tar:
         """Fetch the delivery archive into its TRAINING_RESULTS root with events."""
         local_base = self.delivery_root(run_id)
         local_base.mkdir(parents=True, exist_ok=True)
-        self.result_event(run_id, "download", "started", workers=1)
+        receipt_root = self.receipt_root(run_id)
+        self.result_event(receipt_root, "download", "started", workers=1)
         local = local_base / DELIVERY_ARCHIVE_NAME
         self.download_with_visibility(
             remote=f"{self.remote_root}/{DELIVERY_ARCHIVE_NAME}",
@@ -186,16 +198,15 @@ with tar_archive(delivery, "w") as tar:
             worker=None,
             index=1,
             total=1,
-            run_id=run_id,
         )
-        self.result_event(run_id, "download", "completed", archive=str(local),
+        self.result_event(receipt_root, "download", "completed", archive=str(local),
                           destination=str(local_base))
-        self._record_delivery_size(local, run_id)
+        self._record_delivery_size(local, receipt_root)
         print(_stamp(), f"[bundle] delivered -> {local}", flush=True)
         print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
 
     @timed
-    def _record_delivery_size(self, local: Path, run_id: str) -> int:
+    def _record_delivery_size(self, local: Path, receipt_root: str) -> int:
         """Record the delivered archive's byte size and the writer's token.
 
         The VM recorded ``<archive>.size`` as it finished writing; this reads
@@ -215,7 +226,7 @@ with tar_archive(delivery, "w") as tar:
             print(_stamp(), f"[bundle] delivery size token unreadable at "
                   f"{remote_token} ({error})", flush=True)
         observed = transport_archive_size(local)
-        self.result_event(run_id, "download", "measured", archive=str(local),
+        self.result_event(receipt_root, "download", "measured", archive=str(local),
                           archive_size=observed, writer_token=writer_token or None)
         print(_stamp(), f"[bundle] delivered size={observed} "
               f"(writer token {writer_token or 'absent'})", flush=True)

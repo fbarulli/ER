@@ -430,8 +430,8 @@ def test_downloaded_delivery_records_its_size_and_the_writer_token(tmp_path, mon
     monkeypatch.setattr(colab, "_result_event", lambda *a, **k: events.append((a, k)))
     monkeypatch.setattr(colab, "_read_remote_text", lambda remote: str(token) + "\n")
     lane = ColabCPULane()
-    assert lane._record_delivery_size(archive, "bundle_x") == token
+    assert lane._record_delivery_size(archive, "colab_bundle_x") == token
     assert events[-1][0][1:3] == ("download", "measured")
     # A token that disagrees with the delivered bytes is recorded, not refused.
     monkeypatch.setattr(colab, "_read_remote_text", lambda remote: "0" * 64)
-    assert lane._record_delivery_size(archive, "bundle_x") == token
+    assert lane._record_delivery_size(archive, "colab_bundle_x") == token

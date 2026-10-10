@@ -600,11 +600,19 @@ def _download_file_with_visibility(
     worker: int | None,
     index: int,
     total: int,
-    run_id: str,
 ) -> int:
-    """Download one result while exposing progress and connection failures."""
+    """Download one result while exposing progress and connection failures.
+
+    The destination is the ONE source of the run root: display paths and
+    result events resolve under the TRAINING_RESULTS root the file actually
+    lands in, so no caller can key receipts to a root other than the
+    destination's (the split-root ValueError class of the lane-qualified
+    ``colab_bundle_``/``smoke_`` roots).
+    """
     surface = hub()
-    relative = local.relative_to(surface.TRAINING_RESULTS / run_id)
+    run_relative = local.relative_to(surface.TRAINING_RESULTS)
+    run_root = run_relative.parts[0]
+    relative = Path(*run_relative.parts[1:])
     worker_label = str(worker) if worker is not None else "all"
     print(
         surface._stamp(),
@@ -613,7 +621,7 @@ def _download_file_with_visibility(
         flush=True,
     )
     surface._result_event(
-        run_id,
+        run_root,
         "download_file",
         "started",
         worker=worker,
@@ -651,7 +659,7 @@ def _download_file_with_visibility(
     except BaseException as exc:
         received = _local_file_size(local)
         surface._result_event(
-            run_id,
+            run_root,
             "download_file",
             "failed",
             worker=worker,
@@ -673,7 +681,7 @@ def _download_file_with_visibility(
         heartbeat.join()
     received = _local_file_size(local)
     surface._result_event(
-        run_id,
+        run_root,
         "download_file",
         "completed",
         worker=worker,
