@@ -828,6 +828,21 @@ class ValidationRowAssembler:
     def assemble(self, g1: str, g2: str, label: object) -> dict[str, object] | None:
         return self.assemble_with_reason(g1, g2, label)[0]
 
+    @classmethod
+    def emitted_columns(cls) -> tuple[str, ...]:
+        """The exact CSV header of the frame this assembler emits.
+
+        ``assemble_with_reason``'s row dict is the ONE place the columns are
+        spelled; reading the header off a synthetic scored row (fold n-1, so
+        never both-in-train) keeps every mirror of the header drift-free by
+        construction instead of by a retyped tuple.
+        """
+        probe = cls(FoldResolver({"0": 3}), {}, {}, n_folds=4)
+        row, reason = probe.assemble_with_reason("0", "0", 1)
+        if row is None:
+            raise RuntimeError(f"emitted-columns probe emitted no row: {reason}")
+        return tuple(row)
+
     def assemble_all_with_trace(
         self, labeled: pd.DataFrame, trace: TraceRun | None
     ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
@@ -916,6 +931,12 @@ class ValidationRowAssembler:
                 source="data/labeled_pairs.csv over the merged component graph",
             )
         return pd.DataFrame(rows), records
+
+
+#: The CSV header of ``data/final_validation.csv`` — DERIVED from the
+#: assembler's own emitted row, never respelled, so consuming mirrors import
+#: it instead of retyping it (SSOT).
+FINAL_VALIDATION_COLUMNS: tuple[str, ...] = ValidationRowAssembler.emitted_columns()
 
 
 class LeakGuards:

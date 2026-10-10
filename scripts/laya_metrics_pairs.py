@@ -51,6 +51,8 @@ state_column='attribute_pairs', wanted_columns=('gtin1', 'gtin2',
   * gtin1_norm/gtin2_norm — normalize_gtin (training.folds, THE single
     source: drop the float '.0' artifact, keep digits, left-zero-pad to 14);
   * true_label            — the listing_pairs ground-truth label (0/1);
+  * pair_id               — THE pair key (core.pair_identity SSOT) of the
+    endpoints' gtins, derived — never invented;
   * v1_*/v2_*             — the composed per-side slice literals above;
   * fold/fold_2/component_id/component_id_2/straddles_fold/endpoint_in_train
     — carried with '' values: the ground-truth pairs file carries NO graph
@@ -73,7 +75,11 @@ from collections import Counter
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
-from training.build_final_validation import SLICE_FIELDS as SLICE_FIELD_PAIRS
+from core.pair_identity import PairIdentity
+from training.build_final_validation import (
+    FINAL_VALIDATION_COLUMNS,
+    SLICE_FIELDS as SLICE_FIELD_PAIRS,
+)
 from training.folds import normalize_gtin
 
 PAIRS_PATH = TRAIN_ROOT / "data/track_setup/listing_pairs.csv"
@@ -90,17 +96,10 @@ SLICE_FIELDS: tuple[str, ...] = tuple(
 )
 
 # The final_validation.csv header this builder mirrors (the output adds
-# one more column: the `attribute_pairs` state column). Verified against
-# the file itself at build time — drift fails loud, never silently forks
-# the shape.
-FINAL_VALIDATION_COLUMNS: tuple[str, ...] = (
-    "gtin1", "gtin2", "gtin1_norm", "gtin2_norm", "true_label",
-    "fold", "fold_2", "component_id", "component_id_2", "straddles_fold",
-    "endpoint_in_train",
-    "v1_volume", "v2_volume", "v1_pack", "v2_pack",
-    "v1_package_type", "v2_package_type", "v1_sweetener", "v2_sweetener",
-    "v1_flavor", "v2_flavor", "v1_carbonation", "v2_carbonation",
-)
+# one more column: the `attribute_pairs` state column). IMPORTED from the
+# emitting lane (training.build_final_validation derives it from the
+# assembler's own emitted row), never retyped here — the two cannot drift.
+# Verified against the file itself at build time; drift fails loud.
 STATE_COLUMN = "attribute_pairs"
 
 
@@ -263,6 +262,9 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
             "component_id_2": "", "straddles_fold": "",
             "endpoint_in_train": "",
             "attribute_pairs": compose_state(side_one, side_two),
+            # THE pair key (core.pair_identity SSOT), derived from the
+            # endpoints' gtins — measured, never invented.
+            "pair_id": PairIdentity.of(row_one["gtin"], row_two["gtin"]),
         }
         for field in SLICE_FIELDS:
             record[f"v1_{field}"] = side_one[field]
@@ -285,8 +287,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
         raise RuntimeError(
             f"{output.name} misses the identity state column "
             f"{binding['state_column']!r}")
-    if measured["columns"] not in (
-            columns, list(FINAL_VALIDATION_COLUMNS) + [STATE_COLUMN]):
+    if measured["columns"] != columns:
         raise RuntimeError(
             f"{output.name} header drifted: {measured['columns']}")
 
