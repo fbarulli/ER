@@ -25,7 +25,7 @@ class EvalRecordsPolicy:
         self.eval_amp = bool(eval_amp)
         self.eval_batch = max(0, int(eval_batch))
 
-    def update(self, control) -> "EvalRecordsPolicy":
+    def update(self, control) -> "EvalRecordsPolicy":  # noqa: UP037 -- also injected without future annotations
         self.eval_amp = bool(control.get("eval_amp"))
         self.eval_batch = max(0, int(control.get("eval_batch") or 0))
         return self
@@ -146,7 +146,7 @@ class DevEvaluator:
                                         device, max_len, head_max_len,
                                         parallel)
         metrics = laya_train.evaluate_records(records)
-        return DevReport.from_metrics(
+        return DevReport.from_metrics(  # noqa: F821 -- DevReport co-injects (core.laya_controls) into the kernel namespace
             metrics, records=records,
             confidence_threshold=control.get("abstain_confidence"))
 
@@ -164,7 +164,7 @@ class DevEvaluator:
                 z = np.asarray(logits, dtype=float)[:int(k)]
                 pred = int(z.argmax())
                 gold = int(np.asarray(target, dtype=float)[:int(k)].argmax())
-            except Exception:
+            except Exception:  # noqa: BLE001,S112 - a malformed record never fails the artifacts
                 continue
             bucket = confusion.setdefault(str(qtype), {})
             row = bucket.setdefault(str(gold), {})
@@ -174,7 +174,7 @@ class DevEvaluator:
             try:
                 temperature = laya_train.fit_temperature_map(
                     records).get("temperature")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - the fit is optional, recorded and skipped
                 print("[perf-patch] temperature fit skipped: "
                       + str(error)[:120], flush=True)
         return {

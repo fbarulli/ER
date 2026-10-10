@@ -16,9 +16,9 @@ import types
 
 import torch
 
+from cli import laya_lane
 from core import laya_eval_fast
 from core.laya_config import FinetuneSpec
-from cli import laya_lane
 
 
 def _stub_laya_train(calls):
@@ -30,7 +30,6 @@ def _stub_laya_train(calls):
 
     def _forward(model, batch, device, amp, detach_encoder):
         calls.append(("forward", amp))
-        return None
 
     return types.SimpleNamespace(
         calibration_records=calibration_records, _forward=_forward)
@@ -120,9 +119,9 @@ def test_hpo_final_eval_off_and_loop_stamps_best_dev_loss(monkeypatch):
     ranked epoch's raw dev loss into the control result as the trial's
     dev_loss source."""
     import sys
+
     import torch
-    from test_laya_ddp import (_Cfg, _TinyNet, _load_ddp_namespace,
-                               _make_fake_laya)
+    from test_laya_ddp import _Cfg, _load_ddp_namespace, _make_fake_laya, _TinyNet
 
     # SSOT: default-ON in the finetune lane, OFF in the HPO trial policy
     assert FinetuneSpec().final_eval is True
