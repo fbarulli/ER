@@ -323,22 +323,15 @@ def test_the_log_roof_is_the_declared_directory():
     declared = spec()
     import cli.colab as colab
 
+    # The transcript resolves from the SSOT logs root + the declared lane subdir
+    # + the session-derived basename — never a literal in the caller.
     assert colab.lane_transcript_path() == (
-        TRAIN_ROOT / declared.log_dir / declared.default_log_name).resolve()
-    # The root/training per-session transcripts live under the same declared dir.
+        TRAIN_ROOT / declared.lane_log_relative_path(declared.session)).resolve()
+    # The lane subdir is one bare name under the SSOT logs root.
     from cli import log_capture
-    assert log_capture.lane_log_at(declared.log_dir, "x.log").parent == \
-        (TRAIN_ROOT / declared.log_dir).resolve()
-
-
-def test_paths_yaml_legacy_bindings_agree_with_the_class():
-    """The declared default transcript IS the legacy ``colab_live_log`` binding."""
-    from core.common import F
-
-    declared = spec()
-    expected = (TRAIN_ROOT / declared.log_dir / declared.default_log_name).resolve()
-    assert Path(F["colab_live_log"]).resolve() == expected
-    assert Path(F["colab_training_log"]).resolve() == expected
+    assert log_capture.lane_dir(declared.log_dir) == (
+        TRAIN_ROOT / declared.lane_log_relative_path(declared.session)).resolve().parent
+    assert declared.log_dir == Path(declared.log_dir).name
 
 
 def test_launcher_lock_name_comes_from_the_class():

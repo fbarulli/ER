@@ -338,8 +338,6 @@ _CONFIG_SSOT_BASELINE_UNREAD = frozenset({
     'paths.yaml:files.attribute_agreement_summary',
     'paths.yaml:files.attribute_separation_summary',
     'paths.yaml:files.attribute_separation_values',
-    'paths.yaml:files.colab_live_log',
-    'paths.yaml:files.colab_training_log',
     'paths.yaml:files.data_quality_columns',
     'paths.yaml:files.data_quality_gtin_groups',
     'paths.yaml:files.data_quality_summary',

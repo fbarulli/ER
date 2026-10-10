@@ -33,6 +33,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The wrapper's own run log lands in the declared Colab lane dir via the SSOT
+# accessor (cli.log_capture), never an ad-hoc top-level logs/*.log. The lane
+# transcript (logs/colab/lane_<session>.log) is opened separately by the lane.
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
+  --name "colab_bundle_$(date -u +%Y%m%dT%H%M%SZ).log")"
+exec > >(tee "$RUN_LOG") 2>&1
+echo "[colab-bundle $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
+
 if [[ $# -gt 0 ]]; then
   CSV="$1"
   shift

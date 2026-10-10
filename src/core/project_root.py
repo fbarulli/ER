@@ -16,7 +16,6 @@ itself, during the very same import cycle, without ordering hazards.
 from __future__ import annotations
 
 import os
-import subprocess
 from functools import lru_cache
 from pathlib import Path
 
@@ -57,20 +56,27 @@ def canonical_root(project_root: Path) -> Path:
 
     A linked git worktree (``git worktree add``) is itself a project root, but
     state that must be shared across worktrees — the logs roof — belongs in the
-    MAIN worktree, not a per-checkout copy. The main worktree is the parent of
-    the shared git dir (``--git-common-dir``), so every worktree of one repo
-    agrees on the same answer. Falls back to ``project_root`` when git is
-    unavailable or the directory is not inside a checkout (a bare VM checkout,
-    a test's tmp root).
+    MAIN worktree, not a per-checkout copy. A linked worktree's ``.git`` is a
+    file pointing at ``<main>/.git/worktrees/<name>``, so the main root is three
+    parents up from that git dir; a plain checkout's ``.git`` is a directory and
+    is already canonical. Reading the pointer directly (no git subprocess) keeps
+    the resolver usable under a mocked/subprocess-less runtime. Falls back to
+    ``project_root`` when it is not inside a checkout (a bare VM checkout, a
+    test's tmp root).
     """
-    try:
-        common = subprocess.run(
-            ["git", "-C", str(project_root), "rev-parse",
-             "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return Path(project_root).resolve()
-    if not common:
-        return Path(project_root).resolve()
-    return Path(common).resolve().parent
+    root = Path(project_root).resolve()
+    git_entry = root / ".git"
+    if git_entry.is_dir():
+        return root
+    if not git_entry.is_file():
+        return root
+    text = git_entry.read_text(encoding="utf-8", errors="replace").strip()
+    if not text.startswith("gitdir:"):
+        return root
+    git_dir = Path(text.split(":", 1)[1].strip())
+    if not git_dir.is_absolute():
+        git_dir = (root / git_dir).resolve()
+    # Linked worktree: <main>/.git/worktrees/<name> -> <main>.
+    if git_dir.parent.name == "worktrees" and git_dir.parent.parent.name == ".git":
+        return git_dir.parent.parent.parent
+    return root
