@@ -110,6 +110,12 @@ def perf_patch_enabled():
 # the single-process fallback: ER_LAYA_DDP=0.
 DDP_ENV = "ER_LAYA_DDP"
 
+# Post-destroy exit-rendezvous bound (seconds): how long a non-rank0 process
+# keeps its CUDA context alive waiting for rank 0's destroy to land (see
+# destroy_if_distributed). Bounded + fail-soft: on timeout the reason is
+# recorded and the worker exits anyway.
+DDP_TEARDOWN_RENDEZVOUS_SECONDS = 300.0
+
 
 def ddp_enabled():
     return os.environ.get(DDP_ENV, "1").strip().lower() not in (
@@ -169,8 +175,37 @@ def init_distributed(backend=None):
         # job: checkTimeout -> DistBackendError, the 2026-10-10 2xT4 run.
         # Defense-in-depth only; the teardown reorder (teardown_after_training)
         # is what removes the divergence.
-        torch.distributed.init_process_group(
-            backend, timeout=timedelta(minutes=DDP_TIMEOUT_MINUTES))
+        init_kwargs = {"timeout": timedelta(minutes=DDP_TIMEOUT_MINUTES)}
+        if backend == "nccl":
+            # EAGER per-rank device binding (torch>=2.2). The lazy binding is
+            # what the hung 2xT4 smoke (2026-10-10T17:36, rev 98eb6084) warned
+            # about — "barrier(): using the device under current context" —
+            # right before rank 0's watchdog reported "stuck ... another
+            # thread holding the GIL inside a CUDA api" and the rank-0 tail
+            # (held-out eval + receipt) never ran. Binding the group to THIS
+            # rank's device makes every collective and the teardown
+            # deterministic. Older torch without the kwarg: retry without it,
+            # loudly (full traceback, never silent).
+            init_kwargs["device_id"] = torch.device("cuda", local_rank)
+        try:
+            torch.distributed.init_process_group(backend, **init_kwargs)
+        except TypeError:
+            import traceback
+            print("[perf-patch] init_process_group rejected device_id; "
+                  "retrying without it\\n" + traceback.format_exc(), flush=True)
+            init_kwargs.pop("device_id", None)
+            torch.distributed.init_process_group(backend, **init_kwargs)
+    if rank == 0:
+        # Drop a stale exit-rendezvous marker from a PREVIOUS session/trial so
+        # a peer can never mistake it for this teardown's confirmation.
+        marker = _teardown_marker_path()
+        if marker is not None and os.path.exists(marker):
+            try:
+                os.remove(marker)
+            except OSError:
+                import traceback
+                print("[perf-patch] stale teardown marker removal failed\\n"
+                      + traceback.format_exc(), flush=True)
     return True
 
 
@@ -211,12 +246,61 @@ def barrier_if_distributed():
         dist.barrier()
 
 
+def _teardown_marker_path():
+    """The post-destroy exit-rendezvous marker under the kernel's WORKING.
+
+    ``None`` when WORKING is absent (the offline unit-test exec of this
+    source), which disables the rendezvous without any caller branch."""
+    root = globals().get("WORKING")
+    if root is None:
+        return None
+    return os.path.join(str(root), ".ddp_teardown_done")
+
+
+def _teardown_rendezvous():
+    """Hold every non-rank0 process until rank 0's destroy has landed.
+
+    The peer-exit race (2xT4 smoke, 2026-10-10T17:36, rev 98eb6084 — the
+    teardown reorder was already in): rank 0 passed the barrier, then its
+    watchdog reported "stuck for 480 seconds ... another thread holding the
+    GIL inside a CUDA api" and the rank-0 tail (held-out eval + receipt +
+    tar) NEVER ran. A spawned peer that returns from its worker immediately
+    after its own destroy starts interpreter finalization and tears its CUDA
+    context down while rank 0 is still inside NCCL teardown. The marker keeps
+    the peers' contexts alive (bounded, fail-soft, reason recorded) until
+    rank 0 confirms its destroy returned."""
+    import time
+    marker = _teardown_marker_path()
+    if marker is None:
+        return
+    if is_rank0():
+        try:
+            with open(marker, "w", encoding="utf-8") as handle:
+                handle.write("destroyed")
+        except OSError:
+            import traceback
+            print("[perf-patch] teardown marker write failed\\n"
+                  + traceback.format_exc(), flush=True)
+        return
+    deadline = time.time() + DDP_TEARDOWN_RENDEZVOUS_SECONDS
+    while time.time() < deadline:
+        if os.path.exists(marker):
+            return
+        time.sleep(1.0)
+    print("[perf-patch] teardown rendezvous timed out after %.0fs (rank 0 "
+          "marker absent); exiting anyway" % DDP_TEARDOWN_RENDEZVOUS_SECONDS,
+          flush=True)
+
+
 def destroy_if_distributed():
     if not is_distributed():
         return
     import torch.distributed as dist
     if dist.is_initialized():
         dist.destroy_process_group()
+        # AFTER the destroy actually ran: rank 0 publishes the confirmation,
+        # the peers hold their contexts until it lands (the exit race fix).
+        _teardown_rendezvous()
 
 
 def teardown_after_training():
@@ -229,6 +313,10 @@ def teardown_after_training():
     # during the tail: every rank confirms training done (barrier), every rank
     # destroys the group TOGETHER right now, and only THEN does rank 0 run its
     # tail as a plain single process with no process group alive anywhere.
+    # destroy_if_distributed carries the post-destroy exit rendezvous, so a
+    # peer's CUDA context cannot die mid-teardown on rank 0 either (the SECOND
+    # exposure of the class: the 17:36 smoke hung inside rank 0's NCCL
+    # teardown itself, before the tail ever started).
     barrier_if_distributed()
     destroy_if_distributed()
 

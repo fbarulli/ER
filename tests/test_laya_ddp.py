@@ -296,6 +296,75 @@ def test_rank0_tail_longer_than_collective_timeout_survives(tmp_path):
     assert out_path.read_text(encoding="utf-8") == "tail-done"
 
 
+def _rendezvous_worker(rank, world_size, working, slow_seconds, out_dir):
+    """The post-destroy exit rendezvous under a SLOW rank-0 destroy.
+
+    The second exposure of the 2xT4 teardown class (smoke 2026-10-10T17:36,
+    rev 98eb6084 — the reorder already in): rank 0 passed the barrier, then
+    hung INSIDE its own NCCL teardown while rank 1 returned from destroy and
+    began interpreter/CUDA finalization, and rank 0's watchdog fired. Here
+    rank 0's ``destroy_process_group`` is pinned slow; the marker rendezvous
+    must keep rank 1 alive until rank 0's destroy lands (the marker appears).
+    Each rank records the wall-clock instant it returns from teardown.
+    """
+    import time
+
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace()
+    namespace["WORKING"] = working
+    assert namespace["init_distributed"](backend="gloo") is True
+    if rank == 0:
+        import torch.distributed as dist
+
+        _real_destroy = dist.destroy_process_group
+
+        def _slow_destroy(*args, **kwargs):
+            time.sleep(slow_seconds)  # rank 0's slow NCCL teardown
+            return _real_destroy(*args, **kwargs)
+
+        dist.destroy_process_group = _slow_destroy
+    try:
+        namespace["teardown_after_training"]()
+        returned = time.time()
+    finally:
+        namespace["destroy_if_distributed"]()
+    (Path(out_dir) / ("returned_rank%d" % rank)).write_text(
+        repr(returned), encoding="utf-8")
+
+
+def test_teardown_rendezvous_holds_peers_until_rank0_destroy_lands(tmp_path):
+    """Rank 1 must NOT return from teardown before rank 0's slow destroy lands
+    (the marker file appears). Without the rendezvous rank 1's fast gloo
+    destroy returns immediately and races rank 0's still-running teardown."""
+    import time
+
+    out_dir = tmp_path / "rendezvous"
+    out_dir.mkdir()
+    slow_seconds = 4.0
+    started = time.time()
+    torch.multiprocessing.spawn(
+        _rendezvous_worker,
+        args=(WORLD, str(out_dir), slow_seconds, str(out_dir)), nprocs=WORLD,
+        join=True, start_method="spawn")
+    marker = out_dir / ".ddp_teardown_done"
+    assert marker.is_file()
+    marker_mtime = marker.stat().st_mtime
+    returned = {
+        rank: float((out_dir / ("returned_rank%d" % rank)).read_text(
+            encoding="utf-8"))
+        for rank in range(WORLD)
+    }
+    # rank 1 waited for rank 0's marker: it returned at/after the marker was
+    # written, and only after the slow destroy had time to run.
+    assert returned[1] >= marker_mtime - 0.5
+    assert returned[1] >= started + slow_seconds - 0.5
+
+
+
 def test_dist_env_reads_rank_vars_and_ddp_optout(monkeypatch):
     namespace = _load_ddp_namespace()
     monkeypatch.setenv("LOCAL_RANK", "1")
@@ -439,7 +508,11 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
     assert "destroy_if_distributed()" in script
     assert ("DDP_TIMEOUT_MINUTES = "
             f"{laya_lane._spec().ddp_timeout_minutes}") in script
-    assert "timeout=timedelta(minutes=DDP_TIMEOUT_MINUTES)" in script
+    assert '"timeout": timedelta(minutes=DDP_TIMEOUT_MINUTES)' in script
+    # the eager nccl device binding + the post-destroy exit rendezvous
+    assert 'init_kwargs["device_id"] = torch.device("cuda", local_rank)' in script
+    assert "_teardown_rendezvous()" in script
+    assert "DDP_TEARDOWN_RENDEZVOUS_SECONDS" in script
     # the single-process branch is preserved byte-for-byte
     assert "random.Random(config.seed + epoch).shuffle(epoch_items)" in script
 

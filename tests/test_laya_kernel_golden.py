@@ -87,11 +87,19 @@ GOLDEN_SHA256: dict[str, str] = {
     # (LaneProgress/TqdmLaneWriter, injected from core.laya_controls), tee'd
     # into the live wandb log channel so the bar reaches the lane log; the
     # offline-exec fallback stubs LOG_SINK for the DDP unit test.
-    "finetune": "f48dcfba4acaca9a74916e7bde12d6753a4563c7c369e151823b398e1a112bb8",
-    "finetune-smoke": "1aca5a1b90064d5b3cbb364fa5cdce0fb21b89dfdf3838b0e67fa1634c962cc1",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the DDP teardown-hang fix:
+    # init_process_group binds the nccl device eagerly (device_id — the lazy
+    # "device under current context" the hung smoke warned about) and
+    # destroy_if_distributed carries the post-destroy exit rendezvous (rank 0
+    # publishes .ddp_teardown_done; peers hold their CUDA contexts until it
+    # lands, bounded + fail-soft), so a peer can never tear its context down
+    # mid-teardown on rank 0.
+    "finetune": "24ed060320f176dca42d450a6f7368960b7d5a3dc90e373e8de653906c57fcc1",
+    "finetune-smoke": "54852b739406fad2f9406cee682c1327e877a2c18851999a978deb7fbbb94633",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "f23c7e13e2079aa2f7a6b42fefed709cba1a85d8f8c3a040e784cc805ba94079",
+    "hpo": "3d81486f6a5ae8e7329208e2f71ac8f4904b9fbef748190f577495981d3c3f30",
 }
 
 
