@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import inspect
 
-from core import laya_controls
+from core import laya_controls, laya_eval_fast
 
 
 # Movement/redundancy PERF_PATCH for the finetune kernel (laya>=0.3.29).
@@ -58,6 +58,9 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_controls.PhaseTimings,
         laya_controls.CalibrationTimingHook,
         laya_controls.ProfilerSession,
+        laya_eval_fast.EvalRecordsPolicy,
+        laya_eval_fast.EvalRecordsHook,
+        laya_eval_fast.DevEvaluator,
     )
 )
 

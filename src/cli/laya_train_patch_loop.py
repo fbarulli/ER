@@ -245,69 +245,6 @@ class EpochItemSelector:
         return balanced
 
 
-class DevEvaluator:
-    """Rank-0 dev scoring + end-of-run calibration/confusion artifacts."""
-
-    @staticmethod
-    def metrics(laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control, annotate=None):
-        records = DevEvaluator._records(laya_train, model, tok, dev_items,
-                                        device, max_len, head_max_len,
-                                        parallel, annotate)
-        metrics = laya_train.evaluate_records(records)
-        return DevReport.from_metrics(
-            metrics, records=records,
-            confidence_threshold=control.get("abstain_confidence"))
-
-    @staticmethod
-    def artifacts(laya_train, model, tok, dev_items, device, max_len,
-                  head_max_len, parallel, control, annotate=None):
-        records = DevEvaluator._records(laya_train, model, tok, dev_items,
-                                        device, max_len, head_max_len,
-                                        parallel, annotate)
-        metrics = laya_train.evaluate_records(records)
-        confusion = {}
-        for qtype, logits, target, k in records:
-            try:
-                import numpy as np
-                z = np.asarray(logits, dtype=float)[:int(k)]
-                pred = int(z.argmax())
-                gold = int(np.asarray(target, dtype=float)[:int(k)].argmax())
-            except Exception:
-                continue
-            bucket = confusion.setdefault(str(qtype), {})
-            row = bucket.setdefault(str(gold), {})
-            row[str(pred)] = row.get(str(pred), 0) + 1
-        temperature = None
-        if control.get("temperature_scale"):
-            try:
-                temperature = laya_train.fit_temperature_map(
-                    records).get("temperature")
-            except Exception as error:
-                print("[perf-patch] temperature fit skipped: "
-                      + str(error)[:120], flush=True)
-        return {
-            "items": len(records),
-            "accuracy": metrics.get("accuracy"),
-            "ece": metrics.get("ece"),
-            "brier": metrics.get("brier"),
-            "brier_top1": metrics.get("brier_top1"),
-            "confusion": confusion,
-            "temperature": temperature,
-        }
-
-    @staticmethod
-    def _records(laya_train, model, tok, dev_items, device, max_len,
-                 head_max_len, parallel, annotate=None):
-        import contextlib
-
-        scope = annotate("calibration") if annotate else contextlib.nullcontext()
-        with scope:
-            return laya_train.calibration_records(
-                model, tok, dev_items, device, max_len, head_max_len,
-                parallel=parallel)
-
-
 class WandbProfileSink:
     """Mirrors the ProfilerSession top-ops table to the live wandb run."""
 
@@ -865,9 +802,13 @@ def apply_perf_patch():
     from laya import train as laya_train
     globals()["PHASE_TIMINGS"] = CalibrationTimingHook.install_for_rank(
         laya_train, is_rank0(), sink=WandbTimingSink.log)
+    control = TrainingControls.parse(globals().get("FINETUNE_CONTROL"), {}).block
+    policy = globals().setdefault("EVAL_RECORDS_POLICY", EvalRecordsPolicy())
+    EvalRecordsHook.install(laya_train, policy.update(control))
     laya_train.train_model = _perf_train_model
     print("[perf-patch] laya.train.train_model patched: on-GPU loss (1 sync/"
-          "epoch), single device move, encode memoization", flush=True)
+          "epoch), single device move, encode memoization; eval records "
+          "amp=%s batch=%d" % (policy.eval_amp, policy.eval_batch), flush=True)
     return True
 
 

@@ -115,11 +115,18 @@ GOLDEN_SHA256: dict[str, str] = {
     # slots_per_gpu=2 (4 parallel), warm_start.baseline=false (pure HPO, no
     # seed trial) and fidelity.full=3 (<=3 epochs/trial) — all ride the baked
     # HPO_SPACE literal, so the kernel bytes move.
-    "finetune": "809737e611a6b616b72631fdd9b452ddd34e8ecac60b914a313d568275b1790d",
-    "finetune-smoke": "72332be643febe5701dfdc9c582672d52946f06183aad36f552b3c2f6b95b573",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the eval-records speed
+    # path (core.laya_eval_fast, injected): EvalRecordsHook gives every
+    # grad-disabled CUDA eval-records forward fp16 autocast + a control-sized
+    # batch (FinetuneSpec eval_amp/eval_batch, default-OFF; the HPO trial
+    # policy enables them), and DevEvaluator moved out of the loop template
+    # into the injected module (the loop file drops back under the 1k cap).
+    "finetune": "9142631df91320e58eeecf9d22a134d39d415e319ffe806947fde54d5555de14",
+    "finetune-smoke": "f4e6fa33ac9dd38f184c0cfd6a043a560b80abd5cb82fc8b382b0057087918ba",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "c92e97700ada26689e880089454d365e3991199ae5cf76fe53fce1d73a8dba55",
+    "hpo": "03a9704cab3e8782a8a14fadf6d2fae4b84efd751ce10ebfc2afadc5a7960aa2",
 }
 
 

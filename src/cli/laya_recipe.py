@@ -120,6 +120,7 @@ FINETUNE_CONTROL_FIELDS = (
     "early_stop_metric", "keep_best", "save_each_epoch", "resume",
     "lr_scheduler", "warmup_frac", "warmup_steps", "plateau_patience",
     "plateau_factor", "onecycle_pct_start", "abstain_confidence",
+    "eval_amp", "eval_batch",
     # Phase 2 (default-OFF)
     "unfreeze_after_epoch", "layer_decay", "ema", "ema_decay", "swa", "swa_lr",
     "swa_start_frac", "optimizer",

@@ -316,7 +316,12 @@ class HpoArtifactPolicy:
     """
 
     #: Control overrides baked into the HPO trial's FINETUNE_CONTROL (SSOT).
-    CONTROL_OVERRIDES = {"save_each_epoch": False, "resume": False}
+    #: eval_amp/eval_batch: a trial is ranked by its per-epoch dev accuracy, so
+    #: its eval-records forwards run fp16 at a bigger batch (the 1kbaseline
+    #: harvest: dev_eval 441 s/epoch fp32 batch-16 on 27,305 items); the
+    #: session-end held-out number runs in the unpatched controller (fp32).
+    CONTROL_OVERRIDES = {"save_each_epoch": False, "resume": False,
+                         "eval_amp": True, "eval_batch": 32}
 
     @classmethod
     def apply(cls, control: dict[str, Any]) -> dict[str, Any]:

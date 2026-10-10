@@ -97,6 +97,13 @@ class FinetuneSpec(BaseModel):
     # Confidence cut used only to derive the dev abstain_rate/coverage wandb
     # metrics (laya's evaluate_records emits neither).
     abstain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Eval-records speed (EvalRecordsHook): fp16 autocast for grad-disabled
+    # CUDA forwards (laya's calibration_records hardcodes amp=False) and the
+    # calibration_records batch override (0 keeps laya's own default, 16).
+    # Default-OFF: the finetune lane's honest numbers stay fp32 unless the
+    # YAML opts in; the HPO trial policy enables both (HpoArtifactPolicy).
+    eval_amp: bool = False
+    eval_batch: int = Field(default=0, ge=0)
     # Phase 2 (default-OFF): gradual unfreezing, layer-wise LR decay, EMA,
     # SWA/SWA-LR and the optimizer menu.
     unfreeze_after_epoch: int | None = Field(default=None, ge=0)
