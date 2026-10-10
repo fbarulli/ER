@@ -11,13 +11,14 @@ facades and the test fakes keep driving every lane through one patch surface.
 """
 from __future__ import annotations
 
-from core.portable_archive import file_size
+from contextlib import contextmanager
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from cli.colab_hub import hub
+from core.portable_archive import file_size
 from training.prepare_all_trace import timed
 
 DELIVERY_ARCHIVE_NAME = "bundle_delivery.tar.zst"
@@ -131,6 +132,22 @@ class ColabLaneBase:
     def delivery_root(self, run_id: str) -> Path:
         """SSOT of the TRAINING_RESULTS delivery root (commit 4d40d1e)."""
         return self.training_results / ("colab_bundle_" + run_id)
+
+    @contextmanager
+    def transcript(self):
+        """This lane's ONE per-run transcript.
+
+        Owned here so every committed-export/relaunch caller captures its
+        output to the declared ``ColabSpec`` transcript
+        (``logs/colab/lane_<session>.log``) without re-wiring
+        ``cli.colab.start_live_log``/``close_live_log`` at each facade — the
+        path and the truncate-once/append contract stay in one place.
+        """
+        self.surface.start_live_log()
+        try:
+            yield
+        finally:
+            self.surface.close_live_log()
 
     @timed
     def export_digest(self, dataset_csv: Path) -> int:

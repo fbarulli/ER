@@ -53,10 +53,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from core.common import TRAIN_ROOT
-from core.run_log import RunLogger
-from core.schemas import ColabBundlePlan
-from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import (  # noqa: F401
     BUNDLE_DELIVERY_TIMEOUT_SECONDS,
     BUNDLE_LAUNCH_TIMEOUT_SECONDS,
@@ -74,9 +70,13 @@ from cli.colab_lane_contracts import (  # noqa: F401
     ColabLaneBase,
     _stamp,
 )
-from cli.colab_lane_cpu_provision import ColabCPULaneProvision
 from cli.colab_lane_cpu_delivery import ColabCPULaneDelivery
 from cli.colab_lane_cpu_poll import ColabCPULanePoll
+from cli.colab_lane_cpu_provision import ColabCPULaneProvision
+from core.common import TRAIN_ROOT
+from core.run_log import RunLogger
+from core.schemas import ColabBundlePlan
+from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
 
@@ -182,6 +182,22 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
         )
         with self.dual_transcript_streaming(surface), _LOG.section("colab_lane.cpu_prep.run_bundle"):
             surface.run_bundle(dataset_csv=source, diagnostic=diagnostic)
+
+    @timed
+    def run_committed_export(self, dataset_csv: Path, *, resume_from: str | None = None,
+                             resume_run_id: str | None = None,
+                             resume_state: Path | None = None) -> None:
+        """The committed-export lane under its ONE transcript.
+
+        Provision (class-owned sparse checkout) then deliver, all captured to
+        the declared ``ColabSpec`` transcript — the single class entry a
+        committed-export facade calls, so the transcript and the provisioning
+        order are never re-wired at a call site.
+        """
+        with self.transcript():
+            self.provision(dataset_csv)
+            self.run_delivery(dataset_csv, resume_from=resume_from,
+                              resume_run_id=resume_run_id, resume_state=resume_state)
 
 
 class ColabGPULane(ColabLaneBase):
