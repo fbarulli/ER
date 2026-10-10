@@ -357,7 +357,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         # completed and reported. The saved per-track ablation below is the part
         # that must always complete.
         baseline_request = output / 'baseline' / 'ablation' / spec.ablation_request_file
-        if baseline_request.is_file():
+        baseline_present = baseline_request.is_file()
+        if baseline_present:
             complete_baseline(output / 'baseline', setup, config=TRAIN_ROOT / cfg.ablation_config)
         else:
             trace().add(
@@ -374,9 +375,15 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         trace().add(
             'run', 'ablation',
             in_count=len(TRACKS), out_count=len(TRACKS),
-            reason='the suite completes the baseline and the saved attribute ablation before the '
-                   'result is sealed, so the archive carries the frozen reports',
+            # Honest wording: the SAVED attribute ablation always completes; the
+            # frozen BASELINE report only exists when the suite shipped a request
+            # (GPU sessions stage none — owner order 2026-10-07), so the receipt
+            # never implies a baseline report the run did not produce.
+            reason='the suite completes the saved attribute ablation before the result is '
+                   'sealed, plus the frozen baseline report only when the suite shipped a '
+                   'baseline ablation request',
             detail={'baseline': str(output / 'baseline'),
+                    'baseline_report_present': baseline_present,
                     'ablation_config': str(TRAIN_ROOT / cfg.ablation_config),
                     'tracks': list(TRACKS)},
             source=str(Results.for_root(output, run_tag).receipt()),

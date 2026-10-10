@@ -1,4 +1,13 @@
-"""Frozen baseline ablation before training, with saved-vector CPU reporting."""
+"""Frozen baseline ablation completion with saved-vector CPU reporting.
+
+The staging producer (``forward``) was removed with the GPU ablation phase
+(owner order 2026-10-07: ablation is not a training-session phase; the removal
+deleted the ~205s ``ablation_inputs.prepare_inputs`` burn the T4 box paid).
+``complete`` stays for result archives that SHIP a baseline request: both
+consumers (``run.py``, ``bundle_steps.finalize``) invoke it only when the
+request is present and record a named-reason skip otherwise, so a missing
+frozen baseline report is always visible and never masquerades as complete.
+"""
 from core.portable_archive import ByteCount
 import json
 from pathlib import Path
@@ -14,7 +23,6 @@ from graph_tracks.data import file_size, load_records, load_text_cache
 from graph_tracks.report import dev_threshold
 from graph_tracks.train import load_pairs
 from model_tracks.ablation import checkpoint_identity, report, request_context, resolve, source_name, write
-from model_tracks.staged_ablation import forward as forward_staged
 
 _LOG = RunLogger(__name__)
 
@@ -73,32 +81,6 @@ class BaselineCalibration(BaseModel):
     dev_negatives: int = Field(gt=0)
     test_used_for_selection: Literal[False] = False
     retraining: Literal[False] = False
-
-
-@timed
-def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_model=None):
-    """Reuse text interventions and frozen catalog vectors in this suite session."""
-    with _LOG.section('ablation.baseline.forward'):
-        spec = bundle_spec()
-        template_path = setup/spec.ablation_templates_dir/'text'/spec.ablation_request_file
-        template = json.loads(template_path.read_text())
-        saved = (setup/_setup_layout().shared_embeddings
-                 if template['settings']['retrieval_catalog'] == 'full' and template['settings'].get('coverage') != 'all' else None)
-        trace().add(
-            "forward", "text_template",
-            in_count=1, out_count=1, key='text',
-            reason='the untrained baseline reuses the frozen text template and its saved catalog vectors',
-            detail={'template': source_name(template_path),
-                    'retrieval_catalog': template['settings']['retrieval_catalog'],
-                    'coverage': template['settings'].get('coverage'),
-                    'saved_text': None if saved is None else source_name(saved),
-                    'checkpoint': source_name(checkpoint), 'device': device},
-            source=source_name(template_path),
-        )
-        path = forward_staged(output, setup, 'text', checkpoint, device=device,
-                              checkpoint_role='baseline', saved_text=saved, text_model=text_model)
-    flush_trace()
-    return path
 
 
 @timed
