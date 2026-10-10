@@ -312,10 +312,11 @@ kaggle:
   train_suite_config: "data/model_tracks/suite.yaml"
   # Git-shipped checkpoint the embed kernel encodes against.
   checkpoint: "artifacts/models"
-  # kernel-logs poll cadence + transcript dir (TRAIN_ROOT-relative: the one
-  # canonical logs root, logs/kaggle/).
+  # kernel-logs poll cadence + transcript lane subdir (the bare lane name under
+  # the ONE SSOT logs root, ``paths.logs_dir``; composed by cli.log_capture —
+  # never a second spelling of the root here).
   logs_poll_seconds: 15.0
-  logs_dir: "logs/kaggle"
+  logs_dir: "kaggle"
   run_tag_prefix: "gpu_"
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
@@ -377,11 +378,12 @@ colab:
     training:
       session: "smoke-gpu"
       log_name: "lane_gpu.log"
-  # The ONE Colab transcript roof and its fallback names: the configured
+  # The ONE Colab transcript lane subdir (the bare lane name under the SSOT
+  # logs root, ``paths.logs_dir``) and its fallback names. The configured
   # session above uses default_log_name, an isolated EUROMONITOR_COLAB_SESSION
   # gets log_name_template rendered with its own name (concurrent lanes never
-  # truncate one shared file).
-  log_dir: "logs/colab"
+  # truncate one shared file). The root is composed by cli.log_capture.
+  log_dir: "colab"
   default_log_name: "lane.log"
   log_name_template: "lane_{session}.log"
   # The advisory launcher lock that refuses a second launcher sharing one VM

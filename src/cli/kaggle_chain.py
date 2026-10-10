@@ -36,7 +36,8 @@ class KaggleChain:
         raise RuntimeError(
             f"chain gave up waiting for the {kind} watcher receipt "
             f"({receipt_path}) after {deadline_polls} polls; the spawned "
-            "watcher keeps running — check logs/kaggle/autowatch_*.log")
+            f"watcher keeps running — check the lane transcript under "
+            f"{lane.lane_logs_dir()}")
 
     @staticmethod
     def _clear_stale_autowatch_receipt(kind: str) -> str | None:

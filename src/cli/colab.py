@@ -93,7 +93,7 @@ from cli.colab_lane import (
     DELIVERY_TRACKED_DIRS,
 )
 from cli.colab_lane_contracts import _stamp as _lane_stamp
-from cli.log_capture import lane_log_at, progress_frames_to_lines
+from cli.log_capture import lane_log, progress_frames_to_lines
 
 _LOG = RunLogger(__name__)
 
@@ -943,14 +943,13 @@ from cli.colab_retention import (  # noqa: E402,F401
     publish_local_hpo_results,
 )
 def lane_transcript_path() -> Path:
-    """The ONE Colab lane transcript path (declared dir + derived basename).
+    """The ONE Colab lane transcript path (SSOT logs root + lane + basename).
 
-    ``ColabSpec.lane_log_relative_path`` derives ``<log_dir>/<name>`` from the
-    session and ``log_capture.lane_log_at`` resolves it under the repo root, so
-    the path is never assembled from a literal here.
+    ``ColabSpec.log_dir`` is the declared lane subdir and ``transcript_name`` the
+    session-derived basename; ``log_capture.lane_log`` composes them under the
+    canonical logs root, so neither the root nor the lane is a literal here.
     """
-    relative = Path(_COLAB.lane_log_relative_path(SESSION))
-    return lane_log_at(relative.parent.as_posix(), relative.name)
+    return lane_log(_COLAB.log_dir, _COLAB.transcript_name(SESSION), TRAIN_ROOT)
 
 
 def start_live_log() -> None:

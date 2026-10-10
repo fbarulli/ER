@@ -184,6 +184,9 @@ class LayaSpec(BaseModel):
     # Staging root (TRAIN_ROOT-relative). Receipts land under
     # results/laya_lane/<kind>/<op>/...
     staging_dir: str = "results/laya_lane"
+    # The bare lane subdir under the ONE SSOT logs root (``paths.logs_dir``);
+    # the root is composed by ``cli.log_capture``, never re-spelled here.
+    logs_dir: str = "laya"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
     # The fine-tune/eval kernels' pin (the version their flags + the PERF/

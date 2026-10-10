@@ -853,8 +853,15 @@ def staging_dir() -> Path:
 
 
 def lane_logs_dir() -> Path:
-    """The lane transcript dir (one canonical roof: TRAIN_ROOT/logs)."""
-    return TRAIN_ROOT / "logs" / "laya"
+    """The lane transcript dir: SSOT logs root + the declared lane subdir.
+
+    The root (``paths.logs_dir``) resolves against the CANONICAL (main-worktree)
+    checkout through ``cli.log_capture``, so this lane writes ONE shared
+    transcript even when launched from a linked worktree.
+    """
+    from cli.log_capture import lane_dir
+
+    return lane_dir(_spec().logs_dir, TRAIN_ROOT)
 
 
 def _stamp() -> str:
@@ -4097,15 +4104,15 @@ def _spawn_stream_follower(slug: str) -> None:
     """Follow a pushed kernel's live session log into the laya lane transcript.
 
     The laya lane otherwise has no visibility into the remote session (it never
-    opens a stream), so the training tqdm never reaches ``logs/laya/lane.log``.
+    opens a stream), so the training tqdm never reaches the lane transcript.
     This spawns the kaggle lane's SSE follower against the pushed slug so the
     live output lands there. Detached (setsid) so a wrapper/shell death cannot
     orphan or kill the follower.
     """
     from core.common import TRAIN_ROOT
+    from cli.log_capture import lane_log
 
-    log = TRAIN_ROOT / "logs/laya/lane.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
+    log = lane_log(_spec().logs_dir, LANE_LOG_NAME, TRAIN_ROOT)
     code = (
         "from pathlib import Path\n"
         "from cli.kaggle_lane import stream_kernel_logs\n"

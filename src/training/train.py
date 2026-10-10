@@ -207,7 +207,7 @@ def results_pointer(rows, *, run_tag, args, metrics_csv_name):
         "train_frac": args.train_frac,
         "mask_frac": args.mask_frac,
         "fold_metrics_csv": metrics_csv_name,
-        "visibility_log_dir": f"logs/{run_tag}",
+        "visibility_log_dir": artifact("visibility", {"name": run_tag}).relative_to(RESULTS).as_posix(),
         "n_folds_ok": len(ok_rows),
         "metrics_status": (
             None if not ok_rows
@@ -268,7 +268,7 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
     if latest_metrics.is_file() and latest_metrics != metrics_path:
         artifact_paths.append(latest_metrics)
 
-    run_logs = RESULTS / "logs" / run_tag
+    run_logs = artifact("visibility", {"name": run_tag})
     if run_logs.is_dir():
         artifact_paths.append(run_logs)
     report_dir = RESULTS / f"report_{run_tag}"
