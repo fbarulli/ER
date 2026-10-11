@@ -795,13 +795,25 @@ def test_emit_traceability_writes_through_the_layout(tmp_path, monkeypatch):
     assert json.loads(path.read_text())["schema_id"] == "er-traceability-report-v1"
 
 
-def test_fetched_traceability_validates_the_train_report(laya_train_report):
-    receipt = {"corpus_size": {"train.jsonl": "6" * 64},
+@pytest.mark.parametrize("input_record", [
+    {"corpus_size": {"train.jsonl": 123}},
+    {"corpus_size": 123},
+    {"eval_jsonl_size": 123},
+    {"eval_data_size": 123},
+    {"corpus_size": {"train.jsonl": "6" * 64}},
+])
+def test_fetched_traceability_validates_the_train_report(input_record):
+    report = {"rows": 1, "items": 1, "eval_split": "dev",
+              "after": _block(items=1).model_dump()}
+    receipt = {**input_record,
                "output_dir": "/kaggle/working/checkpoint"}
     documents, artifacts = laya_lane.fetched_traceability(
-        receipt, {"train_report.json": laya_train_report, "notes.json": {"a": 1}})
+        receipt, {"train_report.json": report, "notes.json": {"a": 1}})
     assert set(documents) == {"train_report.json"}
-    assert documents["train_report.json"]["provenance"]["digests"]["corpus_size"] == "6" * 64
+    expected = next(iter(input_record.values()))
+    if isinstance(expected, dict):
+        expected = expected["train.jsonl"]
+    assert documents["train_report.json"]["provenance"]["digests"]["corpus_size"] == expected
     assert artifacts == {}
 
 

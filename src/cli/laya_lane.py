@@ -63,6 +63,7 @@ from core.eval_trace import (
     write_report,
 )
 from core.laya_config import LayaHostedRole, LayaSpec
+from cli.laya_provenance import LayaCorpusProvenance
 from core.manifest import atomic_write_json, file_size
 from core.results import Results
 
@@ -639,25 +640,7 @@ def corpus_traceability(report: dict, *, model_id: str, digests: dict,
         coverage=coverage)
 
 
-def corpus_digest(receipt: dict) -> str:
-    """The corpus digest a fetched lane receipt carries.
-
-    The finetune receipt keys ``corpus_size`` by corpus file name; the eval-only
-    receipt names the scored held-out split directly.
-    """
-    corpus = receipt.get("corpus_size")
-    if isinstance(corpus, dict):
-        for name in FINETUNE_CORPUS_FILES:
-            if isinstance(corpus.get(name), str):
-                return corpus[name]
-    if isinstance(corpus, str):
-        return corpus
-    for key in ("eval_jsonl_size", "eval_data_size"):
-        value = receipt.get(key)
-        if isinstance(value, str):
-            return value
-    raise KeyError("receipt carries no corpus digest (corpus_size / "
-                   "eval_jsonl_size / eval_data_size)")
+corpus_digest = LayaCorpusProvenance.build
 
 
 def metric_block_or_none(payload: dict) -> MetricBlock | None:

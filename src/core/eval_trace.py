@@ -379,6 +379,10 @@ class EvalRowKey(BaseModel):
     question_type: QTypeName
 
 
+# Historical reports retain strings; current receipts carry integer byte counts.
+ProvenanceValue = Count | str
+
+
 class EvalProvenance(BaseModel):
     """What produced this report and which inputs it rests on.
 
@@ -400,7 +404,7 @@ class EvalProvenance(BaseModel):
     source: EvalSource
     model_id: str = Field(min_length=1)
     laya_package: str | None = None
-    digests: dict[str, str] = Field(default_factory=dict)
+    digests: dict[str, ProvenanceValue] = Field(default_factory=dict)
     # A fine-tune eval's most important traceability fact: was the scored split
     # really held out, and how many items overlapped training data.
     is_held_out: bool | None = None
