@@ -108,25 +108,15 @@ class SmartPartitionPopulations(BaseModel):
     def on_row_keys(self, row_bc) -> dict[str, list[str]]:
         """Map the normalized carve onto one payload's raw ``row_bc`` keys.
 
-        Every distinct raw gtin spelling whose normalized form the carve names
-        lands in that split; spellings that normalize to nothing (empty padding
-        rows) are dropped, as ``FrozenHoldoutPolicy.entities_cover_payload``
-        requires. The mapping is total for a carve that covers the payload.
+        The bridge lives ONCE (``FrozenHoldoutPolicy.populations_on_row_keys``),
+        the same mapping the adoption itself uses, so the bundle build and the
+        packaging adoption can never drift.
         """
         from training.folds import normalize_gtin
+        from training.prepared_bundle import FrozenHoldoutPolicy
 
-        split_of: dict[str, str] = {}
-        for name in ("train", "dev", "test"):
-            for value in getattr(self, name):
-                key = normalize_gtin(value)
-                if key:
-                    split_of[key] = name
-        mapped: dict[str, set[str]] = {"train": set(), "dev": set(), "test": set()}
-        for value in row_bc:
-            name = split_of.get(normalize_gtin(str(value)))
-            if name is not None:
-                mapped[name].add(str(value))
-        return {name: sorted(values) for name, values in mapped.items()}
+        return FrozenHoldoutPolicy.populations_on_row_keys(
+            row_bc, self.splits(), normalize_gtin)
 
 #: The carve-owned ablation cohort directory (the canonical name
 #: ``model_tracks.ablation_cohort.prepare_cohort`` writes). It is REGENERATED
