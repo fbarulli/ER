@@ -5,12 +5,11 @@ the control logic to rebuild ``FINETUNE_PERF_PATCH_SOURCE`` byte-for-byte.
 """
 from __future__ import annotations
 
+from cli.laya_train_patch_checkpoint import CHECKPOINTER_TEMPLATE
 from cli.laya_train_patch_ddp import (
     DDP_PATCH_TEMPLATE,
     FINETUNE_CONTROL_LOGIC_SOURCE,
 )
-from cli.laya_train_patch_checkpoint import CHECKPOINTER_TEMPLATE
-
 
 LOOP_PATCH_TEMPLATE = CHECKPOINTER_TEMPLATE + '''\
 class DistributedBroadcast:
@@ -366,59 +365,64 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 mask = batch["marker_mask"]
                 target = batch["target"]
                 qtype = batch["qtype"]
-            with profiler.phase("forward"):
-                logits = Forwarder.run(torch, laya_train, model, batch, device,
-                                        amp, config.freeze_encoder, amp_dtype)
-            with profiler.phase("loss"):
-                loss = LossBuilder.compute(
-                    torch, laya_train, config, logits, target, mask, qtype,
-                    sigma, epoch_w_sph, epoch_w_rps, class_weights,
-                    epoch_margin)
-                if ddp_sampler is not None:
-                    loss = loss + DeterministicDdp.loss_guard(params)
-                if r_drop_on:
-                    logits_two = Forwarder.run(
+            update_due = ((n_steps + 1) % epoch_grad_accum == 0
+                          or start + config.micro_batch >= len(epoch_items))
+            # Adversarial perturbations consume synchronized gradients.
+            synchronize = (ddp_sampler is None or update_due
+                           or bool(adv_eps and float(adv_eps) > 0.0))
+            with DeterministicDdp.accumulate(model, synchronize):
+                with profiler.phase("forward"):
+                    logits = Forwarder.run(torch, laya_train, model, batch, device,
+                                            amp, config.freeze_encoder, amp_dtype)
+                with profiler.phase("loss"):
+                    loss = LossBuilder.compute(
+                        torch, laya_train, config, logits, target, mask, qtype,
+                        sigma, epoch_w_sph, epoch_w_rps, class_weights,
+                        epoch_margin)
+                    if ddp_sampler is not None:
+                        loss = loss + DeterministicDdp.loss_guard(params)
+                    if r_drop_on:
+                        logits_two = Forwarder.run(
+                            torch, laya_train, model, batch, device, amp,
+                            config.freeze_encoder, amp_dtype)
+                        loss_two = LossBuilder.compute(
+                            torch, laya_train, config, logits_two, target, mask,
+                            qtype, sigma, epoch_w_sph, epoch_w_rps, class_weights,
+                            epoch_margin)
+                        kl = RDrop.kl(torch, logits, logits_two, mask)
+                        loss = RDrop.combine(loss, loss_two, kl, r_drop_alpha)
+                window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum
+                window_size = min(epoch_grad_accum,
+                                  steps_per_epoch - window_start)
+                scaled = loss / window_size
+                with profiler.phase("backward"):
+                    if scaler is not None:
+                        scaler.scale(scaled).backward()
+                    else:
+                        scaled.backward()
+                if adv_eps and float(adv_eps) > 0.0:
+                    # FGM perturbs the embedding params, AWP every trainable param;
+                    # both take an extra backward then restore the weights.
+                    targets = AdversarialPerturber.targets(model, params, adv_kind)
+                    total_sq = 0.0
+                    for p in targets:
+                        if p.grad is not None:
+                            total_sq += float(p.grad.detach().pow(2).sum())
+                    norm = math.sqrt(total_sq) + 1e-12
+                    deltas = AdversarialPerturber.perturb(
+                        torch, targets, float(adv_eps), norm)
+                    adv_logits = Forwarder.run(
                         torch, laya_train, model, batch, device, amp,
                         config.freeze_encoder, amp_dtype)
-                    loss_two = LossBuilder.compute(
-                        torch, laya_train, config, logits_two, target, mask,
-                        qtype, sigma, epoch_w_sph, epoch_w_rps, class_weights,
-                        epoch_margin)
-                    kl = RDrop.kl(torch, logits, logits_two, mask)
-                    loss = RDrop.combine(loss, loss_two, kl, r_drop_alpha)
-            window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum
-            window_size = min(epoch_grad_accum,
-                              steps_per_epoch - window_start)
-            scaled = loss / window_size
-            with profiler.phase("backward"):
-                if scaler is not None:
-                    scaler.scale(scaled).backward()
-                else:
-                    scaled.backward()
-            if adv_eps and float(adv_eps) > 0.0:
-                # FGM perturbs the embedding params, AWP every trainable param;
-                # both take an extra backward then restore the weights.
-                targets = AdversarialPerturber.targets(model, params, adv_kind)
-                total_sq = 0.0
-                for p in targets:
-                    if p.grad is not None:
-                        total_sq += float(p.grad.detach().pow(2).sum())
-                norm = math.sqrt(total_sq) + 1e-12
-                deltas = AdversarialPerturber.perturb(
-                    torch, targets, float(adv_eps), norm)
-                adv_logits = Forwarder.run(
-                    torch, laya_train, model, batch, device, amp,
-                    config.freeze_encoder, amp_dtype)
-                adv_loss = laya_train.soft_ce_loss(adv_logits, target, mask)
-                adv_scaled = adv_loss / window_size
-                if scaler is not None:
-                    scaler.scale(adv_scaled).backward()
-                else:
-                    adv_scaled.backward()
-                AdversarialPerturber.restore(torch, deltas)
+                    adv_loss = laya_train.soft_ce_loss(adv_logits, target, mask)
+                    adv_scaled = adv_loss / window_size
+                    if scaler is not None:
+                        scaler.scale(adv_scaled).backward()
+                    else:
+                        adv_scaled.backward()
+                    AdversarialPerturber.restore(torch, deltas)
             n_steps += 1
-            if (n_steps % epoch_grad_accum == 0
-                    or start + config.micro_batch >= len(epoch_items)):
+            if update_due:
                 with profiler.phase("optimizer_step"):
                     if scaler is not None:
                         scaler.unscale_(optimizer)

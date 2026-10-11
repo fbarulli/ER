@@ -11,7 +11,6 @@ import inspect
 
 from core import laya_controls, laya_eval_fast, laya_train_fast, laya_train_parts
 
-
 # Movement/redundancy PERF_PATCH for the finetune kernel (laya>=0.3.29).
 # Replaces laya.train.train_model with a faithful copy carrying exactly three
 # recipe-neutral changes:
@@ -256,6 +255,12 @@ class DeterministicDdp:
         if device.type == "cuda":
             kwargs.update(device_ids=[local_rank], output_device=local_rank)
         return torch.nn.parallel.DistributedDataParallel(model, **kwargs)
+
+    @staticmethod
+    def accumulate(model: "object", synchronize: bool) -> "object":
+        from contextlib import nullcontext
+
+        return nullcontext() if synchronize else model.no_sync()
 
     @staticmethod
     def loss_guard(params):
