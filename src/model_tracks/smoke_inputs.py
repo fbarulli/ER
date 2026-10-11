@@ -50,12 +50,13 @@ def _checkout_path(value, *, train_root: Path) -> Path:
     return resolved
 
 
-#: The lane-config keys that name an input the smoke must repoint at its own tree.
+#: The lane-config keys that name an input a derived setup must repoint at its
+#: own tree (both derived-setup builders route through ``repoint_lane_paths``).
 #: ``text_index`` / ``gnn_checkpoint`` are NOT here: they name the cascade's
 #: RUN-TIME trained artifacts (under a results root that only exists once the
 #: suite runs), never a setup-tree input, so a smoke child always re-declares
 #: them null and lets the worker resolve its own same-run tracks.
-_SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache')
+LANE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache')
 
 
 def _setup_layout():
@@ -64,17 +65,17 @@ def _setup_layout():
     return prepared_setup_layout()
 
 
-def _repoint_smoke_paths(settings: dict, *, setup: Path, output: Path,
+def repoint_lane_paths(settings: dict, *, setup: Path, output: Path,
                          train_root: Path) -> dict:
     """Rebase one graph lane's parent inputs onto this smoke's own tree.
 
     The parent may record absolute paths (a live prepared tree) or
     checkout-relative ones (a committed fixture); both are resolved from the
     checkout root before the member's path below the parent setup is re-rooted
-    under ``output``. The written value stays portable, so a checked-in smoke
-    fixture never names the machine that produced it.
+    under ``output``. The written value stays portable, so a derived setup
+    never names the machine that produced it.
     """
-    for key in _SMOKE_INPUT_KEYS:
+    for key in LANE_INPUT_KEYS:
         if not settings.get(key):
             continue
         source = _checkout_path(settings[key], train_root=train_root)
@@ -260,8 +261,8 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
     prepare_baseline(output, checkpoint)
     for track in ('gnn_only','cascade'):
-        settings = _repoint_smoke_paths(graph_settings[track], setup=setup,
-                                        output=output, train_root=train_root)
+        settings = repoint_lane_paths(graph_settings[track], setup=setup,
+                                      output=output, train_root=train_root)
         settings.update(device='cpu',epochs=1,report_test=False)
         if track == 'cascade':
             # The cascade's trained inputs are run-time artifacts, never a

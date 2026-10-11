@@ -162,7 +162,8 @@ class SmartSplit:
     def strata(self) -> tuple[str, ...]:
         return self._spec.strata
 
-    def allocate_stratified(self, items: list, stratum_of: Callable[[dict], str]
+    def allocate_stratified(self, items: list, stratum_of: Callable[[dict], str],
+                            weight_of: Callable[[dict], int] | None = None
                             ) -> dict[str, list]:
         """Deterministically carve ``items`` into the physical splits, STRATIFIED.
 
@@ -170,6 +171,14 @@ class SmartSplit:
         declared ratios (largest remainder), so a rare stratum is represented
         in every split instead of being concentrated by one global shuffle.
         The seed is per-stratum, so the carve is reproducible byte-for-byte.
+
+        ``weight_of`` carries unevenly sized items (the component-grain carve,
+        where one item is a whole identity component and its weight is the
+        listing count it brings along): the per-stratum largest remainder then
+        allocates WEIGHT, and the seeded order fills each split greedily up to
+        its declared weight share (within one item's weight at the seam).
+        Omitted, every item weighs one and the carve is by item count exactly
+        as before.
         """
         ratios = self._spec.ratios
         by_stratum: dict[str, list] = defaultdict(list)
@@ -179,11 +188,23 @@ class SmartSplit:
         for stratum in sorted(by_stratum):
             members = list(by_stratum[stratum])
             random.Random(f"{self._spec.seed}:{stratum}").shuffle(members)
-            allocation = largest_remainder(len(members), ratios)
+            if weight_of is None:
+                allocation = largest_remainder(len(members), ratios)
+                cursor = 0
+                for name in ratios:
+                    out[name].extend(members[cursor:cursor + allocation[name]])
+                    cursor += allocation[name]
+                continue
+            weights = [weight_of(member) for member in members]
+            targets = largest_remainder(sum(weights), ratios)
             cursor = 0
             for name in ratios:
-                out[name].extend(members[cursor:cursor + allocation[name]])
-                cursor += allocation[name]
+                start, filled = cursor, 0
+                while cursor < len(members) and filled < targets[name]:
+                    filled += weights[cursor]
+                    cursor += 1
+                out[name].extend(members[start:cursor])
+            out[list(ratios)[-1]].extend(members[cursor:])
         return out
 
     @staticmethod
