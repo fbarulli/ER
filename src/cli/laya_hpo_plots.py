@@ -31,6 +31,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, RootModel
+
 #: The per-epoch metric keys the shared kernel wandb block logs (the
 #: ``EPOCH_STEP_METRICS`` namespaces' concrete series; x = epoch).
 PLOT_METRICS: tuple[str, ...] = (
@@ -45,8 +47,40 @@ SYSTEM_METRICS: tuple[str, ...] = (
 RANK_METRIC = "select/best_dev_accuracy"
 #: Every column fetched in ONE scan_history pass per run.
 HISTORY_KEYS: tuple[str, ...] = (
-    "epoch", RANK_METRIC, *PLOT_METRICS, *SYSTEM_METRICS,
+    *PLOT_METRICS, *SYSTEM_METRICS,
 )
+
+
+class HistoryPoint(RootModel[tuple[FiniteFloat, FiniteFloat]]):
+    """A finite coordinate/value pair shared by the reader and plot."""
+
+
+class WandbHistoryRow(BaseModel):
+    """Parse W&B's sparse network row before building metric series."""
+
+    model_config = ConfigDict(extra="allow")
+    epoch: float | None = None
+    step: float | None = Field(default=None, alias="_step")
+
+    def point(self, metric: str) -> HistoryPoint:
+        coordinate = self.step if metric in SYSTEM_METRICS else self.epoch
+        return HistoryPoint.model_validate((coordinate, self.model_extra[metric]))
+
+
+class HistoryGap(BaseModel):
+    metric: str
+    step: float | None
+    traceback: str
+
+
+class RunHistory(BaseModel):
+    id: str
+    name: str
+    state: str
+    rank_value: float | None
+    history: dict[str, list[HistoryPoint]] = Field(default_factory=dict)
+    history_gaps: list[HistoryGap] = Field(default_factory=list)
+    history_error: str | None = None
 
 
 class RunHistoryFetcher:
@@ -55,38 +89,38 @@ class RunHistoryFetcher:
     Dependency-injected with a ``WandbRunReader``; ONE ``scan_history`` pass
     per run keeps every requested key. A run whose history fetch fails is
     recorded with its full reason (never silently dropped): the JSON artifact
-    shows what was readable.
+    shows what was readable. Invalid points carry a metric, source step and
+    full traceback; a missing coordinate never becomes a misleading chart.
     """
 
     def __init__(self, reader: Any) -> None:
         self._reader = reader
 
-    def fetch(self) -> list[dict[str, Any]]:
+    def fetch(self) -> list[RunHistory]:
         import traceback
 
-        fetched: list[dict[str, Any]] = []
+        fetched: list[RunHistory] = []
         for run in self._reader.family():
-            entry: dict[str, Any] = {
-                "id": str(getattr(run, "id", "")),
-                "name": str(getattr(run, "name", "")),
-                "state": str(getattr(run, "state", "unknown")),
-                "rank_value": self._rank_value(run),
-                "history": {},
-            }
+            entry = RunHistory(
+                id=str(run.id), name=str(run.name), state=str(run.state),
+                rank_value=self._rank_value(run))
             try:
-                for row in run.scan_history(keys=list(HISTORY_KEYS)):
-                    if not isinstance(row, dict):
-                        continue
-                    epoch = row.get("epoch")
-                    step = epoch if epoch is not None else row.get("_step")
+                # W&B's keys filter intersects rows; these sinks log separately.
+                for row in run.scan_history():
+                    record = WandbHistoryRow.model_validate(row)
                     for key in HISTORY_KEYS:
-                        value = row.get(key)
-                        if value is None or isinstance(value, str):
+                        if key not in record.model_extra:
                             continue
-                        entry["history"].setdefault(key, []).append(
-                            [step, float(value)])
+                        try:
+                            point = record.point(key)
+                        except ValueError:
+                            entry.history_gaps.append(HistoryGap(
+                                metric=key, step=record.step,
+                                traceback=traceback.format_exc()))
+                        else:
+                            entry.history.setdefault(key, []).append(point)
             except Exception as error:  # noqa: BLE001 - recorded, never fatal
-                entry["history_error"] = (
+                entry.history_error = (
                     f"{type(error).__name__}: {error}\n"
                     f"{traceback.format_exc()}")
             fetched.append(entry)
@@ -103,18 +137,18 @@ class ConsolidatedPlot:
     """ONE figure: all per-epoch losses+metrics overlaid in a single plot and
     the system panel beside it — both limited to the top-N ranked runs."""
 
-    def __init__(self, histories: list[dict[str, Any]], *, top_runs: int,
+    def __init__(self, histories: list[RunHistory], *, top_runs: int,
                  out_dir: Path) -> None:
         self._histories = list(histories)
         self._top_runs = max(1, int(top_runs))
         self._out_dir = Path(out_dir)
 
-    def top(self) -> list[dict[str, Any]]:
+    def top(self) -> list[RunHistory]:
         """The top-N runs by the promoted dev accuracy (unranked last)."""
         ranked = sorted(
             self._histories,
-            key=lambda entry: (entry["rank_value"] is not None,
-                               entry["rank_value"] or 0.0),
+            key=lambda entry: (entry.rank_value is not None,
+                               entry.rank_value or 0.0),
             reverse=True)
         return ranked[:self._top_runs]
 
@@ -131,50 +165,57 @@ class ConsolidatedPlot:
         plotted: dict[str, Any] = {}
         for entry in top:
             for key in PLOT_METRICS:
-                series = entry["history"].get(key) or []
+                series = entry.history.get(key, [])
                 if series:
-                    metrics_axis.plot([p[0] for p in series],
-                                      [p[1] for p in series], marker=".",
+                    metrics_axis.plot([p.root[0] for p in series],
+                                      [p.root[1] for p in series], marker=".",
                                       markersize=3, linewidth=1.0,
-                                      label=f"{entry['name']} {key}")
-                    plotted.setdefault(entry["name"], {})[key] = series
+                                      label=f"{entry.name} {key}")
+                    plotted.setdefault(entry.name, {})[key] = [
+                        point.model_dump(mode="json") for point in series]
             for key in SYSTEM_METRICS:
-                series = entry["history"].get(key) or []
+                series = entry.history.get(key, [])
                 if series:
-                    system_axis.plot([p[0] for p in series],
-                                     [p[1] for p in series], linewidth=0.8,
-                                     label=f"{entry['name']} {key}")
-                    plotted.setdefault(entry["name"], {})[key] = series
+                    system_axis.plot([p.root[0] for p in series],
+                                     [p.root[1] for p in series], linewidth=0.8,
+                                     label=f"{entry.name} {key}")
+                    plotted.setdefault(entry.name, {})[key] = [
+                        point.model_dump(mode="json") for point in series]
         metrics_axis.set_title(
             f"laya HPO — ALL per-epoch metrics, top {len(top)} runs")
         metrics_axis.set_xlabel("epoch")
         metrics_axis.grid(True, alpha=0.3)
-        metrics_axis.legend(fontsize=6, ncol=2)
+        if metrics_axis.lines:
+            metrics_axis.legend(fontsize=6, ncol=2)
         system_axis.set_title("GPU / network (same top runs)")
         system_axis.set_xlabel("step")
         system_axis.grid(True, alpha=0.3)
-        system_axis.legend(fontsize=6, ncol=2)
+        if system_axis.lines:
+            system_axis.legend(fontsize=6, ncol=2)
         figure.tight_layout()
         png = self._out_dir / "consolidated.png"
         figure.savefig(png, dpi=140)
         plt.close(figure)
+        reports = [entry.model_dump(mode="json", exclude={"history"})
+                   for entry in self._histories]
         document = {
             "top_runs": self._top_runs,
             "rank_metric": RANK_METRIC,
             "plot_metrics": list(PLOT_METRICS),
             "system_metrics": list(SYSTEM_METRICS),
-            "runs": [{"name": entry["name"], "state": entry["state"],
-                      "rank_value": entry["rank_value"],
-                      "history_error": entry.get("history_error")}
-                     for entry in self._histories],
+            "runs": reports,
             "plotted": plotted,
         }
         series = self._out_dir / "series.json"
         series.write_text(json.dumps(document, indent=2) + "\n",
                           encoding="utf-8")
+        if not plotted:
+            raise RuntimeError(f"No plottable W&B metrics; details in {series}")
         return {"plot": str(png), "series": str(series),
-                "top": [entry["name"] for entry in top],
-                "runs": len(self._histories)}
+                "top": [entry.name for entry in top],
+                "runs": len(self._histories),
+                "gaps": [report for report in reports
+                         if report["history_gaps"] or report["history_error"]]}
 
 
 class HpoPlotFactory:
