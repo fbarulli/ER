@@ -479,7 +479,6 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             dist.all_reduce(mean_tensor, op=dist.ReduceOp.SUM)
             mean = float(mean_tensor.item()) / dist_env()[2]
         history.append(mean)
-        epoch_time = max(0.0, time.time() - epoch_started)
         lr_now = float(optimizer.param_groups[0]["lr"])
         print("epoch %d/%d mean loss %.4f lr %.6g grad_accum %d hits %d/%d"
               % (epoch + 1, config.epochs, mean, lr_now, epoch_grad_accum,
@@ -513,8 +512,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             if config.freeze_encoder or gradual:
                 model.encoder.eval()
         # ── best tracking + early stop + plateau + checkpointing ────────
-        extra = {"epoch": epoch + 1, "train/lr": lr_now,
-                 "epoch_time_s": epoch_time}
+        extra = {"epoch": epoch + 1, "train/lr": lr_now}
         if grad_norm_mean is not None:
             extra["train/grad_norm"] = grad_norm_mean
         stop_flag = False
@@ -547,8 +545,6 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             torch, [1.0 if stop_flag else 0.0], device)[0] >= 0.5)
         extra["select/best_dev_accuracy"] = best_acc
         extra["select/bad_epochs"] = bad_epochs
-        wandb_log_epoch(epoch, mean, extra)
-        profiler.flush_epoch(epoch + 1)
         with profiler.phase("checkpoint_save"):
             # save_each_epoch owns EVERY per-epoch artifact: the torch resume
             # checkpoint (model+optimizer+scheduler) AND the caller's HF
@@ -563,6 +559,9 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 for p in params:
                     swa_state[id(p)].add_(p.detach())
                 swa_count += 1
+        extra["epoch_time_s"] = max(0.0, time.time() - epoch_started)
+        wandb_log_epoch(epoch, mean, extra)
+        profiler.flush_epoch(epoch + 1)
         if stop_flag:
             stopped = True
             stopped_epoch = epoch + 1
