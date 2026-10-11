@@ -335,134 +335,138 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         total, n_steps = None, 0
         grad_norm_sum, grad_steps = 0.0, 0
         optimizer.zero_grad(set_to_none=True)
-        for start in progress.bar(range(0, len(epoch_items),
-                                        config.micro_batch),
-                                  desc="epoch %d/%d" % (epoch + 1,
-                                                        config.epochs),
-                                  unit="batch", leave=False):
-            chunk_items = epoch_items[start:start + config.micro_batch]
-            chunk = []
-            with profiler.phase("data.encode"):
-                for it in chunk_items:
-                    order = laya_train.draw_option_order(
-                        it, order_rng, config.shuffle_options)
-                    chunk.append(laya_train.encode_item(
-                        tok, it, max_len, head_max_len, order, parallel))
-            with profiler.phase("collate+batch_move"):
-                batch = laya_train.collate_items([chunk], tok.pad_token_id)
-                # dynamic padding: laya's collate already pads to the batch
-                # longest (max_len only TRUNCATES); this rounds the collated
-                # batch length to pad_to_multiple.
-                if dynamic_padding_on:
-                    batch = DynamicPadder.pad(torch, batch, pad_to_multiple)
-                # (2) ONE pinned non_blocking move of the WHOLE batch (offender
-                # #6: blocking pageable H2D serialized the host against the
-                # stream — 326 s/epoch in the smoke harvest, GPU starved to
-                # ~40%). The loop's reads below and _forward's own .to(device)
-                # are then no-ops, so nothing is copied twice.
-                batch = BatchMover.to_device(torch, batch, device,
-                                             pin_memory_on)
-                mask = batch["marker_mask"]
-                target = batch["target"]
-                qtype = batch["qtype"]
-            update_due = ((n_steps + 1) % epoch_grad_accum == 0
-                          or start + config.micro_batch >= len(epoch_items))
-            # Adversarial perturbations consume synchronized gradients.
-            synchronize = (ddp_sampler is None or update_due
-                           or bool(adv_eps and float(adv_eps) > 0.0))
-            with DeterministicDdp.accumulate(model, synchronize):
-                with profiler.phase("forward"):
-                    logits = Forwarder.run(torch, laya_train, model, batch, device,
-                                            amp, config.freeze_encoder, amp_dtype)
-                with profiler.phase("loss"):
-                    loss = LossBuilder.compute(
-                        torch, laya_train, config, logits, target, mask, qtype,
-                        sigma, epoch_w_sph, epoch_w_rps, class_weights,
-                        epoch_margin)
-                    if ddp_sampler is not None:
-                        loss = loss + DeterministicDdp.loss_guard(params)
-                    if r_drop_on:
-                        logits_two = Forwarder.run(
+        with AutocastCacheFactory.build(torch, device, amp):
+            for start in progress.bar(range(0, len(epoch_items),
+                                            config.micro_batch),
+                                      desc="epoch %d/%d" % (epoch + 1,
+                                                            config.epochs),
+                                      unit="batch", leave=False):
+                chunk_items = epoch_items[start:start + config.micro_batch]
+                chunk = []
+                with profiler.phase("data.encode"):
+                    for it in chunk_items:
+                        order = laya_train.draw_option_order(
+                            it, order_rng, config.shuffle_options)
+                        chunk.append(laya_train.encode_item(
+                            tok, it, max_len, head_max_len, order, parallel))
+                with profiler.phase("collate+batch_move"):
+                    batch = laya_train.collate_items([chunk], tok.pad_token_id)
+                    # dynamic padding: laya's collate already pads to the batch
+                    # longest (max_len only TRUNCATES); this rounds the collated
+                    # batch length to pad_to_multiple.
+                    if dynamic_padding_on:
+                        batch = DynamicPadder.pad(torch, batch, pad_to_multiple)
+                    # (2) ONE pinned non_blocking move of the WHOLE batch (offender
+                    # #6: blocking pageable H2D serialized the host against the
+                    # stream — 326 s/epoch in the smoke harvest, GPU starved to
+                    # ~40%). The loop's reads below and _forward's own .to(device)
+                    # are then no-ops, so nothing is copied twice.
+                    batch = BatchMover.to_device(torch, batch, device,
+                                                 pin_memory_on)
+                    mask = batch["marker_mask"]
+                    target = batch["target"]
+                    qtype = batch["qtype"]
+                update_due = ((n_steps + 1) % epoch_grad_accum == 0
+                              or start + config.micro_batch >= len(epoch_items))
+                # Adversarial perturbations consume synchronized gradients.
+                synchronize = (ddp_sampler is None or update_due
+                               or bool(adv_eps and float(adv_eps) > 0.0))
+                with DeterministicDdp.accumulate(model, synchronize):
+                    with profiler.phase("forward"):
+                        logits = Forwarder.run(torch, laya_train, model, batch, device,
+                                                amp, config.freeze_encoder, amp_dtype)
+                    with profiler.phase("loss"):
+                        loss = LossBuilder.compute(
+                            torch, laya_train, config, logits, target, mask, qtype,
+                            sigma, epoch_w_sph, epoch_w_rps, class_weights,
+                            epoch_margin)
+                        if ddp_sampler is not None:
+                            loss = loss + DeterministicDdp.loss_guard(params)
+                        if r_drop_on:
+                            # Separate casts preserve the two-pass gradient rounding.
+                            torch.clear_autocast_cache()
+                            logits_two = Forwarder.run(
+                                torch, laya_train, model, batch, device, amp,
+                                config.freeze_encoder, amp_dtype)
+                            loss_two = LossBuilder.compute(
+                                torch, laya_train, config, logits_two, target, mask,
+                                qtype, sigma, epoch_w_sph, epoch_w_rps, class_weights,
+                                epoch_margin)
+                            kl = RDrop.kl(torch, logits, logits_two, mask)
+                            loss = RDrop.combine(loss, loss_two, kl, r_drop_alpha)
+                    window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum
+                    window_size = min(epoch_grad_accum,
+                                      steps_per_epoch - window_start)
+                    scaled = loss / window_size
+                    with profiler.phase("backward"):
+                        if scaler is not None:
+                            scaler.scale(scaled).backward()
+                        else:
+                            scaled.backward()
+                    if adv_eps and float(adv_eps) > 0.0:
+                        # FGM perturbs the embedding params, AWP every trainable param;
+                        # both take an extra backward then restore the weights.
+                        targets = AdversarialPerturber.targets(model, params, adv_kind)
+                        total_sq = 0.0
+                        for p in targets:
+                            if p.grad is not None:
+                                total_sq += float(p.grad.detach().pow(2).sum())
+                        norm = math.sqrt(total_sq) + 1e-12
+                        deltas = AdversarialPerturber.perturb(
+                            torch, targets, float(adv_eps), norm)
+                        adv_logits = Forwarder.run(
                             torch, laya_train, model, batch, device, amp,
                             config.freeze_encoder, amp_dtype)
-                        loss_two = LossBuilder.compute(
-                            torch, laya_train, config, logits_two, target, mask,
-                            qtype, sigma, epoch_w_sph, epoch_w_rps, class_weights,
-                            epoch_margin)
-                        kl = RDrop.kl(torch, logits, logits_two, mask)
-                        loss = RDrop.combine(loss, loss_two, kl, r_drop_alpha)
-                window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum
-                window_size = min(epoch_grad_accum,
-                                  steps_per_epoch - window_start)
-                scaled = loss / window_size
-                with profiler.phase("backward"):
-                    if scaler is not None:
-                        scaler.scale(scaled).backward()
-                    else:
-                        scaled.backward()
-                if adv_eps and float(adv_eps) > 0.0:
-                    # FGM perturbs the embedding params, AWP every trainable param;
-                    # both take an extra backward then restore the weights.
-                    targets = AdversarialPerturber.targets(model, params, adv_kind)
-                    total_sq = 0.0
-                    for p in targets:
-                        if p.grad is not None:
-                            total_sq += float(p.grad.detach().pow(2).sum())
-                    norm = math.sqrt(total_sq) + 1e-12
-                    deltas = AdversarialPerturber.perturb(
-                        torch, targets, float(adv_eps), norm)
-                    adv_logits = Forwarder.run(
-                        torch, laya_train, model, batch, device, amp,
-                        config.freeze_encoder, amp_dtype)
-                    adv_loss = laya_train.soft_ce_loss(adv_logits, target, mask)
-                    adv_scaled = adv_loss / window_size
-                    if scaler is not None:
-                        scaler.scale(adv_scaled).backward()
-                    else:
-                        adv_scaled.backward()
-                    AdversarialPerturber.restore(torch, deltas)
-            n_steps += 1
-            if update_due:
-                with profiler.phase("optimizer_step"):
-                    if scaler is not None:
-                        scaler.unscale_(optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
-                    if control.get("log_grad_norm") and grad_norm is not None:
-                        grad_norm_sum += grad_norm.detach().clamp(max=config.grad_clip)
-                        grad_steps += 1
-                    if scaler is not None:
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        optimizer.step()
-                    if not plateau:
-                        scheduler.step()
-                    if str(optim_state_dtype or "fp32").lower() == "bf16":
-                        OptimizerStateCaster.apply(torch, optimizer,
-                                                   optim_state_dtype)
-                    if ema_state is not None:
-                        with torch.no_grad():
-                            for p in params:
-                                shadow = ema_state[id(p)]
-                                shadow.mul_(ema_decay).add_(
-                                    p.detach(), alpha=1.0 - ema_decay)
-                    optimizer.zero_grad(set_to_none=True)
-            if hard_scores is not None:
-                per_row = LossBuilder.per_row(torch, logits, target, mask)
-                for item, value in zip(chunk_items, per_row.tolist()):
-                    hard_scores[id(item)] = float(value)
-            # (1) stay on-GPU: accumulate the loss, sync once per epoch.
-            detached = loss.detach()
-            total = detached if total is None else total + detached
-            if config.log_every and n_steps % config.log_every == 0:
-                # Per-step loss: ONE extra GPU sync every log_every steps
-                # (negligible); it was dropped when the loop switched to
-                # on-GPU accumulation, which left the log loss-less.
-                print("epoch %d/%d step %d loss %.4f" % (
-                    epoch + 1, config.epochs, n_steps,
-                    float(detached.item())), flush=True)
-            # Bounded schedule: one profiler "step" per micro-batch.
-            profiler.step()
+                        adv_loss = laya_train.soft_ce_loss(adv_logits, target, mask)
+                        adv_scaled = adv_loss / window_size
+                        if scaler is not None:
+                            scaler.scale(adv_scaled).backward()
+                        else:
+                            adv_scaled.backward()
+                        AdversarialPerturber.restore(torch, deltas)
+                n_steps += 1
+                if update_due:
+                    with profiler.phase("optimizer_step"):
+                        if scaler is not None:
+                            scaler.unscale_(optimizer)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
+                        if control.get("log_grad_norm") and grad_norm is not None:
+                            grad_norm_sum += grad_norm.detach().clamp(max=config.grad_clip)
+                            grad_steps += 1
+                        if scaler is not None:
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            optimizer.step()
+                        torch.clear_autocast_cache()
+                        if not plateau:
+                            scheduler.step()
+                        if str(optim_state_dtype or "fp32").lower() == "bf16":
+                            OptimizerStateCaster.apply(torch, optimizer,
+                                                       optim_state_dtype)
+                        if ema_state is not None:
+                            with torch.no_grad():
+                                for p in params:
+                                    shadow = ema_state[id(p)]
+                                    shadow.mul_(ema_decay).add_(
+                                        p.detach(), alpha=1.0 - ema_decay)
+                        optimizer.zero_grad(set_to_none=True)
+                if hard_scores is not None:
+                    per_row = LossBuilder.per_row(torch, logits, target, mask)
+                    for item, value in zip(chunk_items, per_row.tolist()):
+                        hard_scores[id(item)] = float(value)
+                # (1) stay on-GPU: accumulate the loss, sync once per epoch.
+                detached = loss.detach()
+                total = detached if total is None else total + detached
+                if config.log_every and n_steps % config.log_every == 0:
+                    # Per-step loss: ONE extra GPU sync every log_every steps
+                    # (negligible); it was dropped when the loop switched to
+                    # on-GPU accumulation, which left the log loss-less.
+                    print("epoch %d/%d step %d loss %.4f" % (
+                        epoch + 1, config.epochs, n_steps,
+                        float(detached.item())), flush=True)
+                # Bounded schedule: one profiler "step" per micro-batch.
+                profiler.step()
         if hard_scores is not None:
             globals()["FINETUNE_HARD_SCORES"] = hard_scores
         mean = (float(total.item() / max(1, n_steps))

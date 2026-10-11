@@ -18,6 +18,26 @@ from __future__ import annotations
 from typing import Any
 
 
+class AutocastCacheFactory:
+    """Keep weight casts until mutation without autocasting loss or backward.
+
+    Torch clears its weight cache when the outermost autocast scope exits.
+    A disabled outer scope preserves the inner forward's casts while leaving
+    loss/backward precision unchanged. Callers clear the cache at mutations;
+    scope exit releases it on completion or error. No second weight copy or
+    parameter replacement is introduced.
+    """
+
+    @staticmethod
+    def build(torch_module: "Any", device: "Any", enabled: bool) -> "Any":  # noqa: UP037 -- injected without module imports
+        from contextlib import nullcontext
+
+        if not enabled:
+            return nullcontext()
+        device_type = getattr(device, "type", None) or torch_module.device(device).type
+        return torch_module.autocast(device_type, enabled=False)
+
+
 class ModelCompiler:
     """``torch.compile`` the training module (offenders #2 dispatch + #4 cast).
 

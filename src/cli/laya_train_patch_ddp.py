@@ -61,6 +61,7 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_train_parts.TrainingOptimizer,
         laya_train_parts.LossBuilder,
         laya_train_parts.Forwarder,
+        laya_train_fast.AutocastCacheFactory,
         laya_train_fast.ModelCompiler,
         laya_train_fast.BatchMover,
         laya_eval_fast.EvalRecordsPolicy,

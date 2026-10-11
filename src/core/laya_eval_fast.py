@@ -13,6 +13,10 @@ fp32 forwards on the T4 — 441 s/epoch for the 27,305-item dev split in the
 """
 from __future__ import annotations
 
+from typing import Any
+
+from core.laya_train_fast import AutocastCacheFactory
+
 
 class EvalRecordsPolicy:
     """Per-trial eval-records speed policy (fp16 autocast + batch override).
@@ -55,10 +59,14 @@ class EvalRecordsHook:
         original_records = laya_train.calibration_records
         original_forward = laya_train._forward
 
-        def calibration_records(model, tok, items, device, *args, **kwargs):
+        def calibration_records(model: "Any", tok: "Any", items: "Any",  # noqa: UP037 -- injected without module imports
+                                device: "Any", *args: "Any", **kwargs: "Any") -> "Any":  # noqa: UP037
+            import torch
+
             if policy.eval_batch > 0:
                 kwargs.setdefault("batch_size", policy.eval_batch)
-            return original_records(model, tok, items, device, *args, **kwargs)
+            with AutocastCacheFactory.build(torch, device, policy.eval_amp):
+                return original_records(model, tok, items, device, *args, **kwargs)
 
         def _forward(model, batch, device, amp, detach_encoder):
             import torch

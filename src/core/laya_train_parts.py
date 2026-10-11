@@ -39,7 +39,9 @@ class AdversarialPerturber:
         return picked or list(params)
 
     @staticmethod
-    def perturb(torch, params, adv_eps, norm):
+    def perturb(torch: "Any", params: "list[Any]", adv_eps: float,  # noqa: UP037 -- injected without module imports
+                norm: float) -> "list[tuple[Any, Any]]":  # noqa: UP037
+        torch.clear_autocast_cache()
         deltas = []
         with torch.no_grad():
             for param in params:
@@ -51,10 +53,11 @@ class AdversarialPerturber:
         return deltas
 
     @staticmethod
-    def restore(torch, deltas):
+    def restore(torch: "Any", deltas: "list[tuple[Any, Any]]") -> None:  # noqa: UP037 -- injected without module imports
         with torch.no_grad():
             for param, delta in deltas:
                 param.sub_(delta)
+        torch.clear_autocast_cache()
 
 
 class TrainingOptimizer:
