@@ -475,6 +475,10 @@ def _tracking_mnrl_loss(
             self._population_lookup = torch.empty(0, dtype=torch.long)
             self._population_device_lookup = {}
             self._pending_subset = None
+            self._pair_lineage: list[dict] = []
+            self._pair_present_counts: dict[int, int] = {}
+            self._pair_backprop_counts: dict[int, int] = {}
+            self._pair_per_epoch_counts: dict[int, dict[int, dict[str, int]]] = {}
 
         def set_epoch(self, epoch: int) -> None:
             if int(epoch) != self._current_epoch:
@@ -483,6 +487,76 @@ def _tracking_mnrl_loss(
 
         def set_batch_pair_ids(self, pair_ids) -> None:
             self._batch_pair_ids = pair_ids.detach()
+
+        def set_pair_lineage(self, pair_lineage: list[dict]) -> None:
+            self._pair_lineage = pair_lineage
+
+        def pair_usage_rows(self) -> list[dict]:
+            """Cumulative per-triple presentation/backprop with source lineage.
+
+            Every MNRL row's loss ``-(positive - log_z)`` is averaged into the
+            batch objective, so each presented triple is backpropagated; the
+            counters make that attribution explicit instead of dropping the
+            minted/masked rows at the fold boundary.
+            """
+            ids = set(self._pair_present_counts)
+            ids.update(self._pair_backprop_counts)
+            rows = []
+            for pair_id in sorted(ids):
+                lineage = (
+                    self._pair_lineage[pair_id]
+                    if pair_id < len(self._pair_lineage)
+                    else {}
+                )
+                rows.append(
+                    {
+                        "pair_id": pair_id,
+                        "present_count": self._pair_present_counts.get(pair_id, 0),
+                        "hard_selected_count": self._pair_present_counts.get(pair_id, 0),
+                        "backprop_count": self._pair_backprop_counts.get(pair_id, 0),
+                        **lineage,
+                    }
+                )
+            return rows
+
+        def pair_usage_rows_by_epoch(self) -> list[dict]:
+            """Per-epoch per-triple presentation/backprop counts with lineage."""
+            rows = []
+            for epoch in sorted(self._pair_per_epoch_counts):
+                for pair_id in sorted(self._pair_per_epoch_counts[epoch]):
+                    lineage = (
+                        self._pair_lineage[pair_id]
+                        if pair_id < len(self._pair_lineage)
+                        else {}
+                    )
+                    rows.append(
+                        {
+                            "epoch": epoch,
+                            "pair_id": pair_id,
+                            **self._pair_per_epoch_counts[epoch][pair_id],
+                            **lineage,
+                        }
+                    )
+            return rows
+
+        def presentation_counts(self) -> dict[tuple, int]:
+            """The datapoint-coverage keys for this fold's MNRL rows.
+
+            The population is the triple's registry-safe source lineage (never
+            the monitoring tag base/masked/twin, which describes the negative
+            pressure rather than a registered datapoint population).
+            """
+            counts: dict[tuple, int] = {}
+            for epoch in sorted(self._pair_per_epoch_counts):
+                for pair_id, stats in self._pair_per_epoch_counts[epoch].items():
+                    lineage = (
+                        self._pair_lineage[pair_id]
+                        if pair_id < len(self._pair_lineage)
+                        else {}
+                    )
+                    counts[(epoch, pair_id, str(lineage.get("population", "unknown")),
+                            "none", 0)] = int(stats["present_count"])
+            return counts
 
         def set_triple_populations(self, populations) -> None:
             self._flush_subset_totals()
@@ -645,6 +719,31 @@ def _tracking_mnrl_loss(
                 values = row_losses.detach().to(dtype=torch.float64)
                 self._pending_subset[0].scatter_add_(0, population_codes, values)
                 self._pending_subset[1].scatter_add_(0, population_codes, torch.ones_like(values))
+
+            if (batch_pair_ids is not None and self._pair_lineage
+                    and torch.is_grad_enabled()):
+                # Every presented triple contributes its own row term to the
+                # averaged batch objective, so present == backprop here; the
+                # per-pair carry is what lets minted/masked rows survive the
+                # fold boundary instead of dropping at the writer gate.
+                epoch_stats = self._pair_per_epoch_counts.setdefault(
+                    self._current_epoch, {})
+                for pair_id in batch_pair_ids[: row_losses.shape[0]].tolist():
+                    pair_id = int(pair_id)
+                    self._pair_present_counts[pair_id] = (
+                        self._pair_present_counts.get(pair_id, 0) + 1
+                    )
+                    self._pair_backprop_counts[pair_id] = (
+                        self._pair_backprop_counts.get(pair_id, 0) + 1
+                    )
+                    stats = epoch_stats.setdefault(
+                        pair_id,
+                        {"present_count": 0, "hard_selected_count": 0,
+                         "backprop_count": 0},
+                    )
+                    stats["present_count"] += 1
+                    stats["hard_selected_count"] += 1
+                    stats["backprop_count"] += 1
 
             if self._warmup_enabled:
                 if batch_pair_ids is not None:
