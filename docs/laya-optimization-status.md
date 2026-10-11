@@ -64,39 +64,69 @@ epoch time, plus 1,086 points for each GPU series. Dev accuracy is
 names this gap instead of silently dropping it. It does not repair the
 training value or reinterpret the run's crashed state as success.
 
-Verification used `uv`: four focused W&B/plot tests passed, Ruff passed, and
-the branch's invariant suite passed four tests with one pre-existing expected
-failure. Mypy, Pyright and Ty are unavailable in the shared environment;
-type checking was not run.
+## Completed optimization and boundary fixes
 
-## Unfinished work, one unit at a time
+All changes stay on `laya-candidate`, the user's requested destination; no
+merge into `main` is intended. Dataset drafts are excluded.
 
-1. Investigate the training-side gradient-norm value before trusting the
-   optimization telemetry. The loop also clamps the reported norm to the
-   clipping threshold; inspect that measurement contract.
-2. Finish the existing autocast-cache draft: reuse weight casts between
-   forwards, invalidate at optimizer/adversarial mutations, and preserve
-   loss/backward precision and R-Drop behavior.
-3. Finish the existing DDP accumulation draft: synchronize only on update
-   boundaries while preserving the adversarial path's gradient semantics.
-4. Finish the existing independent-dimension compile draft: equal dimensions
-   in the first batch must not accidentally tie later variable shapes.
-5. Finish the existing optimizer-group draft: group equal learning rates and
-   preserve every incoming group option. The committed implementation drops
-   options such as weight_decay/betas and creates one group per parameter.
-6. Validate each completed optimization on a comparable real T4 workload,
-   including numerical behavior, peak memory, phase timing, completion and
-   artifact harvest. CPU tests do not establish NCCL health or GPU speedup.
+| Commit | Verified behavior |
+|---|---|
+| `f5bc3d9` | Equal-rate optimizer groups retain weight decay, betas and incoming options |
+| `cff0bee` | Dynamic compilation keeps unrelated batch dimensions independent |
+| `67dd84b` | DDP accumulation synchronizes at update boundaries, preserving adversarial semantics |
+| `299f539` | AMP weight casts are reused until parameter mutation; loss/backward precision retained |
+| `01b99fe` | Reinstalled evaluation policy updates without stacking wrappers |
+| `1d3cefc` | Encode memo retains tokenizer/item identities until trial reset |
+| `97e9b8e` | Post-training calibration reuses identical logits and releases retained models in finally |
+| `62c9d19` | Typed dev artifacts surface lost confusion records with full tracebacks |
+| `950462a` | Logged gradient norms retain the pre-clipping magnitude |
+| `e6e8bb4` | Epoch timing includes evaluation and checkpoints |
+| `a2d361f` | Host optimizer and dev evaluator import their canonical class dependencies |
+| `2dfcabc` | Optional optimizer failures retain full tracebacks and share construction |
+| `c7a7def` | Pydantic dev reports require scoring fields; sparse history extras and memo metadata are typed |
 
-The four performance drafts predate this continuation and remain uncommitted.
-Their initial local checks passed 11 non-DDP tests; the CPU/Gloo DDP regression
-run passed 18 tests after allowing localhost networking. Those checks do not
-make the drafts landed or GPU-validated. Dataset edits remain separate.
+The host-boundary regressions were reproduced before fixing: extraction in
+`0694529` left TrainingOptimizer dependent on injected ParamGroupBuilder;
+`4b2cfa3` left DevEvaluator dependent on injected DevReport. Both now import
+the canonical classes, with public host behavior and generated-kernel coverage.
+DevReport is now a Pydantic boundary model: accuracy and loss are required;
+missing fields fail validation instead of masquerading as zero. Its constructor
+assembly and duplicated optional-field parsing were removed.
+W&B sparse extras are explicitly typed on their Pydantic owner; function
+memo metadata uses the standard function attribute dictionary.
 
-## Integration gap
+## Validation and remaining limits
 
-The W&B fix is committed on the existing `laya-candidate` integration branch.
-It is not on `main`: that branch lacks the plot/reader implementation and the
-candidate carries dataset and other-lane changes. Landing the whole candidate
-would exceed the current LAYA-only, no-dataset scope. This is an outstanding
-integration obligation, not a claim that a pushed branch completes delivery.
+Checks use `uv`; scoped Ruff and Ty checks cover the changed optimizer,
+evaluation, compile/cache and W&B history owners. The combined regression
+suite covers CPU/Gloo DDP, accumulation, AMP cache parity, dynamic shapes,
+optimizer updates, evaluator artifacts, epoch timing, W&B plotting/steps,
+generated kernels, HPO SSOT parity and repository invariants.
+
+CPU tests do not establish T4 speedup, GPU peak memory or NCCL health. The
+latest inspected W&B smoke run remains crashed and its NaN gradient norm is
+not repaired by correcting the norm measurement. No new remote run was
+launched in this continuation; a Kaggle COMPLETE status alone is not evidence
+of healthy training. No msgspec migration or benchmark was performed.
+
+The final combined suite passed **128 tests with one pre-existing expected
+failure** in 80.43 seconds, including all training-control tests. Three
+warnings are pre-existing: two Pydantic instance-field deprecations and the
+scheduler-order warning in a focused scheduler test.
+Full-file Ruff on `src/core/laya_controls.py` reports 16 pre-existing findings,
+with identical diagnostic counts/codes before and after this change. These
+include silent malformed abstention records (`src/core/laya_controls.py:231`),
+loop-variable closure warnings (`src/core/laya_controls.py:537`), and truncated profiler
+errors (`src/core/laya_controls.py:893`, `:919`, `:928`, `:965`). No baseline or allowlist was widened. Other
+changed Python files pass Ruff, and scoped Ty checks pass. Full-repository
+type checking was not performed.
+
+Other observed legacy gaps are not concealed by this delivery:
+
+- `src/core/laya_train_parts.py:136`: malformed targets are skipped while
+  computing class weights; this data-related path is outside the requested scope.
+- `src/cli/laya_train_patch_loop.py:60`: malformed balancing targets become
+  label -1; this data-related path is likewise excluded.
+
+Dataset scripts and the pre-existing `docs/laya-lane.md` draft remain
+uncommitted and untouched by this optimization delivery.
