@@ -345,9 +345,10 @@ def test_worker_emits_command_training_inference_and_ablation_skip_rows(
     monkeypatch.setenv("ER_GPU_TRAINING_ONLY", "1")
     monkeypatch.setenv("ER_TRACK_BARRIER", str(tmp_path / "barrier"))
     monkeypatch.setattr(common, "TRAIN_ROOT", tmp_path)
-    cfg = SimpleNamespace(setup_dir="setup", text_bundle="bundle", text_model="baseline",
-                          epochs=1, device="cuda", report_test=False,
-                          post_training_ablation=True)
+    from model_tracks.config import SuiteConfig
+    cfg = SuiteConfig(setup_dir="setup", text_bundle="bundle", text_model="baseline",
+                      epochs=1, device="cuda", report_test=False,
+                      post_training_ablation=True)
     monkeypatch.setattr(worker, "load_config", lambda _: cfg)
     monkeypatch.setattr(prepared_bundle, "load_prepared_bundle",
                         lambda _: (SimpleNamespace(payload_variant="full"), {}))

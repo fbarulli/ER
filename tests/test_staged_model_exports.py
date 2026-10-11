@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import torch
 from model_tracks import ablation, staged_ablation, text_export
+from model_tracks.config import SuiteConfig
 
 
 def test_bound_request_preserves_prepared_tensor_hash_and_relative_checkpoint(tmp_path,monkeypatch):
@@ -80,7 +81,7 @@ def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,mon
     monkeypatch.setenv('ER_GPU_TRAINING_ONLY','1')
     monkeypatch.setenv('ER_TRACK_BARRIER',str(tmp_path/'barrier'))
     monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    cfg = SimpleNamespace(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
+    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
                           device='cuda',report_test=False,post_training_ablation=True)
     monkeypatch.setattr(worker,'load_config',lambda _:cfg)
     monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
@@ -129,7 +130,7 @@ def test_gpu_worker_skips_ablation_export_without_bundle_templates(tmp_path,monk
     monkeypatch.setenv('ER_GPU_TRAINING_ONLY','1')
     monkeypatch.setenv('ER_TRACK_BARRIER',str(tmp_path/'barrier'))
     monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    cfg = SimpleNamespace(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
+    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
                           device='cuda',report_test=False,post_training_ablation=True)
     monkeypatch.setattr(worker,'load_config',lambda _:cfg)
     monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
@@ -180,7 +181,7 @@ def test_local_worker_keepsloud_ablation_template_error(tmp_path,monkeypatch):
     monkeypatch.delenv('ER_GPU_TRAINING_ONLY',raising=False)
     monkeypatch.setenv('ER_TRACK_BARRIER',str(tmp_path/'barrier'))
     monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    cfg = SimpleNamespace(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
+    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
                           device='cpu',report_test=False,post_training_ablation=True)
     monkeypatch.setattr(worker,'load_config',lambda _:cfg)
     monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
