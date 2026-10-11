@@ -91,6 +91,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from core.coverage_contracts import Difficulty
 from core.execution_policy import OptimizerBackend
 from core.hosted_dataset import HostedRegistry, hosted_registry
 
@@ -1711,6 +1712,15 @@ class BalancedAugmentationSpec(BaseModel):
     counts: AugmentationCounts = Field(default_factory=lambda: AugmentationCounts(
         minted_negatives=0, masked_minted_negatives=0, masked_positives=0, vendor_variation_positives=0))
     sample_counts: AugmentationCounts | None = None
+    # Relative counts (additive, optional): the carve's class sizes are only
+    # known once the actual split is loaded, so the engine derives the counts
+    # from ``len(positives)/len(negatives)`` instead of a fixed number.
+    # ``balance_negatives_to_positives`` mints `P - N` negatives (R1);
+    # ``masked_share_per_class`` masks that share of each (now equal) class (R2).
+    # A count resolved relative must NOT also be given absolutely: the sentinel
+    # is the all-zero default, so the two are mutually exclusive by construction.
+    balance_negatives_to_positives: bool = False
+    masked_share_per_class: float | None = Field(default=None, gt=0, le=1)
     # Cohort-tagged counts (additive): the remote bundle kernel tags its run
     # via ER_COHORT_TAG; a cohort without an entry uses `counts` unchanged and
     # the exact-equality coverage contract still holds for every cohort.
@@ -1721,6 +1731,20 @@ class BalancedAugmentationSpec(BaseModel):
     max_variants_per_anchor_field: int = Field(default=2, ge=1)
     max_attribute_share: float = Field(default=.35, gt=0, le=1)
     mask_extent: float = Field(default=.15, gt=0, le=.3)
+
+    @model_validator(mode='after')
+    def relative_excludes_absolute(self):
+        if self.balance_negatives_to_positives and self.counts.minted_negatives:
+            raise ValueError(
+                'balance_negatives_to_positives is mutually exclusive with an explicit '
+                f'counts.minted_negatives ({self.counts.minted_negatives})')
+        if self.masked_share_per_class is not None and (
+            self.counts.masked_positives or self.counts.masked_minted_negatives
+        ):
+            raise ValueError(
+                'masked_share_per_class is mutually exclusive with explicit counts.masked_*')
+        return self
+
 
 
 class MaskingSpec(BaseModel):
@@ -4486,6 +4510,13 @@ class MaskAuditEntry(BaseModel):
     donor_anchor_payload_idx: int | None = Field(default=None, ge=0)
     donor_pair_payload_idx: int | None = Field(default=None, ge=0)
     copy_pair_payload_idx: int | None = Field(default=None, ge=0)
+    # Measured structural difficulty of the SOURCE pair this copy derives from
+    # (``training.difficulty.measure_pair`` over the frozen payload text), and
+    # the (field, difficulty) stratum the copy was minted for. Both are carried
+    # so a minted/masked row stays traceable to its stratum through the bundle
+    # audit and the post-training cohort, not only to its indices.
+    difficulty_slice: Difficulty = "unknown"
+    target_stratum: str | None = None
 
 
 class MaskingResult(BaseModel):
