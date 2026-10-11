@@ -415,13 +415,19 @@ def test_the_flip_is_decided_by_the_frozen_threshold_not_a_hardcoded_zero():
 
 
 def test_the_real_ablation_report_matches_the_frozen_threshold():
+    """Every row in the real report agrees with the frozen threshold.
+
+    The report is a regenerated local artifact (fresh runs change its cohort
+    size and flip count), so the contract is agreement, not a pinned count: the
+    validator cross-checks each ``decision_flip`` against the report's own
+    threshold, and it must accept the whole report unchanged.
+    """
     path = Path(__file__).resolve().parents[1]/'results/attribute_ablation/report.json'
     if not path.is_file():
         pytest.skip('results/attribute_ablation/report.json not present')
     report = json.loads(path.read_text(encoding='utf-8'))
     rows = report['rows']
     assert a.assert_ablation_rows(rows,report['threshold']) is rows
-    assert sum(row['decision_flip'] for row in rows) == 5
 
 
 def test_report_refuses_a_wrong_flip_before_saving(tmp_path,monkeypatch):
