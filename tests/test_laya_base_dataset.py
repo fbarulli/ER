@@ -211,7 +211,9 @@ def test_recipe_defaults_reproduced_from_config(tmp_path, monkeypatch):
     assert config["target_error"] == 0.10
     assert config["min_abstain_n"] == 10
     assert config["amp"] is None
-    assert config["gradient_checkpointing"] is None
+    # offender #4: the tuned default is checkpointing OFF (the backward win;
+    # parity-pinned bit-exact vs ON, red-teamed to fit prod single-T4 mb=8)
+    assert config["gradient_checkpointing"] is False
     assert config["log_every"] == 100
     # the kernel applies the FULL config to the trainer surface (the CLI
     # never ran: the non-CLI knobs are set by constructing TrainConfig)

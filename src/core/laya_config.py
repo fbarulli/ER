@@ -69,7 +69,14 @@ class FinetuneSpec(BaseModel):
     # runtime
     seed: int = 1729
     amp: bool | None = None
-    gradient_checkpointing: bool | None = None
+    # DEFAULT TUNED TO OFF (offender #4): the checkpointing recompute was ~47%
+    # of the epoch's backward (1,529 s/epoch in the 1kbaseline harvest). OFF is
+    # a large backward win and is parity-pinned bit-exact vs ON (deterministic
+    # recompute + preserved dropout RNG). Red-team: prod single-T4 mb=8 fits
+    # without it (~6-7 GB of a 15 GB card). An OOM-prone config (large
+    # micro_batch, 2-slot HPO) re-enables it via this dial — never a silent
+    # downshift. `None` still resolves to laya's amp-driven auto in the loop.
+    gradient_checkpointing: bool | None = False
     log_every: int = Field(default=100, ge=0)
     device: str = "auto"
 

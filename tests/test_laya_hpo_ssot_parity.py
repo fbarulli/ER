@@ -134,5 +134,7 @@ def test_dial_space_version_and_count_are_pinned():
     # v4: + compile_model / compile_mode (the dispatch/cast-storm lever: the
     # verified T4 profile is CPU-dispatch-bound, GPU ~40% busy; torch.compile
     # fuses the 6528 linear+mm/step + the autocast _to_copy storm).
-    assert space["space_version"] == 4
+    # v5: micro_batch floor raised 4->8 + ceiling ->32 (offender #5: mb=4 was
+    # the dispatch-storm worst case; bigger batches amortize #2/#4).
+    assert space["space_version"] == 5
     assert len(space["dials"]) == 36

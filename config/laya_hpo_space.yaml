@@ -19,7 +19,7 @@
 # PostgreSQL Optuna URL lives exclusively in the runtime secret store
 # (`OPTUNA_STORAGE_URL`) and is injected into the staged kernel, never here.
 
-space_version: 4
+space_version: 5
 
 # The shared-study identity (the model boundary; kept distinct from the
 # generation boundary, which is runtime environment).
@@ -217,12 +217,21 @@ dials:
   micro_batch:
     type: categorical
     target: config
-    choices: [4, 8, 16]
+    # FLOOR RAISED (offender #5): mb=4 was the worst case of the dispatch storm
+    # (most Python dispatches + H2D copies per sample); trial-1 mb=8 halved
+    # fwd+bwd vs mb=4. Floor now 8, ceiling extended to 32 (fewer/bigger
+    # dispatches amortize offenders #2/#4). A mb=32 + checkpointing-off trial
+    # MAY OOM at 2 slots/GPU — the accepted outcome of this round
+    # (options.parallelism): reported, never engineered away, gated by the
+    # gradient_checkpointing dial.
+    choices: [8, 16, 32]
   # The backward-pass lever (1kbaseline harvest: backward = 1,529 s/epoch,
   # 47% of the epoch, backward/forward ~= 1.9 = the checkpointing recompute).
-  # OFF trades activation memory for ~-20-35% backward; a micro_batch 16 +
-  # checkpointing-off trial MAY OOM at 2 slots/GPU — the accepted outcome of
-  # this round (options.parallelism): reported, never engineered away.
+  # OFF trades activation memory for ~-20-35% backward; the FinetuneSpec
+  # DEFAULT is now OFF (red-teamed to fit prod single-T4 mb=8; parity-pinned
+  # bit-exact vs ON). A micro_batch 16/32 + checkpointing-off trial MAY OOM at
+  # 2 slots/GPU — the accepted outcome of this round (options.parallelism):
+  # reported, never engineered away.
   gradient_checkpointing:
     type: categorical
     target: config

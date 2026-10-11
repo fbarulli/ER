@@ -208,7 +208,7 @@ def test_sample_dials_dispatches_generically_by_type():
     assert by_name["encoder_lr"][0] == "float" and by_name["encoder_lr"][4] is True
     assert by_name["weight_decay"][0] == "float" and by_name["weight_decay"][4] is False
     assert by_name["lr_scheduler"][0] == "categorical"
-    assert by_name["micro_batch"][2] == (4, 8, 16)
+    assert by_name["micro_batch"][2] == (8, 16, 32)
     assert by_name["base_batch"][0] == "int" and by_name["base_batch"][4] is True
 
 

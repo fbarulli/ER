@@ -153,11 +153,18 @@ GOLDEN_SHA256: dict[str, str] = {
      # ON), and the four pure loop building-block classes (AdversarialPerturber/
      # TrainingOptimizer/LossBuilder/Forwarder) moved verbatim into the injected
      # core.laya_train_parts to bring the loop template back under the 1k cap.
-     "finetune": "53a8d93a0f540a7212c8d83056ea38abcefa69fe621c311d356490757715fc26",
-     "finetune-smoke": "a843c429b1d1d10821ce9b0ecbe764b6e6464a23789a2e039e197ebba555a7ca",
+     #
+     # finetune / finetune-smoke / hpo re-pinned for the tuned checkpointing
+     # default (offender #4): FinetuneSpec.gradient_checkpointing None -> False
+     # rides the baked FINETUNE_CONFIG literal on all three surfaces (the
+     # backward-pass win; parity-pinned bit-exact vs ON). The HPO space also
+     # raised the micro_batch floor 4 -> 8 (+ ceiling 32), which rides the baked
+     # HPO_SPACE literal (hpo surface).
+     "finetune": "502dabbde6a481203fd57abb27c6e1a4ca119b8a25082ea41f6c310f13c065e9",
+     "finetune-smoke": "0b908b900cbcd3b60136920193bc6af2c358a7a5af65331205604274e80aca33",
      "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
      "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-     "hpo": "eb8706c7325a7b06472c8e7c7fa675d3461efbe9278eb388a9c5b5a595eba281",
+     "hpo": "022d68ef8b718213feeab0b4f0ba88d1f838ea78d5cce8743681cf4c8edc07b1",
 }
 
 
