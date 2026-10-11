@@ -263,12 +263,14 @@ PYTHONPATH=src .venv/bin/python -m training.prepare_all --resume-from validation
 | Resume from | Requires |
 |---|---|
 | `dedupe` (default) | nothing; full run |
-| `validation` | CSV stages done and their manifests verify. Fresh log directory. |
-| `full_bundle` | same run dir, identical provenance, this run's `graph_inputs` done |
-| `suite_inputs` | same run dir, identical provenance, this run's `full_bundle` done |
+| `validation` | CSV stages completed. Fresh log directory. |
+| `full_bundle` | same run dir and run tag, this run's `graph_inputs` done |
+| `suite_inputs` | same run dir and run tag, this run's `full_bundle` done |
 
-Any change to source, config, raw input or checkpoint bytes during the run poisons
-resume and is rejected. That is intentional.
+Resume validates the run directory and run tag. Provenance and output sizes are
+recorded for reporting; they do not impose content-hash or staleness gates.
+Changed inputs belong to a new preparation artifact.
 
-Preparation **mutates its inputs**, so it sets `ER_DATA_GATE_ENFORCE=1` and pops
-`WANDB_API_KEY`. Smoke inputs are hashed before and after and must be unchanged.
+Preparation sets `ER_DATA_GATE_ENFORCE=1` and removes `WANDB_API_KEY` from its
+child environment. It does not train. The sampled smoke writes a new child
+bundle and retains its parent unchanged.
