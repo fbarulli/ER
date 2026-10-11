@@ -22,6 +22,13 @@ skip it.
 - **Prefer the higher-level abstraction over low-level ad-hoc code.** Model the domain with
   types/classes; do not drop to raw primitives (dicts/strings/tuples/ints) where a modeled
   type, helper, or existing abstraction exists.
+- **Model every boundary (a seam).** Where data crosses between components, layers, or
+  artifacts, it crosses as a typed model — never a raw primitive (`str`/`dict`/`tuple`/`int`)
+  whose contract lives only in a docstring. A render→parse / compose→decompose pair shares ONE
+  type; a missing branch fails loud at the seam instead of dropping silently.
+- **Derive, never re-declare.** A second tuple/list/set/dict literal of a canonical constant,
+  or a re-implemented parser/codec, is drift even when each copy is individually valid —
+  derive it from the one owner; consumers import the owner.
 - **Deletion beats addition.** No wrapper, indirection, option, or "for later" code that does
   not buy clarity. If an abstraction is just a pass-through, delete it.
 
@@ -49,6 +56,11 @@ skip it.
   it (timing/log line) — do not guess or leave it silent.
 - **Fail loud on real errors; fail-soft only with a recorded reason.** An empty/no-op outcome
   must never masquerade as success.
+- **Always surface gaps.** A dropped or no-op outcome is never silent: no counter
+  (`skipped_*`), scanner baseline/allowlist, `.get(default)` fallback, or `except: pass` may
+  absorb a real loss. A check's baseline is never widened to hide drift — fix the code or
+  justify the entry in the same commit. **Name the gap in the report** (`file:line`, what was
+  lost, blast radius) rather than passing over it.
 
 ## 4. Process (how to work)
 
