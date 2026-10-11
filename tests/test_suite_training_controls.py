@@ -162,6 +162,32 @@ def test_text_worker_passes_declared_loss(tmp_path, monkeypatch, text_loss):
         assert command[command.index('--loss') + 1] == text_loss
 
 
+def test_graph_worker_projects_the_wandb_ssot_mode(tmp_path):
+    """The graph lane honors the SAME W&B SSOT the text lane reads.
+
+    A packaged lane yaml ships ``wandb.mode: offline``; ``graph_worker_settings``
+    must project ``training.wandb`` (the SSOT ``core.wandb_ctx.WandbCtx`` reads)
+    so gnn metrics reach the ``e-r`` dashboard online once the launcher injects
+    WANDB_API_KEY. Regression: the graph worker trained offline while the text
+    lane logged online (Gate-1 colab GPU smoke 1010T220607339825Z).
+    """
+    from core.common import training_cfg
+    from model_tracks.config import SuiteConfig
+    from model_tracks.worker import graph_worker_settings
+
+    setup = tmp_path
+    (setup / 'gnn_only.yaml').write_text(yaml.safe_dump(dict(
+        track='gnn_only', listings=str(setup / 'prepared/listings.json'),
+        pairs=str(setup / 'prepared/pairs.csv'), output_dir=str(setup / 'runs'),
+        device='cpu', wandb=dict(project='stale-project', mode='offline'))))
+    cfg = SuiteConfig(setup_dir=str(setup), text_bundle=str(setup / 'text.pkl.gz'),
+                      device='cpu', epochs=1, publish_git=False)
+    settings = graph_worker_settings(setup, cfg, 'gnn_only', gpu_only=True)
+    ssot = training_cfg().tracking.wandb
+    assert settings['wandb']['mode'] == ssot.mode
+    assert settings['wandb']['project'] == ssot.project
+
+
 @pytest.mark.parametrize('has_embeddings', [False, True])
 @pytest.mark.parametrize('parent_cache', ['present', 'absent', 'checkpoint_changed'])
 @pytest.mark.parametrize('relative_paths', [False, True])

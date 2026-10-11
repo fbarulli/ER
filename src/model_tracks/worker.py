@@ -59,10 +59,19 @@ def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = Fals
     The pre-training data gate builds its graph inputs through this function so
     the validated configuration cannot drift from the executed one.
     """
+    from core.common import training_cfg
     from graph_tracks.config import GraphConfig, load_config as load_graph_config
     settings = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
     settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
                     postprocess=not gpu_only, include_inputs=False)
+    # The graph lane honors the SAME W&B SSOT the text lane reads
+    # (core.wandb_ctx.WandbCtx -> training.wandb): a packaged lane yaml ships
+    # ``mode: offline``, so project the tracking SSOT (project+mode) here or gnn
+    # metrics never reach the dashboard while the text lane logs online. The
+    # launcher injects WANDB_API_KEY; GraphWandb fails loud when it is absent.
+    wandb_ssot = training_cfg().tracking.wandb
+    settings['wandb'] = {**settings.get('wandb', {}),
+                         'project': wandb_ssot.project, 'mode': wandb_ssot.mode}
     if cfg.dvc_enabled or gpu_only:
         # The suite publisher owns persistence; avoid a second mutable
         # local DVC snapshot while background uploads are active.
