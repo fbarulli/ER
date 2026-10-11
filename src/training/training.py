@@ -4400,6 +4400,7 @@ def _negative_source_accounting(
     tr_negs: np.ndarray,
     tr_neg_sources: np.ndarray,
     usage_rows: list[dict],
+    pair_populations: list[str] | None = None,
 ) -> dict[str, int]:
     """Per-fold census of every negative SOURCE that reached the train fold.
 
@@ -4481,10 +4482,15 @@ def _negative_source_accounting(
         # The funnel bound only applies to a real SOURCE tag: a presentation
         # label (ann_finetuned) replaces a negative's text without moving it
         # between sources, so its total is 0 by construction.
+        base_total = source_coverage.setdefault(f"n_train_neg_source_{name}", 0)
+        # The loss reports usage per pair_id over ITS population; bound the
+        # funnel by that same population's per-source census (ONE owner), not
+        # the base negatives, or an MNRL triple expansion reads as a breach.
         bound = (
-            source_coverage.setdefault(f"n_train_neg_source_{name}", 0)
-            if name in source_names
-            else denominator
+            sum(1 for entry in pair_populations
+                if _base_population_tag(str(entry)) == name)
+            if pair_populations is not None
+            else base_total if name in source_names else denominator
         )
         for key in ("present", "selected", "backprop"):
             if counts[key] > bound:
@@ -5815,6 +5821,10 @@ def train_one_config(
                 dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
                 dynamic_epoch_ref = {"epoch": 0}
                 dynamic_mask_audit: list[dict] = []
+                # One label per pair in the objective's population; the loss
+                # reports usage per pair_id, so the funnel bound derives from
+                # THIS list, not a second reconstruction from base negatives.
+                pair_populations: list[str] = []
                 if loss == "contrastive":
                     # OnlineContrastiveLoss (owner ruling 2026-09-07): paired
                     # (sentence1, sentence2, label) rows. POSITIVES = train_all
@@ -6620,6 +6630,7 @@ def train_one_config(
                 tr_negs=tr_negs,
                 tr_neg_sources=tr_neg_sources,
                 usage_rows=usage_rows,
+                pair_populations=pair_populations,
             )
             if wandb_ctx is not None:
                 wandb_ctx.log_metrics(
