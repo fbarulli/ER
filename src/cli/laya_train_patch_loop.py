@@ -431,7 +431,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                             scaler.unscale_(optimizer)
                         grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
                         if control.get("log_grad_norm") and grad_norm is not None:
-                            grad_norm_sum += grad_norm.detach().clamp(max=config.grad_clip)
+                            grad_norm_sum += grad_norm.detach()
                             grad_steps += 1
                         if scaler is not None:
                             scaler.step(optimizer)

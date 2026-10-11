@@ -21,6 +21,7 @@ import random
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 from cli import laya_lane
@@ -44,7 +45,7 @@ def _load_ddp_namespace(ddp_timeout_minutes=None):
         ddp_timeout_minutes = LayaSpec().ddp_timeout_minutes
     namespace = {"os": os, "math": math, "random": random,
                  "DDP_TIMEOUT_MINUTES": ddp_timeout_minutes}
-    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
+    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)  # noqa: S102 -- trusted generated kernel under test
     return namespace
 
 
@@ -332,7 +333,7 @@ def _rendezvous_worker(rank, world_size, working, slow_seconds, out_dir):
         returned = time.time()
     finally:
         namespace["destroy_if_distributed"]()
-    (Path(out_dir) / ("returned_rank%d" % rank)).write_text(
+    (Path(out_dir) / f"returned_rank{rank}").write_text(
         repr(returned), encoding="utf-8")
 
 
@@ -354,7 +355,7 @@ def test_teardown_rendezvous_holds_peers_until_rank0_destroy_lands(tmp_path):
     assert marker.is_file()
     marker_mtime = marker.stat().st_mtime
     returned = {
-        rank: float((out_dir / ("returned_rank%d" % rank)).read_text(
+        rank: float((out_dir / f"returned_rank{rank}").read_text(
             encoding="utf-8"))
         for rank in range(WORLD)
     }
@@ -550,6 +551,7 @@ def _ddp_control_worker(rank, world_size, shared_dir, out_path):
     assert namespace["init_distributed"](backend="gloo") is True
     try:
         import sys
+
         import torch.distributed as dist
 
         processed = []
@@ -639,7 +641,7 @@ def test_apply_perf_patch_emits_calibration_records_timing(tmp_path,
         "[timing] laya calibration_records epoch=1 elapsed_seconds=")
 
 
-def test_grad_norm_logging_does_not_change_training(monkeypatch):
+def test_grad_norm_logging_does_not_change_training(monkeypatch: pytest.MonkeyPatch) -> None:
     """P1-F: moving the grad-norm .item() from every optimizer step to once per
     epoch is logging-only — the clip and step are untouched, so the trained
     weights are bit-identical with the grad-norm log on or off."""
@@ -655,18 +657,28 @@ def test_grad_norm_logging_does_not_change_training(monkeypatch):
     base = dict(laya_lane.finetune_control())
     items = [{"i": index, "label": index % 3} for index in range(N_ITEMS)]
     runs = []
+    logged = []
+
+    def log_epoch(epoch: int, mean: float, extra: dict[str, object]) -> None:
+        logged.append(extra)
+
+    namespace["wandb_log_epoch"] = log_epoch
+    config = _Cfg()
+    config.grad_clip = 0.0001
     for flag in (True, False):
         namespace["FINETUNE_CONTROL"] = {**base, "log_grad_norm": flag}
         torch.manual_seed(SEED)
         model = _TinyNet()
         history = namespace["_perf_train_model"](
-            model, types.SimpleNamespace(pad_token_id=0), items, _Cfg(),
+            model, types.SimpleNamespace(pad_token_id=0), items, config,
             torch.device("cpu"), 8, 4)
         runs.append((history, {key: value.detach().clone()
                                for key, value in model.state_dict().items()}))
     assert runs[0][0] == runs[1][0]
     for key, value in runs[0][1].items():
         assert torch.equal(value, runs[1][1][key]), key
+
+    assert logged[0]["train/grad_norm"] > config.grad_clip
 
 
 def _ddp_used_graph_worker(rank, world_size, out_path):
