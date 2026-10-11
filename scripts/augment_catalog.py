@@ -9,9 +9,10 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from core.columns import GATE_COLUMNS
 from training.folds import normalize_gtin as n
 
-GATE = ["volume_set", "pack_set", "package_type_set", "flavor_set"]
+GATE = GATE_COLUMNS
 
 
 def parse(v):

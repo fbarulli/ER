@@ -250,6 +250,44 @@ def _number_token(prefix: str, value: float) -> str:
     return f"{prefix}{rendered.replace('.', '_')}"
 
 
+#: canonical structured-feature key -> (text-token group marker, token prefix),
+#: in the exact order ``text_tokens`` emits their groups. The laya corpus builder
+#: INVERTS this (payload token -> standardized attribute key) instead of retyping
+#: the prefixes, so emit and parse share one vocabulary.
+TEXT_TOKEN_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("volume", "VOLUME", "volume_ml_"),
+    ("pack", "PACK_SIZE", "pack_qty_"),
+    ("package_type", "PACKAGE_TYPE", "package_type_"),
+    ("flavor", "FLAVOR", "flavor_"),
+    ("carbonation", "CARBONATION", "carbonation_"),
+    ("sweetener", "SWEETENER_DIET", "sweetener_diet_"),
+    ("pulp", "PULP", "pulp_"),
+    ("sweetener_type", "SWEETENER_TYPE", "sweetener_type_"),
+    ("sweetening", "SWEETENING", "sweetening_"),
+    ("package_material", "PACK_MATERIAL", "package_material_"),
+    ("juice_content", "JUICE_CONTENT_BAND", "juice_content_"),
+)
+
+#: The two numeric groups render their value as a float token; every other group
+#: renders the bare (space-underscored) string value.
+_TEXT_NUMERIC_KEYS = frozenset({"volume", "pack"})
+_TEXT_TOKEN_PREFIX: dict[str, str] = {
+    key: prefix for key, _group, prefix in TEXT_TOKEN_GROUPS
+}
+
+
+def _text_group_values(key: str, info: Mapping[str, object]) -> list[str]:
+    """One structured-feature key -> its payload tokens, prefix and rendering
+    taken from the ONE ``TEXT_TOKEN_GROUPS`` declaration."""
+    prefix = _TEXT_TOKEN_PREFIX[key]
+    if key in _TEXT_NUMERIC_KEYS:
+        return _number_tokens(prefix, sorted(_as_set(info.get(key), kind=key)))
+    return [
+        f"{prefix}{value.replace(' ', '_')}"
+        for value in sorted(_as_string_set(info.get(key), kind=key))
+    ]
+
+
 def text_tokens(info: Mapping[str, object]) -> list[str]:
     """Return deterministic field-marked tokens appended to model text.
 
@@ -266,61 +304,11 @@ def text_tokens(info: Mapping[str, object]) -> list[str]:
     tests/test_universe_capture_wiring.py), and a populated key only appends
     its block.
     """
-    volumes = sorted(_as_set(info.get("volume"), kind="volume"))
-    packs = sorted(_as_set(info.get("pack"), kind="pack"))
-    package_types = sorted(
-        _as_string_set(info.get("package_type"), kind="package_type")
-    )
-    package_materials = sorted(
-        _as_string_set(info.get("package_material"), kind="package_material")
-    )
-    juice_bands = sorted(_as_string_set(info.get("juice_content"), kind="juice_content"))
-    categorical = {
-        "FLAVOR": sorted(_as_string_set(info.get("flavor"), kind="flavor")),
-        "CARBONATION": sorted(
-            _as_string_set(info.get("carbonation"), kind="carbonation")
-        ),
-        "SWEETENER_DIET": sorted(
-            _as_string_set(info.get("sweetener"), kind="sweetener")
-        ),
-        "PULP": sorted(_as_string_set(info.get("pulp"), kind="pulp")),
-        "SWEETENER_TYPE": sorted(_as_string_set(info.get("sweetener_type"), kind="sweetener_type")),
-        "SWEETENING": sorted(_as_string_set(info.get("sweetening"), kind="sweetening")),
-    }
-    groups: list[tuple[str, list[str]]] = [
-        ("VOLUME", _number_tokens("volume_ml_", volumes)),
-        ("PACK_SIZE", _number_tokens("pack_qty_", packs)),
-        (
-            "PACKAGE_TYPE",
-            [f"package_type_{value.replace(' ', '_')}" for value in package_types],
-        ),
-        *[
-            (name, [f"{name.casefold()}_{value.replace(' ', '_')}" for value in values])
-            for name, values in categorical.items()
-        ],
-        # Captured evidence appends LAST so every existing group's byte
-        # stream and relative order are unchanged (value values keep the
-        # published space->underscore convention; a census value such as
-        # "paper / carton" renders as the token package_material_paper_/_carton).
-        (
-            "PACK_MATERIAL",
-            [
-                f"package_material_{value.replace(' ', '_')}"
-                for value in package_materials
-            ],
-        ),
-        (
-            "JUICE_CONTENT_BAND",
-            [
-                f"juice_content_{value.replace(' ', '_')}"
-                for value in juice_bands
-            ],
-        ),
-    ]
     tokens: list[str] = []
-    for field, values in groups:
+    for key, group, _prefix in TEXT_TOKEN_GROUPS:
+        values = _text_group_values(key, info)
         if values:
-            tokens.extend((f"[FIELD_{field}]", *values))
+            tokens.extend((f"[FIELD_{group}]", *values))
     return tokens
 
 

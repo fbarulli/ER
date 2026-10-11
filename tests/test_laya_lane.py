@@ -874,7 +874,7 @@ def test_builder_side_composition_mirrors_final_validation_shape():
     assert side["sweetener"] == "[no_sugar]"
     assert side["flavor"] == "[apple, pear]"
     assert side["carbonation"] == "[still]"
-    assert side["pack"] == ""  # no pack-count field in the catalog vocabulary
+    assert side["pack"] == ""  # this attribute string carries no pack token
     empty = builder.compose_side("Juice Content: 0-2%")
     assert empty == {field: "" for field in builder.SLICE_FIELDS}
 
