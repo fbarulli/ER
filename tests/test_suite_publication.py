@@ -3,7 +3,7 @@ import zipfile
 
 import pytest
 
-from core.portable_archive import write_archive
+from core.portable_archive import ByteCount, write_archive
 from model_tracks.publish import persist_results
 
 
