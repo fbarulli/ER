@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.laya_controls import ParamGroupBuilder
+
 
 class AdversarialPerturber:
     """FGM (embedding-direction) / AWP (weight-direction) perturbation.
@@ -64,9 +66,10 @@ class TrainingOptimizer:
     """Optimizer construction + best-effort layer-wise LR decay."""
 
     @staticmethod
-    def make(torch, model, groups, config, control):
+    def make(torch: "Any", model: "Any", groups: "list[dict[str, Any]]",  # noqa: UP037 -- injected without module imports
+             config: "Any", control: "dict[str, Any]") -> "Any":  # noqa: UP037
         kind = str(control.get("optimizer") or "").lower()
-        groups = ParamGroupBuilder.apply(  # noqa: F821 -- co-injected (core.laya_controls)
+        groups = ParamGroupBuilder.apply(
             model, groups, bool(control.get("no_decay_bias_norm")))
         fused = any(param.is_cuda for group in groups
                     for param in group["params"])

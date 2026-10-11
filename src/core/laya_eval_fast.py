@@ -17,6 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from core.laya_controls import DevReport
 from core.laya_train_fast import AutocastCacheFactory
 
 
@@ -298,13 +299,15 @@ class DevEvaluator:
     """Rank-0 dev scoring + end-of-run calibration/confusion artifacts."""
 
     @staticmethod
-    def metrics(laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control, collate_memo=None):
+    def metrics(laya_train: "Any", model: "Any", tok: "Any",  # noqa: UP037 -- injected without module imports
+                dev_items: "Any", device: "Any", max_len: int,  # noqa: UP037
+                head_max_len: int, parallel: bool, control: "dict[str, Any]",  # noqa: UP037
+                collate_memo: "CollateMemo | None" = None) -> "DevReport":  # noqa: UP037
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
                                         parallel, collate_memo)
         metrics = laya_train.evaluate_records(records)
-        return DevReport.from_metrics(  # noqa: F821 -- DevReport co-injects (core.laya_controls) into the kernel namespace
+        return DevReport.from_metrics(
             metrics, records=records,
             confidence_threshold=control.get("abstain_confidence"))
 

@@ -247,3 +247,13 @@ def test_error_artifact_failure_reports_the_full_traceback(
     assert "error_artifacts" not in result
     assert "Traceback (most recent call last)" in result["error_artifacts_error"]
     assert "invalid-logit" in result["error_artifacts_error"]
+
+
+def test_host_dev_scoring_returns_the_shared_report() -> None:
+    from test_laya_ddp import _make_fake_laya
+
+    fake = _make_fake_laya([])
+    report = laya_eval_fast.DevEvaluator.metrics(
+        fake.train, torch.nn.Linear(2, 1), object(), [{"state": "x"}],
+        torch.device("cpu"), 8, 4, False, laya_lane.finetune_control())
+    assert report.accuracy == 0.9 and report.loss == 0.5
