@@ -73,25 +73,27 @@ class TrainingOptimizer:
             model, groups, bool(control.get("no_decay_bias_norm")))
         fused = any(param.is_cuda for group in groups
                     for param in group["params"])
+        import importlib
+        import traceback
+
         if kind == "adafactor":
             try:
                 return torch.optim.Adafactor(
                     groups, lr=config.head_lr,
                     weight_decay=config.weight_decay)
-            except Exception:  # noqa: BLE001 - Adafactor missing -> AdamW
-                print("[perf-patch] Adafactor unavailable; AdamW", flush=True)
+            except Exception:  # noqa: BLE001 -- retain the documented AdamW fallback
+                print("[perf-patch] Adafactor unavailable; AdamW\n" +
+                      traceback.format_exc(), flush=True)
         if kind == "lamb":
-            try:
-                from torch_optimizer import Lamb
-                return Lamb(groups, lr=config.head_lr,
-                            weight_decay=config.weight_decay)
-            except Exception:  # noqa: BLE001 - torch_optimizer missing -> next
+            for provider in ("torch_optimizer", "transformers.optimization"):
                 try:
-                    from transformers.optimization import Lamb
-                    return Lamb(groups, lr=config.head_lr,
-                                weight_decay=config.weight_decay)
-                except Exception:  # noqa: BLE001 - Lamb missing -> AdamW
-                    print("[perf-patch] Lamb unavailable; AdamW", flush=True)
+                    optimizer = importlib.import_module(provider).Lamb
+                    return optimizer(groups, lr=config.head_lr,
+                                     weight_decay=config.weight_decay)
+                except Exception:  # noqa: BLE001 -- try the next optional provider
+                    print(f"[perf-patch] {provider}.Lamb unavailable\n" +
+                          traceback.format_exc(), flush=True)
+            print("[perf-patch] Lamb unavailable; AdamW", flush=True)
         return torch.optim.AdamW(groups, weight_decay=config.weight_decay,
                                  fused=fused)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 
+import pytest
 import torch
 
 from core.laya_train_parts import TrainingOptimizer
@@ -47,3 +48,31 @@ class TestOptimizerGroups:
         model(torch.ones(1, 3)).sum().backward()
         optimizer.step()
         assert all(torch.isfinite(parameter).all() for parameter in model.parameters())
+
+
+@pytest.mark.parametrize("kind", ["adafactor", "lamb"])
+def test_unavailable_optimizer_reports_traceback_before_adamw(
+    kind: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    import importlib
+
+    from test_laya_ddp import _Cfg
+
+    original_import = importlib.import_module
+
+    def import_optional(name: str, package: str | None = None) -> object:
+        if name in {"torch_optimizer", "transformers.optimization"}:
+            raise ImportError("optional optimizer unavailable")
+        return original_import(name, package)
+
+    def unavailable(*args: object, **kwargs: object) -> object:
+        raise ImportError("optional optimizer unavailable")
+
+    monkeypatch.setattr(importlib, "import_module", import_optional)
+    monkeypatch.setattr(torch.optim, "Adafactor", unavailable)
+    model = torch.nn.Linear(3, 2)
+    optimizer = TrainingOptimizer.make(
+        torch, model, [{"params": list(model.parameters()), "lr": 0.01}],
+        _Cfg(), {"optimizer": kind})
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert "Traceback (most recent call last)" in capsys.readouterr().out
