@@ -89,6 +89,10 @@ skip it.
   internal to test. Do not test that an internal gate "exists" or "was removed".
 - **Sequence as small verifiable units**, each ending in a checkable state; order delivery so
   the sequence proves itself.
+- **Size every task small.** Decompose non-trivial work into small, independently verifiable
+  units and dispatch **one at a time** (at most two per agent). A unit ends in a checkable
+  state (build → verify → commit → next); never hand one agent a multi-subsystem change, and
+  never let scope grow mid-task. Scope bloat is a planning failure, not a licence to run long.
 
 ## 5. Writing code (laziness ladder)
 
