@@ -4050,6 +4050,35 @@ def _training_pair_populations(
     return populations
 
 
+@timed
+def _mnrl_pair_populations(
+    triples: list[tuple[int, int, int]],
+    train_neg: np.ndarray,
+    train_neg_sources: np.ndarray | None,
+) -> list[str]:
+    """One registry-safe source label for every MNRL triple.
+
+    The row's positive pair is the loss's ``(anchor, positive)``, but the
+    provenance that must survive training is the explicit negative's SOURCE
+    (gate / minted / counterfactual / lane tags): MNRL trains against that
+    third column, so the coverage census keys on it. A negative index absent
+    from the fold's negatives (or a lane with no source array) falls back to
+    ``gate``, a registered source, never the unregistered ``base``/``masked``/
+    ``twin`` monitoring tags.
+    """
+    source_by_negative: dict[int, str] = {}
+    pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
+    for index, (_anchor, negative) in enumerate(pairs):
+        source = (
+            _base_population_tag(str(train_neg_sources[index]))
+            if train_neg_sources is not None and index < len(train_neg_sources)
+            else "gate"
+        )
+        source_by_negative[int(negative)] = source
+    return [source_by_negative.get(int(negative), "gate")
+            for _anchor, _positive, negative in triples]
+
+
 def _usage_row(
     *,
     fold_i: int,
@@ -5921,6 +5950,13 @@ def train_one_config(
                     # through PairIdDataCollator to the loss; both columns are
                     # stripped before tokenization and never affect the loss value.
                     triple_populations = objective_plan["dataset"]["population"]
+                    # Per-triple coverage population (the explicit negative's
+                    # registry-safe source) and the per-pair presentation counts
+                    # the loss fills during training; both are consumed by the
+                    # datapoint-usage writer below.
+                    pair_populations = _mnrl_pair_populations(
+                        triples, tr_negs, tr_neg_sources)
+                    presentation_counts: dict[tuple, int] = {}
                     train_ds = Dataset.from_dict(objective_plan["dataset"])
                 else:
                     train_ds = Dataset.from_dict(objective_plan["dataset"])
@@ -6260,17 +6296,38 @@ def train_one_config(
                 )
                 if loss == "mnrl" and hasattr(loss_fn, "set_triple_populations"):
                     loss_fn.set_triple_populations(triple_populations)
-                pair_lineage = _build_pair_lineage(
-                    train_all,
-                    tr_negs,
-                    train_neg_sources=tr_neg_sources,
-                    mask_audit=mask_audit,
-                    hard_negative_mask_audit=hard_negative_mask_audit,
-                    payload_metadata=payload_metadata,
-                    gate_lookup=gate_lookup,
-                )
+                if loss == "mnrl":
+                    # One lineage row per TRIPLE, keyed by its (anchor, positive)
+                    # pair so a masked-positive anchor resolves its mask audit;
+                    # the population is replaced with the negative source label
+                    # the coverage census keys on.
+                    pair_lineage = _build_pair_lineage(
+                        np.asarray([(int(a), int(b)) for a, b, _c in triples],
+                                   dtype=int).reshape(-1, 2),
+                        np.empty((0, 2), dtype=int),
+                        train_neg_sources=None,
+                        mask_audit=mask_audit,
+                        hard_negative_mask_audit=hard_negative_mask_audit,
+                        payload_metadata=payload_metadata,
+                        gate_lookup=gate_lookup,
+                    )
+                    for record, population in zip(pair_lineage, pair_populations,
+                                                  strict=True):
+                        record["population"] = population
+                else:
+                    pair_lineage = _build_pair_lineage(
+                        train_all,
+                        tr_negs,
+                        train_neg_sources=tr_neg_sources,
+                        mask_audit=mask_audit,
+                        hard_negative_mask_audit=hard_negative_mask_audit,
+                        payload_metadata=payload_metadata,
+                        gate_lookup=gate_lookup,
+                    )
                 if hasattr(loss_fn, "set_pair_lineage"):
                     loss_fn.set_pair_lineage(pair_lineage)
+                if loss == "contrastive":
+                    # The dynamic per-presentation masking lane is contrastive-only.
                     loss_fn._dynamic_mask_counts = dynamic_mask_counts
                     loss_fn._dynamic_mask_counts_by_epoch = dynamic_mask_counts_by_epoch
                     loss_fn._dynamic_mask_stats_by_epoch = dynamic_mask_stats_by_epoch
@@ -6406,15 +6463,22 @@ def train_one_config(
                     if isinstance(callback, LateEpochLrDecayCallback)
                 )
                 datapoint_coverage: dict[str, int] = {}
-                if loss == "contrastive" and TRACK_DATAPOINT_USAGE:
-                    enabled_dynamic_populations = {
-                        population
-                        for population, enabled in (
-                            ("ann_finetuned", ann_refresh_enabled),
-                            ("attribute_conflict", attribute_conflict_refresh_enabled),
-                        )
-                        if enabled
-                    }
+                if loss in {"contrastive", "mnrl"} and TRACK_DATAPOINT_USAGE:
+                    if loss == "contrastive":
+                        enabled_dynamic_populations = {
+                            population
+                            for population, enabled in (
+                                ("ann_finetuned", ann_refresh_enabled),
+                                ("attribute_conflict", attribute_conflict_refresh_enabled),
+                            )
+                            if enabled
+                        }
+                    else:
+                        # The mining-refresh lanes are contrastive-only, so the
+                        # MNRL fold has no dynamic source; its per-triple
+                        # presentation counts come from the loss itself.
+                        enabled_dynamic_populations = set()
+                        presentation_counts = loss_fn.presentation_counts()
                     print(
                         "    [datapoint-sources] "
                         + ", ".join(

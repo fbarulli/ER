@@ -72,6 +72,17 @@ CENSUS_SCHEMA = "er-smart-setup-partition-v1"
 #: The published gtin->split populations the text lane adopts (sibling owner).
 POPULATIONS_NAME = "smart_partition_populations.json"
 
+#: The carve-owned ablation cohort directory (the canonical name
+#: ``model_tracks.ablation_cohort.prepare_cohort`` writes). It is REGENERATED
+#: from the carve's own pairs/catalog and bundle, never hardlinked: the source
+#: cohort describes the SOURCE split, so linking it would hand the carve a
+#: cohort whose rows never saw the carve.
+ABLATION_COHORT_DIR = "ablation_cohort"
+
+#: The carve's shipped text bundle (the prepared training bundle the cohort
+#: reads mint/mask lineage from, and the suite's ``text_bundle``).
+TEXT_BUNDLE_NAME = "text_prepared.pkl.gz"
+
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
@@ -172,7 +183,7 @@ class SmartSetupPartition:
         cast no vote — a component with no measured pair stays honestly
         ``unknown``, never invented as easy/hard.
         """
-        cohort = self._setup / "ablation_cohort" / "pairs.csv"
+        cohort = self._setup / ABLATION_COHORT_DIR / "pairs.csv"
         if not cohort.is_file():
             _LOG.info("[smart-setup] no ablation cohort in the source setup; "
                       "every component stays difficulty=unknown")
@@ -426,6 +437,8 @@ class SmartSetupPartition:
         timing.mark("frames_and_links")
         self._prepare_dir(output, training_tensors=training_tensors)
         timing.mark("prepared")
+        self._regenerate_ablation_cohort(output)
+        timing.mark("ablation_cohort")
         self._write_lane_configs(output)
         self._write_documents(output, partition)
         timing.mark("configs_and_documents")
@@ -467,7 +480,8 @@ class SmartSetupPartition:
             if not path.is_file():
                 continue
             relative = path.relative_to(self._setup)
-            if relative.parts[0] == layout.prepared_dir or str(relative) in regenerated:
+            if (relative.parts[0] in {layout.prepared_dir, ABLATION_COHORT_DIR}
+                    or str(relative) in regenerated):
                 continue
             target = output / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -483,6 +497,28 @@ class SmartSetupPartition:
         layout = _setup_layout()
         prepare(output / layout.catalog, output / layout.splits, output / layout.pairs,
                 output / layout.prepared_dir, training_tensors=training_tensors)
+
+    def _regenerate_ablation_cohort(self, output: Path) -> None:
+        """Rebuild the carve's ablation cohort from the carve itself.
+
+        The source cohort is a hardlink: it describes the SOURCE split, so
+        linking it hands the carve a cohort whose rows never saw the carve and
+        whose difficulty votes are the wrong halves. Regenerated through the
+        ONE canonical owner (``ablation_cohort.prepare_cohort``) over the
+        carve's regenerated pairs/catalog/prepared listings and the shipped
+        text bundle the cohort reads mint/mask lineage from.
+        """
+        from model_tracks.ablation_cohort import prepare_cohort
+        from training.prepared_bundle import BundleCodec
+
+        bundle_path = output / TEXT_BUNDLE_NAME
+        if not bundle_path.is_file():
+            _LOG.info("[smart-setup] carve carries no text bundle; "
+                      f"{ABLATION_COHORT_DIR} not regenerated")
+            return
+        prepare_cohort(output, BundleCodec.read_payload(bundle_path))
+        _LOG.info(f"[smart-setup] regenerated {ABLATION_COHORT_DIR} for the carve "
+                  f"at {output / ABLATION_COHORT_DIR}")
 
     def _write_lane_configs(self, output: Path) -> None:
         """Re-render the lane configs onto the new tree (the ONE rebaser)."""
@@ -532,7 +568,7 @@ class SmartSetupPartition:
         parent = load_config(self._suite_config or Path(bundle_spec().suite_config))
         settings = parent.model_dump()
         settings["setup_dir"] = portable_path(output)
-        bundle = output / "text_prepared.pkl.gz"
+        bundle = output / TEXT_BUNDLE_NAME
         if bundle.is_file():
             settings["text_bundle"] = portable_path(bundle)
         (output / "suite.yaml").write_text(yaml.safe_dump(settings, sort_keys=False))
