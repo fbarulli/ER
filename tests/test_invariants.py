@@ -241,10 +241,28 @@ _ARTIFACT_SUFFIX = (".json", ".yaml", ".yml", ".csv", ".zst", ".zip", ".pt", ".n
 
 
 def _config_drift(repo_root: Path) -> dict[str, list]:
-    """AST/static census of the two config-SSOT drift classes."""
+    """AST/static census of the config-SSOT drift classes.
+
+    Two surfaces are scanned, because a hardcoded copy of a config-owned value
+    hides on either: the typed config (`config/*.yaml` leaves, read through the
+    typed models) and the LANE CODE (`scripts/**`, the entry-point scripts the
+    earlier src-only scan never looked at). `config/*.json` is scanned for the
+    duplicated class only: those files are DATA specs (question criteria,
+    vocabulary, review records) consumed as data, so a leaf without a code
+    attribute read is not drift.
+
+    The duplicated class is split by consumer surface (`src/**` vs `scripts/**`)
+    so a shrinking `src` baseline can never mask a new script respelling.
+    """
     leaves: dict[tuple[str, str], object] = {}
-    for config_path in sorted((repo_root / "config").glob("*.yaml")):
-        stack = [((), yaml.safe_load(config_path.read_text()))]
+    config_paths = sorted([*(repo_root / "config").glob("*.yaml"),
+                           *(repo_root / "config").glob("*.json")])
+    for config_path in config_paths:
+        if config_path.suffix == ".json":
+            document = json.loads(config_path.read_text())
+        else:
+            document = yaml.safe_load(config_path.read_text())
+        stack = [((), document)]
         while stack:
             path, node = stack.pop()
             if isinstance(node, dict):
@@ -256,15 +274,16 @@ def _config_drift(repo_root: Path) -> dict[str, list]:
             else:
                 leaves[(config_path.name, ".".join(path))] = node
 
-    # A leaf counts as READ only when some src AST node is a REAL attribute
-    # access onto it (``loaded_config.<key>`` -- the typed config models and
-    # their nested spec fields). A bare identifier named like the key and a
-    # string literal that merely CONTAINS the key are coincidences, not reads:
-    # that is exactly how a dead ``orchestration_stages``-style block looked
-    # clean while its only mentions were a docstring / ``.get("...")`` literal.
+    # A leaf counts as READ only when some AST node is a REAL attribute access
+    # onto it (``loaded_config.<key>`` -- the typed config models and their
+    # nested spec fields). A bare identifier named like the key and a string
+    # literal that merely CONTAINS the key are coincidences, not reads: that is
+    # exactly how a dead ``orchestration_stages``-style block looked clean while
+    # its only mentions were a docstring / ``.get("...")`` literal.
     attribute_reads: set[str] = set()
     literals: dict[str, set[str]] = {}
-    for source in sorted((repo_root / "src").rglob("*.py")):
+    for source in sorted([*(repo_root / "src").rglob("*.py"),
+                          *(repo_root / "scripts").rglob("*.py")]):
         relative = source.relative_to(repo_root).as_posix()
         try:
             tree = ast.parse(source.read_text(errors="replace"))
@@ -276,23 +295,36 @@ def _config_drift(repo_root: Path) -> dict[str, list]:
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                 literals.setdefault(node.value, set()).add(relative)
 
-    unread, duplicated, mirrored = [], [], []
+    unread, duplicated, script_duplicated, mirrored = [], [], [], []
     for (config_name, path), value in leaves.items():
         key = path.rsplit(".", 1)[-1]
-        if not key.startswith("[") and key not in attribute_reads:
+        if (config_name.endswith(".yaml") and not key.startswith("[")
+                and key not in attribute_reads):
             unread.append(f"{config_name}:{path}")
         if not (isinstance(value, str) and len(value) >= 6
                 and (value.endswith(_ARTIFACT_SUFFIX) or "/" in value)):
             continue
+        # An artifact identity has no whitespace; a prose value in a generated
+        # data spec (a review reason, a provenance note) is not a filename and
+        # matching it would only flag the very script that wrote it.
+        if any(character.isspace() for character in value):
+            continue
         owners = literals.get(value)
         if not owners:
             continue
-        independent = sorted(owners - _CONFIG_MIRRORS)
-        if independent:
-            duplicated.append(f"{value!r} ({config_name}:{path} <- {', '.join(independent[:2])})")
-        else:
+        src_owners = sorted(o for o in owners
+                            if o.startswith("src/") and o not in _CONFIG_MIRRORS)
+        script_owners = sorted(o for o in owners if o.startswith("scripts/"))
+        if src_owners:
+            duplicated.append(
+                f"{value!r} ({config_name}:{path} <- {', '.join(src_owners[:2])})")
+        elif script_owners:
+            script_duplicated.append(
+                f"{value!r} ({config_name}:{path} <- {', '.join(script_owners[:2])})")
+        elif owners - _CONFIG_MIRRORS:
             mirrored.append(f"{config_name}:{path}")
-    return {"unread": unread, "duplicated": duplicated, "mirrored": mirrored}
+    return {"unread": unread, "duplicated": duplicated,
+            "script_duplicated": script_duplicated, "mirrored": mirrored}
 
 
 #: PINNED BASELINE of the config-SSOT drift that exists TODAY (measured
@@ -769,30 +801,71 @@ _CONFIG_SSOT_BASELINE_DUPLICATED = frozenset({
     "'vocabulary.json' (training.yaml:packaging.snapshot_pinned_configs.[9] <- src/core/common.py, src/core/critical_attributes.py)",
 })
 
+#: PINNED BASELINE for the DRIFT THE SRC-ONLY SCAN COULD NOT SEE: config-owned
+#: artifact values respelled in `scripts/**`. The earlier scan looked only at
+#: `src/**`, so a hardcoded copy in a lane script was invisible — the blind spot
+#: the slice-vocabulary drift lived in. This is a SEPARATE surface baseline (the
+#: two frozensets above are NOT widened); measured 2026-10-11. New script
+#: respellings FAIL the guard; repairing the known ones shrinks this set.
+_CONFIG_SSOT_BASELINE_SCRIPT_DUPLICATED = frozenset({
+    "'baseline_threshold.json' (results.yaml:names.baseline_threshold <- scripts/ablation_timing_3k.py, scripts/ablation_timing_5k.py)",
+    "'data/prepared/full/worker_1_baseline.pkl.gz' (training.yaml:colab.full_prepared_bundles.[0] <- scripts/laya_build_dataset.py)",
+    "'data/track_setup' (model_tracks.yaml:setup_dir <- scripts/run_colab_embeddings.py)",
+    "'data/track_setup' (paths.yaml:layouts.dataset_track_setup.template <- scripts/run_colab_embeddings.py)",
+    "'eligible_catalog.csv' (training.yaml:preparation.graph_setup.catalog <- scripts/smoke_graph_tracks.py)",
+    "'gtin_stratum_sweep.csv' (training.yaml:rand_matching.stratum_sweep.output <- scripts/sid_graph_eval.py)",
+    "'input_manifest.json' (training.yaml:preparation.graph_setup.input_manifest <- scripts/smoke_graph_tracks.py)",
+    "'inputs.tar.zst' (training.yaml:colab.data_bundle.transport_member <- scripts/run_colab_ablation.py)",
+    "'listing_splits.csv' (training.yaml:preparation.graph_setup.splits <- scripts/smoke_graph_tracks.py)",
+    "'listings.json' (training.yaml:preparation.graph_setup.listings <- scripts/run_colab_embeddings.py)",
+    "'prepared_inputs.npz' (results.yaml:names.prepared_inputs <- scripts/run_colab_ablation.py)",
+    "'request.json' (hosted_datasets.yaml:datasets.[7].members.[0] <- scripts/run_colab_ablation.py, scripts/run_colab_embeddings.py)",
+    "'request.json' (training.yaml:bundle.ablation_request_file <- scripts/run_colab_ablation.py, scripts/run_colab_embeddings.py)",
+    "'request.json' (training.yaml:kaggle.files.request_file <- scripts/run_colab_ablation.py, scripts/run_colab_embeddings.py)",
+    "'results/graph_tracks' (graph_tracks_cascade.yaml:output_dir <- scripts/verify_suite_archive.py)",
+    "'results/graph_tracks' (graph_tracks_gnn.yaml:output_dir <- scripts/verify_suite_archive.py)",
+    "'results/kaggle_lane' (training.yaml:kaggle.staging_dir <- scripts/consolidate_logs.py)",
+    "'results/manifests' (training.yaml:audit.manifest_dir <- scripts/count_evidence.py)",
+    "'results/model_tracks' (text_track.yaml:output_dir <- scripts/consolidate_logs.py, scripts/verify_suite_archive.py)",
+    "'results/training_results' (paths.yaml:paths.training_results_dir <- scripts/consolidate_logs.py)",
+    "'scripts/encode_prepared_embeddings.py' (training.yaml:kaggle.files.embedding_script <- scripts/run_colab_embeddings.py)",
+    "'scripts/seed_brand_aliases.py' (vocabulary.json:brand_aliases_provenance.generated_by <- scripts/seed_brand_aliases.py)",
+    "'setup_manifest.json' (training.yaml:preparation.graph_setup.manifest <- scripts/smoke_graph_tracks.py)",
+    "'trainer_state.json' (training.yaml:bundle.deployment_ignored_filenames.[5] <- scripts/audit_resume_state.py)",
+    "'trainer_state.json' (training.yaml:bundle.trainer_state_file <- scripts/audit_resume_state.py)",
+})
 
-def _new_config_drift(repo_root: Path) -> tuple[list[str], list[str], set, set]:
-    """Measured drift minus the pinned baseline, plus the measured sets."""
+
+def _new_config_drift(repo_root: Path) -> tuple[list[str], list[str], list[str], set, set, set]:
+    """Measured drift minus the pinned baselines, plus the measured sets."""
     drift = _config_drift(repo_root)
     unread = set(drift["unread"])
     duplicated = set(drift["duplicated"])
+    script_duplicated = set(drift["script_duplicated"])
     return (
         sorted(unread - _CONFIG_SSOT_BASELINE_UNREAD),
         sorted(duplicated - _CONFIG_SSOT_BASELINE_DUPLICATED),
+        sorted(script_duplicated - _CONFIG_SSOT_BASELINE_SCRIPT_DUPLICATED),
         unread,
         duplicated,
+        script_duplicated,
     )
 
 
 def _assert_no_new_config_drift(repo_root: Path) -> None:
     """Fail on config-SSOT drift that is NOT in the pinned baseline snapshot."""
-    new_unread, new_duplicated, unread, duplicated = _new_config_drift(repo_root)
-    assert not new_unread and not new_duplicated, (
+    (new_unread, new_duplicated, new_script_duplicated,
+     unread, duplicated, script_duplicated) = _new_config_drift(repo_root)
+    assert not new_unread and not new_duplicated and not new_script_duplicated, (
         "NEW config-SSOT drift beyond the pinned baseline: "
-        f"{len(new_unread)} unread leaf/leaves and {len(new_duplicated)} "
-        f"respelled config value(s) (measured {len(unread)} / {len(duplicated)}).\n"
-        f"unread (no src attribute reader): {new_unread[:5]}\n"
-        f"respelled (code literal duplicates a config-owned value): "
+        f"{len(new_unread)} unread leaf/leaves, {len(new_duplicated)} src "
+        f"respelling(s) and {len(new_script_duplicated)} script respelling(s) "
+        f"(measured {len(unread)} / {len(duplicated)} / {len(script_duplicated)}).\n"
+        f"unread (no code attribute reader): {new_unread[:5]}\n"
+        f"respelled in src (code literal duplicates a config-owned value): "
         f"{new_duplicated[:3]}\n"
+        f"respelled in scripts/** (the surface the src-only scan missed): "
+        f"{new_script_duplicated[:3]}\n"
         "Fix the new leaf/literal (or delete the dead config leaf), do not "
         "widen _CONFIG_SSOT_BASELINE_*."
     )
@@ -801,28 +874,36 @@ def _assert_no_new_config_drift(repo_root: Path) -> None:
 def test_config_leaves_have_readers_and_no_literal_duplicate_values():
     """Every config leaf is read, and no code literal respells a config value.
 
-    The scan is static (yaml leaves vs src AST). A leaf is "read" only when
-    code performs a REAL attribute access on the loaded config
+    The scan is static (config leaves vs AST). A leaf is "read" only when code
+    performs a REAL attribute access on the loaded config
     (``data_cfg().column_mapping``, ``training_cfg().bundle...``); a bare
     identifier or a string literal that merely mentions the key is a
     coincidence, not a reader, so a dead block can no longer hide behind its
-    own name.
+    own name. Both the typed config (`config/*.yaml`) and the lane code
+    (`src/**` AND `scripts/**`) are scanned, and the respelling census is split
+    by consumer surface so the src baseline can never mask a new script copy —
+    the surface the earlier src-only scan left dark.
 
-    ENFORCEMENT: the measured drift must be a SUBSET of the pinned baseline
-    (``_CONFIG_SSOT_BASELINE_UNREAD`` / ``..._DUPLICATED``). A NEW unread leaf
-    or a NEW respelled config-owned value therefore FAILS this test; the old
-    ``pytest.xfail`` shape could never fail, so the invariant was green on any
-    drift whatsoever. Known drift shrinking stays green (the guard only moves
-    in the safe direction); delete the fixed entry from the baseline.
+    ENFORCEMENT: the measured drift must be a SUBSET of the pinned baselines
+    (``_CONFIG_SSOT_BASELINE_UNREAD`` / ``..._DUPLICATED`` /
+    ``..._SCRIPT_DUPLICATED``). A NEW unread leaf or a NEW respelled
+    config-owned value therefore FAILS this test; the old ``pytest.xfail`` shape
+    could never fail, so the invariant was green on any drift whatsoever. Known
+    drift shrinking stays green (the guard only moves in the safe direction);
+    delete the fixed entry from the baseline.
     """
     _assert_no_new_config_drift(Path(__file__).parents[1])
 
 
-def _synthetic_repo(tmp_path: Path, config_yaml: str, source: str) -> Path:
+def _synthetic_repo(tmp_path: Path, config_yaml: str, source: str,
+                    script: str | None = None) -> Path:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config/demo.yaml").write_text(config_yaml)
     (tmp_path / "src/demo.py").write_text(source)
+    if script is not None:
+        (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "scripts/demo.py").write_text(script)
     return tmp_path
 
 
@@ -831,13 +912,13 @@ def test_config_drift_guard_fails_on_a_new_unread_leaf(tmp_path):
 
     Regression pin for the defect this replaced: an invariant that can never
     fail is not an invariant. This runs the REAL scanner over a synthetic repo
-    whose only leaf has no src attribute reader and is absent from the pinned
+    whose only leaf has no code attribute reader and is absent from the pinned
     baseline.
     """
     repo = _synthetic_repo(tmp_path, "brand_new_dead_leaf: 1\n", "value = 1\n")
     with pytest.raises(AssertionError, match="NEW config-SSOT drift"):
         _assert_no_new_config_drift(repo)
-    new_unread, new_duplicated, _, _ = _new_config_drift(repo)
+    new_unread, new_duplicated, _, _, _, _ = _new_config_drift(repo)
     assert new_unread == ["demo.yaml:brand_new_dead_leaf"]
     assert new_duplicated == []
 
@@ -858,9 +939,32 @@ def test_config_drift_guard_fails_on_a_new_respelled_config_value(tmp_path):
     )
     with pytest.raises(AssertionError, match="NEW config-SSOT drift"):
         _assert_no_new_config_drift(repo)
-    new_unread, new_duplicated, _, _ = _new_config_drift(repo)
+    new_unread, new_duplicated, _, _, _, _ = _new_config_drift(repo)
     assert new_unread == []
     assert len(new_duplicated) == 1 and "dataset_path" in new_duplicated[0]
+
+
+def test_config_drift_guard_fails_on_a_new_script_respelling(tmp_path):
+    """A hardcoded copy in `scripts/**` must trip the assert (the blind spot).
+
+    The src surface stays clean (the src module reads the config), so the
+    failure is carried by the script surface alone — the surface the src-only
+    scan never looked at, where the slice-vocabulary drift lived.
+    """
+    repo = _synthetic_repo(
+        tmp_path,
+        "catalog_path: data/track_setup/eligible_catalog.csv\n",
+        "from types import SimpleNamespace\n"
+        "cfg = SimpleNamespace(catalog_path='x')\n"
+        "read = cfg.catalog_path\n",
+        script="CATALOG = 'data/track_setup/eligible_catalog.csv'\n",
+    )
+    with pytest.raises(AssertionError, match="NEW config-SSOT drift"):
+        _assert_no_new_config_drift(repo)
+    new_unread, new_duplicated, new_script_duplicated, _, _, _ = _new_config_drift(repo)
+    assert new_unread == [] and new_duplicated == []
+    assert len(new_script_duplicated) == 1
+
 
 
 # ── 5. the orchestration stage map matches the producers' STAGE constants ───
