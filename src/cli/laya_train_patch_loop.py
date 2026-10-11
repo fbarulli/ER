@@ -366,13 +366,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
         model = DeterministicDdp.wrap(torch, model, device, local_rank)
         print("[perf-patch] ddp: rank %d/%d, %d local items"
               % (rank, world_size, len(ddp_sampler)), flush=True)
-    elif control.get("compile_model"):
-        try:
-            model = torch.compile(model)
-            print("[perf-patch] torch.compile enabled", flush=True)
-        except Exception as error:
-            print("[perf-patch] torch.compile skipped: "
-                  + str(error)[:120], flush=True)
+    # torch.compile AFTER the DDP wrap so DDPOptimizer sees the DDP module
+    # (the documented order); in the single-process path it compiles the raw
+    # model. Fail-soft to eager inside ModelCompiler (offenders #2/#4).
+    if control.get("compile_model"):
+        model = ModelCompiler.compile(torch, model, control.get("compile_mode"))
     epoch_len = len(ddp_sampler) if ddp_sampler is not None else len(items)
     steps_per_epoch = math.ceil(epoch_len / config.micro_batch)
     # The schedule length MUST equal the ACTUAL optimizer-step count. With

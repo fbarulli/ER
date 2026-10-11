@@ -132,6 +132,15 @@ class FinetuneSpec(BaseModel):
     # Phase 4 (default-OFF, except log_grad_norm): torch.compile, AMP dtype,
     # TF32, grad-norm logging, ECE/confusion artifacts and determinism.
     compile_model: bool = False
+    # torch.compile Inductor mode (only read when compile_model is on):
+    # "default" is the safe fusion; "reduce-overhead"/"max-autotune" trade
+    # compile time for GPU throughput (their CUDA-graph path needs static
+    # shapes — with laya's variable per-batch length the compile pins
+    # dynamic=True, so they fuse but may not capture graphs; HPO measures the
+    # net). "max-autotune-no-cudagraphs" autotunes matmuls without the graph
+    # capture. See core.laya_train_fast.ModelCompiler.
+    compile_mode: Literal["default", "reduce-overhead", "max-autotune",
+                          "max-autotune-no-cudagraphs"] = "default"
     amp_dtype: Literal["fp16", "bf16"] = "fp16"
     tf32: bool = False
     log_grad_norm: bool = True

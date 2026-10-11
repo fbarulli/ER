@@ -130,6 +130,9 @@ def test_space_is_bound_in_the_paths_ssot():
 def test_dial_space_version_and_count_are_pinned():
     space = laya_hpo.load_space()
     # v3: + gradient_checkpointing (the backward-pass lever harvested from
-    # the 1kbaseline runs: 1,529 s/epoch under the checkpointing recompute)
-    assert space["space_version"] == 3
-    assert len(space["dials"]) == 34
+    # the 1kbaseline runs: 1,529 s/epoch under the checkpointing recompute).
+    # v4: + compile_model / compile_mode (the dispatch/cast-storm lever: the
+    # verified T4 profile is CPU-dispatch-bound, GPU ~40% busy; torch.compile
+    # fuses the 6528 linear+mm/step + the autocast _to_copy storm).
+    assert space["space_version"] == 4
+    assert len(space["dials"]) == 36

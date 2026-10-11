@@ -128,7 +128,7 @@ FINETUNE_CONTROL_FIELDS = (
     "class_weight", "balanced_sample", "hard_example_frac", "curriculum",
     "adv_eps", "adv_kind", "temperature_scale",
     # Phase 4 (default-OFF except log_grad_norm)
-    "compile_model", "amp_dtype", "tf32", "log_grad_norm",
+    "compile_model", "compile_mode", "amp_dtype", "tf32", "log_grad_norm",
     "write_error_artifacts", "deterministic",
     # torch.profiler (default-OFF; opt in per run)
     "profile", "profile_dir", "profile_schedule",

@@ -90,6 +90,7 @@ def test_space_loads_declared_dials_and_metadata():
         "head_lr", "weight_decay", "micro_batch", "grad_accum",
         "label_smoothing", "sigma_start", "sigma_end", "ema", "swa",
         "layer_decay", "gradient_checkpointing",
+        "compile_model", "compile_mode",
         # optional control dials (default-OFF)
         "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
         "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
@@ -98,7 +99,7 @@ def test_space_loads_declared_dials_and_metadata():
         "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
         "contrastive_margin_end",
     }
-    assert len(space["dials"]) == 34
+    assert len(space["dials"]) == 36
     assert space["model_key"] == "laya"
     assert space["objective"] == {
         "direction": "maximize", "primary": "dev_accuracy",

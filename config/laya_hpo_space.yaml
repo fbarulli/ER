@@ -19,7 +19,7 @@
 # PostgreSQL Optuna URL lives exclusively in the runtime secret store
 # (`OPTUNA_STORAGE_URL`) and is injected into the staged kernel, never here.
 
-space_version: 3
+space_version: 4
 
 # The shared-study identity (the model boundary; kept distinct from the
 # generation boundary, which is runtime environment).
@@ -231,6 +231,23 @@ dials:
     type: categorical
     target: config
     choices: [4, 8, 16]
+  # The dispatch/cast-storm lever (verified T4 profile: CPU-dispatch-bound,
+  # Self CPU 17.2s vs Self CUDA 4.4s per 3 steps, GPU ~40% busy; 6528
+  # linear+mm/step at mb=4 + ~46k autocast _to_copy). torch.compile fuses them
+  # (CPU proxy: -56% calls/step, -88% _to_copy, -75% copy_). compile_mode is
+  # gated on compile_model=true; the CUDA-graph modes (reduce-overhead/
+  # max-autotune) fuse but may not capture graphs under the pinned dynamic=True
+  # (laya pads to the batch-longest), so HPO measures the net — never assumed.
+  # A ~140s cold-Inductor compile amortizes over the >=3-epoch trial budget.
+  compile_model:
+    type: categorical
+    target: control
+    choices: [false, true]
+  compile_mode:
+    type: categorical
+    target: control
+    choices: [default, reduce-overhead, max-autotune]
+    when: {dial: compile_model, equals: true}
   label_smoothing:
     type: float
     target: config

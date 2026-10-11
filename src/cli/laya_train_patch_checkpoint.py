@@ -47,6 +47,10 @@ class ControlCheckpointer:
 
     @staticmethod
     def unwrap(model):
+        # Strip torch.compile's OptimizedModule (_orig_mod) and DDP (.module)
+        # wrappers to the raw weight-bearing module, so a state_dict() never
+        # carries an `_orig_mod.` prefix a raw load_state_dict would reject.
+        model = getattr(model, "_orig_mod", model)
         return model.module if hasattr(model, "module") else model
 
     def directory(self):

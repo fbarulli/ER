@@ -136,11 +136,18 @@ GOLDEN_SHA256: dict[str, str] = {
      # _held_out falls back to the ZERO-LEAK dev (validate) half when the 50/50
      # carve's test.jsonl is empty (owner directive 2026-10-11) — never a
      # reasoned skip — recording eval_split="dev" + a selection-optimistic note.
-     "finetune": "03b85f5ce66c1bee8c044489fa66aa78590add32b75df04d0f2ba555db8624e1",
-     "finetune-smoke": "e8a744958273299f26649314235c2b65e763f2bcfa902acb0a5fedf576c48e97",
+     #
+     # finetune / finetune-smoke / hpo re-pinned for the torch.compile wiring
+     # (offenders #2 dispatch + #4 cast/copy storm): ModelCompiler is injected
+     # from the new core.laya_train_fast, compile now applies AFTER the DDP wrap
+     # on BOTH the distributed and single-process paths (was `elif`, so DDP never
+     # compiled), ControlCheckpointer.unwrap strips the `_orig_mod` wrapper, and
+     # FinetuneSpec grew compile_mode (baked into FINETUNE_CONTROL).
+     "finetune": "88d641e9e642b393799906c0c4a24067593cafddb77a468611dce691c23d8829",
+     "finetune-smoke": "160efe9e8bd015a327c78208d9f1c6bb1fb3fe102fea4ae84ddf86515c2fe55d",
      "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
      "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-     "hpo": "671a17cbda0bc944e333ed35916e41384929546e61c508d08ad8264e1a8f584d",
+     "hpo": "888a861943be22f6c275a193568b57ca1a535e1516ca0f2bbfb4f859b8d1be7b",
 }
 
 
