@@ -234,7 +234,7 @@ def _build_trace_frame(
                 "mask_applied2": bool(m2["applied"]),
                 "mask_realized_extent1": float(m1["extent"]),
                 "mask_realized_extent2": float(m2["extent"]),
-                "mask_config_fingerprint": mask_fp,
+                "mask_config": str(mask_fp),
                 "model_keys": model_keys_json,
                 "lineage_id": lineage_id,
             }

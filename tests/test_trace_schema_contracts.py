@@ -568,7 +568,7 @@ def zero_shot_frame(**over: object) -> pd.DataFrame:
         "mask_applied2": False,
         "mask_realized_extent1": 0.0,
         "mask_realized_extent2": 0.0,
-        "mask_config_fingerprint": "a" * 64,
+        "mask_config": "a" * 64,
         "model_keys": "mini",
         "lineage_id": "0123456789abcdef",
         "sim_mini": 0.75,
