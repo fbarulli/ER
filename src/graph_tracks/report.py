@@ -324,6 +324,9 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         slices=slices, attributes=attribute_summary_rows(report_dir, track),
         performance=performance, confidence_intervals=intervals))
     _plots(scored, report_dir, track, threshold)
+    curves_plot, curves_skip = _epoch_curves_artifact(checkpoint, report_dir, track)
+    progress('epoch_curves_plot', plot=(str(curves_plot) if curves_plot else None),
+             skipped=curves_skip)
     cluster_plot, cluster_skip = _cluster_quality_plot(summary, scores, report_dir, track)
     progress('cluster_quality_plot', plot=(str(cluster_plot) if cluster_plot else None),
              skipped=cluster_skip)
@@ -478,6 +481,104 @@ def _plots(scored, output, track, threshold):
     fig.tight_layout()
     fig.savefig(output / name(track, 'score_distribution_and_pr.png'), dpi=plot_dpi())
     plt.close(fig)
+
+
+#: The per-epoch results artifact: every epoch's OWN values as lines across
+#: epochs (the pre-suite report view — ``training/generate_training_report.py``
+#: rendered ``training_vs_dev_loss_by_epoch`` / ``ranking_quality_by_epoch``;
+#: the suite reports regressed to final-snapshot plots only). A completed-run
+#: snapshot (bars, PR curves, final pair metrics) never replaces it.
+EPOCH_CURVES_PLOT = 'epoch_curves.png'
+
+
+def epoch_curves_plot(loss_curves, quality_curves, out, *, title):
+    """Render per-epoch values as LINE plots across epochs; return the path.
+
+    ``loss_curves`` / ``quality_curves`` map a label to ``(epochs, values)``:
+    ONE point per epoch, never a cumulative aggregate and never collapsed to a
+    single bar. Two panels share the epoch axis — losses left, dev quality
+    right — mirroring the old by-epoch loss + ranking-quality figures.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    if not loss_curves and not quality_curves:
+        raise ValueError('epoch curves need at least one per-epoch series')
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    for ax, curves, ylabel in ((axes[0], loss_curves, 'loss'),
+                               (axes[1], quality_curves, 'score')):
+        for label, (epochs, values) in curves.items():
+            ax.plot(epochs, values, marker='o', label=label)
+        ax.set(xlabel='epoch', ylabel=ylabel)
+        ax.grid(alpha=0.25)
+        if curves:
+            ax.legend(fontsize=8)
+    axes[1].set_ylim(0, 1.05)
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(out, dpi=plot_dpi())
+    plt.close(fig)
+    return Path(out)
+
+
+def _epoch_series(events, specs):
+    """label -> ``(epochs, values)``, one point per event carrying the key."""
+    curves = {}
+    for label, key in specs:
+        points = [(float(event['epoch']), float(event[key])) for event in events
+                  if event.get('epoch') is not None and event.get(key) is not None]
+        if points:
+            epochs, values = zip(*points)
+            curves[label] = (list(epochs), list(values))
+    return curves
+
+
+def graph_epoch_curves(rows):
+    """Per-epoch curves from ``<track>__epoch_metrics.jsonl`` rows.
+
+    The trainer writes ONE row per epoch; each epoch's own values are carried
+    through verbatim (no aggregation), so the drawn series is exactly the
+    logged per-epoch history.
+    """
+    return (_epoch_series(rows, (('train loss', 'train_loss'),
+                                 ('train classification loss', 'train_classification_loss'),
+                                 ('train metric loss', 'train_metric_loss'))),
+            _epoch_series(rows, (('dev PR-AUC', 'dev_pr_auc'),
+                                 ('dev precision@agreed recall', 'dev_precision_at_recall'))))
+
+
+def text_epoch_curves(log_history):
+    """Per-epoch curves from the HF trainer ``log_history`` (the text lane).
+
+    The trainer records the fractional epoch for every loss/dev-eval event;
+    each event's OWN values are carried through — the same per-epoch view the
+    old ``*_by_epoch`` report figures drew.
+    """
+    return (_epoch_series(log_history, (('train loss', 'loss'), ('dev loss', 'eval_loss'))),
+            _epoch_series(log_history, (('dev AP', 'eval_dev_cosine_ap'),
+                                        ('dev precision', 'eval_dev_cosine_precision'),
+                                        ('dev recall', 'eval_dev_cosine_recall'))))
+
+
+def _epoch_curves_artifact(checkpoint, report_dir, track):
+    """The graph lane's per-epoch line plot, or ``(None, reason)`` — loud, never silent.
+
+    The history lives beside the training run (one row per epoch); it is
+    located by scanning up from the checkpoint, the same idiom the lane's
+    profile lookup uses.
+    """
+    stem = name(track, 'epoch_metrics.jsonl')
+    path = next((parent / stem for parent in checkpoint.parents
+                 if (parent / stem).is_file()), None)
+    if path is None:
+        return None, f'no {stem} above the checkpoint; nothing per-epoch to draw'
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    if not rows:
+        return None, f'{path} is empty; nothing per-epoch to draw'
+    loss, quality = graph_epoch_curves(rows)
+    out = epoch_curves_plot(loss, quality, report_dir / name(track, EPOCH_CURVES_PLOT),
+                            title=f'{track} per-epoch results')
+    return out, None
 
 
 def _cluster_quality_plot(summary, scores, output, track):

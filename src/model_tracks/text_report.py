@@ -152,8 +152,21 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     pd.DataFrame(summary).to_csv(reports / _reports_leaf('model_evaluation'), index=False)
     scored_frame = pd.DataFrame(scored)
     scored_frame.to_csv(reports / _reports_leaf('scored_pairs'), index=False)
-    from graph_tracks.report import _plots
+    from graph_tracks.artifacts import name
+    from graph_tracks.report import EPOCH_CURVES_PLOT, _plots, epoch_curves_plot, text_epoch_curves
     _plots(scored_frame, reports, 'text', threshold)
+    # Per-epoch results as lines across epochs — the selected trainer state's
+    # own log_history (one event per logged epoch), never a final snapshot.
+    loss_curves, quality_curves = text_epoch_curves(selection.get('log_history', []))
+    if loss_curves or quality_curves:
+        curves = epoch_curves_plot(loss_curves, quality_curves,
+                                   reports / name('text', EPOCH_CURVES_PLOT),
+                                   title='text per-epoch results')
+        print(f"[text-phase] epoch_curves_plot path={curves} series="
+              f"{sorted(loss_curves) + sorted(quality_curves)}", flush=True)
+    else:
+        print('[text-phase] epoch_curves_plot skipped reason=the selected trainer '
+              'state carries no per-epoch events', flush=True)
     from graph_tracks.report_attributes import write_reports as write_attribute_reports
     write_attribute_reports(listings, records, pairs, scores, reports, 'text')
     slices = slice_report(records, scored_frame, track='text', output=reports,
