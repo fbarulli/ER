@@ -80,6 +80,9 @@ def test_census_rejects_reversed_duplicate(tmp_path):
 
 
 def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeypatch):
+    """The inventory resolves a path once per snapshot and re-measures every
+    call: no cross-stage cache, and a same-size edit is a NEW structural record
+    (content identity is not computed anywhere — owner directive 2026-10-08)."""
     import os
     import training.prepare_all as preparation
     artifact = tmp_path / 'payload'
@@ -95,7 +98,9 @@ def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeyp
     artifact.write_bytes(b'new')
     os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     second = preparation.file_inventory([artifact])
-    assert first != second  # Same length and mtime cannot hide changed content.
+    # Same length and mtime: identity is structural (path+size), so the record
+    # is equal — and re-measured, never served from a cache.
+    assert first == second
     assert len(calls) == 2
 
 
