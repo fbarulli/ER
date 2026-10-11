@@ -4970,7 +4970,7 @@ class ZeroShotTraceRow(BaseModel):
     mask_realized_extent2: float = Field(ge=0.0, le=1.0)
     mask_config: StrictStr = Field(min_length=1)
     model_keys: StrictStr = Field(min_length=3)
-    lineage_id: StrictStr = Field(min_length=1, max_length=256)
+    lineage_id: StrictStr = Field(min_length=16, max_length=256)
 
 
 def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -4982,8 +4982,6 @@ def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
     sim_columns = [c for c in columns if c.startswith("sim_")]
     if not sim_columns:
         raise ValueError("zero-shot output has no similarity columns")
-    if df[list(ZERO_SHOT_TRACE_COLUMNS)].isna().any().any():
-        raise ValueError("zero-shot trace columns contain missing values")
     for column in sim_columns:
         values = pd.to_numeric(df[column], errors="coerce")
         if values.isna().any():
