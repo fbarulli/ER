@@ -53,8 +53,10 @@ class EvalRecordsHook:
     INSTALLED = "_er_eval_records_installed"
 
     @classmethod
-    def install(cls, laya_train, policy: EvalRecordsPolicy):
-        if getattr(laya_train, cls.INSTALLED, False):
+    def install(cls, laya_train: "Any", policy: "EvalRecordsPolicy") -> "EvalRecordsPolicy":  # noqa: UP037 -- injected without module imports
+        installed = getattr(laya_train, cls.INSTALLED, None)
+        if installed is not None:
+            setattr(laya_train, cls.INSTALLED, policy)
             return policy
         original_records = laya_train.calibration_records
         original_forward = laya_train._forward
@@ -63,14 +65,17 @@ class EvalRecordsHook:
                                 device: "Any", *args: "Any", **kwargs: "Any") -> "Any":  # noqa: UP037
             import torch
 
+            policy = getattr(laya_train, cls.INSTALLED)
             if policy.eval_batch > 0:
                 kwargs.setdefault("batch_size", policy.eval_batch)
             with AutocastCacheFactory.build(torch, device, policy.eval_amp):
                 return original_records(model, tok, items, device, *args, **kwargs)
 
-        def _forward(model, batch, device, amp, detach_encoder):
+        def _forward(model: "Any", batch: "Any", device: "Any", amp: bool,  # noqa: UP037 -- injected without module imports
+                     detach_encoder: bool) -> "Any":  # noqa: UP037
             import torch
 
+            policy = getattr(laya_train, cls.INSTALLED)
             if (not amp and policy.eval_amp and not torch.is_grad_enabled()
                     and getattr(device, "type", "") == "cuda"):
                 amp = True
@@ -78,7 +83,7 @@ class EvalRecordsHook:
 
         laya_train.calibration_records = calibration_records
         laya_train._forward = _forward
-        setattr(laya_train, cls.INSTALLED, True)
+        setattr(laya_train, cls.INSTALLED, policy)
         return policy
 
 

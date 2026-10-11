@@ -637,7 +637,7 @@ def apply_perf_patch():
         laya_train, is_rank0(), sink=WandbTimingSink.log)
     control = TrainingControls.parse(globals().get("FINETUNE_CONTROL"), {}).block
     policy = globals().setdefault("EVAL_RECORDS_POLICY", EvalRecordsPolicy())
-    EvalRecordsHook.install(laya_train, policy.update(control))
+    policy = EvalRecordsHook.install(laya_train, policy.update(control))
     EncodeMemo.install(laya_train,
                        globals().setdefault("ENCODE_MEMO", EncodeMemo()).reset())
     CollateMemo.install(

@@ -63,6 +63,14 @@ def test_eval_records_hook_batches_and_autocasts_eval_only():
         ("forward", False),   # grad-enabled training forward: untouched
     ]
 
+    # A new trial may provide a new policy object; the installed hook follows it.
+    replacement = laya_eval_fast.EvalRecordsPolicy(eval_amp=False, eval_batch=4)
+    laya_eval_fast.EvalRecordsHook.install(laya_train, replacement)
+    with torch.no_grad():
+        laya_train.calibration_records(None, None, [1], device, 8, 4)
+        laya_train._forward(None, None, device, False, False)
+    assert calls[-2:] == [("records", {"batch_size": 4}), ("forward", False)]
+
 
 def test_eval_speed_knobs_are_default_off_and_hpo_on():
     ft = FinetuneSpec()
@@ -76,7 +84,7 @@ def test_eval_speed_knobs_are_default_off_and_hpo_on():
     # the knobs reach the staged perf patch (the injected classes are exec'd
     # byte-for-byte, so the staged namespace re-defines them from source)
     namespace = {"os": os, "math": math, "random": random}
-    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
+    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)  # noqa: S102 -- trusted generated kernel under test
     for injected in ("EvalRecordsPolicy", "EvalRecordsHook", "DevEvaluator"):
         assert injected in namespace, injected
     import inspect
