@@ -458,13 +458,18 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
                 # (1) stay on-GPU: accumulate the loss, sync once per epoch.
                 detached = loss.detach()
                 total = detached if total is None else total + detached
-                if config.log_every and n_steps % config.log_every == 0:
+                if n_steps == 1 or (config.log_every and n_steps % config.log_every == 0):
                     # Per-step loss: ONE extra GPU sync every log_every steps
                     # (negligible); it was dropped when the loop switched to
                     # on-GPU accumulation, which left the log loss-less.
+                    batch_loss = float(detached.item())
                     print("epoch %d/%d step %d loss %.4f" % (
                         epoch + 1, config.epochs, n_steps,
-                        float(detached.item())), flush=True)
+                        batch_loss), flush=True)
+                    if WANDB_RUN is not None:
+                        WandbTrainingMetrics.publish(
+                            epoch * steps_per_epoch + n_steps, batch_loss,
+                            float(optimizer.param_groups[0]["lr"]))
                 # Bounded schedule: one profiler "step" per micro-batch.
                 profiler.step()
         if hard_scores is not None:

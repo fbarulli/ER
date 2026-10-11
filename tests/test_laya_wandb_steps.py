@@ -153,3 +153,22 @@ def test_wandb_finish_redrives_the_upload_with_wandb_sync(monkeypatch):
     namespace["wandb_init"]()
     namespace["wandb_finish"]()
     assert any("sync failed" in line for line in lines)
+
+
+def test_training_batch_metrics_survive_system_rows_with_their_own_axis(monkeypatch):
+    fake = FakeWandb()
+    namespace, _ = _exec_helpers(fake, FakeSubprocess(), monkeypatch)
+    namespace["wandb_init"]()
+    sink = namespace["WandbTrainingMetrics"]
+    sink.publish(1, 0.75, 2e-5)
+    fake.run.log({"gpu/util_pct": 100})
+    sink.publish(100, 0.5, 1e-5)
+    namespace["wandb_log_epoch"](0, 0.6)
+    rows = [payload for _, payload in fake.run.rows if "train_step" in payload]
+    assert rows == [
+        {"train_step": 1, "train/batch_loss": 0.75, "train/batch_lr": 2e-5},
+        {"train_step": 100, "train/batch_loss": 0.5, "train/batch_lr": 1e-5},
+    ]
+    assert fake.run.dropped == []
+    for metric in ("train/batch_loss", "train/batch_lr"):
+        assert (metric, {"step_metric": "train_step"}) in fake.defined

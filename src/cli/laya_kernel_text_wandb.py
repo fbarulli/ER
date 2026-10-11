@@ -25,6 +25,8 @@ from __future__ import annotations
 
 #: The shared helper block, injected verbatim into BOTH staged kernel texts.
 WANDB_HELPERS_SOURCE = '''\
+from pydantic import BaseModel, ConfigDict, Field
+
 WANDB_RUN = None
 
 # The per-epoch metric namespaces: `wandb_init` declares `epoch` their step
@@ -37,6 +39,35 @@ EPOCH_STEP_METRICS = ("train/*", "dev/*", "select/*", "early_stop/*",
 # `wandb sync` teardown-retry budget (seconds): an already-synced run dir is a
 # fast no-op, an interrupted upload gets ONE bounded re-drive.
 WANDB_SYNC_TIMEOUT_SECONDS = 900.0
+TRAINING_STEP_METRIC = "train_step"
+
+class WandbTrainingMetrics(BaseModel):
+    """Measured batch values use training steps, separate from epoch summaries."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    step: int = Field(alias=TRAINING_STEP_METRIC)
+    loss: float = Field(alias="train/batch_loss")
+    learning_rate: float = Field(alias="train/batch_lr")
+
+    @classmethod
+    def define(cls, wandb) -> None:
+        wandb.define_metric(TRAINING_STEP_METRIC)
+        for name, field in cls.model_fields.items():
+            if name == "step":
+                continue
+            if field.alias is not None:
+                wandb.define_metric(field.alias, step_metric=TRAINING_STEP_METRIC)
+
+    @classmethod
+    def publish(cls, step: int, loss: float, learning_rate: float) -> None:
+        if WANDB_RUN is None:
+            return
+        try:
+            payload = cls(step=step, loss=loss, learning_rate=learning_rate)
+            WANDB_RUN.log(payload.model_dump(by_alias=True))
+        except Exception as error:
+            log("[wandb] training metrics failed: " + type(error).__name__
+                + ": " + str(error) + "\\n" + traceback.format_exc())
 
 class WandbLogSink:
     """Batch notable log lines into the live W&B text channel `log/line`.
@@ -106,6 +137,7 @@ def wandb_init(name=None, group=None, config=None):
         wandb.define_metric("epoch")
         for pattern in EPOCH_STEP_METRICS:
             wandb.define_metric(pattern, step_metric="epoch")
+        WandbTrainingMetrics.define(wandb)
         log("[wandb] run " + str(getattr(WANDB_RUN, "id", "")) + " -> "
             + WANDB_PROJECT)
     except Exception as error:  # tracking is best-effort, never fatal
