@@ -29,13 +29,13 @@
     "mask_cases": 1200,
     "mask_package_state_true": 1111,
     "mask_package_state_false": 89,
-    "aug_pairs": 8843,
+    "aug_pairs": 9276,
     "aug_pairs_positive": 86,
-    "aug_pairs_negative": 8757,
-    "aug_pairs_counterfactual": 8312,
+    "aug_pairs_negative": 9190,
+    "aug_pairs_counterfactual": 8745,
     "labeled_pairs_added": 531,
     "identity_positive_total_with_growth": 44031,
-    "identity_negative_total_with_growth": 47422
+    "identity_negative_total_with_growth": 47855
   },
   "growth": {
     "bundle": "/home/opc/ONE/ER/data/prepared/full/worker_1_baseline.pkl.gz",
@@ -48,12 +48,12 @@
     "mask_package_state_false": 89,
     "mask_skipped_duplicate": 0,
     "aug_pair_audits": 18000,
-    "aug_pair_cases": 8843,
+    "aug_pair_cases": 9276,
     "aug_pair_positive": 86,
-    "aug_pair_negative": 8757,
-    "aug_pair_counterfactual": 8312,
-    "aug_skipped_duplicate": 6091,
-    "aug_skipped_unrepresentable": 3597,
+    "aug_pair_negative": 9190,
+    "aug_pair_counterfactual": 8745,
+    "aug_skipped_duplicate": 6428,
+    "aug_skipped_unrepresentable": 2827,
     "labeled_pairs_rows": 793,
     "labeled_pairs_added": 531,
     "labeled_pairs_missing_gtin": 0,
@@ -79,41 +79,41 @@
     },
     "counterfactual": {
       "false": 83482,
-      "true": 8312
+      "true": 8745
     },
     "evidence_sufficient": {
       "false": 98532,
-      "true": 44269
+      "true": 44702
     },
     "field_same:carbonation": {
-      "different": 1043,
-      "same": 11472,
-      "unknown": 79279
+      "different": 1045,
+      "same": 11831,
+      "unknown": 79351
     },
     "field_same:flavor": {
       "different": 2045,
-      "same": 9522,
-      "unknown": 80227
+      "same": 9927,
+      "unknown": 80255
     },
     "field_same:pack": {
       "different": 733,
-      "same": 1355,
-      "unknown": 89706
+      "same": 1468,
+      "unknown": 90026
     },
     "field_same:package_type": {
-      "different": 1426,
-      "same": 9851,
-      "unknown": 80517
+      "different": 1429,
+      "same": 10211,
+      "unknown": 80587
     },
     "field_same:sweetener": {
-      "different": 2565,
-      "same": 6420,
-      "unknown": 82809
+      "different": 2990,
+      "same": 6517,
+      "unknown": 82720
     },
     "field_same:volume": {
-      "different": 2808,
-      "same": 11513,
-      "unknown": 77473
+      "different": 2811,
+      "same": 11916,
+      "unknown": 77500
     },
     "gate_reason": {
       "compatible": 341
@@ -122,16 +122,16 @@
       "proceed": 341
     },
     "identity_claim": {
-      "false": 47422,
+      "false": 47855,
       "true": 44031
     },
     "pack_format_equivalent": {
-      "false": 81943,
-      "true": 9851
+      "false": 82016,
+      "true": 10211
     },
     "pack_volume_equal": {
-      "false": 80971,
-      "true": 10823
+      "false": 80993,
+      "true": 11234
     },
     "package_state": {
       "false": 25663,
@@ -146,22 +146,22 @@
     "all_same": 5257,
     "insufficient": 76348,
     "multi_diff": 361,
-    "one_diff": 9828,
+    "one_diff": 10261,
     "pairwise": 3099,
     "single_state": 51007
   },
   "attribute_census": {
-    "carbonation": 1184,
+    "carbonation": 1186,
     "flavor": 2617,
     "none": 43243,
     "pack": 1067,
-    "package_type": 4896,
-    "sweetener": 3260,
-    "volume": 89633
+    "package_type": 4899,
+    "sweetener": 3685,
+    "volume": 89636
   },
   "tag_gate_reason_census": {
     "compatible": 341,
-    "none": 145559
+    "none": 145992
   },
   "split_ratios": {
     "train": 0.9296695315337127,
@@ -169,9 +169,9 @@
     "test": 0.03505628858491708
   },
   "split_sizes": {
-    "train": 135639,
-    "dev": 5146,
-    "test": 5115
+    "train": 136042,
+    "dev": 5161,
+    "test": 5130
   },
   "split_counts": {
     "train": {
@@ -179,8 +179,8 @@
       "listing_negative": 38400,
       "gate_negative": 0,
       "gate_proceed": 317,
-      "aug_pair_positive": 82,
-      "aug_pair_negative": 8139,
+      "aug_pair_positive": 81,
+      "aug_pair_negative": 8543,
       "better_match": 2881,
       "state": 46304,
       "mask_state": 1116
@@ -190,8 +190,8 @@
       "listing_negative": 134,
       "gate_negative": 0,
       "gate_proceed": 12,
-      "aug_pair_positive": 1,
-      "aug_pair_negative": 311,
+      "aug_pair_positive": 2,
+      "aug_pair_negative": 325,
       "better_match": 109,
       "state": 1757,
       "mask_state": 42
@@ -202,7 +202,7 @@
       "gate_negative": 0,
       "gate_proceed": 12,
       "aug_pair_positive": 3,
-      "aug_pair_negative": 307,
+      "aug_pair_negative": 322,
       "better_match": 109,
       "state": 1746,
       "mask_state": 42
@@ -210,10 +210,10 @@
   },
   "question_schema_size": 6894,
   "size": {
-    "train.jsonl": 851688530,
-    "dev.jsonl": 32497904,
-    "test.jsonl": 32291613,
+    "train.jsonl": 854347135,
+    "dev.jsonl": 32595688,
+    "test.jsonl": 32390501,
     "unknown_pairs.csv": 8064059
   },
-  "corpus_size": 916478047
+  "corpus_size": 919333324
 }
