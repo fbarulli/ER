@@ -383,7 +383,7 @@ laya:
     train_rows: 200
     dev_rows: 100
     test_rows: 100
-    epochs: 1
+    epochs: 2
     micro_batch: 1
     grad_accum: 1
     # GPU smoke: prove the single-T4 code path end-to-end. Schema default stays

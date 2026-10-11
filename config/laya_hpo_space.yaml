@@ -31,23 +31,16 @@ model_key: laya
 # budget is PURE TPE sweep (owner directive 2026-10-10: no baseline seed
 # trial — see options.warm_start.baseline). Override per launch with
 # `--n-trials` (the CLI bake is validated by the lane tests).
-n_trials: 3
-n_jobs: 3          # owner directive: 3 parallel experiments on the 2xT4 session
+n_trials: 1
+n_jobs: 1          # one trial for the profiled smoke
 seed: 1729
 
-# The HPO corpus carve (owner directive 2026-10-10): 50/50 train<->validate,
-# component-aware STRATIFIED, ZERO leakage — carved by
-# scripts/laya_hpo_corpus.py through the canonical smart-split profile
-# `laya_hpo_5050` (config/smart_split.yaml). `dir` is the carved corpus root
-# (train.jsonl + dev.jsonl; test.jsonl is EMPTY by construction — the 50/50
-# carve has no test role, so the kernel's session-end held-out eval records a
-# reasoned skip). `dataset_slug` is DISTINCT from the fine-tune lane's corpus
-# slug so an HPO publish never clobbers the fine-tune corpus version.
-# Absent keys fall back to the LayaSpec defaults (finetune_corpus_dir /
-# finetune_dataset_slug).
+# Profiled HPO smoke: the canonical smoke builder retains 200/100/100 rows
+# from the existing train/dev/test splits. Dedicated smoke dataset and kernel
+# slugs preserve the full-corpus HPO and fine-tune remote surfaces.
 corpus:
-  dir: data/laya_hpo5050
-  dataset_slug: fbarulli/er-laya-hpo5050
+  dir: results/laya_lane/hpo_smoke_200_profiled_2ep
+  dataset_slug: fbarulli/er-laya-train-smoke
 
 # The objective contract (rank trials on DEV only; never touch test).
 objective:
@@ -120,15 +113,14 @@ options:
     max_resource: auto        # Hyperband's largest resource ("auto" or epochs)
     reduction_factor: 3
   fidelity:
-    # The EPOCH CAP (owner directive 2026-10-10: <=3 epochs per trial — the
-    # 8-epoch smoke hit loss 0.0004 by epoch 3, so 3 is enough). enabled +
+    # Two epochs per smoke trial (owner directive 2026-10-11). enabled +
     # dimension=epochs + stages=1 pins EVERY trial's TrainConfig.epochs to
     # `full` (apply_fidelity_and_staging); this YAML is the SSOT, never a
     # code literal.
     enabled: true             # epoch-cap lever ON (no pruning: pruner=none)
     dimension: epochs         # epochs | subset
     small: 1
-    full: 3
+    full: 2
     stages: 1
   multi_objective: false      # maximize dev_accuracy, minimize secondary
   multi_objective_secondary: epoch_time_s
@@ -172,7 +164,7 @@ options:
 
 # The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune
 # kernel so an HPO push never clobbers a training push.
-kernel_slug: fbarulli/er-laya-hpo
+kernel_slug: fbarulli/er-laya-hpo-smoke
 
 # The searchable dials. `type` selects the generic `trial.suggest_*` call:
 #   int          -> suggest_int(name, lo, hi)

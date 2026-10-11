@@ -794,7 +794,7 @@ def test_hpo_receipt_and_publish_resolve_the_shared_contract(monkeypatch,
 def test_kernel_slug_dispatch_resolves_the_hpo_kind():
     laya_hpo.register_dispatch()
     slug = laya_hpo.kernel_slug("laya-hpo")
-    assert slug.endswith("er-laya-hpo")
+    assert slug == laya_hpo.load_space()["kernel_slug"]
     assert laya_lane.kernel_slug("laya-hpo") == slug
 
 
@@ -1351,10 +1351,9 @@ def test_staging_enqueues_no_baseline_pure_hpo(monkeypatch, tmp_path):
     assert receipt["budget"]["max_workers"] == 3
 
 
-def test_fidelity_caps_every_trial_at_three_epochs(monkeypatch, tmp_path):
-    """OWNER DIRECTIVE: <=3 epochs per trial via the config SSOT (the fidelity
-    lever, full=3 + stages=1 + pruner=none) — never a code literal. The staged
-    space carries the cap and FidelitySchedule pins resource()->3 for EVERY
+def test_fidelity_caps_every_smoke_trial_at_two_epochs(monkeypatch, tmp_path):
+    """The profiled smoke runs two epochs per trial through the fidelity owner.
+    The staged space carries the cap and FidelitySchedule pins it for EVERY
     trial number, which apply_fidelity_and_staging writes to TrainConfig."""
     from training.laya_hpo_options import FidelitySchedule
 
@@ -1365,9 +1364,9 @@ def test_fidelity_caps_every_trial_at_three_epochs(monkeypatch, tmp_path):
     fidelity = space["options"]["fidelity"]
     assert fidelity["enabled"] is True
     assert fidelity["dimension"] == "epochs"
-    assert fidelity["full"] == 3 and fidelity["stages"] == 1
+    assert fidelity["full"] == 2 and fidelity["stages"] == 1
     schedule = FidelitySchedule(fidelity)
-    assert all(schedule.resource(n) == 3 for n in range(8))
+    assert all(schedule.resource(n) == 2 for n in range(8))
 
 
 def test_early_stop_patience_is_pinned_to_three():
