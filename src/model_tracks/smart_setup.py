@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel, ConfigDict
 
 from core.run_log import RunLogger
 from core.smart_split import SmartSplit
@@ -71,6 +73,60 @@ CENSUS_SCHEMA = "er-smart-setup-partition-v1"
 
 #: The published gtin->split populations the text lane adopts (sibling owner).
 POPULATIONS_NAME = "smart_partition_populations.json"
+
+
+class SmartPartitionPopulations(BaseModel):
+    """The published gtin->split carve: ONE reader/writer contract.
+
+    ``SmartSetupPartition._write_documents`` publishes this document; the text
+    bundle build (``training.train --holdout-populations``) and the packaging
+    adoption (``model_tracks.package.SetupHoldoutAdoption``) both READ it, so the
+    carve has exactly one spelling. Illegal states — a missing, extra or empty
+    split — are unrepresentable.
+
+    The published gtins are NORMALIZED (14-digit); a bundle's ``row_bc`` is the
+    raw gtin spelling its payload was built from. ``on_row_keys`` is the total
+    bridge between the two: ``pairs_in_set`` filters raw row_bc directly, so a
+    split mapped from normalized keys would silently match nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    train: list[str]
+    dev: list[str]
+    test: list[str]
+
+    @classmethod
+    def read(cls, path: Path | str) -> "SmartPartitionPopulations":
+        """Parse a published populations document (fail loud on any malformation)."""
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+    def splits(self) -> dict[str, list[str]]:
+        """The three splits as sorted gtin lists, in canonical train/dev/test order."""
+        return {name: sorted(getattr(self, name)) for name in ("train", "dev", "test")}
+
+    def on_row_keys(self, row_bc) -> dict[str, list[str]]:
+        """Map the normalized carve onto one payload's raw ``row_bc`` keys.
+
+        Every distinct raw gtin spelling whose normalized form the carve names
+        lands in that split; spellings that normalize to nothing (empty padding
+        rows) are dropped, as ``FrozenHoldoutPolicy.entities_cover_payload``
+        requires. The mapping is total for a carve that covers the payload.
+        """
+        from training.folds import normalize_gtin
+
+        split_of: dict[str, str] = {}
+        for name in ("train", "dev", "test"):
+            for value in getattr(self, name):
+                key = normalize_gtin(value)
+                if key:
+                    split_of[key] = name
+        mapped: dict[str, set[str]] = {"train": set(), "dev": set(), "test": set()}
+        for value in row_bc:
+            name = split_of.get(normalize_gtin(str(value)))
+            if name is not None:
+                mapped[name].add(str(value))
+        return {name: sorted(values) for name, values in mapped.items()}
 
 #: The carve-owned ablation cohort directory (the canonical name
 #: ``model_tracks.ablation_cohort.prepare_cohort`` writes). It is REGENERATED
@@ -467,15 +523,18 @@ class SmartSetupPartition:
     def _link_unchanged(self, output: Path) -> None:
         """Hardlink every split-independent member (fall back to a copy).
 
-        The frozen text bundle and its sidecar pass through UNCHANGED (owner:
-        never re-bundle); the text lane adopts the carve from the published
-        populations, not from a rewrite here.
+        The frozen text bundle passes through UNCHANGED (owner: never
+        re-bundle); the text lane adopts the carve from the published
+        populations, not from a rewrite here. Its manifest sidecar is COPIED,
+        never hardlinked: a later bundle rebuild writes that sidecar in place,
+        and a shared inode would truncate the source setup's sibling bytes.
         """
         layout = _setup_layout()
         regenerated = {layout.catalog, layout.splits, layout.pairs, layout.pair_lineage,
                        layout.manifest, layout.census, layout.text_config,
                        layout.track_config("gnn_only"), layout.track_config("cascade"),
                        "suite.yaml", POPULATIONS_NAME}
+        copy_not_link = {TEXT_BUNDLE_NAME + ".json"}
         for path in sorted(self._setup.rglob("*")):
             if not path.is_file():
                 continue
@@ -485,10 +544,12 @@ class SmartSetupPartition:
                 continue
             target = output / relative
             target.parent.mkdir(parents=True, exist_ok=True)
+            if relative.name in copy_not_link:
+                shutil.copy2(path, target)
+                continue
             try:
                 os.link(path, target)
             except OSError:
-                import shutil
                 shutil.copy2(path, target)
 
     def _prepare_dir(self, output: Path, *, training_tensors: bool) -> None:

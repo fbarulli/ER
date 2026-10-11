@@ -387,18 +387,24 @@ class SetupHoldoutAdoption:
     boundary where both lanes are sealed into the run's immutable inputs, so the
     text bundle adopts the carve HERE — before the preflight that requires the
     two splits to agree — and keeps that adoption in the shipped archive.
+
+    The published carve names NORMALIZED gtins; the bundle's ``row_bc`` is the
+    raw spelling its payload was built from. :meth:`SmartPartitionPopulations.
+    on_row_keys` maps one to the other, because ``pairs_in_set`` filters raw
+    row_bc directly — a normalized holdout would silently match nothing.
     """
 
     @staticmethod
     def apply(setup: Path, bundle_path: Path) -> None:
         """Re-freeze ``bundle_path`` from the setup's populations, if published."""
-        from model_tracks.smart_setup import POPULATIONS_NAME
-        from training.prepared_bundle import FrozenHoldoutPolicy
+        from model_tracks.smart_setup import POPULATIONS_NAME, SmartPartitionPopulations
+        from training.prepared_bundle import BundleCodec, FrozenHoldoutPolicy
         populations_path = Path(setup) / POPULATIONS_NAME
         if not populations_path.is_file():
             return
-        populations = json.loads(populations_path.read_text(encoding='utf-8'))
-        FrozenHoldoutPolicy.adopt(Path(bundle_path), populations)
+        published = SmartPartitionPopulations.read(populations_path)
+        row_bc = BundleCodec.read_payload(bundle_path)['row_bc']
+        FrozenHoldoutPolicy.adopt(Path(bundle_path), published.on_row_keys(row_bc))
         send(f'[package] text holdout adopted the smart-partition carve '
              f'{populations_path}')
 

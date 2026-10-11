@@ -677,6 +677,14 @@ class _TrainerDriver:
                 default=None,
                 help="write the fully prepared local training bundle and exit",
             )
+            ap.add_argument(
+                "--holdout-populations",
+                type=Path,
+                default=None,
+                help="a published smart-partition carve (gtin->split JSON) that "
+                "replaces the derived holdout, so this build's augmentation and "
+                "frozen split match the carve's train populations",
+            )
             args = ap.parse_args()
 
         mask_cfg = masking_cfg(args.masking_profile)
@@ -1159,6 +1167,24 @@ class _TrainerDriver:
         self.uniformity = uniformity
         self.country = country
 
+    def _resolve_holdout_split(self, pos, row_bc, split_cfg) -> tuple[set, set, set]:
+        """The build's train/dev/test gtin sets: the published carve, else derived.
+
+        When ``--holdout-populations`` names a published carve it is the SSOT —
+        the SAME populations the graph lane trains on — mapped onto this
+        payload's RAW ``row_bc`` keys and validated by the frozen-holdout
+        contract BEFORE any donor is drawn. Without one the split is derived
+        from the component graph, exactly as before.
+        """
+        if self.args.holdout_populations is None:
+            return derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+        from model_tracks.smart_setup import SmartPartitionPopulations
+        from training.folds import normalize_gtin
+        from training.prepared_bundle import FrozenHoldoutPolicy
+        splits = SmartPartitionPopulations.read(self.args.holdout_populations).on_row_keys(row_bc)
+        FrozenHoldoutPolicy.validate_frozen({'row_bc': row_bc, 'pos': pos}, splits, normalize_gtin)
+        return (set(splits['train']), set(splits['dev']), set(splits['test']))
+
     @timed
     def augment(self) -> None:
         """Append the static augmentation lanes (mask, swaps, twins)."""
@@ -1252,7 +1278,7 @@ class _TrainerDriver:
             from collections import Counter as _MintCounter
             mint_rejections = _MintCounter()
             if args.split == "holdout":
-                train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+                train_bc, dev_bc, test_bc = self._resolve_holdout_split(pos, row_bc, split_cfg)
                 frozen_holdout = {role: sorted(values) for role, values in
                                   zip(("train", "dev", "test"), (train_bc, dev_bc, test_bc))}
                 donor_scope = {i for i,value in enumerate(row_bc) if str(value) in train_bc}
