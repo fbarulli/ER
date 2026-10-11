@@ -704,10 +704,18 @@ class PrepareRun:
                     '--defer-training-tensors']
         if name == 'full_bundle':
             F = self.context.files
-            return ['-m', 'training.train', '--dataset', str(F['dataset_deduped']),
-                    '--payload', 'full', '--prepare-bundle', str(self.context.bundle),
-                    '--model', self.context.suite.text_model,
-                    '--no-mask-effect', '--no-plot']
+            command = ['-m', 'training.train', '--dataset', str(F['dataset_deduped']),
+                       '--payload', 'full', '--prepare-bundle', str(self.context.bundle),
+                       '--model', self.context.suite.text_model,
+                       '--no-mask-effect', '--no-plot']
+            # A smart-partition carve is the build's split SSOT: when the setup
+            # publishes it, the bundle build draws the R1/R2 augmentation from
+            # the carve's train populations, not a freshly derived split.
+            from model_tracks.smart_setup import POPULATIONS_NAME
+            populations = self.context.setup / POPULATIONS_NAME
+            if populations.is_file():
+                command += ['--holdout-populations', str(populations)]
+            return command
         if name == 'suite_inputs':
             return ['-m', 'model_tracks.package', '--config', str(self.context.config_path),
                     '--output', str(self.suite_archive)]
