@@ -924,8 +924,8 @@ def held_out_enabled():
         "0", "false", "off", "no")
 
 
-def evaluate_held_out(test_path, checkpoint, device):
-    """Score a trained checkpoint on the HELD-OUT test split (both kernels).
+def evaluate_held_out(test_path, checkpoint, device, split="test"):
+    """Score a trained checkpoint on the HELD-OUT split (both kernels).
 
     DEFAULT-ON (owner order, gate: held_out_enabled): the training-time eval is
     the dev split and overlaps training/calibration, so this is the run's
@@ -934,6 +934,10 @@ def evaluate_held_out(test_path, checkpoint, device):
     training. An empty/unusable split raises RuntimeError (NOT SystemExit):
     the callers' fail-soft handlers catch Exception, so a held-out failure is
     recorded with its reason and NEVER discards the checkpoint/receipt.
+
+    ``split`` names the split being scored ("test" on the full corpus; the
+    50/50 HPO carve passes "dev" — its zero-leak validate half — because its
+    test split is empty by construction).
     """
     import torch
     from laya import train as laya_train
@@ -958,7 +962,7 @@ def evaluate_held_out(test_path, checkpoint, device):
         "eval_mode": "held_out",
         "is_held_out": True,
         "eval_source": str(Path(test_path).name),
-        "eval_split": "test",
+        "eval_split": str(split),
         "rows": len(rows),
         "items": len(items),
         "skipped": skipped,

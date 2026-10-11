@@ -294,8 +294,16 @@ class SessionReceiptWriter:
         (objective.forbidden=test still governs sampling/ranking); it is the
         honest generalization number of the promoted champion. DEFAULT-ON
         (ER_LAYA_HELD_OUT, the shared gate); fail-soft with the recorded
-        reason: no champion, an empty held-out split (the 50/50 HPO carve has
-        no test role) or an eval failure never discards the session receipt.
+        reason: no champion or an unusable split never discards the session
+        receipt.
+
+        OWNER DIRECTIVE (2026-10-11): the 50/50 carve's test split is EMPTY by
+        construction, and a reasoned skip is NOT validation — the held-out
+        eval then scores the ZERO-LEAK dev (validate) half instead (the
+        component-disjoint carve guarantees no train/dev entity overlap). The
+        receipt records the split it scored AND the selection note: trials are
+        ranked on dev, so a dev-split champion number is selection-optimistic
+        (never silently presented as an untouched test number).
         """
         if not held_out_enabled():
             return {"skipped": "ER_LAYA_HELD_OUT off"}
@@ -305,12 +313,18 @@ class SessionReceiptWriter:
             return {"skipped": "no champion checkpoint to evaluate"}
         try:
             import torch
-            test_path = resolve_input(TEST_JSONL)
-            if test_path.stat().st_size == 0:
-                return {"skipped": "empty held-out split (the 50/50 HPO "
-                                   "carve has no test role)"}
+            path, split = resolve_input(TEST_JSONL), "test"
+            if path.stat().st_size == 0:
+                path, split = resolve_input(DEV_JSONL), "dev"
+            if path.stat().st_size == 0:
+                return {"skipped": "held-out splits are empty (test AND dev)"}
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            held_out = evaluate_held_out(test_path, checkpoint, device)
+            held_out = evaluate_held_out(path, checkpoint, device, split=split)
+            if split == "dev":
+                held_out["selection_note"] = (
+                    "scored on the zero-leak dev (validate) half: the 50/50 "
+                    "carve has no test role; trials are ranked on this split, "
+                    "so the champion number is selection-optimistic")
         except Exception as error:
             log("held-out evaluation FAILED: " + type(error).__name__ + ": "
                 + str(error)[:400] + "\\n" + traceback.format_exc())

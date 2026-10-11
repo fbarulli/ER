@@ -130,11 +130,17 @@ GOLDEN_SHA256: dict[str, str] = {
      # and the HPO WorkerSession starts one per worker. hpo also moves for the
      # owner's 3-parallel session config (n_jobs/max_concurrent_trials=3 and
      # early_stop_patience pinned to 3) riding the baked HPO_SPACE literal.
-     "finetune": "456ff9df9bacd7aa70c5af586d47351516842a9663f65cccefbc11ad35823dc9",
-     "finetune-smoke": "e47031061ffa029ecc63118165a4060b91937d330adef88b679b136accd797c6",
+     #
+     # finetune / finetune-smoke / hpo re-pinned for the held-out-on-dev fix:
+     # evaluate_held_out grew a `split` parameter (default "test") and the HPO
+     # _held_out falls back to the ZERO-LEAK dev (validate) half when the 50/50
+     # carve's test.jsonl is empty (owner directive 2026-10-11) — never a
+     # reasoned skip — recording eval_split="dev" + a selection-optimistic note.
+     "finetune": "03b85f5ce66c1bee8c044489fa66aa78590add32b75df04d0f2ba555db8624e1",
+     "finetune-smoke": "e8a744958273299f26649314235c2b65e763f2bcfa902acb0a5fedf576c48e97",
      "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
      "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-     "hpo": "1cb3922d2aefd224aac7455d301cae75a9f5f7d1ab0f289109ed28cc46af1638",
+     "hpo": "671a17cbda0bc944e333ed35916e41384929546e61c508d08ad8264e1a8f584d",
 }
 
 

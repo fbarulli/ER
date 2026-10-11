@@ -630,6 +630,12 @@ def test_both_kernels_trace_the_holdout_eval_end_to_end(monkeypatch,
     assert "if not held_out_enabled():" in script
     assert "def evaluate_held_out(" in script  # via the shared PERF patch
     assert "held_out_eval_done" in script
+    # OWNER DIRECTIVE (2026-10-11): the 50/50 carve's empty test split falls
+    # back to the ZERO-LEAK dev (validate) half — never a reasoned skip — and
+    # the receipt records the split + the selection-optimistic note.
+    assert 'path, split = resolve_input(DEV_JSONL), "dev"' in script
+    assert "selection_note" in script
+    assert 'evaluate_held_out(path, checkpoint, device, split=split)' in script
 
     finetune = (laya_lane.FINETUNE_KERNEL_SCRIPT
                 + laya_lane.FINETUNE_PERF_PATCH_SOURCE)
