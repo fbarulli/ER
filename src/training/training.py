@@ -46,6 +46,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from training.mnrl_provenance import MnrlProvenanceFactory
+
 # DEFAULT_MODEL retired: the entry (train.py) resolves the trainer base
 # from the config SSOT (models.multilingual_l12); the lib.cache.MODEL_NAME
 # indirection was dead code with a phantom docstring.
@@ -4050,34 +4052,7 @@ def _training_pair_populations(
     return populations
 
 
-@timed
-def _mnrl_pair_populations(
-    triples: list[tuple[int, int, int]],
-    train_neg: np.ndarray,
-    train_neg_sources: np.ndarray | None,
-) -> list[str]:
-    """One registry-safe source label for every MNRL triple.
-
-    The row's positive pair is the loss's ``(anchor, positive)``, but the
-    provenance that must survive training is the explicit negative's SOURCE
-    (gate / minted / counterfactual / lane tags): MNRL trains against that
-    third column, so the coverage census keys on it. A negative index absent
-    from the fold's negatives (or a lane with no source array) falls back to
-    ``gate``, a registered source, never the unregistered ``base``/``masked``/
-    ``twin`` monitoring tags.
-    """
-    source_by_negative: dict[int, str] = {}
-    pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
-    for index, (_anchor, negative) in enumerate(pairs):
-        source = (
-            _base_population_tag(str(train_neg_sources[index]))
-            if train_neg_sources is not None and index < len(train_neg_sources)
-            else "gate"
-        )
-        source_by_negative[int(negative)] = source
-    return [source_by_negative.get(int(negative), "gate")
-            for _anchor, _positive, negative in triples]
-
+_mnrl_pair_populations = timed(MnrlProvenanceFactory.build)
 
 def _usage_row(
     *,
@@ -4857,7 +4832,10 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
         dataset = {"anchor": [payload[a] for a, b, c in triples],
                    "positive": [payload[b] for a, b, c in triples],
                    "negative": [payload[c] for a, b, c in triples],
-                   "pair_id": list(range(len(triples))), "population": populations}
+                   "pair_id": list(range(len(triples))), "population": populations,
+                   "pair_population": _mnrl_pair_populations(
+                       triples, tr_negs, tr_neg_sources, mask_audit=mask_audit,
+                       hard_negative_mask_audit=hard_negative_mask_audit)}
         objective["triples"] = triples
         objective["shared_gtin_rows"] = _mnrl_shared_positive_gtin_rows(triples, row_bc)
         sampler_populations = populations
@@ -5965,7 +5943,8 @@ def train_one_config(
                     # the loss fills during training; both are consumed by the
                     # datapoint-usage writer below.
                     pair_populations = _mnrl_pair_populations(
-                        triples, tr_negs, tr_neg_sources)
+                        triples, tr_negs, tr_neg_sources, mask_audit=mask_audit,
+                        hard_negative_mask_audit=hard_negative_mask_audit)
                     presentation_counts: dict[tuple, int] = {}
                     train_ds = Dataset.from_dict(objective_plan["dataset"])
                 else:

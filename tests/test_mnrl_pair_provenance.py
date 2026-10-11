@@ -17,6 +17,7 @@ mapping itself is the load-bearing contract.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from training.training import _mnrl_pair_populations, _tracking_mnrl_loss
@@ -54,3 +55,52 @@ def test_mnrl_per_pair_backprop_carries_registry_safe_source_lineage():
     assert {key[2] for key in loss.presentation_counts()} == {"gate", "counterfactual"}
     assert {row["population"] for row in loss.pair_usage_rows_by_epoch()} == {
         "gate", "counterfactual"}
+
+
+def test_mnrl_sources_follow_exact_edges_and_copy_lineage() -> None:
+    positives = np.array([[1, 2], [1, 4], [20, 21]])
+    negatives = np.array([[1, 3], [8, 3], [30, 2]])
+    sources = np.array(["gate", "attribute", "counterfactual+aug"], dtype=object)
+    mask = [{"anchor_payload_idx": 1, "pair_payload_idx": 2,
+             "copy_payload_idx": 20, "copy_pair_payload_idx": 21}]
+    twin = [{"anchor_payload_idx": 1, "pair_payload_idx": 2,
+             "copy_payload_idx": 30, "target_mode": "counterfactual"}]
+    from training.training import _build_mnrl_training_triples
+
+    triples = _build_mnrl_training_triples(
+        positives, negatives, mask_audit=mask, hard_negative_mask_audit=twin)
+    populations = _mnrl_pair_populations(
+        triples, negatives, sources, mask_audit=mask,
+        hard_negative_mask_audit=twin)
+    assert dict(zip(triples, populations, strict=True)) == {
+        (1, 2, 3): "gate", (20, 21, 3): "gate",
+        (1, 2, 30): "counterfactual", (1, 4, 30): "counterfactual"}
+    canonical = [{**twin[0], "copy_source_payload_idx": 2}]
+    assert _mnrl_pair_populations(
+        [(2, 1, 30)], negatives, sources,
+        hard_negative_mask_audit=canonical) == ["counterfactual"]
+
+
+@pytest.mark.parametrize("sources", [None, np.array(["gate"], dtype=object)])
+def test_mnrl_sources_reject_missing_source_rows(sources: np.ndarray | None) -> None:
+    with pytest.raises(ValueError, match="source"):
+        _mnrl_pair_populations([(1, 2, 3)], np.array([[1, 3], [4, 5]]), sources)
+
+
+def test_mnrl_sources_reject_an_unresolved_negative() -> None:
+    with pytest.raises(ValueError, match="provenance"):
+        _mnrl_pair_populations([(1, 2, 99)], np.array([[1, 3]]),
+                               np.array(["gate"], dtype=object))
+
+
+def test_mnrl_positive_copy_keeps_direct_edges_and_inherits_twin_sources() -> None:
+    mask = [{"anchor_payload_idx": 1, "pair_payload_idx": 2,
+             "copy_payload_idx": 20, "copy_pair_payload_idx": 21}]
+    twin = [{"anchor_payload_idx": 1, "pair_payload_idx": 2,
+             "copy_payload_idx": 30, "copy_source_payload_idx": 2,
+             "target_mode": "counterfactual"}]
+    negatives = np.array([[20, 5], [30, 2]])
+    sources = np.array(["attribute", "counterfactual"], dtype=object)
+    assert _mnrl_pair_populations(
+        [(20, 21, 5), (20, 21, 30)], negatives, sources,
+        mask_audit=mask, hard_negative_mask_audit=twin) == ["attribute", "counterfactual"]
