@@ -304,14 +304,18 @@ class SmartSetupPartition:
         claims: a cross-half negative is dropped exactly like the producer's
         ``cross_split_negative`` policy, never relabeled.
 
-        ``example_id`` is a TRAIN-only field (``SupervisedPairs`` rejects a
-        non-empty id on a dev/test row): a pair that leaves train is no longer a
-        training relationship, so its id is cleared. Lineage and the difficulty
-        vote both key on the SKU pair, never on ``example_id``, so nothing is
-        lost by the clear.
+        ``example_id`` marks REPEATED training relationships (the source carries
+        the same SKU pair many times with distinct ids, all on train), so the
+        multiplicity is meaningful only on train. A pair that leaves train is one
+        held-out relationship: its id is cleared (``SupervisedPairs`` rejects a
+        non-empty id off train) AND the repeats collapse to a single row — kept,
+        they would hand the scanner identical duplicates and it would raise
+        "duplicate or conflicting pair". Lineage and the difficulty vote both key
+        on the SKU pair, never on ``example_id``, so nothing is lost.
         """
         has_example_id = "example_id" in pairs.columns
         kept, excluded = [], 0
+        seen_off_train: set[tuple[tuple[str, str], str]] = set()
         for row in pairs.itertuples(index=False):
             left = split_of_sku[row.sku_id1]
             right = split_of_sku[row.sku_id2]
@@ -324,8 +328,13 @@ class SmartSetupPartition:
                 continue
             record = row._asdict()
             record["split"] = left
-            if has_example_id and left != "train":
-                record["example_id"] = ""
+            if left != "train":
+                key = (tuple(sorted((str(row.sku_id1), str(row.sku_id2)))), str(row.label))
+                if key in seen_off_train:
+                    continue
+                seen_off_train.add(key)
+                if has_example_id:
+                    record["example_id"] = ""
             kept.append(record)
         return pd.DataFrame(kept, columns=list(pairs.columns)), excluded
 
