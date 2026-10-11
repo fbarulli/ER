@@ -183,6 +183,24 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
         self.assertIn("stop", order)
 
 
+class TeardownOpIsNotGpuGatedTests(unittest.TestCase):
+    """`--what stop` launches nothing, so the GPU-launch ack must not gate it."""
+
+    def test_bare_stop_is_not_refused_by_the_gpu_gate(self):
+        """Bare `er-colab --what stop` must release, not demand --allow-gpu.
+
+        Regression: `--gpu` defaults to T4 (non-CPU) and the GPU boundary gate
+        ran BEFORE the stop dispatch, so a teardown op failed with "GPU launch
+        requires --allow-gpu" despite provisioning nothing (Gate-1 colab GPU
+        smoke 1010T220607339825Z). Stop now dispatches beside the other
+        no-launch op, ahead of the gate.
+        """
+        with mock.patch.object(sys, "argv", ["colab.py", "--what", "stop"]), \
+             mock.patch.object(colab, "stop", return_value=True) as stop_mock:
+            colab.main()
+        stop_mock.assert_called_once_with(stop_local_owner=True)
+
+
 class DaemonStopTests(unittest.TestCase):
     def test_stopping_reports_when_there_is_nothing_to_stop(self):
         with mock.patch.object(colab, "keep_alive_daemon_pids", return_value=[]):

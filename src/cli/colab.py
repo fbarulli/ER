@@ -2367,6 +2367,14 @@ def main() -> None:
         print(_stamp(), f"[self-watch] receipt released: {plan['receipt']}")
         return
 
+    # A teardown op launches nothing, so it must never reach the GPU-launch
+    # acknowledgement gate below (which refuses a non-CPU --gpu without
+    # --allow-gpu). Dispatch it here, beside the other no-launch op, so
+    # `er-colab --what stop` releases the session regardless of --gpu.
+    if args.what == "stop":
+        stop(stop_local_owner=True)
+        return
+
     if args.prepared_input_package is not None:
         args.prepared_input_package = resolve_prepared_input_package(args.prepared_input_package)
     suite_archive = None
@@ -2526,10 +2534,6 @@ def main() -> None:
             "result_transport=direct",
             flush=True,
         )
-
-    if args.what == "stop":
-        stop(stop_local_owner=True)
-        return
 
     start_live_log()
     launch_lock = None
