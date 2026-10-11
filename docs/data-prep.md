@@ -50,12 +50,13 @@ full bundle on Colab CPU through the launcher (the VM reads committed code):
 
 ```bash
 systemd-run --user --unit=er-prep-full --working-directory="$PWD" \
-  env PYTHONPATH=src EUROMONITOR_COLAB_SESSION=er-prep-full \
+  env PATH="$PATH" PYTHONPATH=src EUROMONITOR_COLAB_SESSION=er-prep-full \
   "$(command -v uv)" run --no-sync python -u colab_backend.py \
   --what bundle --gpu CPU --keep-alive --dataset-csv "$PWD/dataset.csv"
 ```
 
 Follow `journalctl --user -u er-prep-full -f` and the launcher's transcript.
+Passing `PATH` makes the installed `colab` CLI available to the user service.
 Do not run another Colab session or session/exec probes while it is live.
 Completion means the full preparation stages finish and the launcher delivers
 `colab_bundle_<run_id>/bundle_delivery.tar.zst`; launching the VM is not success.
