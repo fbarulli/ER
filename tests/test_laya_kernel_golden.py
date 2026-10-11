@@ -158,13 +158,21 @@ GOLDEN_SHA256: dict[str, str] = {
      # default (offender #4): FinetuneSpec.gradient_checkpointing None -> False
      # rides the baked FINETUNE_CONFIG literal on all three surfaces (the
      # backward-pass win; parity-pinned bit-exact vs ON). The HPO space also
-     # raised the micro_batch floor 4 -> 8 (+ ceiling 32), which rides the baked
-     # HPO_SPACE literal (hpo surface).
-     "finetune": "502dabbde6a481203fd57abb27c6e1a4ca119b8a25082ea41f6c310f13c065e9",
-     "finetune-smoke": "0b908b900cbcd3b60136920193bc6af2c358a7a5af65331205604274e80aca33",
-     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
-     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-     "hpo": "022d68ef8b718213feeab0b4f0ba88d1f838ea78d5cce8743681cf4c8edc07b1",
+      # raised the micro_batch floor 4 -> 8 (+ ceiling 32), which rides the baked
+      # HPO_SPACE literal (hpo surface).
+      #
+      # finetune / finetune-smoke / hpo re-pinned for the NCCL HeartbeatMonitor
+      # fix (the laya_1011T044654Z 2xT4 smoke abort): init_distributed now sets
+      # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC from the SAME laya.ddp_timeout_minutes
+      # SSOT. That heartbeat watchdog is a SECOND abort timer, independent of the
+      # collective timeout every prior fix set — its 480s default SIGABRT'd a
+      # healthy rank 0 during teardown ("watchdog got stuck for 480 seconds ...
+      # CudaEventDestroy"), before the tail ran. Only the nccl path bakes it.
+      "finetune": "124a8a8e3ca937a7df1059c2d469f85994a0d50c29f46b06577a5323fc1954ec",
+      "finetune-smoke": "a0c2b8f101f72d441c81488464f81c0a9ecb0e73ea9ae120a4bb2dd02c3585b8",
+      "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
+      "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
+      "hpo": "a792fa0c010b7a3ce71637bb035fbcc54484cf60b3b315e9d11452de4303144c",
 }
 
 

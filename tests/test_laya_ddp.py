@@ -509,6 +509,11 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
     assert ("DDP_TIMEOUT_MINUTES = "
             f"{laya_lane._spec().ddp_timeout_minutes}") in script
     assert '"timeout": timedelta(minutes=DDP_TIMEOUT_MINUTES)' in script
+    # the NCCL HeartbeatMonitor (a SEPARATE abort timer from the collective
+    # timeout) is sized from the same SSOT so a transient GIL stall in teardown
+    # never SIGABRTs a healthy rank (the laya_1011T044654Z 2xT4 smoke abort).
+    assert 'os.environ["TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC"]' in script
+    assert "int(DDP_TIMEOUT_MINUTES * 60)" in script
     # the eager nccl device binding + the post-destroy exit rendezvous
     assert 'init_kwargs["device_id"] = torch.device("cuda", local_rank)' in script
     assert "_teardown_rendezvous()" in script

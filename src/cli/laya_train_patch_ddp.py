@@ -178,6 +178,22 @@ def init_distributed(backend=None):
         # torch.multiprocessing.spawn does not (single box => localhost).
         os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
         os.environ.setdefault("MASTER_PORT", "29500")
+        if backend == "nccl":
+            # The NCCL HeartbeatMonitor is a SECOND, independent abort timer
+            # (TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC, torch default 480s) that no
+            # collective timeout reaches: it fires when the watchdog thread
+            # makes no progress for that window, typically because the main
+            # thread holds the GIL inside a CUDA call (e.g. CudaEventDestroy)
+            # during teardown. That is EXACTLY the 2xT4 smoke abort
+            # (laya_1011T044654Z, rev c5e13e6): rank 0 trained + evaluated
+            # fine, then "watchdog got stuck for 480 seconds" SIGABRT'd it
+            # before the tail ran. The generous collective timeout below does
+            # NOT bound it. Size the heartbeat from the SAME SSOT
+            # (laya.ddp_timeout_minutes) so a transient GIL stall in teardown
+            # can never trip it; a real hang is still bounded by the collective
+            # timeout + the rendezvous. Set BEFORE init_process_group reads it.
+            os.environ["TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC"] = str(
+                max(1, int(DDP_TIMEOUT_MINUTES * 60)))
         # Explicit GENEROUS collective timeout (config SSOT: the baked
         # DDP_TIMEOUT_MINUTES literal = laya.ddp_timeout_minutes). Torch's
         # 10-min default is smaller than rank 0's legitimate slow collectives
