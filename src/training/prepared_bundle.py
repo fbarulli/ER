@@ -188,8 +188,34 @@ class FrozenHoldoutPolicy:
             raise ValueError('frozen holdout needs train/dev/test')
         populations = tuple(set(frozen[split]) for split in ('train', 'dev', 'test'))
         FrozenHoldoutPolicy.entities_cover_payload(data, populations, normalize_gtin)
-        FrozenHoldoutPolicy.pairs_stay_in_split(data, normalize_gtin)
+        FrozenHoldoutPolicy.pairs_stay_in_split(data, frozen, normalize_gtin)
         return populations
+
+    @staticmethod
+    @timed
+    def adopt(path: Path, populations: dict[str, list[str]]) -> None:
+        """Re-freeze a bundle's holdout from published gtin->split populations.
+
+        A lane whose frozen bundle predates a re-carve of its setup adopts the
+        carve HERE, from the same populations the graph lane trains on, so both
+        lanes share one split. Only ``holdout_populations`` changes: the payload
+        bytes are untouched (owner rule — adopting a split is not re-bundling
+        text). The populations pass the SAME frozen-holdout contract a parent
+        split must pass (every payload entity covered exactly once, no positive
+        pair crossing), and the bundle is replaced ATOMICALLY so a hardlinked
+        sibling (e.g. the source setup's text bundle) keeps its own bytes.
+        """
+        from training.folds import normalize_gtin
+        data = BundleCodec.read_payload(path)
+        populations = {split: list(values) for split, values in populations.items()}
+        FrozenHoldoutPolicy.validate_frozen(data, populations, normalize_gtin)
+        data['holdout_populations'] = {split: sorted(populations[split])
+                                       for split in ('train', 'dev', 'test')}
+        path = Path(path)
+        partial = path.with_name(path.name + '.partial')
+        BundleCodec.write_pickle(partial, data)
+        os.replace(partial, path)
+        _LOG.info(f'[holdout] adopted a re-carve into {path}')
 
     @staticmethod
     @timed
@@ -210,11 +236,11 @@ class FrozenHoldoutPolicy:
 
     @staticmethod
     @timed
-    def pairs_stay_in_split(data: dict, normalize_gtin) -> None:
+    def pairs_stay_in_split(data: dict, frozen: dict, normalize_gtin) -> None:
         """No positive pair may cross the frozen split boundary."""
         roles = {}
         for split in ('train', 'dev', 'test'):
-            for value in data['holdout_populations'][split]:
+            for value in frozen[split]:
                 roles[normalize_gtin(value)] = split
         for a, b in _LOG.progress(data['pos'], desc='holdout_pairs', unit='pair'):
             ka = normalize_gtin(data['row_bc'][a])

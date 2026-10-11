@@ -377,12 +377,39 @@ def _collect_package_sources(cfg, setup: Path, bundle_path: Path) -> dict[str, P
     return files
 
 
+class SetupHoldoutAdoption:
+    """Adopt a setup's published smart-partition carve into its text bundle.
+
+    ``model_tracks.smart_setup`` publishes the carve's gtin->split populations
+    beside the setup instead of re-bundling the text lane (owner rule). The
+    text bundle's frozen holdout therefore still carries the pre-carve split,
+    and preflight rightly refuses a text/graph split mismatch. Packaging is the
+    boundary where both lanes are sealed into the run's immutable inputs, so the
+    text bundle adopts the carve HERE — before the preflight that requires the
+    two splits to agree — and keeps that adoption in the shipped archive.
+    """
+
+    @staticmethod
+    def apply(setup: Path, bundle_path: Path) -> None:
+        """Re-freeze ``bundle_path`` from the setup's populations, if published."""
+        from model_tracks.smart_setup import POPULATIONS_NAME
+        from training.prepared_bundle import FrozenHoldoutPolicy
+        populations_path = Path(setup) / POPULATIONS_NAME
+        if not populations_path.is_file():
+            return
+        populations = json.loads(populations_path.read_text(encoding='utf-8'))
+        FrozenHoldoutPolicy.adopt(Path(bundle_path), populations)
+        send(f'[package] text holdout adopted the smart-partition carve '
+             f'{populations_path}')
+
+
 @timed
 def package(config: Path, output: Path) -> Path:
     """Publish the immutable suite package: stage, preflight, collect, write."""
     from training.prepared_bundle import load_prepared_bundle
     bundle_path, setup, cfg = _resolve_package_paths(config)
     _require_absent_output(output)
+    SetupHoldoutAdoption.apply(setup, bundle_path)
     with trace_step('package.load_bundle', bundle=bundle_path.name):
         _, bundle = load_prepared_bundle(bundle_path)
     try:
