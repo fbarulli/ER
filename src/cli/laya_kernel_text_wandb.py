@@ -25,6 +25,7 @@ from __future__ import annotations
 
 #: The shared helper block, injected verbatim into BOTH staged kernel texts.
 WANDB_HELPERS_SOURCE = '''\
+from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 WANDB_RUN = None
@@ -50,7 +51,7 @@ class WandbTrainingMetrics(BaseModel):
     learning_rate: float = Field(alias="train/batch_lr")
 
     @classmethod
-    def define(cls, wandb) -> None:
+    def define(cls, wandb: Any) -> None:
         wandb.define_metric(TRAINING_STEP_METRIC)
         for name, field in cls.model_fields.items():
             if name == "step":
