@@ -198,12 +198,14 @@ class FrozenHoldoutPolicy:
 
         A lane whose frozen bundle predates a re-carve of its setup adopts the
         carve HERE, from the same populations the graph lane trains on, so both
-        lanes share one split. Only ``holdout_populations`` changes: the payload
-        bytes are untouched (owner rule — adopting a split is not re-bundling
-        text). The populations pass the SAME frozen-holdout contract a parent
-        split must pass (every payload entity covered exactly once, no positive
-        pair crossing), and the bundle is replaced ATOMICALLY so a hardlinked
-        sibling (e.g. the source setup's text bundle) keeps its own bytes.
+        lanes share one split. The payload bytes are untouched (owner rule —
+        adopting a split is not re-bundling text): the frozen holdout and the
+        training plan it derives (folds/triples) are re-freezen together, so a
+        bundle can never carry one split's holdout and another's plan. The
+        populations pass the SAME frozen-holdout contract a parent split must
+        pass (every payload entity covered exactly once, no positive pair
+        crossing), and the bundle is replaced ATOMICALLY so a hardlinked sibling
+        (e.g. the source setup's text bundle) keeps its own bytes.
         """
         from training.folds import normalize_gtin
         data = BundleCodec.read_payload(path)
@@ -211,11 +213,35 @@ class FrozenHoldoutPolicy:
         FrozenHoldoutPolicy.validate_frozen(data, populations, normalize_gtin)
         data['holdout_populations'] = {split: sorted(populations[split])
                                        for split in ('train', 'dev', 'test')}
+        FrozenHoldoutPolicy.rebuild_plan(data)
         path = Path(path)
         partial = path.with_name(path.name + '.partial')
         BundleCodec.write_pickle(partial, data)
         os.replace(partial, path)
         _LOG.info(f'[holdout] adopted a re-carve into {path}')
+
+    @staticmethod
+    @timed
+    def rebuild_plan(data: dict) -> None:
+        """Re-derive the frozen training plan from the (re-freezen) holdout.
+
+        The plan's folds and triples ARE a function of the holdout, so a bundle
+        with an adopted holdout and the OLD plan would train the OLD split's
+        rows. The plan's own identity records the objective/sampling contract
+        it was built under; rebuilding keeps that contract and re-derives the
+        folds for the new split. A bundle with no plan is left untouched.
+        """
+        plan = data.get('training_plan')
+        if plan is None:
+            return
+        from core.common import SEED
+        from training.run_plan import prepare_run_plan
+        identity = dict(plan.get('identity') or {})
+        data['training_plan'] = prepare_run_plan(
+            data, loss=identity.get('loss'),
+            train_frac=float(identity.get('train_frac', 1.0)),
+            sample=bool(identity.get('sample', False)),
+            seed=int(identity.get('seed', SEED)))
 
     @staticmethod
     @timed
