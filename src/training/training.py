@@ -3952,7 +3952,7 @@ def _build_pair_lineage(
     lookup: dict[tuple[int, int, int], dict] = {}
     audits = list(mask_audit or []) + list(hard_negative_mask_audit or [])
     for audit in audits:
-        population = str(audit.get("population", "positive"))
+        population = str(audit["population"])
         label = 1 if population == "positive" else 0
         anchor = int(audit["anchor_payload_idx"])
         target = int(audit["pair_payload_idx"])
