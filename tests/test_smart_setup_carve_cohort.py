@@ -57,15 +57,21 @@ def test_publish_regenerates_the_carve_ablation_cohort(
         staticmethod(lambda path: {"bundle": str(path)}))
     recorded: dict = {}
     monkeypatch.setattr(
+        prepared_bundle_module.FrozenHoldoutPolicy, "adopt",
+        staticmethod(lambda path, populations: recorded.update(
+            adopted=str(path), populations=populations)))
+    monkeypatch.setattr(
         cohort_module, "prepare_cohort",
         lambda out, bundle: recorded.update(setup=str(out), bundle=bundle))
 
+    partition = smart_setup.SmartSetupPartition.from_config(setup)
     output = tmp_path / "carve"
-    smart_setup.SmartSetupPartition.from_config(setup).publish(
-        output, training_tensors=False)
+    partition.publish(output, training_tensors=False)
 
-    # Regenerated from the CARVE tree, not the source...
+    # The linked bundle adopted the CARVE populations before the cohort read it...
+    assert recorded["adopted"] == str(output / smart_setup.TEXT_BUNDLE_NAME)
+    assert set(recorded["populations"]) == {"train", "dev", "test"}
+    # ...and the cohort was regenerated from the CARVE tree, not the source.
     assert recorded["setup"] == str(output)
     assert recorded["bundle"] == {"bundle": str(output / smart_setup.TEXT_BUNDLE_NAME)}
-    # ...and the source cohort was never hardlinked into the carve.
     assert not (output / smart_setup.ABLATION_COHORT_DIR / "pairs.csv").exists()

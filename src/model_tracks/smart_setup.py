@@ -437,7 +437,7 @@ class SmartSetupPartition:
         timing.mark("frames_and_links")
         self._prepare_dir(output, training_tensors=training_tensors)
         timing.mark("prepared")
-        self._regenerate_ablation_cohort(output)
+        self._regenerate_ablation_cohort(output, partition)
         timing.mark("ablation_cohort")
         self._write_lane_configs(output)
         self._write_documents(output, partition)
@@ -498,24 +498,30 @@ class SmartSetupPartition:
         prepare(output / layout.catalog, output / layout.splits, output / layout.pairs,
                 output / layout.prepared_dir, training_tensors=training_tensors)
 
-    def _regenerate_ablation_cohort(self, output: Path) -> None:
+    def _regenerate_ablation_cohort(self, output: Path,
+                                    partition: SetupPartition) -> None:
         """Rebuild the carve's ablation cohort from the carve itself.
 
         The source cohort is a hardlink: it describes the SOURCE split, so
         linking it hands the carve a cohort whose rows never saw the carve and
-        whose difficulty votes are the wrong halves. Regenerated through the
-        ONE canonical owner (``ablation_cohort.prepare_cohort``) over the
-        carve's regenerated pairs/catalog/prepared listings and the shipped
-        text bundle the cohort reads mint/mask lineage from.
+        whose difficulty votes are the wrong halves. The cohort reads the split
+        from the shipped text bundle, and the linked bundle still carries the
+        SOURCE holdout, so the carve's published populations are adopted FIRST
+        (the canonical ``FrozenHoldoutPolicy.adopt``; the atomic replace leaves
+        the hardlinked source bundle's bytes untouched). Then the cohort is
+        regenerated through the ONE canonical owner
+        (``ablation_cohort.prepare_cohort``) over the carve's regenerated
+        pairs/catalog/prepared listings and that now-carve bundle.
         """
         from model_tracks.ablation_cohort import prepare_cohort
-        from training.prepared_bundle import BundleCodec
+        from training.prepared_bundle import BundleCodec, FrozenHoldoutPolicy
 
         bundle_path = output / TEXT_BUNDLE_NAME
         if not bundle_path.is_file():
             _LOG.info("[smart-setup] carve carries no text bundle; "
                       f"{ABLATION_COHORT_DIR} not regenerated")
             return
+        FrozenHoldoutPolicy.adopt(bundle_path, partition.populations)
         prepare_cohort(output, BundleCodec.read_payload(bundle_path))
         _LOG.info(f"[smart-setup] regenerated {ABLATION_COHORT_DIR} for the carve "
                   f"at {output / ABLATION_COHORT_DIR}")
