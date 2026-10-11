@@ -3,6 +3,14 @@
 Non-negotiable for every change. If you cannot follow a rule, say so and why — never silently
 skip it.
 
+## Instruction loading — OpenCode and Codex
+
+Every agent, including Codex and any delegated agent, must read this `AGENTS.md` and
+[`patterns.md`](patterns.md) in full before starting work. Both roles are preserved in §8
+of this file; read both, whichever phase you run. These are the same canonical instructions
+for OpenCode and Codex; do not copy them into tool-specific files. Investigation is read-only;
+finish that phase before building.
+
 ## 1. Structure & design (code shape)
 
 - **Everything behavior-bearing lives in a class.** No loose top-level functions as the
@@ -124,8 +132,8 @@ simplification.**
 
 ## 7. Lane ops & consequential actions (every agent)
 
-- **Read BOTH roles** — `.opencode/agent/build.md` (implement) and `.opencode/agent/investigate.md`
-  (read-only). Every agent gets both, whichever phase it runs.
+- **Read BOTH roles** — the build (implement) and investigate (read-only) roles in §8.
+  Every agent gets both, whichever phase it runs; the former `.opencode/agent/` files are retired.
 - **Regression-first for lane behavior** (Kaggle/Colab/finetune ops). Missing behavior that
   already exists elsewhere is a REGRESSION, not a feature request. Find it in history
   (`git log`/`gh`), name the commit that dropped or never wired the canonical call, and route
