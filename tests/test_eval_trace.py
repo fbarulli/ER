@@ -231,6 +231,24 @@ def test_report_polices_the_per_type_item_sum():
         _report(overall=overall, by_type={"noul": _block(items=9)})
 
 
+def test_report_requires_a_held_out_attestation_for_a_fitted_calibration():
+    """A calibrated report must say whether its split was held out.
+
+    The fit is only interpretable against records it did not see, so an
+    UNATTESTED split (``is_held_out=None``) is the one shape that could pass an
+    in-sample temperature fit off as held-out truth. Both attestations are
+    accepted — the contract demands the fact, not a particular answer.
+    """
+    calibrated = _block(items=10, temperature=[1.0, 1.0, 2.0])
+    with pytest.raises(ValidationError, match="must attest"):
+        _report(overall=calibrated)
+    for attested in (True, False):
+        document = _report(overall=calibrated, is_held_out=attested)
+        assert document.calibration_evidence == ("temperature",)
+    # a runtime confidence gate is an operator pin, not a fit: it leaks nothing
+    assert _report(min_confidence=0.7).calibration_evidence == ()
+
+
 def test_report_rejects_an_unknown_question_type():
     with pytest.raises(ValidationError):
         _report(overall=_block(items=10), by_type={"noul": _block(items=6),
@@ -619,6 +637,14 @@ def test_provenance_requires_the_source_digest():
         EvalProvenance(source="identity_decision_csv", model_id="m")
     # an emitter that rests on no named digest of its own is fine
     assert EvalProvenance(source="tracks_suite", model_id="m").digests == {}
+
+
+def test_provenance_rejects_a_held_out_claim_carrying_an_overlap_count():
+    # laya's own trainer names the leaky mode `overlapping_eval` and sets
+    # is_held_out=False beside its overlap count; the two facts cannot disagree.
+    with pytest.raises(ValidationError, match="not held out"):
+        _provenance(is_held_out=True, eval_overlap_items=48)
+    assert _provenance(is_held_out=True, eval_overlap_items=0).is_held_out is True
 
 
 def test_real_corpus_receipt_digest_passes_the_digest_contract():

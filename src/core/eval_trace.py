@@ -410,6 +410,19 @@ class EvalProvenance(BaseModel):
     revision: str | None = None
 
     @model_validator(mode="after")
+    def held_out_is_consistent(self) -> EvalProvenance:
+        # laya's own trainer names the leaky mode ``overlapping_eval``, sets
+        # ``is_held_out=False`` and counts the overlap in its note; a report
+        # cannot claim the held-out split and carry that count at once.
+        if self.is_held_out and self.eval_overlap_items:
+            raise ValueError(
+                "is_held_out=True with eval_overlap_items="
+                f"{self.eval_overlap_items}: an eval overlapping training or "
+                "calibration data is not held out — report is_held_out=False "
+                "and keep the overlap count")
+        return self
+
+    @model_validator(mode="after")
     def source_inputs_present(self):
         # The input keys a source may name for its scored INPUT; at
         # least one must be present. ``laya_cli_eval`` accepts either the
@@ -813,6 +826,25 @@ class TraceabilityReport(BaseModel):
     keys: tuple[EvalRowKey, ...] = ()
     coverage: TraceabilityCoverage
 
+    @property
+    def calibration_evidence(self) -> tuple[str, ...]:
+        """The FITTED calibration this report carries (empty = nothing was fitted).
+
+        ONE spelling of "is this report calibrated": a merged temperature map,
+        its per-bucket form, or the abstention census. A runtime
+        ``min_confidence`` is deliberately NOT here — it is provenance (an
+        operator pin, or the fitted map's reduced ``default`` sentinel), and a
+        pin fits nothing, so it cannot leak. The names are the report's own keys
+        so a rejection says which fit is unattested.
+        """
+        blocks = ([] if self.overall is None else [self.overall])
+        blocks += list(self.by_type.values())
+        return tuple(name for name, carried in (
+            ("temperature", any(b.temperature is not None for b in blocks)),
+            ("temperature_by_options", any(b.temperature_by_options for b in blocks)),
+            ("abstention", self.abstention is not None),
+        ) if carried)
+
     @model_validator(mode="after")
     def contracts(self):
         # No require_keys on by_type: a producer emits only the types that have
@@ -823,6 +855,20 @@ class TraceabilityReport(BaseModel):
                 raise ValueError("per-type metrics require the overall metric block")
             if sum(block.items for block in self.by_type.values()) != self.overall.items:
                 raise ValueError("per-type items do not account for the overall item count")
+        # A calibration is only interpretable against a split its fit did not
+        # see. The real leaky producer says so itself (a fetched
+        # ``train_report.json``: ``eval_mode=overlapping_eval``,
+        # ``is_held_out=False``, note "overlap training data (46) and
+        # calibration data (7)") while its before/after blocks are fitted and
+        # scored on the SAME records — so an UNATTESTED split (None) is the one
+        # shape that could pass a fitted calibration off as held-out truth.
+        if self.calibration_evidence and self.provenance.is_held_out is None:
+            raise ValueError(
+                "a report carrying a fitted calibration ("
+                + ", ".join(self.calibration_evidence) + ") must attest "
+                "provenance.is_held_out True or False: an unattested split "
+                "cannot separate a held-out calibration from one fitted on the "
+                "records it is scored on")
         if self.overall is None and not self.records:
             raise ValueError("a report must carry metrics, records, or both")
         if any(blank(reason) for reason in self.skipped):
