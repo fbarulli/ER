@@ -2083,25 +2083,26 @@ from cli.colab_self_watch import (  # noqa: E402,F401
     self_watch,
     spawn_self_watch,
 )
-def _suite_matrix_flip_path(suite_config: Path) -> Path:
-    """The scratch cuda clone path for `results/model_tracks/<suite>__gpu/`."""
+def _suite_matrix_flip_path(suite_config: Path, target_device: str) -> Path:
+    """The scratch clone path for `results/model_tracks/<suite><suffix>/`."""
     matrix = canonical_suite_matrix()
     family = (suite_config.parent.name
               if suite_config.name == 'suite.yaml' else suite_config.stem)
-    return RESULTS / matrix.device_flip.tracks_dir / f'{family}{matrix.device_flip.suffix}' / suite_config.name
+    return RESULTS / matrix.device_flip.tracks_dir / f'{family}{matrix.device_flip.suffix_for(target_device)}' / suite_config.name
 
-def _suite_device_flip(suite_config: Path, suite) -> Path:
-    """Baked matrix default: a non-CPU cuda request against a tracked
-    device-cpu suite immediately generates the scratch cuda variant
-    (only the yamls; every data binding stays under data/). The tracks
+def _suite_device_flip(suite_config: Path, suite, target_device: str) -> Path:
+    """Baked matrix default: a `--gpu` request that disagrees with the suite's
+    declared device immediately generates the scratch variant for the requested
+    device (`__gpu` from a device-cpu suite, `__cpu` from a device-cuda suite).
+    Only the yamls are copied; every data binding stays under data/. The tracks
     gate then validates the clone like any other suite config."""
-    pattern = canonical_suite_matrix().device_flip
     source_text = suite_config.read_text(encoding='utf-8')
-    flipped, flips = re.subn(r'(?m)^(\s*device:\s*)cpu\s*$', r'\1cuda', source_text, count=1)
+    flipped, flips = re.subn(r'(?m)^(\s*device:\s*)(?:cpu|cuda)\s*$',
+                             rf'\1{target_device}', source_text, count=1)
     if not flips:
         raise ValueError(
-            'suite device is cpu but the suite yaml carries no device line: '+str(suite_config))
-    flip_path = _suite_matrix_flip_path(suite_config)
+            f'suite yaml carries no device line to flip to {target_device}: {suite_config}')
+    flip_path = _suite_matrix_flip_path(suite_config, target_device)
     flip_path.parent.mkdir(parents=True, exist_ok=True)
     setup_dir = (TRAIN_ROOT / suite.setup_dir).resolve()
     layout = training_cfg().preparation.graph_setup
@@ -2452,11 +2453,11 @@ def main() -> None:
             checks = {**checks, 'lane': _lane_contract(args.gpu)}
             print(json.dumps(checks,indent=2))
             return
-        if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
-            if (args.gpu.upper() != 'CPU' and suite.device == 'cpu'
-                    and os.environ.get(canonical_suite_matrix().device_flip.opt_out_env) != '1'):
+        requested_device = 'cpu' if args.gpu.upper() == 'CPU' else 'cuda'
+        if suite.device != requested_device:
+            if os.environ.get(canonical_suite_matrix().device_flip.opt_out_env) != '1':
                 matrix = canonical_suite_matrix()
-                suite_config = _suite_device_flip(suite_config, suite)
+                suite_config = _suite_device_flip(suite_config, suite, requested_device)
                 suite = load_suite(suite_config)
                 print(_stamp(), '[suite-matrix] baked device flip -> '
                       f'{suite_config} (opt out with '

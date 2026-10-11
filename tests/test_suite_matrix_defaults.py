@@ -63,7 +63,8 @@ def test_unknown_suite_configs_still_work():
 def test_the_device_flip_pattern_owns_the_defaults():
     flip = canonical_suite_matrix().device_flip
     assert flip.tracks_dir == "model_tracks"
-    assert flip.suffix == "__gpu"
+    assert flip.gpu_suffix == "__gpu"
+    assert flip.cpu_suffix == "__cpu"
     assert flip.opt_out_env == "ER_SUITES_KEEP_DEVICE"
 
 
@@ -77,7 +78,7 @@ def suite_paths(tmp_path, monkeypatch):
 def test_a_cpu_suite_flips_automatically(suite_paths, tmp_path):
     _setup_dir(tmp_path)
     source = tmp_path / "data/prepared/smoke_200/suite.yaml"
-    flip_path = colab._suite_device_flip(source, _settings(source))
+    flip_path = colab._suite_device_flip(source, _settings(source), "cuda")
     assert flip_path == tmp_path / "results/model_tracks/smoke_200__gpu/suite.yaml"
     flipped = flip_path.read_text(encoding="utf-8")
     assert "device: cuda" in flipped
@@ -86,6 +87,16 @@ def test_a_cpu_suite_flips_automatically(suite_paths, tmp_path):
         assert (flip_path.parent / name).is_file()
     assert all(path.suffix == ".yaml" for path in flip_path.parent.iterdir()), \
         "copying ONLY the yamls invites device flips"
+
+
+def test_a_cuda_suite_flips_to_cpu(suite_paths, tmp_path):
+    """The reverse direction: a device-cuda suite under `--gpu CPU` clones to
+    `__cpu` so the CPU rebundle is a supported lane, not a hand-edited path."""
+    _setup_dir(tmp_path, device="cuda")
+    source = tmp_path / "data/prepared/smoke_200/suite.yaml"
+    flip_path = colab._suite_device_flip(source, _settings(source), "cpu")
+    assert flip_path == tmp_path / "results/model_tracks/smoke_200__cpu/suite.yaml"
+    assert "device: cpu" in flip_path.read_text(encoding="utf-8")
 
 
 def test_default_bundle_is_the_canonical_full_cohort(suite_paths, tmp_path):

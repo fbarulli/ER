@@ -5676,20 +5676,32 @@ class ColabBundlePlan(BaseModel):
 
 
 class SuiteDeviceFlip(BaseModel):
-    """The automatic device-flip pattern for a tracked device-cpu suite.
+    """The automatic device-flip pattern for a tracked suite.
 
-    A non-CPU `--gpu` request on a `device: cpu` suite immediately generates
-    the scratch cuda variant under `results/model_tracks/<suite><suffix>/` —
-    only yamls are copied, so every data binding stays under `data/`; the
-    tracks gate then validates the clone like any other suite config. Setting
-    the opt-out env to `1` gives operators the raw must-agree error instead.
+    A `--gpu` request that disagrees with the suite's declared `device`
+    immediately generates the scratch variant under
+    `results/<tracks_dir>/<suite><suffix_for(target)>/` — only yamls are
+    copied, so every data binding stays under `data/`; the tracks gate then
+    validates the clone like any other suite config. Both directions are
+    supported: a device-cpu suite under an accelerator request (`__gpu`) and a
+    device-cuda suite under `--gpu CPU` (`__cpu`). Setting the opt-out env to
+    `1` gives operators the raw must-agree error instead.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     tracks_dir: str = "model_tracks"
-    suffix: str = "__gpu"
+    gpu_suffix: str = "__gpu"
+    cpu_suffix: str = "__cpu"
     opt_out_env: str = "ER_SUITES_KEEP_DEVICE"
+
+    def suffix_for(self, device: str) -> str:
+        """The clone suffix for the requested device (`cpu`/`cuda`)."""
+        if device == "cpu":
+            return self.cpu_suffix
+        if device == "cuda":
+            return self.gpu_suffix
+        raise ValueError(f"unknown requested suite device: {device!r}")
 
 
 class SuiteMatrixEntry(BaseModel):
