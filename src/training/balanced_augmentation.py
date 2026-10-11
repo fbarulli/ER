@@ -12,11 +12,85 @@ import random
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core.schemas import BalancedAugmentationSpec, MaskAuditEntry
-from core.coverage_contracts import Count, require_keys
+from core.coverage_contracts import Count, Difficulty, require_keys
+from core.schemas import AugmentationCounts, BalancedAugmentationSpec, MaskAuditEntry
+from training.difficulty import DifficultyEndpoint, measure_pair
 from training.masking import (_FIELD_PREFIXES, _field_surfaces, _field_values_conflict,
     _coherent_splice_field, field_of, augment_pairs, extend_augmented_features,
     normalize_entity_key)
+
+
+class RelativeCounts:
+    """Resolve a spec's relative R1/R2 counts against the ACTUAL class sizes.
+
+    The carve's class sizes are known only at bundle-build time, so the counts
+    are expressed relatively in config and resolved here from
+    ``len(positives)/len(negatives)``. Absolute counts (``spec.counts`` already
+    non-zero, e.g. the sample or a cohort override) win unchanged — the relative
+    knobs only fill the all-zero sentinel.
+    """
+
+    @staticmethod
+    def resolve(spec: BalancedAugmentationSpec, positives: int, negatives: int) -> AugmentationCounts:
+        counts = spec.counts
+        updates: dict[str, int] = {}
+        if spec.balance_negatives_to_positives and not counts.minted_negatives:
+            updates["minted_negatives"] = max(0, positives - negatives)
+        if spec.masked_share_per_class is not None and not (
+            counts.masked_positives or counts.masked_minted_negatives
+        ):
+            share = spec.masked_share_per_class
+            updates["masked_positives"] = round(share * positives)
+            updates["masked_minted_negatives"] = round(share * max(positives, negatives))
+        if not updates:
+            return counts
+        # Re-validate the RESOLVED object: the negative-first invariant
+        # (masked <= minted) can only be checked once P/N are substituted.
+        return AugmentationCounts.model_validate({**counts.model_dump(), **updates})
+
+
+class PairDifficultyIndex:
+    """Zero-leak pair difficulty measured from the frozen payload text.
+
+    Difficulty is a property of the text pair alone, so it is measured INSIDE
+    the mint/mask loops from ``payload`` — never carried as a new bundle member.
+    A pair the vocabulary cannot judge stays ``unknown`` (a declared value).
+    """
+
+    def __init__(self, by_pair: dict[tuple[int, int], Difficulty]):
+        self._by_pair = by_pair
+
+    @classmethod
+    def from_pairs(cls, pairs, payload, label: int) -> "PairDifficultyIndex":
+        endpoints: dict[int, DifficultyEndpoint] = {}
+        by_pair: dict[tuple[int, int], Difficulty] = {}
+        for a, b in pairs:
+            a, b = int(a), int(b)
+            for index in (a, b):
+                if index not in endpoints:
+                    endpoints[index] = DifficultyEndpoint.from_text(payload[index])
+            by_pair[(a, b)] = measure_pair(endpoints[a], endpoints[b], label).difficulty
+        return cls(by_pair)
+
+    def get(self, a: int, b: int) -> Difficulty:
+        return self._by_pair.get((int(a), int(b)), "unknown")
+
+    @staticmethod
+    def stratified(rows, key_of, rng):
+        """Interleave rows round-robin across difficulty strata.
+
+        Each stratum is shuffled independently, then one row of every non-empty
+        stratum is taken per turn, so a stratified selection (minting or masking)
+        covers the difficulties present instead of letting one dominate.
+        """
+        from itertools import zip_longest
+        strata: dict[str, list] = defaultdict(list)
+        for row in rows:
+            strata[key_of(row)].append(row)
+        for group in strata.values():
+            rng.shuffle(group)
+        tiers = zip_longest(*[strata[key] for key in sorted(strata)])
+        return [row for tier in tiers for row in tier if row is not None]
 
 
 class AttributeAllocation(BaseModel):
@@ -196,14 +270,17 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
         return str(retailer_by_row[index]) if index < len(retailer_by_row) else ''
     positives = [(int(a), int(b)) for a,b in pos if int(a) in train_indices and int(b) in train_indices]
     negatives = [(int(a), int(b)) for a,b in neg if int(a) in train_indices and int(b) in train_indices]
+    counts = RelativeCounts.resolve(spec, len(positives), len(negatives))
+    difficulty = PairDifficultyIndex.from_pairs(positives, payload, label=1)
     positive_support, negative_support = Counter(), Counter()
-    anchors, donors = defaultdict(list), defaultdict(list)
+    anchors, anchors_by_diff, donors = defaultdict(list), defaultdict(lambda: defaultdict(list)), defaultdict(list)
     for a,b in positives:
         for field in _FIELD_PREFIXES:
             if fields[a].get(field) and fields[b].get(field):
                 positive_support[field] += 1
                 if b in canonical_indices and not _field_values_conflict(field, fields[a][field], fields[b][field]):
                     anchors[field].append((a,b))
+                    anchors_by_diff[field][difficulty.get(a,b)].append((a,b))
     for a,b in negatives:
         negative_support.update(f for f in _FIELD_PREFIXES if fields[a].get(f) and fields[b].get(f))
     for index in sorted(train_indices):
@@ -211,15 +288,23 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
             donors[field].append((index, values))
     eligible_fields = [f for f in _FIELD_PREFIXES if len(anchors[f]) >= spec.min_attribute_pairs
         and len({tuple(v) for _,v in donors[f]}) >= 2]
-    target = spec.counts.minted_negatives
-    weights = {f: math.sqrt(len(anchors[f])) * (1 + max(0, positive_support[f]/max(len(positives),1)
-        - negative_support[f]/max(len(negatives),1))) for f in eligible_fields}
-    quota = {f: 0 for f in _FIELD_PREFIXES}
-    if weights:
-        total = sum(weights.values())
-        raw = {f: target*w/total for f,w in weights.items()}
-        for f,value in raw.items(): quota[f] = math.floor(value)
-        for f in sorted(raw, key=lambda f: (-(raw[f]-quota[f]), f))[:target-sum(quota.values())]: quota[f] += 1
+    target = counts.minted_negatives
+    # Quota weights per (field x difficulty): a field's share is split across the
+    # difficulty strata its anchors actually span, so the minted negatives cover
+    # the measured difficulty of the source positives, not just their field.
+    field_factor = {f: 1 + max(0, positive_support[f]/max(len(positives),1)
+        - negative_support[f]/max(len(negatives),1)) for f in eligible_fields}
+    cell_weights = {(f,d): math.sqrt(len(cells)) * field_factor[f]
+                    for f in eligible_fields for d, cells in anchors_by_diff[f].items()}
+    field_weight = {f: math.sqrt(len(anchors[f])) * field_factor[f] for f in eligible_fields}
+    quota_cell = {cell: 0 for cell in cell_weights}
+    if cell_weights:
+        total = sum(cell_weights.values())
+        raw = {cell: target*w/total for cell,w in cell_weights.items()}
+        for cell,value in raw.items(): quota_cell[cell] = math.floor(value)
+        for cell in sorted(raw, key=lambda cell: (-(raw[cell]-quota_cell[cell]), cell))[:target-sum(quota_cell.values())]:
+            quota_cell[cell] += 1
+    quota = {f: sum(quota_cell.get((f,d),0) for d in anchors_by_diff[f]) for f in _FIELD_PREFIXES}
     new_payload, new_bc = list(payload), list(map(str,row_bc))
     minted, audits, rejection, value_use = [], [], Counter(), Counter()
     minted_per_field, masked_per_field = Counter(), Counter()
@@ -227,8 +312,10 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     value_cap = max(spec.min_attribute_pairs, math.ceil(target*.03))
     anchor_use=Counter()
     initial_quota=dict(quota)
-    def mint_field(field, budget):
-        candidates = list(anchors[field]); rng.shuffle(candidates)
+    def mint_field(field, difficulty_slice, budget):
+        candidates = list(anchors[field] if difficulty_slice is None
+                          else anchors_by_diff[field][difficulty_slice])
+        rng.shuffle(candidates)
         # Round-robin source entities/vendors: each anchor gets one turn before
         # another variant; no large seller/product group monopolizes a field.
         groups = defaultdict(list)
@@ -268,20 +355,25 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
                         fields_hit=[field], donor_split='train', donor_anchor_payload_idx=donor,
                         donor_pair_payload_idx=donor, donor_anchor_entity=str(row_bc[donor]),
                         donor_pair_entity=str(row_bc[donor]), fields_before={field:fields[b][field]},
-                        fields_after={field:values}).model_dump())
+                        fields_after={field:values},
+                        difficulty_slice=difficulty.get(a,b),
+                        target_stratum=(None if difficulty_slice is None else f'{field}:{difficulty_slice}')
+                        ).model_dump())
                     break
                 else: rejection['no_safe_donor:'+field] += 1
-    for field in sorted(eligible_fields, key=lambda f: (len(anchors[f]), f)):
-        mint_field(field, quota[field])
+    quota_cells = sorted(quota_cell, key=lambda cell: (-cell_weights[cell], cell))
+    for field, difficulty_slice in quota_cells:
+        mint_field(field, difficulty_slice,
+                   minted_per_field[field] + quota_cell[(field, difficulty_slice)])
     # Transfer rejected slots to supported fields, retaining a field ceiling.
     # Keep both the initial and final quotas so this adaptation is auditable.
     remaining=target-len(minted)
     if remaining:
         quota={f:minted_per_field[f] for f in _FIELD_PREFIXES}
-        for field in sorted(eligible_fields,key=lambda f:(-weights[f],f)):
+        for field in sorted(eligible_fields,key=lambda f:(-field_weight[f],f)):
             room=max(0,math.ceil(target*spec.max_attribute_share)-minted_per_field[field])
             if not room: continue
-            mint_field(field,minted_per_field[field]+min(remaining,room))
+            mint_field(field,None,minted_per_field[field]+min(remaining,room))
             quota[field]=minted_per_field[field]
             remaining=target-len(minted)
             if not remaining: break
@@ -290,9 +382,12 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     # Mask AFTER minting. Keep the discriminating attribute and all numeric
     # features unchanged; the original clean negative view remains available.
     minted_count = len(minted)
-    mask_candidates = list(audits); rng.shuffle(mask_candidates)
+    # Difficulty-stratified masking: every stratum the minted negatives span gets
+    # a turn before any stratum is masked a second time.
+    mask_candidates = PairDifficultyIndex.stratified(
+        audits, lambda row: row['difficulty_slice'], rng)
     for audit in mask_candidates:
-        if sum(masked_per_field.values()) >= spec.counts.masked_minted_negatives: break
+        if sum(masked_per_field.values()) >= counts.masked_minted_negatives: break
         field = audit['fields_hit'][0]
         result = context_mask(audit['masked_text'],field,spec.mask_extent,rng)
         if result is None: rejection['no_maskable_context:'+field] += 1; continue
@@ -308,7 +403,7 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     by_entity=defaultdict(list)
     for index in sorted(train_indices):
         if index<len(df): by_entity[normalize_entity_key(row_bc[index],str(index))].append(index)
-    vendor_pairs=_mine_vendor_pairs(by_entity,fields,retailer_of,spec.counts.vendor_variation_positives)
+    vendor_pairs=_mine_vendor_pairs(by_entity,fields,retailer_of,counts.vendor_variation_positives)
     pos_with_vendors=np.vstack([pos,np.asarray(vendor_pairs,dtype=int)]) if vendor_pairs else np.asarray(pos)
     # Only originals that now have an explicit negative are masked: no dead
     # positive copies are minted speculatively. GENERATE-ONLY-IF-COVERED, never
@@ -321,12 +416,13 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     # gradient.
     usable={a for a,b in negatives} | {r['anchor_payload_idx'] for r in audits}
     mask_pairs=np.asarray([(a,b) for a,b in positives if a in usable],dtype=int).reshape(-1,2)
-    if len(mask_pairs) < spec.counts.masked_positives:
-        raise ValueError(f'positive masking needs {spec.counts.masked_positives} licensed anchors; only {len(mask_pairs)} available')
-    chosen = list(map(tuple,mask_pairs.tolist())); rng.shuffle(chosen)
+    if len(mask_pairs) < counts.masked_positives:
+        raise ValueError(f'positive masking needs {counts.masked_positives} licensed anchors; only {len(mask_pairs)} available')
+    chosen = PairDifficultyIndex.stratified(
+        list(map(tuple,mask_pairs.tolist())), lambda pair: difficulty.get(pair[0],pair[1]), rng)
     pos_audit=[]
     for a,b in chosen:
-        if len(pos_audit)>=spec.counts.masked_positives: break
+        if len(pos_audit)>=counts.masked_positives: break
         masked=context_mask(original_payload[a],'context',spec.mask_extent,rng)
         if masked is None: continue
         text,extent=masked;copy=len(new_payload)
@@ -334,7 +430,9 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
         pos_audit.append(MaskAuditEntry(anchor_payload_idx=a,pair_payload_idx=b,copy_payload_idx=copy,
             gtin=str(row_bc[a]),anchor_text=original_payload[a],masked_text=text,
             realized_extent=extent,population='positive',target_mode='targeted',
-            generation_variant='masked',fields_hit=[]).model_dump())
+            generation_variant='masked',fields_hit=[],
+            difficulty_slice=difficulty.get(a,b),
+            target_stratum=f'positive:{difficulty.get(a,b)}').model_dump())
     n_mask=len(pos_audit)
     masked_pairs=np.asarray([(r['copy_payload_idx'],r['pair_payload_idx']) for r in pos_audit],dtype=int).reshape(-1,2)
     final_pos=np.vstack([pos_with_vendors,masked_pairs]) if len(masked_pairs) else pos_with_vendors
@@ -347,5 +445,5 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
             initial_requested=initial_quota[f],
             minted=minted_per_field[f],masked=masked_per_field[f],shortfall=quota[f]-minted_per_field[f],
             status='eligible' if f in eligible_fields else 'insufficient_comparable_evidence') for f in _FIELD_PREFIXES},
-        rejections=dict(rejection),requested_counts=spec.counts.model_dump())
+        rejections=dict(rejection),requested_counts=counts.model_dump())
     return final_pos, np.vstack([neg,np.asarray(minted,dtype=int)]) if minted else np.asarray(neg),new_payload,np.asarray(new_bc),new_features,pos_audit,audits,coverage

@@ -17,11 +17,19 @@ masking:
   enabled: true
   balanced_augmentation:
     enabled: true
+    # R1/R2 relative counts (SSOT owner 2026-10-11): the carve's class sizes are
+    # known only at bundle build time, so the engine resolves the counts from the
+    # actual train split: mint negatives up to the positive count (R1), then mask
+    # this share of each (now equal) class (R2). The zeroed `counts` sentinel is
+    # what makes the relative knobs and the absolute sample/cohort counts
+    # mutually exclusive — never both for the same count.
     counts:
-      minted_negatives: 12000
-      masked_minted_negatives: 6000
-      masked_positives: 1200
-      vendor_variation_positives: 300
+      minted_negatives: 0
+      masked_minted_negatives: 0
+      masked_positives: 0
+      vendor_variation_positives: 0
+    balance_negatives_to_positives: true
+    masked_share_per_class: 0.25
     sample_counts:
       minted_negatives: 100
       masked_minted_negatives: 50
