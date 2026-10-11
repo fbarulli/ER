@@ -5964,8 +5964,7 @@ def train_one_config(
                     # registry-safe source) and the per-pair presentation counts
                     # the loss fills during training; both are consumed by the
                     # datapoint-usage writer below.
-                    pair_populations = _mnrl_pair_populations(
-                        triples, tr_negs, tr_neg_sources)
+                    pair_populations = list(objective_plan["dataset"]["population"])
                     presentation_counts: dict[tuple, int] = {}
                     train_ds = Dataset.from_dict(objective_plan["dataset"])
                 else:
