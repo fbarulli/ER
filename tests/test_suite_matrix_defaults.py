@@ -94,3 +94,11 @@ def test_default_bundle_is_the_canonical_full_cohort(suite_paths, tmp_path):
     bundle.mkdir(parents=True)
     (bundle / "all_tracks_inputs.tar.zst").write_bytes(b"x")
     assert colab.default_prepared_input_package() == bundle
+
+
+def test_default_bundle_falls_back_to_the_prep_run_tree(suite_paths, tmp_path):
+    run = tmp_path / "results/training_prep/20261010T160841744159"
+    run.mkdir(parents=True)
+    (run / "all_tracks_inputs.tar.zst").write_bytes(b"x")
+    assert colab.default_prepared_input_package() == run
+

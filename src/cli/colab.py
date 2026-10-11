@@ -2139,11 +2139,13 @@ def prepared_package_candidates() -> list[tuple[Path, dict]]:
                 metadata = {}
         found.append((archive, metadata))
 
-    kaggle_root = RESULTS / 'kaggle_lane'
+    kaggle = training_cfg().kaggle
+    kaggle_root = RESULTS / Path(kaggle.staging_dir).name
+    bundle_dir = kaggle.files.install_dir.format(kind='bundle')
     if kaggle_root.is_dir():
         for install in sorted(p for p in kaggle_root.iterdir() if p.is_dir()):
-            bundle = install / 'bundle'
-            add(bundle / _BUNDLE_ARCHIVE, bundle / 'bundle.receipt.json')
+            bundle = install / bundle_dir
+            add(bundle / _BUNDLE_ARCHIVE, bundle / kaggle.files.bundle_receipt)
     prep_root = RESULTS / _PREP_RUN_DIR_BASE
     if prep_root.is_dir():
         for run in sorted(p for p in prep_root.iterdir() if p.is_dir()):
@@ -2170,7 +2172,7 @@ def resolve_prepared_input_package(value: Path) -> Path:
     if value.is_file():
         return value
     if value.is_dir():
-        receipt_path = value / 'bundle.receipt.json'
+        receipt_path = value / training_cfg().kaggle.files.bundle_receipt
         if receipt_path.is_file():
             try:
                 archive_name = json.loads(receipt_path.read_text(encoding='utf-8')).get('archive')
@@ -2191,17 +2193,48 @@ def resolve_prepared_input_package(value: Path) -> Path:
         f'bundle directory, or one of:\n{listing}')
 
 
+def _kaggle_bundle_install(cohort: str) -> Path:
+    """One kaggle-lane cohort's bundle install: ``<staging>/<cohort>/bundle``.
+
+    The layout is the kaggle lane's own (``KaggleDatasets._newest_bundle_install``):
+    the staging root is the module RESULTS roof and the cohort/install names come
+    from the kaggle declaration, so no caller re-spells ``kaggle_lane``/``bundle``.
+    """
+    kaggle = training_cfg().kaggle
+    return (RESULTS / Path(kaggle.staging_dir).name / cohort
+            / kaggle.files.install_dir.format(kind='bundle'))
+
+
+def _prep_run_input_dirs() -> list[Path]:
+    """Preparation run dirs carrying the sealed inputs archive, newest first.
+
+    ``RESULTS/<preparation.run_dir_base>/<run>/<archive>`` is where
+    ``training.prepare_all`` seals its ``all_tracks_inputs`` package; the run dir
+    resolves through its canonical archive name like the kaggle bundle install.
+    """
+    prep_root = RESULTS / _PREP_RUN_DIR_BASE
+    if not prep_root.is_dir():
+        return []
+    runs = [run for run in prep_root.iterdir() if (run / _BUNDLE_ARCHIVE).is_file()]
+    return sorted(runs, key=lambda run: (run / _BUNDLE_ARCHIVE).stat().st_mtime,
+                  reverse=True)
+
+
 def default_prepared_input_package() -> Path | None:
     """The canonical full-cohort bundle when the operator names none.
 
-    Policy: every launch trains the full cohort on a GPU from the prebuilt full
-    bundle, so an unspecified --prepared-input-package resolves to the full
-    cohort install under the kaggle lane's configured staging root instead of
-    repackaging locally. Unknown layout returns None and the lane falls back to
-    on-VM packaging.
+    Policy: every launch trains the full cohort on a GPU from a prebuilt full
+    bundle, so an unspecified --prepared-input-package resolves, in order, to
+    the full-cohort install under the kaggle lane's configured staging root and
+    then to the newest preparation run tree, where ``training.prepare_all``
+    seals its ``all_tracks_inputs`` package. Unknown layout returns None and the
+    lane falls back to packaging the suite locally.
     """
-    bundle = RESULTS / 'kaggle_lane' / 'full' / 'bundle'
-    return bundle if bundle.is_dir() else None
+    install = _kaggle_bundle_install(training_cfg().kaggle.default_cohort)
+    if install.is_dir():
+        return install
+    runs = _prep_run_input_dirs()
+    return runs[0] if runs else None
 
 
 def main() -> None:
