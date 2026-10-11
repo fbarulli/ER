@@ -324,6 +324,9 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         slices=slices, attributes=attribute_summary_rows(report_dir, track),
         performance=performance, confidence_intervals=intervals))
     _plots(scored, report_dir, track, threshold)
+    cluster_plot, cluster_skip = _cluster_quality_plot(summary, scores, report_dir, track)
+    progress('cluster_quality_plot', plot=(str(cluster_plot) if cluster_plot else None),
+             skipped=cluster_skip)
     progress('plots_complete', plots=[str(path) for path in sorted(report_dir.glob('*.png'))])
     perf.write_payload(report_dir / name(track, 'performance.json'), performance)
     progress('performance_complete', performance=performance)
@@ -475,6 +478,32 @@ def _plots(scored, output, track, threshold):
     fig.tight_layout()
     fig.savefig(output / name(track, 'score_distribution_and_pr.png'), dpi=plot_dpi())
     plt.close(fig)
+
+
+def _cluster_quality_plot(summary, scores, output, track):
+    """The Gate-2 cluster-quality deliverable for the held-out split.
+
+    Renders the pairwise precision/recall + over/under-merge bars
+    (``training.cluster_quality_plot.ClusterQualityPlot``) from the reported
+    held-out split's ``pair_metrics`` row — ``test`` when it was reported, else
+    ``dev``. Returns ``(path, None)`` on success or ``(None, reason)`` when the
+    split carries no both-classes support to draw; the reason (with the full
+    traceback) is logged by the caller's progress row, never a silent no-op.
+    """
+    import traceback
+
+    from training.cluster_quality_plot import PLOT_NAME, ClusterQualityPlot
+    split = 'test' if 'test' in scores else 'dev'
+    row = next((r for r in summary if r['split'] == split), None)
+    if row is None:
+        return None, f'no pair-metrics row for the held-out split {split!r}'
+    try:
+        path = ClusterQualityPlot.from_pair_metrics(row, split=split, track=track).render(
+            output / name(track, PLOT_NAME))
+        return path, None
+    except ValueError:
+        return None, (f'cluster-quality plot skipped for split {split!r} '
+                      f'(no both-classes support):\n{traceback.format_exc()}')
 
 
 def main():
