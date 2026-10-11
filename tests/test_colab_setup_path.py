@@ -782,9 +782,8 @@ class SampleSuiteGuardTests(unittest.TestCase):
         """
         with mock.patch.object(
             sys, "argv", ["colab.py", "--what", "tracks", "--sample", "5", "--gpu", "CPU"]
-        ):
-            with self.assertRaises(ValueError) as raised:
-                colab.main()
+        ), self.assertRaises(ValueError) as raised:
+            colab.main()
         self.assertIn("does not apply to an all-track suite", str(raised.exception))
         self.assertIn("prepare_smoke", str(raised.exception))
 
