@@ -3222,10 +3222,14 @@ def token_verdict(tok: str, brand_vocab: set[str]) -> tuple[str, str]:
     """
     cls = _classify(tok)
     core = re.sub(r"[^a-z0-9]", "", tok.lower())
-    if tok.lower() in brand_vocab or core in brand_vocab:
-        return cls, "keep_brand"
+    # A nutrient/chemical code (vitamin b12, o2, co2, h2o, ph) is SEMANTIC: it
+    # must survive even when a single brand elsewhere shares the token (`H2O`
+    # branded water is measured as the nutrient code, never a per-row brand
+    # token), so the code check precedes the brand vocabulary.
     if _NUTRIENT_RE.match(tok):
         return cls, "keep_nutrient"
+    if tok.lower() in brand_vocab or core in brand_vocab:
+        return cls, "keep_brand"
     if cls == "word_embedded" and _name_embedded(tok) and not _CODE_RE.match(tok):
         return cls, "keep_name"
     if cls == "word_embedded" and re.search(
