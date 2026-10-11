@@ -32,7 +32,7 @@ model_key: laya
 # trial — see options.warm_start.baseline). Override per launch with
 # `--n-trials` (the CLI bake is validated by the lane tests).
 n_trials: 3
-n_jobs: 4          # owner directive: 4 parallel workers on the 2xT4 session
+n_jobs: 3          # owner directive: 3 parallel experiments on the 2xT4 session
 seed: 1729
 
 # The HPO corpus carve (owner directive 2026-10-10): 50/50 train<->validate,
@@ -83,16 +83,18 @@ plot:
 # builder registry per family, assembled by `build_option_set`.
 options:
   # A) trial parallelism — one worker PROCESS per GPU (true parallelism).
-  # OWNER DIRECTIVE (2026-10-10): attempt 4 parallel AS-IS on the 2xT4
-  # session (2 slots/card). The documented memory math: the full recipe peaks
-  # ~8.07 GB/proc while 2 slots/card impose a ~7.7 GB per-process cap
-  # (cuda_alloc_fraction 1.0 split across that GPU's slots, MPS OFF), so a
-  # trial sampling micro_batch 8/16 is EXPECTED to OOM. Per the owner, an OOM
-  # is the ACCEPTED outcome of this attempt: no silent downshift, no
-  # feasibility block — the failure is reported, not engineered away.
+  # OWNER DIRECTIVE (2026-10-11): a full trial session of 3 PARALLEL
+  # experiments on the 2xT4 session. With slots_per_gpu=2 the worker pool is
+  # capped at max_concurrent_trials=3, so the deal is 2 slots on GPU0 + 1 slot
+  # on GPU1 (index % gpu_count). Memory math: GPU0's two slots split its budget
+  # (cuda_alloc_fraction 1.0 / 2 = ~0.5 each) while GPU1's lone slot gets the
+  # full card, so a micro_batch 8/16 trial on GPU0 is EXPECTED to OOM while the
+  # GPU1 slot has headroom. Per the owner, an OOM is the ACCEPTED outcome of
+  # this attempt: no silent downshift, no feasibility block — reported, not
+  # engineered away.
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 2            # two worker PROCESSes per T4 (no MPS sharing)
-  max_concurrent_trials: 4    # = slots_per_gpu * visible GPUs: 4 on 2xT4
+  slots_per_gpu: 2            # up to two worker PROCESSes per T4 (no MPS share)
+  max_concurrent_trials: 3    # the 3-parallel cap: min(slots_per_gpu*GPUs, 3)
   mps: false                  # no process shares a GPU via MPS this round
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
@@ -178,10 +180,14 @@ kernel_slug: fbarulli/er-laya-hpo
 #   categorical  -> suggest_categorical(name, choices)
 dials:
   early_stop_patience:
+    # OWNER DIRECTIVE (2026-10-11): a FIXED session patience of 3 epochs (the
+    # in-trial early stop on the dev metric). Pinned in-space (lo==hi==3) so it
+    # is config SSOT — every trial routes patience=3 to the training control,
+    # never a code literal and never searched this round.
     type: int
     target: control
-    lo: 0
-    hi: 6
+    lo: 3
+    hi: 3
   warmup_frac:
     type: float
     target: control

@@ -151,6 +151,22 @@ class WorkerSession:
             generation_id=GENERATION_ID, model_key=MODEL_KEY,
             timeout_s=self.options.session.timeout_s, log=log).run()
 
+    def _gpu_sampler(self):
+        """This worker's OWN 1 Hz GPU poller (offender #10: the finetune kernel
+        starts one at rank 0, the HPO WorkerSession never did).
+
+        Each worker writes a PER-WORKER log (keyed by ER_LAYA_HPO_WORKER_INDEX,
+        so the 3 parallel workers never clobber one ``gpu_usage.log``) and pins
+        ``nvidia-smi`` to its OWN ``CUDA_VISIBLE_DEVICES`` (which the sampler
+        would otherwise ignore), so every worker records its OWN gpu/util_pct —
+        the next profiling attempt is GPU-visible per worker.
+        """
+        devices = os.environ.get("CUDA_VISIBLE_DEVICES") or ""
+        worker = os.environ.get("ER_LAYA_HPO_WORKER_INDEX") or str(os.getpid())
+        return start_gpu_sampler(
+            path=WORKING / ("gpu_usage.worker" + worker + ".log"),
+            devices=devices or None)
+
     def run(self):
         self._assert_laya()
         self._install()
@@ -166,17 +182,22 @@ class WorkerSession:
                             generation_id=GENERATION_ID, role="worker")
         except Exception as error:
             log("wandb init failed: " + str(error)[:200])
-        objective = self._objective(lease_store, champion_store, train_path,
-                                    dev_path, base_model)
-        if self.resolver.remote:
-            self._optimize_shared(study, objective, champion_store)
-        else:
-            # Local SQLite (no remote URL) or an offline session: no shared
-            # ledger, but parallel workers still share the SAME study file.
-            self._optimize_offline(study, objective)
-        # Observe the committed study ONCE (idempotent across workers/sessions)
-        # and flush every worker's mirror so an exiting worker never loses it.
-        _sync_observations(study)
+        gpu_handle = self._gpu_sampler()
+        try:
+            objective = self._objective(lease_store, champion_store, train_path,
+                                        dev_path, base_model)
+            if self.resolver.remote:
+                self._optimize_shared(study, objective, champion_store)
+            else:
+                # Local SQLite (no remote URL) or an offline session: no shared
+                # ledger, but parallel workers still share the SAME study file.
+                self._optimize_offline(study, objective)
+            # Observe the committed study ONCE (idempotent across workers/
+            # sessions) and flush every worker's mirror so an exiting worker
+            # never loses it.
+            _sync_observations(study)
+        finally:
+            stop_gpu_sampler(gpu_handle)
         wandb_finish()
 
 
@@ -468,11 +489,14 @@ class SessionOrchestrator:
     def _launch(self, specs):
         script = os.path.abspath(__file__)
         processes = []
-        for spec in specs:
+        for index, spec in enumerate(specs):
             env = os.environ.copy()
             env.update(spec.env)
             env["ER_LAYA_HPO_SKIP_INSTALL"] = "1"
             env["ER_LAYA_HPO_WORKER_COUNT"] = str(len(specs))
+            # A stable per-worker identity so each worker's GPU sampler writes
+            # its OWN gpu_usage log (parallel workers never clobber one file).
+            env["ER_LAYA_HPO_WORKER_INDEX"] = str(index)
             if self.options.scheduler.mode == "slots":
                 # Pin the slot to ONE physical GPU (its own worker process).
                 env["CUDA_VISIBLE_DEVICES"] = str(spec.device_index)

@@ -1313,9 +1313,9 @@ def test_receipt_worker_cap_is_the_gpu_capped_plan(monkeypatch, tmp_path):
     """#8: max_workers is the GPU-capped worker plan (no shared-data cache)."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert "shared_data" not in receipt["options"]
-    # slots mode: the owner's 4-parallel round — n_jobs=4 workers, 2 slots per
-    # card on the 2xT4 session, capped at max_concurrent=4.
-    assert receipt["budget"]["max_workers"] == 4
+    # slots mode: the owner's 3-parallel round — n_jobs=3, 2 slots per card on
+    # the 2xT4 session, capped at max_concurrent=3 (2 on GPU0 + 1 on GPU1).
+    assert receipt["budget"]["max_workers"] == 3
 
 
 def _hpo_space_from_script(script: str) -> dict:
@@ -1338,9 +1338,10 @@ def test_staging_enqueues_no_baseline_pure_hpo(monkeypatch, tmp_path):
     space = _hpo_space_from_script(script)
     assert space["options"]["warm_start"]["baseline"] is False
     assert space["options"]["warm_start"]["enqueue"] == []
-    # 4 parallel workers on the 2xT4 session (owner directive: 2 slots/card).
-    assert receipt["budget"]["n_jobs"] == 4
-    assert receipt["budget"]["max_workers"] == 4
+    # 3 parallel experiments on the 2xT4 session (owner directive: 2 slots/card
+    # capped at max_concurrent_trials=3 -> 2 on GPU0 + 1 on GPU1).
+    assert receipt["budget"]["n_jobs"] == 3
+    assert receipt["budget"]["max_workers"] == 3
 
 
 def test_fidelity_caps_every_trial_at_three_epochs(monkeypatch, tmp_path):
@@ -1360,6 +1361,21 @@ def test_fidelity_caps_every_trial_at_three_epochs(monkeypatch, tmp_path):
     assert fidelity["full"] == 3 and fidelity["stages"] == 1
     schedule = FidelitySchedule(fidelity)
     assert all(schedule.resource(n) == 3 for n in range(8))
+
+
+def test_early_stop_patience_is_pinned_to_three():
+    """OWNER DIRECTIVE (2026-10-11): the session's early-stop patience is a
+    FIXED 3 epochs — pinned in the space SSOT (lo==hi==3), so every trial routes
+    patience=3 to the training control (never searched, never a code literal)."""
+    space = laya_hpo.load_space()
+    dial = space["dials"]["early_stop_patience"]
+    assert dial["target"] == "control"
+    assert dial["lo"] == 3 and dial["hi"] == 3
+    # A sampled + routed trial carries patience=3 in the CONTROL block.
+    dials = laya_hpo.sample_dials(FakeTrial(), space)
+    assert dials["early_stop_patience"] == 3
+    _config, control = laya_hpo.route_dials({}, {}, dials, space)
+    assert control["early_stop_patience"] == 3
 
 
 def test_staging_uses_the_space_corpus_carve(monkeypatch, tmp_path):
@@ -1431,6 +1447,27 @@ def test_staged_kernel_observes_once_after_commit_and_falls_back(monkeypatch,
     resolver = resolver.split("\nclass ", 1)[0]
     assert resolver.index("if self.offline:") < resolver.index(
         "ensure_optuna_url()")
+
+
+def test_staged_kernel_wires_the_per_worker_gpu_sampler(monkeypatch, tmp_path):
+    """Offender #10: the HPO WorkerSession starts its OWN GPU sampler (like the
+    finetune kernel does at rank 0), with a PER-WORKER log path — the 3 parallel
+    workers never clobber one ``gpu_usage.log`` — and ``nvidia-smi`` filtered to
+    the worker's ``CUDA_VISIBLE_DEVICES`` (which nvidia-smi otherwise ignores),
+    so each worker records its OWN gpu/util_pct and profiling is GPU-visible."""
+    receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
+    script = (Path(receipt["staged"]) / laya_hpo.HPO_CODE_FILE).read_text(
+        encoding="utf-8")
+    # The WorkerSession starts + stops the sampler around its trial budget.
+    assert "gpu_handle = self._gpu_sampler()" in script
+    assert "stop_gpu_sampler(gpu_handle)" in script
+    # A per-worker path (keyed by the worker index) + the worker's own devices.
+    assert "gpu_usage.worker" in script
+    assert 'devices = os.environ.get("CUDA_VISIBLE_DEVICES")' in script
+    # The shared sampler pins nvidia-smi to those devices via -i.
+    assert 'command += ["-i", devices]' in script
+    # The orchestrator hands each worker a stable index for its log path.
+    assert 'env["ER_LAYA_HPO_WORKER_INDEX"] = str(index)' in script
 
 
 def test_workers_backfill_the_budget_across_two_workers():

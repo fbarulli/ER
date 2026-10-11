@@ -806,12 +806,17 @@ def apply_perf_patch():
     return True
 
 
-def start_gpu_sampler():
-    """Start the ONE 1 Hz GPU poller: append gpu_usage.log AND mirror to wandb.
+def start_gpu_sampler(path=None, devices=None):
+    """Start the ONE 1 Hz GPU poller: append a log AND mirror to wandb.
 
-    The existing sampler loop is reused (same 1 Hz cadence, same log file) but
-    runs in-process so it reaches the live wandb run; there is still exactly one
-    poller. A wandb write failure is fail-soft and never stops the samples.
+    The existing sampler loop is reused (same 1 Hz cadence) but runs in-process
+    so it reaches the live wandb run; there is still exactly one poller per
+    process. ``path`` defaults to the session-wide ``gpu_usage.log`` (the
+    finetune kernel's single rank-0 sampler); a MULTI-worker lane (HPO) passes a
+    PER-WORKER path so parallel workers never clobber one file, and its
+    ``devices`` (its own ``CUDA_VISIBLE_DEVICES``) so ``nvidia-smi -i`` reports
+    ONLY the GPU that worker owns — each worker records its OWN gpu/util_pct. A
+    wandb write failure is fail-soft and never stops the samples.
     """
     if not perf_patch_enabled():
         return None
@@ -820,20 +825,26 @@ def start_gpu_sampler():
         return None
     import threading
 
-    path = WORKING / "gpu_usage.log"
+    path = Path(path) if path else (WORKING / "gpu_usage.log")
     path.parent.mkdir(parents=True, exist_ok=True)
     stop_event = threading.Event()
-    thread = threading.Thread(target=_gpu_sampler_loop, args=(path, stop_event),
-                              daemon=True)
+    thread = threading.Thread(target=_gpu_sampler_loop,
+                              args=(path, stop_event, devices), daemon=True)
     thread.start()
-    log("gpu sampler: 1 Hz -> " + str(path))
+    log("gpu sampler: 1 Hz -> " + str(path)
+        + (" (nvidia-smi -i " + devices + ")" if devices else ""))
     return thread, stop_event
 
 
-def _gpu_sampler_loop(path, stop_event):
-    command = ["nvidia-smi",
-               "--query-gpu=utilization.gpu,memory.used,memory.total",
-               "--format=csv,noheader"]
+def _gpu_sampler_loop(path, stop_event, devices=None):
+    command = ["nvidia-smi"]
+    if devices:
+        # Pin the query to the GPU(s) THIS process owns (CUDA_VISIBLE_DEVICES);
+        # nvidia-smi ignores that env var, so without -i every parallel worker
+        # would log every card and gpu/util_pct could not be attributed.
+        command += ["-i", devices]
+    command += ["--query-gpu=utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader"]
     with path.open("w", encoding="utf-8", buffering=1) as handle:
         while not stop_event.wait(1.0):
             try:

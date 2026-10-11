@@ -121,12 +121,20 @@ GOLDEN_SHA256: dict[str, str] = {
     # grad-disabled CUDA eval-records forward fp16 autocast + a control-sized
     # batch (FinetuneSpec eval_amp/eval_batch, default-OFF; the HPO trial
     # policy enables them), and DevEvaluator moved out of the loop template
-    # into the injected module (the loop file drops back under the 1k cap).
-    "finetune": "7c338cd6bb0a6b75cf6b46525b37cc13688bd6cb8e9e75999c69130f4ad533cd",
-    "finetune-smoke": "3d8cff0a8bbb44c12a07e27d441de636717f2bc356fd6a6329c5bf326cc850ac",
-    "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
-    "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "5cb0465cbdcbc0120c4c5fe196d38d64c3b4db9358684f7160937345a18ec88e",
+     # into the injected module (the loop file drops back under the 1k cap).
+     #
+     # finetune / finetune-smoke / hpo re-pinned for the HPO GPU-sampler wiring
+     # (offender #10): start_gpu_sampler/_gpu_sampler_loop (the shared PERF
+     # patch) now take a per-worker path + a CUDA_VISIBLE_DEVICES `-i` filter
+     # (defaults keep the finetune rank-0 sampler byte-identical in behaviour),
+     # and the HPO WorkerSession starts one per worker. hpo also moves for the
+     # owner's 3-parallel session config (n_jobs/max_concurrent_trials=3 and
+     # early_stop_patience pinned to 3) riding the baked HPO_SPACE literal.
+     "finetune": "456ff9df9bacd7aa70c5af586d47351516842a9663f65cccefbc11ad35823dc9",
+     "finetune-smoke": "e47031061ffa029ecc63118165a4060b91937d330adef88b679b136accd797c6",
+     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
+     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
+     "hpo": "1cb3922d2aefd224aac7455d301cae75a9f5f7d1ab0f289109ed28cc46af1638",
 }
 
 
