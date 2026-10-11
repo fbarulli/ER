@@ -30,3 +30,21 @@ strata: [difficulty_slice, attribute]
 
 # Per-stratum shuffle seed (the carve is a deterministic function of the data).
 seed: 1729
+
+# ── named carve profiles (the SAME owner, a purpose-built ratio set) ─────────
+# A profile is a lighter carve under core.smart_split.SmartSplit: its own
+# ratios/strata/seed, resolved by name (core.smart_split.smart_split_profile).
+# No consumer re-spells a ratio; a lane names the profile it carves through.
+profiles:
+  # The laya HPO 50/50 carve (owner directive 2026-10-10): train<->validate,
+  # NO test role (the HPO objective selects on dev and the session-end held-out
+  # eval records a reasoned skip on the empty test split). Carved at the
+  # COMPONENT grain (zero leakage) by scripts/laya_hpo_corpus.py through
+  # SmartSplit.allocate_components; the strata keep every attribute/difficulty
+  # proportionally represented in BOTH halves.
+  laya_hpo_5050:
+    ratios:
+      train: 0.5
+      dev: 0.5
+    strata: [difficulty_slice, attribute]
+    seed: 1729

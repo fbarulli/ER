@@ -113,13 +113,35 @@ class LayaPublishFactory:
                 "before an attach")
         return slug, key
 
+    @staticmethod
+    def _staged_dataset_slug(metadata_file: Path) -> str | None:
+        """The staged payload's dataset ``id`` (the publish SSOT), or None.
+
+        ``None`` only when the payload is not staged yet (a dry run before
+        staging); a present-but-corrupt metadata file fails loud (traceback),
+        never silently falling back to a slug that would publish the wrong
+        dataset.
+        """
+        if not metadata_file.is_file():
+            return None
+        return json.loads(metadata_file.read_text(encoding="utf-8")).get("id")
+
     def publish_laya_dataset(self, decision_kind: str, *, run_tag: str,
                              execute: bool) -> dict[str, Any]:
         """`--execute`-gated create-or-version of the laya inputs dataset."""
         payload = (self._runtime.staging_dir() / "kaggle" / decision_kind
                    / DATASET_PAYLOAD_DIR)
         metadata_file = payload / DATASET_METADATA_FILE
-        slug, _ = self._dataset_target(decision_kind)
+        # The staged payload's metadata `id` is the SSOT for WHAT publishes: an
+        # external-kind lane (HPO) stages its OWN corpus slug (the 50/50 carve's
+        # fbarulli/er-laya-hpo5050), distinct from the LayaSpec fallback that
+        # `_dataset_target` resolves. Keying create-vs-version on the fallback
+        # would "version" a dataset that does not exist yet, so the staged slug
+        # wins whenever the payload is present (equivalent for every other kind,
+        # whose staged slug IS the spec binding).
+        slug = self._staged_dataset_slug(metadata_file)
+        if slug is None:
+            slug, _ = self._dataset_target(decision_kind)
         plan: dict[str, Any] = {"mode": "executed" if execute else "dry-run",
                                 "payload": str(payload), "slug": slug}
         if not execute:

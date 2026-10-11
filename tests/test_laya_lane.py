@@ -523,10 +523,32 @@ def test_dataset_publish_create_carries_dir_mode_for_nested_payloads(
         lane, "_run_kaggle", staticmethod(
             lambda command: (commands.append(command), (0, ""))[1]))
     plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
-                                          execute=True)
+                                           execute=True)
     assert plan["action"] == "create"
     assert commands[0][:5] == [str(tmp_path / "fake-kaggle"), "datasets",
                                "create", "-r", "zip"]
+
+
+def test_publish_keys_on_the_staged_payload_slug(tmp_path, monkeypatch):
+    """The staged payload's metadata `id` is the publish SSOT: an external-kind
+    lane (HPO) stages its OWN corpus slug (the 50/50 carve's
+    fbarulli/er-laya-hpo5050), distinct from the LayaSpec fallback that
+    `_dataset_target` resolves, so create-vs-version must key on the STAGED
+    slug — never "version" a dataset that does not exist yet."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    metadata_file = Path(receipt["staged"]) / "dataset_payload" \
+        / "dataset-metadata.json"
+    metadata = json.loads(metadata_file.read_text())
+    assert metadata["id"] != "fbarulli/er-laya-hpo5050"  # the spec fallback
+    metadata["id"] = "fbarulli/er-laya-hpo5050"
+    metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=False)
+    assert plan["slug"] == "fbarulli/er-laya-hpo5050"  # staged wins
 
 
 def test_module_scope_gate_pins_nameerror_payload():

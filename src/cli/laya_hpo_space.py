@@ -169,10 +169,10 @@ def validate_space(space: dict[str, Any]) -> None:
     if corpus is not None:
         if not isinstance(corpus, dict):
             raise TypeError("laya HPO corpus must be a mapping")
-        for key in ("dir", "dataset_slug"):
+        for key in ("dir", "dataset_slug", "split_profile"):
             value = corpus.get(key)
             if value is not None and (not isinstance(value, str)
-                                      or not value.strip()):
+                                       or not value.strip()):
                 raise ValueError(
                     f"laya HPO corpus.{key} must be a non-empty string")
     # The option components own their own validation; assemble once so a bad

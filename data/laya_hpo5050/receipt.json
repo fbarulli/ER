@@ -1,0 +1,105 @@
+{
+  "carve": "laya_hpo_5050",
+  "entity": "product side signature (six slice fields); GTIN over-merges (one side text <-> many GTINs) so it is not the leakage grain",
+  "output_dir": "/home/opc/ONE/ER/.worktrees/laya/data/laya_hpo5050",
+  "profile": {
+    "ratios": {
+      "train": 0.5,
+      "dev": 0.5
+    },
+    "strata": [
+      "difficulty_slice",
+      "attribute"
+    ],
+    "seed": 1729
+  },
+  "source_dir": "/home/opc/ONE/ER/.worktrees/laya/data/laya",
+  "source_split_sizes": {
+    "train": 7551,
+    "dev": 3478,
+    "test": 3279
+  },
+  "split_sizes": {
+    "train": 7215,
+    "dev": 7093
+  },
+  "records": 14308,
+  "components": 4003,
+  "largest_component": 4678,
+  "largest_component_pct": 32.695,
+  "leakage": {
+    "components": 0,
+    "endpoints": 0,
+    "pairs": 0
+  },
+  "attribute_proportions": {
+    "carbonation": {
+      "total": 507,
+      "train": 0.5088757396449705,
+      "dev": 0.4911242603550296
+    },
+    "flavor": {
+      "total": 2903,
+      "train": 0.4994832931450224,
+      "dev": 0.5005167068549776
+    },
+    "none": {
+      "total": 15,
+      "train": 0.5333333333333333,
+      "dev": 0.4666666666666667
+    },
+    "package_type": {
+      "total": 1609,
+      "train": 0.5003107520198882,
+      "dev": 0.4996892479801119
+    },
+    "sweetener": {
+      "total": 2284,
+      "train": 0.5004378283712785,
+      "dev": 0.4995621716287215
+    },
+    "volume": {
+      "total": 6990,
+      "train": 0.5080114449213161,
+      "dev": 0.49198855507868383
+    }
+  },
+  "difficulty_proportions": {
+    "all_same": {
+      "total": 532,
+      "train": 0.5112781954887218,
+      "dev": 0.48872180451127817
+    },
+    "insufficient": {
+      "total": 1,
+      "train": 0.0,
+      "dev": 1.0
+    },
+    "multi_diff": {
+      "total": 298,
+      "train": 0.6644295302013423,
+      "dev": 0.33557046979865773
+    },
+    "one_diff": {
+      "total": 8220,
+      "train": 0.5001216545012166,
+      "dev": 0.49987834549878346
+    },
+    "pairwise": {
+      "total": 3,
+      "train": 0.6666666666666666,
+      "dev": 0.3333333333333333
+    },
+    "single_state": {
+      "total": 5254,
+      "train": 0.5009516558812334,
+      "dev": 0.49904834411876664
+    }
+  },
+  "sha256": {
+    "train": "59f3b0ece1ab965c7e033cbc1715645658d35528838886f19c4c3838b4d70714",
+    "dev": "d2e0bd3853b70275fbaf9a6324392c8ff4fddca9d3f9507b9db3ac6de8ac9909",
+    "test": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "corpus_sha256": "2081fd69b3fb89c14a03dac59be75420b57d3278025c7f8d9e860c594e119315"
+}

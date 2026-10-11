@@ -24,7 +24,7 @@ no value is re-spelled in code. ``SmartSplitSpec`` validates at the boundary.
 from __future__ import annotations
 
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -69,6 +69,10 @@ class SmartSplitSpec(BaseModel):
     #: The subgroup keys the stratified carve balances across every split.
     strata: tuple[str, ...] = Field(min_length=1)
     seed: int
+    #: Named purpose-built carves under the SAME owner (e.g. the HPO lane's
+    #: 50/50 ``laya_hpo_5050``). Additive: the default spec is unchanged when
+    #: no profile is declared, so both existing consumers stay byte-identical.
+    profiles: dict[str, SmartSplitProfile] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _contract_is_complete(self) -> "SmartSplitSpec":
@@ -84,12 +88,7 @@ class SmartSplitSpec(BaseModel):
             raise ValueError(
                 f"smart_split.ratios keys {sorted(self.ratios)} must equal the "
                 f"physical split names {sorted(physical)}")
-        if any(value <= 0.0 for value in self.ratios.values()):
-            raise ValueError(f"smart_split.ratios must be positive: {self.ratios}")
-        total = sum(self.ratios.values())
-        if abs(total - 1.0) > 1e-6:
-            raise ValueError(
-                f"smart_split.ratios must sum to 1.0, got {total!r}: {self.ratios}")
+        _ratios_are_fractions(self.ratios, "smart_split.ratios")
         return self
 
     @property
@@ -114,6 +113,21 @@ def smart_split_spec() -> SmartSplitSpec:
         label="Smart-split declaration")
 
 
+def smart_split_profile(name: str) -> SmartSplitProfile:
+    """Resolve ONE named carve profile from the smart-split declaration.
+
+    Fails loud (KeyError) on an undeclared profile, so a lane can never
+    silently fall back to the default three-role ratios: the profile IS the
+    carve contract (e.g. the HPO lane's 50/50 ``laya_hpo_5050``).
+    """
+    profiles = smart_split_spec().profiles
+    if name not in profiles:
+        raise KeyError(
+            f"smart_split profile {name!r} is not declared; known profiles: "
+            f"{sorted(profiles)} (config/smart_split.yaml `profiles:`)")
+    return profiles[name]
+
+
 def largest_remainder(total: int, ratios: Mapping[str, float]) -> dict[str, int]:
     """Largest-remainder allocation of ``total`` at ``ratios`` (sums to total)."""
     raw = {key: total * ratios[key] for key in ratios}
@@ -125,6 +139,48 @@ def largest_remainder(total: int, ratios: Mapping[str, float]) -> dict[str, int]
         allocation[key] += 1
         remainder -= 1
     return allocation
+
+
+def _ratios_are_fractions(ratios: Mapping[str, float], where: str) -> None:
+    """The ONE ratio contract: named, positive, and summing to 1.0."""
+    if not ratios:
+        raise ValueError(f"{where} must declare at least one split ratio")
+    if any(value <= 0.0 for value in ratios.values()):
+        raise ValueError(f"{where} must be positive: {dict(ratios)}")
+    total = sum(ratios.values())
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(
+            f"{where} must sum to 1.0, got {total!r}: {dict(ratios)}")
+
+
+class SmartSplitProfile(BaseModel):
+    """A NAMED carve profile (``config/smart_split.yaml`` ``profiles:``).
+
+    The default :class:`SmartSplitSpec` names the three-role train/select/
+    validate carve both training checkouts share. A profile is a lighter,
+    purpose-built carve under the SAME owner: its own ``ratios`` (any number of
+    physical splits, e.g. the HPO lane's 50/50 ``train``/``dev`` with no test
+    role), the ``strata`` it balances and the ``seed`` that makes it
+    reproducible. Declared once in config; no consumer re-spells a ratio.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: physical split name -> fraction of the population (sums to 1).
+    ratios: dict[str, float]
+    #: The subgroup keys the stratified carve balances across every split.
+    strata: tuple[str, ...] = Field(min_length=1)
+    seed: int
+
+    @model_validator(mode="after")
+    def _ratios_sum_to_one(self) -> "SmartSplitProfile":
+        _ratios_are_fractions(self.ratios, "smart_split profile ratios")
+        return self
+
+    @property
+    def splits(self) -> tuple[str, ...]:
+        """The physical split names, in declared ratio order."""
+        return tuple(self.ratios)
 
 
 class SmartSplit:
@@ -187,6 +243,60 @@ class SmartSplit:
         return out
 
     @staticmethod
+    def allocate_components(items: list, component_of: Callable[[dict], str],
+                            stratum_of: Callable[[dict], str],
+                            ratios: Mapping[str, float], seed: int
+                            ) -> dict[str, list]:
+        """Carve ``items`` at the COMPONENT grain, STRATIFIED (zero leakage).
+
+        The component-aware sibling of :meth:`allocate_stratified`: a component
+        (``component_of(item)`` — an atomic entity such as the union-find root
+        of a record's GTIN endpoints) is dealt WHOLE, so it never straddles two
+        splits. That is the zero-leakage guarantee — every item sharing an
+        entity lands in the SAME split, so no product/pair/endpoint crosses the
+        carve. Whole components are then dealt greedily, largest first, each to
+        the split most behind its per-stratum largest-remainder ``ratios``
+        target, so the ``stratum_of`` proportions are preserved in every split
+        instead of being concentrated by one global shuffle.
+
+        Deterministic: components are seeded-shuffled then stably sorted
+        largest-first, and the greedy target is a pure function of ``ratios``,
+        so a rerun reproduces every byte.
+        """
+        _ratios_are_fractions(ratios, "allocate_components ratios")
+        names = list(ratios)
+        by_component: dict[str, list] = defaultdict(list)
+        for item in items:
+            by_component[str(component_of(item))].append(item)
+        # Per-component stratum census + the population stratum totals, so the
+        # per-split target is the largest-remainder share of each stratum.
+        component_strata: dict[str, Counter] = {}
+        stratum_totals: Counter = Counter()
+        for component, members in by_component.items():
+            census = Counter(stratum_of(member) for member in members)
+            component_strata[component] = census
+            stratum_totals.update(census)
+        target = {name: {stratum: ratios[name] * count
+                         for stratum, count in stratum_totals.items()}
+                  for name in names}
+        filled: dict[str, Counter] = {name: Counter() for name in names}
+        order = list(by_component)
+        random.Random(seed).shuffle(order)
+        order.sort(key=lambda component: -len(by_component[component]))
+        out: dict[str, list] = {name: [] for name in names}
+        for component in order:
+            census = component_strata[component]
+            # The split most behind target over THIS component's strata; ties
+            # break on the declared ratio order so the deal is reproducible.
+            chosen = min(
+                names,
+                key=lambda name: (sum(filled[name][s] - target[name][s]
+                                      for s in census), names.index(name)))
+            out[chosen].extend(by_component[component])
+            filled[chosen].update(census)
+        return out
+
+    @staticmethod
     def deal_uniform(components: Sequence[set[str]], k: int, seed: int
                      ) -> list[set[str]]:
         """Deal components round-robin over ``k`` seeded folds (the tracks grain).
@@ -228,8 +338,10 @@ __all__ = [
     "CONFIG_NAME",
     "largest_remainder",
     "SmartSplit",
+    "SmartSplitProfile",
     "SmartSplitRoles",
     "SmartSplitSpec",
     "smart_split_config_path",
+    "smart_split_profile",
     "smart_split_spec",
 ]
