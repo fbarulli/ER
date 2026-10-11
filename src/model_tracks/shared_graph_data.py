@@ -109,6 +109,35 @@ def _copy_record(parent, text, audit, node_id):
     return result
 
 
+def _endpoint_node_id(endpoint) -> str:
+    """The stable node ID ONE shared endpoint projects to (the graph contract).
+
+    A listing endpoint keeps its real sku_id; a canonical endpoint is keyed by
+    its (bundle-stable) GTIN; an augmentation endpoint is keyed by its
+    bundle-LOCAL payload index. Both the projection and :func:`validate_projection`
+    derive the ID here, so the render/parse seam shares ONE definition.
+    """
+    if endpoint.kind == 'listing':
+        return endpoint.source_id
+    if endpoint.kind == 'canonical':
+        return canonical_node_id(endpoint.source_id)
+    return augmentation_node_id(endpoint.payload_index)
+
+
+def _superseded_endpoints(shared: SharedTrainingData) -> set[str]:
+    """Node IDs the projection re-mints from THIS bundle (bundle-local namespace).
+
+    ``augmentation:<payload_index>`` is index-keyed and ``canonical:<gtin>`` is
+    GTIN-keyed, so a record carried from a previous projection — or from a carve
+    built on a DIFFERENT bundle — can describe a different product under the same
+    ID. The projection is the sole owner of its endpoints, so those carried
+    records are superseded, never merged: merging would shadow the current
+    bundle's payload and train the graph lane on the wrong product.
+    """
+    return {_endpoint_node_id(endpoint) for endpoint in shared.endpoints
+            if endpoint.kind != 'listing'}
+
+
 def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) -> dict:
     """Run locally; replace supervised train rows, keep clean evaluation intact."""
     from graph_tracks.data import file_size, load_records
@@ -182,6 +211,17 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         parents[index] = record
         return record
 
+    # The projection is the sole owner of its endpoints' records: a record
+    # carried for one of its node IDs (a previous projection, or a carve built
+    # on a DIFFERENT bundle) names a different payload and must never shadow the
+    # current bundle, or the graph lane would train on the wrong product. Drop
+    # them here; the endpoint loop below re-mints every endpoint from THIS bundle.
+    superseded = _superseded_endpoints(shared)
+    records = [record for record in records if record['sku_id'] not in superseded]
+    by_id = {record['sku_id']: record for record in records}
+    catalog_rows = [row for row in catalog_rows if row['sku_id'] not in superseded]
+    report_rows = [row for row in report_rows if row['sku_id'] not in superseded]
+    report_ids -= superseded
     node_map, virtual_counts = {}, {'canonical': 0, 'augmentation': 0, 'added_listing': 0}
     missing_report_fields: dict[str, int] = {}
     from training.attribute_separation import ATTRIBUTE_SOURCES
@@ -200,9 +240,10 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
             node_id = record['sku_id']
         node_map[str(index)] = node_id
         if node_id in by_id:
-            # Deduplicate: an endpoint that resolves to an already-present node
-            # is merged, not re-added. Data has not changed; the prior collision
-            # guard was over-strict for canonical endpoints.
+            # An endpoint resolving to an already-present LISTING is merged, not
+            # re-added (its real catalog record is authoritative and its split is
+            # already enforced train by ``parent_record``). A virtual endpoint's
+            # carried record was dropped above, so it always lands below.
             continue
         by_id[node_id] = record
         records.append(record)
@@ -240,13 +281,23 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         )
     clean_pairs = pd.read_csv(prepared / 'pairs.csv', dtype=str, keep_default_na=False)
     evaluation = clean_pairs[clean_pairs.split != 'train'].copy()
+    # An evaluation pair that references a re-minted endpoint belongs to the
+    # bundle the carried record came from, not to the shipped one: its node now
+    # describes a different product, so the pair cannot be evaluated against
+    # this bundle. Drop it and count it (never silently — the count rides in the
+    # projection's ``virtual_counts``).
+    superseded_evaluation = evaluation[
+        evaluation.sku_id1.isin(superseded) | evaluation.sku_id2.isin(superseded)]
+    evaluation = evaluation.drop(index=superseded_evaluation.index)
     superseded_train_pairs = int((clean_pairs.split == 'train').sum())
     virtual_counts['superseded_clean_train_pairs'] = superseded_train_pairs
+    virtual_counts['superseded_evaluation_pairs'] = len(superseded_evaluation)
     virtual_counts['unmeasured_report_fields'] = len(missing_report_fields)
     print(
         f'[shared-graph] replacing {superseded_train_pairs:,} clean train pair(s) '
         f'with {len(shared.examples):,} shared example(s); '
-        f'{len(evaluation):,} evaluation pair(s) preserved',
+        f'{len(evaluation):,} evaluation pair(s) preserved, '
+        f'{len(superseded_evaluation):,} dropped with re-minted endpoints',
         flush=True,
     )
     evaluation_size = _rows_size(_pair_rows(evaluation))
@@ -338,10 +389,7 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
             or len(set(projection.node_map.values())) != len(projection.node_map)):
         raise ValueError('shared graph endpoint projection mismatch')
     for endpoint in shared.endpoints:
-        expected_id = (endpoint.source_id if endpoint.kind == 'listing' else
-                       canonical_node_id(endpoint.source_id) if endpoint.kind == 'canonical' else
-                       augmentation_node_id(endpoint.payload_index))
-        if projection.node_map[str(endpoint.payload_index)] != expected_id:
+        if projection.node_map[str(endpoint.payload_index)] != _endpoint_node_id(endpoint):
             raise ValueError('shared graph stable endpoint ID mismatch')
     pairs = pd.read_csv(setup / layout.prepared_dir / 'pairs.csv', dtype=str, keep_default_na=False)
     expected = [dict(example_id=row['example_id'], sku_id1=projection.node_map[str(row['payload_index1'])],
