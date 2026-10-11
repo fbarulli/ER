@@ -609,10 +609,11 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
             model.eval()
             result["error_artifacts"] = DevEvaluator.artifacts(
                 laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control, collate_memo)
-        except Exception as error:
-            result["error_artifacts_error"] = (
-                type(error).__name__ + ": " + str(error)[:200])
+                head_max_len, parallel, control, collate_memo).model_dump()
+        except Exception:
+            result["error_artifacts_error"] = traceback.format_exc()
+            print("[perf-patch] error artifacts failed: "
+                  + result["error_artifacts_error"], flush=True)
     globals()["FINETUNE_CONTROL_RESULT"] = result
     try:
         wandb_log_control_summary(result)

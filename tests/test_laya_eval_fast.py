@@ -12,10 +12,12 @@ from __future__ import annotations
 import math
 import os
 import random
+import sys
 import types
 import weakref
 from typing import Any
 
+import pytest
 import torch
 
 from cli import laya_lane
@@ -214,3 +216,34 @@ def test_calibration_tail_reuses_logits_across_temperature_fitting_and_resets() 
     third = train.calibration_records(model, tokenizer, items, device, 8, 4)
     assert len(calls) == 6
     assert not (first[0][1] == third[0][1]).all()
+
+
+def test_error_artifact_failure_reports_the_full_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from test_laya_ddp import _Cfg, _load_ddp_namespace, _make_fake_laya, _TinyNet
+
+    namespace = _load_ddp_namespace()
+    fake = _make_fake_laya([])
+
+    def records(*args: object, **kwargs: object) -> list[tuple[int, list[str], list[float], int]]:
+        return [(0, ["invalid-logit"], [1.0], 1)]
+
+    fake.train.calibration_records = records
+    monkeypatch.setitem(sys.modules, "laya", fake)
+    monkeypatch.setitem(sys.modules, "laya.train", fake.train)
+    namespace["FINETUNE_CONTROL"] = {
+        **laya_lane.finetune_control(), "save_each_epoch": False,
+        "resume": False, "write_error_artifacts": True,
+    }
+    namespace["FINETUNE_DEV_ROWS"] = [{"state": "x"}]
+    config = _Cfg()
+    config.epochs = 1
+    namespace["_perf_train_model"](
+        _TinyNet(), types.SimpleNamespace(pad_token_id=0),
+        [{"i": i, "label": i % 3} for i in range(4)], config,
+        torch.device("cpu"), 8, 4)
+    result = namespace["FINETUNE_CONTROL_RESULT"]
+    assert "error_artifacts" not in result
+    assert "Traceback (most recent call last)" in result["error_artifacts_error"]
+    assert "invalid-logit" in result["error_artifacts_error"]

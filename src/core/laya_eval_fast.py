@@ -282,6 +282,18 @@ class CollateMemo:
         return memo
 
 
+class DevArtifacts(BaseModel):
+    """The shared artifact shape at the evaluator-to-training-result boundary."""
+
+    items: int
+    accuracy: float | None
+    ece: float | None
+    brier: float | None
+    brier_top1: float | None
+    confusion: dict[str, dict[str, dict[str, int]]]
+    temperature: object
+
+
 class DevEvaluator:
     """Rank-0 dev scoring + end-of-run calibration/confusion artifacts."""
 
@@ -297,21 +309,20 @@ class DevEvaluator:
             confidence_threshold=control.get("abstain_confidence"))
 
     @staticmethod
-    def artifacts(laya_train, model, tok, dev_items, device, max_len,
-                  head_max_len, parallel, control, collate_memo=None):
+    def artifacts(laya_train: "Any", model: "Any", tok: "Any",  # noqa: UP037 -- injected without module imports
+                  dev_items: "Any", device: "Any", max_len: int,  # noqa: UP037
+                  head_max_len: int, parallel: bool, control: "Any",  # noqa: UP037
+                  collate_memo: "CollateMemo | None" = None) -> "DevArtifacts":  # noqa: UP037
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
                                         parallel, collate_memo)
         metrics = laya_train.evaluate_records(records)
         confusion = {}
+        import numpy as np
+
         for qtype, logits, target, k in records:
-            try:
-                import numpy as np
-                z = np.asarray(logits, dtype=float)[:int(k)]
-                pred = int(z.argmax())
-                gold = int(np.asarray(target, dtype=float)[:int(k)].argmax())
-            except Exception:  # noqa: BLE001,S112 - a malformed record never fails the artifacts
-                continue
+            pred = int(np.asarray(logits, dtype=float)[:int(k)].argmax())
+            gold = int(np.asarray(target, dtype=float)[:int(k)].argmax())
             bucket = confusion.setdefault(str(qtype), {})
             row = bucket.setdefault(str(gold), {})
             row[str(pred)] = row.get(str(pred), 0) + 1
@@ -320,27 +331,25 @@ class DevEvaluator:
             try:
                 temperature = laya_train.fit_temperature_map(
                     records).get("temperature")
-            except Exception as error:  # noqa: BLE001 - the fit is optional, recorded and skipped
-                print("[perf-patch] temperature fit skipped: "
-                      + str(error)[:120], flush=True)
-        return {
-            "items": len(records),
-            "accuracy": metrics.get("accuracy"),
-            "ece": metrics.get("ece"),
-            "brier": metrics.get("brier"),
-            "brier_top1": metrics.get("brier_top1"),
-            "confusion": confusion,
-            "temperature": temperature,
-        }
+            except Exception:  # noqa: BLE001 - optional fit, recorded in full
+                import traceback
+
+                print("[perf-patch] temperature fit failed: "
+                      + traceback.format_exc(), flush=True)
+        return DevArtifacts(
+            items=len(records), accuracy=metrics.get("accuracy"),
+            ece=metrics.get("ece"), brier=metrics.get("brier"),
+            brier_top1=metrics.get("brier_top1"), confusion=confusion,
+            temperature=temperature)
 
     @staticmethod
-    def _records(laya_train, model, tok, dev_items, device, max_len,
-                 head_max_len, parallel, collate_memo=None):
-        if collate_memo is None:
-            return laya_train.calibration_records(
-                model, tok, dev_items, device, max_len, head_max_len,
-                parallel=parallel)
-        with collate_memo:
+    def _records(laya_train: "Any", model: "Any", tok: "Any",  # noqa: UP037 -- injected without module imports
+                 dev_items: "Any", device: "Any", max_len: int,  # noqa: UP037
+                 head_max_len: int, parallel: bool,
+                 collate_memo: "CollateMemo | None" = None) -> "Any":  # noqa: UP037
+        from contextlib import nullcontext
+
+        with collate_memo if collate_memo is not None else nullcontext():
             return laya_train.calibration_records(
                 model, tok, dev_items, device, max_len, head_max_len,
                 parallel=parallel)

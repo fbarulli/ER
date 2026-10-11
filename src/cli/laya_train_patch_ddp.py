@@ -71,6 +71,7 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "from pydantic import BaseModel\n\n" + "\n\n".jo
         laya_eval_fast.EvalRecordsHook,
         laya_eval_fast.EncodeMemo,
         laya_eval_fast.CollateMemo,
+        laya_eval_fast.DevArtifacts,
         laya_eval_fast.DevEvaluator,
     )
 )
