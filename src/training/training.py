@@ -5811,6 +5811,10 @@ def train_one_config(
                 # transform, but post-training telemetry is shared by every loss.
                 # Keep its empty state defined for those lanes.
                 dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
+                dynamic_mask_counts: dict[int, int] = {}
+                dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
+                dynamic_epoch_ref = {"epoch": 0}
+                dynamic_mask_audit: list[dict] = []
                 if loss == "contrastive":
                     # OnlineContrastiveLoss (owner ruling 2026-09-07): paired
                     # (sentence1, sentence2, label) rows. POSITIVES = train_all
@@ -5835,10 +5839,6 @@ def train_one_config(
                     pair_populations = fixed_dataset["pair_population"]
                     presentation_counts: dict[tuple, int] = {}
                     train_ds = Dataset.from_dict(fixed_dataset)
-                    dynamic_mask_counts: dict[int, int] = {}
-                    dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
-                    dynamic_epoch_ref = {"epoch": 0}
-                    dynamic_mask_audit: list[dict] = []
                     if (
                         (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)
                         or ann_refresh_enabled
