@@ -34,7 +34,7 @@ from core import laya_controls, laya_eval_fast, laya_train_fast, laya_train_part
 # is injected here VERBATIM via `inspect.getsource`: one source of truth,
 # unit-tested on the host and executed byte-for-byte in the kernel (which
 # cannot import the repo). Injection order is the class dependency order.
-FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
+FINETUNE_CONTROL_LOGIC_SOURCE = "from pydantic import BaseModel\n\n" + "\n\n".join(
     inspect.getsource(klass) for klass in (
         laya_controls.ControlBlock,
         laya_controls.EarlyStopStep,
@@ -64,6 +64,9 @@ FINETUNE_CONTROL_LOGIC_SOURCE = "\n\n".join(
         laya_train_fast.AutocastCacheFactory,
         laya_train_fast.ModelCompiler,
         laya_train_fast.BatchMover,
+        laya_eval_fast.EvalRecordsCall,
+        laya_eval_fast.EvalRecordsResult,
+        laya_eval_fast.EvalRecordsReuse,
         laya_eval_fast.EvalRecordsPolicy,
         laya_eval_fast.EvalRecordsHook,
         laya_eval_fast.EncodeMemo,

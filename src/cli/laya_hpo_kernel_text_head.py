@@ -408,9 +408,13 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
         except Exception as error:
             log("dev rows load skipped: " + str(error)[:200])
     log("TrainConfig: " + json.dumps(FINETUNE_CONFIG, sort_keys=True))
-    return laya_train.finetune(data=str(train_path), model_dir=str(base_model),
-                               output_dir=str(out_dir), config=config,
-                               device=device)
+    try:
+        return laya_train.finetune(data=str(train_path), model_dir=str(base_model),
+                                   output_dir=str(out_dir), config=config,
+                                   device=device)
+    finally:
+        EvalRecordsHook.release_after_training(laya_train)
+
 
 
 def dev_loss_from_report(out_dir):

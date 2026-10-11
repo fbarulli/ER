@@ -623,6 +623,7 @@ def _perf_train_model(model, tok, items, config, device, max_len, head_max_len,
     wandb_log_event("training_done", epochs_run=len(history),
                     best_dev_accuracy=best_acc)
     model.eval()
+    EvalRecordsHook.reuse_after_training(laya_train)
     return history
 
 

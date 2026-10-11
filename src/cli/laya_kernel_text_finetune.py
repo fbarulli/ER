@@ -343,9 +343,13 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
     log("starting laya.train.finetune: the pre-train dev evaluation runs "
         "silently until the first 'epoch 1/8 step' line (minutes on the full "
         "corpus)")
-    return laya_train.finetune(
-        data=str(train_path), model_dir=str(base_model),
-        output_dir=str(out_dir), config=config, device=device)
+    try:
+        return laya_train.finetune(
+            data=str(train_path), model_dir=str(base_model),
+            output_dir=str(out_dir), config=config, device=device)
+    finally:
+        EvalRecordsHook.release_after_training(laya_train)
+
 
 
 def sha256_of(path):

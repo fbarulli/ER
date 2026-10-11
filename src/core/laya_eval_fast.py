@@ -15,7 +15,53 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from core.laya_train_fast import AutocastCacheFactory
+
+
+class EvalRecordsCall(BaseModel, frozen=True):
+    """One immutable Laya evaluation request; retain identities for safe reuse."""
+
+    model: object
+    tokenizer: object
+    items: object
+    device: object
+    args: tuple[object, ...]
+    kwargs: dict[str, object]
+
+    def matches(self, other: "EvalRecordsCall") -> bool:  # noqa: UP037 -- injected without future annotations
+        return (self.model is other.model and self.tokenizer is other.tokenizer
+                and self.items is other.items and self.device == other.device
+                and self.args == other.args and self.kwargs == other.kwargs)
+
+    def run(self, original: "Any", amp: bool) -> object:  # noqa: UP037 -- injected without module imports
+        import torch
+
+        with AutocastCacheFactory.build(torch, self.device, amp):
+            return original(self.model, self.tokenizer, self.items, self.device,
+                            *self.args, **self.kwargs)
+
+
+class EvalRecordsResult(BaseModel):
+    """Laya owns the opaque records representation; reuse it without conversion."""
+
+    call: EvalRecordsCall
+    records: object
+
+
+class EvalRecordsReuse:
+    """Bounded to the final calibration tail, where weights no longer mutate."""
+
+    def __init__(self) -> None:
+        self._latest: "EvalRecordsResult | None" = None  # noqa: UP037 -- injected without future annotations
+
+    def records(self, call: "EvalRecordsCall", original: "Any", amp: bool) -> object:  # noqa: UP037 -- injected without module imports
+        latest = self._latest
+        if latest is None or not latest.call.matches(call):
+            latest = EvalRecordsResult(call=call, records=call.run(original, amp))
+            self._latest = latest
+        return latest.records
 
 
 class EvalRecordsPolicy:
@@ -51,9 +97,19 @@ class EvalRecordsHook:
     """
 
     INSTALLED = "_er_eval_records_installed"
+    REUSE = "_er_eval_records_reuse"
+
+    @classmethod
+    def reuse_after_training(cls, laya_train: "Any") -> None:  # noqa: UP037 -- injected without module imports
+        setattr(laya_train, cls.REUSE, EvalRecordsReuse())
+
+    @classmethod
+    def release_after_training(cls, laya_train: "Any") -> None:  # noqa: UP037 -- injected without module imports
+        setattr(laya_train, cls.REUSE, None)
 
     @classmethod
     def install(cls, laya_train: "Any", policy: "EvalRecordsPolicy") -> "EvalRecordsPolicy":  # noqa: UP037 -- injected without module imports
+        cls.release_after_training(laya_train)
         installed = getattr(laya_train, cls.INSTALLED, None)
         if installed is not None:
             setattr(laya_train, cls.INSTALLED, policy)
@@ -63,13 +119,15 @@ class EvalRecordsHook:
 
         def calibration_records(model: "Any", tok: "Any", items: "Any",  # noqa: UP037 -- injected without module imports
                                 device: "Any", *args: "Any", **kwargs: "Any") -> "Any":  # noqa: UP037
-            import torch
-
             policy = getattr(laya_train, cls.INSTALLED)
             if policy.eval_batch > 0:
                 kwargs.setdefault("batch_size", policy.eval_batch)
-            with AutocastCacheFactory.build(torch, device, policy.eval_amp):
-                return original_records(model, tok, items, device, *args, **kwargs)
+            call = EvalRecordsCall(model=model, tokenizer=tok, items=items,
+                                   device=device, args=args, kwargs=kwargs)
+            reuse = getattr(laya_train, cls.REUSE)
+            if reuse is not None:
+                return reuse.records(call, original_records, policy.eval_amp)
+            return call.run(original_records, policy.eval_amp)
 
         def _forward(model: "Any", batch: "Any", device: "Any", amp: bool,  # noqa: UP037 -- injected without module imports
                      detach_encoder: bool) -> "Any":  # noqa: UP037

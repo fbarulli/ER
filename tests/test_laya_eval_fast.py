@@ -14,6 +14,7 @@ import os
 import random
 import types
 import weakref
+from typing import Any
 
 import torch
 
@@ -175,3 +176,41 @@ def test_hpo_final_eval_off_and_loop_stamps_best_dev_loss(monkeypatch):
     result = namespace["FINETUNE_CONTROL_RESULT"]
     assert result["best_dev_accuracy"] == 0.9
     assert result["best_dev_loss"] == 0.5   # the fake dev eval's loss
+
+
+def test_calibration_tail_reuses_logits_across_temperature_fitting_and_resets() -> None:
+    from laya.train import evaluate_records
+
+    calls = []
+    model = torch.nn.Linear(2, 1, bias=False)
+
+    def records(model: torch.nn.Linear, tok: object, items: list[object],
+                device: torch.device, *args: object,
+                **kwargs: object) -> list[tuple[int, Any, list[float], int]]:
+        calls.append((items, args, kwargs))
+        return [(0, model.weight.detach().numpy().reshape(-1).copy(), [1.0, 0.0], 2)]
+
+    train = types.SimpleNamespace(calibration_records=records, _forward=lambda *args: None)
+    policy = laya_eval_fast.EvalRecordsPolicy()
+    laya_eval_fast.EvalRecordsHook.install(train, policy)
+    items, tokenizer, device = [object()], object(), torch.device("cpu")
+    # Training/baseline evaluations remain uncached while weights can change.
+    train.calibration_records(model, tokenizer, items, device, 8, 4)
+    train.calibration_records(model, tokenizer, items, device, 8, 4)
+    laya_eval_fast.EvalRecordsHook.reuse_after_training(train)
+    first = train.calibration_records(model, tokenizer, items, device, 8, 4)
+    second = train.calibration_records(model, tokenizer, items, device, 8, 4)
+    assert first is second and len(calls) == 3
+    assert evaluate_records(first, [2.0]) == evaluate_records(second, [2.0])
+    laya_eval_fast.EvalRecordsHook.release_after_training(train)
+    train.calibration_records(model, tokenizer, items, device, 8, 4)
+    assert len(calls) == 4
+    train.calibration_records(model, tokenizer, items, device, 16, 4)
+    assert len(calls) == 5
+    # Reinstall starts a new trial, even when the policy object is unchanged.
+    with torch.no_grad():
+        model.weight.add_(1.0)
+    laya_eval_fast.EvalRecordsHook.install(train, policy)
+    third = train.calibration_records(model, tokenizer, items, device, 8, 4)
+    assert len(calls) == 6
+    assert not (first[0][1] == third[0][1]).all()
