@@ -308,6 +308,18 @@ def _manifest():
         return {}
 
 
+def _dedupe_input_size(manifest):
+    """Byte size of the dedupe manifest's first input, or None if unrecorded.
+
+    Identity is structural (path+size); the manifest carries NO content digest.
+    """
+    try:
+        size = manifest.get('inputs', [{}])[0].get('size')
+    except (AttributeError, IndexError, TypeError):
+        return None
+    return size if isinstance(size, int) else None
+
+
 @app.get('/datagen', response_class=HTMLResponse)
 def datagen_track():
     m = _manifest()
@@ -409,12 +421,14 @@ def datagen_track():
         _fmetric(0, 'cells changed vs pre-change'),
         _fmetric(13_250, 'distinct valid GTINs'),
         _fmetric(139, 'review-quarantined GTINs'),
-        _fmetric(m.get('inputs', [{}])[0].get('size', '')[:12], 'dataset.csv SHA (unchanged)'),
+        _fmetric(_dedupe_input_size(m) or 0, 'dataset.csv bytes (unchanged)'),
     ])
     gtin_compare = _fcompare([(name, current, 'PASS')
                               for name, original, current in gtin_ledger])
 
-    gtin_evidence = _fevidence(f'dataset.csv (size {m.get("inputs", [{}])[0].get("size", "?")[:20]}…)',
+    _dataset_size = _dedupe_input_size(m)
+    gtin_evidence = _fevidence(f'dataset.csv ({_dataset_size:,} bytes)' if _dataset_size
+                               else 'dataset.csv (size not recorded)',
                                'GTIN ledger re-measured on the same byte-identical export — session ledger (2026-09-30):\n'
                                + '\n'.join(f'{k}: {v:,}' for k, v in [
                                    ('missing (NA) gtin', 41_545),
@@ -425,7 +439,7 @@ def datagen_track():
                                    ('review-quarantined GTINs', 139)]))
     f02 = _ffinding(2, 'GTIN capture ledger — Wave-1 truncation-fix guarantees', 'PASS',
                     gtin_metrics, gtin_compare, gtin_evidence,
-                    f"<span class='badge badge-pass'>PASS</span> unchanged (byte-identical SHA) — 0 first-run ≠ longest-run cells; guarantees <code>gtin_equivalent()</code> + longest-run parsing for future feeds.")
+                    f"<span class='badge badge-pass'>PASS</span> unchanged (same byte size) — 0 first-run ≠ longest-run cells; guarantees <code>gtin_equivalent()</code> + longest-run parsing for future feeds.")
     # Finding 03 — description alias fix
     desc_metrics = ''.join([
         _fmetric(52_856, 'deduped rows consuming description'),
