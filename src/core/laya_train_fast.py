@@ -15,6 +15,8 @@ eval-path siblings live in ``core.laya_eval_fast``.
 """
 from __future__ import annotations
 
+from typing import Any
+
 
 class ModelCompiler:
     """``torch.compile`` the training module (offenders #2 dispatch + #4 cast).
@@ -31,37 +33,47 @@ class ModelCompiler:
     laya's collate pads to the batch-longest, so with ``dynamic=True`` they
     still fuse but may not capture graphs; HPO measures the net, never assumed).
 
-    ``dynamic=True`` is pinned (not a knob): the sequence length varies per
-    batch, so a static compile would thrash recompile-per-shape. One dynamic
-    compile serves every batch length.
+    ``dynamic=True`` handles variable lengths; Laya's ``independent_dims``
+    also prevents coincidentally equal row/token/marker dimensions from being
+    tied together at trace time. The context covers lazy forward execution,
+    not just construction. Torch can still specialize zero/one dimensions.
 
     Applied AFTER the DDP wrap so ``torch.compile`` sees the
     ``DistributedDataParallel`` module and its DDPOptimizer splits the graph at
     the allreduce buckets (the documented DDP+compile order). The compile
     wrapper (``_orig_mod``) is stripped by ``ControlCheckpointer.unwrap`` before
-    any ``state_dict`` is persisted. Fail-soft: a compile error (backend miss,
-    unsupported op) logs the FULL traceback and returns the eager module, so a
-    run never silently downshifts the recipe NOR dies on a compiler bug.
+    any ``state_dict`` is persisted. Construction failures log a full traceback
+    and return the eager module. Lazy compilation failures still fail the trial.
     """
 
     #: Pinned: variable per-batch sequence length => one dynamic compile.
     DYNAMIC = True
 
     @staticmethod
-    def compile(torch_module, model, mode):
+    def compile(torch_module: "Any", model: "Any", mode: str | None) -> "Any":  # noqa: UP037 -- injected without module imports
         resolved = str(mode or "default")
         try:
             compiled = torch_module.compile(
                 model, mode=resolved, dynamic=ModelCompiler.DYNAMIC)
             print(f"[perf-patch] torch.compile enabled mode={resolved} "
                   f"dynamic={ModelCompiler.DYNAMIC}", flush=True)
-            return compiled
         except Exception:  # noqa: BLE001 - fail-soft to eager, recorded
             import traceback
 
             print("[perf-patch] torch.compile skipped (eager fallback): "
                   + traceback.format_exc(), flush=True)
             return model
+        try:
+            from laya._compile import independent_dims
+        except ImportError:
+            import traceback
+
+            print("[perf-patch] independent shape tracing unavailable; "
+                  "keeping ordinary dynamic compilation: "
+                  + traceback.format_exc(), flush=True)
+        else:
+            compiled.forward = independent_dims()(compiled.forward)
+        return compiled
 
 
 class BatchMover:

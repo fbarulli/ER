@@ -168,11 +168,11 @@ GOLDEN_SHA256: dict[str, str] = {
       # collective timeout every prior fix set — its 480s default SIGABRT'd a
       # healthy rank 0 during teardown ("watchdog got stuck for 480 seconds ...
       # CudaEventDestroy"), before the tail ran. Only the nccl path bakes it.
-      "finetune": "4ce6b32efda2e0f0a801b939b575d7b23e165e477044cdc4a6a787e5770262f2",
-      "finetune-smoke": "b1e5841006d0aa2bd42c2e26a53fb0827ca09fb520043d6fe8724e870195c103",
+      "finetune": "3b8a1e0a34fcf93fec18d13cda22dd32edca8bff46fce309a52b4c36f28bfd83",
+      "finetune-smoke": "014e884af162b6b242d8c91eac7111035ba01420c356a4989c83d71af1cfac6d",
       "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
       "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-      "hpo": "a47ba3c7eedba01dc3d6b8aad6145714b3423d41981268b8a8a00f7943c1db32",
+      "hpo": "99fff3926ee26192aaf88a681fd924f5008cda585abf9a8c74b24b4740aad6e2",
 }
 
 
