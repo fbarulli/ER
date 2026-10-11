@@ -4066,16 +4066,33 @@ def _mnrl_pair_populations(
     ``gate``, a registered source, never the unregistered ``base``/``masked``/
     ``twin`` monitoring tags.
     """
+    if train_neg_sources is None and len(np.asarray(train_neg).reshape(-1, 2)):
+        raise ValueError(
+            "MNRL pair populations need the fold's negative sources; a lane "
+            "without them would relabel every negative 'gate'"
+        )
     source_by_negative: dict[int, str] = {}
     pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
     for index, (_anchor, negative) in enumerate(pairs):
-        source = (
-            _base_population_tag(str(train_neg_sources[index]))
-            if train_neg_sources is not None and index < len(train_neg_sources)
-            else "gate"
+        if index >= len(train_neg_sources):
+            raise ValueError(
+                f"negative source array ({len(train_neg_sources)}) is shorter "
+                f"than the fold's negative pairs ({len(pairs)})"
+            )
+        source_by_negative[int(negative)] = _base_population_tag(
+            str(train_neg_sources[index])
         )
-        source_by_negative[int(negative)] = source
-    return [source_by_negative.get(int(negative), "gate")
+    missing = sorted(
+        {int(negative) for _anchor, _positive, negative in triples}
+        - set(source_by_negative)
+    )
+    if missing:
+        raise ValueError(
+            f"MNRL triple negative(s) {missing[:5]} are absent from the fold's "
+            f"{len(source_by_negative)} negative pair(s): relabelling them "
+            f"'gate' would lose their provenance"
+        )
+    return [source_by_negative[int(negative)]
             for _anchor, _positive, negative in triples]
 
 
