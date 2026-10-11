@@ -701,14 +701,16 @@ def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
 
 def test_lane_logs_dir_resolves_under_canonical_root(tmp_path, monkeypatch):
     """A worktree launch still logs to the canonical (main) tree: the roof is
-    ProjectRoot.canonical(TRAIN_ROOT) joined with the DECLARED laya.logs_dir
-    (db02bc4 convention), never a re-spelled literal."""
+    the SSOT logs root resolved under the canonical checkout, joined with the
+    DECLARED laya.logs_dir, never a re-spelled literal."""
+    from cli import log_capture
+
     cfg_spec = _spec(tmp_path, monkeypatch)
-    canonical_root = tmp_path / "canonical"
-    monkeypatch.setattr(
-        laya_lane, "ProjectRoot",
-        types.SimpleNamespace(canonical=lambda source: canonical_root))
-    assert laya_lane.lane_logs_dir() == canonical_root / cfg_spec.logs_dir
+    canonical = tmp_path / "canonical"
+    monkeypatch.setattr(log_capture, "canonical_root", lambda source: canonical)
+    expected = (canonical / log_capture.data_cfg().paths.logs_dir
+                / cfg_spec.logs_dir).resolve()
+    assert laya_lane.lane_logs_dir() == expected
 
 
 def test_stage_receipts_layout_is_per_op(tmp_path, monkeypatch):

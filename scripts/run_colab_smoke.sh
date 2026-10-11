@@ -9,6 +9,13 @@ set -euo pipefail
 # --what smoke is gate-held for legacy sampled preparation; the tracks
 # lane with the frozen S suite is the working command (docs/colab-lane.md).
 LANE_GPU="${COLAB_GPU:-CPU}"
+# The wrapper's own run log lands in the declared Colab lane dir via the SSOT
+# accessor (cli.log_capture), never an ad-hoc top-level logs/*.log. The lane
+# transcript (logs/colab/lane_<session>.log) is opened separately by the lane.
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
+  --name "colab_smoke_$(date -u +%Y%m%dT%H%M%SZ).log")"
+exec > >(tee "$RUN_LOG") 2>&1
+echo "[colab-smoke $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
 # Nothing below is spelled here: the launcher prints the selected lane's
 # declarations (ColabSpec.lane_env_exports -> session, transcript, and the ONE
 # data-bundle suite config both lanes train from) and this evaluates them. An

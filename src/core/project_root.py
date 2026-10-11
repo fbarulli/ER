@@ -108,8 +108,10 @@ class ProjectRoot:
         return Path(common).parent if common else marker
 
 
-# Back-compat entry point for the ~50 existing callers (``scripts/``,
-# ``dashboard/``, ``jev/``) that import ``find_project_root``. The behaviour
-# lives in :meth:`ProjectRoot.find`; this is a name binding, not a second
-# implementation. New code should call ``ProjectRoot.find`` directly.
+# Back-compat entry points for the ~50 existing callers (``scripts/``,
+# ``dashboard/``, ``jev/``) that import ``find_project_root`` / ``canonical_root``.
+# The behaviour lives in :meth:`ProjectRoot.find` / :meth:`ProjectRoot.canonical`;
+# these are name bindings, not second implementations. New code should call
+# ``ProjectRoot`` directly.
 find_project_root = ProjectRoot.find
+canonical_root = ProjectRoot.canonical

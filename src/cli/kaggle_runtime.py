@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 from cli.log_capture import progress_frames_to_lines
-from core.project_root import ProjectRoot
 
 # One fresh lane.log per run: the first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
@@ -35,21 +34,18 @@ class KaggleRuntime:
 
     @staticmethod
     def lane_logs_dir() -> Path:
-        """The lane's transcript directory: the config SSOT `kaggle.logs_dir`
-        resolved under the CANONICAL checkout.
+        """The lane's transcript directory under the SSOT logs root.
 
         Local per-lane logs (live lane log, SSE stream captures, fetched session
-        logs) live at logs/kaggle/ — never under results/kaggle_lane (receipts,
-        zip payloads, staging only). Resolved through ``ProjectRoot.canonical``
-        so a run launched from a linked ``.worktrees/<name>`` checkout still
-        transcripts to the main tree — never the scratch checkout. Derived from
-        this module's TRAIN_ROOT so tests can re-point the roof; the default and
-        subdir are log_capture's one-roof convention.
+        logs) live at ``<logs_root>/<kaggle.logs_dir>`` — never under
+        results/kaggle_lane (receipts, zip payloads, staging only). The lane
+        name is ``kaggle.logs_dir`` and the root is ``paths.logs_dir``, composed
+        by ``cli.log_capture`` (canonical, main-worktree rooted).
         """
         from cli import kaggle_lane as lane
+        from cli.log_capture import lane_dir
 
-        return (ProjectRoot.canonical(lane.TRAIN_ROOT)
-                / lane._spec().logs_dir).resolve()
+        return lane_dir(lane._spec().logs_dir, lane.TRAIN_ROOT)
 
     @staticmethod
     def cohort_label(dataset_csv: Path) -> str:
