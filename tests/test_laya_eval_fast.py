@@ -13,6 +13,7 @@ import math
 import os
 import random
 import types
+import weakref
 
 import torch
 
@@ -118,6 +119,21 @@ def test_encode_memo_serves_every_caller_and_resets_per_trial():
     memo.reset()
     laya_train.encode_item(None, item, 8, 4, None, False)
     assert len(encoded_calls) == 3 and memo.lookups == 1 and memo.hits == 0
+
+    class Tokenizer:
+        """An identity-only tokenizer for the cache lifetime contract."""
+
+    first_tokenizer, second_tokenizer = Tokenizer(), Tokenizer()
+    left = laya_train.encode_item(first_tokenizer, item, 8, 4, None, False)
+    right = laya_train.encode_item(second_tokenizer, item, 8, 4, None, False)
+    assert left is not right
+    assert laya_train.encode_item(first_tokenizer, item, 8, 4, None, False) is left
+    assert len(encoded_calls) == 5
+    retained = weakref.ref(first_tokenizer)
+    del first_tokenizer
+    assert retained() is not None
+    memo.reset()
+    assert retained() is None
 
 
 def test_hpo_final_eval_off_and_loop_stamps_best_dev_loss(monkeypatch):

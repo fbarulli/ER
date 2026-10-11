@@ -96,52 +96,59 @@ class EncodeMemo:
     dev_eval, and the finetune before/after evals paid it again. The loop's
     old per-call dict covered TRAIN items only; this memo wraps the module
     function once, so every caller hits the same cache. Keyed by
-    ``(id(item), args, kwargs)`` — items are immutable dicts owned by the
+    ``(tokenizer identity, item identity, args, kwargs)`` — items are immutable dicts owned by the
     trial; ``reset()`` per trial (apply_perf_patch) bounds the cache to ONE
-    trial's items, the same lifetime the loop-local dict had.
+    trial's items, the same lifetime the loop-local dict had. Cache entries retain
+    both inputs so object-id reuse cannot return another input's encoding.
     """
 
-    def __init__(self):
-        self._cache = {}
+    class Entry:
+        """Retain input identities so Python cannot reuse a cached object's id."""
+
+        def __init__(self, tokenizer: "Any", item: "Any", encoded: "Any") -> None:  # noqa: UP037 -- injected without module imports
+            self.tokenizer = tokenizer
+            self.item = item
+            self.encoded = encoded
+
+    def __init__(self) -> None:
+        self._cache: "dict[tuple[Any, ...], EncodeMemo.Entry]" = {}  # noqa: UP037
         self.hits = 0
         self.lookups = 0
 
     @staticmethod
-    def _key(item, args, kwargs):
-        def part(value):
-            return tuple(value) if isinstance(value, list) else value
-        return ((id(item),) + tuple(part(value) for value in args)
-                + tuple(sorted((name, part(value))
+    def _part(value: "Any") -> "Any":  # noqa: UP037 -- injected without module imports
+        return tuple(value) if isinstance(value, list) else value
+
+    @classmethod
+    def _key(cls, tok: "Any", item: "Any", args: "tuple[Any, ...]",  # noqa: UP037 -- injected without module imports
+             kwargs: "dict[str, Any]") -> "tuple[Any, ...]":  # noqa: UP037
+        return ((id(tok), id(item)) + tuple(cls._part(value) for value in args)
+                + tuple(sorted((name, cls._part(value))
                                for name, value in kwargs.items())))
 
-    def lookup(self, item, args, kwargs):
-        self.lookups += 1
-        return self._cache.get(self._key(item, args, kwargs))
-
-    def store(self, item, args, kwargs, encoded):
-        self._cache[self._key(item, args, kwargs)] = encoded
-
-    def reset(self):
+    def reset(self) -> "EncodeMemo":  # noqa: UP037 -- injected without module imports
         self._cache.clear()
         self.hits = 0
         self.lookups = 0
         return self
 
     @classmethod
-    def install(cls, laya_train, memo):
+    def install(cls, laya_train: "Any", memo: "EncodeMemo") -> "EncodeMemo":  # noqa: UP037 -- injected without module imports
         current = laya_train.encode_item
         if getattr(current, "_er_memo", None) is memo:
             return memo
         original = getattr(current, "_er_original", current)
 
-        def encode_item(tok, item, *args, **kwargs):
-            encoded = memo.lookup(item, args, kwargs)
-            if encoded is None:
-                encoded = original(tok, item, *args, **kwargs)
-                memo.store(item, args, kwargs, encoded)
+        def encode_item(tok: "Any", item: "Any", *args: "Any", **kwargs: "Any") -> "Any":  # noqa: UP037 -- injected without module imports
+            memo.lookups += 1
+            key = cls._key(tok, item, args, kwargs)
+            entry = memo._cache.get(key)
+            if entry is None:
+                entry = cls.Entry(tok, item, original(tok, item, *args, **kwargs))
+                memo._cache[key] = entry
             else:
                 memo.hits += 1
-            return encoded
+            return entry.encoded
 
         encode_item._er_memo = memo
         encode_item._er_original = original
